@@ -169,6 +169,7 @@ export fn dict_lua_value_to_number(input: *const rt.Value, out: *f64) callconv(.
     return 1;
 }
 export fn dict_lua_global_get(ctx: *rt.Context, slot: u32, out: *rt.Value) callconv(.c) u32 {
+    rt.observeInvocationGlobalAccess();
     const value = ctx.getGlobal(slot);
     if (value != .nil) {
         out.* = value;
@@ -186,6 +187,7 @@ export fn dict_lua_global_get(ctx: *rt.Context, slot: u32, out: *rt.Value) callc
     return 0;
 }
 export fn dict_lua_global_set(ctx: *rt.Context, slot: u32, input: *const rt.Value) callconv(.c) u32 {
+    rt.observeInvocationGlobalAccess();
     if (ctx.getGlobal(slot) == .nil) if (ctx.global_table) |global| {
         if (global.metatable != null and global.fieldKey(slot) != null) {
             ctx.setIndex(.{ .table = global }, global.fieldKey(slot).?, input.*) catch |err| return fail(ctx, err);
@@ -1432,4 +1434,134 @@ test "invoke rollback restores choice storage before a linear ABI write grows it
 
 fn fixedCallableWrongEntry(_: *rt.Context, _: *const rt.Captures, _: [*]const rt.Value, _: usize, _: ?[*]rt.Value, _: usize) callconv(.c) rt.FunctionResult {
     return .{ .values_ptr = null, .values_len = 0, .status = 1, .reserved = 0 };
+}
+
+test "executed mutable global ABI reads writes and environment exposure prevent initializer promotion" {
+    const Mode = enum { read, write, environment };
+    const State = struct { mode: Mode, calls: usize = 0 };
+    const Root = struct {
+        fn call(ctx: *rt.Context, _: rt.Captures, _: []const rt.Value) ![]const rt.Value {
+            const state: *State = @ptrCast(@alignCast(ctx.host orelse return error.MissingProbeState));
+            state.calls += 1;
+            var value: rt.Value = undefined;
+            switch (state.mode) {
+                .read => if (dict_lua_global_get(ctx, 1, &value) != 0) return error.AotCallFailed,
+                .write => {
+                    value = .{ .number = 22 };
+                    if (dict_lua_global_set(ctx, 1, &value) != 0) return error.AotCallFailed;
+                },
+                .environment => if (dict_lua_global_get(ctx, 0, &value) != 0) return error.AotCallFailed,
+            }
+            const result = try std.heap.smp_allocator.alloc(rt.Value, 1);
+            result[0] = value;
+            return result;
+        }
+    };
+    for ([_]Mode{ .read, .write, .environment }) |mode| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var template = try rt.Context.initProgram(a, 2, 1);
+        defer template.deinit();
+        const roots = [_]rt.FunctionFn{rt.stabilize(Root.call)};
+        template.module_root_entries = &roots;
+        var eligible = [_]bool{false};
+        var rejected = [_]bool{false};
+        template.module_template_eligible = &eligible;
+        template.module_template_rejected = &rejected;
+        var state: State = .{ .mode = mode };
+        var first_environment: ?*rt.Table = null;
+        for (0..2) |invocation| {
+            var ctx = try template.forkProgram(a);
+            defer ctx.deinit();
+            try rt.bindGlobalTable(&ctx, null, 0);
+            ctx.module_template_context = &template;
+            ctx.setHost(&state);
+            const initial: f64 = if (invocation == 0) 7 else 9;
+            try ctx.setGlobal(1, .{ .number = initial });
+            const value = try ctx.requireModuleId(0, "Module:InvocationGlobals");
+            switch (mode) {
+                .read => try std.testing.expectEqual(initial, value.number),
+                .write => {
+                    try std.testing.expectEqual(@as(f64, 22), value.number);
+                    try std.testing.expectEqual(@as(f64, 22), ctx.getGlobal(1).number);
+                },
+                .environment => {
+                    try std.testing.expect(value.table == ctx.global_table.?);
+                    if (first_environment) |first| try std.testing.expect(value.table != first);
+                    first_environment = value.table;
+                },
+            }
+            try ctx.setGlobal(1, .{ .number = 31 });
+            const cached = try ctx.requireModuleId(0, "Module:InvocationGlobals");
+            try std.testing.expect(rt.rawEqual(value, cached));
+            try std.testing.expectEqual(invocation + 1, state.calls);
+            try std.testing.expect(!eligible[0] and rejected[0]);
+            for (template.module_state_pages) |page| try std.testing.expect(page == null);
+        }
+        try std.testing.expectEqual(@as(usize, 2), state.calls);
+        try std.testing.expect(template.getGlobal(1) == .nil);
+    }
+}
+
+test "global ABI false nil and saved environment aliases preserve metamethod fallback" {
+    const State = struct { reads: usize = 0, writes: usize = 0, reject: bool = false };
+    const F = struct {
+        fn one(value: rt.Value) ![]const rt.Value {
+            const result = try std.heap.smp_allocator.alloc(rt.Value, 1);
+            result[0] = value;
+            return result;
+        }
+        fn index(raw: ?*anyopaque, _: *rt.Context, _: []const rt.Value) ![]const rt.Value {
+            const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingProbeState));
+            state.reads += 1;
+            if (state.reject) return error.NotImplemented;
+            return one(.{ .number = 97 });
+        }
+        fn newindex(raw: ?*anyopaque, ctx: *rt.Context, args: []const rt.Value) ![]const rt.Value {
+            const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingProbeState));
+            state.writes += 1;
+            try args[0].table.rawSet(ctx.allocator, args[1], args[2]);
+            return &.{};
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.initProgram(arena.allocator(), 3, 2);
+    defer ctx.deinit();
+    const keys = [_]rt.Value{ .{ .string = "_G" }, .{ .string = "x" }, .{ .string = "y" } };
+    const shape: rt.Shape = .{ .keys = .{ .boxed = &keys }, .field_count = keys.len, .open = true };
+    try rt.bindGlobalTable(&ctx, &shape, 0);
+    const environment = ctx.global_table.?;
+    var state: State = .{};
+    const mt = try ctx.newTable();
+    try mt.rawSet(ctx.allocator, .{ .string = "__index" }, try ctx.newNative(&state, F.index));
+    try mt.rawSet(ctx.allocator, .{ .string = "__newindex" }, try ctx.newNative(&state, F.newindex));
+    try environment.setMetatable(mt);
+    var output: rt.Value = undefined;
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_global_get(&ctx, 1, &output));
+    try std.testing.expectEqual(@as(f64, 97), output.number);
+    const absent: rt.Value = .nil;
+    const present: rt.Value = .{ .boolean = false };
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_global_set(&ctx, 1, &present));
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_global_get(&ctx, 1, &output));
+    try std.testing.expect(output == .boolean and !output.boolean);
+    try std.testing.expectEqual(@as(usize, 1), state.reads);
+    try std.testing.expectEqual(@as(usize, 1), state.writes);
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_global_set(&ctx, 1, &absent));
+    try std.testing.expectEqual(@as(usize, 1), state.writes);
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_global_get(&ctx, 1, &output));
+    try std.testing.expectEqual(@as(f64, 97), output.number);
+    try std.testing.expectEqual(@as(usize, 2), state.reads);
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_global_set(&ctx, 0, &absent));
+    try std.testing.expect(ctx.getGlobal(0) == .nil and ctx.global_table.? == environment);
+    const late: rt.Value = .{ .number = 41 };
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_global_set(&ctx, 2, &late));
+    try std.testing.expectEqual(@as(f64, 41), environment.rawGet(keys[2]).?.number);
+    try std.testing.expectEqual(@as(usize, 2), state.writes);
+    state.reject = true;
+    try std.testing.expectEqual(@as(u32, 1), dict_lua_global_get(&ctx, 1, &output));
+    try std.testing.expectEqualStrings("NotImplemented", ctx.aotErrorName().?);
+    try std.testing.expectEqual(@as(f64, 41), ctx.getGlobal(2).number);
+    try std.testing.expect(ctx.depth == 0 and ctx.active_module_id == null);
 }

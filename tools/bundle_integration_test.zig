@@ -166,7 +166,7 @@ const loop_capture_module_source =
     \\ assert(sum==66,"uncaptured loop behavior")
     \\end
 ;
-const module_source = loop_capture_module_source ++ "\n" ++
+const module_source = loop_capture_module_source ++ "\n" ++ invocation_shared_root_probe_source ++ "\n" ++
     \\local concat_prefix = 'A'
     \\local concat_first = concat_prefix .. ('\000' .. 'β')
     \\assert(concat_first == 'A\000β')
@@ -205,14 +205,17 @@ const module_source = loop_capture_module_source ++ "\n" ++
     \\assert(require('Module:IntegrationCapturedRoot') == captured_override)
     \\assert(require('Module:IntegrationCapturedRoot')('direct') == 'override:direct')
     \\package.loaded['Module:IntegrationCapturedRoot'] = captured
-    \\local poison = require('Module:IntegrationPoison')
-    \\assert(poison.probe() == 'poison' and type(next) == 'function')
     \\local saved_next = next
+    \\assert(type(saved_next) == 'function')
+    \\local poison = require('Module:IntegrationPoison')
+    \\assert(poison.probe() == 'poison' and next == 'poison', 'required module writes the shared global')
     \\next = 'local-poison'
     \\local local_pairs_text = ''
     \\for k, v in pairs({x = 1}) do local_pairs_text = local_pairs_text .. k .. v end
     \\assert(local_pairs_text == 'x1' and next == 'local-poison')
+    \\assert(poison.probe() == 'local-poison', 'returned function observes late caller rebinding')
     \\next = saved_next
+    \\assert(poison.probe() == saved_next, 'restored builtin binding is shared too')
     \\local large_static = require('Module:IntegrationLargeStatic')
     \\assert(large_static.k129[1] == 129 and large_static.k129[2] == 'v129')
     \\local bit32 = require('bit32')
@@ -681,6 +684,9 @@ fn writeFixture(io: std.Io, a: std.mem.Allocator, path: []const u8) !void {
         .{ .title = "Module:languages/canonical names", .ns = 828, .id = 3, .body = "return { [\"English\"] = \"en\" }" },
         .{ .title = "Module:IntegrationFormsData", .ns = 828, .id = 2, .body = "return { mouse = 'mice' }" },
         .{ .title = "Module:IntegrationPoison", .ns = 828, .id = 7, .body = "next = 'poison'; return { probe = function() return next end }" },
+        .{ .title = "Module:IntegrationSharedReader", .ns = 828, .id = 7001, .body = invocation_shared_reader_source },
+        .{ .title = "Module:IntegrationSharedBroken", .ns = 828, .id = 7002, .body = "integration_shared_value = 'written before failure'; error('shared initializer failure')" },
+        .{ .title = "Module:IntegrationSharedNil", .ns = 828, .id = 7003, .body = "integration_shared_loads = (integration_shared_loads or 0) + 1; return nil" },
         .{ .title = "Module:IntegrationLargeStatic", .ns = 828, .id = 6, .body = large_static.written() },
         .{ .title = "Module:IntegrationFormsData.json", .ns = 828, .id = 5, .body = "{\"cuts\":[1,2],\"nested\":{\"ok\":true}}", .model = "json" },
         .{ .title = "Module:IntegrationFormsAlias", .ns = 828, .id = 4, .body = "#REDIRECT [[Module:IntegrationFormsData]]", .redirect = "Module:IntegrationFormsData" },
@@ -2034,10 +2040,26 @@ fn loadDataCacheProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, b
         const root = try std.fmt.allocPrint(h.a, "{s}/{s}-dictionary", .{ dir, name });
         // There is deliberately no Module:headword/page in either edition.
         try writePages(h.io, h.a, dump, &.{
-            .{ .title = "Cache Alpha", .ns = 0, .id = 1, .body = "==English==\n# {{#invoke:LoadDataProbe|run}}\n" },
-            .{ .title = "Cache Beta", .ns = 0, .id = 2, .body = "==English==\n# {{#invoke:LoadDataProbe|run}}\n" },
+            .{ .title = "Cache Alpha", .ns = 0, .id = 1, .body = "==English==\n# {{#invoke:LoadDataProbe|run}}\n# {{#invoke:IntegrationNativeEnvironment|run|17}} / {{#invoke:IntegrationNativeEnvironment|run|19}}\n" },
+            .{ .title = "Cache Beta", .ns = 0, .id = 2, .body = "==English==\n# {{#invoke:LoadDataProbe|run}}\n# {{#invoke:IntegrationNativeEnvironment|run|31}} / {{#invoke:IntegrationNativeEnvironment|run|37}}\n" },
             .{ .title = "Cache Gamma", .ns = 0, .id = 3, .body = "==English==\n# {{#invoke:LoadDataProbe|run}}\n" },
             .{ .title = "Module:LoadDataProbe", .ns = 828, .id = 4, .body = probe },
+            .{ .title = "Module:IntegrationNativeEnvironment", .ns = 828, .id = 7004, .body = invocation_native_probe_source },
+            .{ .title = "Module:IntegrationNativeFieldCapture", .ns = 828, .id = 7005, .body = "local value = math.abs; return {value=value}" },
+            .{ .title = "Module:IntegrationNativeMetatableCapture", .ns = 828, .id = 7006, .body = "local value = getmetatable(math); return {value=value}" },
+            .{ .title = "Module:IntegrationPrivateEnvironmentData", .ns = 828, .id = 7007, .body = "integration_private_value = 'private child'; return {value=integration_private_value}" },
+            .{ .title = "Module:IntegrationPristineFieldCapture", .ns = 828, .id = 7008, .body = "local value = math.abs; return {value=value}" },
+            .{ .title = "Module:IntegrationPristineMetatableCapture", .ns = 828, .id = 7009, .body = "local value = getmetatable(math); return {value=value}" },
+            .{ .title = "Module:IntegrationInvocationCapture", .ns = 828, .id = 7010, .body = "local value = integration_required_value; return {value=value}" },
+            .{ .title = "Module:IntegrationInvocationConsumer", .ns = 828, .id = 7011, .body = "local capture = require('Module:IntegrationInvocationCapture'); return {value=capture.value}" },
+            .{ .title = "Module:IntegrationExportDependency", .ns = 828, .id = 7012, .body = "return {child={x=7}}" },
+            .{ .title = "Module:IntegrationExportHelper", .ns = 828, .id = 7013, .body = "return {read=function() local dependency=require('Module:IntegrationExportDependency'); return dependency.child.x end}" },
+            .{ .title = "Module:IntegrationExportWarm", .ns = 828, .id = 7014, .body = "local helper=require('Module:IntegrationExportHelper'); local value=helper.read(); return {value=value}" },
+            .{ .title = "Module:IntegrationExportCold", .ns = 828, .id = 7015, .body = "local helper=require('Module:IntegrationExportHelper'); local value=helper.read(); return {value=value}" },
+            .{ .title = "Module:IntegrationDeclensionParent", .ns = 828, .id = 7016, .body = "export={parent_only=true}; local child=require('Module:IntegrationDeclensionChild'); assert(export==child and export.parent_only==nil); return export" },
+            .{ .title = "Module:IntegrationDeclensionChild", .ns = 828, .id = 7017, .body = "export={child_only=true}; local nested=require('Module:IntegrationDeclensionNested'); assert(export==nested and export.child_only==nil); export['νίκη']=function() return integration_declension_value end; return export" },
+            .{ .title = "Module:IntegrationDeclensionNested", .ns = 828, .id = 7018, .body = "export={}; export['γνώμη']=function() return integration_declension_value end; return export" },
+            .{ .title = "Module:IntegrationDeclensionSibling", .ns = 828, .id = 7019, .body = "return {read=function() return export end}" },
             .{ .title = "Module:headword/data", .ns = 828, .id = 5, .body = if (dynamic) page_data else static_data },
             .{ .title = "Module:glossary/data", .ns = 828, .id = 6, .body = "return {title=mw.title.getCurrentTitle().text}" },
             .{ .title = "Modul:Kardinaltalen", .ns = 828, .id = 14490, .body = invalid_nds },
@@ -2051,6 +2073,10 @@ fn loadDataCacheProbe(h: *Harness, pipeline: []const u8, verifier: []const u8, b
         _ = try verifyFixture(h, verifier, root, null);
         for ([_][]const u8{ "Cache Alpha", "Cache Beta", "Cache Gamma" }) |title| {
             const word = try h.run(&.{ bin, "lookup", title, "--root", root, "--language", "English", "--details" }, 0);
+            if (std.mem.eql(u8, title, "Cache Alpha"))
+                try h.require(std.mem.indexOf(u8, word, "shared native environment:17 / shared native environment:19") != null, "same page opposite-value invokes retain modified native field and metatable initializer dependencies");
+            if (std.mem.eql(u8, title, "Cache Beta"))
+                try h.require(std.mem.indexOf(u8, word, "shared native environment:31 / shared native environment:37") != null, "another page retains exact native field/metatable values and private readonly loadData environment");
             const witness = try std.fmt.allocPrint(h.a, "data={s}; current={s}; repeated loads preserved", .{ if (dynamic) title else "STATIC", title });
             try h.require(std.mem.indexOf(u8, word, witness) != null and std.mem.indexOf(u8, word, "Lua error") == null, "compiled cold and warm loadData uses actual module results without invented dependencies or stale page fields");
         }
@@ -2772,7 +2798,7 @@ const PoemObserved = struct {
         }
     }
     fn figure(self: *PoemObserved, h: *Harness, value: encoder.presentation_types.Figure, body: bool, reference: bool) anyerror!void {
-        try self.spans(h, &.{value.image_span}, body, reference);
+        try self.spans(h, &.{value.content.span()}, body, reference);
         if (value.caption_blocks) |blocks| {
             for (blocks) |child| try self.block(h, child, body, reference);
         } else try self.spans(h, value.caption, body, reference);
@@ -2944,11 +2970,15 @@ fn checkLayoutGridRecord(h: *Harness, title: []const u8, value: encoder.presenta
             }
         }
         fn figure(harness: *Harness, value_figure: encoder.presentation_types.Figure, all: *std.ArrayList(u8), counts: *[6]usize, wanted: []const []const u8) anyerror!void {
-            const image = value_figure.image_span.image orelse return error.MissingLayoutFigureImage;
+            const content = switch (value_figure.content) {
+                .image => |image| image,
+                .missing => return error.MissingLayoutFigureImage,
+            };
+            const image = content.span.image orelse return error.MissingLayoutFigureImage;
             try harness.require(std.mem.eql(u8, image.file, "Cat.jpg") and image.width_px == 250 and image.height_px == null and
-                value_figure.format == .thumbnail and value_figure.sizing == .requested_fit,
+                value_figure.format == .thumbnail and content.sizing == .requested_fit,
                 "native layout retains its controlled typed image and exact sizing policy");
-            try spans(harness, &.{value_figure.image_span}, all, counts, wanted);
+            try spans(harness, &.{content.span}, all, counts, wanted);
             if (value_figure.caption_blocks) |blocks| {
                 for (blocks) |child| try block(harness, child, all, counts, wanted);
             } else try spans(harness, value_figure.caption, all, counts, wanted);
@@ -3566,3 +3596,118 @@ fn emptyHeadingProvenanceProbe(h: *Harness, worker: *expander.Worker, parent: []
         }
     }
 }
+
+const invocation_shared_reader_source =
+    \\return {
+    \\ read=function() return integration_shared_value end,
+    \\ call=function() return integration_shared_function() end
+    \\}
+;
+
+const invocation_shared_root_probe_source =
+    \\integration_shared_value = 7
+    \\integration_shared_function = function() return 'first' end
+    \\local shared_reader = require('Module:IntegrationSharedReader')
+    \\local returned_read = shared_reader.read
+    \\assert(shared_reader.read() == 7 and shared_reader.call() == 'first', 'caller globals visible in required module')
+    \\integration_shared_value = false
+    \\integration_shared_function = function() return 'second' end
+    \\assert(returned_read() == false and shared_reader.call() == 'second', 'late global and global-function rebinding')
+    \\assert(require('Module:IntegrationSharedReader') == shared_reader, 'shared reader require identity')
+    \\local original_environment = _G
+    \\_G = nil
+    \\integration_shared_value = 11
+    \\assert(original_environment.integration_shared_value == 11 and returned_read() == 11, 'G variable is not the actual environment pointer')
+    \\_G = {}
+    \\rawset(original_environment, 'integration_shared_value', 13)
+    \\assert(returned_read() == 13 and rawget(original_environment, 'integration_shared_value') == 13, 'saved environment alias remains authoritative')
+    \\_G = original_environment
+    \\for retry=1,2 do
+    \\ local ok, err = pcall(require, 'Module:IntegrationSharedBroken')
+    \\ assert(not ok and tostring(err):find('shared initializer failure', 1, true), 'initializer error remains visible and retry is not a load loop')
+    \\ assert(returned_read() == 'written before failure', 'caught initializer error preserves ordinary global writes')
+    \\end
+    \\integration_shared_loads = 0
+    \\local nil_name = 'Module:IntegrationSharedNil'
+    \\assert(require(nil_name) == true and integration_shared_loads == 1, 'nil return caches true')
+    \\assert(require(nil_name) == true and integration_shared_loads == 1, 'truthy require cache avoids another root')
+    \\package.loaded[nil_name] = false
+    \\assert(require(nil_name) == true and integration_shared_loads == 2, 'explicit false cache reloads')
+    \\package.loaded[nil_name] = nil
+    \\assert(require(nil_name) == true and integration_shared_loads == 3, 'explicit nil cache reloads')
+    \\integration_shared_value = nil
+    \\integration_shared_function = nil
+;
+
+const invocation_native_probe_source =
+    \\return {run=function(frame)
+    \\ local n = tonumber(frame.args[1])
+    \\ assert(n == 17 or n == 19 or n == 31 or n == 37)
+    \\ assert(export == nil and integration_declension_value == nil, 'separate invocations and pages start without the prior export environment')
+    \\ integration_declension_value = n
+    \\ local declension = require('Module:IntegrationDeclensionParent')
+    \\ local sibling = require('Module:IntegrationDeclensionSibling')
+    \\ assert(declension == export and sibling.read() == declension, 'parent child nested and sibling modules share the reassigned export table')
+    \\ assert(declension['νίκη']() == n and declension['γνώμη']() == n, 'returned child exports use the active invocation globals')
+    \\ integration_declension_value = false
+    \\ assert(declension['νίκη']() == false and declension['γνώμη']() == false, 'late caller writes remain visible through both defining modules')
+    \\ assert(require('Module:IntegrationDeclensionParent') == declension and require('Module:IntegrationDeclensionChild') == declension, 'same invocation require identities survive late writes')
+    \\ integration_declension_value = nil
+    \\ assert(declension['νίκη']() == nil and declension['γνώμη']() == nil, 'nil does not restore an older module environment')
+    \\ local dependency = require('Module:IntegrationExportDependency')
+    \\ local nested = dependency.child
+    \\ assert(nested.x == 7, 'fresh invocation restores the dependency prototype')
+    \\ local warm
+    \\ if n == 17 then
+    \\  warm = require('Module:IntegrationExportWarm')
+    \\  assert(warm.value == 7, 'unchanged initializer establishes the warm template')
+    \\ end
+    \\ nested.x = n
+    \\ local cold = require('Module:IntegrationExportCold')
+    \\ assert(cold.value == n, 'first initializer after a nested dependency write is not promoted with a stale value')
+    \\ if n ~= 17 then
+    \\  warm = require('Module:IntegrationExportWarm')
+    \\  assert(warm.value == n, 'warm initializer follows a helper-defined static require and current nested value')
+    \\ else
+    \\  assert(require('Module:IntegrationExportWarm') == warm and warm.value == 7, 'same-invocation require keeps the previously captured value')
+    \\ end
+    \\ nested.x = false
+    \\ assert(require('Module:IntegrationExportCold') == cold and cold.value == n, 'late false does not rerun the same invocation initializer')
+    \\ nested.x = nil
+    \\ assert(require('Module:IntegrationExportDependency') == dependency and dependency.child == nested and nested.x == nil, 'nested deletion preserves module and shared descendant identity')
+    \\ integration_required_value = n
+    \\ local captured_global = require('Module:IntegrationInvocationConsumer')
+    \\ assert(captured_global.value == n, 'transitive initializer global dependency is not frozen across invocations')
+    \\ integration_required_value = false
+    \\ assert(require('Module:IntegrationInvocationConsumer') == captured_global and captured_global.value == n, 'same-invocation require cache retains its captured scalar')
+    \\ integration_required_value = nil
+    \\ local original = math.abs
+    \\ local original_mt = getmetatable(math)
+    \\ if n == 17 then
+    \\  local warm_field = require('Module:IntegrationPristineFieldCapture')
+    \\  local warm_metatable = require('Module:IntegrationPristineMetatableCapture')
+    \\  assert(warm_field.value == original and warm_metatable.value == original_mt, 'pristine initializers establish reusable library-dependent templates')
+    \\ end
+    \\ math.abs = n
+    \\ local captured = require('Module:IntegrationNativeFieldCapture')
+    \\ assert(captured.value == n, 'changed builtin table field is not frozen from another invocation')
+    \\ if n ~= 17 then
+    \\  local changed = require('Module:IntegrationPristineFieldCapture')
+    \\  assert(changed.value == n, 'pristine-first field template is guarded against later invocation mutation')
+    \\ end
+    \\ math.abs = original
+    \\ assert(require('Module:IntegrationNativeFieldCapture') == captured and captured.value == n, 'ordinary same-invocation require cache retains captured value')
+    \\ setmetatable(math, {marker=n})
+    \\ local metadata = require('Module:IntegrationNativeMetatableCapture')
+    \\ assert(metadata.value.marker == n, 'changed builtin owner metatable is not frozen from another invocation')
+    \\ if n ~= 17 then
+    \\  local changed = require('Module:IntegrationPristineMetatableCapture')
+    \\  assert(changed.value.marker == n, 'pristine-first owner-metatable template is guarded against later invocation mutation')
+    \\ end
+    \\ setmetatable(math, original_mt)
+    \\ local private = mw.loadData('Module:IntegrationPrivateEnvironmentData')
+    \\ assert(private.value == 'private child' and integration_private_value == nil, 'nested loadData environment does not publish its globals')
+    \\ assert(not pcall(function() private.value = 'changed' end), 'nested loadData data remains readonly')
+    \\ return 'shared native environment:' .. n
+    \\end}
+;

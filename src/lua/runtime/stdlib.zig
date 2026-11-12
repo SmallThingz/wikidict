@@ -200,12 +200,12 @@ fn baseSetMetatable(_: ?*anyopaque, _: *rt.Context, args: []const Value, result_
     if (args.len < 2 or args[0] != .table) return error.TableExpected;
     args[0].table.notePackageStateAccess();
     if (args[0].table.metatable) |old| if (old.rawGet(.{ .string = "__metatable" }) != null) return error.ProtectedMetatable;
-    try rt.noteInvokeTableMutation(args[0].table);
-    args[0].table.metatable = switch (args[1]) {
+    const metatable: ?*rt.Table = switch (args[1]) {
         .nil => null,
         .table => |t| t,
         else => return error.TableExpected,
     };
+    try args[0].table.setMetatable(metatable);
     return bufferedOne(result_buffer, args[0]);
 }
 
@@ -1450,6 +1450,7 @@ pub fn install(runtime: *rt.Context) !void {
     try setNativeBuffered(runtime, debug, "traceback", debugTraceback);
     try runtime.setGlobal(global_abi.id("debug"), .{ .table = debug });
     try registerStandardPackageLoaded(runtime);
+    runtime.finishLibraryInstallation();
 }
 
 fn cloneTemplateNamespace(runtime: *rt.Context, source: *rt.Table) !*rt.Table {
@@ -1502,8 +1503,6 @@ pub const Template = struct {
         if (runtime.global_table == null) return error.GlobalTableNotBound;
         if (runtime.globals.len < self.base.globals.len) return error.TemplateGlobalLayoutMismatch;
         const page_global = runtime.global_table.?;
-        // Instantiation writes the slot array directly, outside Context.setGlobal.
-        if (runtime.globals.ptr == runtime.root_globals.ptr) runtime.root_tail_cache_valid.* = false;
         @memcpy(runtime.globals[0..self.base.globals.len], self.base.globals);
         runtime.next_identity = self.base.next_identity;
         runtime.builtin_next = self.base.builtin_next;
@@ -1525,6 +1524,7 @@ pub const Template = struct {
         runtime.registerNativeMetatable(.string, string_mt);
         try installPackage(runtime);
         try installDynamicBase(runtime);
+        runtime.finishLibraryInstallation();
     }
 };
 

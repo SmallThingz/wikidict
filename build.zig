@@ -386,8 +386,12 @@ pub fn build(b: *std.Build) void {
         }),
         .test_runner = .{ .path = test_runner, .mode = .simple },
     };
+    // Unit tests pass fixture fingerprints directly to the diagnostic API.
+    // Only the production captured Writer embeds the current source binding.
+    const captured_writer_test_options = b.addOptions();
+    captured_writer_test_options.addOption([]const u8, "source_fingerprint", "");
     const blob_build_tests = b.addTest(blob_build_test_options);
-    blob_build_tests.root_module.addOptions("captured_writer_options", captured_writer_options);
+    blob_build_tests.root_module.addOptions("captured_writer_options", captured_writer_test_options);
     blob_build_tests.root_module.linkSystemLibrary("bz2", .{});
     blob_build_tests.root_module.linkSystemLibrary("zstd", .{});
     blob_build_tests.root_module.addImport("namespace_registry", namespace_registry_test_mod);
@@ -1083,7 +1087,13 @@ fn bundleWorkerObject(b: *std.Build) *std.Build.Step.Compile {
     abi.addImport("zig_runtime", runtime);
     abi.addImport("lua_static_literal_decode", static_decode);
     abi.addImport("lua_static_literal_format", static_format);
+    const page_language_provider = workerModule(b, "tools/page_language.zig");
+    page_language_provider.addImport("namespace_registry", namespace);
+    // The prefix parser shares the data-only syntax API with provider tests.
+    const page_language_encoder = workerModule(b, "src/encoder/blob_root.zig");
+    page_language_provider.addImport("encoder", page_language_encoder);
     const root = workerModule(b, "src/lua/bundle_worker.zig");
+    root.addImport("page_language", page_language_provider);
     root.link_libc = true;
     root.addImport("lua_program", program);
     root.addImport("lua_llvm_abi", abi);

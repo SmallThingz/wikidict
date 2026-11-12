@@ -8,6 +8,7 @@ pub const execution_budget = @import("execution_budget.zig");
 const static_fields = @import("lua_static_fields");
 pub const NativeNamespace = static_fields.Namespace;
 const native_namespace_count = @typeInfo(static_fields.Namespace).@"enum".field_names.len;
+comptime { if (native_namespace_count > 64) @compileError("library dependency mask is too small"); }
 
 // Promotion still mutates process-lived graphs incrementally. A failed
 // allocation can be caught by Lua pcall or an optional upward-promotion caller;
@@ -66,6 +67,7 @@ comptime {
 extern fn snprintf(buffer: [*]u8, size: usize, format: [*:0]const u8, ...) c_int;
 
 pub const Cell = struct { value: Value };
+const ExportGuardRoot = struct { table: ?*Table };
 pub const Env = struct {
     captures: []const *Cell,
     capture_view: Captures,
@@ -571,6 +573,8 @@ pub const Table = struct {
     slots: []Value = &.{},
     global_tail: ?*GlobalTail = null,
     owns_slots: bool = true,
+    // The real environment owner, independent of the ordinary variable _G.
+    invocation_environment: bool = false,
     choices: []ChoiceCell = &.{},
     map: Map = .empty,
     // Lua next() accepts a previously present key after its value is cleared.
@@ -585,7 +589,12 @@ pub const Table = struct {
     // it in the table, not in one arbitrarily chosen module-state allocation.
     has_export_guard: bool = false,
     export_pristine: bool = false,
-    root_tail_cache_valid: ?*bool = null,
+    export_guard_graph_ready: bool = false,
+    // Every exported root that reaches this table shares its mutation guard.
+    // These context-owned lists are installed once, never copied across forks.
+    export_guard_root: ?*ExportGuardRoot = null,
+    export_guard_parents: []const *ExportGuardRoot = &.{},
+    export_capture_baselines: []const InvokeCellBaseline = &.{},
     // Monotonic: only tables that have ever hashed a numeric key need numeric map probes.
     has_hashed_number: bool = false,
     field_cache_owner_nonce: u64 = 0,
@@ -615,6 +624,8 @@ pub const Table = struct {
     // probe is active. Mutating a table owned by another probe (or no probe)
     // is an externally visible effect and makes the root non-reusable.
     module_template_probe_id: u64 = 0,
+    // Certified only at the end of library installation, before Lua executes.
+    template_native_baseline_pristine: ?bool = null,
     invoke_rollback_owner_nonce: u64 = 0,
     invoke_rollback_allocation_id: u64 = 0,
     invoke_rollback_snapshot_id: u64 = 0,
@@ -627,6 +638,13 @@ pub const Table = struct {
     }
 
     pub fn notePackageStateAccess(self: *const Table) void {
+        if (module_template_effect_probe != null) {
+            if (self.invocation_environment) observeInvocationGlobalAccess();
+            if (self.native_namespace) |namespace| {
+                if (templateSingletonNamespace(namespace)) self.observeTemplateLibrary(namespace);
+            }
+            if (self.native_metatable_namespace) |namespace| self.observeTemplateLibrary(namespace);
+        }
         if (module_template_effect_probe != null and self.module_template_reconstructable) {
             // The package singleton is remapped, not snapshotted. Its user-visible
             // contents (including misses, false, iteration, length and writes) are page state.
@@ -635,9 +653,24 @@ pub const Table = struct {
         }
     }
 
+    fn observeTemplateLibrary(self: *const Table, namespace: NativeNamespace) void {
+        module_template_library_dependencies |= @as(u64, 1) << @as(u6, @intCast(@backingInt(namespace)));
+        // Uncertified lazy libraries are unproved dependencies, just as a
+        // previously modified installed library is. Execution stays unchanged.
+        if (self.template_native_baseline_pristine != @as(?bool, true))
+            observeInvocationGlobalAccess();
+    }
+
     fn markMutated(self: *Table) !void {
         self.notePackageStateAccess();
         try noteInvokeTableMutation(self);
+        for (self.export_guard_parents) |guard| if (guard.table) |root| {
+            if (!root.export_pristine) continue;
+            try noteInvokeTableMutation(root);
+            root.export_pristine = false;
+        };
+        if (self.template_native_baseline_pristine != null)
+            self.template_native_baseline_pristine = false;
         if (module_template_effect_probe != null and self.native_metatable_namespace != null) {
             // A builtin type is shared by every object of that type. Returning
             // its metatable from a module does not make it module-private.
@@ -658,7 +691,11 @@ pub const Table = struct {
             markModuleTemplateEffect();
         }
         self.export_pristine = false;
-        if (self.root_tail_cache_valid) |valid| valid.* = false;
+    }
+
+    pub fn setMetatable(self: *Table, metatable: ?*Table) !void {
+        try self.markMutated();
+        self.metatable = metatable;
     }
 
     fn prepareExportGuard(self: *Table) void {
@@ -668,8 +705,22 @@ pub const Table = struct {
         self.export_pristine = true;
     }
 
+    fn exportGraphPristine(self: *const Table) bool {
+        if (!self.export_guard_graph_ready or !self.export_pristine) return false;
+        // Generated stores write capture cells directly. Descendant table
+        // writes use the guards above; rebinding a cell is checked separately.
+        for (self.export_capture_baselines) |baseline|
+            if (!rawEqual(baseline.cell.value, baseline.value)) return false;
+        return true;
+    }
+
     fn invalidateExportGuard(self: *Table) !void {
         try noteInvokeTableMutation(self);
+        for (self.export_guard_parents) |guard| if (guard.table) |root| {
+            if (!root.export_pristine) continue;
+            try noteInvokeTableMutation(root);
+            root.export_pristine = false;
+        };
         self.export_pristine = false;
     }
 
@@ -1338,7 +1389,9 @@ threadlocal var module_template_probe_owner_id: u64 = 0;
 threadlocal var module_template_probe_next_id: u64 = 1;
 threadlocal var module_template_effect_reasons: u32 = 0;
 threadlocal var module_template_probe_page_scope: bool = false;
+threadlocal var module_template_library_dependencies: u64 = 0;
 threadlocal var module_template_allocation_mutation_probe: ?*u64 = null;
+threadlocal var module_template_dependency_probe: ?*ModuleTemplateDependencyProbe = null;
 threadlocal var invoke_rollback: ?*InvokeRollbackJournal = null;
 threadlocal var invoke_rollback_next_id: u64 = 1;
 
@@ -1348,7 +1401,6 @@ const InvokeTableSnapshot = struct {
     borrowed_slots: []Value = &.{},
     tail_ptr: ?*GlobalTail = null,
     tail: ?GlobalTail = null,
-    root_cache_value: ?bool = null,
 };
 
 const InvokeCellBaseline = struct { cell: *Cell, value: Value };
@@ -1415,7 +1467,6 @@ pub const InvokeRollbackJournal = struct {
             .borrowed_slots = borrowed_slots,
             .tail_ptr = table.global_tail,
             .tail = tail,
-            .root_cache_value = if (table.root_tail_cache_valid) |valid| valid.* else null,
         });
         table.invoke_rollback_snapshot_id = self.id;
     }
@@ -1437,9 +1488,6 @@ pub const InvokeRollbackJournal = struct {
                 tail.* = saved_tail;
                 table.global_tail = tail;
                 snapshot.tail = null;
-            }
-            if (snapshot.root_cache_value) |value| {
-                if (table.root_tail_cache_valid) |valid| valid.* = value;
             }
             ctx.assignFieldCacheIdentity(table);
             snapshot.saved.map = .empty;
@@ -1668,42 +1716,46 @@ test "template tagging does not retain context markers in deeply immutable share
     try std.testing.expect(nested.module_template_mutation_probe == null);
 }
 
-test "template global cloning visits sparse deltas and preserves nil snapshots after root writes" {
+test "shared invocation globals preserve large slots false and nil across module owners" {
     for ([_]usize{ 100, 129 }) |pages| {
         var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena.deinit();
         const a = arena.allocator();
         const count = module_global_prefix_len + pages * global_page_len + 3;
-        const old_slot: u32 = module_global_prefix_len + 2 * global_page_len + 7;
-        const late_slot: u32 = module_global_prefix_len + 70 * global_page_len + 5;
-        const far_slot: u32 = @intCast(count - 1);
-        var source = try Context.initProgram(a, @intCast(count), 1);
-        defer source.deinit();
-        var target = try Context.initProgram(a, @intCast(count), 1);
-        defer target.deinit();
-        try source.setGlobal(old_slot, .{ .number = 42 });
-        try target.setGlobal(old_slot, .{ .number = 42 });
-        const previous = try source.enterModule(0);
-        try std.testing.expect(source.global_tail != null);
-        try source.setGlobal(1, .{ .number = 17 });
-        try source.setGlobal(old_slot, .nil);
-        try source.setGlobal(far_slot, .{ .number = 123 });
-        source.restoreGlobals(previous);
-        // This root write occurs after the source module's snapshot. An absent
-        // source page must clear it in the freshly instantiated target module.
-        try source.setGlobal(late_slot, .{ .number = 987 });
-        try target.setGlobal(late_slot, .{ .number = 987 });
-        var clone = Context.ModuleTemplateClone{ .source = &source, .target = &target };
-        defer clone.deinit();
-        try clone.cloneModuleGlobals(0);
-        const target_previous = try target.enterModule(0);
-        defer target.restoreGlobals(target_previous);
-        try std.testing.expectEqual(@as(f64, 17), target.getGlobal(1).number);
-        try std.testing.expectEqual(@as(f64, 123), target.getGlobal(far_slot).number);
-        try std.testing.expect(target.getGlobal(old_slot) == .nil);
-        try std.testing.expect(target.getGlobal(late_slot) == .nil);
-        try std.testing.expectEqual(@as(f64, 42), source.getGlobal(old_slot).number);
-        try std.testing.expectEqual(@as(f64, 987), source.getGlobal(late_slot).number);
+        const early: u32 = module_global_prefix_len + 2 * global_page_len + 7;
+        const late: u32 = @intCast(count - 1);
+        var ctx = try Context.initProgram(a, count, 2);
+        defer ctx.deinit();
+        try bindGlobalTable(&ctx, null, 0);
+        const environment = ctx.global_table.?;
+        try ctx.setGlobal(early, .{ .number = 42 });
+        const first = try ctx.enterModule(0);
+        try ctx.setGlobal(early, .nil);
+        try ctx.setGlobal(late, .{ .boolean = false });
+        ctx.restoreModule(first);
+        const second = try ctx.enterModule(1);
+        try std.testing.expect(ctx.global_table.? == environment);
+        try std.testing.expect(ctx.getGlobal(0).table == environment);
+        try std.testing.expect(ctx.getGlobal(early) == .nil);
+        try std.testing.expect(ctx.getGlobal(late) == .boolean and !ctx.getGlobal(late).boolean);
+        const late_key = @as(f64, @floatFromInt(late + 1));
+        try std.testing.expect(!environment.rawGetNumber(late_key).?.boolean);
+        try environment.rawSet(a, .{ .number = late_key }, .{ .number = 123 });
+        try std.testing.expectEqual(@as(f64, 123), ctx.getGlobal(late).number);
+        var iterator = environment.iterator();
+        try std.testing.expectEqual(@as(f64, 1), iterator.next().?.key_ptr.number);
+        const high = iterator.next().?;
+        try std.testing.expectEqual(late_key, high.key_ptr.number);
+        try std.testing.expectEqual(@as(f64, 123), high.value_ptr.number);
+        try std.testing.expect(iterator.next() == null);
+        ctx.restoreModule(second);
+        try std.testing.expectEqual(@as(f64, 123), ctx.getGlobal(late).number);
+        var independent = try ctx.forkProgram(a);
+        defer independent.deinit();
+        try bindGlobalTable(&independent, null, 0);
+        try std.testing.expect(independent.global_table.? != environment);
+        try std.testing.expect(independent.getGlobal(late) == .nil);
+        try std.testing.expect(independent.getGlobal(0).table == independent.global_table.?);
     }
 }
 
@@ -1724,6 +1776,7 @@ const ModuleTemplateProbeState = struct {
     previous_owner_id: u64,
     previous_reasons: u32,
     previous_page_scope: bool,
+    previous_library_dependencies: u64,
 };
 
 pub fn beginLoadDataEffectProbe(flag: *bool) ?*bool {
@@ -1776,6 +1829,7 @@ fn beginModuleTemplateEffectProbe(flag: *bool, page_scope: bool) ModuleTemplateP
     const previous_owner_id = module_template_probe_owner_id;
     const previous_reasons = module_template_effect_reasons;
     const previous_page_scope = module_template_probe_page_scope;
+    const previous_library_dependencies = module_template_library_dependencies;
     const id = module_template_probe_next_id;
     module_template_probe_next_id +%= 1;
     if (module_template_probe_next_id == 0) module_template_probe_next_id = 1;
@@ -1784,12 +1838,14 @@ fn beginModuleTemplateEffectProbe(flag: *bool, page_scope: bool) ModuleTemplateP
     module_template_probe_owner_id = if (previous != null) previous_owner_id else id;
     module_template_effect_reasons = 0;
     module_template_probe_page_scope = page_scope;
+    module_template_library_dependencies = 0;
     return .{
         .previous = previous,
         .previous_id = previous_id,
         .previous_owner_id = previous_owner_id,
         .previous_reasons = previous_reasons,
         .previous_page_scope = previous_page_scope,
+        .previous_library_dependencies = previous_library_dependencies,
     };
 }
 
@@ -1800,6 +1856,7 @@ fn endModuleTemplateEffectProbe(state: ModuleTemplateProbeState, observed: bool)
     module_template_probe_owner_id = state.previous_owner_id;
     module_template_effect_reasons = state.previous_reasons | observed_reasons;
     module_template_probe_page_scope = state.previous_page_scope;
+    module_template_library_dependencies = state.previous_library_dependencies | module_template_library_dependencies;
     if (observed) {
         if (state.previous) |flag| flag.* = true;
     }
@@ -1809,32 +1866,47 @@ inline fn noteModuleTemplateEffectReason(bit: u32) void {
     if (module_template_effect_probe != null) module_template_effect_reasons |= bit;
 }
 
-const ModuleTemplateProbeSuspend = struct {
+pub const ModuleTemplateProbeSuspend = struct {
     current: ?*bool,
     current_id: u64,
     current_owner_id: u64,
     current_page_scope: bool,
+    current_library_dependencies: u64,
+    current_reasons: u32,
 };
 
-fn suspendModuleTemplateEffectProbe() ModuleTemplateProbeSuspend {
+pub fn suspendModuleTemplateEffectProbe() ModuleTemplateProbeSuspend {
     const state = ModuleTemplateProbeSuspend{
         .current = module_template_effect_probe,
         .current_id = module_template_probe_id,
         .current_owner_id = module_template_probe_owner_id,
         .current_page_scope = module_template_probe_page_scope,
+        .current_library_dependencies = module_template_library_dependencies,
+        .current_reasons = module_template_effect_reasons,
     };
     module_template_effect_probe = null;
     module_template_probe_id = 0;
     module_template_probe_owner_id = 0;
     module_template_probe_page_scope = false;
+    module_template_library_dependencies = 0;
+    module_template_effect_reasons = 0;
     return state;
 }
 
-fn resumeModuleTemplateEffectProbe(state: ModuleTemplateProbeSuspend) void {
+pub fn resumeModuleTemplateEffectProbe(state: ModuleTemplateProbeSuspend) void {
     module_template_effect_probe = state.current;
     module_template_probe_id = state.current_id;
     module_template_probe_owner_id = state.current_owner_id;
     module_template_probe_page_scope = state.current_page_scope;
+    module_template_library_dependencies = state.current_library_dependencies;
+    module_template_effect_reasons = state.current_reasons;
+}
+
+/// Executed unknown/mutable global bindings are invocation dependencies of a
+/// module initializer. This does not classify private loadData state as a host effect.
+pub fn observeInvocationGlobalAccess() void {
+    noteModuleTemplateEffectReason(1 << 6);
+    markModuleTemplateEffect();
 }
 
 fn markModuleTemplateEffect() void {
@@ -1865,6 +1937,34 @@ const ModuleTemplateOverride = struct {
     value: Value,
 };
 const non_table_export_pristine = false;
+const ModuleValueGuard = struct {
+    valid: bool = true,
+    root: ?*Table = null,
+    capture_tables: []const *Table = &.{},
+    capture_cells: []const InvokeCellBaseline = &.{},
+
+    fn pristine(self: ModuleValueGuard) bool {
+        if (!self.valid) return false;
+        if (self.root) |root| if (!root.exportGraphPristine()) return false;
+        for (self.capture_tables) |table| if (!table.exportGraphPristine()) return false;
+        for (self.capture_cells) |cell| if (!rawEqual(cell.cell.value, cell.value)) return false;
+        return true;
+    }
+};
+
+const ModuleTemplateDependencyProbe = struct {
+    ctx: *Context,
+    requirements: std.ArrayList(ModuleRequirement) = .empty,
+
+    fn record(self: *ModuleTemplateDependencyProbe, ctx: *const Context, module_id: u32, requested: []const u8) !void {
+        if (self.ctx != ctx) return;
+        for (self.requirements.items) |item|
+            if (item.module_id == module_id and std.mem.eql(u8, item.requested, requested)) return;
+        const name = try self.ctx.stringAllocator().dupe(u8, requested);
+        try self.requirements.append(std.heap.smp_allocator, .{ .module_id = module_id, .requested = name });
+    }
+};
+
 const ModuleState = struct {
     loading: bool = false,
     value: ?Value = null,
@@ -1873,12 +1973,14 @@ const ModuleState = struct {
     deferred_require_visibility: bool = false,
     template_package_observed: bool = false,
     template_page_scoped_only: bool = false,
+    template_library_dependencies: u64 = 0,
+    template_invocation_dependent: bool = false,
+    template_value_guard: ModuleValueGuard = .{},
+    template_origin_context: ?*const Context = null,
+    template_observed_requirements: []const ModuleRequirement = &.{},
     template_init_probe_id: u64 = 0,
     template_mutation_probe_id: u64 = 0,
     template_overrides: []const ModuleTemplateOverride = &.{},
-    globals: ?[]Value = null,
-    global_tail: ?*GlobalTail = null,
-    global_table: ?*Table = null,
 };
 const ModuleStatePage = struct {
     initialized: [module_state_page_len / 64]u64 = @as([(module_state_page_len / 64)]u64, @splat(0)),
@@ -1899,11 +2001,7 @@ const ModuleStatePage = struct {
         return &self.states[index];
     }
 };
-const GlobalScope = struct {
-    globals: []Value,
-    global_table: ?*Table,
-    global_tail: ?*GlobalTail,
-};
+const ModuleScope = struct { module_id: ?u32 };
 
 // Nonces prevent a stale site pointer from surviving page-arena address reuse.
 var next_field_cache_context_nonce: std.atomic.Value(u64) = .init(1);
@@ -2061,9 +2159,6 @@ pub const Context = struct {
     globals: []Value,
     root_globals: []Value,
     // Stable heap address because Context is returned and forked by value.
-    root_tail_cache_valid: *bool,
-    root_tail_occupied: [2]u64 = .{ 0, 0 },
-    root_tail_dense: bool = false,
     global_tail: ?*GlobalTail = null,
     program_shapes: []const Shape = &.{},
     program_shapes_validated: bool = false,
@@ -2120,6 +2215,7 @@ pub const Context = struct {
     module_template_page_scope: bool = false,
     page_stable_host_effects: bool = false,
     eager_bootstrap: bool = false,
+    template_library_installation_closed: bool = false,
     package_observable: bool = false,
     program_bootstrap_ctx: ?*const anyopaque = null,
     program_bootstrap: ?ProgramBootstrapFn = null,
@@ -2133,7 +2229,8 @@ pub const Context = struct {
     global_table: ?*Table = null,
     root_global_table: ?*Table = null,
     global_env_slot: ?u32 = null,
-    static_global_scopes: std.ArrayList(GlobalScope) = .empty,
+    active_module_id: ?u32 = null,
+    static_module_scopes: std.ArrayList(ModuleScope) = .empty,
     next_iteration_hint: ?NextIterationHint = null,
     // Borrowed program-owned immutable Unicode pattern metadata cache.
     ustring_pattern_cache: ?*anyopaque = null,
@@ -2150,9 +2247,6 @@ pub const Context = struct {
         const module_state_pages = try allocator.alloc(?*ModuleStatePage, page_count);
         errdefer allocator.free(module_state_pages);
         @memset(module_state_pages, null);
-        const root_tail_cache_valid = try allocator.create(bool);
-        errdefer allocator.destroy(root_tail_cache_valid);
-        root_tail_cache_valid.* = false;
         return .{
             .allocator = allocator,
             .namespace_catalog = if (@import("builtin").is_test) try namespace_registry.englishTestRegistry() else null,
@@ -2160,7 +2254,6 @@ pub const Context = struct {
             .string_arena = .init(allocator),
             .globals = globals,
             .root_globals = globals,
-            .root_tail_cache_valid = root_tail_cache_valid,
             .module_count = module_count,
             .module_state_pages = module_state_pages,
         };
@@ -2214,6 +2307,18 @@ pub const Context = struct {
 
     fn stringAllocator(self: *Context) std.mem.Allocator {
         return if (self.strings_use_context_allocator) self.allocator else self.string_arena.allocator();
+    }
+
+    /// Installation-only: finish every library field and alias before exposing
+    /// this Context to Lua. Never use this to reseal user-modified libraries.
+    pub fn finishLibraryInstallation(self: *Context) void {
+        if (self.template_library_installation_closed) return;
+        for (self.template_native_namespaces) |table| {
+            if (table) |library| library.template_native_baseline_pristine = true;
+        }
+        for (self.template_native_metatables) |table| {
+            if (table) |metatable| metatable.template_native_baseline_pristine = true;
+        }
     }
 
     pub fn registerNativeMetatable(self: *Context, namespace: NativeNamespace, table: *Table) void {
@@ -2363,27 +2468,9 @@ pub const Context = struct {
         self.module_template_clone_tables.deinit(self.allocator);
         self.module_template_clone_cells.deinit(self.allocator);
         self.module_template_clone_callables.deinit(self.allocator);
-        self.static_global_scopes.deinit(self.allocator);
-        for (self.module_state_pages) |page| if (page) |owned| {
-            for (owned.initialized, 0..) |word, word_index| {
-                var remaining = word;
-                while (remaining != 0) {
-                    const slot = word_index * 64 + @as(usize, @intCast(@ctz(remaining)));
-                    remaining &= remaining - 1;
-                    const state = &owned.states[slot];
-                    if (state.global_table) |table| {
-                        table.deinit(self.allocator);
-                        self.allocator.destroy(table);
-                    }
-                    if (state.globals) |globals| self.allocator.free(globals);
-                    if (state.global_tail) |tail| {
-                        tail.deinit();
-                        self.allocator.destroy(tail);
-                    }
-                }
-            }
+        self.static_module_scopes.deinit(self.allocator);
+        for (self.module_state_pages) |page| if (page) |owned|
             self.allocator.destroy(owned);
-        };
         self.allocator.free(self.module_state_pages);
         if (self.package_loaded_tail) |tail| {
             tail.deinit();
@@ -2394,7 +2481,6 @@ pub const Context = struct {
             self.allocator.destroy(table);
         }
         self.allocator.free(self.root_globals);
-        self.allocator.destroy(self.root_tail_cache_valid);
         self.string_arena.deinit();
     }
 
@@ -2454,7 +2540,6 @@ pub const Context = struct {
         if (slot < self.globals.len) {
             self.globals[slot] = value;
             if (value != .nil) if (self.global_table) |table| table.noteSlotPresence(slot);
-            if (self.globals.ptr == self.root_globals.ptr) self.root_tail_cache_valid.* = false;
             return;
         }
         const tail = self.global_tail orelse return error.BadGlobalSlot;
@@ -2480,14 +2565,7 @@ pub const Context = struct {
                     const slot = word_index * 64 + @as(usize, @intCast(@ctz(remaining)));
                     remaining &= remaining - 1;
                     const state = &states.states[slot];
-                    const globals = state.globals;
-                    const global_tail = state.global_tail;
-                    const global_table = state.global_table;
-                    state.* = .{
-                        .globals = globals,
-                        .global_tail = global_tail,
-                        .global_table = global_table,
-                    };
+                    state.* = .{};
                 }
             }
         };
@@ -2497,7 +2575,8 @@ pub const Context = struct {
         self.package_observable = false;
         self.current_frame = null;
         self.depth = 0;
-        self.static_global_scopes.clearRetainingCapacity();
+        self.active_module_id = null;
+        self.static_module_scopes.clearRetainingCapacity();
         self.next_iteration_hint = null;
         self.clearLuaError();
         self.clearAotErrorName();
@@ -2578,7 +2657,7 @@ pub const Context = struct {
         self.depth += 1;
         defer self.depth -= 1;
         const previous = try self.enterFunctionModule(value.id);
-        defer if (previous) |scope| self.restoreGlobals(scope);
+        defer if (previous) |scope| self.restoreModule(scope);
         return self.callEntryBuffered(value.entry, value.captures(), args, result_buffer);
     }
 
@@ -2593,7 +2672,7 @@ pub const Context = struct {
         if (module_id == std.math.maxInt(u32))
             return self.callEntryBuffered(entry, .{ .direct = captures }, args, result_buffer);
         const previous = try self.enterModule(module_id);
-        defer self.restoreGlobals(previous);
+        defer self.restoreModule(previous);
         return self.callEntryBuffered(entry, .{ .direct = captures }, args, result_buffer);
     }
 
@@ -2602,7 +2681,7 @@ pub const Context = struct {
         self.depth += 1;
         defer self.depth -= 1;
         const previous = try self.enterFunctionModule(value.id);
-        defer if (previous) |scope| self.restoreGlobals(scope);
+        defer if (previous) |scope| self.restoreModule(scope);
         return direct(self, value.captures(), args);
     }
 
@@ -2611,7 +2690,7 @@ pub const Context = struct {
         self.depth += 1;
         defer self.depth -= 1;
         const previous = try self.enterFunctionModule(value.id);
-        defer if (previous) |scope| self.restoreGlobals(scope);
+        defer if (previous) |scope| self.restoreModule(scope);
         return direct(self, value.captures(), args, result_buffer);
     }
 
@@ -2738,7 +2817,7 @@ pub const Context = struct {
         return table.rawGetAfterSlot(key);
     }
 
-    fn packageLoadedModuleGet(self: *Context, module_id: u32, requested: ?[]const u8) ?Value {
+    fn packageLoadedModuleGet(self: *const Context, module_id: u32, requested: ?[]const u8) ?Value {
         const suspended = suspendModuleTemplateEffectProbe();
         defer resumeModuleTemplateEffectProbe(suspended);
         const loaded = self.package_loaded orelse return null;
@@ -2778,6 +2857,9 @@ pub const Context = struct {
     }
 
     pub fn deferStaticRequireRef(self: *Context, module_id: u32, out: *Value) ?*const bool {
+        // The existing fallthrough records the exact require in the root probe.
+        // This pointer-only ABI cannot report allocation failure for that record.
+        if (module_template_dependency_probe != null) return null;
         if (self.package_observable) return null;
         const state = self.moduleState(module_id) orelse return null;
         const value = state.value orelse state.preinitialized orelse return null;
@@ -2786,6 +2868,8 @@ pub const Context = struct {
             if (!rawEqual(visible, value)) return null;
         if (!self.eager_bootstrap) state.deferred_require_visibility = true;
         out.* = value;
+        if (value == .table and value.table.export_pristine and !state.template_value_guard.pristine())
+            return &non_table_export_pristine;
         return if (value == .table) &value.table.export_pristine else &non_table_export_pristine;
     }
 
@@ -2793,6 +2877,7 @@ pub const Context = struct {
         const state = self.moduleStateConst(module_id) orelse return null;
         const expected = state.value orelse state.preinitialized orelse return null;
         if (!rawEqual(value, expected) or value != .table) return null;
+        if (value.table.export_pristine and !state.template_value_guard.pristine()) return &non_table_export_pristine;
         return &value.table.export_pristine;
     }
 
@@ -2832,115 +2917,29 @@ pub const Context = struct {
         return self.module_state_pages[page_index].?.ensure(@as(usize, module_id) & module_state_page_mask);
     }
 
-    fn moduleGlobalsAreDense(self: *Context) bool {
-        // A shapeless bound environment exposes numeric array slots directly.
-        if (self.root_global_table) |table| if (table.shape == null) return true;
-        if (self.root_globals.len <= module_global_prefix_len) return true;
-        const values = self.root_globals[module_global_prefix_len..];
-        const page_count = values.len / global_page_len + @intFromBool(values.len % global_page_len != 0);
-        const cacheable = page_count <= self.root_tail_occupied.len * 64;
-        if (cacheable and self.root_tail_cache_valid.*) return self.root_tail_dense;
-        self.root_tail_occupied = .{ 0, 0 };
-        var occupied: usize = 0;
-        var start: usize = 0;
-        while (start < values.len) : (start += global_page_len) {
-            for (values[start..@min(start + global_page_len, values.len)]) |value| {
-                if (value != .nil) {
-                    occupied += 1;
-                    if (cacheable) {
-                        const page_index = start / global_page_len;
-                        self.root_tail_occupied[page_index / 64] |= @as(u64, 1) << @intCast(page_index % 64);
-                    }
-                    break;
-                }
-            }
-        }
-        const dense = occupied > page_count / 2;
-        if (cacheable) {
-            self.root_tail_dense = dense;
-            self.root_tail_cache_valid.* = true;
-        }
-        return dense;
-    }
-
-    fn ensureModuleGlobals(self: *Context, module_id: u32) !GlobalScope {
-        const state = try self.ensureModuleState(module_id);
-        if (state.globals == null) {
-            const dense = self.moduleGlobalsAreDense();
-            const prefix_len = if (dense) self.root_globals.len else @min(self.root_globals.len, module_global_prefix_len);
-            const globals = try self.allocator.dupe(Value, self.root_globals[0..prefix_len]);
-            errdefer self.allocator.free(globals);
-            const tail = if (prefix_len < self.root_globals.len)
-                try GlobalTail.snapshot(self.allocator, self.root_globals[prefix_len..], if (self.root_tail_cache_valid.*) &self.root_tail_occupied else null)
-            else
-                null;
-            errdefer if (tail) |owned| {
-                owned.deinit();
-                self.allocator.destroy(owned);
-            };
-            var table: ?*Table = null;
-            if (self.root_global_table) |root_table| {
-                const owned = try self.allocator.create(Table);
-                errdefer self.allocator.destroy(owned);
-                owned.* = .{
-                    .shape = root_table.shape,
-                    .slots = globals,
-                    .global_tail = tail,
-                    .owns_slots = false,
-                    .module_template_probe_id = module_template_probe_owner_id,
-                    .invoke_rollback_owner_nonce = self.field_cache_nonce,
-                };
-                owned.slot_history = root_table.slot_history;
-                owned.slot_history_tail = try self.allocator.dupe(u64, root_table.slot_history_tail);
-                errdefer self.allocator.free(owned.slot_history_tail);
-                if (self.global_env_slot) |slot| {
-                    if (slot < globals.len) {
-                        globals[slot] = .{ .table = owned };
-                    } else if (tail) |extra| {
-                        try extra.set(slot - globals.len, .{ .table = owned });
-                    } else return error.BadGlobalSlot;
-                }
-                table = owned;
-            }
-            state.globals = globals;
-            state.global_tail = tail;
-            state.global_table = table;
-        }
-        return .{
-            .globals = state.globals.?,
-            .global_table = state.global_table,
-            .global_tail = state.global_tail,
-        };
-    }
-
     fn moduleForFunction(self: *const Context, function_id: u32) ?u32 {
         if (function_id >= self.function_module_ids.len) return null;
         const module_id = self.function_module_ids[function_id];
         return if (module_id < self.module_count) module_id else null;
     }
 
-    fn enterModule(self: *Context, module_id: u32) !GlobalScope {
-        const previous = GlobalScope{
-            .globals = self.globals,
-            .global_table = self.global_table,
-            .global_tail = self.global_tail,
-        };
-        const target = try self.ensureModuleGlobals(module_id);
-        self.globals = target.globals;
-        self.global_table = target.global_table;
-        self.global_tail = target.global_tail;
+    fn enterModule(self: *Context, module_id: u32) !ModuleScope {
+        if (module_id >= self.module_count) return error.BadModuleId;
+        self.template_library_installation_closed = true;
+        const previous = ModuleScope{ .module_id = self.active_module_id };
+        // Required modules share the active invocation's globals. Defining
+        // module identity remains call metadata, not environment ownership.
+        self.active_module_id = module_id;
         return previous;
     }
 
-    fn enterFunctionModule(self: *Context, function_id: u32) !?GlobalScope {
+    fn enterFunctionModule(self: *Context, function_id: u32) !?ModuleScope {
         const module_id = self.moduleForFunction(function_id) orelse return null;
         return try self.enterModule(module_id);
     }
 
-    fn restoreGlobals(self: *Context, previous: GlobalScope) void {
-        self.globals = previous.globals;
-        self.global_table = previous.global_table;
-        self.global_tail = previous.global_tail;
+    fn restoreModule(self: *Context, previous: ModuleScope) void {
+        self.active_module_id = previous.module_id;
     }
 
     pub fn enterLocalStaticFunction(self: *Context) !void {
@@ -2957,12 +2956,12 @@ pub const Context = struct {
         self.depth += 1;
         errdefer self.depth -= 1;
         const previous = try self.enterModule(module_id);
-        errdefer self.restoreGlobals(previous);
-        try self.static_global_scopes.append(self.allocator, previous);
+        errdefer self.restoreModule(previous);
+        try self.static_module_scopes.append(self.allocator, previous);
     }
 
     pub fn leaveStaticFunction(self: *Context) void {
-        if (self.static_global_scopes.pop()) |previous| self.restoreGlobals(previous);
+        if (self.static_module_scopes.pop()) |previous| self.restoreModule(previous);
         if (self.depth != 0) self.depth -= 1;
     }
 
@@ -2987,6 +2986,177 @@ pub const Context = struct {
             copy.metatable = (try self.cloneSnapshotValue(.{ .table = metatable }, seen)).table;
         copy.read_only = value.table.read_only;
         return .{ .table = copy };
+    }
+
+    const ExportGraphGuard = struct {
+        owner: *Context,
+        root: *Table,
+        tables: std.AutoHashMapUnmanaged(*Table, void) = .empty,
+        cells: std.AutoHashMapUnmanaged(*Cell, void) = .empty,
+        callables: std.AutoHashMapUnmanaged(*const FunctionValue, void) = .empty,
+        baselines: std.ArrayList(InvokeCellBaseline) = .empty,
+        pending: std.ArrayList(Value) = .empty,
+
+        fn deinit(self: *ExportGraphGuard) void {
+            self.tables.deinit(std.heap.smp_allocator);
+            self.cells.deinit(std.heap.smp_allocator);
+            self.callables.deinit(std.heap.smp_allocator);
+            self.baselines.deinit(std.heap.smp_allocator);
+            self.pending.deinit(std.heap.smp_allocator);
+        }
+
+        fn table(self: *ExportGraphGuard, item: *Table) anyerror!void {
+            if (item.cross_page_stable and item.read_only) return;
+            if (item.invoke_rollback_owner_nonce != self.owner.field_cache_nonce) {
+                self.root.export_pristine = false;
+                return;
+            }
+            if (item.invocation_environment or !item.owns_slots or item.global_tail != null) {
+                self.root.export_pristine = false;
+                return;
+            }
+            if (item.native_metatable_namespace != null) return;
+            if (item.native_namespace) |namespace|
+                if (templateSingletonNamespace(namespace) or namespace == .namespace_map or namespace == .title_value) return;
+            const entry = try self.tables.getOrPut(std.heap.smp_allocator, item);
+            if (entry.found_existing) return;
+            if (item != self.root) {
+                if (item.has_export_guard and !item.exportGraphPristine())
+                    self.root.export_pristine = false;
+                var present = false;
+                for (item.export_guard_parents) |parent| {
+                    if (parent.table) |ancestor| {
+                        if (ancestor != self.root and !ancestor.exportGraphPristine()) self.root.export_pristine = false;
+                        present = present or ancestor == self.root;
+                    }
+                }
+                if (!present) {
+                    try noteInvokeTableMutation(item);
+                    const parents = try self.owner.stringAllocator().alloc(*ExportGuardRoot, item.export_guard_parents.len + 1);
+                    @memcpy(parents[0..item.export_guard_parents.len], item.export_guard_parents);
+                    parents[item.export_guard_parents.len] = self.root.export_guard_root.?;
+                    item.export_guard_parents = parents;
+                }
+            }
+            for (item.slots) |slot_value| try self.pending.append(std.heap.smp_allocator, slot_value);
+            for (item.choices) |choice| {
+                try self.pending.append(std.heap.smp_allocator, choice.key);
+                try self.pending.append(std.heap.smp_allocator, choice.value);
+            }
+            var entries = item.map.iterator();
+            while (entries.next()) |row| {
+                try self.pending.append(std.heap.smp_allocator, row.key_ptr.*);
+                try self.pending.append(std.heap.smp_allocator, row.value_ptr.*);
+            }
+            if (item.metatable) |metatable| try self.pending.append(std.heap.smp_allocator, .{ .table = metatable });
+        }
+
+        fn value(self: *ExportGraphGuard, item: Value) anyerror!void {
+            switch (item) {
+                .table => |table_value| try self.table(table_value),
+                .callable => |callable| {
+                    if (callable.id == native_function_id) return;
+                    const entry = try self.callables.getOrPut(std.heap.smp_allocator, callable);
+                    if (entry.found_existing) return;
+                    switch (callable.captures()) {
+                        .direct => |captures| for (captures) |cell| {
+                            const seen = try self.cells.getOrPut(std.heap.smp_allocator, cell);
+                            if (seen.found_existing) continue;
+                            try self.baselines.append(std.heap.smp_allocator, .{ .cell = cell, .value = cell.value });
+                            try self.pending.append(std.heap.smp_allocator, cell.value);
+                        },
+                        .native => unreachable,
+                    }
+                },
+                else => {},
+            }
+        }
+    };
+
+    fn prepareModuleExportGuard(self: *Context, value: Value) !void {
+        if (value != .table or value.table.export_guard_graph_ready) return;
+        const root = value.table;
+        try noteInvokeTableMutation(root);
+        if (root.export_guard_root == null) {
+            const record = try self.stringAllocator().create(ExportGuardRoot);
+            record.* = .{ .table = root };
+            root.export_guard_root = record;
+        }
+        root.prepareExportGuard();
+        errdefer root.export_pristine = false;
+        var guard = ExportGraphGuard{ .owner = self, .root = root };
+        defer guard.deinit();
+        // Heap graph depth is independent of Lua call depth.
+        try guard.pending.append(std.heap.smp_allocator, value);
+        while (guard.pending.pop()) |item| try guard.value(item);
+        root.export_capture_baselines = try self.stringAllocator().dupe(InvokeCellBaseline, guard.baselines.items);
+        root.export_guard_graph_ready = true;
+    }
+
+    fn prepareModuleValueGuard(self: *Context, value: Value) !ModuleValueGuard {
+        if (value == .table) {
+            if (value.table.cross_page_stable and value.table.read_only) return .{};
+            if (value.table.invoke_rollback_owner_nonce != self.field_cache_nonce) return .{ .valid = false };
+            try self.prepareModuleExportGuard(value);
+            return .{ .root = value.table };
+        }
+        if (value != .callable) return .{};
+        const Walk = struct {
+            ctx: *Context,
+            valid: bool = true,
+            seen: std.AutoHashMapUnmanaged(*const FunctionValue, void) = .empty,
+            cells: std.AutoHashMapUnmanaged(*Cell, void) = .empty,
+            tables: std.ArrayList(*Table) = .empty,
+            baselines: std.ArrayList(InvokeCellBaseline) = .empty,
+            pending: std.ArrayList(Value) = .empty,
+
+            fn visit(walk: *@This(), item: Value) anyerror!void {
+                if (item == .table) {
+                    if (item.table.cross_page_stable and item.table.read_only) return;
+                    if (item.table.invoke_rollback_owner_nonce != walk.ctx.field_cache_nonce) {
+                        walk.valid = false;
+                        return;
+                    }
+                    for (walk.tables.items) |table| if (table == item.table) return;
+                    try walk.ctx.prepareModuleExportGuard(item);
+                    try walk.tables.append(std.heap.smp_allocator, item.table);
+                } else if (item == .callable and item.callable.id != native_function_id) {
+                    const entry = try walk.seen.getOrPut(std.heap.smp_allocator, item.callable);
+                    if (entry.found_existing) return;
+                    switch (item.callable.captures()) {
+                        .direct => |captures| for (captures) |cell| {
+                            const found = try walk.cells.getOrPut(std.heap.smp_allocator, cell);
+                            if (found.found_existing) continue;
+                            try walk.baselines.append(std.heap.smp_allocator, .{ .cell = cell, .value = cell.value });
+                            try walk.pending.append(std.heap.smp_allocator, cell.value);
+                        },
+                        .native => unreachable,
+                    }
+                }
+            }
+        };
+        var walk = Walk{ .ctx = self };
+        defer walk.seen.deinit(std.heap.smp_allocator);
+        defer walk.cells.deinit(std.heap.smp_allocator);
+        defer walk.tables.deinit(std.heap.smp_allocator);
+        defer walk.baselines.deinit(std.heap.smp_allocator);
+        defer walk.pending.deinit(std.heap.smp_allocator);
+        try walk.pending.append(std.heap.smp_allocator, value);
+        while (walk.pending.pop()) |item| try walk.visit(item);
+        return .{
+            .valid = walk.valid,
+            .capture_tables = try self.stringAllocator().dupe(*Table, walk.tables.items),
+            .capture_cells = try self.stringAllocator().dupe(InvokeCellBaseline, walk.baselines.items),
+        };
+    }
+
+    fn retainModuleRequirements(self: *Context, values: []const ModuleRequirement) ![]const ModuleRequirement {
+        const result = try self.stringAllocator().alloc(ModuleRequirement, values.len);
+        for (values, result) |item, *out| out.* = .{
+            .module_id = item.module_id,
+            .requested = try self.stringAllocator().dupe(u8, item.requested),
+        };
+        return result;
     }
 
     const ModuleTemplateTagger = struct {
@@ -3402,53 +3572,6 @@ pub const Context = struct {
             };
         }
 
-        fn cloneModuleGlobals(self: *ModuleTemplateClone, module_id: u32) anyerror!void {
-            const source_state = self.source.moduleState(module_id) orelse return;
-            if (source_state.globals == null) return;
-            if (self.source.root_globals.len != self.target.root_globals.len)
-                return error.UnsupportedModuleTemplate;
-
-            const source_previous = try self.source.enterModule(module_id);
-            defer self.source.restoreGlobals(source_previous);
-            const target_previous = try self.target.enterModule(module_id);
-            defer self.target.restoreGlobals(target_previous);
-
-            if (self.source.global_table) |source_global|
-                if (self.target.global_table) |target_global| {
-                    try self.tables.put(self.mapAllocator(), source_global, target_global);
-                    target_global.slot_history = source_global.slot_history;
-                    @memcpy(target_global.slot_history_tail, source_global.slot_history_tail);
-                };
-
-            for (self.source.globals, 0..) |value, slot|
-                try self.cloneGlobalDelta(slot, value);
-            if (self.source.global_tail) |tail| {
-                // Module tails are sparse snapshots, not live views of root
-                // globals. Visit allocated pages plus currently occupied root
-                // pages: the latter preserve nil tombstones after root writes.
-                _ = self.source.moduleGlobalsAreDense();
-                for (tail.pages, 0..) |page, page_index| {
-                    if (page == null and self.source.root_tail_cache_valid.* and
-                        page_index < self.source.root_tail_occupied.len * 64 and
-                        self.source.root_tail_occupied[page_index / 64] &
-                            (@as(u64, 1) << @intCast(page_index % 64)) == 0)
-                        continue;
-                    const tail_start = page_index * global_page_len;
-                    const count = @min(global_page_len, tail.len - tail_start);
-                    const start = self.source.globals.len + tail_start;
-                    for (0..count) |index|
-                        try self.cloneGlobalDelta(start + index, if (page) |values| values[index] else .nil);
-                }
-            }
-        }
-
-        fn cloneGlobalDelta(self: *ModuleTemplateClone, slot_usize: usize, source_value: Value) anyerror!void {
-            const slot: u32 = @intCast(slot_usize);
-            if (self.source.global_env_slot != null and self.source.global_env_slot.? == slot) return;
-            if (rawEqual(source_value, self.source.root_globals[slot_usize])) return;
-            try self.target.setGlobal(slot, try self.cloneValue(source_value));
-        }
-
         fn cloneModule(
             self: *ModuleTemplateClone,
             module_id: u32,
@@ -3464,6 +3587,7 @@ pub const Context = struct {
             if (self.target.moduleState(module_id)) |existing| {
                 if (existing.value) |value| {
                     try self.bindExisting(source_value, value);
+                    try self.publishRequestedAlias(module_id, requested, value);
                     return value;
                 }
                 if (existing.loading) return error.ModuleLoadLoop;
@@ -3474,7 +3598,8 @@ pub const Context = struct {
                 state.template_init_probe_id = module_template_probe_id;
             state.loading = true;
             errdefer state.loading = false;
-            for (self.target.requirementsFor(module_id)) |requirement| {
+            var requirements = self.source.templateRequirementsFor(module_id);
+            while (requirements.next()) |requirement| {
                 if (self.skipsModule(requirement.module_id)) continue;
                 _ = try self.cloneModule(requirement.module_id, requirement.requested);
             }
@@ -3487,23 +3612,40 @@ pub const Context = struct {
                 self.source_mutation_marker = previous_source_marker;
                 self.mutation_marker = previous_marker;
             }
-            try self.cloneModuleGlobals(module_id);
             const value = try self.cloneValue(source_value);
+            const observed_requirements = try self.target.retainModuleRequirements(source_state.template_observed_requirements);
+            const value_guard = try self.target.prepareModuleValueGuard(value);
             state.value = value;
             state.preinitialized = null;
             state.template_package_observed = source_state.template_package_observed;
             state.template_page_scoped_only = source_state.template_page_scoped_only;
-            if (value == .table) value.table.prepareExportGuard();
+            state.template_library_dependencies = source_state.template_library_dependencies;
+            state.template_invocation_dependent = source_state.template_invocation_dependent;
+            state.template_observed_requirements = observed_requirements;
+            state.template_value_guard = value_guard;
+            state.template_origin_context = if (self.promotion) null else self.source;
             state.loading = false;
             try self.target.packageLoadedModuleSet(module_id, requested, value);
+            try self.publishRequestedAlias(module_id, requested, value);
             if (!self.promotion and source_state.template_package_observed)
                 try self.target.observePackage();
             return value;
         }
 
+        fn publishRequestedAlias(self: *ModuleTemplateClone, module_id: u32, requested: ?[]const u8, value: Value) !void {
+            const raw_name = requested orelse return;
+            const loaded = self.target.package_loaded orelse return;
+            if (self.target.canonicalModuleName(module_id, null)) |canonical|
+                if (std.mem.eql(u8, canonical, raw_name)) return;
+            if (rawGetRuntimeBookkeeping(loaded, .{ .string = raw_name })) |existing|
+                if (rawEqual(existing, value)) return;
+            try self.target.rawSetRuntimeBookkeeping(loaded, .{ .string = raw_name }, value);
+        }
+
         fn applyTemplateOverrides(
             self: *ModuleTemplateClone,
             overrides: []const ModuleTemplateOverride,
+            creator: *const ModuleState,
         ) anyerror!void {
             const previous_source_marker = self.source_mutation_marker;
             const previous_marker = self.mutation_marker;
@@ -3517,9 +3659,22 @@ pub const Context = struct {
                 self.source_mutation_marker = if (source_state) |owner| &owner.template_mutation_probe_id else null;
                 self.mutation_marker = &state.template_mutation_probe_id;
                 const value = try self.cloneValue(override.value);
+                const value_guard = try self.target.prepareModuleValueGuard(value);
+                const original = if (source_state) |owner| owner.template_observed_requirements else &.{};
+                const combined = try self.target.allocator.alloc(ModuleRequirement, original.len + creator.template_observed_requirements.len);
+                defer self.target.allocator.free(combined);
+                @memcpy(combined[0..original.len], original);
+                @memcpy(combined[original.len..], creator.template_observed_requirements);
+                const observed_requirements = try self.target.retainModuleRequirements(combined);
                 state.value = value;
                 state.preinitialized = null;
-                if (value == .table) value.table.prepareExportGuard();
+                state.template_value_guard = value_guard;
+                state.template_origin_context = null;
+                state.template_library_dependencies = creator.template_library_dependencies |
+                    (if (source_state) |owner| owner.template_library_dependencies else 0);
+                state.template_invocation_dependent = creator.template_invocation_dependent or
+                    (if (source_state) |owner| owner.template_invocation_dependent else false);
+                state.template_observed_requirements = observed_requirements;
                 state.loading = false;
                 try self.target.packageLoadedModuleSet(override.module_id, null, value);
             }
@@ -3562,47 +3717,12 @@ pub const Context = struct {
                 try self.bind(exported, existing);
                 return true;
             };
-            for (self.clone.target.requirementsFor(id)) |dependency| {
+            var requirements = self.clone.source.templateRequirementsFor(id);
+            while (requirements.next()) |dependency| {
                 if (self.clone.skipsModule(dependency.module_id)) continue;
                 if (!try self.module(dependency.module_id)) return false;
             }
-            if (!try self.moduleGlobals(id, source)) return false;
             return self.value(exported);
-        }
-
-        fn globalDelta(self: *PromotionPreflight, slot: usize, input: Value) anyerror!bool {
-            if (self.clone.source.global_env_slot) |env| if (slot == env) return true;
-            if (rawEqual(input, self.clone.source.root_globals[slot])) return true;
-            return self.value(input);
-        }
-
-        fn moduleGlobals(self: *PromotionPreflight, id: u32, source: *const ModuleState) anyerror!bool {
-            const globals = source.globals orelse return true;
-            if (self.clone.source.root_globals.len != self.clone.target.root_globals.len) return false;
-            // Match cloneModuleGlobals' environment alias without constructing
-            // destination module state or allocating any persistent storage.
-            const target_has_table = blk: {
-                if (self.clone.target.moduleStateConst(id)) |target| {
-                    if (target.globals != null) break :blk target.global_table != null;
-                }
-                break :blk self.clone.target.root_global_table != null;
-            };
-            if (target_has_table) {
-                if (source.global_table) |table| _ = try self.first(table);
-            }
-            for (globals, 0..) |input, slot| if (!try self.globalDelta(slot, input)) return false;
-            if (source.global_tail) |tail| {
-                for (tail.pages, 0..) |maybe_page, page_index| {
-                    const page = maybe_page orelse continue;
-                    const start = page_index * global_page_len;
-                    const count = @min(global_page_len, tail.len - start);
-                    for (page[0..count], 0..) |input, index|
-                        if (!try self.globalDelta(globals.len + start + index, input)) return false;
-                }
-                // Absent pages are nil tombstones: always portable. The actual
-                // clone still visits them when needed to clear later root writes.
-            }
-            return true;
         }
 
         fn value(self: *PromotionPreflight, input: Value) anyerror!bool {
@@ -3680,6 +3800,26 @@ pub const Context = struct {
         };
     }
 
+    fn templateLibrariesPristine(self: *const Context, dependencies: u64) bool {
+        var remaining = dependencies;
+        while (remaining != 0) {
+            const index: usize = @intCast(@ctz(remaining));
+            remaining &= remaining - 1;
+            if (index >= native_namespace_count) return false;
+            var present = false;
+            if (self.template_native_namespaces[index]) |library| {
+                present = true;
+                if (library.template_native_baseline_pristine != @as(?bool, true)) return false;
+            }
+            if (self.template_native_metatables[index]) |metatable| {
+                present = true;
+                if (metatable.template_native_baseline_pristine != @as(?bool, true)) return false;
+            }
+            if (!present) return false;
+        }
+        return true;
+    }
+
     fn instantiateModuleTemplate(self: *Context, module_id: u32, requested: ?[]const u8) anyerror!?Value {
         const source = self.module_template_context orelse return null;
         if (module_id >= self.module_template_eligible.len or
@@ -3715,6 +3855,9 @@ pub const Context = struct {
         };
         const source_value = source_state.value orelse source_state.preinitialized orelse return null;
         if (!source_value.truthy()) return null;
+        if (source_state.template_invocation_dependent or
+            !self.templateLibrariesPristine(source_state.template_library_dependencies)) return null;
+        if (!try self.templateDependenciesPristine(module_id)) return null;
         for (source_state.template_overrides) |override| {
             if (self.moduleStateConst(override.module_id)) |existing|
                 if (existing.value != null or existing.preinitialized != null)
@@ -3768,7 +3911,7 @@ pub const Context = struct {
             else => return err,
         };
         if (value == null) return null;
-        clone.applyTemplateOverrides(source_state.template_overrides) catch |err| switch (err) {
+        clone.applyTemplateOverrides(source_state.template_overrides, source_state) catch |err| switch (err) {
             error.UnsupportedModuleTemplate => {
                 try self.clearTemplateInstalledModule(module_id, requested);
                 for (source_state.template_overrides) |override|
@@ -3879,6 +4022,11 @@ pub const Context = struct {
         // Bundle workers execute requests serially. Temporarily expose the root
         // to the clone walker, and retain the bit only after a complete clone.
         self.module_template_eligible[module_id] = true;
+        errdefer {
+            self.module_template_eligible[module_id] = false;
+            self.module_template_rejected[module_id] = true;
+            target.clearTemplateInstalledModule(module_id, requested) catch {};
+        }
         var clone = ModuleTemplateClone{
             .source = self,
             .target = target,
@@ -3918,6 +4066,7 @@ pub const Context = struct {
                 return error.UnsupportedModuleTemplate;
             target_state.template_overrides = overrides;
         }
+        if (self.moduleState(module_id)) |state| state.template_origin_context = target;
         return true;
     }
 
@@ -3952,7 +4101,8 @@ pub const Context = struct {
         if (visit.found_existing) return false;
         defer _ = visiting.remove(module_id);
 
-        for (self.requirementsFor(module_id)) |requirement| {
+        var requirements = self.templateRequirementsFor(module_id);
+        while (requirements.next()) |requirement| {
             if (requirement.module_id >= target.module_template_eligible.len)
                 return false;
             if (!target.module_template_eligible[requirement.module_id]) {
@@ -3981,6 +4131,11 @@ pub const Context = struct {
             if (!try preflight.value(override.value)) return false;
 
         target.module_template_eligible[module_id] = true;
+        errdefer {
+            target.module_template_eligible[module_id] = false;
+            target.module_template_rejected[module_id] = true;
+            target.clearTemplateInstalledModule(module_id, requested) catch {};
+        }
         var clone = ModuleTemplateClone{
             .source = self,
             .target = target,
@@ -3996,15 +4151,19 @@ pub const Context = struct {
             },
             else => return err,
         };
-        if (source_state.template_overrides.len != 0)
-            clone.applyTemplateOverrides(source_state.template_overrides) catch |err| switch (err) {
-                error.UnsupportedModuleTemplate => {
-                    target.module_template_eligible[module_id] = false;
-                    try target.clearTemplateInstalledModule(module_id, requested);
-                    return false;
-                },
-                else => return err,
+        if (source_state.template_overrides.len != 0) {
+            // Upward promotion stores creator-local effects on that prototype.
+            // Only a later live instantiation may install them as module state.
+            const overrides = try target.allocator.alloc(ModuleTemplateOverride, source_state.template_overrides.len);
+            errdefer target.allocator.free(overrides);
+            for (source_state.template_overrides, overrides) |original, *override| override.* = .{
+                .module_id = original.module_id,
+                .value = try clone.cloneValue(original.value),
             };
+            const target_state = target.moduleState(module_id) orelse return error.UnsupportedModuleTemplate;
+            target_state.template_overrides = overrides;
+        }
+        if (self.moduleState(module_id)) |state| state.template_origin_context = target;
         return true;
     }
 
@@ -4017,12 +4176,12 @@ pub const Context = struct {
     pub fn preinitializeModule(self: *Context, module_id: u32, value: Value, snapshot_load_data: bool) !void {
         const state = try self.ensureModuleState(module_id);
         if (state.value == null and state.preinitialized == null) {
-            state.preinitialized = value;
             try self.tagModuleTemplateValue(
                 value,
                 &state.template_mutation_probe_id,
             );
-            if (value == .table) value.table.prepareExportGuard();
+            state.template_value_guard = try self.prepareModuleValueGuard(value);
+            state.preinitialized = value;
         }
         if (snapshot_load_data and state.load_data_snapshot == null) {
             var seen: std.AutoHashMapUnmanaged(*Table, *Table) = .empty;
@@ -4046,6 +4205,83 @@ pub const Context = struct {
         return get(self.module_requirements_ctx, module_id);
     }
 
+    const RequirementIterator = struct {
+        declared: []const ModuleRequirement,
+        observed: []const ModuleRequirement,
+        index: usize = 0,
+
+        fn next(self: *RequirementIterator) ?ModuleRequirement {
+            const i = self.index;
+            self.index += 1;
+            if (i < self.declared.len) return self.declared[i];
+            const j = i - self.declared.len;
+            return if (j < self.observed.len) self.observed[j] else null;
+        }
+    };
+
+    fn templateRequirementsFor(self: *const Context, module_id: u32) RequirementIterator {
+        const state = self.moduleStateConst(module_id);
+        return .{
+            .declared = self.requirementsFor(module_id),
+            .observed = if (state) |value| value.template_observed_requirements else &.{},
+        };
+    }
+
+    fn templateDependencyPristine(
+        self: *const Context,
+        source: *const Context,
+        module_id: u32,
+        seen: *std.AutoHashMapUnmanaged(u32, void),
+    ) anyerror!bool {
+        const visited = try seen.getOrPut(std.heap.smp_allocator, module_id);
+        if (visited.found_existing) return true;
+        const prototype = source.moduleStateConst(module_id) orelse return false;
+        if (prototype.value == null and prototype.preinitialized == null) return false;
+        if (prototype.template_invocation_dependent or
+            !self.templateLibrariesPristine(prototype.template_library_dependencies)) return false;
+        if (self.moduleStateConst(module_id)) |state| {
+            if (state.value != null or state.preinitialized != null) {
+                if (state.template_origin_context != source or state.template_invocation_dependent or !state.template_value_guard.pristine() or
+                    (module_id < self.module_template_rejected.len and self.module_template_rejected[module_id])) return false;
+            }
+        }
+        var requirements = source.templateRequirementsFor(module_id);
+        while (requirements.next()) |requirement|
+            if (!try self.templateRequirementPristine(source, requirement, seen)) return false;
+        return true;
+    }
+
+    fn templateRequirementPristine(
+        self: *const Context,
+        source: *const Context,
+        requirement: ModuleRequirement,
+        seen: *std.AutoHashMapUnmanaged(u32, void),
+    ) !bool {
+        const expected = self.preparedModuleValue(requirement.module_id);
+        const requested = if (self.package_loaded) |loaded|
+            rawGetRuntimeBookkeeping(loaded, .{ .string = requirement.requested }) else null;
+        const canonical = self.packageLoadedModuleGet(requirement.module_id, requirement.requested);
+        if (requested orelse canonical) |visible| {
+            if (expected == null or !visible.truthy() or !rawEqual(visible, expected.?)) return false;
+        }
+        if (self.requireMissMustReload(requirement.module_id, requested, canonical)) return false;
+        return self.templateDependencyPristine(source, requirement.module_id, seen);
+    }
+
+    fn templateDependenciesPristine(self: *const Context, module_id: u32) !bool {
+        const source = self.module_template_context orelse return true;
+        var seen: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        defer seen.deinit(std.heap.smp_allocator);
+        var requirements = source.templateRequirementsFor(module_id);
+        while (requirements.next()) |requirement|
+            if (!try self.templateRequirementPristine(source, requirement, &seen)) return false;
+        // A cold root has not published observed requirements yet. Its declared
+        // imports still guard compiled static-require paths before evaluation.
+        for (self.requirementsFor(module_id)) |requirement|
+            if (!try self.templateRequirementPristine(source, requirement, &seen)) return false;
+        return true;
+    }
+
     fn adoptPreinitialized(
         self: *Context,
         module_id: u32,
@@ -4062,13 +4298,15 @@ pub const Context = struct {
         }
 
         var valid = true;
-        for (self.requirementsFor(module_id)) |requirement| {
+        var requirements = self.templateRequirementsFor(module_id);
+        while (requirements.next()) |requirement| {
             const expected = self.preparedModuleValue(requirement.module_id) orelse {
                 valid = false;
                 break;
             };
             const actual = try self.requireModuleId(requirement.module_id, requirement.requested);
-            if (!rawEqual(actual, expected)) {
+            const dependency = self.moduleStateConst(requirement.module_id);
+            if (!rawEqual(actual, expected) or dependency == null or !dependency.?.template_value_guard.pristine()) {
                 valid = false;
                 break;
             }
@@ -4111,9 +4349,13 @@ pub const Context = struct {
             if (module_id < self.module_template_rejected.len)
                 self.module_template_rejected[module_id] = true;
         }
+        const had_template = !reload and self.module_template_context != null and
+            module_id < self.module_template_eligible.len and self.module_template_eligible[module_id];
         if (!reload) if (try self.instantiateModuleTemplate(module_id, requested)) |templated|
             return templated;
-        const dynamic_template_probe = self.dynamicModuleTemplateCandidate(module_id);
+        const guarded_template_miss = had_template and self.module_template_eligible[module_id] and
+            (module_id >= self.module_template_rejected.len or !self.module_template_rejected[module_id]);
+        const dynamic_template_probe = guarded_template_miss or self.dynamicModuleTemplateCandidate(module_id);
         var observed_template_effect = false;
         const previous_template_probe = if (dynamic_template_probe)
             beginModuleTemplateEffectProbe(
@@ -4124,15 +4366,30 @@ pub const Context = struct {
             null;
         defer if (dynamic_template_probe)
             endModuleTemplateEffectProbe(previous_template_probe.?, observed_template_effect);
+        var dependency_probe = ModuleTemplateDependencyProbe{ .ctx = self };
+        const previous_dependency_probe = module_template_dependency_probe;
+        if (dynamic_template_probe) module_template_dependency_probe = &dependency_probe;
+        defer {
+            module_template_dependency_probe = previous_dependency_probe;
+            dependency_probe.requirements.deinit(std.heap.smp_allocator);
+        }
         errdefer if (dynamic_template_probe) {
             observed_template_effect = true;
-            self.module_template_rejected[module_id] = true;
+            if (!guarded_template_miss) self.module_template_rejected[module_id] = true;
         };
         const state = try self.ensureModuleState(module_id);
         if (dynamic_template_probe and state.template_init_probe_id == 0)
             state.template_init_probe_id = module_template_probe_id;
+        self.template_library_installation_closed = true;
         state.loading = true;
         errdefer state.loading = false;
+        if (dynamic_template_probe) for (self.requirementsFor(module_id)) |requirement| {
+            if (self.moduleStateConst(requirement.module_id)) |dependency|
+                if (dependency.value != null or dependency.preinitialized != null) {
+                    if (!dependency.template_value_guard.pristine() or dependency.template_invocation_dependent)
+                        observeInvocationGlobalAccess();
+                };
+        };
 
         const canonical = self.canonicalModuleName(module_id, requested);
         var owned_values: ?[]const Value = null;
@@ -4149,7 +4406,7 @@ pub const Context = struct {
                     root_executed = true;
                     const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
                     const previous_globals = try self.enterModule(module_id);
-                    defer self.restoreGlobals(previous_globals);
+                    defer self.restoreModule(previous_globals);
                     if (work_stats.current()) |work| work.module_roots +|= 1;
                     var root_frame: work_stats.RootFrame = .{};
                     work_stats.beginRoot(&root_frame, module_id);
@@ -4162,7 +4419,7 @@ pub const Context = struct {
                 root_executed = true;
                 const argv: []const Value = if (canonical) |text| &.{.{ .string = text }} else &.{};
                 const previous_globals = try self.enterModule(module_id);
-                defer self.restoreGlobals(previous_globals);
+                defer self.restoreModule(previous_globals);
                 if (work_stats.current()) |work| work.module_roots +|= 1;
                 var root_frame: work_stats.RootFrame = .{};
                 work_stats.beginRoot(&root_frame, module_id);
@@ -4182,8 +4439,25 @@ pub const Context = struct {
             } else if (self.packageLoadedModuleGet(module_id, requested)) |existing| value = existing;
             if (value == .nil) value = .{ .boolean = true };
         }
+        // These ordinary root executions already lack a reusable template proof.
+        // Do not traverse their values or invalidate a returned dependency's guard.
+        const skip_value_guard = root_executed and (guarded_template_miss or
+            (dynamic_template_probe and observed_template_effect) or
+            (module_id < self.module_template_rejected.len and self.module_template_rejected[module_id]));
+        const value_guard = if (skip_value_guard)
+            ModuleValueGuard{ .valid = false }
+        else
+            try self.prepareModuleValueGuard(value);
+        const observed_requirements = if (dynamic_template_probe)
+            try self.retainModuleRequirements(dependency_probe.requirements.items) else &.{};
         try self.packageLoadedModuleSet(module_id, requested, value);
         state.value = value;
+        state.template_origin_context = null;
+        if (dynamic_template_probe) {
+            state.template_library_dependencies = module_template_library_dependencies;
+            state.template_invocation_dependent = guarded_template_miss or observed_template_effect;
+            state.template_observed_requirements = observed_requirements;
+        }
         if (dynamic_template_probe and module_template_effect_reasons & (1 << 3) != 0)
             state.template_package_observed = true;
         if (dynamic_template_probe and module_template_effect_reasons & (1 << 5) != 0)
@@ -4192,9 +4466,9 @@ pub const Context = struct {
             value,
             &state.template_mutation_probe_id,
         );
-        if (value == .table) value.table.prepareExportGuard();
+        state.template_value_guard = value_guard;
         state.loading = false;
-        if (dynamic_template_probe) {
+        if (dynamic_template_probe and !guarded_template_miss) {
             if (observed_template_effect) {
                 if (work_stats.current()) |work| if (work.sampled)
                     work_stats.logLine("module template reject: id={d} page_scope={} reasons=0x{x} name={s}\n", .{
@@ -4273,13 +4547,56 @@ pub const Context = struct {
         return false;
     }
 
+    fn observeRequiredTemplateValue(self: *const Context, module_id: ?u32, raw_name: []const u8, value: Value) !void {
+        if (module_template_effect_probe == null) return;
+        if (module_id) |id| {
+            if (self.moduleStateConst(id)) |state| if (state.value orelse state.preinitialized) |expected| {
+                if (rawEqual(value, expected)) {
+                    if (module_template_dependency_probe) |probe| try probe.record(self, id, raw_name);
+                    module_template_library_dependencies |= state.template_library_dependencies;
+                    if (state.template_invocation_dependent or
+                        !state.template_value_guard.pristine() or
+                        (self.module_template_context != null and state.template_origin_context != self.module_template_context) or
+                        (id < self.module_template_rejected.len and self.module_template_rejected[id]) or
+                        !self.templateLibrariesPristine(state.template_library_dependencies))
+                        observeInvocationGlobalAccess();
+                    return;
+                }
+            };
+            // A public package.loaded override is invocation data, not the
+            // prototype selected by this module ID.
+            observeInvocationGlobalAccess();
+            return;
+        }
+        if (value == .table) if (value.table.native_namespace) |namespace| {
+            const name: []const u8 = switch (namespace) {
+                .table => "table", .string => "string", .math => "math", .debug => "debug",
+                .os => "os", .package => "package", .bit32 => "bit32", .library_util => "libraryUtil", .mw => "mw",
+                else => "",
+            };
+            if (name.len != 0 and std.mem.eql(u8, name, raw_name) and
+                self.template_native_namespaces[@backingInt(namespace)] == value.table) return;
+        };
+        observeInvocationGlobalAccess();
+    }
+
+    fn cachedRequiredValue(self: *const Context, raw_name: []const u8, value: Value) !Value {
+        if (module_template_effect_probe == null) return value;
+        const id = if (self.module_lookup) |lookup| lookup(self.module_lookup_ctx, raw_name) else null;
+        try self.observeRequiredTemplateValue(id, raw_name, value);
+        return value;
+    }
+
     pub fn requireModuleId(self: *Context, module_id: u32, raw_name: []const u8) anyerror!Value {
         const canonical = self.canonicalModuleName(module_id, null);
         const canonical_request = if (canonical) |name| std.mem.eql(u8, name, raw_name) else false;
         const canonical_cache = self.packageLoadedModuleGet(module_id, raw_name);
         const requested_cache = if (canonical_request) canonical_cache else if (self.package_loaded) |loaded|
             rawGetRuntimeBookkeeping(loaded, .{ .string = raw_name }) else null;
-        if (requested_cache) |value| if (value.truthy()) return value;
+        if (requested_cache) |value| if (value.truthy()) {
+            try self.observeRequiredTemplateValue(module_id, raw_name, value);
+            return value;
+        };
         if (self.eager_bootstrap)
             return self.preparedModuleValue(module_id) orelse error.EagerDependencyNotInitialized;
         // Loader-search syntax failures precede mutation of package.loaded.
@@ -4296,6 +4613,7 @@ pub const Context = struct {
         if (!canonical_request) if (self.package_loaded) |loaded|
             try self.rawSetRuntimeBookkeeping(loaded, .{ .string = raw_name }, value);
         if (self.moduleState(module_id)) |state| state.deferred_require_visibility = false;
+        try self.observeRequiredTemplateValue(module_id, raw_name, value);
         return value;
     }
 
@@ -4310,8 +4628,8 @@ pub const Context = struct {
             {
                 const key = Value{ .string = raw_name };
                 const slot = loaded.slotForKey(key);
-                if (slot) |known| if (rawGetSlotRuntimeBookkeeping(loaded, known)) |value| if (value.truthy()) return value;
-                if (rawGetAfterSlotRuntimeBookkeeping(loaded, key)) |value| if (value.truthy()) return value;
+                if (slot) |known| if (rawGetSlotRuntimeBookkeeping(loaded, known)) |value| if (value.truthy()) return self.cachedRequiredValue(raw_name, value);
+                if (rawGetAfterSlotRuntimeBookkeeping(loaded, key)) |value| if (value.truthy()) return self.cachedRequiredValue(raw_name, value);
                 if (slot) |known| if (known < self.package_loaded_slot_modules.len) {
                     const module_id = self.package_loaded_slot_modules[known];
                     if (module_id < self.module_count) if (self.canonicalModuleName(module_id, null)) |canonical| {
@@ -4320,7 +4638,7 @@ pub const Context = struct {
                         }
                     };
                 };
-            } else if (rawGetRuntimeBookkeeping(loaded, .{ .string = raw_name })) |value| if (value.truthy()) return value;
+            } else if (rawGetRuntimeBookkeeping(loaded, .{ .string = raw_name })) |value| if (value.truthy()) return self.cachedRequiredValue(raw_name, value);
         }
         return self.requireModuleId(try self.resolveModule(raw_name), raw_name);
     }
@@ -4427,6 +4745,7 @@ pub const Context = struct {
     /// Release a table returned by a Context constructor. Its header belongs
     /// to the context arena; its mutable buffers have independent allocations.
     pub fn destroyTable(self: *Context, table: *Table) void {
+        if (table.export_guard_root) |guard| guard.table = null;
         table.deinit(self.allocator);
         self.stringAllocator().destroy(table);
     }
@@ -5446,17 +5765,17 @@ test "AOT module resolver caches numeric identities and exposes package.loaded a
     try ctx.package_loaded.?.rawSet(ctx.allocator, .{ .string = "builtin" }, .{ .string = "preloaded" });
     try std.testing.expectEqualStrings("preloaded", (try ctx.requireByName("builtin")).string);
     try ctx.ensureModule(0);
-    try std.testing.expect(ctx.getGlobal(0) == .nil);
-    try std.testing.expectEqual(@as(f64, 1), ctx.moduleState(0).?.globals.?[0].number);
+    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
+    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
     try std.testing.expectEqualStrings("Module:A", ctx.package_loaded.?.rawGet(.{ .string = "Module:A" }).?.string);
 
     const alias = try ctx.requireByName("Alias:A");
     try std.testing.expectEqualStrings("Module:A", alias.string);
-    try std.testing.expectEqual(@as(f64, 1), ctx.moduleState(0).?.globals.?[0].number);
+    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
     const canonical = try ctx.requireByName("Module:A");
     try std.testing.expectEqualStrings("Module:A", canonical.string);
-    try std.testing.expectEqual(@as(f64, 1), ctx.moduleState(0).?.globals.?[0].number);
-    try std.testing.expect(ctx.getGlobal(0) == .nil);
+    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
+    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
     try std.testing.expectEqualStrings("Module:A", ctx.package_loaded.?.rawGet(.{ .string = "Alias:A" }).?.string);
     try std.testing.expectEqualStrings("Module:A", ctx.package_loaded.?.rawGet(.{ .string = "Module:A" }).?.string);
 
@@ -5737,65 +6056,49 @@ test "upstream promotion rejects nonportable graphs before allocating persistent
     try std.testing.expect(!rejected[0]);
 }
 
-test "promotion rejects nonportable global deltas before persistent allocation" {
+test "pure module templates ignore unrelated invocation globals without importing foreign values" {
     const Native = struct {
-        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
-            return &.{};
-        }
+        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value { return &.{}; }
     };
     const count = module_global_prefix_len + 2 * global_page_len + 3;
     for ([_]u32{ 1, count - 1 }) |slot| {
-        for ([_]bool{ false, true }) |ordinary| {
-            var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-            defer source_arena.deinit();
-            var storage: [512 * 1024]u8 = undefined;
-            var fixed = std.heap.FixedBufferAllocator.init(&storage);
-            var target = try Context.initProgram(fixed.allocator(), count, 1);
-            defer target.deinit();
-            var eligible = [_]bool{false};
-            var rejected = [_]bool{false};
-            target.module_template_eligible = &eligible;
-            target.module_template_rejected = &rejected;
-            const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.root)};
-            target.module_root_entries = &roots;
-            var source = try target.forkProgram(source_arena.allocator());
-            defer source.deinit();
-            source.module_template_context = &target;
-            var host: u64 = 123;
-            const hidden = try source.newTable();
-            try hidden.rawSet(source.allocator, .{ .string = "bound" }, try source.newNative(&host, Native.call));
-            try hidden.rawSet(source.allocator, .{ .string = "cycle" }, .{ .table = hidden });
-            const scope = try source.enterModule(0);
-            try source.setGlobal(slot, .{ .table = hidden });
-            try std.testing.expect(source.global_tail != null);
-            source.restoreGlobals(scope);
-            try source.preinitializeModule(0, .{ .number = 42 }, false);
-            const before = fixed.end_index;
-            for (0..64) |_| {
-                const promoted = if (ordinary)
-                    try source.promoteModuleTemplate(0, null)
-                else
-                    try source.promoteModuleTemplateUpstream(0, null);
-                try std.testing.expect(!promoted);
-                try std.testing.expect(!eligible[0]);
-                try std.testing.expect(target.moduleStateConst(0) == null);
-                try std.testing.expectEqual(before, fixed.end_index);
-            }
-            try std.testing.expectEqual(ordinary, rejected[0]);
-        }
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var storage: [512 * 1024]u8 = undefined;
+        var fixed = std.heap.FixedBufferAllocator.init(&storage);
+        var target = try Context.initProgram(fixed.allocator(), count, 1);
+        defer target.deinit();
+        var eligible = [_]bool{false};
+        var rejected = [_]bool{false};
+        target.module_template_eligible = &eligible;
+        target.module_template_rejected = &rejected;
+        const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.root)};
+        target.module_root_entries = &roots;
+        var source = try target.forkProgram(arena.allocator());
+        defer source.deinit();
+        source.module_template_context = &target;
+        var host: u64 = 123;
+        const unrelated = try source.newTable();
+        try unrelated.rawSet(source.allocator, .{ .string = "bound" }, try source.newNative(&host, Native.call));
+        try unrelated.rawSet(source.allocator, .{ .string = "cycle" }, .{ .table = unrelated });
+        try source.setGlobal(slot, .{ .table = unrelated });
+        // This export neither reads nor captures that unrelated environment value.
+        try source.preinitializeModule(0, .{ .number = 42 }, false);
+        try std.testing.expect(try source.promoteModuleTemplate(0, null));
+        try std.testing.expect(target.getGlobal(slot) == .nil);
+        try std.testing.expectEqual(@as(f64, 42), target.moduleStateConst(0).?.value.?.number);
+        const after = fixed.end_index;
+        for (0..64) |_| try std.testing.expect(try source.promoteModuleTemplate(0, null));
+        try std.testing.expectEqual(after, fixed.end_index);
+        try std.testing.expect(eligible[0] and !rejected[0]);
     }
 }
 
-test "global delta preflight skips unchanged native roots and binds environment aliases" {
-    const Native = struct {
-        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
-            return &.{};
-        }
-    };
+test "module template preflight rejects an exported invocation environment alias" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var target = try Context.initProgram(a, 4, 1);
+    var target = try Context.initProgram(a, 3, 1);
     defer target.deinit();
     var eligible = [_]bool{false};
     var rejected = [_]bool{false};
@@ -5804,25 +6107,19 @@ test "global delta preflight skips unchanged native roots and binds environment 
     const roots = [_]FunctionFn{stabilize(ModuleTemplateProbe.root)};
     target.module_root_entries = &roots;
     try bindGlobalTable(&target, null, 0);
-    var host: u64 = 123;
     try target.setGlobal(1, .{ .number = 7 });
     var source = try target.forkProgram(a);
     defer source.deinit();
     source.module_template_context = &target;
     try bindGlobalTable(&source, null, 0);
-    try source.setGlobal(1, try source.newNative(&host, Native.call));
-    const scope = try source.enterModule(0);
-    const environment = source.getGlobal(0);
     const exported = try source.newTable();
-    try exported.rawSet(a, .{ .string = "environment" }, environment);
-    try source.setGlobal(2, .{ .table = exported });
-    source.restoreGlobals(scope);
+    try exported.rawSet(a, .{ .string = "environment" }, source.getGlobal(0));
     try source.preinitializeModule(0, .{ .table = exported }, false);
-    try std.testing.expect(try source.promoteModuleTemplateUpstream(0, null));
-    const state = target.moduleStateConst(0).?;
-    try std.testing.expect(state.value.?.table == state.globals.?[2].table);
-    try std.testing.expect(state.value.?.table.rawGet(.{ .string = "environment" }).?.table == state.global_table.?);
-    try std.testing.expect(rawEqual(state.globals.?[1], target.root_globals[1]));
+    try std.testing.expect(!try source.promoteModuleTemplateUpstream(0, null));
+    try std.testing.expect(!eligible[0]);
+    try std.testing.expect(target.moduleStateConst(0) == null);
+    try std.testing.expectEqual(@as(f64, 7), target.getGlobal(1).number);
+    try std.testing.expect(target.getGlobal(0).table == target.global_table.?);
 }
 
 test "caught promotion allocation failures retain the worker fatal signal" {
@@ -6735,7 +7032,7 @@ const ModuleGlobalIsolationProbe = struct {
     }
 };
 
-test "module globals are isolated for dynamic and static calls" {
+test "module globals are shared for dynamic and static calls" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var ctx = try Context.initProgram(arena.allocator(), 2, 2);
@@ -6752,15 +7049,15 @@ test "module globals are isolated for dynamic and static calls" {
 
     const a = try ctx.loadModule(0, null);
     const b = try ctx.loadModule(1, null);
-    try std.testing.expectEqualStrings("root", ctx.getGlobal(0).string);
+    try std.testing.expectEqualStrings("B", ctx.getGlobal(0).string);
 
     const a_result = try ctx.callValue(a, &.{});
     defer freeResults(a_result);
-    try std.testing.expectEqualStrings("A", a_result[0].string);
+    try std.testing.expectEqualStrings("B", a_result[0].string);
     const b_result = try ctx.callValue(b, &.{});
     defer freeResults(b_result);
     try std.testing.expectEqualStrings("B", b_result[0].string);
-    try std.testing.expectEqualStrings("root", ctx.getGlobal(0).string);
+    try std.testing.expectEqualStrings("B", ctx.getGlobal(0).string);
 
     const static_a = try ctx.callStaticFunctionBuffered(
         0,
@@ -6770,7 +7067,7 @@ test "module globals are isolated for dynamic and static calls" {
         null,
     );
     defer freeResults(static_a);
-    try std.testing.expectEqualStrings("A", static_a[0].string);
+    try std.testing.expectEqualStrings("B", static_a[0].string);
     try ctx.setGlobal(0, .{ .string = "current" });
     const same_module = try ctx.callStaticFunctionBuffered(
         std.math.maxInt(u32),
@@ -6870,6 +7167,7 @@ pub fn bindGlobalTable(ctx: *Context, shape: ?*const Shape, env_slot: u32) !void
         .shape = shape,
         .slots = ctx.globals,
         .owns_slots = false,
+        .invocation_environment = true,
         .invoke_rollback_owner_nonce = ctx.field_cache_nonce,
     };
     table.initSlotHistory(ctx.allocator) catch |err| {
@@ -6882,7 +7180,6 @@ pub fn bindGlobalTable(ctx: *Context, shape: ?*const Shape, env_slot: u32) !void
     for (ctx.globals, 0..) |value, slot| if (value != .nil) table.noteSlotPresence(@intCast(slot));
     ctx.global_table = table;
     ctx.root_global_table = table;
-    table.root_tail_cache_valid = ctx.root_tail_cache_valid;
     ctx.root_globals = ctx.globals;
     ctx.global_env_slot = env_slot;
     try ctx.setGlobal(env_slot, .{ .table = table });
@@ -7312,7 +7609,7 @@ test "package observation visits initialized module states across bitmap words a
     try std.testing.expect(ctx.moduleState(257) == null);
 }
 
-test "sparse module globals preserve root snapshots aliases and iteration" {
+test "module calls share global aliases presence iteration and metadata independently" {
     const count = 193;
     var keys: [count]Value = undefined;
     for (&keys, 0..) |*key, slot| key.* = .{ .number = @floatFromInt(slot + 1) };
@@ -7324,159 +7621,83 @@ test "sparse module globals preserve root snapshots aliases and iteration" {
     var ctx = try Context.initProgram(std.testing.allocator, count, 2);
     defer ctx.deinit();
     try bindGlobalTable(&ctx, &shape, 0);
-    const root = ctx.global_table.?;
+    const environment = ctx.global_table.?;
+    const globals = ctx.globals.ptr;
     try ctx.setGlobal(1, .{ .number = 1 });
     try ctx.setGlobal(128, .{ .number = 8 });
-
-    const root_scope = try ctx.enterModule(0);
-    const first = ctx.global_table.?;
-    try std.testing.expect(ctx.global_tail != null);
-    try std.testing.expectEqual(@as(usize, module_global_prefix_len), ctx.globals.len);
-    try std.testing.expect(ctx.getGlobal(0).table == first);
-    const native_ptr = &ctx.globals[1];
-    const late_ptr = first.slotPtr(128).?;
+    const first = try ctx.enterModule(0);
+    try std.testing.expectEqual(@as(?u32, 0), ctx.active_module_id);
     try ctx.setGlobal(1, .{ .number = 2 });
-    try first.rawSet(ctx.allocator, keys[128], .{ .number = 9 });
+    try environment.rawSet(ctx.allocator, keys[128], .{ .number = 9 });
     try ctx.setGlobal(64, .{ .boolean = false });
-    try std.testing.expectEqual(@as(f64, 2), native_ptr.number);
-    try std.testing.expectEqual(@as(f64, 9), late_ptr.number);
-    try std.testing.expect(!first.rawGet(keys[64]).?.boolean);
-    var it = first.iterator();
-    for ([_]usize{ 0, 1, 64, 128 }) |slot| {
-        const entry = it.next().?;
-        try std.testing.expect(rawEqual(keys[slot], entry.key_ptr.*));
-    }
-    try std.testing.expect(it.next() == null);
-    ctx.restoreGlobals(root_scope);
-
+    ctx.restoreModule(first);
+    const second = try ctx.enterModule(1);
+    try std.testing.expectEqual(@as(?u32, 1), ctx.active_module_id);
+    try std.testing.expect(ctx.globals.ptr == globals and ctx.global_table.? == environment);
+    try std.testing.expect(ctx.getGlobal(0).table == environment);
+    try std.testing.expectEqual(@as(f64, 2), ctx.getGlobal(1).number);
+    try std.testing.expectEqual(@as(f64, 9), ctx.getGlobal(128).number);
+    try std.testing.expect(!ctx.getGlobal(64).boolean);
+    var iterator = environment.iterator();
+    for ([_]usize{ 0, 1, 64, 128 }) |slot|
+        try std.testing.expect(rawEqual(keys[slot], iterator.next().?.key_ptr.*));
+    try std.testing.expect(iterator.next() == null);
     try ctx.setGlobal(128, .nil);
-    const second_scope = try ctx.enterModule(1);
-    try std.testing.expect(ctx.global_table.? != first);
-    try std.testing.expect(ctx.getGlobal(64) == .nil);
-    try std.testing.expect(ctx.getGlobal(128) == .nil);
-    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(1).number);
-    try std.testing.expect(ctx.getGlobal(0).table == ctx.global_table.?);
+    try std.testing.expect(environment.rawGet(keys[128]) == null);
     try std.testing.expectError(error.BadGlobalSlot, ctx.setGlobal(count, .nil));
-    ctx.restoreGlobals(second_scope);
-    try std.testing.expect(ctx.global_table.? == root and ctx.global_tail == null);
+    ctx.restoreModule(second);
+    try std.testing.expect(ctx.active_module_id == null);
     try std.testing.expect(ctx.getGlobal(128) == .nil);
+    try std.testing.expect(!ctx.getGlobal(64).boolean);
 }
 
-fn moduleGlobalAllocationCase(allocator: std.mem.Allocator, dense: bool) !void {
+fn invocationGlobalAllocationCase(allocator: std.mem.Allocator, env_slot: u32) !void {
     var keys = @as([257]Value, @splat(.nil));
-    keys[256] = .{ .string = "_G" };
+    keys[env_slot] = .{ .string = "_G" };
     const shape: Shape = .{ .keys = .{ .boxed = &keys }, .field_count = keys.len, .open = true };
-    var ctx = try Context.initProgram(allocator, keys.len, 1);
+    var ctx = try Context.initProgram(allocator, keys.len, 2);
     defer ctx.deinit();
-    try bindGlobalTable(&ctx, &shape, 256);
-    try ctx.setGlobal(64, .{ .number = 1 });
-    if (dense) try ctx.setGlobal(128, .{ .boolean = false });
+    try bindGlobalTable(&ctx, &shape, env_slot);
+    const environment = ctx.global_table.?;
     const previous = try ctx.enterModule(0);
-    defer ctx.restoreGlobals(previous);
-    try std.testing.expectEqual(dense, ctx.global_tail == null);
-    try std.testing.expect(ctx.getGlobal(256).table == ctx.global_table.?);
+    try ctx.setGlobal(64, .{ .number = 1 });
+    ctx.restoreModule(previous);
+    const second = try ctx.enterModule(1);
+    defer ctx.restoreModule(second);
+    try std.testing.expect(ctx.getGlobal(env_slot).table == environment);
+    try std.testing.expect(ctx.global_table.? == environment);
+    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(64).number);
     try ctx.setGlobal(128, .{ .number = 2 });
     try std.testing.expectEqual(@as(f64, 2), ctx.getGlobal(128).number);
 }
 
-test "sparse and dense module globals clean up allocation failures" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, moduleGlobalAllocationCase, .{false});
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, moduleGlobalAllocationCase, .{true});
+test "shared invocation globals clean up allocation failures including a late environment slot" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, invocationGlobalAllocationCase, .{@as(u32, 0)});
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, invocationGlobalAllocationCase, .{@as(u32, 256)});
 }
 
-test "module global density counts false and partial tail pages" {
-    var ctx = try Context.init(std.testing.allocator, 257);
-    defer ctx.deinit();
-    try ctx.setGlobal(1, .{ .number = 1 });
-    try std.testing.expect(!ctx.moduleGlobalsAreDense());
-    try ctx.setGlobal(64, .{ .number = 1 });
-    try ctx.setGlobal(192, .{ .number = 1 });
-    try std.testing.expect(!ctx.moduleGlobalsAreDense());
-    try ctx.setGlobal(256, .{ .boolean = false });
-    try std.testing.expect(ctx.moduleGlobalsAreDense());
-    try ctx.setGlobal(256, .nil);
-    try std.testing.expect(!ctx.moduleGlobalsAreDense());
-}
-
-test "cached root tail occupancy preserves first touch across root writes and deletion" {
-    var keys = @as([257]Value, @splat(.nil));
-    keys[0] = .{ .string = "_G" };
-    keys[64] = .{ .string = "early" };
-    keys[128] = .{ .string = "later" };
-    keys[192] = .{ .string = "last" };
-    keys[256] = .{ .string = "dense" };
+test "reassigning the G variable preserves actual shared environment and saved aliases" {
+    const keys = [_]Value{ .{ .string = "_G" }, .{ .string = "x" }, .{ .string = "late" } };
     const shape: Shape = .{ .keys = .{ .boxed = &keys }, .field_count = keys.len, .open = true };
-    var ctx = try Context.initProgram(std.testing.allocator, keys.len, 3);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), keys.len, 2);
     defer ctx.deinit();
     try bindGlobalTable(&ctx, &shape, 0);
-    try ctx.setGlobal(64, .{ .number = 1 });
-    const first = try ctx.enterModule(0);
-    try std.testing.expect(ctx.root_tail_cache_valid.*);
-    try std.testing.expectEqual(@as(u64, 1), ctx.root_tail_occupied[0]);
-    ctx.restoreGlobals(first);
-
-    const root_table = ctx.root_global_table.?;
-    // Preinitializing an export may claim the normal mutation sentinel, even
-    // when the export aliases _G. Root occupancy invalidation remains separate.
-    try ctx.preinitializeModule(0, .{ .table = root_table }, false);
-    try root_table.rawSetSlot(64, .nil);
-    try std.testing.expect(!ctx.root_tail_cache_valid.*);
-    try root_table.rawSetSlot(128, .{ .boolean = false });
-    try root_table.rawSetSlot(192, .{ .number = 3 });
-    const second = try ctx.enterModule(1);
-    try std.testing.expect(ctx.root_tail_cache_valid.*);
-    try std.testing.expectEqual(@as(u64, 0b110), ctx.root_tail_occupied[0]);
-    try std.testing.expect(ctx.getGlobal(64) == .nil);
-    try std.testing.expect(!ctx.getGlobal(128).boolean);
-    try std.testing.expectEqual(@as(f64, 3), ctx.getGlobal(192).number);
-    ctx.restoreGlobals(second);
-
-    try ctx.setGlobal(256, .{ .number = 9 });
-    try std.testing.expect(!ctx.root_tail_cache_valid.*);
-    const third = try ctx.enterModule(2);
-    try std.testing.expect(ctx.root_tail_dense);
-    try std.testing.expect(ctx.global_tail == null);
-    try std.testing.expectEqual(@as(f64, 9), ctx.getGlobal(256).number);
-    ctx.restoreGlobals(third);
-
-    const first_again = try ctx.enterModule(0);
-    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(64).number);
-    try std.testing.expect(ctx.getGlobal(128) == .nil);
-    ctx.restoreGlobals(first_again);
-    try root_table.rawSet(ctx.allocator, .{ .string = "dynamic" }, .{ .number = 5 });
-    try std.testing.expect(!ctx.root_tail_cache_valid.*);
-}
-
-test "large root tail falls back without caching occupancy" {
-    const count = module_global_prefix_len + 129 * global_page_len;
-    var ctx = try Context.initProgram(std.testing.allocator, count, 1);
-    defer ctx.deinit();
-    try ctx.setGlobal(count - 1, .{ .number = 7 });
-    const previous = try ctx.enterModule(0);
-    defer ctx.restoreGlobals(previous);
-    try std.testing.expect(!ctx.root_tail_cache_valid.*);
-    try std.testing.expectEqual(@as(f64, 7), ctx.getGlobal(count - 1).number);
-}
-
-test "shapeless module globals keep numeric array aliases" {
-    var ctx = try Context.initProgram(std.testing.allocator, 193, 1);
-    defer ctx.deinit();
-    try bindGlobalTable(&ctx, null, 0);
-    try ctx.setGlobal(64, .{ .number = 11 });
-    const previous = try ctx.enterModule(0);
-    const table = ctx.global_table.?;
-    try std.testing.expect(ctx.global_tail == null);
-    try std.testing.expectEqual(@as(f64, 11), table.rawGetNumber(65).?.number);
-    try table.rawSet(ctx.allocator, .{ .number = 65 }, .{ .number = 22 });
-    try std.testing.expectEqual(@as(f64, 22), ctx.getGlobal(64).number);
-    var iterator = table.iterator();
-    try std.testing.expectEqual(@as(f64, 1), iterator.next().?.key_ptr.number);
-    const high = iterator.next().?;
-    try std.testing.expectEqual(@as(f64, 65), high.key_ptr.number);
-    try std.testing.expectEqual(@as(f64, 22), high.value_ptr.number);
-    try std.testing.expect(iterator.next() == null);
-    ctx.restoreGlobals(previous);
-    try std.testing.expectEqual(@as(f64, 11), ctx.getGlobal(64).number);
+    const saved = ctx.global_table.?;
+    for ([_]Value{ .nil, .{ .table = try ctx.newTable() } }) |replacement| {
+        const first = try ctx.enterModule(0);
+        try ctx.setGlobal(0, replacement);
+        try ctx.setGlobal(1, .{ .boolean = false });
+        ctx.restoreModule(first);
+        const second = try ctx.enterModule(1);
+        try std.testing.expect(ctx.global_table.? == saved);
+        try std.testing.expect(rawEqual(replacement, ctx.getGlobal(0)));
+        try std.testing.expect(!saved.rawGet(keys[1]).?.boolean);
+        try saved.rawSet(ctx.allocator, keys[2], .{ .number = 19 });
+        try std.testing.expectEqual(@as(f64, 19), ctx.getGlobal(2).number);
+        ctx.restoreModule(second);
+    }
 }
 
 test "forked AOT context shares native module entries but resets runtime state" {
@@ -8690,7 +8911,7 @@ test "immutable string index construction is allocation-failure atomic" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Probe.run, .{});
 }
 
-test "failed static scope entry restores caller globals and depth before recovery" {
+test "failed static module metadata entry preserves shared globals and depth before recovery" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
@@ -8700,7 +8921,7 @@ test "failed static scope entry restores caller globals and depth before recover
     try ctx.setGlobal(1, .{ .number = 17 });
     const caller = try ctx.enterModule(0);
     try ctx.setGlobal(1, .{ .number = 43 });
-    ctx.restoreGlobals(caller);
+    ctx.restoreModule(caller);
     ctx.depth = 7;
     var failed = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
     ctx.allocator = failed.allocator();
@@ -8708,15 +8929,16 @@ test "failed static scope entry restores caller globals and depth before recover
     ctx.allocator = a;
     try std.testing.expectError(error.OutOfMemory, entered);
     try std.testing.expectEqual(@as(usize, 7), ctx.depth);
-    try std.testing.expectEqual(@as(usize, 0), ctx.static_global_scopes.items.len);
-    try std.testing.expect(ctx.globals.ptr == caller.globals.ptr);
-    try std.testing.expect(ctx.global_table == caller.global_table);
-    try std.testing.expect(ctx.global_tail == caller.global_tail);
-    try std.testing.expectEqual(@as(f64, 17), ctx.getGlobal(1).number);
+    try std.testing.expectEqual(@as(usize, 0), ctx.static_module_scopes.items.len);
+    try std.testing.expectEqual(caller.module_id, ctx.active_module_id);
+    try std.testing.expect(ctx.globals.ptr == ctx.root_globals.ptr);
+    try std.testing.expect(ctx.global_table == ctx.root_global_table);
+    try std.testing.expectEqual(@as(f64, 43), ctx.getGlobal(1).number);
     try ctx.enterStaticModule(0);
     try std.testing.expectEqual(@as(f64, 43), ctx.getGlobal(1).number);
     ctx.leaveStaticFunction();
-    try std.testing.expectEqual(@as(f64, 17), ctx.getGlobal(1).number);
+    try std.testing.expectEqual(caller.module_id, ctx.active_module_id);
+    try std.testing.expectEqual(@as(f64, 43), ctx.getGlobal(1).number);
     try std.testing.expectEqual(@as(usize, 7), ctx.depth);
 }
 
@@ -9026,11 +9248,16 @@ test "template override cycles retain each source module mutation owner" {
     source.module_root_entries = &roots;
     source.configureModuleRequirements(null, Probe.requirements);
     const dependency = try source.newTable();
-    try source.preinitializeModule(0, .{ .table = dependency }, false);
+    const dependency_owner = try source.ensureModuleState(0);
+    try source.tagModuleTemplateValue(.{ .table = dependency }, &dependency_owner.template_mutation_probe_id);
     const alias = try source.newTable();
     try alias.rawSet(a, .{ .string = "dependency" }, .{ .table = dependency });
-    try source.preinitializeModule(1, .{ .table = alias }, false);
+    const alias_owner = try source.ensureModuleState(1);
+    try source.tagModuleTemplateValue(.{ .table = alias }, &alias_owner.template_mutation_probe_id);
     try dependency.rawSet(a, .{ .string = "back" }, .{ .table = alias });
+    // Production promotion clones the complete graph before sealing exports.
+    try source.preinitializeModule(0, .{ .table = dependency }, false);
+    try source.preinitializeModule(1, .{ .table = alias }, false);
     const overrides = [_]ModuleTemplateOverride{.{ .module_id = 0, .value = .{ .table = dependency } }};
     source.moduleState(1).?.template_overrides = &overrides;
     try std.testing.expect(dependency.module_template_mutation_probe == &source.moduleState(0).?.template_mutation_probe_id);
@@ -9765,12 +9992,12 @@ test "require caller seeded false followed by nil loader becomes cached true" {
     try std.testing.expect((try ctx.requireByName(key.string)).boolean);
     try std.testing.expect(ctx.package_loaded.?.rawGet(key).?.boolean);
     try std.testing.expect((try ctx.requireByName(key.string)).boolean);
-    try std.testing.expectEqual(@as(f64, 1), ctx.moduleState(0).?.globals.?[0].number);
+    try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
     // The ID entry point must also distinguish old false from a root write.
     try ctx.package_loaded.?.rawSet(ctx.allocator, key, .{ .boolean = false });
     try std.testing.expect((try ctx.requireModuleId(0, key.string)).boolean);
     try std.testing.expect(ctx.package_loaded.?.rawGet(key).?.boolean);
-    try std.testing.expectEqual(@as(f64, 2), ctx.moduleState(0).?.globals.?[0].number);
+    try std.testing.expectEqual(@as(f64, 2), ctx.getGlobal(0).number);
 }
 
 test "require loader writing false then returning nil remains false and reruns" {
@@ -9791,7 +10018,7 @@ test "require loader writing false then returning nil remains false and reruns" 
     try std.testing.expect(!ctx.package_loaded.?.rawGet(key).?.boolean);
     try std.testing.expect(!(try ctx.requireModuleId(1, key.string)).boolean);
     try std.testing.expect(!ctx.package_loaded.?.rawGet(key).?.boolean);
-    try std.testing.expectEqual(@as(f64, 2), ctx.moduleState(1).?.globals.?[0].number);
+    try std.testing.expectEqual(@as(f64, 2), ctx.getGlobal(0).number);
 }
 
 // Private core.zig append; UNEXECUTED. Requires both cache peer patches and
@@ -9840,9 +10067,7 @@ const RequireCacheControl = struct {
         return result;
     }
     fn calls(ctx: *Context) f64 {
-        const state = ctx.moduleState(0) orelse return 0;
-        const globals = state.globals orelse return 0;
-        return switch (globals[0]) { .number => |n| n, else => 0 };
+        return switch (ctx.getGlobal(0)) { .number => |n| n, else => 0 };
     }
 };
 
@@ -10214,6 +10439,958 @@ test "package loaded writes remain page effects despite export guards or probe a
             page.package_loaded.?.prepareExportGuard();
             try std.testing.expectEqualStrings("written", (try page.requireByName("Module:Writer")).string);
             try std.testing.expectEqual(@as(f64, 17), page.package_loaded.?.rawGet(.{ .string = "__written" }).?.number);
+        }
+    }
+}
+
+const InvocationEnvironmentTest = struct {
+    const names = [_][]const u8{ "Module:InvocationWriter", "Module:InvocationReader", "Module:InvocationBroken" };
+    fn lookup(_: ?*const anyopaque, requested: []const u8) ?u32 {
+        for (names, 0..) |item, id| if (std.mem.eql(u8, item, requested)) return @intCast(id);
+        return null;
+    }
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return if (id < names.len) names[id] else null;
+    }
+    fn one(value: Value) ![]const Value {
+        const result = try std.heap.smp_allocator.alloc(Value, 1);
+        result[0] = value;
+        return result;
+    }
+    fn read(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        try std.testing.expectEqual(@as(?u32, 1), ctx.active_module_id);
+        return one(ctx.getGlobal(1));
+    }
+    fn readBuffered(ctx: *Context, captures: Captures, args: []const Value, buffer: ?[]Value) ![]const Value {
+        try std.testing.expectEqual(@as(?u32, 1), ctx.active_module_id);
+        if (buffer) |out| if (out.len != 0) {
+            out[0] = ctx.getGlobal(1);
+            return out[0..1];
+        };
+        return read(ctx, captures, args);
+    }
+    fn reader(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        const exported = try ctx.newTable();
+        try exported.rawSet(ctx.allocator, .{ .string = "read" }, try ctx.makeFunction(3, stabilize(read), &.{}));
+        return one(.{ .table = exported });
+    }
+    fn writer(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        try ctx.setGlobal(1, .{ .number = 7 });
+        const exported = try ctx.requireByName(names[1]);
+        const callable = exported.table.rawGet(.{ .string = "read" }).?;
+        const first = try ctx.callValueFirst(callable, &.{});
+        try ctx.setGlobal(1, .{ .number = 19 });
+        const second = try ctx.callValueFirst(callable, &.{});
+        try std.testing.expect(rawEqual(exported, try ctx.requireByName(names[1])));
+        const result = try ctx.newTable();
+        try result.rawSet(ctx.allocator, .{ .string = "before" }, first);
+        try result.rawSet(ctx.allocator, .{ .string = "after" }, second);
+        return one(.{ .table = result });
+    }
+    fn broken(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        try ctx.setGlobal(1, .{ .number = 43 });
+        return error.NotImplemented;
+    }
+};
+
+test "required modules and returned functions observe same invocation globals and late writes" {
+    const F = InvocationEnvironmentTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 2, F.names.len);
+    defer ctx.deinit();
+    const roots = [_]FunctionFn{ stabilize(F.writer), stabilize(F.reader), stabilize(F.broken) };
+    const owners = [_]u32{ 0, 1, 2, 1 };
+    ctx.module_root_entries = &roots;
+    ctx.function_module_ids = &owners;
+    ctx.configureModules(null, F.lookup, F.name);
+    const actual = try ctx.requireByName(F.names[0]);
+    try std.testing.expectEqual(@as(f64, 7), actual.table.rawGet(.{ .string = "before" }).?.number);
+    try std.testing.expectEqual(@as(f64, 19), actual.table.rawGet(.{ .string = "after" }).?.number);
+    try std.testing.expectEqual(@as(f64, 19), ctx.getGlobal(1).number);
+    try std.testing.expect(ctx.active_module_id == null and ctx.depth == 0);
+    const cached = try ctx.requireByName(F.names[1]);
+    const callable = cached.table.rawGet(.{ .string = "read" }).?;
+    try ctx.setGlobal(1, .{ .boolean = false });
+    try std.testing.expect(!(try ctx.callValueFirst(callable, &.{})).boolean);
+    try std.testing.expect(rawEqual(cached, try ctx.requireByName(F.names[1])));
+    try std.testing.expect(ctx.active_module_id == null and ctx.depth == 0);
+}
+
+test "static direct buffered and dynamic calls retain environment while restoring defining module metadata" {
+    const F = InvocationEnvironmentTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 2, 2);
+    defer ctx.deinit();
+    const owners = [_]u32{ 0, 1 };
+    ctx.function_module_ids = &owners;
+    const callable = try ctx.makeFunction(1, stabilize(F.read), &.{});
+    try ctx.setGlobal(1, .{ .number = 29 });
+    const outer = try ctx.enterModule(0);
+    defer ctx.restoreModule(outer);
+    var buffer: [1]Value = undefined;
+    const dynamic = try ctx.callFunctionBuffered(callable.callable, &.{}, &buffer);
+    defer freeResults(dynamic);
+    try std.testing.expectEqual(@as(f64, 29), dynamic[0].number);
+    try std.testing.expectEqual(@as(?u32, 0), ctx.active_module_id);
+    const direct = try ctx.callDirectFunction(callable.callable.*, F.read, &.{});
+    defer freeResults(direct);
+    try std.testing.expectEqual(@as(f64, 29), direct[0].number);
+    try std.testing.expectEqual(@as(?u32, 0), ctx.active_module_id);
+    const buffered = try ctx.callBufferedDirectFunction(callable.callable.*, F.readBuffered, &.{}, &buffer);
+    try std.testing.expect(buffered.ptr == buffer[0..].ptr);
+    try std.testing.expectEqual(@as(f64, 29), buffered[0].number);
+    try std.testing.expectEqual(@as(?u32, 0), ctx.active_module_id);
+    const fixed = try ctx.callStaticFunctionBuffered(1, stabilize(F.read), &.{}, &.{}, &buffer);
+    defer freeResults(fixed);
+    try std.testing.expectEqual(@as(f64, 29), fixed[0].number);
+    try std.testing.expectEqual(@as(?u32, 0), ctx.active_module_id);
+    try ctx.enterStaticModule(1);
+    try std.testing.expectEqual(@as(?u32, 1), ctx.active_module_id);
+    try ctx.setGlobal(1, .{ .number = 31 });
+    ctx.leaveStaticFunction();
+    try std.testing.expectEqual(@as(f64, 31), ctx.getGlobal(1).number);
+    try std.testing.expectEqual(@as(?u32, 0), ctx.active_module_id);
+    try std.testing.expectEqual(@as(usize, 0), ctx.depth);
+}
+
+test "caught module initialization errors preserve prior global writes and unwind loading owner and depth" {
+    const F = InvocationEnvironmentTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try Context.initProgram(arena.allocator(), 2, F.names.len);
+    defer ctx.deinit();
+    const roots = [_]FunctionFn{ stabilize(F.writer), stabilize(F.reader), stabilize(F.broken) };
+    const owners = [_]u32{ 0, 1, 2, 1 };
+    ctx.module_root_entries = &roots;
+    ctx.function_module_ids = &owners;
+    ctx.configureModules(null, F.lookup, F.name);
+    const exported = try ctx.requireByName(F.names[1]);
+    for (0..2) |_| {
+        try std.testing.expectError(error.AotCallFailed, ctx.requireByName(F.names[2]));
+        try std.testing.expectEqualStrings("NotImplemented", ctx.aotErrorName().?);
+        try std.testing.expect(!ctx.moduleStateConst(2).?.loading);
+        try std.testing.expect(ctx.active_module_id == null and ctx.depth == 0);
+        try std.testing.expectEqual(@as(f64, 43), ctx.getGlobal(1).number);
+        ctx.clearAotErrorName();
+        try std.testing.expectEqual(@as(f64, 43), (try ctx.callValueFirst(exported.table.rawGet(.{ .string = "read" }).?, &.{})).number);
+    }
+}
+
+test "modified installed library field and metatable reads refuse root promotion and rollback restores baseline" {
+    for ([_]bool{ false, true }) |page_scope| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var ctx = try Context.initProgram(a, 3, 1);
+        defer ctx.deinit();
+        try bindGlobalTable(&ctx, null, 0);
+        const environment = ctx.global_table.?;
+        const math = try ctx.newNativeNamespace(.math);
+        try math.rawSetNativeField(.math, "abs", .{ .number = 7 });
+        const absolute_slot = math.slotForString("abs", null) orelse return error.MissingNativeFixtureField;
+        try ctx.setGlobal(1, .{ .table = math });
+        try ctx.setGlobal(2, .{ .number = 11 });
+        ctx.finishLibraryInstallation();
+        const initial_scope = try ctx.enterModule(0);
+        ctx.restoreModule(initial_scope);
+        var pristine_effect = false;
+        const pristine_probe = beginModuleTemplateEffectProbe(&pristine_effect, page_scope);
+        const pristine = ctx.getKnownNativeField(ctx.getGlobal(1), .math, absolute_slot, "abs") catch |err| {
+            endModuleTemplateEffectProbe(pristine_probe, pristine_effect);
+            return err;
+        };
+        endModuleTemplateEffectProbe(pristine_probe, pristine_effect);
+        try std.testing.expectEqual(@as(f64, 7), pristine.number);
+        try std.testing.expect(!pristine_effect);
+
+        var journal = InvokeRollbackJournal.init(a, &ctx);
+        journal.begin();
+        var journal_active = true;
+        defer if (journal_active) journal.rollback(&ctx);
+        try math.rawSetNativeField(.math, "abs", .{ .number = 19 });
+        ctx.finishLibraryInstallation();
+        try std.testing.expectEqual(@as(?bool, false), math.template_native_baseline_pristine);
+        const changed_mt = try ctx.newTable();
+        try changed_mt.rawSet(a, .{ .string = "__index" }, .{ .number = 23 });
+        try math.setMetatable(changed_mt);
+        try ctx.setGlobal(2, .{ .boolean = false });
+        try ctx.setGlobal(0, .nil);
+        try std.testing.expect(ctx.global_table.? == environment and ctx.getGlobal(0) == .nil);
+
+        var field_effect = false;
+        const field_probe = beginModuleTemplateEffectProbe(&field_effect, page_scope);
+        const changed = ctx.getKnownNativeField(ctx.getGlobal(1), .math, absolute_slot, "abs") catch |err| {
+            endModuleTemplateEffectProbe(field_probe, field_effect);
+            return err;
+        };
+        endModuleTemplateEffectProbe(field_probe, field_effect);
+        try std.testing.expectEqual(@as(f64, 19), changed.number);
+        try std.testing.expect(field_effect);
+
+        var metatable_effect = false;
+        const metatable_probe = beginModuleTemplateEffectProbe(&metatable_effect, page_scope);
+        const inherited = ctx.metamethod(.{ .table = math }, "__index");
+        endModuleTemplateEffectProbe(metatable_probe, metatable_effect);
+        try std.testing.expectEqual(@as(f64, 23), (inherited orelse return error.MissingNativeFixtureMetamethod).number);
+        try std.testing.expect(metatable_effect);
+
+        ctx.setAotErrorName("controlled invocation failure");
+        journal.rollback(&ctx);
+        journal_active = false;
+        try std.testing.expect(ctx.global_table.? == environment and ctx.getGlobal(0).table == environment);
+        try std.testing.expectEqual(@as(f64, 11), ctx.getGlobal(2).number);
+        try std.testing.expect(math.metatable == null);
+        try std.testing.expect(ctx.aotErrorName() == null and ctx.depth == 0 and ctx.active_module_id == null);
+        var restored_effect = false;
+        const restored_probe = beginModuleTemplateEffectProbe(&restored_effect, page_scope);
+        const restored = ctx.getKnownNativeField(ctx.getGlobal(1), .math, absolute_slot, "abs") catch |err| {
+            endModuleTemplateEffectProbe(restored_probe, restored_effect);
+            return err;
+        };
+        endModuleTemplateEffectProbe(restored_probe, restored_effect);
+        try std.testing.expectEqual(@as(f64, 7), restored.number);
+        try std.testing.expect(!restored_effect);
+    }
+}
+
+test "pristine library template reuse guards current invocation and retains later pristine reuse" {
+    const Probe = struct {
+        var calls: usize = 0;
+        const names = [_][]const u8{ "Module:LibraryCapture", "Module:LibraryConsumer" };
+        fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+            for (names, 0..) |candidate, id| if (std.mem.eql(u8, candidate, raw_name)) return @intCast(id);
+            return null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id < names.len) names[id] else null;
+        }
+        fn result(ctx: *Context, value: Value) ![]const Value {
+            const table = try ctx.newTable();
+            try table.rawSet(ctx.allocator, .{ .string = "value" }, value);
+            const out = try std.heap.smp_allocator.alloc(Value, 1);
+            out[0] = .{ .table = table };
+            return out;
+        }
+        fn capture(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            calls += 1;
+            const math = ctx.getGlobal(0);
+            const slot = math.table.slotForString("abs", null) orelse return error.MissingNativeFixtureField;
+            return result(ctx, try ctx.getKnownNativeField(math, .math, slot, "abs"));
+        }
+        fn consumer(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            const captured = try ctx.requireByName(names[0]);
+            return result(ctx, captured.table.rawGet(.{ .string = "value" }).?);
+        }
+        fn install(ctx: *Context) !*Table {
+            const math = try ctx.newNativeNamespace(.math);
+            try math.rawSetNativeField(.math, "abs", .{ .number = 7 });
+            try ctx.setGlobal(0, .{ .table = math });
+            ctx.finishLibraryInstallation();
+            return math;
+        }
+    };
+    for ([_]bool{ false, true }) |page_scope| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var template = try Context.initProgram(a, 1, 2);
+        defer template.deinit();
+        const roots = [_]FunctionFn{ stabilize(Probe.capture), stabilize(Probe.consumer) };
+        template.module_root_entries = &roots;
+        template.configureModules(null, Probe.lookup, Probe.name);
+        var eligible = [_]bool{ false, false };
+        var rejected = [_]bool{ false, false };
+        template.module_template_eligible = &eligible;
+        template.module_template_rejected = &rejected;
+        template.module_template_page_scope = page_scope;
+        _ = try Probe.install(&template);
+        Probe.calls = 0;
+        for ([_]f64{ 7, 19, 7 }, 0..) |expected, invocation_index| {
+            var invocation = try template.forkProgram(a);
+            defer invocation.deinit();
+            invocation.module_template_context = &template;
+            invocation.module_template_page_scope = page_scope;
+            invocation.package_loaded = try invocation.newTable();
+            const math = try Probe.install(&invocation);
+            if (expected != 7) try math.rawSetNativeField(.math, "abs", .{ .number = expected });
+            const value = try invocation.requireByName(Probe.names[0]);
+            try std.testing.expectEqual(expected, value.table.rawGet(.{ .string = "value" }).?.number);
+            try std.testing.expect(eligible[0] and !rejected[0]);
+            try std.testing.expect(template.moduleStateConst(0).?.template_library_dependencies != 0);
+            try std.testing.expectEqual(invocation_index == 1, invocation.moduleStateConst(0).?.template_invocation_dependent);
+            if (invocation_index == 1) {
+                const consumer = try invocation.requireByName(Probe.names[1]);
+                try std.testing.expectEqual(expected, consumer.table.rawGet(.{ .string = "value" }).?.number);
+                try std.testing.expect(!eligible[1] and rejected[1]);
+                try math.rawSetNativeField(.math, "abs", .{ .number = 7 });
+                const cached = try invocation.requireByName(Probe.names[0]);
+                try std.testing.expect(cached.table == value.table);
+                try std.testing.expectEqual(expected, cached.table.rawGet(.{ .string = "value" }).?.number);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 2), Probe.calls);
+    }
+}
+
+const BetweenProbeDependencyFixture = struct {
+    calls: [2]usize = .{ 0, 0 },
+    fail: bool = false,
+    const names = [_][]const u8{ "Module:GuardA", "Module:GuardB", "Module:GuardHelper" };
+    const roots = [_]FunctionFn{ stabilize(rootA), stabilize(rootB), stabilize(helperRoot) };
+
+    fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+        if (std.mem.eql(u8, raw_name, "Module:GuardAlias")) return 0;
+        for (names, 0..) |item, id| if (std.mem.eql(u8, item, raw_name)) return @intCast(id);
+        return null;
+    }
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return if (id < names.len) names[id] else null;
+    }
+    fn fixture(ctx: *Context) *@This() {
+        return @ptrCast(@alignCast(@constCast(ctx.module_lookup_ctx.?)));
+    }
+    fn result(value: Value) ![]const Value {
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = value;
+        return out;
+    }
+    fn rootA(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        fixture(ctx).calls[0] += 1;
+        const nested_child = try ctx.newTable();
+        try nested_child.rawSet(ctx.allocator, .{ .string = "x" }, .{ .number = 7 });
+        const out = try ctx.newTable();
+        try out.rawSet(ctx.allocator, .{ .string = "child" }, .{ .table = nested_child });
+        return result(.{ .table = out });
+    }
+    fn helperRoot(_: *Context, _: Captures, _: []const Value) ![]const Value {
+        return error.TestUnexpectedResult;
+    }
+    fn helper(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        try std.testing.expectEqual(@as(?u32, 2), ctx.active_module_id);
+        var deferred: Value = undefined;
+        if (module_template_dependency_probe != null)
+            try std.testing.expect(ctx.deferStaticRequireRef(0, &deferred) == null);
+        const dependency = try ctx.requireByName("Module:GuardAlias");
+        const nested_child = dependency.table.rawGet(.{ .string = "child" }).?.table;
+        return result(nested_child.rawGet(.{ .string = "x" }) orelse .nil);
+    }
+    fn rootB(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+        fixture(ctx).calls[1] += 1;
+        const values = try ctx.callStaticFunctionBuffered(2, stabilize(helper), &.{}, &.{}, null);
+        defer freeResults(values);
+        if (fixture(ctx).fail) return error.DependencyGuardProbeFailure;
+        const out = try ctx.newTable();
+        try out.rawSet(ctx.allocator, .{ .string = "saved" }, values[0]);
+        return result(.{ .table = out });
+    }
+    fn init(self: *@This(), a: std.mem.Allocator, eligible: []bool, rejected: []bool) !Context {
+        var ctx = try Context.initProgram(a, 0, roots.len);
+        ctx.module_root_entries = &roots;
+        ctx.configureModules(self, lookup, name);
+        ctx.module_template_eligible = eligible;
+        ctx.module_template_rejected = rejected;
+        return ctx;
+    }
+    fn fork(template: *Context, a: std.mem.Allocator) !Context {
+        var ctx = try template.forkProgram(a);
+        ctx.module_template_context = template;
+        ctx.package_loaded = try ctx.newTable();
+        return ctx;
+    }
+    fn child(value: Value) *Table {
+        return value.table.rawGet(.{ .string = "child" }).?.table;
+    }
+    fn saved(value: Value) Value {
+        return value.table.rawGet(.{ .string = "saved" }) orelse .nil;
+    }
+};
+
+test "warm template dependency guard rejects between probe descendants and retains unchanged specialization" {
+    const F = BetweenProbeDependencyFixture;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var probe: F = .{};
+    var eligible = [_]bool{ false, false, false };
+    var rejected = [_]bool{ false, false, false };
+    var template = try probe.init(a, &eligible, &rejected);
+    defer template.deinit();
+    for ([_]f64{ 7, 19, 7 }, 0..) |expected, index| {
+        var live = try F.fork(&template, a);
+        defer live.deinit();
+        const dependency = try live.requireByName(F.names[0]);
+        const sentinel = live.moduleValueSentinel(0, dependency).?;
+        var direct: Value = undefined;
+        try std.testing.expect(live.deferStaticRequireRef(0, &direct) != null);
+        try std.testing.expect(rawEqual(direct, dependency));
+        if (index == 1) {
+            try std.testing.expect(module_template_effect_probe == null);
+            try F.child(dependency).rawSet(a, .{ .string = "x" }, .{ .number = expected });
+            try std.testing.expect(!sentinel.*);
+        }
+        const value = try live.requireByName(F.names[1]);
+        try std.testing.expectEqual(expected, F.saved(value).number);
+        try std.testing.expect(rawEqual(dependency, live.package_loaded.?.rawGet(.{ .string = "Module:GuardAlias" }).?));
+        try std.testing.expect(eligible[0] and eligible[1]);
+        try std.testing.expect(!rejected[0] and !rejected[1]);
+        try std.testing.expectEqual(index == 1, live.moduleStateConst(1).?.template_invocation_dependent);
+        const cached = try live.requireByName(F.names[1]);
+        try std.testing.expect(rawEqual(value, cached));
+        const requirements = template.moduleStateConst(1).?.template_observed_requirements;
+        try std.testing.expectEqual(@as(usize, 1), requirements.len);
+        try std.testing.expectEqual(@as(u32, 0), requirements[0].module_id);
+        try std.testing.expectEqualStrings("Module:GuardAlias", requirements[0].requested);
+        try std.testing.expectEqual(@as(f64, 7), F.saved(template.moduleStateConst(1).?.value.?).number);
+    }
+    try std.testing.expectEqualSlices(usize, &.{ 1, 2 }, &probe.calls);
+}
+
+test "cold template dependency guard observes mutation before initializer and preserves nil false and errors" {
+    const F = BetweenProbeDependencyFixture;
+    for ([_]Value{ .{ .number = 19 }, .{ .boolean = false }, .nil }) |expected| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var probe: F = .{};
+        var eligible = [_]bool{ false, false, false };
+        var rejected = [_]bool{ false, false, false };
+        var template = try probe.init(a, &eligible, &rejected);
+        defer template.deinit();
+        var first = try F.fork(&template, a);
+        defer first.deinit();
+        const dependency = try first.requireByName(F.names[0]);
+        try F.child(dependency).rawSet(a, .{ .string = "x" }, expected);
+        const actual = try first.requireByName(F.names[1]);
+        try std.testing.expect(rawEqual(expected, F.saved(actual)));
+        try std.testing.expect(eligible[0] and !rejected[0] and !eligible[1] and rejected[1]);
+        try std.testing.expect(template.moduleStateConst(1) == null);
+        var second = try F.fork(&template, a);
+        defer second.deinit();
+        const later = try second.requireByName(F.names[0]);
+        try F.child(later).rawSet(a, .{ .string = "x" }, .{ .number = 27 });
+        try std.testing.expectEqual(@as(f64, 27), F.saved(try second.requireByName(F.names[1])).number);
+        var failed = try F.fork(&template, a);
+        defer failed.deinit();
+        probe.fail = true;
+        try std.testing.expectError(error.AotCallFailed, failed.requireByName(F.names[1]));
+        try std.testing.expectEqualStrings("DependencyGuardProbeFailure", failed.aotErrorName().?);
+        try std.testing.expect(failed.moduleStateConst(1).?.value == null);
+        try std.testing.expectEqualSlices(usize, &.{ 1, 3 }, &probe.calls);
+    }
+}
+
+test "template dependency guard rejects requested alias overrides without changing the worker prototype" {
+    const F = BetweenProbeDependencyFixture;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var probe: F = .{};
+    var eligible = [_]bool{ false, false, false };
+    var rejected = [_]bool{ false, false, false };
+    var template = try probe.init(a, &eligible, &rejected);
+    defer template.deinit();
+    var seed = try F.fork(&template, a);
+    defer seed.deinit();
+    _ = try seed.requireByName(F.names[0]);
+    _ = try seed.requireByName(F.names[1]);
+    var live = try F.fork(&template, a);
+    defer live.deinit();
+    const original = try live.requireByName(F.names[0]);
+    const replacement = try live.newTable();
+    const child = try live.newTable();
+    try child.rawSet(a, .{ .string = "x" }, .{ .number = 31 });
+    try replacement.rawSet(a, .{ .string = "child" }, .{ .table = child });
+    try live.package_loaded.?.rawSet(a, .{ .string = "Module:GuardAlias" }, .{ .table = replacement });
+    try std.testing.expectEqual(@as(f64, 31), F.saved(try live.requireByName(F.names[1])).number);
+    try std.testing.expect(rawEqual(original, try live.requireByName(F.names[0])));
+    try std.testing.expectEqual(@as(f64, 7), F.saved(template.moduleStateConst(1).?.value.?).number);
+    try std.testing.expect(eligible[1] and !rejected[1]);
+}
+
+test "descendant export guards cover shared cycles slot writes and rollback without invoking metatables" {
+    const Poison = struct {
+        fn call(_: ?*anyopaque, _: *Context, _: []const Value) ![]const Value {
+            return error.TestUnexpectedResult;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try Context.initProgram(a, 0, 2);
+    defer ctx.deinit();
+    const keys = [_][]const u8{"x"};
+    const shape = Shape{ .keys = .{ .strings = &keys }, .field_count = 1 };
+    const child = try ctx.newShapedTable(&shape);
+    try child.rawSetSlot(0, .{ .number = 7 });
+    const left = try ctx.newTable();
+    const right = try ctx.newTable();
+    try left.rawSet(a, .{ .string = "child" }, .{ .table = child });
+    try right.rawSet(a, .{ .string = "child" }, .{ .table = child });
+    try child.rawSet(a, .{ .string = "left" }, .{ .table = left });
+    try child.rawSet(a, .{ .string = "right" }, .{ .table = right });
+    const meta = try ctx.newTable();
+    try meta.rawSet(a, .{ .string = "__index" }, try ctx.newNative(null, Poison.call));
+    child.metatable = meta;
+    try ctx.preinitializeModule(0, .{ .table = left }, false);
+    try ctx.preinitializeModule(1, .{ .table = right }, false);
+    const left_guard = ctx.moduleValueSentinel(0, .{ .table = left }).?;
+    var delayed: Value = undefined;
+    const right_guard = ctx.deferStaticRequireRef(1, &delayed).?;
+    try std.testing.expect(left_guard.* and right_guard.*);
+    try std.testing.expectEqual(@as(usize, 2), child.export_guard_parents.len);
+    const parents = child.export_guard_parents.ptr;
+    for (0..16) |_| {
+        try std.testing.expect(ctx.moduleStateConst(0).?.template_value_guard.pristine());
+        try std.testing.expect(ctx.moduleStateConst(1).?.template_value_guard.pristine());
+        try std.testing.expect(child.export_guard_parents.ptr == parents);
+    }
+    var journal = InvokeRollbackJournal.init(a, &ctx);
+    journal.begin();
+    try child.rawSetSlot(0, .{ .boolean = false });
+    try std.testing.expect(!left_guard.* and !right_guard.*);
+    try std.testing.expect(child.rawGetSlot(0).?.boolean == false);
+    try child.rawSetSlot(0, .nil);
+    try std.testing.expect(child.rawGetSlot(0) == null);
+    journal.rollback(&ctx);
+    try std.testing.expect(left_guard.* and right_guard.*);
+    try std.testing.expectEqual(@as(f64, 7), child.rawGetSlot(0).?.number);
+    try std.testing.expect(child.rawGet(.{ .string = "left" }).?.table == left);
+    try std.testing.expect(child.rawGet(.{ .string = "right" }).?.table == right);
+    try meta.rawSet(a, .{ .string = "changed" }, .{ .number = 1 });
+    try std.testing.expect(!left_guard.* and !right_guard.*);
+}
+
+test "export graph guards inspect captured cells without disabling pure closure templates" {
+    const F = struct {
+        fn call(_: *Context, captures: Captures, _: []const Value) ![]const Value {
+            return BetweenProbeDependencyFixture.result((try captures.cell(0)).value);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try Context.initProgram(a, 0, 1);
+    defer ctx.deinit();
+    const cell = try ctx.newCell(.{ .number = 7 });
+    const callable = try ctx.makeFunctionKnown(0, F.call, &.{cell});
+    try ctx.preinitializeModule(0, callable, false);
+    const guard = ctx.moduleStateConst(0).?.template_value_guard;
+    try std.testing.expect(guard.pristine());
+    cell.value = .{ .boolean = false };
+    try std.testing.expect(!guard.pristine());
+    const actual = try ctx.callValue(callable, &.{});
+    defer freeResults(actual);
+    try std.testing.expectEqualDeep(Value{ .boolean = false }, actual[0]);
+    cell.value = .nil;
+    try std.testing.expect(!guard.pristine());
+    cell.value = .{ .number = 7 };
+    try std.testing.expect(guard.pristine());
+}
+
+test "descendant guard records survive destroyed roots and reject foreign mutable ownership" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try Context.initProgram(a, 0, 2);
+    defer ctx.deinit();
+    const child = try ctx.newTable();
+    try child.rawSet(a, .{ .string = "x" }, .{ .number = 7 });
+    const root = try ctx.newTable();
+    try root.rawSet(a, .{ .string = "child" }, .{ .table = child });
+    _ = try ctx.prepareModuleValueGuard(.{ .table = root });
+    const retired = root.export_guard_root.?;
+    try std.testing.expect(child.export_guard_parents[0] == retired);
+    ctx.destroyTable(root);
+    try std.testing.expect(retired.table == null);
+    try child.rawSet(a, .{ .string = "x" }, .{ .number = 19 });
+    try std.testing.expectEqual(@as(f64, 19), child.rawGet(.{ .string = "x" }).?.number);
+    const survivor = try ctx.newTable();
+    try survivor.rawSet(a, .{ .string = "child" }, .{ .table = child });
+    const surviving_guard = try ctx.prepareModuleValueGuard(.{ .table = survivor });
+    try std.testing.expect(surviving_guard.pristine());
+    try child.rawSet(a, .{ .string = "x" }, .nil);
+    try std.testing.expect(!surviving_guard.pristine());
+    var foreign = try Context.init(a, 0);
+    defer foreign.deinit();
+    const borrowed = try foreign.newTable();
+    const owner = try ctx.newTable();
+    try owner.rawSet(a, .{ .string = "borrowed" }, .{ .table = borrowed });
+    const unproved = try ctx.prepareModuleValueGuard(.{ .table = owner });
+    try std.testing.expect(!unproved.pristine());
+    try std.testing.expectEqual(@as(usize, 0), borrowed.export_guard_parents.len);
+    try std.testing.expect(!(try ctx.prepareModuleValueGuard(.{ .table = borrowed })).pristine());
+}
+
+const UpstreamOverrideGuardFixture = struct {
+    fn root(_: *Context, _: Captures, _: []const Value) ![]const Value {
+        return error.TestUnexpectedResult;
+    }
+    fn requirements(_: ?*const anyopaque, id: u32) []const ModuleRequirement {
+        return if (id == 1) &.{.{ .module_id = 0, .requested = "Module:Dependency" }} else &.{};
+    }
+    fn table(ctx: *Context, number: f64) !Value {
+        const out = try ctx.newTable();
+        try out.rawSet(ctx.allocator, .{ .string = "x" }, .{ .number = number });
+        return .{ .table = out };
+    }
+    fn run(backing: std.mem.Allocator) !void {
+        var arena = std.heap.ArenaAllocator.init(backing);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const roots: [2]FunctionFn = @splat(stabilize(root));
+        var worker = try Context.initProgram(a, 0, 2);
+        defer worker.deinit();
+        var worker_eligible = [_]bool{ true, false };
+        var worker_rejected = [_]bool{ false, false };
+        worker.module_root_entries = &roots;
+        worker.module_template_eligible = &worker_eligible;
+        worker.module_template_rejected = &worker_rejected;
+        worker.configureModuleRequirements(null, requirements);
+        const baseline = try table(&worker, 7);
+        try worker.preinitializeModule(0, baseline, false);
+        var page = try worker.forkProgram(a);
+        defer page.deinit();
+        var page_eligible = [_]bool{ true, true };
+        var page_rejected = [_]bool{ false, false };
+        page.module_template_context = &worker;
+        page.module_template_eligible = &page_eligible;
+        page.module_template_rejected = &page_rejected;
+        try page.preinitializeModule(0, try table(&page, 7), false);
+        const overridden = try table(&page, 19);
+        const exported = try page.newTable();
+        try exported.rawSet(a, .{ .string = "dependency" }, overridden);
+        try page.preinitializeModule(1, .{ .table = exported }, false);
+        const effects = [_]ModuleTemplateOverride{.{ .module_id = 0, .value = overridden }};
+        page.moduleState(1).?.template_overrides = &effects;
+        const promoted = page.promoteModuleTemplateUpstream(1, null) catch |err| {
+            if (err == error.OutOfMemory) {
+                try std.testing.expect(!worker_eligible[1]);
+                if (worker.moduleStateConst(1)) |state| try std.testing.expect(state.value == null);
+            }
+            return err;
+        };
+        try std.testing.expect(promoted and worker_eligible[1]);
+        try std.testing.expect(rawEqual(baseline, worker.preparedModuleValue(0).?));
+        try std.testing.expectEqual(@as(f64, 7), baseline.table.rawGet(.{ .string = "x" }).?.number);
+        const prototype = worker.moduleStateConst(1).?;
+        try std.testing.expectEqual(@as(usize, 1), prototype.template_overrides.len);
+        const retained = prototype.template_overrides[0].value;
+        try std.testing.expect(rawEqual(retained, prototype.value.?.table.rawGet(.{ .string = "dependency" }).?));
+        try std.testing.expectEqual(@as(f64, 19), retained.table.rawGet(.{ .string = "x" }).?.number);
+        var live = try worker.forkProgram(a);
+        defer live.deinit();
+        live.module_template_context = &worker;
+        const creator = try live.loadModule(1, null);
+        const dependency = try live.loadModule(0, null);
+        try std.testing.expect(rawEqual(dependency, creator.table.rawGet(.{ .string = "dependency" }).?));
+        try std.testing.expectEqual(@as(f64, 19), dependency.table.rawGet(.{ .string = "x" }).?.number);
+        try std.testing.expect(live.moduleStateConst(0).?.template_origin_context == null);
+        var independent = try worker.forkProgram(a);
+        defer independent.deinit();
+        independent.module_template_context = &worker;
+        try std.testing.expectEqual(@as(f64, 7), (try independent.loadModule(0, null)).table.rawGet(.{ .string = "x" }).?.number);
+        // Applying an override carries its creator's observations in addition
+        // to the original dependency owner's observations.
+        worker.moduleState(0).?.template_library_dependencies = 2;
+        worker.moduleState(1).?.template_library_dependencies = 4;
+        var checked = try worker.forkProgram(a);
+        defer checked.deinit();
+        var clone = Context.ModuleTemplateClone{ .source = &worker, .target = &checked };
+        defer clone.deinit();
+        try clone.applyTemplateOverrides(prototype.template_overrides, prototype);
+        try std.testing.expectEqual(@as(u64, 6), checked.moduleStateConst(0).?.template_library_dependencies);
+        try std.testing.expect(checked.moduleStateConst(0).?.template_origin_context == null);
+    }
+};
+
+test "upstream promotion retains creator overrides without replacing dependency prototypes" {
+    try UpstreamOverrideGuardFixture.run(std.testing.allocator);
+}
+
+test "dependency guard allocation failures preserve failed promotion and release owned state" {
+    var backing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(backing.allocator(), UpstreamOverrideGuardFixture.run, .{});
+    try std.testing.expectEqual(backing.allocated_bytes, backing.freed_bytes);
+}
+
+test "export guard registration uses heap worklists for deep table and closure chains" {
+    const F = struct {
+        fn call(_: *Context, captures: Captures, _: []const Value) ![]const Value {
+            return BetweenProbeDependencyFixture.result((try captures.cell(0)).value);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ctx = try Context.initProgram(a, 0, 1);
+    defer ctx.deinit();
+    const root = try ctx.newTable();
+    var tail = root;
+    for (0..16384) |_| {
+        const next = try ctx.newTable();
+        try tail.rawSet(a, .{ .string = "child" }, .{ .table = next });
+        tail = next;
+    }
+    const terminal_cell = try ctx.newCell(.{ .number = 7 });
+    var callable = try ctx.makeFunctionKnown(0, F.call, &.{terminal_cell});
+    for (0..16384) |_| {
+        const cell = try ctx.newCell(callable);
+        callable = try ctx.makeFunctionKnown(0, F.call, &.{cell});
+    }
+    try tail.rawSet(a, .{ .string = "closure" }, callable);
+    const graph_guard = try ctx.prepareModuleValueGuard(.{ .table = root });
+    const callable_guard = try ctx.prepareModuleValueGuard(callable);
+    try std.testing.expect(graph_guard.pristine() and callable_guard.pristine());
+    try std.testing.expectEqual(@as(usize, 16385), root.export_capture_baselines.len);
+    try std.testing.expectEqual(@as(usize, 16385), callable_guard.capture_cells.len);
+    try std.testing.expectEqual(@as(usize, 1), tail.export_guard_parents.len);
+    try std.testing.expect(tail.export_guard_parents[0].table == root);
+    terminal_cell.value = .{ .boolean = false };
+    try std.testing.expect(!graph_guard.pristine() and !callable_guard.pristine());
+    terminal_cell.value = .{ .number = 7 };
+    try std.testing.expect(graph_guard.pristine() and callable_guard.pristine());
+    try tail.rawSet(a, .{ .string = "x" }, .{ .number = 19 });
+    try std.testing.expect(!graph_guard.pristine() and callable_guard.pristine());
+}
+
+test "rejected and effectful ordinary roots keep deep values without registering cache guards" {
+    const F = struct {
+        const module_name = "Module:DeepOrdinary";
+        fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+            return if (std.mem.eql(u8, raw_name, module_name)) 0 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) module_name else null;
+        }
+        fn root(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            const value = try ctx.newTable();
+            var tail = value;
+            for (0..16384) |_| {
+                const next = try ctx.newTable();
+                try tail.rawSet(ctx.allocator, .{ .string = "child" }, .{ .table = next });
+                tail = next;
+            }
+            try tail.rawSet(ctx.allocator, .{ .string = "x" }, .{ .number = 19 });
+            // A real invocation-global write makes the active initializer uncacheable.
+            try ctx.global_table.?.rawSet(ctx.allocator, .{ .string = "changed" }, .{ .boolean = true });
+            return BetweenProbeDependencyFixture.result(.{ .table = value });
+        }
+    };
+    for ([_]bool{ false, true }) |previously_rejected| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var template = try Context.initProgram(a, 1, 1);
+        defer template.deinit();
+        const roots = [_]FunctionFn{stabilize(F.root)};
+        template.module_root_entries = &roots;
+        template.configureModules(null, F.lookup, F.name);
+        var eligible = [_]bool{false};
+        var rejected = [_]bool{previously_rejected};
+        template.module_template_eligible = &eligible;
+        template.module_template_rejected = &rejected;
+        var live = try template.forkProgram(a);
+        defer live.deinit();
+        live.module_template_context = &template;
+        live.package_loaded = try live.newTable();
+        try bindGlobalTable(&live, null, 0);
+        const value = try live.requireByName(F.module_name);
+        try std.testing.expect(rejected[0] and !eligible[0]);
+        try std.testing.expect(!live.moduleStateConst(0).?.template_value_guard.pristine());
+        try std.testing.expect(template.moduleStateConst(0) == null);
+        try std.testing.expect(live.global_table.?.rawGet(.{ .string = "changed" }).?.boolean);
+        var tail = value.table;
+        var depth: usize = 0;
+        while (true) {
+            try std.testing.expect(!tail.export_guard_graph_ready and tail.export_guard_root == null);
+            try std.testing.expectEqual(@as(usize, 0), tail.export_guard_parents.len);
+            const next = tail.rawGet(.{ .string = "child" }) orelse break;
+            tail = next.table;
+            depth += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 16384), depth);
+        try std.testing.expectEqual(@as(f64, 19), tail.rawGet(.{ .string = "x" }).?.number);
+        try std.testing.expect(rawEqual(value, try live.requireByName(F.module_name)));
+    }
+}
+
+test "cached require avoids unused lookup but preserves active dependency and mutation observation" {
+    const F = struct {
+        calls: usize = 0,
+        fn lookup(raw: ?*const anyopaque, raw_name: []const u8) ?u32 {
+            const self: *@This() = @ptrCast(@alignCast(@constCast(raw.?)));
+            self.calls += 1;
+            return if (std.mem.eql(u8, raw_name, "Module:CachedAlias")) 0 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) "Module:Cached" else null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var probe: F = .{};
+    var ctx = try Context.initProgram(a, 0, 1);
+    defer ctx.deinit();
+    ctx.configureModules(&probe, F.lookup, F.name);
+    const value = try ctx.newTable();
+    try value.rawSet(a, .{ .string = "field" }, .{ .number = 7 });
+    try ctx.preinitializeModule(0, .{ .table = value }, false);
+    ctx.package_loaded = try ctx.newTable();
+    try ctx.package_loaded.?.rawSet(a, .{ .string = "Module:CachedAlias" }, .{ .table = value });
+    try ctx.package_loaded.?.rawSet(a, .{ .string = "arbitrary" }, .{ .number = 0 });
+    try std.testing.expect((try ctx.requireByName("Module:CachedAlias")).table == value);
+    try std.testing.expectEqual(@as(f64, 0), (try ctx.requireByName("arbitrary")).number);
+    try std.testing.expectEqual(@as(usize, 0), probe.calls);
+    var observed = false;
+    const previous = beginModuleTemplateEffectProbe(&observed, false);
+    defer endModuleTemplateEffectProbe(previous, observed);
+    var dependencies = ModuleTemplateDependencyProbe{ .ctx = &ctx };
+    defer dependencies.requirements.deinit(std.heap.smp_allocator);
+    const saved_dependency_probe = module_template_dependency_probe;
+    module_template_dependency_probe = &dependencies;
+    defer module_template_dependency_probe = saved_dependency_probe;
+    try std.testing.expect((try ctx.requireByName("Module:CachedAlias")).table == value);
+    try std.testing.expectEqual(@as(usize, 1), probe.calls);
+    try std.testing.expect(!observed);
+    try std.testing.expectEqual(@as(usize, 1), dependencies.requirements.items.len);
+    try std.testing.expectEqual(@as(u32, 0), dependencies.requirements.items[0].module_id);
+    try std.testing.expectEqualStrings("Module:CachedAlias", dependencies.requirements.items[0].requested);
+    try value.rawSet(a, .{ .string = "field" }, .{ .boolean = false });
+    observed = false;
+    try std.testing.expect((try ctx.requireByName("Module:CachedAlias")).table == value);
+    try std.testing.expect(observed);
+    try std.testing.expectEqual(@as(usize, 2), probe.calls);
+    try std.testing.expectEqual(@as(usize, 1), dependencies.requirements.items.len);
+    observed = false;
+    try std.testing.expectEqual(@as(f64, 0), (try ctx.requireByName("arbitrary")).number);
+    try std.testing.expect(observed);
+    try std.testing.expectEqual(@as(usize, 3), probe.calls);
+}
+
+test "captured override identity does not excuse post capture descendant mutation" {
+    const F = BetweenProbeDependencyFixture;
+    for ([_]bool{ false, true }) |mutate_after_capture| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var probe: F = .{};
+        var eligible = [_]bool{ true, true, false };
+        var rejected = [_]bool{ false, false, false };
+        var source = try probe.init(a, &eligible, &rejected);
+        defer source.deinit();
+        const nested = try source.newTable();
+        try nested.rawSet(a, .{ .string = "x" }, .{ .number = 19 });
+        const dependency = try source.newTable();
+        try dependency.rawSet(a, .{ .string = "child" }, .{ .table = nested });
+        try source.preinitializeModule(0, .{ .table = dependency }, false);
+        const consumer = try source.newTable();
+        try consumer.rawSet(a, .{ .string = "saved" }, .{ .number = 19 });
+        try source.preinitializeModule(1, .{ .table = consumer }, false);
+        const requirements = [_]ModuleRequirement{.{ .module_id = 0, .requested = "Module:GuardAlias" }};
+        source.moduleState(1).?.template_observed_requirements = &requirements;
+        const overrides = [_]ModuleTemplateOverride{.{ .module_id = 0, .value = .{ .table = dependency } }};
+        source.moduleState(1).?.template_overrides = &overrides;
+        try std.testing.expect(source.moduleStateConst(0).?.template_value_guard.pristine());
+        if (mutate_after_capture) try nested.rawSet(a, .{ .string = "x" }, .{ .number = 31 });
+        try std.testing.expectEqual(!mutate_after_capture, source.moduleStateConst(0).?.template_value_guard.pristine());
+        try std.testing.expect(rawEqual(overrides[0].value, source.preparedModuleValue(0).?));
+        try std.testing.expectEqual(@as(f64, 19), consumer.rawGet(.{ .string = "saved" }).?.number);
+        var live = try F.fork(&source, a);
+        defer live.deinit();
+        const expected: f64 = if (mutate_after_capture) 31 else 19;
+        const actual = try live.requireByName(F.names[1]);
+        const actual_dependency = try live.requireByName(F.names[0]);
+        try std.testing.expectEqual(expected, F.saved(actual).number);
+        try std.testing.expectEqual(expected, F.child(actual_dependency).rawGet(.{ .string = "x" }).?.number);
+        try std.testing.expectEqualSlices(usize, &.{ 0, if (mutate_after_capture) 1 else 0 }, &probe.calls);
+        try std.testing.expectEqual(@as(f64, 19), consumer.rawGet(.{ .string = "saved" }).?.number);
+        try std.testing.expect(actual.table != consumer and actual_dependency.table != dependency);
+        try std.testing.expect(!source.moduleStateConst(1).?.loading);
+    }
+}
+
+test "ordinary promotion captures dependency cycles before sealing and retains distinct mutation owners" {
+    const F = struct {
+        calls: [2]usize = .{ 0, 0 },
+        fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+            if (std.mem.eql(u8, raw_name, "Module:CycleRoot")) return 0;
+            if (std.mem.eql(u8, raw_name, "Module:CycleDep")) return 1;
+            return null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return switch (id) { 0 => "Module:CycleRoot", 1 => "Module:CycleDep", else => null };
+        }
+        fn requirements(_: ?*const anyopaque, id: u32) []const ModuleRequirement {
+            return if (id == 0) &.{.{ .module_id = 1, .requested = "Module:CycleDep" }} else &.{};
+        }
+        fn fixture(ctx: *Context) *@This() {
+            return @ptrCast(@alignCast(@constCast(ctx.module_lookup_ctx.?)));
+        }
+        fn dependency(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            fixture(ctx).calls[1] += 1;
+            const table = try ctx.newTable();
+            try table.rawSet(ctx.allocator, .{ .string = "value" }, .{ .number = 1 });
+            return BetweenProbeDependencyFixture.result(.{ .table = table });
+        }
+        fn root(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            fixture(ctx).calls[0] += 1;
+            const dep = try ctx.loadModule(1, "Module:CycleDep");
+            try dep.table.rawSet(ctx.allocator, .{ .string = "value" }, .{ .number = 2 });
+            const table = try ctx.newTable();
+            try table.rawSet(ctx.allocator, .{ .string = "dependency" }, dep);
+            try dep.table.rawSet(ctx.allocator, .{ .string = "back" }, .{ .table = table });
+            return BetweenProbeDependencyFixture.result(.{ .table = table });
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var probe: F = .{};
+    var template = try Context.initProgram(a, 0, 2);
+    defer template.deinit();
+    const roots = [_]FunctionFn{ stabilize(F.root), stabilize(F.dependency) };
+    template.module_root_entries = &roots;
+    template.configureModules(&probe, F.lookup, F.name);
+    template.configureModuleRequirements(null, F.requirements);
+    var eligible = [_]bool{ false, false };
+    var rejected = [_]bool{ false, false };
+    template.module_template_eligible = &eligible;
+    template.module_template_rejected = &rejected;
+    for (0..2) |iteration| {
+        var live = try template.forkProgram(a);
+        defer live.deinit();
+        live.module_template_context = &template;
+        live.package_loaded = try live.newTable();
+        const creator = try live.requireByName("Module:CycleRoot");
+        const dep = try live.requireByName("Module:CycleDep");
+        try std.testing.expect(creator.table.rawGet(.{ .string = "dependency" }).?.table == dep.table);
+        try std.testing.expect(dep.table.rawGet(.{ .string = "back" }).?.table == creator.table);
+        try std.testing.expectEqual(@as(f64, 2), dep.table.rawGet(.{ .string = "value" }).?.number);
+        try std.testing.expect(creator.table.module_template_mutation_probe == &live.moduleState(0).?.template_mutation_probe_id);
+        try std.testing.expect(dep.table.module_template_mutation_probe == &live.moduleState(1).?.template_mutation_probe_id);
+        try std.testing.expectEqualSlices(usize, &.{ 1, 1 }, &probe.calls);
+        try std.testing.expect(eligible[0] and eligible[1] and !rejected[0] and !rejected[1]);
+        const prototype = template.moduleStateConst(0).?;
+        try std.testing.expectEqual(@as(usize, 1), prototype.template_overrides.len);
+        const captured = prototype.template_overrides[0];
+        try std.testing.expectEqual(@as(u32, 1), captured.module_id);
+        try std.testing.expect(captured.value.table.rawGet(.{ .string = "back" }).?.table == prototype.value.?.table);
+        try std.testing.expectEqual(@as(f64, 2), captured.value.table.rawGet(.{ .string = "value" }).?.number);
+        const baseline = template.preparedModuleValue(1).?.table;
+        try std.testing.expectEqual(@as(f64, 1), baseline.rawGet(.{ .string = "value" }).?.number);
+        try std.testing.expect(baseline.rawGet(.{ .string = "back" }) == null);
+        if (iteration == 1) {
+            var observed = false;
+            const previous = beginModuleTemplateEffectProbe(&observed, true);
+            defer endModuleTemplateEffectProbe(previous, observed);
+            try dep.table.rawSet(a, .{ .string = "value" }, .{ .number = 3 });
+            const mutations = try live.moduleTemplateProbeModules(a, module_template_probe_id, 0);
+            defer a.free(mutations);
+            try std.testing.expectEqualSlices(u32, &.{1}, mutations);
+            try std.testing.expectEqual(@as(f64, 2), captured.value.table.rawGet(.{ .string = "value" }).?.number);
         }
     }
 }

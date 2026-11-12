@@ -1384,6 +1384,7 @@ test "current title root captures stay page scoped with stable providers" {
             const mw = try runtime.newNativeNamespace(.mw);
             try installForTest(runtime, mw);
             try runtime.setGlobal(23, .{ .table = mw });
+            runtime.finishLibraryInstallation();
         }
         fn root(runtime: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
             _ = root_calls.fetchAdd(1, .monotonic);
@@ -2104,5 +2105,81 @@ test "native parser title primitive preserves forced file and ordinary title gra
         const actual = try parserFunctionTitle(&runtime, item.raw, item.file);
         if (item.expected) |expected| try std.testing.expectEqualStrings(expected, actual orelse return error.TestUnexpectedResult)
         else try std.testing.expect(actual == null);
+    }
+}
+
+test "current title capture refuses unfinished and subsequently modified library installation" {
+    const F = struct {
+        var root_calls: usize = 0;
+        fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+            return if (std.mem.eql(u8, raw_name, "Module:TitleLibraryGuard")) 0 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) "Module:TitleLibraryGuard" else null;
+        }
+        fn installTitle(runtime: *rt.Context, host: *host_api.Host, mode: usize) !void {
+            host_api.set(runtime, host);
+            const mw = try runtime.newNativeNamespace(.mw);
+            try installForTest(runtime, mw);
+            try runtime.setGlobal(23, .{ .table = mw });
+            if (mode != 0) runtime.finishLibraryInstallation();
+            const title_api = mw.rawGet(.{ .string = "title" }).?;
+            if (mode == 1) {
+                // Even a same-value user write is after the installation boundary.
+                try mw.rawSetNativeField(.mw, "title", title_api);
+            } else if (mode == 2) {
+                try title_api.table.setMetatable(try runtime.newTable());
+            }
+        }
+        fn root(runtime: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            root_calls += 1;
+            const title_api = try runtime.getIndex(runtime.getGlobal(23), .{ .string = "title" });
+            const current = try callField(runtime, title_api, "getCurrentTitle", &.{});
+            defer rt.freeResults(current);
+            const exports = try runtime.newTable();
+            try exports.rawSet(runtime.allocator, .{ .string = "captured" }, try runtime.getIndex(current[0], .{ .string = "text" }));
+            return one(.{ .table = exports });
+        }
+    };
+    for (0..3) |mode| {
+        F.root_calls = 0;
+        var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer page_arena.deinit();
+        var page = try rt.Context.initProgram(page_arena.allocator(), 24, 1);
+        defer page.deinit();
+        const roots = [_]rt.FunctionFn{rt.stabilize(F.root)};
+        page.module_root_entries = &roots;
+        page.configureModules(null, F.lookup, F.name);
+        var eligible = [_]bool{false};
+        var rejected = [_]bool{false};
+        page.module_template_eligible = &eligible;
+        page.module_template_rejected = &rejected;
+        var host = host_api.Host{ .current_title = "sponsdier", .stable_page_reads = true };
+        try F.installTitle(&page, &host, 3);
+        for (0..2) |invocation_index| {
+            var invoke_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer invoke_arena.deinit();
+            var invocation = try page.forkProgram(invoke_arena.allocator());
+            defer invocation.deinit();
+            invocation.module_template_context = &page;
+            invocation.module_template_page_scope = true;
+            try F.installTitle(&invocation, &host, mode);
+            const module = try invocation.requireByName("Module:TitleLibraryGuard");
+            try std.testing.expectEqualStrings("sponsdier", (try invocation.getIndex(module, .{ .string = "captured" })).string);
+            try std.testing.expectEqual(invocation_index + 1, F.root_calls);
+            try std.testing.expect(!eligible[0] and rejected[0]);
+            // A late completion call cannot reseal an environment exposed to Lua.
+            invocation.finishLibraryInstallation();
+            const mw = invocation.getGlobal(23).table;
+            const title_api = mw.rawGet(.{ .string = "title" }).?.table;
+            if (mode == 0) {
+                try std.testing.expectEqual(@as(?bool, null), mw.template_native_baseline_pristine);
+                try std.testing.expectEqual(@as(?bool, null), title_api.template_native_baseline_pristine);
+            } else if (mode == 1) {
+                try std.testing.expectEqual(@as(?bool, false), mw.template_native_baseline_pristine);
+            } else {
+                try std.testing.expectEqual(@as(?bool, false), title_api.template_native_baseline_pristine);
+            }
+        }
     }
 }

@@ -404,6 +404,7 @@ fn installInto(runtime: *rt.Context, state: *State) !void {
     try mw.rawSetNativeField(.mw, "loadJsonData", try runtime.newNative(state, loadJsonDataCall));
     try mw.rawSetNativeField(.mw, "clone", try runtime.newNative(title_state, cloneCall));
     try runtime.setGlobal(state.mw_slot, .{ .table = mw });
+    runtime.finishLibraryInstallation();
 }
 fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]const Value {
     // Errors may be caught by the caller and must never become shared data.
@@ -439,6 +440,10 @@ fn loadDataCall(raw: ?*anyopaque, runtime: *rt.Context, args: []const Value) ![]
     var observed_effect = false;
     var observed_pending = false;
     const source = blk: {
+        // loadData's nested active environment must not lend initializer
+        // dependencies to the caller. Host effects are propagated below.
+        const caller_probe = rt.suspendModuleTemplateEffectProbe();
+        defer rt.resumeModuleTemplateEffectProbe(caller_probe);
         const previous_probe = rt.beginLoadDataEffectProbe(&observed_effect);
         defer rt.endLoadDataEffectProbe(previous_probe);
         const previous_pending = rt.beginLoadDataPendingProbe(&observed_pending);
