@@ -99,7 +99,7 @@ fn installStrict(ctx: *rt.Context) !Value {
     const mt = global.metatable orelse try ctx.newTable();
     try mt.rawSet(ctx.allocator, .{ .string = "__newindex" }, try ctx.newNative(null, strictNewIndex));
     try mt.rawSet(ctx.allocator, .{ .string = "__index" }, try ctx.newNativeBuffered(null, strictIndex));
-    global.metatable = mt;
+    try global.setMetatable(mt);
     const result = Value{ .boolean = true };
     const loaded = ctx.package_loaded orelse return error.MissingPackageLoaded;
     try loaded.rawSet(ctx.allocator, .{ .string = "strict" }, result);
@@ -3206,6 +3206,56 @@ test "package loaded metatable observations and writes preserve fresh page state
                 const expected: Value = if (page_number == 0) .nil else .{ .table = selected };
                 try std.testing.expect(rt.rawEqual(seen, expected));
             }
+        }
+    }
+}
+
+
+test "strict globals remain enforced within an invoke and restore the prior metatable on rollback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_]bool{ false, true }) |with_prior| {
+        var ctx = try rt.Context.init(a, global_abi.count);
+        defer ctx.deinit();
+        try rt.bindGlobalTable(&ctx, null, global_abi.id("_G"));
+        try install(&ctx);
+        const global = ctx.global_table.?;
+        const prior = if (with_prior) try ctx.newTable() else null;
+        if (prior) |mt| try mt.rawSet(a, .{ .string = "sentinel" }, .{ .number = 17 });
+        try global.setMetatable(prior);
+        const require = ctx.getGlobal(global_abi.id("require"));
+        var journal = rt.InvokeRollbackJournal.init(a, &ctx);
+        journal.begin();
+        {
+            defer journal.rollback(&ctx);
+            const loaded = try ctx.callValue(require, &.{.{ .string = "strict" }});
+            defer rt.freeResults(loaded);
+            try std.testing.expect(loaded.len == 1 and loaded[0] == .boolean and loaded[0].boolean);
+            const cached = try ctx.callValue(require, &.{.{ .string = "strict" }});
+            defer rt.freeResults(cached);
+            try std.testing.expect(cached.len == 1 and cached[0].boolean);
+            try std.testing.expectError(error.AotCallFailed, ctx.getIndex(.{ .table = global }, .{ .string = "frame" }));
+            try std.testing.expectEqualStrings("variable 'frame' is not declared", ctx.last_error.string);
+            try std.testing.expectEqualStrings("LuaRaised", ctx.aotErrorName().?);
+            ctx.clearLuaError();
+            ctx.clearAotErrorName();
+            try std.testing.expectError(error.AotCallFailed, ctx.setIndex(.{ .table = global }, .{ .string = "undeclared" }, .{ .boolean = true }));
+            try std.testing.expectEqualStrings("assign to undeclared variable 'undeclared'", ctx.last_error.string);
+            try std.testing.expectEqualStrings("LuaRaised", ctx.aotErrorName().?);
+            ctx.clearLuaError();
+            ctx.clearAotErrorName();
+            try ctx.setIndex(.{ .table = global }, .{ .string = "arg" }, .{ .number = 3 });
+            try std.testing.expectEqual(@as(f64, 3), (try ctx.getIndex(.{ .table = global }, .{ .string = "arg" })).number);
+        }
+        try std.testing.expect(ctx.global_table.? == global and global.metatable == prior);
+        try std.testing.expect(ctx.package_loaded.?.rawGet(.{ .string = "strict" }) == null);
+        try std.testing.expect((try ctx.getIndex(.{ .table = global }, .{ .string = "frame" })) == .nil);
+        try std.testing.expect(global.rawGet(.{ .string = "arg" }) == null);
+        if (prior) |mt| {
+            try std.testing.expect(mt.rawGet(.{ .string = "__index" }) == null);
+            try std.testing.expect(mt.rawGet(.{ .string = "__newindex" }) == null);
+            try std.testing.expectEqual(@as(f64, 17), mt.rawGet(.{ .string = "sentinel" }).?.number);
         }
     }
 }

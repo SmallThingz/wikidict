@@ -10268,3 +10268,85 @@ test "explicit empty invoke export differs from omitted function and retains err
         try std.testing.expect(runtime.current_frame == null and runtime.aotErrorName() == null and !runtime.last_error_present);
     }
 }
+
+
+const StrictThenPnRollbackProbe = struct {
+    fn lookup(_: ?*const anyopaque, raw_name: []const u8) ?u32 {
+        if (std.mem.eql(u8, raw_name, "Module:StrictInstaller")) return 0;
+        return if (std.mem.eql(u8, raw_name, "Module:PnShaped")) 1 else null;
+    }
+    fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+        return switch (id) { 0 => "Module:StrictInstaller", 1 => "Module:PnShaped", else => null };
+    }
+    fn result(value: Value) ![]const Value {
+        const out = try std.heap.smp_allocator.alloc(Value, 1);
+        out[0] = value;
+        return out;
+    }
+    fn strictRoot(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        // Stable native ABI slot, as with env0/string18/mw23 in this
+        // maintained root harness; lua_globals is private to zig_stdlib.
+        const require = ctx.getGlobal(22);
+        const strict = try ctx.callValue(require, &.{.{ .string = "strict" }});
+        defer rt.freeResults(strict);
+        if (strict.len != 1 or strict[0] != .boolean or !strict[0].boolean) return error.StrictNotInstalled;
+        const exports = try ctx.newTable();
+        try exports.rawSet(ctx.allocator, .{ .string = "run" }, try ctx.newNative(null, strictRun));
+        try exports.rawSet(ctx.allocator, .{ .string = "fail" }, try ctx.newNative(null, strictFail));
+        return result(.{ .table = exports });
+    }
+    fn strictRun(_: ?*anyopaque, ctx: *rt.Context, _: []const Value) ![]const Value {
+        // Strict must remain active throughout this invocation, not merely
+        // disappear early to make the following Pn-shaped root succeed.
+        try std.testing.expectError(error.AotCallFailed, ctx.getIndex(.{ .table = ctx.global_table.? }, .{ .string = "frame" }));
+        try std.testing.expectEqualStrings("variable 'frame' is not declared", ctx.last_error.string);
+        try std.testing.expectEqualStrings("LuaRaised", ctx.aotErrorName().?);
+        ctx.clearLuaError();
+        ctx.clearAotErrorName();
+        return result(.{ .string = "strict" });
+    }
+    fn strictFail(_: ?*anyopaque, ctx: *rt.Context, _: []const Value) ![]const Value {
+        ctx.setLuaError(.{ .string = "strict invocation failed" });
+        return error.LuaRaised;
+    }
+    fn pnRoot(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+        // The actual retained Modulo:Pn reads frame at module scope before
+        // pn(frame) exists. Arguments.getArgs accepts this ordinary nil.
+        const frame = try ctx.getIndex(.{ .table = ctx.global_table.? }, .{ .string = "frame" });
+        if (frame != .nil) return error.ExpectedUndeclaredNil;
+        const exports = try ctx.newTable();
+        try exports.rawSet(ctx.allocator, .{ .string = "run" }, try ctx.newNative(null, pnRun));
+        return result(.{ .table = exports });
+    }
+    fn pnRun(_: ?*anyopaque, _: *rt.Context, _: []const Value) ![]const Value {
+        return result(.{ .string = "" });
+    }
+};
+
+test "ordinary reused invokes restore strict before a later Pn shaped module root on success and failure" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.initProgram(a, 24, 2);
+    defer runtime.deinit();
+    const roots = [_]rt.FunctionFn{ rt.stabilize(StrictThenPnRollbackProbe.strictRoot), rt.stabilize(StrictThenPnRollbackProbe.pnRoot) };
+    runtime.module_root_entries = &roots;
+    runtime.configureModules(null, StrictThenPnRollbackProbe.lookup, StrictThenPnRollbackProbe.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists }, .install_scribunto = installTestInvoke };
+    // One page expansion is essential: expandFragment begins a fresh page.
+    // Both success and failure paths must restore the same cached child.
+    const actual = try expander.expandFragment("R",
+        "{{#invoke:StrictInstaller|run}}|{{#invoke:PnShaped|run}}|{{#invoke:StrictInstaller|run}}|{{#invoke:PnShaped|run}}|" ++
+        "{{#invoke:StrictInstaller|fail}}|{{#invoke:PnShaped|run}}", 1_670_803_200);
+    try std.testing.expect(std.mem.startsWith(u8, actual, "strict||strict||"));
+    try std.testing.expect(std.mem.indexOf(u8, actual, "strict invocation failed") != null);
+    try std.testing.expect(std.mem.endsWith(u8, actual, "|"));
+    try std.testing.expect(std.mem.indexOf(u8, actual, "variable 'frame'") == null);
+    const cached = expander.page_invoke_runtime orelse return error.TestUnexpectedResult;
+    try std.testing.expect(cached.global_table.?.metatable == null);
+    try std.testing.expect(!expander.page_invoke_active and runtime.global_table.?.metatable == null);
+}
