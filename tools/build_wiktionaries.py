@@ -75,6 +75,8 @@ class PreparedSourceGeneration:
         record = self.record
         self.cache = cache
         self.retired = False
+        if record.get('python_tooling')!=build_identity.get('python_tooling'):
+            raise ValueError('Prepared original Python catalog differs from build identity')
         bootstrap=globals().get('_PREPARED_BOOTSTRAP_PYTHON_GUARD')
         self._python_stamps = (dict(bootstrap._python_stamps)
             if isinstance(bootstrap,PreparedSourceGeneration) and bootstrap.record['python']==record['python'] else {})
@@ -89,16 +91,33 @@ class PreparedSourceGeneration:
         if record['seal_archive']['sha256'] != record['seal_sha256']:
             raise ValueError('Retained seal does not match the original generation')
         prepared_metadata(record['seal_archive'])
-        if (self.root != self.workspace / 'expander' / '.bundle-expander'
+        retained=record.get('retained_dispatch')
+        self.retained_roles = (RetainedNativeToolRoles.from_prepared_dispatch(retained)
+                               if retained is not None else None)
+        expected_root=(self.retained_roles.initial_sealed_context[0] if self.retained_roles is not None
+                       else self.workspace / 'expander' / '.bundle-expander')
+        if (self.root != expected_root
                 or not self.workspace.is_absolute()
                 or any(p.is_symlink() for p in (self.workspace, *self.workspace.parents))):
             raise ValueError('Prepared generation workspace differs')
+        if self.retained_roles is not None:
+            context=self.retained_roles.initial_sealed_context
+            if (context!=(self.root,self.dump,record['seal_sha256'])
+                    or self.retained_roles.records!=self.identity.get('native_tool_roles')):
+                raise ValueError('Prepared readonly generation differs from retained selection')
+            expected=dict(seal_sha256=record['seal_sha256'],dump=str(self.dump),
+                build_inputs=self.identity,retained_expander_root=str(self.root))
+            if record['workspace_state'].get('native_generation')!=expected:
+                raise ValueError('Prepared retained state differs from its original binding')
         self.tools = {}
         if set(record['tools']) != set(BLOB_TOOL_NAMES):
             raise ValueError('Incomplete prepared native tool inventory')
         for name, expected in record['tools'].items():
-            path = self.workspace / 'native-blob-tools' / 'bin' / name
-            if expected['path'] != str(path):
+            origin=(self.retained_roles.records[name]['artifact'] if self.retained_roles is not None else None)
+            path = Path(expected['path'])
+            allowed={str(self.workspace / 'native-blob-tools' / 'bin' / name)}
+            if origin is not None:allowed.add(origin['path'])
+            if (str(path) not in allowed or (origin is not None and expected['sha256']!=origin['sha256'])):
                 raise ValueError('Prepared tool escaped its original generation')
             if (not isinstance(expected['stamp'],list) or len(expected['stamp'])!=6
                     or any(type(value) is not int for value in expected['stamp'])
@@ -111,10 +130,24 @@ class PreparedSourceGeneration:
             tool=object.__new__(PreparedBlobTool)
             tool.path=path;tool.stamp=tuple(expected['stamp']);tool.sha256=expected['sha256']
             tool.require_unchanged()
+            if self.retained_roles is not None:
+                if self.retained_roles.bind_input(path)['sha256']!=tool.sha256:
+                    raise ValueError('Prepared retained tool bytes differ')
+                tool.retained_roles=self.retained_roles
+                self.retained_roles.tools[name]=tool
             self.tools[name] = tool
         self.require_unchanged()
 
     def require_python(self, *, force=False):
+        tooling=self.record.get('python_tooling')
+        if tooling is not None:
+            selected=bootstrap_python_tooling(tooling)
+            if (selected is None or selected.spec!=tooling
+                    or (_prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')=='1'
+                        and sys.path!=[sys._stdlib_dir,sys._stdlib_dir+'/lib-dynload'])):
+                raise ValueError('Prepared selected Python import authority changed')
+            selected.require_unchanged()
+            return
         if not hasattr(self,'_python_stamps'):self._python_stamps={}
         if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')=='1':
             standard=[sys._stdlib_dir,sys._stdlib_dir+'/lib-dynload']
@@ -183,6 +216,7 @@ class PreparedSourceGeneration:
         self.require_python(force=force)
         if self.retired:
             raise ValueError('Prepared native generation has already been finalized')
+        if getattr(self,'retained_roles',None) is not None:self.retained_roles.require_unchanged()
         seal = (self.cache.frozen_runtime_context(self.root, self.dump, self.record['seal_sha256'])
                 if full_context or self._seal is None else self._seal)
         if seal is None:
@@ -252,7 +286,7 @@ def prepared_child_imports():
     """Authenticate original Python before adding project imports in this CLI."""
     if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')!='1':return
     global PROJECT,_PREPARED_BOOTSTRAP_PYTHON_GUARD
-    PROJECT=Path(__file__).resolve().parent.parent
+    PROJECT=(_PYTHON_TOOLING.source_root if _PYTHON_TOOLING is not None else Path(__file__).resolve().parent.parent)
     reference=json.loads(os.environ['WIKIDICT_PREPARED_SOURCE_ATTEMPT'])
     start=prepared_metadata(reference)
     control=start.get('prepared_source_control',{})
@@ -275,11 +309,15 @@ def prepared_child_imports():
             python[name]=dict(sha256=reference['sha256'],mode=inventory['modes'][name])
     guard=object.__new__(PreparedSourceGeneration)
     guard.record=dict(python=python)
+    if _PYTHON_TOOLING is not None:
+        if cfg.get('python_tooling')!=_PYTHON_TOOLING.spec:
+            raise ValueError('Prepared selected Python catalog differs from attempt')
+        guard.record['python_tooling']=_PYTHON_TOOLING.spec
     guard.require_python(force=True)
     _PREPARED_BOOTSTRAP_PYTHON_GUARD=guard
     # Stdlib stays ahead of tools, including for future lazy imports. No cwd,
     # PYTHONPATH or site-packages search path is silently restored.
-    sys.path.append(str(PROJECT/'tools'))
+    if _PYTHON_TOOLING is None:sys.path.append(str(PROJECT/'tools'))
 
 
 def prepared_watchdog_options(options):
@@ -289,7 +327,8 @@ def prepared_watchdog_options(options):
                 or not sys.pycache_prefix or not Path(sys.pycache_prefix).is_absolute()
                 or os.path.lexists(sys.pycache_prefix)):
             raise ValueError('Selected Python watchdog requires its original isolated absent-prefix startup')
-        return dict(options,argv=['-I','-S','-B','-X','pycache_prefix='+sys.pycache_prefix,*sys.argv])
+        prepared=(['-X','wikidict_prepared_source=1'] if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')=='1' else [])
+        return dict(options,argv=['-I','-S','-B',*prepared,'-X','pycache_prefix='+sys.pycache_prefix,*sys.argv])
     if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')!='1':return options
     return dict(options,argv=['-I','-S','-B','-X','wikidict_prepared_source=1',
                               '-X','pycache_prefix='+sys.pycache_prefix,*sys.argv])
@@ -327,10 +366,14 @@ def prepared_authorized_generation(configuration, start, launch_reference, *, re
     original=authorization.get('original_source_observation')
     if (not isinstance(original,dict) or original.get('qualified_head')!=configuration['source']['head']
             or original.get('producer_inventory')!=configuration['source'].get('inventory')
-            or original.get('apps_acceptance') is not False):
+            or original.get('apps_acceptance') is not False
+            or (configuration.get('retained_native_roles') is not None
+                and original.get('current_head')!=configuration['source']['head'])):
         raise ValueError('Parent original source observation differs')
     record=prepared_metadata(authorization['generation'])
-    if (record['source']!=configuration['source'] or record['context']!=start['context']
+    if (record.get('python_tooling')!=configuration.get('python_tooling')
+            or (record.get('retained_dispatch',{}).get('selection')!=configuration.get('retained_native_roles'))
+            or record['source']!=configuration['source'] or record['context']!=start['context']
             or record['now_unix']!=configuration['now_unix']):
         raise ValueError('Prepared generation provenance changed')
     if retired:
@@ -415,7 +458,18 @@ class PreparedSourceRequest:
                 or identity['source']!=cfg['source']['fingerprint']
                 or now_unix!=cfg['now_unix']):
             raise ValueError('Prepared source request differs from original inputs')
-        root=workspace/'expander'/'.bundle-expander'
+        retained=next((getattr(tool,'retained_roles',None) for tool in tools.values()
+                       if getattr(tool,'retained_roles',None) is not None),None)
+        if (cfg.get('retained_native_roles') is not None) != (retained is not None):
+            raise ValueError('Prepared retained role selection differs from attempt')
+        if retained is not None:
+            retained.require_unchanged()
+            if retained.initial_sealed_context is None:
+                raise ValueError('Prepared retained tools have no adopted sealed context')
+            if any(getattr(tool,'retained_roles',None) is not retained for tool in tools.values()):
+                raise ValueError('Prepared tools mix retained selections')
+            root=retained.initial_sealed_context[0]
+        else:root=workspace/'expander'/'.bundle-expander'
         marker=root/COMPLETED_EXPANDER_PROOF
         if not marker.is_file():return None
         seal_reference=prepared_metadata_ref(marker)
@@ -431,6 +485,8 @@ class PreparedSourceRequest:
         for name,tool in tools.items():
             tool.require_unchanged()
             libraries=tool.runtime_identity
+            if retained is not None and libraries is None:
+                libraries=cache.tool_identity(tool.path); tool.require_unchanged()
             if not isinstance(libraries,dict) or libraries['extractor_sha256']!=tool.sha256:
                 raise ValueError('Prepared tool changed while binding libraries')
             bound_tools[name]=dict(path=str(tool.path),stamp=list(tool.stamp),sha256=tool.sha256,
@@ -448,6 +504,11 @@ class PreparedSourceRequest:
             seal_sha256=seal_reference['sha256'],seal_archive=archive_ref,
             prepared_by_start=self.reference,
             tracked_process=prepared_metadata(prepared_metadata_ref(self.folder/'launch.json'))['identity'])
+        if cfg.get('python_tooling') is not None:record['python_tooling']=cfg['python_tooling']
+        if retained is not None:
+            record['retained_dispatch']=retained.prepared_dispatch()
+            if record['retained_dispatch']['selection']!=cfg['retained_native_roles']:
+                raise ValueError('Prepared retained map differs from attempt')
         # This is a request, not authority. The parent validates these bindings
         # and original source before authorizing, then the child reopens them.
         reference=write_prepared_metadata(self.folder/'prepared-generation.json',record)
@@ -491,8 +552,6 @@ def bootstrap_python_tooling(selection=None):
             active=getattr(sys.modules['wikidict_python_tooling'],'_ACTIVE',None)
             selection=active.spec if active is not None else None
     if selection is None:return None
-    if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')=='1':
-        raise ValueError('Selected Python tooling is distinct from prepared source custody')
     reference=selection['selector'];path=Path(reference['path'])
     if (not path.is_absolute() or str(path)!=os.path.normpath(str(path))
             or any(p.is_symlink() for p in (path,*path.parents))):
@@ -3272,7 +3331,8 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
             raise ValueError('Initial sealed native graph contains a symlink')
         path = Path(os.path.normpath(str(path)))
         if (str(path) != dependencies[dependency]['path']
-                or native_roles.bind_input(path) != dependencies[dependency]):
+                or (getattr(native_roles,'closed_native_origin',None) is None
+                    and native_roles.bind_input(path) != dependencies[dependency])):
             raise ValueError('Initial sealed native graph differs from selected role')
         observation_graph[field] = str(path)
     snapshots = {auxiliary_snapshot_filename(name): digest for name, digest in
@@ -3295,8 +3355,11 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
             or cache.frozen_runtime_context(root, dump, seal_reference['sha256']) != seal):
         raise ValueError('Initial sealed generation is not finalized')
     # A closed, ready generation cannot enter post-link finalization again.
-    # Retain its producer check without granting scratch or marker mutations.
-    producer, _ = cache.completed_producer_identity(observation_graph)
+    # Preserve the exact authenticated closed producer without recomputing
+    # unused current compiler source; other callers retain their original check.
+    closed_origin=getattr(native_roles,'closed_native_origin',None)
+    producer=(closed_origin['identity']['producer'] if closed_origin is not None else
+              cache.completed_producer_identity(observation_graph)[0])
     after = source_root.stat()
     if (producer != seal['identity']['producer']
             or (after.st_dev, after.st_ino, after.st_mode, after.st_uid) != source_identity):
@@ -3784,8 +3847,9 @@ class RetainedNativeToolRoles:
     This is a tool-selection boundary, not a qualification assessor. The caller
     must join its existing qualification and observed command/dependency proof.
     No receipt status or new schema is invented here. Original compilation
-    payloads are authenticated once from retained bytes/Git; only actually read
-    runtime dependencies remain in per-dispatch guards.
+    payloads are authenticated from retained bytes/Git on ordinary paths. An
+    exact closed initial generation retains those authenticated source facts
+    without rereading unused compiler payloads; execution dependencies stay guarded.
     """
     def __init__(self, roles, *, zig_sha256):
         import copy
@@ -3803,6 +3867,7 @@ class RetainedNativeToolRoles:
         self.tools, self.inputs, self.input_identities, self.directories = {}, {}, {}, {}
         self.zig_sha256 = zig_sha256
         self.compilation_payloads = {}
+        self.closed_native_origin=(self.closed_execution_origin() if self.initial_sealed_generation is not None else None)
         shared_interfaces, shared_runtime = {}, None
         for role, row in self.records.items():
             artifact = row['artifact']
@@ -3819,8 +3884,9 @@ class RetainedNativeToolRoles:
             root = Path(row['source_root'])
             if not root.is_absolute() or root.resolve() != root:
                 raise ValueError('Unsafe retained native source root')
-            st=root.stat()
-            self.directories[root]=(st.st_dev,st.st_ino,st.st_mode,st.st_uid)
+            if self.initial_sealed_generation is None:
+                st=root.stat()
+                self.directories[root]=(st.st_dev,st.st_ino,st.st_mode,st.st_uid)
             required = {*RETAINED_NATIVE_ABI_PATHS, {
                 'dict-blob-build': 'tools/blob_build.zig',
                 'dict-blob-merge': 'tools/blob_merge.zig',
@@ -3842,7 +3908,8 @@ class RetainedNativeToolRoles:
                         or '..' in Path(relative).parts or relative not in inventory):
                     raise ValueError('Unsafe retained native source projection')
                 expected = inventory[relative]
-                identity = self.compilation_identity(row, relative)
+                identity = (dict(expected,mode=source.get('modes',{}).get(relative,expected.get('mode',0o644)))
+                            if self.initial_sealed_generation is not None else self.compilation_identity(row, relative))
                 if (identity['bytes'] != expected['bytes'] or identity['sha256'] != expected['sha256']
                         or ('mode' in expected and identity['mode'] != expected['mode'])
                         or ('modes' in source and identity['mode'] != source['modes'][relative])):
@@ -3867,6 +3934,7 @@ class RetainedNativeToolRoles:
                         raise ValueError('Retained runtime source path differs')
                     if relative in RETAINED_EXPANDER_ABI_PATHS and descriptor['sha256']!=inventory[relative]['sha256']:
                         raise ValueError('Retained live runtime ABI differs from compiled authority')
+                if not self.execution_dependency(name):continue
                 actual = self.bind_input(Path(descriptor['path']))
                 if actual != descriptor:
                     raise ValueError('Retained native dependency differs: '+name)
@@ -3896,6 +3964,90 @@ class RetainedNativeToolRoles:
             prepared_metadata(self.writer_figure_transition)
             self.bind_input(Path(self.writer_figure_transition['path']))
         self.require_unchanged()
+
+    def closed_execution_origin(self):
+        """Authenticate the selected closed producer, never current compiler source."""
+        import extraction_cache as cache
+        selected,result,plan,workspace=initial_sealed_generation(self.initial_sealed_generation,self)
+        reference=result['completed_expander_seal'];seal=prepared_metadata(reference)
+        root=workspace/'expander'/'.bundle-expander';deps=self.records['dict-bundle-build']['dependencies']
+        producer=seal['identity']['producer']
+        if (seal.get('provenance')!='ordinary-linked-expander'
+                or cache.frozen_runtime_context(root,Path(plan['dump']['path']),reference['sha256'])!=seal):
+            raise ValueError('Selected closed execution origin is not finalized')
+        for field,dependency in (('runtime','worker_object'),('leaf','value_leaf_bc'),('main_c','worker_main_c')):
+            if producer.get(field)!=[deps[dependency]['bytes'],deps[dependency]['sha256']]:
+                raise ValueError('Closed execution native ABI artifact differs')
+        for field,dependency in (('extractor','modules'),('llvm','llvm')):
+            if producer.get(field,{}).get('extractor_sha256')!=deps[dependency]['sha256']:
+                raise ValueError('Closed execution compiler artifact origin differs')
+        if (producer.get('zig',{}).get('tool_sha256')!=deps['zig']['sha256']
+                or producer.get('abi')!=[[name,deps['runtime_source:'+name]['sha256']] for name in RETAINED_EXPANDER_ABI_PATHS]
+                or producer.get('policy')!=[[name,[deps['runtime_source:'+name]['bytes'],deps['runtime_source:'+name]['sha256']]] for name in ('build.zig','tools/bundle_build.zig','tools/extraction_cache.py')]
+                or producer.get('clang',{}).get('tool',{}).get('extractor_sha256')!=deps['clang']['sha256']
+                or producer.get('link_flags')!=['cc','-O2','-pthread','-lm','-lbz2','-lzstd','-lc']):
+            raise ValueError('Closed execution producer source or ABI facts differ')
+        assets={name:(size,digest) for name,size,digest in seal['identity']['assets']}
+        for key,name in (('worker','dict-bundle-expander'),('metadata','lua-program.meta'),('source_receipt','extraction-source.json')):
+            if assets.get(name)!=(result[key]['bytes'],result[key]['sha256']):
+                raise ValueError('Closed execution output differs from authenticated preparation')
+        for reference in (self.initial_sealed_generation,selected['preparation_result'],selected['preparation_closure'],
+                          result['input_authority'],plan['roles'],result['completed_expander_seal']):
+            actual=self.bind_input(Path(reference['path']))
+            if any(actual[key]!=reference[key] for key in ('path','bytes','sha256')):
+                raise ValueError('Closed execution authority changed')
+        worker_stamp=cache._full_stamp((root/'dict-bundle-expander').stat())
+        if (cache.tool_identity(root/'dict-bundle-expander')!=seal['identity']['runtime_libraries']
+                or cache.unicode_case_identity()!=producer['unicode']):
+            raise ValueError('Closed execution worker runtime libraries changed')
+        if cache._full_stamp((root/'dict-bundle-expander').stat())!=worker_stamp:
+            raise ValueError('Closed execution worker changed during full authentication')
+        self._closed_native_worker_stamp=worker_stamp
+        self._closed_library_routes={}
+        libraries=[*seal['identity']['runtime_libraries']['libraries'],
+                   *[[row['path'],row['sha256']] for row in producer['unicode']['libraries']]]
+        for name,digest in libraries:
+            resolved=Path(name).resolve(strict=True)
+            if self.bind_input(resolved)['sha256']!=digest:
+                raise ValueError('Closed execution library bytes differ')
+            self._closed_library_routes[name]=str(resolved)
+        self._closed_native_context=(root,Path(plan['dump']['path']),result['completed_expander_seal']['sha256'])
+        return seal
+
+    def closed_execution_resolution(self, root):
+        """Fresh loader paths and original stamps, not another whole ELF hash.
+
+        Full tool/Unicode identities were authenticated at selection; prepared
+        generation full-context/final checks retain their original full probes.
+        """
+        import extraction_cache as cache
+        worker=root/'dict-bundle-expander'
+        if cache._full_stamp(worker.stat())!=self._closed_native_worker_stamp:
+            raise ValueError('Closed execution worker identity changed')
+        observed=subprocess.run(['ldd',str(worker)],capture_output=True,text=True,check=True,
+                                timeout=cache.identity_probe_timeout(30))
+        libraries=set()
+        for line in observed.stdout.splitlines():
+            match=re.search(r'(?:=>\s*)?(/[^\s]+)\s*\(',line)
+            if match:libraries.add(match[1])
+            elif 'not found' in line:raise ValueError('Unresolved closed worker library')
+        expected=self.closed_native_origin['identity']
+        if libraries!={name for name,_ in expected['runtime_libraries']['libraries']}:
+            raise ValueError('Closed execution library resolution changed')
+        unicode_paths={str(Path(line.split(maxsplit=5)[5].strip()).resolve())
+            for line in Path('/proc/self/maps').read_text().splitlines()
+            if len(line.split(maxsplit=5))==6 and ('/libunistring.so' in line or '/libutf8proc.so' in line)}
+        if (unicode_paths!={row['path'] for row in expected['producer']['unicode']['libraries']}
+                or any(str(Path(name).resolve(strict=True))!=resolved for name,resolved in self._closed_library_routes.items())
+                or cache._full_stamp(worker.stat())!=self._closed_native_worker_stamp):
+            raise ValueError('Closed execution runtime resolution or worker changed')
+
+    def execution_dependency(self, name):
+        # Original dependency records stay byte-exact. A closed worker cannot
+        # compile: only Zig's existing build-identity read and imported Python
+        # remain live dependencies of this selected blob-stage execution.
+        return (self.initial_sealed_generation is None or name in
+                ('zig','runtime_source:tools/extraction_cache.py'))
 
     def compilation_identity(self, row, relative):
         """Authenticate old payload custody, not a live source dependency.
@@ -3949,6 +4101,8 @@ class RetainedNativeToolRoles:
         return tool
 
     def install_role(self, role, workspace):
+        if role=='dict-bundle-build' and self.initial_sealed_generation is not None:
+            raise ValueError('Selected initial sealed generation cannot prepare bundle driver')
         # Use the existing private native-tools install location. Never chmod
         # or overwrite an origin in the shared Zig artifact cache.
         self.require_unchanged()
@@ -3988,6 +4142,143 @@ class RetainedNativeToolRoles:
         import copy
         self.require_unchanged()
         return copy.deepcopy(self.records)
+
+    def prepared_dispatch(self):
+        """Snapshot existing dispatch guards for explicit parent authorization."""
+        import copy
+        self.require_unchanged()
+        if (self.initial_sealed_generation is None or self.sealed_expander_recovery is not None
+                or self.writer_figure_transition is not None or self.initial_sealed_context is None):
+            raise ValueError('Prepared retained custody requires an adopted initial sealed generation')
+        selection = copy.deepcopy(self.records)
+        selection['dict-bundle-build']['initial_sealed_generation'] = copy.deepcopy(self.initial_sealed_generation)
+        return dict(selection=selection,
+            inputs=[dict(identity=self.input_identities[path],stamp=list(stamp)) for path,stamp in self.inputs.items()],
+            directories={str(path):list(value) for path,value in self.directories.items()},
+            capture_directories={str(path):[*value[:-1],[str(member) for member in value[-1]]]
+                for path,value in getattr(self,'borrowed_capture_directories',{}).items()},
+            initial_context=[str(self.initial_sealed_context[0]),str(self.initial_sealed_context[1]),self.initial_sealed_context[2]])
+
+    @classmethod
+    def from_prepared_dispatch(cls, binding):
+        """Reopen only guards in an authenticated parent-bound generation record.
+
+        Parent admission independently reconstructs the closed selection and
+        derives its mandatory readset before authorizing this snapshot. Compilation payloads stay original
+        provenance; this does not authorize recompilation or a new role choice.
+        """
+        import copy
+        if not isinstance(binding,dict) or set(binding)!={'selection','inputs','directories','capture_directories','initial_context'}:
+            raise ValueError('Invalid prepared retained dispatch binding')
+        self=object.__new__(cls)
+        self.records=copy.deepcopy(binding['selection'])
+        self.initial_sealed_generation=self.records['dict-bundle-build'].pop('initial_sealed_generation',None)
+        if self.initial_sealed_generation is None or set(self.records)!=set(RETAINED_NATIVE_ROLE_NAMES):
+            raise ValueError('Prepared retained selection differs')
+        self.sealed_expander_recovery=None;self.writer_figure_transition=None
+        self.inputs={};self.input_identities={};self.directories={};self.borrowed_capture_directories={}
+        self.tools={name:None for name in RETAINED_NATIVE_ROLE_NAMES}
+        self.zig_sha256=self.records['dict-bundle-build']['zig_sha256'];self.compilation_payloads={}
+        for row in binding['inputs']:
+            identity=row['identity'];stamp=row['stamp'];path=Path(identity['path'])
+            if (set(row)!={'identity','stamp'} or set(identity)!={'path','bytes','sha256','mode'}
+                    or not path.is_absolute() or path in self.inputs
+                    or not isinstance(stamp,list) or len(stamp)!=6 or any(type(value)is not int for value in stamp)
+                    or identity['bytes']!=stamp[3] or identity['mode']!=stat.S_IMODE(stamp[2])
+                    or not isinstance(identity['sha256'],str) or re.fullmatch('[0-9a-f]{64}',identity['sha256'])is None):
+                raise ValueError('Invalid prepared retained input stamp')
+            self.inputs[path]=tuple(stamp);self.input_identities[path]=copy.deepcopy(identity)
+        for name,value in binding['directories'].items():
+            if not isinstance(value,list) or len(value)!=4 or any(type(v)is not int for v in value):
+                raise ValueError('Invalid prepared retained directory')
+            self.directories[Path(name)]=tuple(value)
+        for name,value in binding['capture_directories'].items():
+            if not isinstance(value,list) or len(value)!=7 or any(type(v)is not int for v in value[:-1]):
+                raise ValueError('Invalid prepared retained capture directory')
+            self.borrowed_capture_directories[Path(name)]=(*value[:-1],tuple(Path(member) for member in value[-1]))
+        context=binding['initial_context']
+        if not isinstance(context,list) or len(context)!=3:
+            raise ValueError('Invalid prepared initial context')
+        self.initial_sealed_context=(Path(context[0]),Path(context[1]),context[2])
+        derived=cls(binding['selection'],zig_sha256=self.zig_sha256)
+        self.closed_native_origin=derived.closed_native_origin
+        self._closed_native_context=derived._closed_native_context
+        self._closed_library_routes=derived._closed_library_routes
+        self._closed_native_worker_stamp=derived._closed_native_worker_stamp
+        for path,identity in derived.input_identities.items():
+            if self.input_identities.get(path)!=identity or self.inputs.get(path)!=derived.inputs[path]:
+                raise ValueError('Prepared retained binding omitted a selected execution dependency')
+        if any(self.directories.get(path)!=value for path,value in derived.directories.items()):
+            raise ValueError('Prepared retained binding omitted an execution directory')
+        self.require_unchanged()
+        _, result, plan, workspace = initial_sealed_generation(self.initial_sealed_generation,self)
+        if self.initial_sealed_context!=(workspace/'expander'/'.bundle-expander',
+                Path(plan['dump']['path']),result['completed_expander_seal']['sha256']):
+            raise ValueError('Prepared retained readonly origin differs')
+        return self
+
+    def authenticate_prepared_captures(self, observed, cfg):
+        """Derive borrowed readsets from the same selected capture validators."""
+        import copy
+        options=cfg.get('edition_options',{})
+        if len(options)!=1:raise ValueError('Prepared retained captures require one edition')
+        edition,option=next(iter(options.items()))
+        snapshots={name:Path(value['path'] if isinstance(value,dict) else value)
+                   for name,value in option.get('auxiliary_snapshots',{}).items()}
+        figures=validated_figure_tuple(snapshots,edition,cfg['date'])
+        owned=tuple(Path(value).resolve() for value in
+            (cfg['output'],cfg['raw_shard_root'],option['extraction_cache_root']))
+        def overlaps(path):
+            path=path.resolve()
+            return any(path==root or path in root.parents or root in path.parents for root in owned)
+        for name,path in snapshots.items():
+            root=path.parent
+            if (path.name!=auxiliary_snapshot_filename(name) or not root.is_absolute()
+                    or root.resolve()!=root or overlaps(root)
+                    or any(node.is_symlink() for node in (root,*root.parents))):continue
+            capture=figures.get(name) if name in figures else validated_auxiliary_capture(name,path,edition,cfg['date'])
+            if capture is None:continue
+            _,inventory=capture
+            if name in figures:
+                key=tuple(sorted((role,str(snapshots[role].absolute())) for role in figures))
+                with _FIGURE_TUPLE_REPLAY_LOCK:
+                    prior=_FIGURE_TUPLE_REPLAYS.get(key)
+                    guard=None if prior is None else copy.deepcopy(prior[0])
+                if guard is None:continue
+                if any(Path(member).resolve()!=Path(member) or overlaps(Path(member))
+                       for member in (*guard[1],*guard[2])):continue
+                required={Path(member):identity['sha256'] for member,(_,identity) in guard[1].items()}
+                directories={Path(directory) for directory in guard[2]}
+            else:
+                if name not in ('wikibase-entities','wikibase-entity-terms'):continue
+                members=tuple(sorted(root.iterdir()))
+                if ({member.name for member in members}!=set(inventory)
+                        or any(member.is_symlink() or not member.is_file() for member in members)):continue
+                required={root/member:digest for member,digest in inventory.items()};directories={root}
+            for member,digest in required.items():
+                if observed.input_identities.get(member,{}).get('sha256')!=digest:
+                    raise ValueError('Prepared retained binding omitted a borrowed capture input')
+            if not directories<=set(observed.borrowed_capture_directories):
+                raise ValueError('Prepared retained binding omitted a borrowed directory guard')
+
+    def authenticate_prepared_dispatch(self, binding, cfg=None):
+        """Parent-only pre-adoption check, while original full source is leased."""
+        observed=self.from_prepared_dispatch(binding)
+        if self.records!=observed.records or self.initial_sealed_generation!=observed.initial_sealed_generation:
+            raise ValueError('Prepared retained origin selection differs')
+        for path,identity in self.input_identities.items():
+            if observed.input_identities.get(path)!=identity or observed.inputs.get(path)!=self.inputs[path]:
+                raise ValueError('Prepared retained binding lost an original guard')
+        if any(observed.directories.get(path)!=value for path,value in self.directories.items()):
+            raise ValueError('Prepared retained origin directory differs')
+        if cfg is not None:self.authenticate_prepared_captures(observed,cfg)
+        elif observed.borrowed_capture_directories:
+            raise ValueError('Prepared borrowed captures lack their selected input configuration')
+        for path,identity in observed.input_identities.items():
+            if self.bind_input(path)!=identity or self.inputs[path]!=observed.inputs[path]:
+                raise ValueError('Prepared retained input differs before authorization')
+        self.require_unchanged();observed.require_unchanged()
+        return observed
 
     def bind_input(self, path, *, retain=True):
         if not path.is_absolute() or any(parent.is_symlink() for parent in (path, *path.parents)):
@@ -4056,11 +4347,15 @@ class RetainedNativeToolRoles:
         self.require_unchanged()
 
     def require_inputs_unchanged(self):
-        context=getattr(self, 'initial_sealed_context', None)
+        context=(getattr(self, 'initial_sealed_context', None) or getattr(self,'_closed_native_context',None))
         if context is not None:
             import extraction_cache as native_cache
-            if native_cache.frozen_runtime_context(*context) is None:
+            frozen=native_cache.frozen_runtime_context(*context)
+            if frozen is None or (getattr(self,'closed_native_origin',None) is not None and frozen!=self.closed_native_origin):
                 raise ValueError('Retained initial sealed input changed')
+            closed=getattr(self,'closed_native_origin',None)
+            if closed is not None:
+                self.closed_execution_resolution(context[0])
         for path,expected in getattr(self,'borrowed_capture_directories',{}).items():
             st=path.stat()
             if (any(parent.is_symlink() for parent in (path,*path.parents)) or
@@ -4095,11 +4390,15 @@ class RetainedNativeToolRoles:
         if role not in self.records:
             raise ValueError('Unknown retained native command role')
         if role == 'dict-bundle-build':
+            if self.initial_sealed_generation is not None or getattr(_PREPARED_SOURCE,'value',None) is not None:
+                raise ValueError('Prepared retained generation cannot recompile or relink')
             # parseOptions starts at index 2; another occurrence may be a value.
             if len(args) < 3 or args[2] != '--expander-only' or args.count('--expander-only') != 1:
                 raise ValueError('Retained bundle role is restricted to expander-only execution')
 
     def prepare(self, expander_args, edition, date, *, workspace=None, figure_inputs=None):
+        if expander_args is not None and self.initial_sealed_generation is not None:
+            raise ValueError('Selected initial sealed generation cannot recompile or relink')
         self.require_unchanged()
         needed=(*BLOB_TOOL_NAMES, *(['dict-bundle-build'] if expander_args is not None else []))
         for role in needed:
@@ -4677,9 +4976,12 @@ def extraction_cache_args(cache_root, staged):
 
 
 def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, provider_update=None):
-    if retained_roles is not None and (not compress_shards or not isinstance(retained_roles, RetainedNativeToolRoles)
-            or getattr(_PREPARED_SOURCE,'request',None) is not None or getattr(_PREPARED_SOURCE,'value',None) is not None):
+    if retained_roles is not None and (not compress_shards or not isinstance(retained_roles, RetainedNativeToolRoles)):
         raise ValueError('Retained roles require ordinary compressed sharded execution')
+    if (retained_roles is not None and (getattr(_PREPARED_SOURCE,'request',None) is not None
+            or getattr(_PREPARED_SOURCE,'value',None) is not None)
+            and retained_roles.initial_sealed_generation is None):
+        raise ValueError('Prepared retained custody requires explicit initial sealed selection')
     validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     validate_llvm_workers(llvm_workers)
     if type(compress_shards) is not bool: raise ValueError('Invalid compressed shard mode')
@@ -4717,7 +5019,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     seal_for_provider_updates=(generation is None and getattr(_PREPARED_SOURCE,'request',None) is None
                                and WIKIBASE_PROVIDER_ROLES <= set(auxiliary_hashes or {}))
     if provider_update:
-        if (not seal_for_provider_updates or provider_update['root']!=str(expander_build/'.bundle-expander')
+        if (initial_reference is not None or not seal_for_provider_updates or provider_update['root']!=str(expander_build/'.bundle-expander')
                 or provider_update['dump']!=str(dump)):
             raise ValueError('Provider update selected another native generation')
         import extraction_cache as native_cache
@@ -5429,9 +5731,12 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
 
 
 def _build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False):
-    if retained_roles is not None and (not compress_shards or not isinstance(retained_roles, RetainedNativeToolRoles)
-            or getattr(_PREPARED_SOURCE,'request',None) is not None or getattr(_PREPARED_SOURCE,'value',None) is not None):
+    if retained_roles is not None and (not compress_shards or not isinstance(retained_roles, RetainedNativeToolRoles)):
         raise ValueError('Retained roles require ordinary compressed sharded execution')
+    if (retained_roles is not None and (getattr(_PREPARED_SOURCE,'request',None) is not None
+            or getattr(_PREPARED_SOURCE,'value',None) is not None)
+            and retained_roles.initial_sealed_generation is None):
+        raise ValueError('Prepared retained custody requires explicit initial sealed selection')
     validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     validate_llvm_workers(llvm_workers)
     validate_now_unix(now_unix)
@@ -5795,12 +6100,28 @@ def watchdog_memory_limit_bytes(limit_mib, resource_mode):
 
 def parse_retained_native_roles(value, zig, *, sharded, edition_count, jobs):
     if value is None:return None
-    if (not sharded or edition_count != 1 or jobs != 1
-            or os.environ.get('WIKIDICT_PREPARED_SOURCE_ATTEMPT') is not None
-            or _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source') == '1'):
+    if not sharded or edition_count != 1 or jobs != 1:
         raise ValueError('Retained native roles require one ordinary compressed edition')
     roles=json.loads(value)
     if not isinstance(roles,dict):raise ValueError('Invalid retained native roles')
+    prepared=os.environ.get('WIKIDICT_PREPARED_SOURCE_ATTEMPT')
+    selected=_prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')=='1'
+    if prepared is not None or selected:
+        if prepared is None or not selected:
+            raise ValueError('Retained native roles require one ordinary compressed edition with the bound prepared bootstrap')
+        start=prepared_metadata(json.loads(prepared)); control=start['prepared_source_control']
+        cfg=control['configuration']
+        if cfg.get('prepared_source_custody') is not True or cfg.get('retained_native_roles')!=roles:
+            raise ValueError('Prepared retained roles differ from attempt')
+        resume=control.get('resume')
+        if resume is not None:
+            old_start=prepared_metadata(resume['start'])
+            generation=prepared_authorized_generation(cfg,old_start,resume['authorization'])
+            if generation.retained_roles is None:
+                raise ValueError('Prepared retry has no retained dispatch binding')
+            return generation.retained_roles
+        if 'initial_sealed_generation' not in roles.get('dict-bundle-build',{}):
+            raise ValueError('Prepared retained custody requires explicit initial sealed selection')
     compiler=shutil.which(zig)
     if compiler is None:raise ValueError('Zig compiler executable is unavailable')
     return RetainedNativeToolRoles(roles,zig_sha256=sha256_file(Path(compiler).resolve(strict=True)))

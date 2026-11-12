@@ -5144,5 +5144,104 @@ class FigureReuseBatchCommandTests(MetadataNetworkCommandTests):
             with self.subTest(bad=bad),self.assertRaisesRegex(ValueError,'Figure reuse'):
                 self.command(dict(self.cfg(),figure_reuse_batches=bad))
 
+
+
+class ReadonlyPreparedControllerTests(unittest.TestCase):
+    parent_fixture = PreparedSourceParentTests.parent_fixture
+
+    def test_retained_origin_recheck_precedes_full_source_and_parent_authorization(self):
+        import sys
+        with self.parent_fixture() as f:
+            native={'dict-bundle-build':{'initial_sealed_generation':{'fixture':'closed'}},
+                'dict-blob-build':{},'dict-blob-merge':{},'dict-blob-verify':{}}
+            f.cfg['retained_native_roles']=native
+            f.start['context']=controller.production_context(f.cfg)
+            f.record.update(context=f.start['context'],retained_dispatch=dict(selection=native))
+            f.record['build_identity']['zig_sha256']='0'*64
+            path=Path(f.start_ref['path']);path.write_text(json.dumps(f.start));f.start_ref=controller.descriptor(path)
+            f.record['prepared_by_start']=f.start_ref
+            path=Path(f.generation_ref['path']);path.write_text(json.dumps(f.record));f.generation_ref=controller.descriptor(path)
+            class Factory:
+                def __init__(inner,selection,**kwargs):
+                    self.assertEqual(selection,native);f.events.append('normal-retained-origin')
+                def authenticate_prepared_dispatch(inner,binding,cfg):
+                    self.assertEqual(binding,f.record['retained_dispatch']);self.assertEqual(cfg,f.cfg)
+                    f.events.append('authenticate-original-dispatch')
+            namespace=sys.modules['build_wiktionaries'];namespace.RetainedNativeToolRoles=Factory
+            def original_source(cfg):
+                value=f.source_guard(cfg);value['current_head']=cfg['source']['head'];return value
+            def advanced_head(cfg):
+                value=original_source(cfg);value['current_head']='unqualified-new-head';return value
+            with mock.patch.object(controller,'source_guard',side_effect=advanced_head),self.assertRaisesRegex(ValueError,'original qualified HEAD'):
+                controller.authorize_prepared_source(f.cfg,f.start,f.start_ref,f.launch,f.generation_ref,process=f.process)
+            self.assertNotIn('prepared_source_authorization',controller.read_json(f.launch));f.events.clear()
+            with mock.patch.object(controller,'source_guard',side_effect=original_source):
+                binding=controller.authorize_prepared_source(f.cfg,f.start,f.start_ref,f.launch,f.generation_ref,process=f.process)
+            self.assertEqual(f.events[:4],['normal-retained-origin','authenticate-original-dispatch','bind-original-generation','full-source'])
+            self.assertIn('prepared_source_authorization',controller.read_json(f.launch))
+            self.assertEqual(binding['start'],f.start_ref)
+
+    def test_failed_original_source_cannot_authorize_retained_release(self):
+        import sys
+        with self.parent_fixture() as f:
+            native={'dict-bundle-build':{'initial_sealed_generation':{'fixture':'closed'}}}
+            f.cfg['retained_native_roles']=native;f.start['context']=controller.production_context(f.cfg)
+            f.record.update(context=f.start['context'],retained_dispatch=dict(selection=native))
+            f.record['build_identity']['zig_sha256']='0'*64
+            path=Path(f.start_ref['path']);path.write_text(json.dumps(f.start));f.start_ref=controller.descriptor(path)
+            f.record['prepared_by_start']=f.start_ref
+            path=Path(f.generation_ref['path']);path.write_text(json.dumps(f.record));f.generation_ref=controller.descriptor(path)
+            class Factory:
+                def __init__(self,*args,**kwargs):pass
+                def authenticate_prepared_dispatch(self,*args):pass
+            sys.modules['build_wiktionaries'].RetainedNativeToolRoles=Factory
+            with mock.patch.object(controller,'source_guard',side_effect=ValueError('original source changed')):
+                with self.assertRaisesRegex(ValueError,'original source changed'):
+                    controller.authorize_prepared_source(f.cfg,f.start,f.start_ref,f.launch,f.generation_ref,process=f.process)
+            self.assertNotIn('prepared_source_authorization',controller.read_json(f.launch))
+
+    def test_selected_catalog_and_prepared_retained_command_compose_without_duplicate_options(self):
+        original_command=controller.command
+        from types import SimpleNamespace
+        with self.parent_fixture() as f:
+            spec={'modules':{'build_wiktionaries':{'path':str(f.root/'private-builder.py')}}}
+            selected=SimpleNamespace(spec=spec)
+            names=('dict-blob-build','dict-blob-merge','dict-blob-verify','dict-bundle-build')
+            __import__('sys').modules['build_wiktionaries'].RETAINED_NATIVE_ROLE_NAMES=names
+            roles={name:{} for name in names}
+            roles['dict-bundle-build']['initial_sealed_generation']={'fixture':'closed'}
+            cfg=dict(f.cfg,compiler=dict(path=str(f.root/'zig')),build_timeout_seconds=5,
+                python_tooling=spec,retained_native_roles=roles,state_directory=str(f.root/'state'))
+            prefix=str(f.root/'unwritten-python-cache')
+            with mock.patch.object(controller,'selected_python_tooling',return_value=selected), \
+                    mock.patch.object(controller,'edition_cli_options',return_value=[]):
+                argv=original_command(cfg,'toy',4,prepared_bytecode_prefix=prefix)
+            for option in ('-I','-S','-B','wikidict_prepared_source=1','pycache_prefix='+prefix):
+                self.assertEqual(argv.count(option),1)
+            self.assertEqual(argv[argv.index('--python-tooling-json')+1],json.dumps(spec,sort_keys=True,separators=(',',':')))
+            self.assertEqual(json.loads(argv[argv.index('--retained-native-roles-json')+1]),roles)
+            without=dict(roles);without['dict-bundle-build']={}
+            with mock.patch.object(controller,'selected_python_tooling',return_value=selected), \
+                    mock.patch.object(controller,'edition_cli_options',return_value=[]),self.assertRaisesRegex(ValueError,'initial sealed'):
+                original_command(dict(cfg,retained_native_roles=without),'toy',4,prepared_bytecode_prefix=prefix)
+
+    def test_original_git_authority_includes_exact_selected_catalog_framing(self):
+        import build_wiktionaries as builder
+        from types import SimpleNamespace
+        with PreparedGitAuthorityTests.repository(self) as (root,cfg,inventory,git):
+            spec={'fixture':'exact qualified selected override catalog'}
+            selected=SimpleNamespace(require_unchanged=lambda:spec)
+            cfg['python_tooling']=spec
+            with mock.patch.object(builder,'PROJECT',root),mock.patch.object(builder,'_PYTHON_TOOLING',selected):
+                cfg['source']['fingerprint']=builder.source_fingerprint()
+            with mock.patch.object(controller,'selected_python_tooling',return_value=selected):
+                authority=controller.prepared_git_source_authority(cfg)
+                (root/'compiler.zig').write_text('next unrelated compiler source')
+                git('add','compiler.zig');git('commit','-qm','future compiler')
+                self.assertEqual(controller.prepared_git_source_authority(cfg,retained=authority),authority)
+                with mock.patch.object(controller,'selected_python_tooling',return_value=SimpleNamespace(require_unchanged=lambda:{'different':'catalog'})):
+                    with self.assertRaisesRegex(ValueError,'outside the original Git inventory'):
+                        controller.prepared_git_source_authority(cfg)
+
 if __name__ == '__main__':
     unittest.main()

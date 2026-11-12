@@ -21,13 +21,54 @@ import math
 import os
 from pathlib import Path
 import resource
-from build_artifact_root import validate_pipeline_paths, execution_paths, refuse_execution_destinations
 import signal
 import subprocess
 import sys
 import time
 import uuid
 from datetime import datetime, timezone
+
+def selected_python_tooling(cfg):
+    """Load only an explicitly authenticated tooling selector; preserve script origins."""
+    import importlib.util
+    import stat
+    selection=cfg.get('python_tooling')
+    if selection is None:
+        if 'wikidict_python_tooling' in sys.modules and getattr(sys.modules['wikidict_python_tooling'],'_ACTIVE',None) is not None:
+            raise ValueError('Cannot drop selected Python tooling within an invocation')
+        return None
+    reference=selection['selector'];path=Path(reference['path'])
+    if (not path.is_absolute() or str(path)!=os.path.normpath(str(path))
+            or any(p.is_symlink() for p in (path,*path.parents))):
+        raise ValueError('Unsafe Python tooling selector path')
+    with path.open('rb') as stream:
+        before=os.fstat(stream.fileno());data=stream.read();after=os.fstat(stream.fileno())
+    fields=('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns','st_mode')
+    if (not all(getattr(before,k)==getattr(after,k)==getattr(path.stat(),k) for k in fields)
+            or len(data)!=reference['bytes'] or hashlib.sha256(data).hexdigest()!=reference['sha256']
+            or stat.S_IMODE(before.st_mode)!=reference['mode'] or before.st_uid!=os.geteuid()):
+        raise ValueError('Selected Python tooling selector changed')
+    module=sys.modules.get('wikidict_python_tooling')
+    if module is None:
+        module=importlib.util.module_from_spec(importlib.util.spec_from_loader('wikidict_python_tooling',loader=None))
+        module.__file__=str(path);sys.modules['wikidict_python_tooling']=module
+        try:exec(compile(data,str(path),'exec'),module.__dict__)
+        except BaseException:
+            sys.modules.pop('wikidict_python_tooling',None);raise
+    elif Path(module.__file__)!=path:
+        raise ValueError('Different Python tooling selector is already imported')
+    selected=module.select(selection,role='corpus_controller',origin=__file__)
+    if cfg.get('prepared_source_custody') is True:selected.require_prepared_imports()
+    return selected
+
+
+_CONTROLLER_TOOLING=None
+if '--python-tooling-json' in sys.argv:
+    if sys.argv.count('--python-tooling-json')!=1 or sys.argv.index('--python-tooling-json')+1>=len(sys.argv):
+        raise ValueError('Invalid controller Python tooling CLI')
+    _CONTROLLER_TOOLING=selected_python_tooling({'python_tooling':json.loads(sys.argv[sys.argv.index('--python-tooling-json')+1])})
+
+from build_artifact_root import validate_pipeline_paths, execution_paths, refuse_execution_destinations
 
 ROOT = Path(__file__).resolve().parents[1]
 PILOT = ('aawiktionary', 'abwiktionary', 'afwiktionary', 'akwiktionary',
@@ -558,6 +599,12 @@ def bound_directory(spec, role):
 
 
 def source_roots(cfg):
+    selected=selected_python_tooling(cfg)
+    if selected is not None:
+        source,workspace=selected.source_root,selected.workspace_root
+        require(cfg.get('source',{}).get('root') in (None,selected.spec['source_root'],str(source)), 'Native source root differs from Python tooling selection')
+        require(cfg.get('workspace_root') in (None,selected.spec['workspace_root'],str(workspace)), 'Workspace differs from Python tooling selection')
+        return source,workspace
     frozen = cfg.get('source', {}).get('root')
     if frozen is None:
         require('workspace_root' not in cfg, 'Workspace override requires a bound retained source')
@@ -710,7 +757,7 @@ def execution_layout(cfg):
             ('state_directory', 'output', 'raw_shard_root')] + caches)
         return None
     require(isinstance(spec, dict), 'Invalid execution root binding')
-    require(Path(__file__).resolve().parents[1] == source,
+    require(cfg.get('python_tooling') is not None or Path(__file__).resolve().parents[1] == source,
             'Execution controller must run from its bound producer source')
     require(isinstance(options, dict) and len(options) == 1 and len(caches) == 1,
             'Execution root requires one explicit private extraction cache')
@@ -759,6 +806,10 @@ def loaded_module_origins():
 
 
 def retained_import_guard(source, workspace, files, builder):
+    selector=sys.modules.get('wikidict_python_tooling')
+    selected=getattr(selector,'_ACTIVE',None) if selector is not None else None
+    if selected is not None:
+        selected.require_unchanged();require(builder.PROJECT==source,'Selected builder native root differs');return
     require(Path(builder.__file__).resolve() == source / 'tools/build_wiktionaries.py'
             and builder.PROJECT == source, 'Builder import belongs to another producer root')
     helper_names = {Path(name).stem for name in files
@@ -823,6 +874,10 @@ def prepared_git_source_authority(cfg, *, retained=None):
     # One stream, bounded chunks: no worktree, archive or copied source payload.
     import build_wiktionaries as builder
     source_digest = hashlib.sha256()
+    if cfg.get('python_tooling') is not None:
+        selected=selected_python_tooling(cfg)
+        source_digest.update(b'wikidict.selected-python-tooling.v1\0'+json.dumps(
+            selected.require_unchanged(),sort_keys=True,separators=(',',':')).encode()+b'\0')
     process = subprocess.Popen(['git', '--no-replace-objects', 'cat-file', '--batch'], cwd=source,
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
@@ -886,7 +941,9 @@ def prepared_source_observation(cfg, binding):
             'Prepared source attempt invocation differs')
     source,workspace=source_roots(cfg)
     execution_layout(cfg)
-    require(builder.PROJECT==source and Path(builder.__file__).resolve()==source/'tools/build_wiktionaries.py',
+    selected=selected_python_tooling(cfg)
+    expected_builder=Path(selected.spec['modules']['build_wiktionaries']['path']) if selected is not None else source/'tools/build_wiktionaries.py'
+    require(builder.PROJECT==source and Path(builder.__file__).resolve()==expected_builder,
             'Prepared source builder import belongs to another producer')
     launch=builder.prepared_metadata(binding['authorization'])
     original=launch['prepared_source_authorization']['original_source_observation']
@@ -926,10 +983,24 @@ def authorize_prepared_source(cfg,start,start_ref,launch_path,generation_ref,*,p
                 and record.get('prepared_by_start')==start_ref
                 and record.get('tracked_process')==launch['identity'],
                 'Prepared generation belongs to another tracked attempt')
+    if cfg.get('retained_native_roles') is not None:
+        binding=record.get('retained_dispatch')
+        require(isinstance(binding,dict) and binding.get('selection')==cfg['retained_native_roles'],
+                'Prepared retained selection differs from configuration')
+        if inherited is None:
+            roles=builder.RetainedNativeToolRoles(cfg['retained_native_roles'],
+                zig_sha256=record['build_identity']['zig_sha256'])
+            roles.authenticate_prepared_dispatch(binding,cfg)
+    else:
+        require(record.get('retained_dispatch') is None, 'Prepared native map was not selected')
+    require(record.get('python_tooling')==cfg.get('python_tooling'), 'Prepared import catalog differs')
     generation=builder.PreparedSourceGeneration(record,source=cfg['source'],
         build_identity=record['build_identity'],now_unix=cfg['now_unix'],context=start['context'])
     if inherited is None:
         original_observation=source_guard(cfg)
+        if cfg.get('retained_native_roles') is not None:
+            require(original_observation.get('current_head')==cfg['source']['head'],
+                    'Prepared retained adoption requires the original qualified HEAD')
     else:
         previous=prepared_source_observation(cfg,inherited)
         require(not previous['native_generation_retired'], 'Retired native generation cannot restart expansion')
@@ -966,6 +1037,9 @@ def source_guard(cfg, prepared_authorization=None):
     if frozen:
         require(descriptor(cfg['compiler']['path']) == cfg['compiler'], 'Pinned compiler changed')
     import build_wiktionaries as builder
+    if cfg.get('python_tooling') is not None:
+        selected_python_tooling(cfg).require_unchanged()
+        require(builder.PROJECT==source,'Selected builder native source differs')
     timing = None
     try:
         if os.environ.get("WIKIDICT_PHASE_TIMING") == "1":
@@ -978,11 +1052,11 @@ def source_guard(cfg, prepared_authorization=None):
     completed = False
     try:
         if timing is not None: timing.switch("source_guard_baseline")
-        head = None if frozen else subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+        head = None if frozen else subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip()
         inventory_ref = cfg['source'].get('inventory')
         require(not frozen or inventory_ref is not None, 'Retained producer requires a qualified source inventory')
         if inventory_ref is None:
-            dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=ROOT, text=True)
+            dirty = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=source, text=True)
             require(not dirty and head == cfg['source']['head'], 'Qualified source must be clean and unchanged')
         else:
             inventory = read_ref(inventory_ref)
@@ -994,10 +1068,10 @@ def source_guard(cfg, prepared_authorization=None):
                 require(retained_source_membership(source) == set(files), 'Retained producer inventory changed')
                 retained_import_guard(source, workspace, files, builder)
             else:
-                tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
+                tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=source).decode().split('\0')
                 producer_paths = {name for name in tracked if name and not name.startswith('apps/')}
                 require(producer_paths == set(files), 'Tracked producer inventory changed')
-                untracked = subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z'], cwd=ROOT).decode().split('\0')
+                untracked = subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '-z'], cwd=source).decode().split('\0')
                 require(not any(name and not name.startswith('apps/') for name in untracked),
                         'Untracked producer input requires explicit source qualification')
             if timing is not None: timing.switch("source_guard_inventory")
@@ -1753,9 +1827,14 @@ def edition_cli_options(cfg, edition):
                             or (root/(cfg['date']+'.shards')/name).is_symlink() for name in RETIRED_PROVIDER_MARKERS),
                     'Retired provider-copy workspace requires a fresh whole-attempt output; retained captures unchanged')
     options = cfg.get('edition_options', {}).get(edition, {})
-    require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot', 'presentation_audit_pages'},
+    require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot', 'presentation_audit_pages', 'continue_failed_shards'},
             'Unknown edition option')
     argv = []
+    if 'continue_failed_shards' in options:
+        from build_wiktionaries import validate_presentation_audit_pages
+        validate_presentation_audit_pages(options.get('presentation_audit_pages'), options['continue_failed_shards'])
+        if options['continue_failed_shards']:
+            argv += ['--continue-failed-shards']
     if 'presentation_audit_pages' in options:
         from build_wiktionaries import validate_presentation_audit_pages
         pages = options['presentation_audit_pages']
@@ -1809,7 +1888,9 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY, *, prepared_byteco
     require(type(memory_limit_bytes) is int and memory_limit_bytes == MEMORY,
             'Production memory budget must be 8 GiB')
     source, _ = source_roots(cfg)
-    argv = [sys.executable, '-B', str(source / 'tools/build_wiktionaries.py'),
+    selected=selected_python_tooling(cfg)
+    script=Path(selected.spec['modules']['build_wiktionaries']['path']) if selected is not None else source/'tools/build_wiktionaries.py'
+    argv = [sys.executable, '-B', str(script),
         '--resource-mode', 'watchdog', '--compress-shards', '--watchdog-address-space', 'unlimited',
         '--watchdog-memory-limit-mib', str(memory_limit_bytes // 1024**2),
         '--cpu-admission', 'affinity', '--threads', str(workers), '--jobs', '1',
@@ -1817,6 +1898,11 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY, *, prepared_byteco
         '--now-unix', str(cfg['now_unix']), '--expansion-timeout-ms', str(cfg['expansion_timeout_ms']),
         '--downloads', cfg['downloads'], '--output', cfg['output'], '--raw-shard-root', cfg['raw_shard_root'],
         '--zig', cfg['compiler']['path'], '--wikis', edition]
+    if selected is not None:
+        prefix=prepared_bytecode_prefix or str(Path(cfg['state_directory'])/'unwritten-python-cache')
+        require(Path(prefix).is_absolute() and not os.path.lexists(prefix),'Selected Python bytecode prefix is not absent')
+        argv[1:2]=['-I','-S','-B','-X','pycache_prefix='+prefix]
+        argv += ['--python-tooling-json',json.dumps(selected.spec,sort_keys=True,separators=(',',':'))]
     metadata_network = cfg.get('metadata_network', 'offline')
     require(metadata_network in ('offline', 'allow'), 'Invalid metadata network policy')
     if metadata_network != 'offline':
@@ -1826,11 +1912,24 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY, *, prepared_byteco
             and len(set(reuse_batches)) == len(reuse_batches), 'Invalid Figure reuse batch paths')
     for path in reuse_batches:
         argv += ['--figure-reuse-batch', path]
+    if 'retained_native_roles' in cfg:
+        from build_wiktionaries import RETAINED_NATIVE_ROLE_NAMES
+        roles=cfg['retained_native_roles']
+        require(isinstance(roles,dict) and set(roles)==set(RETAINED_NATIVE_ROLE_NAMES)
+                and all(isinstance(row,dict) for row in roles.values()),
+                'Invalid retained native role selection')
+        if cfg.get('prepared_source_custody') is True:
+            require('initial_sealed_generation' in roles.get('dict-bundle-build',{}),
+                    'Prepared retained custody requires explicit initial sealed selection')
+        argv += ['--retained-native-roles-json',json.dumps(roles,sort_keys=True,separators=(',',':'))]
     if cfg.get('prepared_source_custody') is True:
         require(isinstance(prepared_bytecode_prefix, str) and Path(prepared_bytecode_prefix).is_absolute(),
                 'Prepared command requires its owned bytecode prefix')
-        argv[1:2]=['-I','-S','-B','-X','wikidict_prepared_source=1',
-                   '-X','pycache_prefix='+prepared_bytecode_prefix]
+        if selected is not None:
+            position=argv.index(str(script));argv[position:position]=['-X','wikidict_prepared_source=1']
+        else:
+            argv[1:2]=['-I','-S','-B','-X','wikidict_prepared_source=1',
+                       '-X','pycache_prefix='+prepared_bytecode_prefix]
     if cfg.get('artifact_root') is not None:
         argv += ['--artifact-root-spec', json.dumps(cfg['artifact_root'], sort_keys=True, separators=(',', ':'))]
     if cfg.get('workspace_root') is not None:
@@ -1840,6 +1939,8 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY, *, prepared_byteco
         require(edition == execution['edition'], 'Command edition differs from execution manifest')
         argv += ['--execution-root-spec', json.dumps(cfg['execution_root'], sort_keys=True, separators=(',', ':')),
                  '--input-manifest', cfg['manifest']['path'], '--input-manifest-sha256', cfg['manifest']['sha256']]
+    if selected is not None and execution is not None:
+        argv += ['--exact-snapshot-selection']
     argv += edition_cli_options(cfg, edition)
     return argv
 
@@ -1852,7 +1953,7 @@ def production_context(cfg):
     values = {key: cfg[key] for key in CONTEXT_KEYS}
     if cfg.get('artifact_root') is not None:
         values['artifact_root'] = cfg['artifact_root']
-    for key in ('campaign', 'edition_options', 'llvm_workers', 'workspace_root', 'execution_root', 'superseded_generated', 'metadata_network', 'figure_reuse_batches'):
+    for key in ('campaign', 'edition_options', 'llvm_workers', 'workspace_root', 'execution_root', 'superseded_generated', 'metadata_network', 'figure_reuse_batches', 'retained_native_roles', 'python_tooling'):
         if key in cfg: values[key] = cfg[key]
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
@@ -2213,6 +2314,112 @@ def normalize_registry_rows(value, *, edition, date):
         if row['wiki'] == edition: selected.append(dict(row))
     require(len(selected) == 1, 'Registry selection is not unique')
     return selected
+
+
+
+
+def require_ordinary_input_roles(cfg):
+    """Cheap producer-contract preflight; full normal tuple validation is separate."""
+    import build_wiktionaries as builder
+    tooling = cfg.get('python_tooling')
+    if tooling is not None:
+        require(Path(builder.__file__) == Path(tooling['modules']['build_wiktionaries']['path']),
+                'Required-role check must use the selected producer')
+    editions = cfg.get('edition_options')
+    require(isinstance(editions, dict) and bool(editions), 'Ordinary input selection has no editions')
+    for options in editions.values():
+        require(isinstance(options, dict) and isinstance(options.get('auxiliary_snapshots', {}), dict),
+                'Invalid ordinary provider selection')
+        staged = options.get('staged_input_root')
+        if staged is not None:
+            require(isinstance(staged, dict) and set(staged) == {'path', 'device', 'inode', 'uid', 'mode', 'completion'},
+                    'Invalid borrowed staged input record')
+            require(isinstance(staged['path'], str) and all(type(staged[k]) is int for k in ('device', 'inode', 'uid', 'mode')),
+                    'Invalid borrowed staged input identity fields')
+            root = Path(staged['path'])
+            require(root.is_absolute() and root.resolve() == root and not root.is_symlink() and root.is_dir(),
+                    'Selected staged input root is not a direct existing directory')
+            for name in ('pages.xml.zst', 'pages-index.txt.bz2', '.complete.json'):
+                path = root / name
+                require(not path.is_symlink() and path.is_file(),
+                        'Selected staged input lacks regular file: ' + name)
+        snapshots = options.get('auxiliary_snapshots', {})
+        builder.require_figure_inputs(snapshots)
+        for name in set(builder.FIGURE_SNAPSHOT_FILES) & set(snapshots):
+            reference = snapshots[name]
+            require(isinstance(reference, dict) and set(reference) == {'path', 'bytes', 'sha256'}
+                    and isinstance(reference['path'], str) and Path(reference['path']).is_absolute()
+                    and type(reference['bytes']) is int and reference['bytes'] >= 0
+                    and isinstance(reference['sha256'], str) and len(reference['sha256']) == 64
+                    and all(c in '0123456789abcdef' for c in reference['sha256']),
+                    'Invalid required Figure input descriptor: ' + name)
+
+
+def ordinary_edition_input_selection(cfg, official_manifest, selected_manifest, registry_rows, *, providers, added_rows=()):
+    """Select authenticated metadata for the existing normal resolver/arm path.
+
+    This creates no cache, arming or historical input-reuse authority. Callers
+    retain their bound references, optional keeper checks and ownership locks.
+    """
+    import copy
+    require_ordinary_input_roles(cfg)
+    edition = execution_layout(cfg)['edition']
+    date = cfg['date']
+    require(isinstance(selected_manifest, dict) and selected_manifest.get('requested_editions') == [edition]
+            and selected_manifest.get('failures') == [], 'Selected manifest belongs to another edition')
+    require(isinstance(official_manifest, dict) and isinstance(official_manifest.get('files'), list),
+            'Official input inventory missing')
+    original_rows = [row for row in official_manifest['files'] if row.get('wiki') == edition and row.get('date') == date]
+    require(original_rows and isinstance(added_rows, (list, tuple)), 'Selected official inputs missing')
+    rows = original_rows + list(added_rows)
+    require(all(isinstance(row, dict) and row.get('wiki') == edition and row.get('date') == date
+                and isinstance(row.get('name'), str) and row['name']
+                and Path(row['name']).name == row['name']
+                and type(row.get('size')) is int and row['size'] > 0
+                and isinstance(row.get('sha1'), str) and len(row['sha1']) == 40 for row in rows),
+            'Official input row differs from selected edition/date')
+    require(len({row['name'] for row in rows}) == len(rows), 'Duplicate original or added official input')
+    require(isinstance(selected_manifest.get('files'), list)
+            and sorted(selected_manifest['files'], key=lambda row: row['name']) == sorted(rows, key=lambda row: row['name']),
+            'Selected manifest differs from exact original and added inputs')
+    registry = normalize_registry_rows(registry_rows, edition=edition, date=date)
+    selected_registry = selected_manifest.get('language_registries')
+    if 'reviewed_alias_derivation' in selected_manifest:
+        from download_wiktionaries import derived_registry_paths
+        derived_registry_paths(selected_manifest, Path(cfg['downloads']))
+        # The normal verifier authenticates the whole manifest and lineage;
+        # compare its selected registry identity without discarding that authority.
+        selected_registry = [{key: row[key] for key in registry[0]}
+                             for row in selected_manifest['language_registries']]
+    require(selected_registry == registry, 'Selected registry differs from its authority')
+    roots = official_manifest.get('auxiliary_capture_roots', {})
+    require(isinstance(roots, dict) and edition in roots
+            and selected_manifest.get('auxiliary_capture_roots') == {edition: roots[edition]},
+            'Selected auxiliary capture root differs from original inventory')
+    options = cfg.get('edition_options', {}).get(edition)
+    require(isinstance(options, dict) and isinstance(providers, dict)
+            and options.get('auxiliary_snapshots', {}) == providers,
+            'Selected auxiliary provider descriptors differ')
+    for reference in providers.values():
+        require(isinstance(reference, dict) and set(reference) == {'path', 'bytes', 'sha256'}
+                and isinstance(reference['path'], str) and Path(reference['path']).is_absolute()
+                and type(reference['bytes']) is int and reference['bytes'] >= 0
+                and isinstance(reference['sha256'], str) and len(reference['sha256']) == 64,
+                'Invalid selected auxiliary provider descriptor')
+    provider_descriptors = dict(providers)
+    if options.get('interwiki_snapshot') is not None:
+        require('interwiki_snapshot' not in providers, 'Interwiki input aliases an auxiliary role')
+        reference = options['interwiki_snapshot']
+        require(isinstance(reference, dict) and set(reference) == {'path', 'bytes', 'sha256'}
+                and isinstance(reference['path'], str) and Path(reference['path']).is_absolute()
+                and type(reference['bytes']) is int and reference['bytes'] >= 0
+                and isinstance(reference['sha256'], str) and len(reference['sha256']) == 64,
+                'Invalid selected interwiki descriptor')
+        provider_descriptors['interwiki_snapshot'] = reference
+    return copy.deepcopy(dict(edition=edition, date=date, key=(edition, date), manifest=selected_manifest,
+        rows=selected_manifest['files'], original_rows=original_rows, added_rows=list(added_rows),
+        registry_rows=registry, overrides={name: Path(value['path']) for name,value in providers.items()},
+        provider_descriptors=provider_descriptors))
 
 
 def commit_source_selection_checkpoint(update, selection_fd, *, lock, authenticate):
@@ -2988,7 +3195,7 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     start = dict(attempt_id=folder.name, sequence=sequence, edition=edition, date=cfg['date'],
         workers_requested=workers, memory_limit_bytes=memory_limit_bytes, address_space='unlimited', context=context,
         controller=process_identity(os.getpid()), started_utc=utc(), argv=command(cfg, edition, workers, memory_limit_bytes,
-            **({'prepared_bytecode_prefix':str(folder/'unwritten-python-cache')} if cfg.get('prepared_source_custody') is True else {})))
+            **({'prepared_bytecode_prefix':str(folder/'unwritten-python-cache')} if cfg.get('prepared_source_custody') is True or cfg.get('python_tooling') is not None else {})))
     if cfg.get('prepared_source_custody') is True:
         bytecode_prefix=folder/'unwritten-python-cache'
         require(not os.path.lexists(bytecode_prefix), 'Prepared bytecode prefix is not absent')
@@ -3141,6 +3348,7 @@ def attempt_needed(rows, edition, *, retry_failed=False, revalidate=False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--python-tooling-json')
     parser.add_argument('--config', required=True, type=Path)
     parser.add_argument('--phase', choices=('pilot', 'remaining', 'all'), default='pilot')
     parser.add_argument('--max-editions', type=int, help='Yield after N closed editions, including all own-cap retries; default unbounded')
@@ -3150,6 +3358,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     require(args.max_editions is None or args.max_editions > 0, 'max-editions must be positive')
     cfg = read_json(args.config)
+    require((json.loads(args.python_tooling_json) if args.python_tooling_json is not None else None)==cfg.get('python_tooling'), 'Controller startup tooling differs from its configuration')
     require(cfg.get('armed') is True, 'Configuration remains unarmed')
     require(resource.getrlimit(resource.RLIMIT_AS) == (resource.RLIM_INFINITY, resource.RLIM_INFINITY), 'Controller requires inherited unlimited AS')
     _, workspace = source_roots(cfg)

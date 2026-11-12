@@ -9743,4 +9743,467 @@ class RetainedNativeRoleCloneTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'changed'):roles.install_role('dict-blob-build',root/'workspace')
             self.assertFalse((root/'workspace/native-blob-tools/bin/dict-blob-build').exists())
 
+
+
+_readonly_real_closed_resolution=b.RetainedNativeToolRoles.closed_execution_resolution
+
+class ReadonlyPreparedRetainedTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def fixture(self, *, separate_origins=False, runtime_library=False):
+        import copy
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); helper=InitialSealedGenerationTests(); f=helper.fixture(root)
+            role_root=root/'native-origins';role_root.mkdir()
+            records,compiler=RetainedNativeRoleTests().fixture(role_root)
+            if separate_origins:
+                for name in ('dict-blob-merge','dict-blob-verify'):
+                    holder=root/(name+'-historical');holder.mkdir()
+                    RetainedNativeRoleTests().separate_source(holder,records[name],{})
+            f.records=records;f.identity['native_tool_roles']=copy.deepcopy(records)
+            f.identity['zig_sha256']=b.sha256_file(compiler);f.plan['zig_sha256']=f.identity['zig_sha256']
+            f.role_ref=_initial_sealed_write(root/'roles.json',records);f.plan['roles']=f.role_ref
+            f.result['role_map']=f.role_ref;f.result['input_authority']=_initial_sealed_write(root/'preparation-data.json',f.plan)
+            for name in b.RETAINED_NATIVE_ROLE_NAMES:
+                path=f.workspace/'native-blob-tools/bin'/name;path.chmod(0o755)
+                path.write_bytes(Path(records[name]['artifact']['path']).read_bytes());path.chmod(0o555)
+            installed={name:_initial_sealed_reference(f.workspace/'native-blob-tools/bin'/name) for name in b.BLOB_TOOL_NAMES}
+            f.result['installed_tools']=installed;f.closed['installed_tools']=installed
+            deps=records['dict-bundle-build']['dependencies']
+            f.seal['origin_graph']={key:deps[name]['path'] for key,name in [('extractor','modules'),('llvm','llvm'),('runtime','worker_object'),('leaf','value_leaf_bc'),('main_c','worker_main_c'),('zig','zig')]}
+            f.seal['origin_graph'].update(project_root=records['dict-bundle-build']['source_root'],clang='clang')
+            worker=f.expander/'dict-bundle-expander'
+            runtime=dict(extractor_sha256=b.sha256_file(worker),libraries=[])
+            if runtime_library:
+                library=root/'worker-runtime-library';library.write_bytes(b'original executed runtime library')
+                runtime['libraries']=[[str(library),b.sha256_file(library)]]
+            f.seal['identity']['runtime_libraries']=runtime
+            f.seal['identity']['producer']['unicode']={'libraries':[]}
+            f.seal['identity']['producer'].update(
+                runtime=[deps['worker_object']['bytes'],deps['worker_object']['sha256']],
+                leaf=[deps['value_leaf_bc']['bytes'],deps['value_leaf_bc']['sha256']],
+                main_c=[deps['worker_main_c']['bytes'],deps['worker_main_c']['sha256']],
+                extractor=dict(extractor_sha256=deps['modules']['sha256']),
+                llvm=dict(extractor_sha256=deps['llvm']['sha256']),
+                zig=dict(tool_sha256=deps['zig']['sha256']),
+                abi=[[name,deps['runtime_source:'+name]['sha256']] for name in b.RETAINED_EXPANDER_ABI_PATHS],
+                policy=[[name,[deps['runtime_source:'+name]['bytes'],deps['runtime_source:'+name]['sha256']]] for name in ('build.zig','tools/bundle_build.zig','tools/extraction_cache.py')],
+                clang=dict(tool=dict(extractor_sha256=deps['clang']['sha256'])),
+                link_flags=['cc','-O2','-pthread','-lm','-lbz2','-lzstd','-lc'])
+            helper.reseal_graph(f)
+            selection=copy.deepcopy(records);selection['dict-bundle-build']['initial_sealed_generation']=f.selection
+            python=root/'tools/custody_fixture_helper.py';python.parent.mkdir();python.write_text('VALUE=1\n')
+            import extraction_cache as native_cache
+            def tool_identity(path):return dict(extractor_sha256=b.sha256_file(path),libraries=runtime['libraries'] if Path(path).name=='dict-bundle-expander' else [])
+            with patch.object(b,'PROJECT',root),patch.object(native_cache,'frozen_runtime_context',return_value=f.seal), \
+                    patch.object(native_cache,'completed_producer_identity',return_value=(f.seal['identity']['producer'],{})), \
+                    patch.object(native_cache,'unicode_case_identity',return_value={'libraries':[]}), \
+                    patch.object(native_cache,'tool_identity',side_effect=tool_identity), \
+                    patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None):
+                roles=b.RetainedNativeToolRoles(selection,zig_sha256=f.identity['zig_sha256'])
+                helper.adopt(f,native_roles=roles)
+                extra=root/'selected-input.tsv';extra.write_bytes(b'actual borrowed bytes')
+                roles.bind_input(extra)
+                record=dict(schema='wikidict.prepared-source-generation.v1',source=dict(head='qualified-before',fingerprint=f.identity['source'],inventory={}),
+                    build_identity=f.identity,now_unix=123,context='context',workspace=str(f.destination),
+                    dump=str(f.dump),expander=str(f.expander),workspace_state=b.read_build_envelope(f.destination/'state.json'),
+                    python={'tools/custody_fixture_helper.py':dict(mode=0o644,sha256=b.sha256_file(python))},
+                    tools={name:dict(path=str(tool.path),stamp=list(tool.stamp),sha256=tool.sha256,libraries=[])
+                        for name,tool in roles.tools.items() if name in b.BLOB_TOOL_NAMES},
+                    seal_sha256=f.seal_ref['sha256'],seal_archive=f.seal_ref,retained_dispatch=roles.prepared_dispatch())
+                cfg=dict(source=record['source'],now_unix=123,prepared_source_custody=True,retained_native_roles=selection)
+                start=dict(context='context')
+                record_path=root/'prepared-generation.json';b.write_prepared_metadata(record_path,record)
+                record_ref=b.prepared_metadata_ref(record_path);launch=root/'launch.json'
+                auth=dict(schema='wikidict.prepared-source-authorization.v1',configuration=cfg,context='context',attempt_start=start,
+                    generation=record_ref,decision='parent-verified-original-source',original_source_observation=dict(
+                    qualified_head='qualified-before',current_head='qualified-before',producer_inventory={},apps_acceptance=False))
+                b.write_prepared_metadata(launch,dict(prepared_source_authorization=auth))
+                generation=b.prepared_authorized_generation(cfg,start,b.prepared_metadata_ref(launch))
+                yield SimpleNamespace(**dict(locals(),identity=f.identity,workspace=f.destination,expander=f.expander,expected=f.expected,seal=f.seal,dump=f.dump))
+
+    def test_readonly_generation_survives_unrelated_compiler_edit_and_reopens_exact_roles(self):
+        with self.fixture() as f:
+            before=f.generation.record.copy()
+            origin=Path(f.records['dict-blob-build']['source_root'])
+            compiler=origin/'src/encoder/presentation_compile.zig';compiler.write_bytes(b'unrelated next renderer')
+            (f.root/'new-head-marker').write_text('new HEAD is not an execution input')
+            # Reopening uses the explicit parent record, not new worktree compilation source.
+            g=b.prepared_authorized_generation(f.cfg,f.start,b.prepared_metadata_ref(f.launch))
+            self.assertEqual(g.identity,f.identity);self.assertEqual(g.record,before)
+            self.assertEqual(g.root,f.expander);self.assertNotEqual(g.root,g.workspace/'expander/.bundle-expander')
+            with patch.object(b._PREPARED_SOURCE,'value',g,create=True):
+                self.assertEqual(b._source_fingerprints(True),(f.identity['source'],f.expected['production_source']))
+                for tool in g.tools.values():self.assertIs(tool.retained_roles,g.retained_roles)
+                with patch.object(b,'timed_run') as called:
+                    g.tools['dict-blob-build'].run(['fixture-input'],'toy','date','fixture')
+                    self.assertEqual(called.call_count,1)
+                with self.assertRaisesRegex(ValueError,'cannot recompile or relink'):
+                    g.retained_roles.require_command('dict-bundle-build',['dump','out','--expander-only'])
+                with self.assertRaisesRegex(ValueError,'cannot silently prepare'):
+                    b.prepare_blob_tools(f.workspace,str(f.compiler),'toy','date',f.identity)
+
+    def test_closed_origin_reopens_without_compiler_payload_but_ordinary_still_requires_it(self):
+        with self.fixture() as f:
+            original=copy.deepcopy(f.records)
+            source=Path(f.records['dict-blob-build']['source_root'])
+            for path in source.rglob('*.zig'):path.unlink()
+            Path(f.records['dict-bundle-build']['dependencies']['extraction_helper']['path']).unlink()
+            fresh=b.RetainedNativeToolRoles(f.selection,zig_sha256=f.identity['zig_sha256'])
+            fresh.authenticate_prepared_dispatch(f.record['retained_dispatch'])
+            self.assertEqual(fresh.provenance(),original)
+            f.generation.require_unchanged()
+            with self.assertRaises((ValueError,OSError)):
+                b.RetainedNativeToolRoles(f.records,zig_sha256=f.identity['zig_sha256'])
+
+    def test_execution_inputs_native_artifact_and_live_runtime_source_drift_refuse(self):
+        for field in ('input','artifact','worker','runtime-python','python','library'):
+            with self.subTest(field=field),self.fixture() as f:
+                if field=='input':path=f.extra
+                elif field=='artifact':path=f.generation.tools['dict-blob-build'].path
+                elif field=='worker':path=f.expander/'dict-bundle-expander'
+                elif field=='runtime-python':path=Path(f.records['dict-bundle-build']['dependencies']['runtime_source:tools/extraction_cache.py']['path'])
+                elif field=='python':path=f.python
+                else:
+                    path=f.root/'runtime-library';path.write_bytes(b'original library')
+                    digest=b.sha256_file(path);f.generation.record['tools']['dict-blob-build']['libraries']=[[str(path),digest]]
+                    f.generation.require_unchanged()
+                path.chmod(0o644);path.write_bytes(b'mutated executed dependency')
+                with self.assertRaises(ValueError):f.generation.require_unchanged()
+
+    def test_guard_snapshot_cannot_omit_or_substitute_selected_authority(self):
+        for mode in ('dependency','selection','root','tools','state','seal'):
+            with self.subTest(mode=mode),self.fixture() as f:
+                record=copy.deepcopy(f.record)
+                if mode=='dependency':
+                    target=f.records['dict-bundle-build']['dependencies']['runtime_source:tools/extraction_cache.py']['path']
+                    record['retained_dispatch']['inputs']=[row for row in record['retained_dispatch']['inputs'] if row['identity']['path']!=target]
+                elif mode=='selection':record['retained_dispatch']['selection']['dict-blob-build']['artifact']['sha256']='0'*64
+                elif mode=='root':record['retained_dispatch']['initial_context'][0]=str(f.workspace/'other')
+                elif mode=='tools':record['tools']['dict-blob-build']['path']=str(f.root/'unselected-writer')
+                elif mode=='state':record['workspace_state']['native_generation']['build_inputs']['source']='new source'
+                else:record['seal_sha256']='0'*64
+                with self.assertRaises((ValueError,OSError)):
+                    b.PreparedSourceGeneration(record,source=f.cfg['source'],build_identity=f.identity,now_unix=123,context='context')
+
+    def test_historical_role_source_directory_can_be_absent_only_for_closed_execution(self):
+        with self.fixture(separate_origins=True) as f:
+            import shutil
+            origin=Path(f.records['dict-blob-merge']['source_root'])
+            shutil.rmtree(origin)
+            selected=b.RetainedNativeToolRoles(f.selection,zig_sha256=f.identity['zig_sha256'])
+            self.assertEqual(selected.provenance(),f.records)
+            f.generation.require_unchanged()
+            with self.assertRaises((ValueError,OSError)):
+                b.RetainedNativeToolRoles(f.records,zig_sha256=f.identity['zig_sha256'])
+
+    def test_rehashed_closed_producer_cannot_substitute_abi_policy_or_native_artifact(self):
+        for kind in ('abi','policy','runtime','clang','link'):
+            with self.subTest(kind=kind),self.fixture() as f:
+                if kind=='abi':f.seal['identity']['producer']['abi'][0][1]='0'*64
+                elif kind=='policy':f.seal['identity']['producer']['policy'][0][1][1]='0'*64
+                elif kind=='runtime':f.seal['identity']['producer']['runtime'][1]='0'*64
+                elif kind=='clang':f.seal['identity']['producer']['clang']['tool']['extractor_sha256']='0'*64
+                else:f.seal['identity']['producer']['link_flags'].append('-unsafe')
+                InitialSealedGenerationTests().reseal_graph(f.f)
+                selection=copy.deepcopy(f.selection);selection['dict-bundle-build']['initial_sealed_generation']=f.f.selection
+                with self.assertRaisesRegex(ValueError,'Closed execution'):
+                    b.RetainedNativeToolRoles(selection,zig_sha256=f.identity['zig_sha256'])
+
+    def test_repeated_closed_guards_resolve_routes_without_worker_or_library_rehash(self):
+        import extraction_cache as cache
+        real_resolution=_readonly_real_closed_resolution
+        with self.fixture(runtime_library=True) as f:
+            selected=f.generation.retained_roles
+            original_read=Path.read_text;maps=['']
+            def proc_maps(path,*args,**kwargs):
+                if path==Path('/proc/self/maps'):return maps[0]
+                return original_read(path,*args,**kwargs)
+            observation=SimpleNamespace(stdout='libfixture.so => '+str(f.library)+' (0x1)\n')
+            with patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',new=real_resolution), \
+                    patch.object(b.subprocess,'run',return_value=observation) as resolved, \
+                    patch.object(Path,'read_text',new=proc_maps), \
+                    patch.object(cache,'tool_identity',side_effect=AssertionError('unexpected full worker hash')), \
+                    patch.object(cache,'unicode_case_identity',side_effect=AssertionError('unexpected library hash')), \
+                    patch.object(cache,'sha256',side_effect=AssertionError('unexpected linked payload hash')), \
+                    patch.object(b,'sha256_file',side_effect=AssertionError('unexpected payload hash')):
+                for _ in range(3):selected.require_unchanged()
+                self.assertEqual(resolved.call_count,3)
+                observation.stdout+='libforeign.so => /foreign/library (0x2)\n'
+                with self.assertRaisesRegex(ValueError,'library resolution'):selected.require_unchanged()
+                observation.stdout='libfixture.so => '+str(f.library)+' (0x1)\n'
+                maps[0]='0 0 0 0 0 /foreign/libutf8proc.so.3\n'
+                with self.assertRaisesRegex(ValueError,'runtime resolution'):selected.require_unchanged()
+                maps[0]=''
+                worker=f.expander/'dict-bundle-expander';replacement=f.root/'worker-replacement'
+                replacement.write_bytes(worker.read_bytes());replacement.chmod(worker.stat().st_mode&0o777);replacement.replace(worker)
+                with self.assertRaisesRegex(ValueError,'worker identity changed'):selected.require_unchanged()
+
+    def test_derived_execution_snapshot_cannot_omit_worker_library(self):
+        with self.fixture(runtime_library=True) as f:
+            record=copy.deepcopy(f.record);target=str(f.library.resolve())
+            record['retained_dispatch']['inputs']=[row for row in record['retained_dispatch']['inputs'] if row['identity']['path']!=target]
+            with self.assertRaisesRegex(ValueError,'omitted a selected execution dependency'):
+                b.PreparedSourceGeneration(record,source=f.cfg['source'],build_identity=f.identity,now_unix=123,context='context')
+
+    def test_worker_library_mutation_same_byte_replacement_and_resolution_refuse(self):
+        for kind in ('bytes','replacement','resolution'):
+            with self.subTest(kind=kind),self.fixture(runtime_library=True) as f:
+                if kind=='bytes':f.library.write_bytes(b'changed runtime code')
+                else:
+                    other=f.root/'other-library';other.write_bytes(f.library.read_bytes())
+                    if kind=='replacement':other.replace(f.library)
+                    else:f.library.unlink();f.library.symlink_to(other)
+                with self.assertRaises(ValueError):f.generation.require_unchanged()
+
+    def test_closed_selection_cannot_enter_mutating_provider_update(self):
+        import ast,inspect,textwrap
+        function=ast.parse(textwrap.dedent(inspect.getsource(b.build_sharded))).body[0]
+        branch=next(n for n in function.body if isinstance(n,ast.If) and isinstance(n.test,ast.Name) and n.test.id=='provider_update')
+        guard=branch.body[0]
+        with self.fixture() as f:
+            values=dict(initial_reference=f.selection,seal_for_provider_updates=True,
+                provider_update=dict(root=str(f.expander),dump=str(f.dump)),expander_build=f.expander.parent,dump=f.dump)
+            with self.assertRaisesRegex(ValueError,'another native generation'):
+                exec(compile(ast.Module(body=[guard],type_ignores=[]),'<actual-provider-update-guard>','exec'),values)
+            values['initial_reference']=None
+            exec(compile(ast.Module(body=[guard],type_ignores=[]),'<actual-provider-update-guard>','exec'),values)
+
+    def test_closed_selection_refuses_driver_or_relink_before_parent_authorization(self):
+        with self.fixture() as f:
+            selected=b.RetainedNativeToolRoles(f.selection,zig_sha256=f.identity['zig_sha256'])
+            with patch.object(b,'timed_run',side_effect=AssertionError('unexpected native launch')):
+                with self.assertRaisesRegex(ValueError,'cannot recompile or relink'):
+                    selected.require_command('dict-bundle-build',['dump','out','--expander-only'])
+                with self.assertRaisesRegex(ValueError,'cannot recompile or relink'):
+                    selected.prepare(['dump','out','--expander-only'],'testwiktionary','20261001')
+                with self.assertRaisesRegex(ValueError,'cannot prepare bundle driver'):
+                    selected.install_role('dict-bundle-build',f.root/'forbidden-driver-prefix')
+                self.assertFalse((f.root/'forbidden-driver-prefix').exists())
+            self.assertEqual(selected.provenance(),f.records)
+
+    def test_closed_original_map_abi_artifact_or_output_substitution_refuses(self):
+        for kind in ('abi','leaf','artifact','source-authority'):
+            with self.subTest(kind=kind),self.fixture() as f:
+                selection=copy.deepcopy(f.selection)
+                row=selection['dict-bundle-build']
+                if kind=='abi':row['dependencies']['runtime_source:src/lua/runtime/llvm_abi.zig']['sha256']='0'*64
+                elif kind=='leaf':row['dependencies']['value_leaf_bc']['sha256']='0'*64
+                elif kind=='artifact':selection['dict-blob-build']['artifact']['sha256']='0'*64
+                else:row['producer_source']='0'*64
+                with self.assertRaisesRegex(ValueError,'different native roles'):
+                    b.RetainedNativeToolRoles(selection,zig_sha256=f.identity['zig_sha256'])
+
+    def test_closed_origin_refusal_never_uses_compilation_or_reset_fallback(self):
+        with self.fixture() as f:
+            (f.expander/'.completed-expander.json').write_text('{}')
+            with patch.object(b,'run_checked',side_effect=AssertionError('unexpected compile')), \
+                    patch.object(b,'remove_artifact_tree',side_effect=AssertionError('unexpected reset')):
+                with self.assertRaises((ValueError,OSError)):
+                    b.RetainedNativeToolRoles(f.selection,zig_sha256=f.identity['zig_sha256'])
+
+    def test_late_python_and_same_byte_native_replacement_refuse(self):
+        for mode in ('late-python','bytecode','replacement'):
+            with self.subTest(mode=mode),self.fixture() as f:
+                if mode=='late-python':(f.root/'tools/unbound.py').write_text('VALUE=1')
+                elif mode=='bytecode':(f.root/'tools/unbound.pyc').write_bytes(b'no bytecode authority')
+                else:
+                    path=f.generation.tools['dict-blob-build'].path
+                    replacement=f.root/'replacement';replacement.write_bytes(path.read_bytes());replacement.chmod(path.stat().st_mode&0o777);replacement.replace(path)
+                with self.assertRaises(ValueError):f.generation.require_unchanged()
+
+    def test_pending_or_changed_worker_never_falls_back_to_compilation(self):
+        with self.fixture() as f:
+            with patch.object(b._PREPARED_SOURCE,'value',f.generation,create=True), \
+                    patch.object(b,'timed_run',side_effect=AssertionError('must not launch')):
+                import extraction_cache as cache
+                with patch.object(cache,'frozen_runtime_context',return_value=None),self.assertRaises(ValueError):
+                    f.generation.require_unchanged()
+                with self.assertRaisesRegex(ValueError,'cannot silently prepare'):
+                    b.prepare_blob_tools(f.workspace,str(f.compiler),'toy','date',f.identity,expander_args=['dump','out','--expander-only'],retained_roles=f.roles)
+
+    def test_offer_records_external_root_and_waits_for_real_parent_before_installing_scope(self):
+        with self.fixture() as f:
+            inventory=f.root/'python-inventory.json'
+            reference=_initial_sealed_write(inventory,dict(head=f.cfg['source']['head'],
+                files={'tools/custody_fixture_helper.py':_initial_sealed_reference(f.python)},
+                modes={'tools/custody_fixture_helper.py':0o644}))
+            f.cfg['source']['inventory']=reference
+            folder=f.root/'pending-attempt';folder.mkdir()
+            start_path=folder/'start.json';start=dict(context='context')
+            start_ref=_initial_sealed_write(start_path,start)
+            _initial_sealed_write(folder/'launch.json',dict(identity={'fixture':'tracked-original'}))
+            request=object.__new__(b.PreparedSourceRequest)
+            request.generation=None;request.configuration=f.cfg;request.start=start
+            request.reference=start_ref;request.folder=folder
+            seen=[]
+            def not_authorized(reference):
+                record=b.prepared_metadata(reference);seen.append(record)
+                self.assertEqual(record['expander'],str(f.expander))
+                self.assertEqual(record['workspace'],str(f.workspace))
+                self.assertEqual(record['retained_dispatch']['selection'],f.selection)
+                self.assertEqual(record['tracked_process'],{'fixture':'tracked-original'})
+                self.assertEqual(b.prepared_metadata(record['seal_archive']),f.seal)
+                self.assertEqual(record['tools']['dict-blob-build']['sha256'],f.records['dict-blob-build']['artifact']['sha256'])
+                raise ValueError('parent has not authorized the request')
+            request.await_authorization=not_authorized
+            unadopted=b.RetainedNativeToolRoles(f.selection,zig_sha256=f.identity['zig_sha256'])
+            with self.assertRaisesRegex(ValueError,'no adopted sealed context'):
+                request.offer(f.workspace,f.dump,unadopted.tools,f.identity,123)
+            self.assertFalse((folder/'prepared-generation.json').exists())
+            before=f.expander.joinpath('.completed-expander.json').read_bytes()
+            with self.assertRaisesRegex(ValueError,'parent has not authorized'):
+                request.offer(f.workspace,f.dump,f.roles.tools,f.identity,123)
+            self.assertEqual(len(seen),1);self.assertIsNone(request.generation)
+            self.assertIsNone(getattr(b._PREPARED_SOURCE,'value',None))
+            self.assertEqual(f.expander.joinpath('.completed-expander.json').read_bytes(),before)
+            self.assertFalse((folder/'native-blob-tools').exists())
+
+    def test_parent_independently_requires_complete_borrowed_capture_readset(self):
+        import hashlib
+        with self.fixture() as f:
+            import prepare_figure_metadata as figure
+            capture=f.root/'capture';capture.mkdir();path=capture/b.auxiliary_snapshot_filename('figure-sizing')
+            path.write_bytes(b'exact replayed capture member')
+            sql=f.root/'source.sql';sql.write_bytes(b'original SQL evidence')
+            def identity(path):
+                raw=path.read_bytes();return b._figure_replay_identity(path),dict(size=len(raw),sha1=hashlib.sha1(raw).hexdigest(),sha256=hashlib.sha256(raw).hexdigest())
+            members={str(path):identity(path),str(sql):identity(sql)}
+            st=capture.stat();guard=((figure.producer(),figure.metadata.producer(),figure.site_info.producer()),members,
+                {str(capture):(st.st_dev,st.st_ino,tuple(sorted(capture.iterdir())),b._figure_replay_identity(capture,directory=True))})
+            inventory={path.name:b.sha256_file(path)}
+            f.roles.bind_capture(capture,inventory,figure_guard=guard)
+            binding=f.roles.prepared_dispatch()
+            cfg=dict(f.cfg,date='20261001',output=str(f.root/'output-owned'),raw_shard_root=str(f.root/'raw-owned'),
+                edition_options={'toy':dict(auxiliary_snapshots={'figure-sizing':str(path)},extraction_cache_root=str(f.root/'cache-owned'))})
+            key=(('figure-sizing',str(path.absolute())),)
+            with patch.object(b,'validated_figure_tuple',return_value={'figure-sizing':({},inventory)}), \
+                    patch.dict(b._FIGURE_TUPLE_REPLAYS,{key:(guard,{})},clear=True):
+                original=b.RetainedNativeToolRoles(f.selection,zig_sha256=f.identity['zig_sha256'])
+                original.authenticate_prepared_dispatch(binding,cfg)
+                for mode in ('sql','directory'):
+                    selected=copy.deepcopy(binding)
+                    if mode=='sql':selected['inputs']=[row for row in selected['inputs'] if row['identity']['path']!=str(sql)]
+                    else:del selected['capture_directories'][str(capture)]
+                    original=b.RetainedNativeToolRoles(f.selection,zig_sha256=f.identity['zig_sha256'])
+                    with self.subTest(mode=mode),self.assertRaisesRegex(ValueError,'omitted a borrowed'):
+                        original.authenticate_prepared_dispatch(selected,cfg)
+
+
+class PreparedSelectedPythonTests(unittest.TestCase):
+    def test_real_isolated_bootstrap_keeps_private_catalog_and_rejects_mutations(self):
+        import copy
+        import subprocess
+        import sys
+        from pathlib import Path
+        for mode in ('unchanged','module','selector','late-module','search-path'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);project=root/'project';tools=project/'tools';tools.mkdir(parents=True)
+                private=project/'qualified-overrides';private.mkdir()
+                selected=private/'custody_selected.py';selected.write_text('import sys\nfrom pathlib import Path\nsys.path.insert(0,str(Path(__file__).parents[1]/"tools"))\ntry:\n import unbound_local\nexcept ModuleNotFoundError:pass\nelse:raise AssertionError("unselected fallback ran")\nVALUE=23\n')
+                # A worktree name must not supersede the explicit private source.
+                (tools/'custody_selected.py').write_text('raise AssertionError("unselected worktree source")\n')
+                controller=tools/'corpus_controller.py';controller.write_text('VALUE=1\n')
+                selector=private/'build_python_tooling.py'
+                selector.write_bytes(Path(b.__file__).with_name('build_python_tooling.py').read_bytes())
+                prefix=Path(b.__file__).read_text().split('from compress_blobs import ',1)[0]
+                script=tools/'build_wiktionaries.py'
+                script.write_text(prefix+'''
+import custody_selected, fractions
+assert custody_selected.VALUE==23
+assert custody_selected.__file__==_PYTHON_TOOLING.spec['modules']['custody_selected']['path']
+assert fractions.__file__.startswith(sys._stdlib_dir)
+assert sys.path==[sys._stdlib_dir,sys._stdlib_dir+'/lib-dynload']
+Path(PROJECT/'unrelated-renderer.zig').write_text('next renderer source')
+_PREPARED_BOOTSTRAP_PYTHON_GUARD.require_python()
+try:
+ import unbound_local
+except ModuleNotFoundError:pass
+else:raise AssertionError('unselected local module imported')
+mode=sys.argv[-1]
+if mode!='unchanged':
+ if mode=='module':Path(custody_selected.__file__).write_text('VALUE=24')
+ elif mode=='selector':Path(_PYTHON_TOOLING.spec['selector']['path']).write_text('changed selector')
+ elif mode=='search-path':sys.path.insert(0,str(PROJECT/'foreign-import-root'))
+ else:
+  from types import SimpleNamespace
+  sys.modules['unbound_local']=SimpleNamespace(__file__=str(PROJECT/'unbound_local.py'))
+ try:_PREPARED_BOOTSTRAP_PYTHON_GUARD.require_python()
+ except ValueError:pass
+ else:raise AssertionError('changed import authority accepted')
+print('SELECTED_PREPARED_IMPORT_OK')
+''')
+                (tools/'unbound_local.py').write_text('raise AssertionError("unbound import")')
+                def desc(path):return dict(_initial_sealed_reference(path),mode=stat.S_IMODE(path.stat().st_mode))
+                st=project.stat();directory=dict(path=str(project),device=st.st_dev,inode=st.st_ino,uid=st.st_uid,mode=stat.S_IMODE(st.st_mode))
+                spec=dict(source_root=directory,workspace_root=directory,selector=desc(selector),modules={
+                    'build_wiktionaries':desc(script),'corpus_controller':desc(controller),'custody_selected':desc(selected)})
+                files={path.relative_to(project).as_posix():_initial_sealed_reference(path) for path in tools.iterdir()}
+                inventory=root/'inventory.json';_initial_sealed_write(inventory,dict(head='qualified-original',files=files,modes={name:0o644 for name in files}))
+                attempt=root/'attempt';attempt.mkdir();bytecode=str(attempt/'unwritten-python-cache')
+                cfg=dict(source=dict(head='qualified-original',root=str(project),inventory=_initial_sealed_reference(inventory)),
+                    prepared_source_custody=True,python_tooling=spec)
+                start=attempt/'start.json';_initial_sealed_write(start,dict(prepared_source_control=dict(version=1,configuration=cfg,bytecode_prefix=bytecode)))
+                env=dict(os.environ,WIKIDICT_PREPARED_SOURCE_ATTEMPT=json.dumps(_initial_sealed_reference(start)),PYTHONPATH=str(tools))
+                result=subprocess.run([sys.executable,'-I','-S','-B','-X','wikidict_prepared_source=1','-X','pycache_prefix='+bytecode,
+                    str(script),'--python-tooling-json',json.dumps(spec),mode],cwd=root,env=env,capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertEqual(result.stdout.strip(),'SELECTED_PREPARED_IMPORT_OK')
+                self.assertFalse(Path(bytecode).exists())
+
+    def test_watchdog_relaunch_preserves_both_prepared_and_selected_import_contracts(self):
+        selected=SimpleNamespace(require_unchanged=lambda:None)
+        with patch.object(b,'_PYTHON_TOOLING',selected),patch.object(sys,'flags',SimpleNamespace(isolated=1,no_site=1)), \
+                patch.object(sys,'dont_write_bytecode',True),patch.object(sys,'pycache_prefix','/nonexistent-prepared-fixture-cache'), \
+                patch.object(sys,'_xoptions',{'wikidict_prepared_source':'1'}),patch.object(sys,'argv',['bound-script','--python-tooling-json','{}']):
+            result=b.prepared_watchdog_options({})
+        self.assertEqual(result['argv'],['-I','-S','-B','-X','wikidict_prepared_source=1','-X',
+            'pycache_prefix=/nonexistent-prepared-fixture-cache','bound-script','--python-tooling-json','{}'])
+
+    def test_actual_selected_statistics_helper_tools_insertion_cannot_restore_fallback(self):
+        import importlib.util
+        import subprocess
+        helper=Path(importlib.util.find_spec('prepare_site_statistics_format').origin)
+        source_root=helper.parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);tools=root/'tools';tools.mkdir()
+            selector=root/'build_python_tooling.py'
+            selector.write_bytes(Path(b.__file__).with_name('build_python_tooling.py').read_bytes())
+            controller=root/'corpus_controller.py';controller.write_text('VALUE=1\n')
+            prefix=Path(b.__file__).read_text().split('from compress_blobs import ',1)[0]
+            script=tools/'build_wiktionaries.py'
+            script.write_text(prefix+'''
+import socket
+socket.create_connection=lambda *args,**kwargs: (_ for _ in ()).throw(AssertionError('offline imports only'))
+socket.socket.connect=socket.create_connection
+import prepare_site_statistics_format
+assert prepare_site_statistics_format.TOOLS==PROJECT/'tools'
+_PREPARED_BOOTSTRAP_PYTHON_GUARD.require_python()
+assert sys.path==[sys._stdlib_dir,sys._stdlib_dir+'/lib-dynload']
+try:
+ import report_corpus_progress
+except ModuleNotFoundError:pass
+else:raise AssertionError('uncatalogued real project helper reached fallback')
+print('ACTUAL_HELPER_IMPORT_OK')
+''')
+            def desc(path):return dict(_initial_sealed_reference(path),mode=stat.S_IMODE(path.stat().st_mode))
+            st=source_root.stat();directory=dict(path=str(source_root),device=st.st_dev,inode=st.st_ino,uid=st.st_uid,mode=stat.S_IMODE(st.st_mode))
+            modules={'build_wiktionaries':desc(script),'corpus_controller':desc(controller)}
+            for name in ('prepare_site_statistics_format','prepare_site_statistics_format_profile','prepare_date_numbering',
+                         'prepare_language_messages','prepare_file_metadata','category_tree_snapshot','download_wiktionaries'):
+                modules[name]=desc(helper.with_name(name+'.py'))
+            spec=dict(source_root=directory,workspace_root=directory,selector=desc(selector),modules=modules)
+            files={('tools/'+name+'.py'):_initial_sealed_reference(helper.with_name(name+'.py'))
+                   for name in modules if name not in ('build_wiktionaries','corpus_controller')}
+            inventory=root/'inventory.json';_initial_sealed_write(inventory,dict(head='bootstrap-only-fixture',files=files,modes={name:0o644 for name in files}))
+            attempt=root/'attempt';attempt.mkdir();bytecode=str(attempt/'unwritten-python-cache')
+            cfg=dict(source=dict(head='bootstrap-only-fixture',root=str(source_root),inventory=_initial_sealed_reference(inventory)),
+                prepared_source_custody=True,python_tooling=spec)
+            start=attempt/'start.json';_initial_sealed_write(start,dict(prepared_source_control=dict(version=1,configuration=cfg,bytecode_prefix=bytecode)))
+            environment=dict(os.environ,WIKIDICT_PREPARED_SOURCE_ATTEMPT=json.dumps(_initial_sealed_reference(start)))
+            result=subprocess.run([sys.executable,'-I','-S','-B','-X','wikidict_prepared_source=1','-X','pycache_prefix='+bytecode,
+                str(script),'--python-tooling-json',json.dumps(spec)],cwd=root,env=environment,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stdout.strip(),'ACTUAL_HELPER_IMPORT_OK')
+            self.assertFalse(Path(bytecode).exists())
+
 if __name__=='__main__':unittest.main()
