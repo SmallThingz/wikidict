@@ -86,6 +86,11 @@ internal class NativeFloatContextGeometry private constructor(
 ) : FloatTextGeometry {
     private data class Paragraph(val partIndex: Int, val offset: Int, val x: Float, val y: Float, val geometry: FloatTextGeometry,
         val textBottom: Float, val paintHere: Boolean = true, val ordinary: Boolean = false)
+    override val textBaselines: NativeTextBaselines? by lazy {
+        val lines = paragraphs.mapNotNull { it.geometry.textBaselines?.translated(it.y) }
+        NativeTextBaselines.of(lines.firstNotNullOfOrNull { it.first },
+            lines.asReversed().firstNotNullOfOrNull { it.last })
+    }
     fun textPaintPart(index: Int): PlacedNativeContextText? = paragraphs.firstOrNull {
         it.partIndex == index && it.paintHere
     }?.let { PlacedNativeContextText(it.geometry, it.x, it.y) } ?: paragraphs.firstNotNullOfOrNull { p ->

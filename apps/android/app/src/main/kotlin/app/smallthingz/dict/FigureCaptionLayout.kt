@@ -64,13 +64,15 @@ internal fun FigureCaptionBlock(block: Block, previous: Block?, trailingGap: Boo
             style = inheritedCellTextStyle(MaterialTheme.typography.labelMedium), color = MaterialTheme.colorScheme.primary)
         CompositionLocalProvider(LocalStaticCaptionInput provides childCaptionInput.takeIf { captionInput != null }) { when {
             block.table != null -> FigureCaptionTable(block.table, childContext, childStyle, reader, publishChild)
+            block.container != null -> UnavailableSelectionContent("Caption container needs its original child selection geometry", publishChild)
             block.feature != null -> UnavailableSelectionContent("Caption feature needs its structured selection geometry", publishChild)
             block.kind == "preformatted" -> UnavailableSelectionContent("Preformatted caption needs its horizontal selection viewport", publishChild)
             block.kind == "rule" -> SelectionRule(publishChild)
             block.figure == null && block.flow == null && spans.isEmpty() -> SelectionEmptyBox(sink = publishChild)
             else -> AnonymousBlockView(if (block.figure != null || block.flow != null) block else Block("paragraph", 0, spans),
                 Modifier, reader.onLink, reader.media, reader.settings, reader.edition,
-                inherited = childContext, style = childStyle, onGeometry = publishChild, interactionOwner = false)
+                inherited = childContext, style = childStyle, onGeometry = publishChild, interactionOwner = false,
+                nativeLineHeight = inheritedContainerFormat()?.takeIf { LocalNativeContainerTextContext.current?.cellText != null }?.lineHeight)
         } }
     }, measurePolicy = object : MeasurePolicy {
         private fun intrinsic(measurables: List<IntrinsicMeasurable>, maximum: Boolean): Int {

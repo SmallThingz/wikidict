@@ -64,8 +64,8 @@ class CellMinimumWidthTest {
         assertThrows(Exception::class.java) { read(bytes + byteArrayOf(0)) }
     }
 
-    @Test fun reservedCellTailBitsAreRejectedByEverySharedHeader() {
-        // Complete former private payloads: rejection must occur at the flag, not truncation.
+    @Test fun formerPrivateCellTailsRemainInvalidAndAbsentNewFieldsPreserveOldBytes() {
+        // Former private tails remain invalid. M now gives 0x08 only the new typed Cell-height grammar.
         val privateTails: List<Wire.() -> Unit> = listOf(
             { byte(8); byte(1); byte(0) },
             { byte(16); length(1, .3f) },

@@ -65,7 +65,7 @@ internal fun tableStyleLengthPixels(value: StyleLength, density: Float, containe
 }
 internal fun tableHasOwnStyle(table: Table): Boolean = table.style != null || table.rows.any { row -> row.any { it.style != null } }
 internal fun tableHasComputedCellStyle(table: Table): Boolean = table.style?.border is StyleBorder.Edges || table.rows.any { row -> row.any { cell ->
-    cell.style?.let { it.border is StyleBorder.Edges || it.borderEdges != null || it.letterSpacing != null || it.width != null || it.minWidth != null } == true ||
+    cell.style?.let { it.border is StyleBorder.Edges || it.borderEdges != null || it.letterSpacing != null || it.width != null || it.minWidth != null || it.lineHeight != null } == true ||
         cell.nestedTable?.let(::tableHasComputedCellStyle) == true ||
         cell.blocks?.any { it.table?.let(::tableHasComputedCellStyle) == true } == true
 } }

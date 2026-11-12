@@ -259,7 +259,7 @@ class InlineTableImageTopTest {
             if (version != 'M') assertThrows(Exception::class.java) {
                 read(fixture(version, cellStyle = { byte(128); byte(0) }))
             }
-            for (reserved in if (version == 'M') listOf(8, 16) else listOf(8, 16, 32)) assertThrows(Exception::class.java) {
+            for (reserved in if (version == 'M') listOf(16) else listOf(8, 16, 32)) assertThrows(Exception::class.java) {
                 read(fixture(version, cellStyle = { byte(reserved); repeat(32) { byte(0) } }))
             }
         }
@@ -337,7 +337,7 @@ class InlineTableImageTopTest {
             read(fixture(cellStyle = { byte(32); byte(0); int(value.toRawBits()) }))
         }
         assertThrows(Exception::class.java) { read(fixture(cellStyle = { byte(32); byte(3); int(0) })) }
-        for (reserved in listOf(8, 16)) assertThrows(Exception::class.java) {
+        for (reserved in listOf(16)) assertThrows(Exception::class.java) {
             read(fixture(cellStyle = { byte(reserved); repeat(32) { byte(0) } }))
         }
         for (size in bytes.indices) assertThrows(Exception::class.java) { read(bytes.copyOf(size)) }

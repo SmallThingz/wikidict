@@ -463,8 +463,14 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
             (available - natural.margins.left - natural.margins.right).coerceAtLeast(0f))).also(selectedMetrics::update)
     }, content = { sink ->
         val natural = checkNotNull(metrics); val style = checkNotNull(captionStyle)
+        val inheritedCellContext = LocalNativeContainerTextContext.current
+        val captionCellContext = inheritedCellContext?.takeIf { it.cellText != null }?.copy(
+            cellText = NativeCellTextState(with(density) { style.fontSize.toPx() },
+                NativeLineHeightPolicy.Pixels(checkNotNull(captionHeight)))) ?: inheritedCellContext
         FigureChildLayout(natural, sink, metricsInput = selectedMetrics, tableMetrics = tablePrepared.getOrThrow(), caption = { captionSink ->
           CompositionLocalProvider(LocalFigureCaptionForeground provides captionColor,
+              LocalNativeContainerTextContext provides captionCellContext,
+              LocalCellWeight provides (if (inheritedCellContext?.cellText != null) style.fontWeight else LocalCellWeight.current),
               LocalFigureCaptionLinkScope provides captionLinkScope,
               LocalAuthoredBackground provides (figure.captionBackground as? FigureColor.Rgb)?.value) {
           val captionContent: @Composable (SelectionGeometrySink) -> Unit = { actualSink ->

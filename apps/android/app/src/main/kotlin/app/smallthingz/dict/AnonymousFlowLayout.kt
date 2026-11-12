@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlin.math.roundToInt
 
 internal data class AnonymousFigureMeasureSpec(val width: Int, val margins: FloatMargins,
     val frameMinimumWidens: Boolean = false, val childMinimumFloor: Boolean = false,
@@ -66,6 +67,7 @@ internal fun AnonymousFlowLayout(
     intrinsicWidths: (((AnonymousFlowEvent.FigureObject) -> Int) -> NativeWidthRange)? = null,
     child: @Composable (AnonymousFlowEvent.FigureObject) -> Unit,
 ) {
+    val publishCellBaselines = LocalNativeContainerTextContext.current?.cellText != null
     val semantic = measureInput?.semantic ?: rememberNativeSemanticMeasurement()
     val scrollClip = LocalNativeScrollClip.current
     val positionedParent = LocalNativePositionedPaintParent.current
@@ -170,7 +172,10 @@ internal fun AnonymousFlowLayout(
               onFlowGeometry(geometry)
               surfaceInput.update(AnonymousSurfaceRequest(physical))
               val surface = measurables.last().measure(Constraints.fixed(physical.width, physical.height))
-              layout(geometry.width, maxOf(constraints.minHeight, geometry.height)) {
+              val alignmentLines = geometry.textBaselines?.takeIf { publishCellBaselines }?.let { lines -> listOfNotNull<Pair<androidx.compose.ui.layout.AlignmentLine, Int>>(
+                  lines.first?.let { androidx.compose.ui.layout.FirstBaseline to it.roundToInt() },
+                  lines.last?.let { androidx.compose.ui.layout.LastBaseline to it.roundToInt() }).toMap() } ?: emptyMap()
+              layout(geometry.width, maxOf(constraints.minHeight, geometry.height), alignmentLines) {
                 geometry.figures.forEach { placed ->
                     measured.getValue(placed.anchor.event.id).placeWithLayer(0, 0) {
                         translationX = placed.bounds.left

@@ -15,10 +15,10 @@ internal fun nativeContainerTextFormat(context: ContainerTextContext, normalBody
     require(density.density.isFinite() && density.density > 0f && density.fontScale.isFinite() && density.fontScale > 0f)
     val bodyPixels = normalBodyFontSize.value.toDouble() * density.density * density.fontScale
     val ownerSp = normalBodyFontSize.value.toDouble() * context.ownerFontScale
-    val ownerPixels = bodyPixels * context.ownerFontScale
+    val ownerPixels = context.cellText?.fontPixels?.toDouble() ?: (bodyPixels * context.ownerFontScale)
     if (!ownerSp.isFinite() || ownerSp > Float.MAX_VALUE || !ownerPixels.isFinite() || ownerPixels > MaxComputedFontPixels)
         throw UnsupportedFloatLayout("Computed container owner font exceeds native geometry")
-    val height = when (val value = context.lineHeight) {
+    val height = context.cellText?.lineHeight ?: when (val value = context.lineHeight) {
         ContainerLineHeight.Normal -> NativeLineHeightPolicy.Normal
         is ContainerLineHeight.Multiplier -> NativeLineHeightPolicy.Multiplier(value.value)
         is ContainerLineHeight.Length -> {
@@ -31,5 +31,7 @@ internal fun nativeContainerTextFormat(context: ContainerTextContext, normalBody
             NativeLineHeightPolicy.Pixels(pixels.toFloat())
         }
     }
-    return NativeContainerTextFormat(inheritedStyle.copy(fontSize = ownerSp.toFloat().sp), height)
+    val size = context.cellText?.fontPixels?.let { with(density) { it.toSp() } } ?: ownerSp.toFloat().sp
+    val style = inheritedStyle.copy(fontSize = size)
+    return NativeContainerTextFormat(if (context.cellText == null) style else nativeCellLineStyle(style, height, density), height)
 }

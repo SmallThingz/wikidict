@@ -13,8 +13,16 @@ internal class NativeSemanticGroup(
     children: List<PositionedSemanticChild>,
     private val decoration: (Canvas) -> Unit = {},
     private val extraNodes: List<FloatInteractionNode> = emptyList(),
+    private val baselineProvider: (() -> NativeTextBaselines?)? = null,
 ) : FloatTextGeometry {
     private val children = children.toList()
+    override val textBaselines: NativeTextBaselines? by lazy {
+        if (baselineProvider != null) baselineProvider.invoke() else {
+            val lines = this.children.mapNotNull { it.geometry.textBaselines?.translated(it.y) }
+            NativeTextBaselines.of(lines.firstNotNullOfOrNull { it.first },
+                lines.asReversed().firstNotNullOfOrNull { it.last })
+        }
+    }
     private data class Segment(val child: PositionedSemanticChild, val start: Int, val end: Int)
     private val segments: List<Segment>
     override val text: String

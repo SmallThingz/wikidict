@@ -3,12 +3,38 @@ package app.smallthingz.dict
 import android.graphics.Canvas
 import android.graphics.RectF
 
+internal data class NativeTextBaselines(val first: Float?, val last: Float?) {
+    init {
+        require(first != null || last != null)
+        require(first == null || first.isFinite())
+        require(last == null || last.isFinite())
+    }
+    fun translated(y: Float) = NativeTextBaselines(first?.plus(y), last?.plus(y))
+    companion object {
+        fun of(first: Float?, last: Float?): NativeTextBaselines? =
+            if (first == null && last == null) null else NativeTextBaselines(first, last)
+    }
+}
+
+/** Table baseline rules are shared by Compose alignment and selected child geometry. */
+internal fun nativeTableTextBaselines(cells: List<NativeTextBaselines?>, rows: List<Int>,
+    tops: List<Float>): NativeTextBaselines? {
+    require(cells.size == rows.size && cells.size == tops.size)
+    val first = cells.indices.mapNotNull { i ->
+        if (rows[i] == 0) cells[i]?.first?.plus(tops[i]) else null
+    }.maxOrNull()
+    val last = cells.indices.mapNotNull { i -> cells[i]?.last?.plus(tops[i]) }.maxOrNull()
+    return NativeTextBaselines.of(first, last)
+}
+
 /** All offsets are UTF-16 indices in [text]; layout must never insert line breaks. */
 internal interface FloatTextGeometry {
     val text: CharSequence
     val width: Int
     val height: Int
     val nodes: List<FloatInteractionNode>
+    /** Actual line baselines; absent for a true empty box, even if it has borders or padding. */
+    val textBaselines: NativeTextBaselines? get() = null
     /** Deferred paint groups retain this owner's text and node indices; no second child graph. */
     val positionedGroups: List<NativePositionedGroup> get() = emptyList()
     /** Fixed boxes default to their allocation; text/composite owners publish their signed overflow. */

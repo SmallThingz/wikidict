@@ -359,12 +359,29 @@ data class TableStyle(val background: String? = null, val border: StyleBorder? =
         require(background == null || Regex("#[0-9a-f]{6}").matches(background)) { "Invalid table background RGB" }
     }
 }
+/** Cell metrics have an explicit origin and admit zero; the older Table domain stays closed. */
+data class CellTextStrut(val fontScale: Float, val fontScaleBasis: FontScaleBasis) {
+    init { require(fontScale.isFinite() && fontScale >= 0f && fontScaleBasis != FontScaleBasis.Context) }
+}
+data class CellFixedLineHeight(val value: Float, val fontScaleBasis: FontScaleBasis) {
+    init { require(value.isFinite() && value >= 0f && fontScaleBasis != FontScaleBasis.Context) }
+}
+sealed interface CellLineHeightValue {
+    data object Normal : CellLineHeightValue
+    data class Multiplier(val value: Float) : CellLineHeightValue {
+        init { require(value.isFinite() && value >= 0f) }
+    }
+    data class Length(val value: CellFixedLineHeight) : CellLineHeightValue
+}
+data class CellLineHeight(val height: CellLineHeightValue, val strut: CellTextStrut? = null)
+
 data class CellStyle(val border: StyleBorder? = null, val padding: StyleEdges? = null,
     val textAlign: CellTextAlign? = null, val borderEdges: CellBorderEdges? = null,
     val letterSpacing: StyleLength? = null, val width: StyleWidth? = null,
-    val minWidth: StyleLength? = null, val verticalAlign: CellVerticalAlign? = null) {
+    val minWidth: StyleLength? = null, val verticalAlign: CellVerticalAlign? = null,
+    val lineHeight: CellLineHeight? = null) {
     init { require(border != null || padding != null || textAlign != null || borderEdges != null ||
-        letterSpacing != null || width != null || minWidth != null || verticalAlign != null) { "Empty cell style" } }
+        letterSpacing != null || width != null || minWidth != null || verticalAlign != null || lineHeight != null) { "Empty cell style" } }
 }
 data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int,
                 val background: String? = null, val nestedTable: Table? = null, val blocks: List<Block>? = null,

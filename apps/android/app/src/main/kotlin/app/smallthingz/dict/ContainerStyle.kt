@@ -116,7 +116,9 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
     }
 
     internal fun textContext(inherited: ContainerTextContext): ContainerTextContext =
-        ContainerTextContext(ownerFontScale ?: inherited.ownerFontScale, lineHeight ?: inherited.lineHeight)
+        ContainerTextContext(ownerFontScale ?: inherited.ownerFontScale, lineHeight ?: inherited.lineHeight,
+            inherited.cellText?.copy(fontPixels = if (ownerFontScale == null) inherited.cellText.fontPixels else null,
+                lineHeight = if (lineHeight == null) inherited.cellText.lineHeight else null))
 
     /** Call with the reader viewport, never a nested cell's or container's width. */
     internal fun atViewport(cssWidth: Float): ContainerViewportStyle = atViewport(cssWidth.toDouble())
@@ -144,7 +146,8 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
 /** Computed font inheritance is independent of descendants and already-normalized box lengths.
  * Holding this context does not create a line box in an empty Container. */
 internal data class ContainerTextContext(val ownerFontScale: Float = 1f,
-    val lineHeight: ContainerLineHeight = ContainerLineHeight.Normal) {
+    val lineHeight: ContainerLineHeight = ContainerLineHeight.Normal,
+    val cellText: NativeCellTextState? = null) {
     init { require(ownerFontScale.isFinite() && ownerFontScale >= 0f) }
 }
 

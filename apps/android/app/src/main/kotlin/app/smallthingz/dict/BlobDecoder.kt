@@ -503,7 +503,7 @@ object BlobDecoder {
         private fun cellStyle(): CellStyle? {
             if (!tableStyles || !presence()) return null
             val flags = byte()
-            val allowed = if (containerFonts) 0xe7 else 0x07
+            val allowed = if (containerFonts) 0xef else 0x07
             require(flags != 0 && flags and allowed.inv() == 0) { "Invalid cell style flags" }
             val border = if (flags and 1 != 0) styleBorder() else null
             val padding = if (flags and 2 != 0) styleEdges() else null
@@ -517,7 +517,22 @@ object BlobDecoder {
             val vertical = if (flags and 128 != 0)
                 CellVerticalAlign.entries.getOrNull(byte()) ?: error("Unknown cell vertical alignment") else null
             return CellStyle(border = border, padding = padding, textAlign = align, width = width, minWidth = minimum,
-                verticalAlign = vertical)
+                verticalAlign = vertical, lineHeight = if (flags and 8 != 0) cellLineHeight() else null)
+        }
+        private fun cellMetricBasis(): FontScaleBasis = when (byte()) {
+            1 -> FontScaleBasis.NormalBody
+            2 -> FontScaleBasis.CssPx
+            else -> error("Unknown cell text metric origin")
+        }
+        private fun cellLineHeight(): CellLineHeight {
+            val strut = if (presence()) CellTextStrut(buffer.float, cellMetricBasis()) else null
+            val height = when (byte()) {
+                0 -> CellLineHeightValue.Normal
+                1 -> CellLineHeightValue.Multiplier(buffer.float)
+                2 -> CellLineHeightValue.Length(CellFixedLineHeight(buffer.float, cellMetricBasis()))
+                else -> error("Unknown cell line height")
+            }
+            return CellLineHeight(height, strut)
         }
         private fun tableStyle(): TableStyle? {
             if (!tableStyles || !presence()) return null

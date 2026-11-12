@@ -14,6 +14,7 @@ internal class NativeSurfaceGeometry(val content: FloatTextGeometry,
     override val text: CharSequence get() = content.text
     override val width: Int get() = surface.width
     override val height: Int get() = surface.height
+    override val textBaselines: NativeTextBaselines? get() = content.textBaselines?.translated(dy)
     override val nodes: List<FloatInteractionNode> = content.nodes.map { it.translated(dx, dy) }
     override val positionedGroups get() = content.positionedGroups.map { it.translated(dx, dy) }
     override val extents: NativeGeometryExtents get() = NativeGeometryExtents(width, height.toFloat(),

@@ -52,6 +52,7 @@ internal class NativeAnonymousFlowGeometry private constructor(
     override val text: CharSequence get() = selection.text
     override val width: Int get() = native.width
     override val height: Int get() = native.height
+    override val textBaselines: NativeTextBaselines? get() = native.textBaselines
     val textBottom: Float get() = native.textBottom
     val scrollableBounds: NativeFloatBounds by lazy {
         figures.fold(native.scrollableBounds) { bounds, figure ->

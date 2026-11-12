@@ -109,6 +109,7 @@ internal fun NativeFloatContextLayout(
     delegatedSourceRevision: Any? = null,
     child: @Composable (id: Int, originalContainingWidth: NativeLayoutInput<Int>) -> Unit,
 ) {
+    val publishCellBaselines = LocalNativeContainerTextContext.current?.cellText != null
     fun flatten(items: List<NativeFloatContextSpec>): List<NativeFloatContextSpec> = items.flatMap { item ->
         val nested = (item as? NativeFloatContextSpec.Container)?.preparedParts
         if (nested == null) listOf(item) else flatten(nested)
@@ -632,7 +633,12 @@ internal fun NativeFloatContextLayout(
                     // The fallback surface establishes exact child tops before these paint-only slots.
                     val mediaPaint = mediaSlots.mapIndexed { slot, row -> row.index to
                         measurables[slots.size + textSlots.size + decorated.size + slot].measure(Constraints.fixed(0, 0)) }.toMap()
-                    val measuredLayout = layout(surface.width, surface.height) {
+                    val cellBaselines = result.getOrNull()?.textBaselines?.takeIf { publishCellBaselines }
+                    val cellBaselineOrigin = pass.documentExtent?.origin ?: 0
+                    val alignmentLines = cellBaselines?.let { lines -> listOfNotNull<Pair<androidx.compose.ui.layout.AlignmentLine, Int>>(
+                        lines.first?.let { androidx.compose.ui.layout.FirstBaseline to (it + cellBaselineOrigin).roundToInt() },
+                        lines.last?.let { androidx.compose.ui.layout.LastBaseline to (it + cellBaselineOrigin).roundToInt() }).toMap() } ?: emptyMap()
+                    val measuredLayout = layout(surface.width, surface.height, alignmentLines) {
                         val geometry = result.getOrNull()
                         val documentOrigin = pass.documentExtent?.origin ?: 0
                         if (geometry == null) {

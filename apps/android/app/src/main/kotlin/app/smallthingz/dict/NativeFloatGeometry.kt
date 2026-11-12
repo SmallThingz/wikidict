@@ -75,6 +75,8 @@ internal class NativeFloatGeometry private constructor(
     val hasResidualFloats: Boolean get() = exclusions.any { it.outer.bottom > textBottom + 0.01f }
     override val height: Int = ceil(max(flow.bottom, exclusions.maxOfOrNull { it.outer.bottom } ?: 0f)).toInt()
     override val nodes: List<FloatInteractionNode> = nodeFactory(this)
+    override val textBaselines: NativeTextBaselines get() =
+        NativeTextBaselines(flow.baselines.first(), flow.baselines.last())
     fun firstLineBand(): RectF = RectF(flow.left[0] + originX(0), flow.tops[0], width - flow.right[0] + originX(0), flow.bottoms[0])
 
     fun remainingExclusions(afterY: Float = textBottom): List<NativeFloatExclusion> {
