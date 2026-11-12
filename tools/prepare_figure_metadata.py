@@ -147,7 +147,9 @@ FIGURE_REGISTRATION_EPOCHS = (FIGURE_REGISTRATION_CORE, FIGURE_LATEST_REGISTRATI
 # not a claim that every current source body is byte-identical.
 FIGURE_WMF4_CORE = 'd45799ff7a503ab18523e720d5e3686761c84c87'
 # These observed revisions have the same qualified V4 behavior; raw echoes stay exact.
-FIGURE_WMF4_CORES = (FIGURE_WMF4_CORE, 'bb3b6755d485f60478c87c907f0557c53117142d')
+# The twenty retained 93f1cd leaves and four media IDs match bb3b67 exactly.
+FIGURE_WMF4_CORES = (FIGURE_WMF4_CORE, 'bb3b6755d485f60478c87c907f0557c53117142d',
+                    '93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c')
 FIGURE_RESPONSE_EPOCHS = (FIGURE_CURRENT_CORE, FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES)
 for _reviewed_core in (FIGURE_COMPATIBLE_CORE, FIGURE_CURRENT_CORE):
     FIGURE_SOURCE_PROFILES[_reviewed_core] = dict(FIGURE_SOURCE_PROFILES['0470f6c99a6456a366635bf25a517a1f951de6f5'])
@@ -1056,6 +1058,23 @@ def tiff_metadata_companion(batch, data, rows, registry, wiki, core, language, a
     return result
 
 
+def jpeg_unrotated_metadata(info):
+    value = info.get('metadata')
+    if not isinstance(value, list) or not 1 <= len(value) <= 4096:
+        return False
+    fields = {}
+    for item in value:
+        if (not isinstance(item, dict) or set(item) != {'name', 'value'} or
+                not isinstance(item['name'], str) or item['name'] in fields):
+            return False
+        fields[item['name']] = item['value']
+    if 'errors' in fields:
+        return False
+    if '_error' in fields:
+        return len(fields) == 1 and fields['_error'] == '0'
+    return 'Orientation' not in fields or (type(fields['Orientation']) is int and fields['Orientation'] == 1)
+
+
 def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, record_limit,
                  profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_compatible_epochs=False, allow_decimal_tiff_axes=True, allow_default_tiff_page=True):
     registry = evidence.Registry(namespace_raw, wiki, date)
@@ -1077,20 +1096,25 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         profile = dict(approved, site_raw_sha256=digest(site_raw))
         _figure_site_profile(site_raw, site_general, wiki, profile, approved)
     records, seen, canonical_facts, observed_files, height_keys = [], set(), {}, set(), set()
+    jpeg_evidence, jpeg_supplemented = {}, set()
     observing = False
     base_count = observed_count = 0
     for batch_index, batch in enumerate(batches):
         if (not isinstance(batch, dict) or set(batch) not in ({'requests', 'response'},
-                {'requests', 'response', 'tiff_metadata_response'},
+                {'requests', 'response', 'tiff_metadata_response'}, {'requests', 'response', 'jpeg_metadata_only'},
                 {'requests', 'response', 'observed_svg_width_px'}, {'requests', 'response', 'observed_svg_occurrences'}) or
                 not isinstance(batch['response'], str) or not isinstance(batch['requests'], list) or
                 not 1 <= len(batch['requests']) <= 50):
             raise ValueError('Invalid Figure source batch')
         if 'tiff_metadata_response' in batch and not allow_tiff_companion:
             raise ValueError('TIFF companion requires its qualified current producer')
+        jpeg_supplement = 'jpeg_metadata_only' in batch
+        if jpeg_supplement and (batch['jpeg_metadata_only'] is not True or not allow_compatible_epochs or
+                profile_kind not in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5)):
+            raise ValueError('JPEG supplement requires explicit qualified file replay')
         observation = batch.get('observed_svg_width_px')
         occurrences = batch.get('observed_svg_occurrences')
-        supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch
+        supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch or jpeg_supplement
         if 'observed_svg_occurrences' in batch:
             if (profile_kind not in (FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) or core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE) or
                     not isinstance(occurrences, list) or not 1 <= len(occurrences) <= 50 or
@@ -1114,9 +1138,10 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         for title in titles:
             if (not isinstance(title, str) or registry.file_title(title) != title or
                     any(char in title for char in '\t\r\n\0') or
-                    (title not in seen if supplemental else title in seen)):
+                    (title not in canonical_facts if jpeg_supplement else title not in seen if supplemental else title in seen)):
                 raise ValueError('Duplicate or noncanonical Figure source request')
-            seen.add(title)
+            if not jpeg_supplement:
+                seen.add(title)
         if len(metadata.query_url(wiki, titles, figure_axes=True)) > metadata.MAX_URL:
             raise ValueError('Figure source batch exceeds URL bound')
         if record_limit is not None and len(seen) > record_limit:
@@ -1188,9 +1213,32 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                     file_timestamp=row['file_timestamp'], original_width=row['width'],
                     original_height=row['height'], mime=mime, mediatype=row['mediatype'])
             facts = file_fact_identity(record)
-            previous = canonical_facts.setdefault(record['canonical_file'], facts)
+            previous = (canonical_facts.get(record['canonical_file']) if jpeg_supplement else
+                        canonical_facts.setdefault(record['canonical_file'], facts))
             if previous != facts:
                 raise ValueError('Conflicting canonical file facts across Figure batches')
+            if jpeg_supplement:
+                canonical = record['canonical_file']
+                proof = jpeg_evidence.get(canonical)
+                if (record['requested_file'] != canonical or record['state'] != 'eligible' or
+                        record['mime'] != 'image/jpeg' or record['mediatype'] != 'BITMAP' or
+                        proof is None or not proof['omitted'] or proof['veto'] or canonical in jpeg_supplemented or
+                        proof['repository'] != pages[row['response_title']]['imagerepository'] or
+                        type(info.get('size')) is not int or proof['size'] != info['size'] or
+                        not jpeg_unrotated_metadata(info)):
+                    raise ValueError('JPEG supplement does not complete exact omitted file metadata')
+                jpeg_supplemented.add(canonical)
+                continue
+            if not supplemental and record['mime'] == 'image/jpeg' and record['state'] == 'eligible':
+                repository, size = pages[row['response_title']]['imagerepository'], info.get('size')
+                if type(size) is not int or size < 0:
+                    raise ValueError('JPEG base file size is not a nonnegative integer')
+                canonical = record['canonical_file']
+                proof = jpeg_evidence.setdefault(canonical, dict(repository=repository, size=size, omitted=False, veto=False))
+                if proof['repository'] != repository or proof['size'] != size:
+                    raise ValueError('JPEG alias changed repository or file size')
+                proof['omitted'] |= 'metadata' not in info
+                proof['veto'] |= 'metadata' in info and not jpeg_unrotated_metadata(info)
             if occurrences is not None:
                 if record['requested_file'] != record['canonical_file']:
                     raise ValueError('SVG occurrence does not grant canonical alias fallback')
@@ -1843,6 +1891,105 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
     return manifest
 
 
+def complete_capture(root, *, manifest_sha256, wiki, date):
+    """Fully validate an owned unfinished stream, then publish only its marker."""
+    if not isinstance(manifest_sha256, str) or re.fullmatch('[0-9a-f]{64}', manifest_sha256) is None:
+        raise ValueError('Invalid incomplete Figure manifest identity')
+    root = Path(root).absolute()
+    if root.resolve() != root or root.is_symlink() or not root.is_dir():
+        raise ValueError('Unsafe incomplete Figure capture directory')
+    if root.lstat().st_uid != os.getuid():
+        raise ValueError('Incomplete Figure capture is not owned')
+    lock = root.with_name('.'+root.name+'.capture.lock')
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    marker_fd = None
+    retained_cache, inventory_cache = {}, {}
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
+            raise ValueError('Unsafe Figure capture lock')
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if os.path.lexists(root / COMPLETE):
+            raise ValueError('Figure completion requires an incomplete capture')
+        def output_state():
+            members, directories = capture_member_paths(root, include_markers=True)
+            return ({path: evidence.stamp(path) for path in members.values()},
+                    {path: (*stamp, path.lstat().st_uid, path.lstat().st_gid)
+                     for path, stamp in directories.items()})
+        before = output_state()
+        manifest_raw = small(root / MANIFEST)
+        declared = decode(manifest_raw)
+        if (digest(manifest_raw) != manifest_sha256 or not isinstance(declared, dict) or
+                declared.get('wiki') != wiki or declared.get('date') != date or
+                declared.get('capture_format') != FILES_STREAM_SCHEMA or
+                set(declared.get('outputs', {})) != {*ROLES, 'file-metadata'}):
+            raise ValueError('Incomplete Figure capture selection differs')
+        if output_state() != before or os.path.lexists(root / COMPLETE):
+            raise ValueError('Incomplete Figure capture changed before validation')
+        verified = verify(root, require_complete=False,
+                          retained_cache=retained_cache, inventory_cache=inventory_cache)
+        check_prefix_cache(retained_cache)
+        check_inventory_replay_cache(inventory_cache)
+        if (verified != declared or small(root / MANIFEST) != manifest_raw or
+                output_state() != before or os.path.lexists(root / COMPLETE)):
+            raise ValueError('Incomplete Figure capture changed during validation')
+        # No data or manifest is rewritten. Keep the newly created marker's FD
+        # until terminal guards pass so failure removes only our own insertion.
+        marker = encoded({'schema': SCHEMA, 'manifest_sha256': manifest_sha256})
+        marker_fd = os.open(root / COMPLETE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        pending = memoryview(marker)
+        while pending:
+            written = os.write(marker_fd, pending)
+            if written <= 0:
+                raise OSError('Incomplete Figure marker write')
+            pending = pending[written:]
+        def marker_identity():
+            held = os.fstat(marker_fd)
+            if (not stat.S_ISREG(held.st_mode) or held.st_nlink != 1 or
+                    held.st_uid != os.getuid() or stat.S_IMODE(held.st_mode) != 0o600 or
+                    held.st_size != len(marker)):
+                raise ValueError('Figure completion marker identity changed')
+            return (held.st_dev, held.st_ino, held.st_size, held.st_mtime_ns, held.st_ctime_ns)
+        marker_before = marker_identity()
+        os.fsync(marker_fd)
+        if marker_identity() != marker_before or evidence.stamp(root / COMPLETE) != marker_before:
+            raise ValueError('Figure completion marker identity changed')
+        published = output_state()
+        files_before, dirs_before = before
+        files_after, dirs_after = published
+        if (set(files_after) != set(files_before) | {root / COMPLETE} or
+                any(files_after[path] != value for path, value in files_before.items()) or
+                dirs_after.keys() != dirs_before.keys() or
+                any((dirs_after[path][:3] + dirs_after[path][5:] != value[:3] + value[5:])
+                    if path == root else dirs_after[path] != value
+                    for path, value in dirs_before.items()) or
+                small(root / MANIFEST) != manifest_raw or small(root / COMPLETE) != marker):
+            raise ValueError('Incomplete Figure capture changed during completion publication')
+        check_prefix_cache(retained_cache)
+        check_inventory_replay_cache(inventory_cache)
+        if (output_state() != published or marker_identity() != marker_before or
+                evidence.stamp(root / COMPLETE) != marker_before):
+            raise ValueError('Completed Figure capture changed before return')
+        return verified
+    except BaseException:
+        if marker_fd is not None:
+            held = os.fstat(marker_fd)
+            try:
+                current = (root / COMPLETE).lstat()
+                if ((held.st_dev, held.st_ino) == (current.st_dev, current.st_ino) and
+                        stat.S_ISREG(current.st_mode) and current.st_nlink == 1):
+                    (root / COMPLETE).unlink()
+            except FileNotFoundError:
+                pass
+        raise
+    finally:
+        retained_cache.clear()
+        inventory_cache.clear()
+        if marker_fd is not None:
+            os.close(marker_fd)
+        os.close(fd)
+
+
 def validate_snapshot(path, wiki=None, date=None):
     path = Path(path)
     if path.name not in (*ROLES.values(), PROVIDER):
@@ -2025,6 +2172,11 @@ def retained_metadata_batch(path, wiki, date, namespace):
     """Reuse an existing request/receipt record; rederive facts from its raw API bytes."""
     path = Path(path)
     record = decode(small(path))
+    if isinstance(record, dict) and ('jpeg_metadata_only' in record or record.get('schema') == 'wikidict.retained-jpeg-metadata-supplement.v1'):
+        if (record.get('schema') != 'wikidict.retained-jpeg-metadata-supplement.v1' or
+                record.get('jpeg_metadata_only') is not True or
+                'observed_svg_width_px' in record or 'observed_svg_occurrences' in record):
+            raise ValueError('Ambiguous retained JPEG supplemental authority')
     if isinstance(record, dict) and 'observed_svg_occurrences' in record:
         return retained_svg_occurrences(path, record, wiki, date, namespace)
     if (path.parent.is_symlink() or not isinstance(record, dict) or
@@ -2045,7 +2197,13 @@ def retained_metadata_batch(path, wiki, date, namespace):
         return retained_svg_observation(path.parent, record, wiki, date, namespace)
     names, response = metadata.verified_batch(path.parent, record.get('batch'), wiki,
                                               record['artifacts'], figure_axes=True)
-    return {'requests': names, 'response': response.decode('utf-8')}
+    batch = {'requests': names, 'response': response.decode('utf-8')}
+    if 'jpeg_metadata_only' in record:
+        if (record.get('schema') != 'wikidict.retained-jpeg-metadata-supplement.v1' or
+                record['jpeg_metadata_only'] is not True or 'observed_svg_width_px' in record):
+            raise ValueError('Invalid explicit JPEG supplemental record')
+        batch['jpeg_metadata_only'] = True
+    return batch
 
 
 def retained_svg_occurrences(path, record, wiki, date, namespace):
@@ -2246,7 +2404,7 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
         path = Path(source.get('path', ''))
         if not path.is_absolute() or path.resolve().is_relative_to(root.resolve()):
             raise ValueError('Complete Figure source aliases output')
-        complete = read_complete_capture(path, prefix_cache, inventory_cache=inventory_cache)
+        complete = read_complete_capture(path, prefix_cache, inventory_cache=inventory_cache, include_document=False)
         if (complete['manifest']['wiki'] != wiki or complete['manifest']['date'] != date or
                 complete['namespace'] != namespace or complete_stream_batch(source, prefix_cache) != batch):
             raise ValueError('Retained complete Figure batch identity differs')
@@ -2456,6 +2614,9 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     query_titles = provider_query_titles(root, query_inputs, namespace, wiki, date)
     coverage = file_coverage(projection, inventory, query_titles)
     verify_provider_stream(root / PROVIDER, projection)
+    # All record consumers have finished. Keep only header/scalar authority
+    # while replaying nested parents; their records must not overlap this graph.
+    del projection['records']
     http_files, prefix_cache = set(), {} if retained_cache is None else retained_cache
     archived, planned = {}, []
     plan = inventory_document(root / PLAN)
@@ -2545,7 +2706,7 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         if (not isinstance(reference, dict) or set(reference) != {'kind', 'path', 'sha256'} or
                 reference['kind'] != 'complete-stream'):
             raise ValueError('Invalid complete Figure source reference')
-        complete = read_complete_capture(Path(reference['path']), prefix_cache, inventory_cache=inventory_cache)
+        complete = read_complete_capture(Path(reference['path']), prefix_cache, inventory_cache=inventory_cache, include_document=False)
         if (complete['manifest_sha256'] != reference['sha256'] or
                 complete['inventory'] != inventory or
                 query_inputs[:len(complete['query_inputs'])] != complete['query_inputs'] or
@@ -2908,8 +3069,10 @@ def complete_capture_directory_stamp(root):
     return (value.st_dev, value.st_ino, value.st_mode, value.st_mtime_ns, value.st_ctime_ns)
 
 
-def read_complete_capture(path, cache=None, *, inventory_cache=None):
-    """Replay one immutable published stream; retain offsets, never all responses."""
+def read_complete_capture(path, cache=None, *, inventory_cache=None, include_document=True):
+    """Replay a published stream; selection callers may also request its facts."""
+    if type(include_document) is not bool:
+        raise ValueError('Invalid complete Figure document selection')
     path = Path(path)
     if (not path.is_absolute() or path.resolve() != path or path.name != MANIFEST or
             path.is_symlink() or path.parent.is_symlink()):
@@ -2928,6 +3091,37 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None):
                     for p, before in value.get('member_directories', {}).items()) or
                 any(evidence.stamp(p) != value['stamps'][p] for p in selected)):
             raise ValueError('Complete Figure source changed')
+        if include_document and 'document' not in value:
+            # A validation-only reader may have populated this invocation's
+            # cache first. Materialize selection facts only under the same full
+            # member/context fences and the already verified projection bytes.
+            try:
+                check_prefix_cache(cache)
+                # Selection can follow a validation-only call made without a
+                # shared SQL proof. Use the ordinary inventory validator here:
+                # it replays cold when absent and guards matching local proof.
+                selection_inventory = {} if inventory_cache is None else inventory_cache
+                verify_inventory(value['inventory'], value['namespace'],
+                                 value['manifest']['wiki'], value['manifest']['date'],
+                                 inventory_cache=selection_inventory)
+                identity = {}
+                values = stream_values(value['root'] / ROLES['figure-sizing'], FILES_STREAM_SCHEMA,
+                                       identity_out=identity)
+                try:
+                    header = next(values)
+                    document = dict(header, records=list(values))
+                finally:
+                    values.close()
+                if (header != value['projection_header'] or
+                        identity != {'size': value['stamps'][value['root'] / ROLES['figure-sizing']][2],
+                                     'sha256': value['manifest']['outputs']['figure-sizing']}):
+                    raise ValueError('Complete Figure selection document changed')
+                check_prefix_cache(cache)
+                check_inventory_replay_cache(selection_inventory)
+                value['document'] = document
+            except BaseException:
+                cache.pop(key, None)
+                raise
         return value
     root = path.parent
     directory_stamp = complete_capture_directory_stamp(root)
@@ -2942,8 +3136,11 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None):
             raise ValueError('Reuse requires a complete shared Figure stream')
         namespace = small(root / (site_info.PREFIX + 'namespace-registry.tsv'))
         values = stream_values(root / ROLES['figure-sizing'], FILES_STREAM_SCHEMA)
-        header = next(values)
-        document = dict(header, records=list(values))
+        try:
+            header = next(values)
+            document = dict(header, records=list(values)) if include_document else None
+        finally:
+            values.close()
         offsets = []
         raw_path = root / ROLES['figure-sizing-raw']
         with raw_path.open('rb') as source:
@@ -2969,12 +3166,14 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None):
                 complete_capture_directory_stamp(root) != directory_stamp):
             raise ValueError('Complete Figure source changed during replay')
         value = {'root': root, 'manifest': manifest, 'manifest_sha256': digest(manifest_raw),
-            'namespace': namespace, 'document': document, 'offsets': offsets,
+            'namespace': namespace, 'projection_header': header, 'offsets': offsets,
             'raw_path': raw_path, 'raw_encoding': encoding, 'stamps': before, 'directory_stamp': directory_stamp,
             'member_directories': member_directories,
             'inventory': inventory_document(root / INVENTORY),
             'query_inputs': decode(small(root / QUERY_INPUTS)),
             'defaults': inventory_document(root / PLAN)['defaults']}
+        if include_document:
+            value['document'] = document
         cache[key] = value
         check_prefix_cache(cache)
         return value
@@ -2987,7 +3186,7 @@ def complete_stream_batch(reference, cache):
     if (not isinstance(reference, dict) or set(reference) != {'kind', 'path', 'sha256', 'batch'} or
             reference['kind'] != 'complete-stream' or type(reference['batch']) is not int):
         raise ValueError('Invalid complete Figure batch reference')
-    complete = read_complete_capture(Path(reference['path']), cache)
+    complete = read_complete_capture(Path(reference['path']), cache, include_document=False)
     number = reference['batch']
     if complete['manifest_sha256'] != reference['sha256'] or not 0 <= number < len(complete['offsets']):
         raise ValueError('Complete Figure batch identity changed')
@@ -3539,7 +3738,11 @@ def selected_inventory(args, namespace, *, inventory_cache=None):
     return inventory
 
 
-def capture_files(args, transport=None, sleep=time.sleep):
+def capture_files(args, transport=None, sleep=time.sleep, *, target_contract=REPLAY_CONTRACT,
+                  _after_capture=None):
+    """Capture or append with an explicit v4/v6 policy; ordinary callers keep v6."""
+    if target_contract not in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT):
+        raise ValueError('Unsupported Figure capture replay contract')
     root = Path(args.output)
     for source in getattr(args, 'reuse', []):
         if root.resolve().is_relative_to(Path(source).resolve()):
@@ -3558,18 +3761,40 @@ def capture_files(args, transport=None, sleep=time.sleep):
                 raise ValueError('Figure capture cannot modify its closed prefix source')
     root.parent.mkdir(parents=True, exist_ok=True)
     lock = root.with_name('.'+root.name+'.capture.lock')
+    verification_caches = None if _after_capture is None else {'retained': {}, 'inventory': {}}
     fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
             raise ValueError('Unsafe Figure capture lock')
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return _capture_files(args, transport=transport, sleep=sleep)
+        result = _capture_files(args, transport=transport, sleep=sleep, target_contract=target_contract,
+                                _verification_caches=verification_caches)
+        if _after_capture is not None:
+            # The maintained caller completes ordinary tuple validation while
+            # this lock and these guarded ancestor proofs still belong to us.
+            verification_caches['output_check']()
+            check_prefix_cache(verification_caches['retained'])
+            check_inventory_replay_cache(verification_caches['inventory'])
+            _after_capture(root, retained_cache=verification_caches['retained'],
+                           inventory_cache=verification_caches['inventory'])
+            check_prefix_cache(verification_caches['retained'])
+            check_inventory_replay_cache(verification_caches['inventory'])
+            verification_caches['output_check']()
+        return result
     finally:
+        if verification_caches is not None:
+            verification_caches['retained'].clear()
+            verification_caches['inventory'].clear()
+            verification_caches.clear()
         os.close(fd)
 
 
-def _capture_files(args, transport=None, sleep=time.sleep):
+def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=REPLAY_CONTRACT,
+                   _verification_caches=None):
+    replay_policy = dict(allow_tiff_companion=True, allow_compatible_epochs=True,
+                         allow_decimal_tiff_axes=True,
+                         allow_default_tiff_page=target_contract == REPLAY_CONTRACT)
     mode = getattr(args, 'metadata_mode', 'full')
     if mode not in ('full', 'lean-tiff-v1'):
         raise ValueError('Invalid Figure metadata acquisition mode')
@@ -3601,7 +3826,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
     if any(digest(saved[name]) != expected for name, expected in artifacts.items()):
         raise ValueError('Figure defaults changed before capture')
     namespace = saved[site_info.PREFIX + 'namespace-registry.tsv']
-    inventory_cache = {}
+    inventory_cache = {} if _verification_caches is None else _verification_caches['inventory']
     inventory = selected_inventory(args, namespace, inventory_cache=inventory_cache)
     log_paths = [Path(path) for path in getattr(args, 'log', [])]
     if len(log_paths) > 1024 or len(set(log_paths)) != len(log_paths):
@@ -3625,7 +3850,8 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                 raise ValueError('Figure resume query bytes differ')
     query_titles = provider_query_titles(root, query_inputs, namespace, args.wiki, args.date)
     desired, used = set(inventory['titles']) | query_titles, set()
-    retained, observed, prefix_cache, light_titles = [], [], {}, set()
+    prefix_cache = {} if _verification_caches is None else _verification_caches['retained']
+    retained, observed, light_titles = [], [], set()
     closed_prefixes = []
     complete_captures = []
     def retain_complete(path):
@@ -3682,8 +3908,9 @@ def _capture_files(args, transport=None, sleep=time.sleep):
             continue
         batch = retained_metadata_batch(path, args.wiki, args.date, namespace)
         names = set(batch['requests'])
-        supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch
-        if not names <= desired or (names & used and not supplemental):
+        jpeg_supplement = 'jpeg_metadata_only' in batch
+        supplemental = 'observed_svg_width_px' in batch or 'observed_svg_occurrences' in batch or jpeg_supplement
+        if (not names <= desired and not jpeg_supplement) or (names & used and not supplemental):
             raise ValueError('Retained file batch has duplicate or unselected names')
         source = {'kind': 'retained-request', 'path': str(Path(path).resolve()), 'sha256': digest(raw)}
         (observed if supplemental else retained).append(source)
@@ -3715,7 +3942,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
     if max(raw_bound, projection_bound) >= 2**64:
         raise ValueError('Figure stream plan byte count overflow')
     plan = {'schema': 'wikidict.figure-capture-plan.v1', 'wiki': args.wiki, 'date': args.date,
-            'replay_contract': REPLAY_CONTRACT,
+            'replay_contract': target_contract,
             'source': capture_source(), 'namespace_registry_sha256': digest(namespace),
             'inventory_sha256': digest(encoded(inventory)), 'defaults': artifacts,
             'query_inputs': query_inputs, 'retained': retained, 'observed': observed,
@@ -3778,7 +4005,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                     followup = state.get('tiff', {}).get('accepted')
                     if needed and followup is None:
                         incomplete.append(file_records(iter((batch,)), namespace, args.wiki, args.date,
-                            site_raw, has_batches=True, record_limit=50, profile_kind=profile_kind, allow_compatible_epochs=True)['records'])
+                            site_raw, has_batches=True, record_limit=50, profile_kind=profile_kind, **replay_policy)['records'])
                         continue
                     if followup is not None:
                         _, raw = metadata.verified_batch(root, followup, args.wiki,
@@ -3786,7 +4013,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                         batch['tiff_metadata_response'] = raw.decode('utf-8')
                 yield batch
         known = file_records(known_batches(), namespace, args.wiki, args.date, site_raw,
-                             has_batches=True, record_limit=len(desired), profile_kind=profile_kind, allow_compatible_epochs=True)
+                             has_batches=True, record_limit=len(desired), profile_kind=profile_kind, **replay_policy)
         if incomplete:
             canonical, requested = {}, {}
             for row in itertools.chain(known['records'], *(rows for rows in incomplete)):
@@ -4017,7 +4244,7 @@ def _capture_files(args, transport=None, sleep=time.sleep):
         first = next(batches, None)
         document = file_records(itertools.chain(() if first is None else (first,), batches),
             namespace, args.wiki, args.date, site_raw, has_batches=bool(base_count), record_limit=len(desired),
-            profile_kind=profile_kind, allow_compatible_epochs=True)
+            profile_kind=profile_kind, **replay_policy)
         if slots is not None and (error := slots.close()) is not None:
             raise error
         if not figure_source_compatible(document['core_revision'], decode(saved[site_info.SNAPSHOT])['query']['general'].get('git-hash')):
@@ -4025,12 +4252,18 @@ def _capture_files(args, transport=None, sleep=time.sleep):
         check_prefix_cache(prefix_cache)
         raw_id = evidence.fingerprint(raw_path)
         document.update(schema=FILES_STREAM_SCHEMA, records_count=len(document['records']),
-            raw_bytes=raw_id['size'], raw_sha256=raw_id['sha256'], generator_sha256=producer()['generator_sha256'], replay_contract=REPLAY_CONTRACT)
+            raw_bytes=raw_id['size'], raw_sha256=raw_id['sha256'], generator_sha256=producer()['generator_sha256'], replay_contract=target_contract)
         coverage = file_coverage(document, inventory, query_titles)
         write_projection_stream(root / ROLES['figure-sizing'], document)
         with (root / PROVIDER).open('xb') as output:
             for chunk in provider_chunks(document):
                 output.write(chunk)
+        # Selection and both serializations are finished. The independent final
+        # replay needs ancestor proofs, not either retained record graph.
+        del document
+        for cache_key, complete in prefix_cache.items():
+            if type(cache_key) is tuple and len(cache_key) == 2 and cache_key[0] == 'complete-stream':
+                complete.pop('document', None)
         manifest = {'schema': SCHEMA, 'capture_format': FILES_STREAM_SCHEMA,
             **producer(), 'wiki': args.wiki, 'date': args.date,
             'namespace_registry_sha256': defaults['namespace_registry_sha256'], 'coverage': coverage,
@@ -4040,8 +4273,35 @@ def _capture_files(args, transport=None, sleep=time.sleep):
                                   for row in inventory['sources']],
             'outputs': {role: evidence.fingerprint(root / name)['sha256'] for role, name in output_roles(root).items()}}
         evidence.document(root / MANIFEST, manifest)
+        if _verification_caches is not None:
+            def output_state():
+                members, directories = capture_member_paths(root, include_markers=True)
+                return ({path: evidence.stamp(path) for path in members.values()},
+                        {path: (*stamp, path.stat().st_uid, path.stat().st_gid)
+                         for path, stamp in directories.items()})
+            before_output = output_state()
+            if root / COMPLETE in before_output[0]:
+                raise ValueError('Figure capture completion appeared before validation')
         verify(root, require_complete=False, retained_cache=prefix_cache, inventory_cache=inventory_cache)
+        if _verification_caches is not None and output_state() != before_output:
+            raise ValueError('Figure capture output changed during final validation')
         evidence.document(root / COMPLETE, {'schema': SCHEMA, 'manifest_sha256': digest(small(root / MANIFEST))})
+        if _verification_caches is not None:
+            published_output = output_state()
+            files_before, dirs_before = before_output
+            files_after, dirs_after = published_output
+            # Only our COMPLETE insertion may advance the root's directory times.
+            if (set(files_after) != set(files_before) | {root / COMPLETE} or
+                    any(files_after[path] != value for path, value in files_before.items()) or
+                    dirs_after.keys() != dirs_before.keys() or
+                    any((dirs_after[path][:3] + dirs_after[path][5:] != value[:3] + value[5:])
+                        if path == root else dirs_after[path] != value
+                        for path, value in dirs_before.items())):
+                raise ValueError('Figure capture output changed during completion publication')
+            def check_output():
+                if output_state() != published_output:
+                    raise ValueError('Completed Figure capture output changed')
+            _verification_caches['output_check'] = check_output
         return manifest
     except BaseException as original:
         if slots is not None:
@@ -4131,11 +4391,12 @@ def select_reuse_batches(paths, wiki, date, namespace):
             batch = retained_metadata_batch(path, record_wiki, record_date, own_namespace)
             plain = {'requests': batch['requests'], 'response': batch['response']}
             height_supplement = 'observed_svg_occurrences' in batch
+            jpeg_supplement = 'jpeg_metadata_only' in batch
             result = file_records((plain, batch) if height_supplement else (plain,), own_namespace, record_wiki, record_date,
                                   batch['response'].encode(), has_batches=True, record_limit=50,
-                                  profile_kind=FIGURE_PROFILE_V4 if height_supplement else FIGURE_PROFILE_V3)
+                                  profile_kind=FIGURE_PROFILE_V4 if height_supplement or jpeg_supplement else FIGURE_PROFILE_V3, allow_compatible_epochs=jpeg_supplement)
             width_supplement = 'observed_svg_width_px' in batch
-            supplement = width_supplement or height_supplement
+            supplement = width_supplement or height_supplement or jpeg_supplement
         group = (record_wiki, record_date)
         if cores.setdefault(group, result['core_revision']) != result['core_revision']:
             raise ValueError('Explicit Figure batches mix source versions')
@@ -5051,14 +5312,19 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
                       target_profile=None, observations=None):
     """Advance replay or explicitly select V5 without copying immutable members.
 
+    Explicit replay.v6 advances v3/v4 with the same source profile; V5 profile
+    advancement remains a separate replay.v4 operation.
+    A materialized-origin capture may advance v3 to v4 without changing any
+    original origin plan, receipt, frame map or semantic replay context.
     The original remains byte/mode/inode exact. Hard links intentionally change
     source nlink/ctime; record each transition, then fence the resulting identity
     through the unchanged full output verifier. No caller supplies trusted facts.
     An error preserves the incomplete output and its partial link observations.
     """
-    if target_contract != REPLAY_CONTRACT_V4:
+    if target_contract not in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT):
         raise ValueError('Unsupported offline Figure reprojection contract')
-    if target_profile not in (None, FIGURE_PROFILE_V5):
+    if (target_profile not in (None, FIGURE_PROFILE_V5) or
+            target_profile is not None and target_contract != REPLAY_CONTRACT_V4):
         raise ValueError('Unsupported offline Figure target profile')
     if observations is None:
         observations = {}
@@ -5088,11 +5354,15 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
     if len({value[:2] for value in original.values()}) != len(original):
         raise ValueError('Figure reprojection source has aliased internal member identities')
     expected_source = dict(original)
-    output_identity = None
+    output_directories = {}
+    def directory_identity(path):
+        value = path.lstat()
+        if (not stat.S_ISDIR(value.st_mode) or value.st_uid != os.geteuid() or
+                path.resolve() != path):
+            raise ValueError('Figure reprojection output directory identity differs')
+        return (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid)
     def check_source():
-        if output_identity is not None and (output.resolve() != output or
-                complete_capture_directory_stamp(output)[:3] != output_identity or
-                output.stat().st_uid != os.geteuid()):
+        if any(directory_identity(path) != expected for path, expected in output_directories.items()):
             raise ValueError('Figure reprojection output directory changed')
         after, identities, directories = snapshot(source)
         if after != members or identities != expected_source or directories != source_directories:
@@ -5115,15 +5385,22 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
     header = stream_decode(line)
     validate_stream_header(header, FILES_STREAM_SCHEMA, original[ROLES['figure-sizing']][5])
     original_profile = (header['source_profile'] or {}).get('kind', FIGURE_PROFILE_V3)
-    if target_profile is None:
+    if target_contract == REPLAY_CONTRACT:
+        if header.get('replay_contract') not in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4):
+            raise ValueError('Explicit replay.v6 requires an existing replay.v3 or replay.v4 capture')
+    elif target_profile is None:
         if header.get('replay_contract') not in (None, REPLAY_CONTRACT_V1, REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3):
             raise ValueError('Figure reprojection must advance a pre-v4 semantic contract')
     elif original_profile != FIGURE_PROFILE_V4 or header.get('replay_contract') != REPLAY_CONTRACT_V4:
         raise ValueError('Explicit V5 reprojection requires an existing V4 profile and replay.v4 capture')
     selected_profile = original_profile if target_profile is None else target_profile
     plan = inventory_document(source / PLAN)
-    if type(plan) is not dict or plan.get('metadata_mode', 'full') != 'full':
-        raise ValueError('Figure reprojection requires an ordinary full-metadata plan')
+    if type(plan) is not dict or plan.get('metadata_mode', 'full') not in ('full', MATERIALIZED_HTTP_MODE):
+        raise ValueError('Figure reprojection requires a full or materialized-origin plan')
+    if plan.get('metadata_mode') == MATERIALIZED_HTTP_MODE and (
+            target_contract != REPLAY_CONTRACT_V4 or target_profile is not None or
+            header.get('replay_contract') != REPLAY_CONTRACT_V3):
+        raise ValueError('Materialized-origin reprojection requires replay.v3 to replay.v4 without a profile change')
     new_plan = dict(plan, replay_contract=target_contract)
     if target_profile is not None:
         new_plan['figure_profile'] = target_profile
@@ -5137,10 +5414,12 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
     if not owned <= set(members):
         raise ValueError('Figure reprojection lacks its plan or complete source members')
     output.mkdir(mode=0o700)
-    output_identity = complete_capture_directory_stamp(output)[:3]
+    output_directories[output] = directory_identity(output)
     for directory in sorted(source_directories, key=str):
         if directory != source:
-            (output / directory.relative_to(source)).mkdir(mode=0o700)
+            destination_directory = output / directory.relative_to(source)
+            destination_directory.mkdir(mode=0o700)
+            output_directories[destination_directory] = directory_identity(destination_directory)
     link_started = time.monotonic()
     for name, path in sorted(members.items()):
         if name in owned:
@@ -5165,7 +5444,7 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
         manifest['wiki'], manifest['date'], site,
         profile_kind=selected_profile,
         allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True,
-        allow_decimal_tiff_axes=True, allow_default_tiff_page=False)
+        allow_decimal_tiff_axes=True, allow_default_tiff_page=target_contract == REPLAY_CONTRACT)
     document['replay_contract'] = target_contract
     new_header = {key: value for key, value in document.items() if key != 'records'}
     expected_header = dict(header)
@@ -5229,6 +5508,10 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     check = commands.add_parser('verify')
     check.add_argument('output', type=Path)
+    complete = commands.add_parser('complete-capture', help='fully verify an owned incomplete stream and insert only its completion marker')
+    complete.add_argument('output', type=Path)
+    for name in ('manifest-sha256', 'wiki', 'date'):
+        complete.add_argument('--'+name, required=True)
     materialize = commands.add_parser('materialize-complete', help='offline self-contained materialization of an authenticated complete stream')
     materialize.add_argument('--source', type=Path, required=True)
     materialize.add_argument('--output', type=Path, required=True)
@@ -5262,7 +5545,9 @@ def main():
     args = parser.parse_args()
     result = (stage(args) if args.command == 'stage' else capture_files(args) if args.command == 'capture-files' else
               materialize_complete_capture(args.source,args.output,max_batches=args.max_batches,max_input_bytes=args.max_input_bytes)
-              if args.command == 'materialize-complete' else verify(args.output))
+              if args.command == 'materialize-complete' else
+              complete_capture(args.output, manifest_sha256=args.manifest_sha256, wiki=args.wiki, date=args.date)
+              if args.command == 'complete-capture' else verify(args.output))
     print(encoded({key: result[key] for key in ('schema', 'wiki', 'date', 'coverage')}).decode(), end='')
 
 

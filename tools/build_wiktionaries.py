@@ -1516,6 +1516,43 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
 
 
 
+def capture_figure_files(args, transport=None, sleep=time.sleep, *, target_contract=None):
+    """Finish capture and normal tuple replay inside one guarded proof lifetime."""
+    import prepare_figure_metadata as helper
+    completed = None
+
+    def validate(root, *, retained_cache, inventory_cache):
+        nonlocal completed
+        paths = {role: root / name for role, name in helper.output_roles(root).items()}
+        guard = figure_tuple_guard(helper, root)
+        # Unknown readsets keep the ordinary independent replay. No result is
+        # published unless every source identity is covered by the normal guard.
+        kwargs = {} if guard is None else {'retained_cache': retained_cache,
+                                          'inventory_cache': inventory_cache}
+        result = helper.verify_tuple(paths, args.wiki, args.date, **kwargs)
+        if guard is not None:
+            if figure_tuple_guard(helper, root, authenticated=guard) != guard:
+                raise ValueError('Figure capture inputs changed during tuple validation')
+            key = tuple(sorted((role, str(Path(path).absolute())) for role, path in paths.items()))
+            completed = (key, guard, json.dumps(result, sort_keys=True, separators=(',', ':')))
+
+    options = {} if target_contract is None else {'target_contract': target_contract}
+    manifest = helper.capture_files(args, transport=transport, sleep=sleep,
+                                    _after_capture=validate, **options)
+    # Capture rechecks ancestors and SQL after the callback, clears its caches,
+    # and releases its lock before returning. Publish no earlier than that.
+    if completed is not None:
+        key, guard, result = completed
+        if figure_tuple_guard(helper, Path(args.output), authenticated=guard) != guard:
+            raise ValueError('Figure capture inputs changed before tuple publication')
+        with _FIGURE_TUPLE_REPLAY_LOCK:
+            if len(_FIGURE_TUPLE_REPLAYS) >= 32:
+                _FIGURE_TUPLE_REPLAYS.clear()
+            _FIGURE_TUPLE_REPLAYS[key] = (guard, result)
+    return manifest
+
+
+
 def validated_figure_tuple(snapshots, edition=None, date=None, *, parent_snapshots=None):
     paths={name:Path(path) for name,path in (snapshots or {}).items() if name in FIGURE_SNAPSHOT_FILES}
     if not paths:return {}
