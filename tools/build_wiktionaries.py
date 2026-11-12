@@ -208,7 +208,7 @@ class PreparedSourceGeneration:
                 raise ValueError('Prepared worker library resolution changed')
         for item in unicode['libraries']:
             self.require_library(item['path'],item['sha256'],force=force)
-        if read_small_json(self.workspace / 'state.json') != self.record['workspace_state']:
+        if read_build_envelope(self.workspace / 'state.json') != self.record['workspace_state']:
             raise ValueError('Prepared generation shard state changed')
         return seal
 
@@ -221,7 +221,7 @@ class PreparedSourceGeneration:
         self.require_unchanged(force=True)
         if (not (staging / VERIFIED_MARKER).is_file()
                 or (staging / VERIFIED_MARKER).read_text() != VERIFIED_CONTENT
-                or read_small_json(staging / BUILD_IDENTITY_NAME) != self.identity):
+                or read_build_envelope(staging / BUILD_IDENTITY_NAME) != self.identity):
             raise ValueError('Prepared generation retirement lacks verified original staging')
         # A retired scope authorizes only Python publication finalization. It can
         # never reopen tools, prepare a worker, or consume another shard prefix.
@@ -444,7 +444,7 @@ class PreparedSourceRequest:
         record=dict(schema='wikidict.prepared-source-generation.v1',source=cfg['source'],
             build_identity=identity,now_unix=now_unix,context=self.start['context'],
             workspace=str(workspace),dump=str(dump),expander=str(root),
-            workspace_state=read_small_json(workspace/'state.json'),python=python,tools=bound_tools,
+            workspace_state=read_build_envelope(workspace/'state.json'),python=python,tools=bound_tools,
             seal_sha256=seal_reference['sha256'],seal_archive=archive_ref,
             prepared_by_start=self.reference,
             tracked_process=prepared_metadata(prepared_metadata_ref(self.folder/'launch.json'))['identity'])
@@ -789,6 +789,27 @@ def read_small_json(path, max_bytes=64*1024):
         raw=source.read(max_bytes+1)
     if len(raw)>max_bytes: raise ValueError(f'Oversized snapshot provenance: {path}')
     return json.loads(raw)
+
+
+# State and build identities retain full native role/source authority. Use the
+# existing prepared-seal metadata ceiling, not the small snapshot bound.
+BUILD_ENVELOPE_MAX_BYTES = 64 * 1024 * 1024
+
+
+def read_build_envelope(path):
+    value = read_small_json(path, BUILD_ENVELOPE_MAX_BYTES)
+    if not isinstance(value, dict):
+        raise ValueError(f'Invalid build envelope: {path}')
+    return value
+
+
+def build_envelope_text(value):
+    if not isinstance(value, dict):
+        raise ValueError('Invalid build envelope')
+    text = json.dumps(value, sort_keys=True) + '\n'
+    if len(text.encode('utf-8')) > BUILD_ENVELOPE_MAX_BYTES:
+        raise ValueError('Build envelope exceeds prepared seal metadata bound')
+    return text
 
 
 def read_snapshot_sha(path):
@@ -2290,7 +2311,7 @@ def persist_build_identity(staging, identity):
     require_build_source(identity)
     path=staging/BUILD_IDENTITY_NAME
     temporary=path.with_suffix('.part')
-    temporary.write_text(json.dumps(identity,sort_keys=True)+'\n')
+    temporary.write_text(build_envelope_text(identity))
     os.replace(temporary,path)
 
 
@@ -2786,7 +2807,7 @@ def cleanup_shard_workspace(workspace):
     if not workspace.exists(): return
     state_path=workspace/'state.json'
     if state_path.is_symlink(): raise ValueError(f'Unsafe shard state: {state_path}')
-    state=json.loads(state_path.read_text()) if state_path.is_file() else {}
+    state=read_build_envelope(state_path) if state_path.is_file() else {}
     if isinstance(state,dict) and state.get('raw_shards_path') is not None:
         raw=external_raw_shards(workspace,state['raw_shards_path'])
         if raw.exists():
@@ -2829,7 +2850,7 @@ def bind_native_generation(workspace, dump, build_identity, *, updating=False):
     if cache.frozen_runtime_context(root, dump, digest, **validation) is None:
         raise ValueError('Ordinary native generation did not produce its requested seal')
     state_path = workspace / 'state.json'
-    state = read_small_json(state_path)
+    state = read_build_envelope(state_path)
     state['native_generation'] = dict(seal_sha256=digest, dump=str(dump),
                                     build_inputs=json.loads(json.dumps(build_identity)))
     # The existing state publication is the last authority before readiness.
@@ -2838,7 +2859,7 @@ def bind_native_generation(workspace, dump, build_identity, *, updating=False):
         raise ValueError('Unexpected native generation state transaction')
     try:
         with temporary.open('x') as output:
-            output.write(json.dumps(state, sort_keys=True) + '\n')
+            output.write(build_envelope_text(state))
         os.replace(temporary, state_path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -2870,7 +2891,7 @@ def sealed_recovery_adopted(workspace, proof, build_identity):
     expected['native_generation'] = dict(seal_sha256=proof['seal']['sha256'], dump=proof['dump'],
                                          build_inputs=proof['current_build_identity'])
     return (proof['current_build_identity'] == build_identity and state_path.is_file()
-            and not state_path.is_symlink() and read_small_json(state_path) == expected)
+            and not state_path.is_symlink() and read_build_envelope(state_path) == expected)
 
 
 def recover_sealed_workspace(workspace, expected, now_unix, build_identity, dump, reference, native_roles):
@@ -2884,7 +2905,7 @@ def recover_sealed_workspace(workspace, expected, now_unix, build_identity, dump
         raise ValueError('Sealed recovery original attempt is not closed')
     validate_now_unix(original.get('now_unix'))
     if (Path(proof['original_state']['path']) == state_path or
-            read_small_json(state_path) != original or proof['workspace'] != str(workspace) or
+            read_build_envelope(state_path) != original or proof['workspace'] != str(workspace) or
             proof['current_state'] != expected or proof['current_build_identity'] != build_identity or
             proof['dump'] != str(dump) or now_unix not in (None, original.get('now_unix'))):
         raise ValueError('Sealed recovery differs from selected state, inputs or source transition')
@@ -2945,7 +2966,7 @@ def recover_sealed_workspace(workspace, expected, now_unix, build_identity, dump
     try:
         with temporary.open('x') as stream:
             created=True
-            json.dump(state, stream, sort_keys=True);stream.write('\n')
+            stream.write(build_envelope_text(state))
         os.replace(temporary, state_path)
     finally:
         if created:temporary.unlink(missing_ok=True)
@@ -3075,7 +3096,7 @@ def writer_figure_adopt_workspace(workspace, expected, now_unix, build_identity,
     desired['native_generation'] = dict(binding, writer_figure_transition=reference)
     if now_unix not in (None, original['now_unix']):
         raise ValueError('Writer Figure transition changed build time')
-    current = read_small_json(state_path)
+    current = read_build_envelope(state_path)
     if current == desired:
         return current['now_unix']
     if current != original:
@@ -3158,7 +3179,7 @@ def writer_figure_adopt_workspace(workspace, expected, now_unix, build_identity,
     try:
         with temporary.open('x') as stream:
             created = True
-            json.dump(desired, stream, sort_keys=True); stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
+            stream.write(build_envelope_text(desired)); stream.flush(); os.fsync(stream.fileno())
         os.replace(temporary, state_path)
         descriptor = os.open(workspace, os.O_RDONLY | os.O_DIRECTORY)
         try: os.fsync(descriptor)
@@ -3332,7 +3353,7 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
         raise ValueError('Initial sealed workspace changed during adoption')
     native_roles.initial_sealed_context = (root, Path(dump), seal_reference['sha256'])
     if os.path.lexists(state_path):
-        state = read_small_json(state_path)
+        state = read_build_envelope(state_path)
         epoch = state.get('now_unix')
         validate_now_unix(epoch)
         if (epoch is None or now_unix not in (None, epoch)
@@ -3351,7 +3372,7 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
         raise ValueError('Unexpected initial sealed state transaction')
     try:
         with temporary.open('x') as stream:
-            json.dump(state, stream, sort_keys=True); stream.write('\n')
+            stream.write(build_envelope_text(state))
         # Publish without replacing a concurrent state or following a symlink.
         os.link(temporary, state_path)
     finally:
@@ -3391,7 +3412,7 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
     state_path=workspace/'state.json'
     if state_path.is_symlink(): raise ValueError(f'Unsafe shard state: {state_path}')
     if state_path.is_file():
-        try: existing=json.loads(state_path.read_text())
+        try: existing=read_build_envelope(state_path)
         except (OSError,json.JSONDecodeError): existing=None
         if isinstance(existing,dict) and existing.get('version')==2 and expected.get('version')==SHARD_STATE_VERSION:
             raise ValueError('Legacy shard source identity requires a new workspace; existing output preserved')
@@ -3452,7 +3473,7 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
     now_unix=now_unix if now_unix is not None else int(time.time())
     state=dict(expected,now_unix=now_unix)
     temp=state_path.with_suffix('.part')
-    temp.write_text(json.dumps(state,sort_keys=True)+'\n')
+    temp.write_text(build_envelope_text(state))
     os.replace(temp,state_path)
     return now_unix
 
@@ -3494,7 +3515,7 @@ def selected_staged_input_root(items, root, output, raw_shard_root=None, extract
     state=parent/(date+'.shards')/'state.json'
     if state.is_symlink():raise ValueError('Unsafe recorded shard owner')
     if state.is_file():
-        recorded=read_small_json(state)
+        recorded=read_build_envelope(state)
         raw=recorded.get('raw_shards_path') if isinstance(recorded,dict) else None
         if raw is not None:
             if not isinstance(raw,str):raise ValueError('Invalid recorded raw shard owner')
@@ -4400,7 +4421,7 @@ def cleanup_failed_attempt_shards(cfg, edition, folder, attempt):
     state_path=workspace/'state.json'
     if state_path.is_symlink() or not state_path.is_file():
         return dict(status='retained-no-workspace-owner',shards=[])
-    state=read_small_json(state_path)
+    state=read_build_envelope(state_path)
     if not isinstance(state,dict): raise ValueError('Invalid failed-attempt workspace owner')
     expected=Path(cfg['raw_shard_root']).absolute()/edition/(cfg['date']+'.raw-shards')
     if state.get('raw_shards_path')!=str(expected): raise ValueError('Failed-attempt raw shard owner differs')
@@ -4665,7 +4686,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     if raw_shards_path is not None:
         raw_shards_path=external_raw_shards(workspace,raw_shards_path,create=True)
-        state=json.loads((workspace/'state.json').read_text())
+        state=read_build_envelope(workspace/'state.json')
         if state.get('raw_shards_path')!=str(raw_shards_path):
             raise ValueError('Raw shard location does not match workspace state')
         cleanup_dead_private_shards(raw_shards_path)
@@ -4707,7 +4728,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             update_result['native_recompiled']=False
     elif generation is None:
         state_path=workspace/'state.json'
-        binding=read_small_json(state_path).get('native_generation') if state_path.is_file() else None
+        binding=read_build_envelope(state_path).get('native_generation') if state_path.is_file() else None
         if binding is not None:
             import extraction_cache as native_cache
             expected_binding_keys=({'seal_sha256','dump','build_inputs','retained_expander_root'} if initial_reference is not None else {'seal_sha256','dump','build_inputs','writer_figure_transition'} if writer_transition is not None else {'seal_sha256','dump','build_inputs'})
@@ -5318,7 +5339,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     if marker.read_text() != VERIFIED_CONTENT:
         require_current_staging_version(staging, None)
     if build_identity is not None:
-        require_build_identity(read_small_json(staging/BUILD_IDENTITY_NAME) if (staging/BUILD_IDENTITY_NAME).is_file() else None,build_identity)
+        require_build_identity(read_build_envelope(staging/BUILD_IDENTITY_NAME) if (staging/BUILD_IDENTITY_NAME).is_file() else None,build_identity)
         require_build_source(build_identity)
     recorded=read_snapshot_sha(staging/INTERWIKI_SHA_NAME) if (staging/INTERWIKI_SHA_NAME).is_file() else None
     if recorded!=interwiki_sha:

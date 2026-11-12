@@ -9545,6 +9545,77 @@ class InitialSealedGenerationTests(unittest.TestCase):
             self.assertFalse((f.workspace/'expander').exists())
             self.assertEqual(json.loads((f.workspace/'state.json').read_text()),dict(source='fresh',now_unix=123))
 
+class BuildEnvelopeTests(unittest.TestCase):
+    def test_large_native_generation_and_build_identity_roundtrip_and_resume(self):
+        fixture = InitialSealedGenerationTests()
+        with tempfile.TemporaryDirectory() as tmp:
+            f = fixture.fixture(Path(tmp))
+            payload = {}
+            for index in range(150):
+                path = f.root / ('source-%03d.zig' % index)
+                path.write_text('const source = %d;\n' % index)
+                payload[path.name] = _initial_sealed_reference(path)
+            for role in f.records.values():
+                role['source_payload_files'] = copy.deepcopy(payload)
+            f.identity['native_tool_roles'] = copy.deepcopy(f.records)
+            f.role_ref = _initial_sealed_write(f.root/'roles.json', f.records)
+            f.plan['roles'] = f.role_ref
+            f.result['role_map'] = f.role_ref
+            f.result['input_authority'] = _initial_sealed_write(f.root/'preparation-data.json', f.plan)
+            fixture.reseal_graph(f)
+            with fixture.contexts(f)[0], fixture.contexts(f)[1], fixture.contexts(f)[2]:
+                self.assertEqual(fixture.adopt(f), 123)
+                path = f.destination/'state.json'
+                self.assertGreater(path.stat().st_size, 64*1024)
+                state = b.read_build_envelope(path)
+                self.assertEqual(state['native_generation']['build_inputs'], f.identity)
+                before = path.read_bytes()
+                self.assertEqual(fixture.adopt(f), 123)
+                self.assertEqual(path.read_bytes(), before)
+                changed = copy.deepcopy(f.identity); changed['source'] = 'different'
+                with self.assertRaises(ValueError): fixture.adopt(f, build_identity=changed)
+                self.assertEqual(path.read_bytes(), before)
+            staging = f.root/'published.building'; staging.mkdir()
+            with patch.object(b, 'require_build_source'):
+                b.persist_build_identity(staging, f.identity)
+            b.require_build_identity(b.read_build_envelope(staging/b.BUILD_IDENTITY_NAME), f.identity)
+            with self.assertRaisesRegex(ValueError, 'Oversized snapshot'):
+                b.read_small_json(staging/b.BUILD_IDENTITY_NAME)
+
+    def test_actual_envelope_bound_and_symmetric_writer_rejection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'state.json'
+            # Sparse allocation exercises the actual 64 MiB bound with no large fixture.
+            with path.open('wb') as stream: stream.truncate(b.BUILD_ENVELOPE_MAX_BYTES + 1)
+            with self.assertRaisesRegex(ValueError, 'Oversized snapshot'): b.read_build_envelope(path)
+            with patch.object(b, 'BUILD_ENVELOPE_MAX_BYTES', 64):
+                with self.assertRaisesRegex(ValueError, 'exceeds prepared seal'):
+                    b.build_envelope_text({'authority': 'x'*64})
+                staging = Path(tmp)/'staging'; staging.mkdir()
+                old = staging/b.BUILD_IDENTITY_NAME; old.write_text('{}\n')
+                with patch.object(b, 'require_build_source'), self.assertRaises(ValueError):
+                    b.persist_build_identity(staging, {'authority':'x'*64})
+                self.assertEqual(old.read_text(), '{}\n')
+                self.assertFalse(old.with_suffix('.part').exists())
+
+    def test_malformed_nonobject_and_symlink_are_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'state.json'
+            for raw in ('{', 'null', '[]'):
+                path.write_text(raw)
+                with self.subTest(raw=raw), self.assertRaises(ValueError): b.read_build_envelope(path)
+            other = Path(tmp)/'identity.json'; other.write_text('{}')
+            path.unlink(); path.symlink_to(other)
+            with self.assertRaisesRegex(ValueError, 'Unsafe snapshot'): b.read_build_envelope(path)
+
+    def test_ordinary_snapshot_bound_stays_small(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'snapshot.json'; value = {'authority':'x'*(64*1024)}
+            path.write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValueError, 'Oversized snapshot'): b.read_small_json(path)
+            self.assertEqual(b.read_build_envelope(path), value)
+
+
 class OwnedRootInitialSealedTests(unittest.TestCase):
     fixture=InitialSealedGenerationTests.fixture
     adopt=InitialSealedGenerationTests.adopt
