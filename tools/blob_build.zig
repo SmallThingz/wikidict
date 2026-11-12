@@ -72,8 +72,14 @@ const FirstFailureCaptureContext = struct {
     failure_evidence_root: ?[]const u8 = null,
     attempted: bool = false,
     continuous_output_active: bool = false,
+    ordinary_writer: ?*const encoder.blob_builder.Writer = null,
     table_styles: ?*const source_table_styles.Authority = null,
     manual_conversion_context: ?namespace_registry.ManualConversionContext = null,
+
+    fn ordinaryOutputActive(self: FirstFailureCaptureContext) bool {
+        const writer = self.ordinary_writer orelse return false;
+        return !writer.closed and !writer.finished and std.mem.eql(u8, writer.output_root, self.output_root);
+    }
 
     fn fromCli(io: std.Io, a: std.mem.Allocator, args: []const []const u8, options: Options) FirstFailureCaptureContext {
         const evidence_root: ?[]const u8 = if (options.failure_receipt) |path| blk: {
@@ -118,6 +124,25 @@ const ContinuousFailureCaptureScope = struct {
     }
 };
 
+// The ordinary Writer has no .incomplete marker. Bind diagnostic writes to
+// the initialized Writer, and release this borrowed pointer before deinit.
+const OrdinaryFailureCaptureScope = struct {
+    context: ?*FirstFailureCaptureContext = null,
+    previous: ?*const encoder.blob_builder.Writer = null,
+
+    fn begin(writer: *const encoder.blob_builder.Writer) OrdinaryFailureCaptureScope {
+        const context = if (first_failure_capture_context) |*value| value else return .{};
+        if (writer.closed or writer.finished or !std.mem.eql(u8, context.output_root, writer.output_root)) return .{};
+        const previous = context.ordinary_writer;
+        context.ordinary_writer = writer;
+        return .{ .context = context, .previous = previous };
+    }
+
+    fn deinit(self: OrdinaryFailureCaptureScope) void {
+        if (self.context) |context| context.ordinary_writer = self.previous;
+    }
+};
+
 fn invocationArgumentsHash(a: std.mem.Allocator, args: []const []const u8) ![]const u8 {
     var hash = std.crypto.hash.sha2.Sha256.init(.{});
     for (args) |arg| {
@@ -148,7 +173,7 @@ fn writeFirstPresentationFailure(err: anyerror, context: FirstFailureCaptureCont
     // The ordinary sharded driver creates a private per-invocation receipt
     // directory outside its disposable workspace and raw shard. Use that same
     // explicit destination for capture; otherwise retain the marker/scope guard.
-    if (context.failure_evidence_root == null and !context.continuous_output_active) {
+    if (context.failure_evidence_root == null and !context.continuous_output_active and !context.ordinaryOutputActive()) {
         const marker = try std.fs.path.join(a, &.{ context.output_root, ".incomplete" });
         const marker_file = try std.Io.Dir.cwd().openFile(context.io, marker, .{});
         marker_file.close(context.io);
@@ -3660,6 +3685,8 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
 
     var writer = try encoder.blob_builder.Writer.init(io, a, if (audit) |value| value.scratch_root else args[2]);
     defer writer.deinit();
+    const capture_scope = OrdinaryFailureCaptureScope.begin(&writer);
+    defer capture_scope.deinit();
     writer.language_codes = codes;
     if (pool.reviewed_nonlexical) |review| writer.namespace_coverage.reviewed_nonlexical_sha256 = review.sha256;
     const index_start = try pageIndexStart(page_index.bytes, options);
@@ -58073,4 +58100,106 @@ test "normal Writer and Reader retain complete EL lekani height figures nested c
     }
     for ([_][]const u8{ "Module:el-nouns-decl", "Module:grc-nouns-decl", "Τα οστά", "τουαλέτας", "πλαστική" }) |text|
         try std.testing.expect(std.mem.indexOf(u8, scan.text.items, text) != null);
+}
+
+test "ordinary capture survives Writer failure and cleanup without an incomplete marker" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const root = try auditControlFreshRoot(a, "ordinary-capture-root");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    first_failure_capture_context = F.context(a, root); defer first_failure_capture_context = null;
+    const job: ExpansionJob = .{ .ordinal = 17, .index_offset = 9,
+        .ns = .{ .id = 0, .kind = .language }, .title = "Ordinary fixture",
+        .source = "exact raw", .page_id = 71, .revision_id = 91,
+        .index_line = "exact index row" };
+    const expanded: bundle_expander.Expansion = .{ .source = "before |} after" };
+    {
+        var writer = try encoder.blob_builder.Writer.init(F.io, a, root);
+        defer writer.deinit();
+        const scope = OrdinaryFailureCaptureScope.begin(&writer); defer scope.deinit();
+        try F.absent(try std.fs.path.join(a, &.{ root, ".incomplete" }));
+        try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, expanded, a, null));
+        try std.testing.expect(first_failure_capture_context.?.attempted);
+    }
+    try std.testing.expect(first_failure_capture_context.?.ordinary_writer == null);
+    try std.testing.expect(!first_failure_capture_context.?.ordinaryOutputActive());
+    const row = try F.manifest(a, root);
+    try std.testing.expect(row.object.get("record_complete").?.bool);
+    try std.testing.expectEqualStrings("UncompiledPresentation", row.object.get("error_name").?.string);
+    try std.testing.expectEqualStrings(job.title, row.object.get("title").?.string);
+    try std.testing.expectEqual(@as(i64, 17), row.object.get("ordinal").?.integer);
+    try F.payload(a, row, "raw_source", job.source, 256 * 1024);
+    try F.payload(a, row, "expanded", expanded.source, 2 * 1024 * 1024);
+    try F.payload(a, row, "index_row", job.index_line, 256 * 1024);
+    try F.absent(try std.fs.path.join(a, &.{ root, ".incomplete" }));
+    try F.noPublication(a, root);
+    const capture = try std.fs.path.join(a, &.{ root, ".presentation-first-failure", "capture.json" });
+    const before = try std.Io.Dir.cwd().readFileAlloc(F.io, capture, a, .limited(64 * 1024));
+    first_failure_capture_context = F.context(a, root);
+    {
+        var writer = try encoder.blob_builder.Writer.init(F.io, a, root);
+        defer writer.deinit();
+        const scope = OrdinaryFailureCaptureScope.begin(&writer); defer scope.deinit();
+        try std.testing.expectError(error.UncompiledPresentation, consumeExpandedPage(&writer, job, .{ .source = "[https:// broken" }, a, null));
+        try std.testing.expect(first_failure_capture_context.?.attempted);
+    }
+    const after = try std.Io.Dir.cwd().readFileAlloc(F.io, capture, a, .limited(64 * 1024));
+    try std.testing.expectEqualSlices(u8, before, after);
+    try F.noPublication(a, root);
+}
+
+test "ordinary capture scope requires its live Writer and restores on every exit" {
+    const F = FirstFailureControl;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const root = try auditControlFreshRoot(a, "ordinary-capture-scope");
+    defer std.Io.Dir.cwd().deleteTree(F.io, root) catch {};
+    const other = try std.fs.path.join(a, &.{ root, "other" });
+    var writer = try encoder.blob_builder.Writer.init(F.io, a, root); defer writer.deinit();
+    var other_writer = try encoder.blob_builder.Writer.init(F.io, a, other); defer other_writer.deinit();
+    const absent = OrdinaryFailureCaptureScope.begin(&writer); defer absent.deinit();
+    try std.testing.expect(absent.context == null);
+    first_failure_capture_context = F.context(a, root); defer first_failure_capture_context = null;
+    const job: ExpansionJob = .{ .ordinal = 0, .index_offset = 0,
+        .ns = .{ .id = 0, .kind = .language }, .title = "scope", .source = "raw" };
+    {
+        const wrong = OrdinaryFailureCaptureScope.begin(&other_writer); defer wrong.deinit();
+        try std.testing.expect(wrong.context == null);
+        try std.testing.expect(!first_failure_capture_context.?.ordinaryOutputActive());
+        try std.testing.expectError(error.FileNotFound, writeFirstPresentationFailure(error.UncompiledPresentation, first_failure_capture_context.?, job, .{ .source = "expanded" }));
+    }
+    const Probe = struct {
+        fn exit(w: *encoder.blob_builder.Writer, fail: bool) !void {
+            const scope = OrdinaryFailureCaptureScope.begin(w); defer scope.deinit();
+            try std.testing.expect(first_failure_capture_context.?.ordinaryOutputActive());
+            {
+                const nested = OrdinaryFailureCaptureScope.begin(w); defer nested.deinit();
+                try std.testing.expect(first_failure_capture_context.?.ordinaryOutputActive());
+            }
+            try std.testing.expect(first_failure_capture_context.?.ordinaryOutputActive());
+            if (fail) return error.ControlledFailure;
+        }
+    };
+    try Probe.exit(&writer, false);
+    try std.testing.expect(first_failure_capture_context.?.ordinary_writer == null);
+    try std.testing.expectError(error.ControlledFailure, Probe.exit(&writer, true));
+    try std.testing.expect(first_failure_capture_context.?.ordinary_writer == null);
+    inline for (.{ "closed", "finished" }) |field| {
+        @field(writer, field) = true;
+        const rejected = OrdinaryFailureCaptureScope.begin(&writer);
+        @field(writer, field) = false;
+        defer rejected.deinit();
+        try std.testing.expect(rejected.context == null);
+    }
+    {
+        const scope = OrdinaryFailureCaptureScope.begin(&writer); defer scope.deinit();
+        writer.finished = true; defer writer.finished = false;
+        try std.testing.expect(!first_failure_capture_context.?.ordinaryOutputActive());
+        try std.testing.expectError(error.FileNotFound, writeFirstPresentationFailure(error.UncompiledPresentation, first_failure_capture_context.?, job, .{ .source = "expanded" }));
+    }
+    try std.testing.expect(first_failure_capture_context.?.ordinary_writer == null);
+    try std.testing.expectError(error.FileNotFound, writeFirstPresentationFailure(error.UncompiledPresentation, first_failure_capture_context.?, job, .{ .source = "expanded" }));
+    try F.absent(try std.fs.path.join(a, &.{ root, ".presentation-first-failure" }));
+    try F.noPublication(a, root);
 }
