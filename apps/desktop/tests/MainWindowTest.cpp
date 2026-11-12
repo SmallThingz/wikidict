@@ -13007,16 +13007,55 @@ private slots:
         QVERIFY(!legacy.originRoot.isEmpty());
         QVERIFY(legacy.originEdition.isEmpty());
         const int unlabelledViews = window.learning_.history().first().views;
+        const QJsonObject originalEntry = window.currentEntry_;
+        const QString originalRoot = window.api_->root();
+        const QString originalOrigin = window.originRoot_;
+        const QString unrecordedEdition = QStringLiteral("The dictionary edition for this saved word was not recorded.");
+        const auto promptMatches = [&](QMessageBox *choice, const QString &requestedTitle, const QString &explanation) {
+            return choice && choice->windowTitle() == QStringLiteral("Open saved word")
+                && choice->textFormat() == Qt::PlainText
+                && choice->text() == QStringLiteral("Open “%1” from this dictionary?").arg(requestedTitle)
+                && choice->informativeText() == explanation + QStringLiteral("\n\nCurrent dictionary: Dictionary · English")
+                && !choice->informativeText().contains(QDir::toNativeSeparators(QFileInfo(originalRoot).canonicalFilePath()))
+                && choice->detailedText() == QStringLiteral("Dictionary folder:\n%1").arg(QDir::toNativeSeparators(QFileInfo(originalRoot).canonicalFilePath()))
+                && choice->standardButtons() == (QMessageBox::Open | QMessageBox::Cancel)
+                && choice->defaultButton() == choice->button(QMessageBox::Cancel);
+        };
         bool unlabelledPrompted = false;
         QTimer::singleShot(0, &window, [&] {
             auto *choice = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
             if (!choice) return;
-            unlabelledPrompted = true;
+            unlabelledPrompted = promptMatches(choice, legacy.title, unrecordedEdition);
             choice->done(QMessageBox::Cancel);
         });
         window.openSavedWord(legacy);
         QVERIFY(unlabelledPrompted);
         QCOMPARE(window.learning_.history().first().views, unlabelledViews);
+        QCOMPARE(window.currentEntry_, originalEntry);
+        QCOMPARE(window.api_->root(), originalRoot);
+        QCOMPARE(window.originRoot_, originalOrigin);
+        QVERIFY(window.originEdition_.isEmpty());
+        // A partial legacy origin must not claim an already-recorded edition is
+        // missing. Its literal title is presentation, never rich-text markup.
+        SavedWord missingFolder = legacy;
+        missingFolder.originRoot.clear();
+        missingFolder.originEdition = QStringLiteral("Recorded edition <sample>");
+        missingFolder.title = QStringLiteral("cat <saved> & word");
+        bool partialPrompted = false;
+        QTimer::singleShot(0, &window, [&] {
+            auto *choice = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (!choice) return;
+            partialPrompted = promptMatches(choice, missingFolder.title,
+                QStringLiteral("The dictionary folder for this saved word was not recorded.\nSaved edition: Recorded edition <sample>"));
+            choice->done(QMessageBox::Cancel);
+        });
+        window.openSavedWord(missingFolder);
+        QVERIFY(partialPrompted);
+        QCOMPARE(window.currentEntry_, originalEntry);
+        QCOMPARE(window.learning_.history().first().views, unlabelledViews);
+        QCOMPARE(window.api_->root(), originalRoot);
+        QCOMPARE(window.originRoot_, originalOrigin);
+        QVERIFY(window.originEdition_.isEmpty());
         legacy.key = QStringLiteral("language\nEnglish\ncat");
         legacy.originRoot.clear();
         legacy.originEdition.clear();
@@ -13031,23 +13070,31 @@ private slots:
         QTimer::singleShot(0, &window, [&] {
             auto *choice = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
             if (!choice) return;
-            prompted = choice->text() == QStringLiteral("Open from this dictionary?");
+            prompted = promptMatches(choice, legacy.title, unrecordedEdition);
             choice->done(QMessageBox::Cancel);
         });
         window.openSavedWord(legacy);
         QVERIFY(prompted);
         QCOMPARE(window.learning_.history().size(), historySize);
         QCOMPARE(window.learning_.history().first().views, views);
+        QCOMPARE(window.currentEntry_, originalEntry);
+        QCOMPARE(window.api_->root(), originalRoot);
+        QCOMPARE(window.originRoot_, originalOrigin);
+        QVERIFY(window.originEdition_.isEmpty());
         prompted = false;
         QTimer::singleShot(0, &window, [&] {
             auto *choice = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
             if (!choice) return;
-            prompted = true;
+            prompted = promptMatches(choice, legacy.title, unrecordedEdition);
             choice->done(QMessageBox::Open);
         });
         window.openSavedWord(legacy);
         QVERIFY(prompted);
         QCOMPARE(window.learning_.history().first().views, views + 1);
+        QCOMPARE(title(window), legacy.title);
+        QCOMPARE(window.api_->root(), originalRoot);
+        QCOMPARE(window.originRoot_, originalOrigin);
+        QVERIFY(window.originEdition_.isEmpty());
         const SavedWord retained = window.learning_.bookmarks().first();
         QCOMPARE(retained.key, original.key);
         QCOMPARE(retained.clue, original.clue);

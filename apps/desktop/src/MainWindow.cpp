@@ -3655,8 +3655,15 @@ void MainWindow::openSavedWord(const SavedWord &word) {
         }
         if (requested.originRoot.isEmpty() || requested.originEdition.isEmpty()) {
             QMessageBox choice(QMessageBox::Question, QStringLiteral("Open saved word"),
-                QStringLiteral("Open from this dictionary?"), QMessageBox::Open | QMessageBox::Cancel, this);
-            choice.setInformativeText(QDir::toNativeSeparators(currentRoot));
+                QStringLiteral("Open “%1” from this dictionary?").arg(requested.title), QMessageBox::Open | QMessageBox::Cancel, this);
+            choice.setTextFormat(Qt::PlainText);
+            const QString explanation = requested.originEdition.isEmpty()
+                ? QStringLiteral("The dictionary edition for this saved word was not recorded.")
+                : QStringLiteral("The dictionary folder for this saved word was not recorded.\nSaved edition: %1").arg(requested.originEdition);
+            const QString dictionary = QStringLiteral("%1 · %2").arg(kindLabel(api_->kind()),
+                api_->kind() == QStringLiteral("language") ? api_->language() : QStringLiteral("All languages"));
+            choice.setInformativeText(explanation + QStringLiteral("\n\nCurrent dictionary: ") + dictionary);
+            choice.setDetailedText(QStringLiteral("Dictionary folder:\n%1").arg(QDir::toNativeSeparators(currentRoot)));
             choice.setDefaultButton(QMessageBox::Cancel);
             if (choice.exec() != QMessageBox::Open) return;
         }
