@@ -535,3 +535,7 @@ tools/testdata/th-peili-default-page/expanded.wikitext -text -whitespace
 tools/testdata/vi-acceleration-resolved-context/expanded.wikitext -text -whitespace
 tools/testdata/vi-acceleration18/expanded.wikitext -text -whitespace
 tools/testdata/vi-acceleration18/raw.wikitext -text -whitespace
+
+# Exact retained EL source and Reader fixtures.
+src/encoder/testdata/el-lekani-hash-border/* -text -whitespace
+src/encoder/testdata/el-lekani-synonym/* -text -whitespace

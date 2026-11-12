@@ -13,7 +13,24 @@ const Search = @import("search.zig").Task;
 const MediaJob = @import("media_job.zig");
 const Page = enum { saved, history, search, learn, settings, library };
 const Focus = enum { search, matches, entry };
-fn studyMeaning(entry: model.Entry) ?model.Block {
+fn studyMeaning(entry: model.Entry) error{InvalidPresentation}!?model.Block {
+    if (entry.organization.lexemes.len != 0) {
+        var selected: ?model.Block = null;
+        for (entry.organization.lexemes) |lexeme| {
+            if (lexeme.section >= entry.sections.len) return error.InvalidPresentation;
+            const blocks = entry.sections[lexeme.section].blocks;
+            for (lexeme.definitions, 0..) |sense, index| {
+                if (sense.parent) |parent| if (parent >= index) return error.InvalidPresentation;
+                const block = enc.presentation_types.resolveBlockPath(blocks, sense.block, sense.block_path) orelse
+                    return error.InvalidPresentation;
+                if (selected == null) selected = block.*;
+            }
+        }
+        // An explicit organization with no senses is not permission to guess
+        // a clue from supporting body. Validate all addresses before choosing.
+        return selected;
+    }
+    // Preserve the legacy fallback for records without lexical organization.
     for (entry.sections) |section| if (output.firstDefinition(section.blocks, 0)) |block| return block;
     return null;
 }
@@ -254,7 +271,7 @@ const State = struct {
             defer record.deinit();
             var doc = try model.fromRecord(self.a, record.record);
             defer doc.deinit();
-            self.study_has_meaning = studyMeaning(doc.entry) != null;
+            self.study_has_meaning = (try studyMeaning(doc.entry)) != null;
             self.study_meaning_index = index;
         }
         return self.study_has_meaning;
@@ -756,7 +773,7 @@ const State = struct {
                 defer source_record.deinit();
                 var doc = try model.fromRecord(self.a, source_record.record);
                 defer doc.deinit();
-                const meaning = studyMeaning(doc.entry);
+                const meaning = try studyMeaning(doc.entry);
                 self.study_meaning_index = i;
                 self.study_has_meaning = meaning != null;
                 if (self.nav == .learn and self.reading != null and self.round >= self.reading.?.data.quiz_length) {
@@ -1260,7 +1277,7 @@ test "terminal missing structured meaning preserves body and cannot grade quiz t
     defer original.deinit();
     var doc = try model.fromRecord(a, original.record);
     defer doc.deinit();
-    try std.testing.expect(studyMeaning(doc.entry) == null);
+    try std.testing.expect((try studyMeaning(doc.entry)) == null);
     try std.testing.expectEqual(T.BlockKind.list_item, doc.entry.sections[0].blocks[0].kind);
     try std.testing.expectEqualStrings(gloss, doc.entry.sections[0].blocks[0].spans[0].text);
     const roundtrip = try enc.presentation_codec.encodeAlloc(a, .{ .entry = doc.entry });
@@ -2032,4 +2049,105 @@ test "M terminal poster preflight preserves reading and File action without star
     try std.testing.expectEqualStrings("File:Model.stl", restored.sections[0].blocks[0].container.?.blocks[0].spans[1].target);
     try std.testing.expectEqualStrings("3D model", restored.sections[0].blocks[0].container.?.blocks[0].spans[1].image.?.static_poster.?.label);
     try std.testing.expectEqual(@as(f32, 0), restored.sections[0].blocks[0].container.?.style.height.?.value);
+}
+
+
+test "terminal study follows validated organized sense addresses and preserves unstructured refusal" {
+    const T = enc.presentation_types;
+    const marked: T.Block = .{ .kind = .list_item, .depth = 1, .list_path = "*", .spans = &.{
+        .{ .kind = .link, .text = "συνώνυμο", .target = "συνώνυμο", .italic = true },
+        .{ .text = " του ", .italic = true },
+        .{ .kind = .link, .text = "λέκος", .target = "λέκος#Αρχαία ελληνικά (grc)", .bold = true },
+        .{ .text = " πιάτο, κατσαρόλα, δοχείο σαν κύπελλο" },
+    } };
+    const blocks = [_]T.Block{
+        .{ .kind = .definition, .spans = &.{.{ .text = "Unselected ordinary definition" }} },
+        .{ .kind = .container, .container = .{ .blocks = &.{marked} } },
+    };
+    const entry: T.Entry = .{ .title = "λεκάνη", .kind = .language, .language = "Αρχαία Ελληνικά", .language_code = "grc",
+        .sections = &.{.{ .level = 3, .title = "Ουσιαστικό", .blocks = &blocks }},
+        .organization = .{ .lexemes = &.{.{ .language = "Αρχαία Ελληνικά", .kind = "Noun", .section = 0,
+            .definitions = &.{.{ .block = 1, .block_path = &.{0} }}, .other_blocks = &.{0} }} },
+    };
+    const payload = try enc.presentation_codec.encodeAlloc(std.testing.allocator, .{ .entry = entry });
+    defer std.testing.allocator.free(payload);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const decoded = try enc.presentation_codec.decodeAlloc(arena.allocator(), payload, entry.title, .language, .{ .heading = entry.language.?, .code = "grc" });
+    try std.testing.expectEqualDeep(marked, (try studyMeaning(decoded.entry)).?);
+    try std.testing.expectEqualDeep(entry, decoded.entry);
+    var changed = entry;
+    changed.organization = .{};
+    try std.testing.expectEqualDeep(blocks[0], (try studyMeaning(changed)).?);
+    changed.sections = &.{.{ .level = 3, .title = "Ουσιαστικό", .blocks = &.{marked} }};
+    try std.testing.expect((try studyMeaning(changed)) == null);
+    changed = entry;
+    changed.organization = .{ .lexemes = &.{.{ .language = "Αρχαία Ελληνικά", .kind = "Noun", .section = 0 }} };
+    try std.testing.expect((try studyMeaning(changed)) == null);
+    for (0..4) |mode| {
+        var senses = [_]T.Sense{.{ .block = 1, .block_path = &.{0} }, .{ .block = 1, .block_path = &.{0} }};
+        var lexical: T.Lexeme = .{ .language = "Αρχαία Ελληνικά", .kind = "Noun", .section = 0, .definitions = &senses };
+        switch (mode) {
+            0 => lexical.section = 9,
+            1 => senses[1].block = 9,
+            2 => senses[1].block_path = &.{9},
+            3 => senses[1].parent = 1,
+            else => unreachable,
+        }
+        changed = entry; changed.organization = .{ .lexemes = &.{lexical} };
+        try std.testing.expectError(error.InvalidPresentation, studyMeaning(changed));
+    }
+}
+
+test "terminal Learn scores compiled Greek synonym sense without rewriting the literal bullet" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "===Ουσιαστικό===\n'''λεκάνη''' ''θηλυκό''\n" ++
+        "* ''[[συνώνυμο|συνώνυμο]] του '''''[[λέκος#Αρχαία ελληνικά (grc)|λέκος]]''' πιάτο, κατσαρόλα, δοχείο σαν κύπελλο\n" ++
+        "*: <span style=\"background:#ffffff; color:#002000;\">''άλλες μορφές:''</span> [[λεκάνιον#Αρχαία ελληνικά (grc)|λεκάνιον]]\n";
+    const document_compiler = @import("encoder").presentation_document;
+    const owner: document_compiler.ClassifiedLanguage = .{ .heading = "Αρχαία Ελληνικά", .code = "grc" };
+    const payload = try document_compiler.compileClassifiedWithHeadingAnchorsAlloc(a, "λεκάνη", .language,
+        owner.heading, owner.code, document_compiler.MissingText.untracked(source), null, .{}, null, null, null,
+        .{}, null, null, &.{}, null, &.{}, owner);
+    const decoded = try enc.presentation_codec.decodeAlloc(a, payload, "λεκάνη", .language, .{ .heading = owner.heading, .code = owner.code });
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.organization.lexemes[0].definitions.len);
+    const clue = (try studyMeaning(decoded.entry)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(enc.presentation_types.BlockKind.list_item, clue.kind);
+    try std.testing.expectEqualStrings("*", clue.list_path);
+    try std.testing.expectEqualStrings("λέκος#Αρχαία ελληνικά (grc)", clue.spans[2].target);
+    const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, owner.code, owner.heading);
+    const bytes = try enc.blob_format.buildAlloc(a, .language, metadata, &.{.{ .title = "λεκάνη", .payload = payload }});
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const path = try std.fs.path.join(a, &.{ root, "sample" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = bytes });
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a };
+    defer db.file.deinit();
+    var reading = ReadingState.init(a); defer reading.deinit();
+    try reading.load(std.testing.io, root, owner.heading);
+    reading.data.history_limit = 0;
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &reading, .label = owner.heading,
+        .theme = .terminal, .color = false, .screen = .{ .cols = 80, .rows = 32 } };
+    defer state.deinit();
+    for (0..3) |game| {
+        state.game = switch (game) { 0 => .quiz, 1 => .scramble, else => .cards };
+        try state.navigate(.learn);
+        try state.prepare(76);
+        try std.testing.expect(state.study_has_meaning);
+        try std.testing.expect(std.mem.indexOf(u8, state.text, "No structured meaning") == null);
+        if (game == 2) {
+            try std.testing.expect(std.mem.indexOf(u8, state.text, "Recall the meaning") != null);
+        } else {
+            try std.testing.expect(std.mem.indexOf(u8, state.text, "πιάτο, κατσαρόλα, δοχείο σαν κύπελλο") != null);
+        }
+        const previous = reading.data.right;
+        try state.answer(true);
+        try state.answer(true);
+        try std.testing.expectEqual(previous + 1, reading.data.right);
+        try std.testing.expect(state.answered);
+    }
+    var record = try db.recordAlloc(a, 0); defer record.deinit();
+    var document = try model.fromRecord(a, record.record); defer document.deinit();
+    try std.testing.expectEqualDeep(decoded.entry, document.entry);
+    try std.testing.expectEqualSlices(u8, payload, try enc.presentation_codec.encodeAlloc(a, .{ .entry = document.entry }));
 }

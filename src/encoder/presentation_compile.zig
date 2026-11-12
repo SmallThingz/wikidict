@@ -83980,3 +83980,81 @@ test "explicit SVG box capability preserves authored axes and cannot replace hei
     var exhausted: Renderer = .{ .a = a, .context = context };
     try std.testing.expectError(error.OutOfMemory, exhausted.renderBody(source));
 }
+
+
+test "retained current EL declension tables preserve hash borders complete cells fonts actions and codec" {
+    const source = @embedFile("testdata/el-lekani-hash-border/page.expanded.wikitext");
+    const css = @embedFile("testdata/el-lekani-hash-border/common.css");
+    const F = struct {
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    try F.hash(source, "455bd17d2cfbd9c7b849937defc886218135fb401977d3aade89963f3d2e68f5");
+    try F.hash(css, "9bf38ccd4d75910298181c590907a5cd755f618067bac8503a1a61323f1c3cd6");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @embedFile("testdata/el-lekani-hash-border/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/el-lekani-hash-border/interwiki-map.tsv"));
+    var profile = try table_style_profile.parseAlloc(a, css); defer profile.deinit();
+    for ([_]struct { begin: usize, end: usize, sha256: []const u8, color: []const u8 }{
+        .{ .begin = 238, .end = 5681, .sha256 = "63ddf8c658e12a81ca88d7c66d506975645aabc86f33689c8da618fe33e3dcd2", .color = "#a1bdea" },
+        .{ .begin = 22272, .end = 33706, .sha256 = "3b1ad003c5057207b998b78f8e26d1bf4001284d57811ad61ad7caade3ac51d4", .color = "#c9d7e8" },
+    }) |case| {
+        const table_source = source[case.begin..case.end];
+        try F.hash(table_source, case.sha256);
+        try std.testing.expect(std.mem.startsWith(u8, table_source, "{| class=\"notheme\""));
+        const opening_end = std.mem.indexOfScalar(u8, table_source, '\n') orelse return error.TestUnexpectedResult;
+        const opening = table_source[0..opening_end];
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, opening, "solid#"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, opening, "; text-align:right;"));
+        try std.testing.expectEqual(@as(usize, if (case.begin == 238) 5 else 10), std.mem.count(u8, table_source, "; text-align:right;"));
+        // Only the authenticated opening changes. Complete cell contents and
+        // all subsequent source coordinates remain byte-identical.
+        const spaced = try std.mem.replaceOwned(u8, a, opening, "solid#", "solid #");
+        const reference_opening = try std.mem.replaceOwned(u8, a, spaced, "; text-align:right;", ";text-align:right;");
+        try std.testing.expectEqual(opening.len, reference_opening.len);
+        const reference = try std.mem.concat(a, u8, &.{ reference_opening, table_source[opening_end..] });
+        try std.testing.expectEqual(table_source.len, reference.len);
+        try std.testing.expectEqualSlices(u8, table_source[opening_end..], reference[opening_end..]);
+        try std.testing.expect(!std.mem.eql(u8, table_source, reference));
+        const context: Context = .{ .title = "λεκάνη", .namespace_catalog = &ns, .table_styles = &profile };
+        var actual: Renderer = .{ .a = a, .content_root = .parser_output, .context = context };
+        var expected: Renderer = .{ .a = a, .content_root = .parser_output, .context = context };
+        const blocks = try actual.renderBody(table_source);
+        const expected_blocks = try expected.renderBody(reference);
+        // Other source-owned cell/style limitations remain exact, not waived.
+        try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+        try std.testing.expectEqualDeep(expected_blocks, blocks);
+        try std.testing.expectEqualDeep(expected.media.items, actual.media.items);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const table = blocks[0].table orelse return error.TestUnexpectedResult;
+        const style = table.style orelse return error.TestUnexpectedResult;
+        const border = style.border orelse return error.TestUnexpectedResult;
+        try std.testing.expect(border == .solid);
+        try std.testing.expectEqualStrings(case.color, border.solid.color);
+        try std.testing.expectEqual(presentation_types.StyleLengthUnit.px, border.solid.width.unit);
+        try std.testing.expectEqual(@as(f32, 1), border.solid.width.value);
+        try std.testing.expectEqual(presentation_types.TableFloatSide.right, style.float_side.?);
+        try std.testing.expectEqual(presentation_types.FigureClear.right, style.clear.?);
+        try std.testing.expectEqual(@as(f32, 0.5), style.margins.?.left.value);
+        try std.testing.expectEqual(@as(f32, 0.5), style.margins.?.bottom.value);
+        try std.testing.expectEqual(@as(?u16, 1), table.geometry.?.border);
+        try std.testing.expectEqual(@as(?u16, 3), table.geometry.?.cell_padding);
+        try std.testing.expectEqual(@as(?u16, 0), table.geometry.?.cell_spacing);
+        const saved = try FormattingScopeTest.encode(a, &actual, blocks);
+        const reference_saved = try FormattingScopeTest.encode(a, &expected, expected_blocks);
+        try std.testing.expectEqualDeep(reference_saved, saved);
+        const codec = @import("blob_encoder").presentation_codec;
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, reference_saved), try codec.encodeAlloc(a, saved));
+        const spans = try FigureProducerTest.bodySpans(a, saved.entry.sections[0].blocks);
+        for ([_][]const u8{ "ενικός", "πληθυντικός", "ονομαστική" }) |target| {
+            var found = false;
+            for (spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, target)) {
+                try std.testing.expect(span.bold and span.italic);
+                found = true;
+            };
+            try std.testing.expect(found);
+        }
+    }
+}

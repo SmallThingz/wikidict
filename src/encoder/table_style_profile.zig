@@ -1156,6 +1156,9 @@ fn borderTokens(value: []const u8, out: *[4][]const u8) ?usize {
                 // A CSS function token ends here even in var(...)1px.
                 if (depth == 0) { at += 1; break; }
             }
+            // A hash starts its own CSS token even after an ident/dimension.
+            // Keep the complete hash name: #ff0000solid is not a hex color.
+            if (depth == 0 and byte == '#' and at != start) break;
             if (depth == 0 and std.ascii.isWhitespace(byte)) break;
         }
         if (depth != 0 or quote != 0) return null;
@@ -4965,13 +4968,12 @@ fn unsupportedEdges(value: []const u8, negative_allowed: bool) bool {
 
 fn borderAlloc(a: std.mem.Allocator, value: []const u8) !?types.StyleBorder {
     if (std.ascii.eqlIgnoreCase(value, "none") or std.mem.eql(u8, value, "0")) return .none;
-    var tokens = std.mem.tokenizeAny(u8, value, " \t\r\n");
+    var tokens: [4][]const u8 = undefined;
+    const count = borderTokens(value, &tokens) orelse return null;
     var width: ?types.StyleLength = null;
     var color: ?[]const u8 = null;
     var solid = false;
-    var count: usize = 0;
-    while (tokens.next()) |token| {
-        count += 1;
+    for (tokens[0..count]) |token| {
         if (std.ascii.eqlIgnoreCase(token, "solid") and !solid) {
             solid = true;
         } else if (length(token)) |next| {
@@ -11571,4 +11573,60 @@ test "figure ancestor class refutation never uses attribute values functional al
     var alternative = try parseAlloc(a, "html.night .mw-parser-output [style*='background'],html.day .mw-parser-output [style*='background']{color:#202122}"); defer alternative.deinit();
     try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved,
         alternative.figureRootDirectionUseWithCompleteClasses(null, "", null, null, false, null, "day mw-parser-output", null));
+}
+
+test "border hash atoms preserve complete CSS name and dimension boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "1px solid#a1bdea", "solid#a1bdea 1px", "1px#a1bdea solid", "#a1bdea solid 1px", "solid 1px#a1bdea" }) |value| {
+        const border = (try borderAlloc(a, value)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(border == .solid);
+        try std.testing.expectEqual(types.StyleLengthUnit.px, border.solid.width.unit);
+        try std.testing.expectEqual(@as(f32, 1), border.solid.width.value);
+        try std.testing.expectEqualStrings("#a1bdea", border.solid.color);
+    }
+    for ([_][]const u8{ "1pxsolid#ff0000", "1px solid#ff0000solid", "1px solid#fff_", "1px solid#ff-0000", "1px solid#ff00000", "1px solid#fff#000", "1px solid#fff 2px", "1px solid#fff solid", "1px dotted#fff", "solid#fff", "1pxsolid #fff" }) |value|
+        try std.testing.expect((try borderAlloc(a, value)) == null);
+    var tokens: [4][]const u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 1), borderTokens("#ff0000solid", &tokens).?);
+    try std.testing.expectEqualStrings("#ff0000solid", tokens[0]);
+    try std.testing.expectEqual(@as(usize, 2), borderTokens("solid#ff0000", &tokens).?);
+    try std.testing.expectEqualStrings("solid", tokens[0]);
+    try std.testing.expectEqualStrings("#ff0000", tokens[1]);
+}
+
+test "table literal hash borders preserve cascade geometry and malformed value refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, ""); defer profile.deinit();
+    for ([_][]const u8{ "#a1bdea", "#c9d7e8" }) |color| {
+        const css = try std.fmt.allocPrint(a, "clear:right;float:right;margin-left:0.5em;margin-bottom:0.5em;background:#ffffff;color:#000000;border:1px solid{s};text-align:right", .{color});
+        const resolved = try profile.resolveTableWithContext(a, 0, "notheme", .{ .text_color_consumed = true }, null, css);
+        try std.testing.expect(!resolved.unresolved);
+        const style = resolved.style orelse return error.TestUnexpectedResult;
+        const border = style.border orelse return error.TestUnexpectedResult;
+        try std.testing.expect(border == .solid);
+        try std.testing.expectEqualStrings(color, border.solid.color);
+        try std.testing.expectEqual(@as(f32, 1), border.solid.width.value);
+        try std.testing.expectEqual(types.StyleLengthUnit.px, border.solid.width.unit);
+        try std.testing.expectEqual(types.TableFloatSide.right, style.float_side.?);
+        try std.testing.expectEqual(types.FigureClear.right, style.clear.?);
+        try std.testing.expectEqual(@as(f32, 0.5), style.margins.?.left.value);
+        try std.testing.expectEqual(@as(f32, 0.5), style.margins.?.bottom.value);
+        try std.testing.expectEqualStrings("#ffffff", style.background.?);
+    }
+    for ([_][]const u8{ "border:1px solid#ff0000solid", "border:1px solid#fff#000", "border:1px solid var(--unknown)" }) |css| {
+        const resolved = try profile.resolveTableWithContext(a, 0, "", .{}, null, css);
+        try std.testing.expect(resolved.unresolved);
+    }
+}
+
+test "border atom hash split preserves balanced function and escape boundaries" {
+    var tokens: [4][]const u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 3), borderTokens("var(--edge, rgb(1, 2, 3))1px solid", &tokens).?);
+    try std.testing.expectEqualStrings("var(--edge, rgb(1, 2, 3))", tokens[0]);
+    try std.testing.expectEqualStrings("1px", tokens[1]);
+    try std.testing.expectEqualStrings("solid", tokens[2]);
+    for ([_][]const u8{ "1px solid rgb(1,2,3", "1px solid rgb(1,2,3))", "1px solid#ff\\0000", "1px solid 'unterminated" }) |value|
+        try std.testing.expect(borderTokens(value, &tokens) == null);
 }

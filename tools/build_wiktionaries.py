@@ -3708,11 +3708,12 @@ RETAINED_NATIVE_ROLE_ABI_INTERFACES = (
      ('src/encoder/blob_format.zig', 'src/encoder/blob_catalog.zig')),
     ('presentation-wire', ('dict-blob-build', 'dict-blob-verify'),
      ('src/encoder/presentation_codec.zig', 'src/encoder/presentation_types.zig')),
-    # Keep the existing conservative native ABI equality for every role.
-    ('native-runtime', RETAINED_NATIVE_ROLE_NAMES,
-     tuple(name for name in RETAINED_NATIVE_ABI_PATHS if name not in (
-         'src/encoder/blob_format.zig', 'src/encoder/blob_catalog.zig',
-         'src/encoder/presentation_codec.zig', 'src/encoder/presentation_types.zig'))),
+    # The Writer communicates with the selected worker through this wire
+    # protocol. Blob tools never execute or import the worker's Lua C ABI.
+    # Each role still authenticates its complete original source projection;
+    # the driver separately binds its own live ABI and paired runtime inputs.
+    ('expansion-wire', ('dict-blob-build', 'dict-bundle-build'),
+     ('src/lua/bundle_protocol.zig',)),
 )
 RETAINED_BUNDLE_RUNTIME_SOURCES = (
     *RETAINED_EXPANDER_ABI_PATHS, 'src/lua/value_leaf_build.zig',

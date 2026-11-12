@@ -8026,6 +8026,73 @@ class RetainedNativeRoleTests(unittest.TestCase):
         row['source']=dict(path=str(inventory),bytes=inventory.stat().st_size,sha256=b.sha256_file(inventory))
         row['producer_source']=row['source']['sha256'];row['source_root']=str(source)
 
+    def test_runtime_body_transition_preserves_blob_role_compilation_origins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            original=copy.deepcopy(roles)
+            driver=roles['dict-bundle-build']
+            self.separate_source(root,driver,{'src/lua/runtime/llvm_abi.zig':b'qualified runtime body repair'})
+            for name in b.RETAINED_BUNDLE_RUNTIME_SOURCES:
+                path=Path(driver['source_root'])/name
+                driver['dependencies']['runtime_source:'+name]=dict(path=str(path),bytes=path.stat().st_size,
+                    sha256=b.sha256_file(path),mode=0o644)
+            selected=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            for name in b.BLOB_TOOL_NAMES:
+                self.assertEqual(selected.records[name],original[name])
+            self.assertNotEqual(selected.records['dict-bundle-build']['producer_source'],
+                                original['dict-bundle-build']['producer_source'])
+            selected.require_unchanged()
+
+    def test_selected_worker_protocol_difference_refuses_unchanged_writer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            self.separate_source(root,roles['dict-bundle-build'],{'src/lua/bundle_protocol.zig':b'other wire format'})
+            # The actual live inputs remain bound to the new driver's origin.
+            driver=roles['dict-bundle-build']
+            for name in b.RETAINED_BUNDLE_RUNTIME_SOURCES:
+                path=Path(driver['source_root'])/name
+                driver['dependencies']['runtime_source:'+name]=dict(path=str(path),bytes=path.stat().st_size,
+                    sha256=b.sha256_file(path),mode=0o644)
+            with self.assertRaisesRegex(ValueError,'incompatible expansion-wire'):
+                b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+
+    def test_blob_envelope_difference_refuses_authentic_independent_merger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            self.separate_source(root,roles['dict-blob-merge'],{'src/encoder/blob_format.zig':b'other blob envelope'})
+            with self.assertRaisesRegex(ValueError,'incompatible blob-envelope'):
+                b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+
+    def test_each_role_still_authenticates_its_original_used_source(self):
+        for role,name in (('dict-blob-build','tools/blob_build.zig'),
+                          ('dict-blob-merge','tools/blob_merge.zig'),
+                          ('dict-blob-verify','tools/blob_verify.zig')):
+            with self.subTest(role=role),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);roles,compiler=self.fixture(root)
+                (Path(roles[role]['source_root'])/name).write_bytes(b'changed retained used code')
+                with self.assertRaisesRegex(ValueError,'source/ABI changed'):
+                    b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+
+    def test_driver_live_abi_or_layout_cannot_borrow_old_compilation_authority(self):
+        for name in ('src/lua/runtime/llvm_abi.zig','src/lua/abi/static_fields.zig'):
+            with self.subTest(name=name),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);roles,compiler=self.fixture(root)
+                driver=roles['dict-bundle-build']
+                self.separate_source(root,driver,{})
+                for relative in b.RETAINED_BUNDLE_RUNTIME_SOURCES:
+                    live=Path(driver['source_root'])/relative
+                    driver['dependencies']['runtime_source:'+relative]=dict(path=str(live),bytes=live.stat().st_size,
+                        sha256=b.sha256_file(live),mode=0o644)
+                path=Path(driver['source_root'])/name
+                kept=root/'original-source';kept.write_bytes(path.read_bytes())
+                driver['source_payload_files']={name:dict(path=str(kept),bytes=kept.stat().st_size,
+                    sha256=b.sha256_file(kept),mode=0o644)}
+                path.write_bytes(b'changed live ABI or layout')
+                driver['dependencies']['runtime_source:'+name]=dict(path=str(path),bytes=path.stat().st_size,
+                    sha256=b.sha256_file(path),mode=0o644)
+                with self.assertRaisesRegex(ValueError,'live runtime ABI differs'):
+                    b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+
     def test_independently_authentic_different_abi_and_runtime_dependencies_refuse(self):
         for changed in ('abi','runtime'):
             with self.subTest(changed=changed),tempfile.TemporaryDirectory() as tmp:

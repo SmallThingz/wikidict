@@ -2397,3 +2397,64 @@ test "nullable local table shape hints retain runtime truthiness through capture
     try std.testing.expect(std.mem.count(u8, ir, "call i8 @dict_lua_value_truthy(") >= 4);
     try std.testing.expect(std.mem.indexOf(u8, ir, "call i32 @dict_lua_get_known_shape_field") != null);
 }
+
+test "literal and dynamic keys share a nonescaping linear table without disabling specialization" {
+    const source =
+        \\local stem = {}
+        \\stem["theta"] = "stem"
+        \\stem["theta0"] = "unstressed"
+        \\local key = choose()
+        \\local first = stem[key]
+        \\stem[key] = false
+        \\local second = stem.theta
+        \\stem.theta = "new"
+        \\local third = stem[key]
+        \\stem[key] = nil
+        \\return first, second, third, stem.theta
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var registry = llvm_shapes.Registry.init(std.testing.allocator);
+    defer registry.deinit();
+    try registry.collect(0, chunk.body);
+    var shape_facts = try registry.moduleFacts(std.testing.allocator, 0);
+    defer shape_facts.deinit(std.testing.allocator);
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{ .table_shapes = &shape_facts });
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ir, "call i32 @dict_lua_new_table("));
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, ir, "call i32 @dict_lua_store_field_hashed("));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, ir, "call i32 @dict_lua_get_linear_index("));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, ir, "call i32 @dict_lua_set_linear_index("));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, ir, "call i32 @dict_lua_get_struct_field("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_get_struct_index("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_set_struct_index("));
+}
+
+test "nil and nan local keys retain the checked dynamic linear store path" {
+    const source =
+        \\local t = {}
+        \\local k = nil
+        \\t[k] = nil
+        \\k = 0 / 0
+        \\t[k] = nil
+    ;
+    var chunk = try llvm_parser.parse(std.testing.allocator, source);
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator);
+    defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0);
+    defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{});
+    defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator);
+    defer std.testing.allocator.free(ir);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, ir, "call i32 @dict_lua_set_linear_index("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_set_struct_index("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_set_typed_array_index("));
+}

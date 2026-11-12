@@ -1,0 +1,251 @@
+==<span title="Από το 1700 ως σήμερα">Νέα ελληνικά</span> ([[:Κατηγορία:Νέα ελληνικά|<span title="Κατηγορία:νέα ελληνικά. Από το 1700 ως σήμερα">el</span>]])==
+
+{| class="notheme"style="clear:right; float:right; margin-left:0.5em; margin-bottom:0.5em;background:#ffffff; color:#000000; border:1px solid#a1bdea; text-align:right;"rules="none" border="1" cellpadding="3" cellspacing="0"|-
+! style="background:#a1bdea; border-right:1px solid #c1d3f1; text-align:center; font-size:90%;" align="center"| &darr;&nbsp;''πτώσεις'' 
+! style="background:#a1bdea; border-right:1px solid #c1d3f1;" colspan="2" align="center"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[ενικός|<span title="ενικός αριθμός" style="color:black;">'''''ενικός'''''</span>]]&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+! style="background:#a1bdea;" colspan="2" align="center"| &nbsp;&nbsp;[[πληθυντικός|<span title="πληθυντικός αριθμός" style="color:black;">'''''πληθυντικός'''''</span>]]&nbsp;&nbsp;
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| [[ονομαστική|<span title="ονομαστική πτώση" style="color:black;">'''''ονομαστική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[η|<span style="color:#002000; font-weight:normal;">η</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #eaf0fa;" align="left" | [[η|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;"></span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">η</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[οι|<span style="color:#002000; font-weight:normal;">οι</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="left" | [[ες|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;"></span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ες</span>]]
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[γενική|<span title="γενική πτώση" style="color:black;">'''''γενική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[της|<span style="color:#002000; font-weight:normal;">της</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #eaf0fa;" align="left" | [[ης|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;"></span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ης</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[των|<span style="color:#002000; font-weight:normal;">των</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="left" | [[ών|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;"></span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ών</span>]]
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;[[αιτιατική|<span title="αιτιατική πτώση" style="color:black;">'''''αιτιατική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[την|<span style="color:#002000; font-weight:normal;">τη</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #eaf0fa;" align="left" | [[η|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;"></span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">η</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[τις|<span style="color:#002000; font-weight:normal;">τις</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="left" | [[ες|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;"></span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ες</span>]]
+|-
+| style="background:#d5e2f6; text-align:right;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[κλητική|<span title="κλητική πτώση" style="color:black; font-size:90%;">'''''κλητική'''''</span>]]
+| align="center" | 
+| style="border-right:1px solid #eaf0fa;" align="left" | [[η|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;"></span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">η</span>]]
+| align="center" | 
+| align="left" | [[ες|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;"></span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ες</span>]]
+|-
+| colspan="5" align="right" style="text-align:right; background:#eaf0fa; font-size:70%; line-height:100%;" | [[:Κατηγορία:Ουσιαστικά που κλίνονται όπως το 'νίκη' (νέα ελληνικά)|Κατηγορία]]  όπως «[[Παράρτημα:Ουσιαστικά (νέα ελληνικά)/θηλυκά#νίκη|νίκη]]» - [[Παράρτημα:Ουσιαστικά (νέα ελληνικά)|<span title="Παράρτημα:Ουσιαστικά">Παράρτημα:Ουσιαστικά</span>]]
+|}[[Κατηγορία:Ουσιαστικά που κλίνονται όπως το 'νίκη' (νέα ελληνικά)]][[Κατηγορία:Ουσιαστικά θηλυκά (νέα ελληνικά)]]
+[[Αρχείο:Kad.jpg|thumb|πλαστική '''λεκάνη''']]
+<div style="clear:right; float:right;">
+{|
+| [[File:Pelvis.svg|thumb|right|x170px|Τα οστά της '''λεκάνης''': (1,4) λαγόνια οστά, (2) ιερόν οστούν, (5) [[κόκκυγας]], (7) ισχιακό οστό, (8) ηβική σύμφυση, (9) άρθρωση με τους μηρούς.]]
+| [[File:Gender Neutral Toilet Sign.svg|thumb|right|x250px|'''λεκάνη''' τουαλέτας.]]
+|}
+</div>
+===<span style="cursor:help; white-space:nowrap;" title="Προέλευση και ιστορία της λέξης">[[Αρχείο:System-search.svg|30px|alt=|link=]] Ετυμολογία </span>===
+: '''λεκάνη''' < ([[κληρονομημένος|κληρονομημένο]]) [[αρχαία ελληνικά|<span style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000); border-bottom: 1px dashed var(--border-color-muted, #dddddd); font-style:italic;">αρχαία ελληνική</span>]] [[Κατηγορία:Κληρονομημένες λέξεις από τα αρχαία ελληνικά (νέα ελληνικά)]][[Κατηγορία:Προέλευση λέξεων από τα αρχαία ελληνικά (νέα ελληνικά)]] [[λεκάνη#Αρχαία ελληνικά (grc)|λεκάνη]]
+
+===[[File:Wikinews commentary.svg|28px|alt=|link=]] <span class="pronunciation">Προφορά</span>===
+
+:[[ΔΦΑ|<span title="ΔΦΑ - Διεθνές Φωνητικό Αλφάβητο">ΔΦΑ</span>]] : /[[Παράρτημα:Προφορά/νέα ελληνικά|<span style="white-space: nowrap; font-size:110%;padding:2pt;letter-spacing:1px;line-height:1.25em;">leˈka.ni</span>]]/[[Κατηγορία:Λήμματα με προφορά ΔΦΑ (νέα ελληνικά)]]
+: [[συλλαβισμός#Ουσιαστικό|<span title="ο χωρισμός γραπτής λέξης σε συλλαβές" style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000); border-bottom: 1px dashed var(--border-color-muted, #dddddd);">''τυπογραφικός συλλαβισμός''</span>]]&#8202;'':''&nbsp;λε&#8208;κά&#8208;νη
+
+===<span id="elουσιαστικό"></span><span style="white-space:nowrap" class="partofspeech">[[File:OOjs_UI-like_arrow_empty-ltr_progressive.svg|25px|alt=|link=]] Ουσιαστικό</span>[[Κατηγορία:Νέα ελληνικά]][[Κατηγορία:Ουσιαστικά (νέα ελληνικά)]][[Κατηγορία:Αντίστροφο λεξικό (νέα ελληνικά)|ηνακελ]]===
+'''λεκάνη''' ''θηλυκό''
+# ανοιχτό φαρδύ [[δοχείο]] με επίπεδη βάση από πλαστικό, μέταλλο ή ξύλο που χρησιμοποιείται για το άπλωμα των ρούχων, μεταφορά νερού, [[ζύμωμα]] και άλλες δουλειές του νοικοκυριού
+# κεραμικό δοχείο προσαρμοσμένο στο έδαφος, για την ούρηση και την αφόδευση
+# ([[:Κατηγορία:Ανατομία (νέα ελληνικά)|<i>ανατομία</i>]])[[Κατηγορία:Ανατομία  (νέα ελληνικά)]] μεγάλο σύνθετο [[οστό]] που αποτελείται από το [[ιερόν οστούν]], τον [[κόκκυγας|κόκκυγα]], τα δύο [[λαγόνιος|λαγόνια]] και τα δύο [[ισχιακός|ισχιακά]] οστά· η διάταξη αυτή σχηματίζει μια μεγάλη κοιλότητα στη βάση του κορμού που κλείνει μπροστά στην [[ηβική σύμφυση]] και ενώνεται προς τα πάνω με τη [[σπονδυλική στήλη]] και προς τα κάτω με τους [[μηρός|μηρούς]]
+#: βλέπε και [[πύελος]]
+# ([[:Κατηγορία:Γεωγραφία (νέα ελληνικά)|<i>γεωγραφία</i>]])[[Κατηγορία:Γεωγραφία  (νέα ελληνικά)]] μεγάλη υπέργεια ή υποθαλάσσια έκταση που περιβάλλεται από υψώματα
+#: <span style="cursor:help;">[[File:Bootstrap arrow-return-right.svg|16x16px|link=|παράδειγμα]]</span>&nbsp; ''[[λεκάνη απορροής]]''
+#: <span style="cursor:help;">[[File:Bootstrap arrow-return-right.svg|16x16px|link=|παράδειγμα]]</span>&nbsp; ''η '''λεκάνη''' της Μεσογείου''
+
+====<span class="relatedwords">Υποκοριστικά</span>====
+* [[λεκανίτσα]]
+* [[λεκανάκι]]
+<div style="clear:both;"></div>
+====[[Αρχείο:Gnome-globe.svg|28px|alt=|link=]] <span class="translations">Μεταφράσεις</span>====
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" style="background:#eeeeee; color:#000000; font-weight:bold; text-align:left;" align="left">&nbsp; &nbsp; πλαστικό δοχείο πλύσης/πλυσίματος</div>
+<div class="NavContent">
+{| style="background:#ffffff; color:#000000; width:100%;" border="0" width="100%" class="translations"
+|-
+| style="background:#f8f8f8; color:#000000; text-align:left; text-valign:top; width:48%;" valign="top" width="48%" align="left" |
+<div style="width:100%; column-count:2; -webkit-column-count:2; -moz-column-count:2; column-width:50%; -webkit-column-width:50%; -moz-column-width:50%;">
+* [[αγγλικά]] : [[wash basin#Αγγλικά (en)|wash basin]] <small><sup>[[:en:wash basin|(en)]]</sup></small>, round plastic wash basin
+* [[γαλλικά]] : [[cuvette#Γαλλικά (fr)|cuvette]] <small><sup>[[:fr:cuvette|(fr)]]</sup></small>
+* [[γερμανικά]] : [[Waschbecken#Γαλλικά (fr)|Waschbecken]] <small><sup>[[:fr:Waschbecken|(fr)]]</sup></small> ''ουδέτερο''
+</div>
+|}</div></div>
+
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" style="background:#eeeeee; color:#000000; font-weight:bold; text-align:left;" align="left">&nbsp; &nbsp; δοχείο</div>
+<div class="NavContent">
+{| style="background:#ffffff; color:#000000; width:100%;" border="0" width="100%" class="translations"
+|-
+| style="background:#f8f8f8; color:#000000; text-align:left; text-valign:top; width:48%;" valign="top" width="48%" align="left" |
+<div style="width:100%; column-count:2; -webkit-column-count:2; -moz-column-count:2; column-width:50%; -webkit-column-width:50%; -moz-column-width:50%;">
+* [[αγγλικά]] : [[bowl#Αγγλικά (en)|bowl]] <small><sup>[[:en:bowl|(en)]]</sup></small>
+* [[γαλλικά]] : [[bassine#Γαλλικά (fr)|bassine]] <small><sup>[[:fr:bassine|(fr)]]</sup></small>, [[cuvette#Γαλλικά (fr)|cuvette]] <small><sup>[[:fr:cuvette|(fr)]]</sup></small>
+* [[γαλλικά]] : [[Schüssel#Γερμανικά (de)|Schüssel]] <small><sup>[[:de:Schüssel|(de)]]</sup></small> ''θηλυκό''
+* [[πολωνικά]] : [[miednica#Πολωνικά (pl)|miednica]] <small><sup>[[:pl:miednica|(pl)]]</sup></small>
+</div>
+|}</div></div>
+
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" style="background:#eeeeee; color:#000000; font-weight:bold; text-align:left;" align="left">&nbsp; &nbsp; η λεκάνη της τουαλέτας</div>
+<div class="NavContent">
+{| style="background:#ffffff; color:#000000; width:100%;" border="0" width="100%" class="translations"
+|-
+| style="background:#f8f8f8; color:#000000; text-align:left; text-valign:top; width:48%;" valign="top" width="48%" align="left" |
+<div style="width:100%; column-count:2; -webkit-column-count:2; -moz-column-count:2; column-width:50%; -webkit-column-width:50%; -moz-column-width:50%;">
+* [[αγγλικά]] : ''ΗΒ, σκωροδόχος'': [[lavatory#Αγγλικά (en)|lavatory]] <small><sup>[[:en:lavatory|(en)]]</sup></small>· [[toilet#Αγγλικά (en)|toilet]] <small><sup>[[:en:toilet|(en)]]</sup></small>
+* [[γαλλικά]] : [[cuvette#Γαλλικά (fr)|cuvette]] <small><sup>[[:fr:cuvette|(fr)]]</sup></small> des  [[toiletttes#Γαλλικά (fr)|toiletttes]] <small><sup>[[:fr:toiletttes|(fr)]]</sup></small>
+* [[γερμανικά]] : [[Kloschüssel#Γερμανικά (de)|Kloschüssel]] <small><sup>[[:de:Kloschüssel|(de)]]</sup></small> ''θηλυκό''
+</div>
+|}</div></div>
+
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" style="background:#eeeeee; color:#000000; font-weight:bold; text-align:left;" align="left">&nbsp; &nbsp; ανατομία</div>
+<div class="NavContent">
+{| style="background:#ffffff; color:#000000; width:100%;" border="0" width="100%" class="translations"
+|-
+| style="background:#f8f8f8; color:#000000; text-align:left; text-valign:top; width:48%;" valign="top" width="48%" align="left" |
+<div style="width:100%; column-count:2; -webkit-column-count:2; -moz-column-count:2; column-width:50%; -webkit-column-width:50%; -moz-column-width:50%;">
+* [[αγγλικά]] : [[pelvis#Αγγλικά (en)|pelvis]] <small><sup>[[:en:pelvis|(en)]]</sup></small>
+* [[γαλλικά]] : [[bassin#Γαλλικά (fr)|bassin]] <small><sup>[[:fr:bassin|(fr)]]</sup></small>
+* [[γερμανικά]] : [[Beckenknochen#Γερμανικά (de)|Beckenknochen]] <small><sup>[[:de:Beckenknochen|(de)]]</sup></small> <span style="background:#ffffff; color:#002000;">''αρσενικό''</span>
+* [[πολωνικά]] : [[miednica#Πολωνικά (pl)|miednica]] <small><sup>[[:pl:miednica|(pl)]]</sup></small>, [[kość miednica#Πολωνικά (pl)|kość miednica]] <small><sup>[[:pl:kość miednica|(pl)]]</sup></small>
+</div>
+|}</div></div>
+
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" style="background:#eeeeee; color:#000000; font-weight:bold; text-align:left;" align="left">&nbsp; &nbsp; γεωγραφία</div>
+<div class="NavContent">
+{| style="background:#ffffff; color:#000000; width:100%;" border="0" width="100%" class="translations"
+|-
+| style="background:#f8f8f8; color:#000000; text-align:left; text-valign:top; width:48%;" valign="top" width="48%" align="left" |
+<div style="width:100%; column-count:2; -webkit-column-count:2; -moz-column-count:2; column-width:50%; -webkit-column-width:50%; -moz-column-width:50%;">
+* [[αγγλικά]] : [[basin#Αγγλικά (en)|basin]] <small><sup>[[:en:basin|(en)]]</sup></small> 
+* [[γαλλικά]] : [[bassin#Γαλλικά (fr)|bassin]] <small><sup>[[:fr:bassin|(fr)]]</sup></small>  
+* [[γερμανικά]] : [[Becken#Γερμανικά (de)|Becken]] <small><sup>[[:de:Becken|(de)]]</sup></small> ''ουδέτερο''
+* [[ισπανικά]] : [[barreño#Ισπανικά (es)|barreño]] <small><sup>[[:es:barreño|(es)]]</sup></small>
+* [[ιταλικά]] : [[bacinella#Ιταλικά (it)|bacinella]] <small><sup>[[:it:bacinella|(it)]]</sup></small>
+* [[ολλανδικά]] : [[wasbak#Ολλανδικά (nl)|wasbak]] <small><sup>[[:nl:wasbak|(nl)]]</sup></small>
+* [[ουγγρικά]] : [[lavór#Ουγγρικά (hu)|lavór]] <small><sup>[[:hu:lavór|(hu)]]</sup></small>
+* [[πορτογαλικά]] : [[bacia#Πορτογαλικά (pt)|bacia]] <small><sup>[[:pt:bacia|(pt)]]</sup></small>
+* [[ρουμανικά]] : [[bazin#Ρουμανικά (ro)|bazin]] <small><sup>[[:ro:bazin|(ro)]]</sup></small>
+* [[σερβικά]] : [[лавор#Σερβικά (sr)|лавор]] <small><sup>[[:sr:лавор|(sr)]]</sup></small>
+* [[σουηδικά]] : [[tvättfat#Σουηδικά (sv)|tvättfat]] <small><sup>[[:sv:tvättfat|(sv)]]</sup></small>
+* [[τσεχικά]] : [[mísa#Τσεχικά (cs)|mísa]] <small><sup>[[:cs:mísa|(cs)]]</sup></small>
+</div>
+|}</div></div>
+
+===<span style="cursor:help;" title="πληροφορίες για πηγές και βιβλιογραφία">[[Αρχείο:Open book icon.png|30px|alt=|link=]] <span style="cursor:help;" title="πληροφορίες για πηγές και βιβλιογραφία">Πηγές</span></span>===
+* [http://www.greek-language.gr/greekLang/el/modern_greek/tools/lexica/triantafyllides/search.html?lq=%CE%BB%CE%B5%CE%BA%CE%AC%CE%BD%CE%B7 λεκάνη]&nbsp;-&nbsp;''[[w:Λεξικό Τριανταφυλλίδη|<span class="notheme" style="background:#f7f7f7;" title="Λεξικό Τριανταφυλλίδη στη  Βικιπαίδεια">Λεξικό της Κοινής Νεοελληνικής</span>]]'' (1998) του [[w:Ινστιτούτο Νεοελληνικών Σπουδών|<span class="notheme" style="background:#f7f7f7;" title="Ινστιτούτο Νεοελληνικών Σπουδών στη  Βικιπαίδεια">Ιδρύματος Μανόλη Τριανταφυλλίδη</span>]] (<small>[https://www.greek-language.gr/greekLang/modern_greek/tools/lexica/triantafyllides/abbreviation.html συντομογραφίες]-[https://www.greek-language.gr/greekLang/modern_greek/tools/lexica/triantafyllides/symbols.html σύμβολα]. [https://www.greek-language.gr/greekLang/modern_greek/tools/lexica/triantafyllides/etymology.html Ετυμολογίες]: Ευάγγελος Πετρούνιας</small>). ''Η Πύλη για την ελληνική γλώσσα'', [https://www.greek-language.gr Κέντρο Ελληνικής Γλώσσας]
+* [https://christikolexiko.academyofathens.gr/index.php/anazitisi?st=%CE%BB%CE%B5%CE%BA%CE%AC%CE%BD%CE%B7 λεκάνη]  -&nbsp;<span class="citation book"
+>[[w:Χριστόφορος Χαραλαμπάκης|<span class="notheme" style="background:#f7f7f7;" title="Χριστόφορος Χαραλαμπάκης στη  Βικιπαίδεια">Χριστόφορος Χαραλαμπάκης</span>]],&#32;(επιμέλεια)&#32;(2014).&#32;''<nowiki />Χρηστικό λεξικό της νεοελληνικής γλώσσας<nowiki />''.&#32;Αθήνα<nowiki>:</nowiki>&#32;Ακαδημία Αθηνών.</span><span
+    class="Z3988"
+    title="ctx_ver=Z39.88-2004&rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook&rft.genre=book&rft.btitle=%CE%A7%CF%81%CE%B7%CF%83%CF%84%CE%B9%CE%BA%CF%8C+%CE%BB%CE%B5%CE%BE%CE%B9%CE%BA%CF%8C+%CF%84%CE%B7%CF%82+%CE%BD%CE%B5%CE%BF%CE%B5%CE%BB%CE%BB%CE%B7%CE%BD%CE%B9%CE%BA%CE%AE%CF%82+%CE%B3%CE%BB%CF%8E%CF%83%CF%83%CE%B1%CF%82&rft.aulast=%5B%5Bw%3A%CE%A7%CF%81%CE%B9%CF%83%CF%84%CF%8C%CF%86%CE%BF%CF%81%CE%BF%CF%82+%CE%A7%CE%B1%CF%81%CE%B1%CE%BB%CE%B1%CE%BC%CF%80%CE%AC%CE%BA%CE%B7%CF%82%7C%3Cspan+class%3D%22notheme%22+style%3D%22background%3A%23f7f7f7%3B%22+title%3D%22%CE%A7%CF%81%CE%B9%CF%83%CF%84%CF%8C%CF%86%CE%BF%CF%81%CE%BF%CF%82+%CE%A7%CE%B1%CF%81%CE%B1%CE%BB%CE%B1%CE%BC%CF%80%CE%AC%CE%BA%CE%B7%CF%82+%CF%83%CF%84%CE%B7++%CE%92%CE%B9%CE%BA%CE%B9%CF%80%CE%B1%CE%AF%CE%B4%CE%B5%CE%B9%CE%B1%22%3E%CE%A7%CF%81%CE%B9%CF%83%CF%84%CF%8C%CF%86%CE%BF%CF%81%CE%BF%CF%82+%CE%A7%CE%B1%CF%81%CE%B1%CE%BB%CE%B1%CE%BC%CF%80%CE%AC%CE%BA%CE%B7%CF%82%3C%2Fspan%3E%5D%5D&rft.aufirst=%28%CE%B5%CF%80%CE%B9%CE%BC%CE%AD%CE%BB%CE%B5%CE%B9%CE%B1%29&rft.au=%5B%5Bw%3A%CE%A7%CF%81%CE%B9%CF%83%CF%84%CF%8C%CF%86%CE%BF%CF%81%CE%BF%CF%82+%CE%A7%CE%B1%CF%81%CE%B1%CE%BB%CE%B1%CE%BC%CF%80%CE%AC%CE%BA%CE%B7%CF%82%7C%3Cspan+class%3D%22notheme%22+style%3D%22background%3A%23f7f7f7%3B%22+title%3D%22%CE%A7%CF%81%CE%B9%CF%83%CF%84%CF%8C%CF%86%CE%BF%CF%81%CE%BF%CF%82+%CE%A7%CE%B1%CF%81%CE%B1%CE%BB%CE%B1%CE%BC%CF%80%CE%AC%CE%BA%CE%B7%CF%82+%CF%83%CF%84%CE%B7++%CE%92%CE%B9%CE%BA%CE%B9%CF%80%CE%B1%CE%AF%CE%B4%CE%B5%CE%B9%CE%B1%22%3E%CE%A7%CF%81%CE%B9%CF%83%CF%84%CF%8C%CF%86%CE%BF%CF%81%CE%BF%CF%82+%CE%A7%CE%B1%CF%81%CE%B1%CE%BB%CE%B1%CE%BC%CF%80%CE%AC%CE%BA%CE%B7%CF%82%3C%2Fspan%3E%5D%5D%2C%26%2332%3B%28%CE%B5%CF%80%CE%B9%CE%BC%CE%AD%CE%BB%CE%B5%CE%B9%CE%B1%29&rft.date=2014&rft.place=%CE%91%CE%B8%CE%AE%CE%BD%CE%B1&rft.pub=%CE%91%CE%BA%CE%B1%CE%B4%CE%B7%CE%BC%CE%AF%CE%B1+%CE%91%CE%B8%CE%B7%CE%BD%CF%8E%CE%BD&rfr_id=info:sid/el.wiktionary.org:%CE%BB%CE%B5%CE%BA%CE%AC%CE%BD%CE%B7"><span style="display: none;">&nbsp;</span></span> (<small>ψηφιοποιημένη έκδοση από το 2023, [https://christikolexiko.academyofathens.gr/index.php/leksiko/syntomografies συντομογραφίες] [https://christikolexiko.academyofathens.gr/index.php/leksiko/symvola σύμβολα]</small>)
+
+----
+
+==<span title="Aπό τον Όμηρο ως την ελληνιστική κοινή μέχρι και τον Ιουστινιανό">Αρχαία ελληνικά</span> ([[:Κατηγορία:Αρχαία ελληνικά|<span title="Κατηγορία:αρχαία ελληνικά. Aπό τον Όμηρο ως την ελληνιστική κοινή μέχρι και τον Ιουστινιανό">grc</span>]])==
+
+{| class="notheme" style="clear:right; float:right; margin-left:0.5em; margin-bottom:0.5em;background:#ffffff; color:#000000; border:1px solid#c9d7e8; text-align:right;"rules="none" border="1" cellpadding="3" cellspacing="0"|-
+| style="background:#93aed2; border-right:1px solid #a5bcd9; text-align:center; font-size:90%;" align="center"| &darr;&nbsp;''πτώσεις'' 
+! style="background:#93aed2; border-right:1px solid #a5bcd9;" colspan="2" align="center"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[ενικός|<span title="ἑνικός ἀριθμός" style="color:black;">'''''ενικός'''''</span>]]&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+! style="background:#93aed2; border-right:1px solid #c9d7e8;" colspan="2" align="center"| &nbsp;&nbsp;[[πληθυντικός|<span title="πληθυντικός ἀριθμός" style="color:black;">'''''πληθυντικός'''''</span>]]&nbsp;&nbsp;
+|-
+| style="background:#e3e5e8; border-bottom:1px solid #edf2f7; line-height:100%;" align="left"|  
+| style="background:#e3e5e8; border-right:1px solid #c9d7e8; font-family:; letter-spacing:1px;font-size:110%;"  colspan="5" align="left" | λεκᾰνα-
+|-|-
+| style="background:#e3e5e8; border-bottom:1px solid #edf2f7; text-align:right; font-size:90%;"| [[ονομαστική|<span title="πτῶσις ὀνομαστική" style="color:black;">'''''ονομαστική'''''</span>]]
+| style="border-bottom:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="center" | [[ἡ#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">ἡ</span>]]
+| style="border-bottom:1px solid #f4f4f4; border-right:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="left" | [[λεκάνη#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">λεκάν</span><span style="color:#eb0000; font-weight:normal;">η</span>]]
+| style="border-bottom:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="center" | [[αἱ#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">αἱ</span>]]
+| style="border-bottom:1px solid #f4f4f4; border-right:1px solid #c9d7e8; font-family:; letter-spacing:1px;font-size:110%;" align="left" | [[λεκάναι#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">λεκάν</span><span style="color:#eb0000; font-weight:normal;">αι</span>]]
+|-
+| style="background:#e3e5e8; border-bottom:1px solid #edf2f7; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[γενική|<span title="πτῶσις γενική" style="color:black;">'''''γενική'''''</span>]]
+| style="border-bottom:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="center" | [[τῆς#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">τῆς</span>]]
+| style="border-bottom:1px solid #f4f4f4; border-right:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="left" | [[λεκάνης#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">λεκάν</span><span style="color:#eb0000; font-weight:normal;">ης</span>]]
+| style="border-bottom:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="center" | [[τῶν#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">τῶν</span>]]
+| style="border-bottom:1px solid #f4f4f4; border-right:1px solid #c9d7e8; font-family:; letter-spacing:1px;font-size:110%;" align="left" | [[λεκανῶν#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">λεκαν</span><span style="color:#eb0000; font-weight:normal;">ῶν</span>]]
+|-
+| style="background:#e3e5e8; border-bottom:1px solid #edf2f7; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[δοτική|<span title="πτῶσις δοτική" style="color:black;">'''''δοτική'''''</span>]]
+| style="border-bottom:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="center" | [[τῇ#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">τῇ</span>]]
+| style="border-bottom:1px solid #f4f4f4; border-right:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="left" | [[λεκάνῃ#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">λεκάν</span><span style="color:#eb0000; font-weight:normal;">ῃ</span>]]
+| style="border-bottom:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="center" | [[ταῖς#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">ταῖς</span>]]
+| style="border-bottom:1px solid #f4f4f4; border-right:1px solid #c9d7e8; font-family:; letter-spacing:1px;font-size:110%;" align="left" | [[λεκάναις#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">λεκάν</span><span style="color:#eb0000; font-weight:normal;">αις</span>]]
+|-
+| style="background:#e3e5e8; border-bottom:1px solid #edf2f7; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;[[αιτιατική|<span title="πτῶσις αἰτιατική" style="color:black;">'''''αιτιατική'''''</span>]]
+| style="border-bottom:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="center" | [[τήν#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">τὴν</span>]]
+| style="border-bottom:1px solid #f4f4f4; border-right:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="left" | [[λεκάνην#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">λεκάν</span><span style="color:#eb0000; font-weight:normal;">ην</span>]]
+| style="border-bottom:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="center" | [[τάς#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">τὰς</span>]]
+| style="border-bottom:1px solid #f4f4f4; border-right:1px solid #c9d7e8; font-family:; letter-spacing:1px;font-size:110%;" align="left" | [[λεκάνας#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">λεκάν</span><span style="color:#eb0000; font-weight:normal;">ᾱς</span>]]
+|-
+| style="background:#e3e5e8; text-align:right;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[κλητική|<span title="πτῶσις κλητική" style="color:black; font-size:90%;">'''''κλητική'''''</span>]] [[ὦ|<span style="color:black;">ὦ</span>]]!
+| style="font-family:; letter-spacing:1px;font-size:110%;" align="center" | 
+| style="border-right:1px solid #f4f4f4; font-family:; letter-spacing:1px;font-size:110%;" align="left" | [[λεκάνη#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">λεκάν</span><span style="color:#eb0000; font-weight:normal;">η</span>]]
+| style="font-family:; letter-spacing:1px;font-size:110%;" align="center" | 
+| style="border-right:1px solid #c9d7e8; font-family:; letter-spacing:1px;font-size:110%;" align="left" | [[λεκάναι#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">λεκάν</span><span style="color:#eb0000; font-weight:normal;">αι</span>]]
+|-
+! style="background:#e3e5e8; border-top:1px solid #edf2f7; border-bottom:1px solid #edf2f7; text-align:center; font-size:90%; line-height:100%;" align="center"| &nbsp; 
+! style="background:#a5bcd9; border-right:1px solid #c9d7e8; font-size:80%; line-height:100%;" colspan="4" align="center" | [[δυϊκός|<span title="δυϊκός ἀριθμός" style="color:black;">'''''δυϊκός'''''</span>]]
+|-
+| style="background:#e3e5e8; border-bottom:1px solid #edf2f7; text-align:right; font-size:85%; line-height:100%;"|  <span title="πτώσεις ὀνομαστικὴ, αἰτιατική καὶ κλητική" style="color:black;">''ονομ-αιτ-κλ''</span>
+| style="border-bottom:1px solid #f4f4f4; font-size:90%; line-height:100%; text-align:right;" align="right" colspan="2" | [[τώ#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">τὼ</span>]]&nbsp;
+| style="border-bottom:1px solid #f4f4f4; border-right:1px solid #c9d7e8; font-family:; letter-spacing:1px;; font-size:90%; line-height:100%;" align="left" colspan="2" | [[λεκάνα#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">λεκάν</span><span style="color:#eb0000; font-weight:normal;">ᾱ</span>]]
+|-
+| style="background:#e3e5e8; border-bottom:1px solid #edf2f7; text-align:right; font-size:85%; line-height:100%;"| <span title="πτώσεις γενικὴ καὶ δοτική" style="color:black;">''γεν-δοτ''</span>
+| style="border-bottom:1px solid #f4f4f4; font-size:90%; line-height:100%; text-align:right;" align="right" colspan="2" | [[τοῖν#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">τοῖν</span>]]&nbsp;
+| style="border-bottom:1px solid #f4f4f4; border-right:1px solid #c9d7e8; font-family:; letter-spacing:1px;; font-size:90%; line-height:100%;" align="left" colspan="2" | [[λεκάναιν#Αρχαία ελληνικά (grc)|<span style="color:#002000; font-weight:normal;">λεκάν</span><span style="color:#eb0000; font-weight:normal;">αιν</span>]]
+|-
+| colspan="5" align="left" style="background:#edf2f7; font-size:80%; line-height:100%;" | Το φωνήεν της παραλήγουσας είναι βραχύ.
+|-
+| colspan="5" align="right" style="text-align:right; background:#edf2f7; font-size:70%; line-height:100%;" | [[Παράρτημα:Ουσιαστικά (αρχαία ελληνικά)/1|1η κλίση]], [[:Κατηγορία:Ουσιαστικά με κλίση της ομάδας 'γνώμη' (αρχαία ελληνικά)|ομάδα 'γνώμη']], [[:Κατηγορία:Ουσιαστικά με κλίση 'δίκη' (αρχαία ελληνικά)|Κατηγορία 'δίκη']] όπως «[[Παράρτημα:Ουσιαστικά (αρχαία ελληνικά)/1#βελόνη|βελόνη]]» - [[Παράρτημα:Ουσιαστικά (αρχαία ελληνικά)|<span title="Παράρτημα:Ουσιαστικά (αρχαία)">Παράρτημα:Ουσιαστικά</span>]]
+|}[[Κατηγορία:Ουσιαστικά με κλίση της ομάδας 'γνώμη' (αρχαία ελληνικά)]][[Κατηγορία:Ουσιαστικά με κλίση 'δίκη' (αρχαία ελληνικά)]][[Κατηγορία:Ουσιαστικά που κλίνονται όπως το 'δίκη' (αρχαία ελληνικά)]][[Κατηγορία:Ουσιαστικά 1ης κλίσης (αρχαία ελληνικά)]][[Κατηγορία:Ουσιαστικά 1ης κλίσης θηλυκά (αρχαία ελληνικά)]][[Κατηγορία:Ουσιαστικά θηλυκά (αρχαία ελληνικά)]][[Κατηγορία:Ουσιαστικά παροξύτονα (αρχαία ελληνικά)]][[Κατηγορία:Ουσιαστικά θηλυκά παροξύτονα (αρχαία ελληνικά)]][[Κατηγορία:Λέξεις παροξύτονες (αρχαία ελληνικά)]]
+===<span style="cursor:help; white-space:nowrap;" title="Προέλευση και ιστορία της λέξης">[[Αρχείο:System-search.svg|30px|alt=|link=]] Ετυμολογία </span>===
+: '''λεκάνη''' < θέμα '''λεκ-''' (υπάρχει στο συνώνυμο [[λέκος#Αρχαία ελληνικά (grc)|λέκος]] ([[πιατέλα]])) με αβέβαιη προέλευση + <span style="white-space:nowrap">[[-άνη#Αρχαία ελληνικά (grc)|-άνη]]</span>[[Κατηγορία:Λέξεις με επίθημα -άνη&nbsp;(αρχαία ελληνικά)]]<ref>λεκάνη - <span class="citation book"
+>[[w:Γεώργιος Μπαμπινιώτης |Μπαμπινιώτης,&#32;Γεώργιος]]&#32;(2010).&#32;''<nowiki />Ετυμολογικό Λεξικό της Νέας Ελληνικής Γλώσσας<nowiki />''&#32;(Β' ανατύπωση. 2009: A' έκδοση).&#32;Αθήνα<nowiki>:</nowiki>&#32;Κέντρο Λεξικολογίας.</span><span
+    class="Z3988"
+    title="ctx_ver=Z39.88-2004&rft_val_fmt=info%3Aofi%2Ffmt%3Akev%3Amtx%3Abook&rft.genre=book&rft.btitle=%CE%95%CF%84%CF%85%CE%BC%CE%BF%CE%BB%CE%BF%CE%B3%CE%B9%CE%BA%CF%8C+%CE%9B%CE%B5%CE%BE%CE%B9%CE%BA%CF%8C+%CF%84%CE%B7%CF%82+%CE%9D%CE%AD%CE%B1%CF%82+%CE%95%CE%BB%CE%BB%CE%B7%CE%BD%CE%B9%CE%BA%CE%AE%CF%82+%CE%93%CE%BB%CF%8E%CF%83%CF%83%CE%B1%CF%82&rft.aulast=%CE%9C%CF%80%CE%B1%CE%BC%CF%80%CE%B9%CE%BD%CE%B9%CF%8E%CF%84%CE%B7%CF%82&rft.aufirst=%CE%93%CE%B5%CF%8E%CF%81%CE%B3%CE%B9%CE%BF%CF%82&rft.au=%CE%9C%CF%80%CE%B1%CE%BC%CF%80%CE%B9%CE%BD%CE%B9%CF%8E%CF%84%CE%B7%CF%82%2C%26%2332%3B%CE%93%CE%B5%CF%8E%CF%81%CE%B3%CE%B9%CE%BF%CF%82&rft.date=2010&rft.edition=%CE%92%27+%CE%B1%CE%BD%CE%B1%CF%84%CF%8D%CF%80%CF%89%CF%83%CE%B7.+2009%3A+A%27&rft.place=%CE%91%CE%B8%CE%AE%CE%BD%CE%B1&rft.pub=%CE%9A%CE%AD%CE%BD%CF%84%CF%81%CE%BF+%CE%9B%CE%B5%CE%BE%CE%B9%CE%BA%CE%BF%CE%BB%CE%BF%CE%B3%CE%AF%CE%B1%CF%82&rfr_id=info:sid/el.wiktionary.org:%CE%BB%CE%B5%CE%BA%CE%AC%CE%BD%CE%B7"><span style="display: none;">&nbsp;</span></span></ref>
+
+===<span id="grcουσιαστικό"></span><span style="white-space:nowrap" class="partofspeech">[[File:OOjs_UI-like_arrow_empty-ltr_progressive.svg|25px|alt=|link=]] Ουσιαστικό</span>[[Κατηγορία:Αρχαία ελληνικά]][[Κατηγορία:Ουσιαστικά (αρχαία ελληνικά)]][[Κατηγορία:Αντίστροφο λεξικό (αρχαία ελληνικά)|ηνακελ]]===
+'''λεκάνη''' ''θηλυκό''
+* ''[[συνώνυμο|συνώνυμο]] του '''''[[λέκος#Αρχαία ελληνικά (grc)|λέκος]]''' πιάτο, κατσαρόλα, δοχείο σαν κύπελλο
+*: <span style="background:#ffffff; color:#002000;">''άλλες μορφές:''</span> [[λεκάνιον#Αρχαία ελληνικά (grc)|λεκάνιον]]
+
+====<span style="cursor:help;" title="Για λέξεις και όρους που παράγονται από «λεκάνη»">Παράγωγα</span>====
+<div class="boite">
+<div >
+
+<div  class="notheme" style="width:45%;column-count:2; -webkit-column-count:2; -moz-column-count:2;column-width:50%; -webkit-column-width:50%; -moz-column-width:50%; background:#fbfbff; color:#000000; vertical-align: top; text-align: left;">
+* [[λεκανίδιον#Αρχαία ελληνικά (grc)|λεκανίδιον]]
+* [[λεκάνιον#Αρχαία ελληνικά (grc)|λεκάνιον]]
+* [[λεκανίς#Αρχαία ελληνικά (grc)|λεκανίς]]
+* [[λεκανίσκη#Αρχαία ελληνικά (grc)|λεκανίσκη]]
+* [[λέκανος#Αρχαία ελληνικά (grc)|λέκανος]]
+</div>
+
+</div>
+</div>
+
+====<span style="cursor:help;" title="Για τις σύνθετες λέξεις «λεκάνη»">Σύνθετα</span>====
+<div class="boite">
+<div >
+
+<div  class="notheme" style="width:45%;column-count:2; -webkit-column-count:2; -moz-column-count:2;column-width:50%; -webkit-column-width:50%; -moz-column-width:50%; background:#fbfbff; color:#000000; vertical-align: top; text-align: left;">
+* [[λεκανομαντεία#Αρχαία ελληνικά (grc)|λεκανομαντεία]]
+* [[λεκανόμαντις#Αρχαία ελληνικά (grc)|λεκανόμαντις]]
+* [[λεκανόπωλις#Αρχαία ελληνικά (grc)|λεκανόπωλις]]
+* [[λεκανοσκοπία#Αρχαία ελληνικά (grc)|λεκανοσκοπία]]
+</div>
+
+</div>
+</div>
+
+===<span style="cursor:help;">[[Αρχείο:Open book icon.png|30px|alt=|link=]] <span title="παραπομπές σε πηγές">Αναφορές</span></span>===
+<references/>
+
+===<span style="cursor:help;" title="πληροφορίες για πηγές και βιβλιογραφία">[[Αρχείο:Open book icon.png|30px|alt=|link=]] <span style="cursor:help;" title="πληροφορίες για πηγές και βιβλιογραφία">Πηγές</span></span>===
+* [http://www.greek-language.gr/digitalResources/ancient_greek/tools/liddell-scott/search.html?lq=%CE%BB%CE%B5%CE%BA%CE%AC%CE%BD%CE%B7 λεκάνη] -&nbsp;Επιτομή του [[w:Λεξικό Λίντελ-Σκοτ|<span class="notheme" style="background:#f7f7f7;" title="Λεξικό Λίντελ-Σκοτ στη  Βικιπαίδεια">Λεξικού Λίντελ-Σκοτ</span>]], Λεξικό της Αρχαίας Ελληνικής Γλώσσας (Επιτομή του Μεγάλου Λεξικού, εκδ.&nbsp;Πελεκάνος, 2007), [http://www.greek-language.gr/digitalResources/index.html Ψηφίδες] στο [http://www.greek-language.gr/ Κέντρο Ελληνικής Γλώσσας], 2012
+* [https://logeion.uchicago.edu/%CE%BB%CE%B5%CE%BA%CE%AC%CE%BD%CE%B7 λεκάνη]&nbsp;-&nbsp;[https://logeion.uchicago.edu/about ΛΟΓΕΙΟΝ] (αγγλικά, από το 2011) Λεξικά για την αρχαία ελληνική και λατινική γλώσσα (στα αγγλικά, γαλλικά, ισπανικά, κ.λπ.) [[w:Πανεπιστήμιο του Σικάγου|<span class="notheme" style="background:#f7f7f7;" title="Πανεπιστήμιο του Σικάγου στη  Βικιπαίδεια">Πανεπιστήμιο του Σικάγου</span>]].
+
+[[Κατηγορία:Αντίστροφο λεξικό (ελληνικά)|ηνακελ]]

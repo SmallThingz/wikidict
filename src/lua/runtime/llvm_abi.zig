@@ -287,15 +287,19 @@ export fn dict_lua_get_linear_index(ctx: *rt.Context, object: *const rt.Value, k
         for (table.slots, 0..) |_, slot| {
             const field_key = table.fieldKey(@intCast(slot)) orelse continue;
             if (!rt.rawEqual(field_key, key.*)) continue;
-            out.* = table.rawGetSlot(@intCast(slot)) orelse .nil;
-            return 0;
+            if (table.rawGetSlot(@intCast(slot))) |value| {
+                out.* = value;
+                return 0;
+            }
+            break;
         }
     }
     for (table.choices, 0..) |_, choice| if (table.rawGetChoice(@intCast(choice), key.*)) |value| {
         out.* = value;
         return 0;
     };
-    out.* = .nil;
+    // Literal field writes can share this table with dynamic linear accesses.
+    out.* = if (table.map.count() != 0) table.rawGet(key.*) orelse .nil else .nil;
     return 0;
 }
 
@@ -328,7 +332,16 @@ export fn dict_lua_set_linear_index(ctx: *rt.Context, object: *const rt.Value, k
         table.rawSetChoice(@intCast(choice), key.*, input.*) catch |err| return fail(ctx, err);
         return 0;
     }
-    if (input.* == .nil) return 0;
+    // Update the original map entry instead of creating a second live key.
+    if (table.map.getPtrContext(key.*, .{}) != null) {
+        table.rawSet(ctx.allocator, key.*, input.*) catch |err| return fail(ctx, err);
+        return 0;
+    }
+    if (input.* == .nil) {
+        // Even an absent deletion validates the key and records the write.
+        table.rawSet(ctx.allocator, key.*, input.*) catch |err| return fail(ctx, err);
+        return 0;
+    }
     if (empty_choice == null) {
         // Storage growth is already a mutation. Snapshot the original layout
         // before realloc can replace it, not later in rawSetChoice.
@@ -1563,5 +1576,257 @@ test "global ABI false nil and saved environment aliases preserve metamethod fal
     try std.testing.expectEqual(@as(u32, 1), dict_lua_global_get(&ctx, 1, &output));
     try std.testing.expectEqualStrings("NotImplemented", ctx.aotErrorName().?);
     try std.testing.expectEqual(@as(f64, 41), ctx.getGlobal(2).number);
+    try std.testing.expect(ctx.depth == 0 and ctx.active_module_id == null);
+}
+
+test "linear ABI reads literal-written stems and updates one shared key through deletion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+    const object: rt.Value = .{ .table = table };
+    const key: rt.Value = .{ .string = "\xce\xb8" };
+    const stem: rt.Value = .{ .string = "\xce\xbb\xce\xb5\xce\xba\xce\xac\xce\xbd" };
+    const hash = rt.stringValueHash(key.string);
+    var out: rt.Value = undefined;
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_store_field_hashed(&ctx, &object, key.string.ptr, key.string.len, hash, &stem));
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_get_linear_index(&ctx, &object, &key, &out));
+    try std.testing.expectEqualStrings(stem.string, out.string);
+
+    const changed: rt.Value = .{ .boolean = false };
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_set_linear_index(&ctx, &object, &key, &changed));
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_get_field_hashed(&ctx, &object, key.string.ptr, key.string.len, hash, &out));
+    try std.testing.expect(out == .boolean and !out.boolean);
+    var iter = table.iterator();
+    const only = iter.next() orelse return error.MissingSharedKey;
+    try std.testing.expect(rt.rawEqual(key, only.key_ptr.*));
+    try std.testing.expect(only.value_ptr.* == .boolean and !only.value_ptr.boolean);
+    try std.testing.expect(iter.next() == null);
+
+    const rewritten: rt.Value = .{ .number = 19 };
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_store_field_hashed(&ctx, &object, key.string.ptr, key.string.len, hash, &rewritten));
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_get_linear_index(&ctx, &object, &key, &out));
+    try std.testing.expectEqual(@as(f64, 19), out.number);
+    const deleted: rt.Value = .nil;
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_set_linear_index(&ctx, &object, &key, &deleted));
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_get_field_hashed(&ctx, &object, key.string.ptr, key.string.len, hash, &out));
+    try std.testing.expect(out == .nil);
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_get_linear_index(&ctx, &object, &key, &out));
+    try std.testing.expect(out == .nil);
+    iter = table.iterator();
+    try std.testing.expect(iter.next() == null);
+
+    // The inverse direction starts in a choice, then uses constant accesses.
+    const dynamic_key: rt.Value = .{ .string = "dynamic" };
+    const dynamic_hash = rt.stringValueHash(dynamic_key.string);
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_set_linear_index(&ctx, &object, &dynamic_key, &stem));
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_get_field_hashed(&ctx, &object, dynamic_key.string.ptr, dynamic_key.string.len, dynamic_hash, &out));
+    try std.testing.expectEqualStrings(stem.string, out.string);
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_store_field_hashed(&ctx, &object, dynamic_key.string.ptr, dynamic_key.string.len, dynamic_hash, &rewritten));
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_get_linear_index(&ctx, &object, &dynamic_key, &out));
+    try std.testing.expectEqual(@as(f64, 19), out.number);
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_store_field_hashed(&ctx, &object, dynamic_key.string.ptr, dynamic_key.string.len, dynamic_hash, &deleted));
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_get_linear_index(&ctx, &object, &dynamic_key, &out));
+    try std.testing.expect(out == .nil);
+    iter = table.iterator();
+    try std.testing.expect(iter.next() == null);
+}
+
+test "linear ABI mixed keys agree with ordinary table operations and invocation rollback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const fast = try ctx.newTable();
+    const ordinary = try ctx.newTable();
+    const fast_value: rt.Value = .{ .table = fast };
+    const identity = try ctx.newTable();
+    const keys = [_]rt.Value{
+        .{ .string = "mapped" }, .{ .number = 1 }, .{ .number = 1000000 },
+        .{ .string = "1" }, .{ .boolean = false }, .{ .table = identity },
+    };
+    for (keys, 0..) |key, i| {
+        const value: rt.Value = .{ .number = @floatFromInt(i + 1) };
+        try fast.rawSet(ctx.allocator, key, value);
+        try ordinary.rawSet(ctx.allocator, key, value);
+    }
+    for (keys) |key| {
+        var out: rt.Value = undefined;
+        try std.testing.expectEqual(@as(u32, 0), dict_lua_get_linear_index(&ctx, &fast_value, &key, &out));
+        try std.testing.expect(rt.rawEqual(ordinary.rawGet(key).?, out));
+    }
+    var journal = rt.InvokeRollbackJournal.init(ctx.allocator, &ctx);
+    journal.begin();
+    for (keys, 0..) |key, i| {
+        const value: rt.Value = if (i % 2 == 0) .nil else .{ .number = @floatFromInt(100 + i) };
+        try std.testing.expectEqual(@as(u32, 0), dict_lua_set_linear_index(&ctx, &fast_value, &key, &value));
+        try ordinary.rawSet(ctx.allocator, key, value);
+        var out: rt.Value = undefined;
+        try std.testing.expectEqual(@as(u32, 0), dict_lua_get_linear_index(&ctx, &fast_value, &key, &out));
+        try std.testing.expect(rt.rawEqual(ordinary.rawGet(key) orelse .nil, out));
+    }
+    var iter = fast.iterator();
+    var count: usize = 0;
+    while (iter.next()) |entry| {
+        count += 1;
+        try std.testing.expect(rt.rawEqual(ordinary.rawGet(entry.key_ptr.*).?, entry.value_ptr.*));
+    }
+    try std.testing.expectEqual(@as(usize, 3), count);
+    journal.rollback(&ctx);
+    for (keys, 0..) |key, i| {
+        var out: rt.Value = undefined;
+        try std.testing.expectEqual(@as(u32, 0), dict_lua_get_linear_index(&ctx, &fast_value, &key, &out));
+        try std.testing.expectEqual(@as(f64, @floatFromInt(i + 1)), out.number);
+    }
+    iter = fast.iterator();
+    count = 0;
+    while (iter.next() != null) count += 1;
+    try std.testing.expectEqual(keys.len, count);
+}
+
+test "linear ABI preserves shaped choice map precedence and access failures" {
+    const State = struct { reads: usize = 0, writes: usize = 0, reject: bool = false };
+    const F = struct {
+        fn index(raw: ?*anyopaque, _: *rt.Context, _: []const rt.Value) ![]const rt.Value {
+            const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingProbeState));
+            state.reads += 1;
+            if (state.reject) return error.NotImplemented;
+            const values_out = try std.heap.smp_allocator.alloc(rt.Value, 1);
+            values_out[0] = .{ .number = 97 };
+            return values_out;
+        }
+        fn newindex(raw: ?*anyopaque, ctx: *rt.Context, args: []const rt.Value) ![]const rt.Value {
+            const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingProbeState));
+            state.writes += 1;
+            if (state.reject) return error.NotImplemented;
+            try args[0].table.rawSet(ctx.allocator, args[1], args[2]);
+            return &.{};
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.init(arena.allocator(), 0);
+    defer ctx.deinit();
+    const keys = [_]rt.Value{.{ .string = "slot" }};
+    const shape: rt.Shape = .{ .keys = .{ .boxed = &keys }, .field_count = keys.len, .choice_count = 2, .open = true };
+    const table = try ctx.newShapedTable(&shape);
+    const object: rt.Value = .{ .table = table };
+    const mapped: rt.Value = .{ .string = "mapped" };
+    const chosen: rt.Value = .{ .string = "choice" };
+    try table.rawSetSlot(0, .{ .number = 11 });
+    try table.rawSet(ctx.allocator, mapped, .{ .number = 22 });
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_set_linear_index(&ctx, &object, &chosen, &.{ .number = 33 }));
+    var out: rt.Value = undefined;
+    for ([_]rt.Value{ keys[0], mapped, chosen }, [_]f64{ 11, 22, 33 }) |key, expected| {
+        try std.testing.expectEqual(@as(u32, 0), dict_lua_get_linear_index(&ctx, &object, &key, &out));
+        try std.testing.expectEqual(expected, out.number);
+    }
+    // Choice writes can overlap a structural key. Clearing the first entry
+    // through the ordinary iterator must expose the still-live choice.
+    try table.rawSetChoice(1, keys[0], .{ .number = 44 });
+    var iter = table.iterator();
+    const structural = iter.next() orelse return error.MissingStructuralEntry;
+    try std.testing.expect(rt.rawEqual(keys[0], structural.key_ptr.*));
+    structural.value_ptr.* = .nil;
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_get_linear_index(&ctx, &object, &keys[0], &out));
+    try std.testing.expectEqual(@as(f64, 44), out.number);
+    try std.testing.expect(rt.rawEqual(table.rawGet(keys[0]).?, out));
+
+    table.read_only = true;
+    try std.testing.expectEqual(@as(u32, 1), dict_lua_set_linear_index(&ctx, &object, &mapped, &.{ .number = 55 }));
+    try std.testing.expectEqualStrings("ReadOnlyTable", ctx.aotErrorName().?);
+    try std.testing.expectEqual(@as(f64, 22), table.rawGet(mapped).?.number);
+    table.read_only = false;
+    ctx.clearAotErrorName();
+    const mt = try ctx.newTable();
+    var state: State = .{};
+    try mt.rawSet(ctx.allocator, .{ .string = "__index" }, try ctx.newNative(&state, F.index));
+    try mt.rawSet(ctx.allocator, .{ .string = "__newindex" }, try ctx.newNative(&state, F.newindex));
+    try table.setMetatable(mt);
+    const missing: rt.Value = .{ .string = "missing" };
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_get_linear_index(&ctx, &object, &missing, &out));
+    try std.testing.expectEqual(@as(f64, 97), out.number);
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_set_linear_index(&ctx, &object, &missing, &.{ .boolean = false }));
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_get_linear_index(&ctx, &object, &missing, &out));
+    try std.testing.expect(out == .boolean and !out.boolean);
+    try std.testing.expectEqual(@as(usize, 1), state.reads);
+    try std.testing.expectEqual(@as(usize, 1), state.writes);
+    state.reject = true;
+    const absent: rt.Value = .{ .number = 12345 };
+    try std.testing.expectEqual(@as(u32, 1), dict_lua_get_linear_index(&ctx, &object, &absent, &out));
+    try std.testing.expectEqualStrings("NotImplemented", ctx.aotErrorName().?);
+    ctx.clearAotErrorName();
+    try std.testing.expectEqual(@as(u32, 1), dict_lua_set_linear_index(&ctx, &object, &absent, &.{ .number = 1 }));
+    try std.testing.expectEqualStrings("NotImplemented", ctx.aotErrorName().?);
+    try std.testing.expect(table.rawGet(absent) == null);
+    try std.testing.expectEqual(@as(usize, 2), state.reads);
+    try std.testing.expectEqual(@as(usize, 2), state.writes);
+    ctx.clearAotErrorName();
+    const non_table: rt.Value = .{ .number = 7 };
+    try std.testing.expectEqual(@as(u32, 1), dict_lua_get_linear_index(&ctx, &non_table, &mapped, &out));
+    try std.testing.expectEqualStrings("IndexType", ctx.aotErrorName().?);
+    try std.testing.expect(ctx.depth == 0 and ctx.active_module_id == null);
+}
+
+test "linear ABI absent deletion preserves key validation readonly order and mutation guards" {
+    const State = struct { calls: usize = 0 };
+    const F = struct {
+        fn accept(raw: ?*anyopaque, _: *rt.Context, args: []const rt.Value) ![]const rt.Value {
+            const state: *State = @ptrCast(@alignCast(raw orelse return error.MissingProbeState));
+            if (args.len != 3 or args[1] != .nil or args[2] != .nil) return error.UnexpectedDeleteArguments;
+            state.calls += 1;
+            return &.{};
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ctx = try rt.Context.initProgram(arena.allocator(), 0, 1);
+    defer ctx.deinit();
+    const table = try ctx.newTable();
+    const object: rt.Value = .{ .table = table };
+    try ctx.preinitializeModule(0, object, false);
+    try std.testing.expect(table.has_export_guard and table.export_pristine);
+    const deleted: rt.Value = .nil;
+    const invalid_keys = [_]rt.Value{ .nil, .{ .number = std.math.nan(f64) } };
+    const expected_errors = [_][]const u8{ "NilTableKey", "NaNTableKey" };
+    for (invalid_keys, expected_errors) |key, expected| {
+        try std.testing.expectEqual(@as(u32, 1), dict_lua_set_linear_index(&ctx, &object, &key, &deleted));
+        try std.testing.expectEqualStrings(expected, ctx.aotErrorName().?);
+        try std.testing.expect(table.export_pristine);
+        try std.testing.expectEqual(@as(usize, 0), table.choices.len);
+        try std.testing.expectEqual(@as(u32, 0), table.map.count());
+        ctx.clearAotErrorName();
+    }
+    table.read_only = true;
+    const absent: rt.Value = .{ .string = "absent" };
+    for ([_]rt.Value{ invalid_keys[0], invalid_keys[1], absent }) |key| {
+        try std.testing.expectEqual(@as(u32, 1), dict_lua_set_linear_index(&ctx, &object, &key, &deleted));
+        try std.testing.expectEqualStrings("ReadOnlyTable", ctx.aotErrorName().?);
+        try std.testing.expect(table.export_pristine);
+        ctx.clearAotErrorName();
+    }
+    table.read_only = false;
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_set_linear_index(&ctx, &object, &absent, &deleted));
+    try std.testing.expect(!table.export_pristine);
+    try std.testing.expect(table.rawGet(absent) == null);
+    try std.testing.expectEqual(@as(usize, 0), table.choices.len);
+    try std.testing.expectEqual(@as(u32, 0), table.map.count());
+
+    // Ordinary __newindex dispatch occurs before raw key validation, including
+    // a read-only receiver whose handler accepts the otherwise invalid key.
+    var state: State = .{};
+    const mt = try ctx.newTable();
+    try mt.rawSet(ctx.allocator, .{ .string = "__newindex" }, try ctx.newNative(&state, F.accept));
+    try table.setMetatable(mt);
+    table.read_only = true;
+    try ctx.setIndex(object, .nil, .nil);
+    try std.testing.expectEqual(@as(usize, 1), state.calls);
+    try std.testing.expectEqual(@as(u32, 0), dict_lua_set_linear_index(&ctx, &object, &deleted, &deleted));
+    try std.testing.expectEqual(@as(usize, 2), state.calls);
+    try std.testing.expect(ctx.aotErrorName() == null);
+    const wrong: rt.Value = .{ .number = 1 };
+    try std.testing.expectEqual(@as(u32, 1), dict_lua_set_linear_index(&ctx, &wrong, &deleted, &deleted));
+    try std.testing.expectEqualStrings("IndexType", ctx.aotErrorName().?);
     try std.testing.expect(ctx.depth == 0 and ctx.active_module_id == null);
 }

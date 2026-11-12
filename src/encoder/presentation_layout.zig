@@ -266,11 +266,96 @@ const PendingSense = struct {
     notes: BlockAddresses = .{},
 };
 
-const LexicalProjection = enum { ordinary, kyrgyz_example, bulgarian_request, id_request };
+// Retained λεκάνη authors {{γρ|λέκος|συνών|grc}} plus a nonempty gloss
+// under its independently owned noun heading. This is not a general bullet rule.
+fn greekSynonymSpan(span: wiki.Span) bool {
+    return span.provenance == .parsed and !span.generated_diagnostic and !span.self_link and
+        span.role == .normal and span.image == null and
+        !span.flags.code and !span.flags.small and !span.flags.superscript and
+        !span.flags.subscript and !span.flags.strike and !span.flags.underline;
+}
+fn greekSynonymPlain(span: wiki.Span) bool {
+    return greekSynonymSpan(span) and span.kind == .text and span.target.len == 0;
+}
+fn greekSynonymFlatBlock(block: wiki.Block) bool {
+    return block.table == null and block.figure == null and block.container == null and
+        block.flow == null and block.feature == null;
+}
+fn greekSynonymHeadword(block: wiki.Block) bool {
+    if (block.kind != .paragraph or !greekSynonymFlatBlock(block) or block.spans.len != 3) return false;
+    const word = block.spans[0];
+    const space = block.spans[1];
+    const gender = block.spans[2];
+    return greekSynonymPlain(word) and word.flags.bold and !word.flags.italic and
+        std.mem.trim(u8, word.text, " \t\r\n").len != 0 and
+        greekSynonymPlain(space) and !space.flags.bold and !space.flags.italic and std.mem.eql(u8, space.text, " ") and
+        greekSynonymPlain(gender) and !gender.flags.bold and gender.flags.italic and std.mem.eql(u8, gender.text, "θηλυκό");
+}
+fn greekSynonymGloss(block: wiki.Block) bool {
+    if (block.kind != .list_item or block.depth != 1 or !std.mem.eql(u8, block.list_path, "*") or
+        !greekSynonymFlatBlock(block) or block.spans.len != 4) return false;
+    for (block.spans) |span| if (!greekSynonymSpan(span)) return false;
+    const marker = block.spans[0];
+    const relation = block.spans[1];
+    const lemma = block.spans[2];
+    const gloss = block.spans[3];
+    return marker.kind == .link and std.mem.eql(u8, marker.target, "συνώνυμο") and
+        std.mem.eql(u8, marker.text, "συνώνυμο") and marker.flags.italic and !marker.flags.bold and
+        greekSynonymPlain(relation) and std.mem.eql(u8, relation.text, " του ") and relation.flags.italic and !relation.flags.bold and
+        lemma.kind == .link and lemma.target.len != 0 and std.mem.trim(u8, lemma.text, " \t\r\n").len != 0 and
+        lemma.flags.bold and !lemma.flags.italic and
+        greekSynonymPlain(gloss) and !gloss.flags.bold and !gloss.flags.italic and
+        std.mem.trim(u8, gloss.text, " \t\r\n").len != 0;
+}
+fn greekSynonymFormNote(block: wiki.Block) bool {
+    if (block.kind != .list_detail or block.depth != 2 or !std.mem.eql(u8, block.list_path, "*:") or
+        !greekSynonymFlatBlock(block) or block.spans.len != 3) return false;
+    const marker = block.spans[0];
+    const space = block.spans[1];
+    const form = block.spans[2];
+    return greekSynonymPlain(marker) and std.mem.eql(u8, marker.text, "άλλες μορφές:") and marker.flags.italic and !marker.flags.bold and
+        greekSynonymPlain(space) and std.mem.eql(u8, space.text, " ") and !space.flags.italic and !space.flags.bold and
+        greekSynonymSpan(form) and form.kind == .link and form.target.len != 0 and
+        std.mem.trim(u8, form.text, " \t\r\n").len != 0 and !form.flags.bold and !form.flags.italic;
+}
+fn greekSynonymSection(section: anytype, owner: ?[]const u8) bool {
+    const language = owner orelse return false;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified") or
+        section.level != 3 or !std.mem.eql(u8, section.title, "Ουσιαστικό")) return false;
+    if (@hasField(@TypeOf(section), "is_heading")) if (!section.is_heading) return false;
+    if (@hasField(@TypeOf(section), "title_depth")) if (section.title_depth != 0) return false;
+    if (@hasField(@TypeOf(section), "title_list_path")) if (section.title_list_path.len != 0) return false;
+    var at: usize = 0;
+    // The ordinary Document may prepend its addressable heading companion.
+    if (at < section.blocks.len and section.blocks[at].kind == .heading) {
+        if (section.blocks[at].level != 3 or section.blocks[at].depth != 0 or
+            section.blocks[at].list_path.len != 0) return false;
+        at += 1;
+    }
+    if (at == section.blocks.len or !greekSynonymHeadword(section.blocks[at])) return false;
+    at += 1;
+    if (at == section.blocks.len or !greekSynonymGloss(section.blocks[at])) return false;
+    at += 1;
+    if (at < section.blocks.len and greekSynonymFormNote(section.blocks[at])) at += 1;
+    return at == section.blocks.len;
+}
+
+const LexicalProjection = enum { ordinary, kyrgyz_example, bulgarian_request, id_request, greek_synonym };
 fn lexicalProjection(block: wiki.Block, projection: LexicalProjection) wiki.Block {
     var result = block;
     switch (projection) {
         .ordinary => {},
+        .greek_synonym => {
+            // Semantic projection only: original list markers and body stay intact.
+            if (greekSynonymGloss(block)) {
+                result.kind = .definition;
+                result.list_path = "#";
+                result.depth = 1;
+            } else if (greekSynonymFormNote(block)) {
+                result.list_path = "#:";
+                result.depth = 1;
+            }
+        },
         .kyrgyz_example => if (kyrgyzExample(block)) {
             result.kind = .example;
             result.list_path = "#:";
@@ -1738,6 +1823,8 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
                 try analyzeMarkedParagraph(a, marker, i, origin, section.blocks)
             else if (grammar_kind != null)
                 try analyzeBulgarianVerb(a, name, i, origin, section.blocks)
+            else if (greekSynonymSection(section, owner))
+                try analyzeProjected(a, name, i, origin, section.blocks, true, .greek_synonym)
             else if (kyrgyzMeaningParent(sections, i) != null)
                 try analyzeKyrgyzMeanings(a, name, i, origin, section.blocks)
             else
@@ -10592,4 +10679,159 @@ test "Malagasy noun alias keeps exact spelling independent owners and numbered s
     const literal = try renderer.renderBody("<nowiki>===Anarana iombonana===\n# literal, not a definition</nowiki>");
     const protected = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = literal }};
     try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &protected)).lexemes.len);
+}
+
+
+const GreekSynonymTest = struct {
+    const body = "'''λεκάνη''' ''θηλυκό''\n" ++
+        "* ''[[συνώνυμο|συνώνυμο]] του '''''[[λέκος#Αρχαία ελληνικά (grc)|λέκος]]''' πιάτο, κατσαρόλα, δοχείο σαν κύπελλο\n" ++
+        "*: <span style=\"background:#ffffff; color:#002000;\">''άλλες μορφές:''</span> [[λεκάνιον#Αρχαία ελληνικά (grc)|λεκάνιον]]\n";
+    const Section = struct {
+        title: []const u8 = "Ουσιαστικό", level: u8 = 3, blocks: []const wiki.Block,
+        is_heading: bool = true, title_depth: u8 = 0, title_list_path: []const u8 = "",
+    };
+    fn hash(bytes: []const u8, expected: []const u8) !void {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+        try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+    }
+};
+
+test "Greek marked synonym gloss owns one sense and form note without changing authored bullets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(GreekSynonymTest.body);
+    try std.testing.expectEqual(@as(usize, 3), blocks.len);
+    const original = try std.json.Stringify.valueAlloc(a, blocks, .{});
+    const sections = [_]GreekSynonymTest.Section{.{ .blocks = blocks }};
+    for ([_][]const u8{ "Αρχαία Ελληνικά", "Independent owner" }) |owner| {
+        const layout = try buildOwned(a, &sections, owner);
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+        const noun = layout.lexemes[0];
+        try std.testing.expectEqualStrings(owner, noun.language);
+        try std.testing.expectEqualStrings("Noun", noun.kind);
+        try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+        try std.testing.expectEqual(@as(usize, 1), noun.definitions[0].block);
+        try std.testing.expectEqualSlices(usize, &.{2}, noun.definitions[0].notes);
+        try std.testing.expectEqualSlices(usize, &.{0}, noun.introduction);
+        try std.testing.expectEqual(@as(usize, 0), noun.other_blocks.len);
+        try std.testing.expectEqual(wiki.Kind.list_item, blocks[1].kind);
+        try std.testing.expectEqualStrings("*", blocks[1].list_path);
+        try std.testing.expectEqual(wiki.Kind.list_detail, blocks[2].kind);
+        try std.testing.expectEqualStrings("*:", blocks[2].list_path);
+        try std.testing.expectEqualStrings("λέκος#Αρχαία ελληνικά (grc)", blocks[1].spans[2].target);
+        try std.testing.expect(blocks[1].spans[0].flags.italic and blocks[1].spans[2].flags.bold);
+        try std.testing.expectEqualStrings("#002000", blocks[2].spans[0].foreground.?);
+        try std.testing.expectEqualStrings(original, try std.json.Stringify.valueAlloc(a, blocks, .{}));
+    }
+}
+
+test "Greek synonym sense refuses unowned ordinary support tainted malformed and empty bullets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(GreekSynonymTest.body);
+    const section: GreekSynonymTest.Section = .{ .blocks = blocks };
+    try std.testing.expect(greekSynonymSection(section, "Αρχαία Ελληνικά"));
+    for ([_]?[]const u8{ null, "", "Unclassified" }) |owner|
+        try std.testing.expect(!greekSynonymSection(section, owner));
+    try std.testing.expectEqual(@as(usize, 0), (try build(a, &[_]GreekSynonymTest.Section{section})).lexemes[0].definitions.len);
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &[_]GreekSynonymTest.Section{section})).lexemes[0].definitions.len);
+    for ([_][]const u8{ "Παράγωγα", "Σύνθετα", "Συνώνυμα", "Μεταφράσεις", "Noun" }) |title| {
+        var changed = section; changed.title = title;
+        try std.testing.expect(!greekSynonymSection(changed, "Αρχαία Ελληνικά"));
+        const layout = try buildOwned(a, &[_]GreekSynonymTest.Section{changed}, "Αρχαία Ελληνικά");
+        for (layout.lexemes) |lexeme| try std.testing.expectEqual(@as(usize, 0), lexeme.definitions.len);
+    }
+    for (0..13) |mode| {
+        const altered = try a.dupe(wiki.Block, blocks);
+        const spans = try a.dupe(wiki.Span, blocks[1].spans);
+        altered[1].spans = spans;
+        var changed = section; changed.blocks = altered;
+        switch (mode) {
+            0 => { spans[0].kind = .text; spans[0].target = ""; },
+            1 => spans[0].target = "unrelated",
+            2 => spans[0].provenance = .protected_literal,
+            3 => spans[3].generated_diagnostic = true,
+            4 => spans[2].target = "",
+            5 => spans[3].text = " \t",
+            6 => spans[2].flags.bold = false,
+            7 => std.mem.swap(wiki.Span, &spans[0], &spans[2]),
+            8 => altered[1].list_path = "**",
+            9 => changed.level = 4,
+            10 => { changed.title_depth = 1; changed.title_list_path = "*"; },
+            11 => altered[0].spans = &.{.{ .text = "ordinary introduction" }},
+            12 => spans[0].self_link = true,
+            else => unreachable,
+        }
+        try std.testing.expect(!greekSynonymSection(changed, "Αρχαία Ελληνικά"));
+        const layout = try buildOwned(a, &[_]GreekSynonymTest.Section{changed}, "Αρχαία Ελληνικά");
+        for (layout.lexemes) |lexeme| try std.testing.expectEqual(@as(usize, 0), lexeme.definitions.len);
+    }
+}
+
+test "complete retained Ancient Greek lekani organization preserves every body action style media and Stored codec field" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const codec = encoder.presentation_codec;
+    const fixture = @embedFile("testdata/el-lekani-synonym/reader.json");
+    const raw = @embedFile("testdata/el-lekani-synonym/raw.wikitext");
+    const expanded = @embedFile("testdata/el-lekani-synonym/expanded.wikitext");
+    try GreekSynonymTest.hash(fixture, "b8caa414f8444e0ee84b70aa13fa7fd32fcdda994ca4af9c52c0e42265959e61");
+    try GreekSynonymTest.hash(raw, "0f6803cd1d74088a06c30f8ee88e14f5e274e3635ccd297cd6563729eaccde2f");
+    try GreekSynonymTest.hash(expanded, "455bd17d2cfbd9c7b849937defc886218135fb401977d3aade89963f3d2e68f5");
+    try std.testing.expect(std.mem.indexOf(u8, raw, "* {{γρ|λέκος|συνών|grc}} πιάτο, κατσαρόλα, δοχείο σαν κύπελλο") != null);
+    try std.testing.expect(std.mem.indexOf(u8, expanded, GreekSynonymTest.body) != null);
+    const parsed = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, fixture, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+    const before = parsed.value.entries[0];
+    try std.testing.expectEqualStrings("grc", before.language_code);
+    try std.testing.expectEqualStrings("Αρχαία Ελληνικά", before.language.?);
+    try std.testing.expectEqual(@as(usize, 7), before.sections.len);
+    try std.testing.expectEqual(@as(usize, 1), before.references.len);
+    try std.testing.expectEqual(@as(usize, 3), before.media.len);
+    try std.testing.expectEqual(@as(usize, 1), before.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes[0].definitions.len);
+    // A build-only view of actual source-addressed blocks; serialized body stays
+    // the complete original Entry. Restore the Reader's flat style flags exactly.
+    const S = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    const projected = try std.json.parseFromSlice(struct { entries: []const struct { sections: []const S } }, a, fixture, .{ .ignore_unknown_fields = true });
+    const sections = try a.dupe(S, projected.value.entries[0].sections);
+    for (sections, before.sections) |*section, original_section| {
+        const blocks = try a.dupe(wiki.Block, section.blocks);
+        section.blocks = blocks;
+        for (blocks, original_section.blocks) |*block, original_block| {
+            const spans = try a.dupe(wiki.Span, block.spans);
+            block.spans = spans;
+            for (spans, original_block.spans) |*span, original_span| span.flags = .{
+                .bold = original_span.bold, .italic = original_span.italic, .code = original_span.code,
+                .small = original_span.small, .superscript = original_span.superscript, .subscript = original_span.subscript,
+                .strike = original_span.strike, .underline = original_span.underline,
+            };
+        }
+    }
+    const layout = try buildOwned(a, sections, before.language.?);
+    const typed = try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{});
+    const expected: T.Layout = .{ .lexemes = &.{.{
+        .language = "Αρχαία Ελληνικά", .kind = "Noun", .section = 2,
+        .definitions = &.{.{ .block = 2, .notes = &.{3} }}, .introduction = &.{ 0, 1 }, .related_sections = &.{ 3, 4 },
+    }}, .other_sections = &.{ 0, 1, 5, 6 } };
+    try std.testing.expectEqualDeep(expected, typed.value);
+    var after: T.Stored = .{ .entry = before }; after.entry.organization = typed.value;
+    const encoded = try codec.encodeAlloc(a, after);
+    const decoded = try codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+    try std.testing.expectEqualDeep(after, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    var restored = decoded; restored.entry.organization = before.organization;
+    try std.testing.expectEqualDeep(before, restored.entry);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = before }), try codec.encodeAlloc(a, restored));
+    const sense = decoded.entry.sections[2].blocks[2];
+    try std.testing.expectEqual(T.BlockKind.list_item, sense.kind);
+    try std.testing.expectEqualStrings("*", sense.list_path);
+    try std.testing.expectEqualStrings("λέκος#Αρχαία ελληνικά (grc)", sense.spans[2].target);
+    try std.testing.expect(sense.spans[0].italic and sense.spans[2].bold);
+    try std.testing.expectEqualStrings("#002000", decoded.entry.sections[2].blocks[3].spans[0].foreground.?);
 }
