@@ -9821,6 +9821,83 @@ class ReadonlyPreparedRetainedTests(unittest.TestCase):
                 generation=b.prepared_authorized_generation(cfg,start,b.prepared_metadata_ref(launch))
                 yield SimpleNamespace(**dict(locals(),identity=f.identity,workspace=f.destination,expander=f.expander,expected=f.expected,seal=f.seal,dump=f.dump))
 
+    @contextlib.contextmanager
+    def pending_preparation_fixture(self):
+        with self.fixture() as f:
+            cfg=copy.deepcopy(f.cfg)
+            cfg.update(date=f.expected['date'],output=str(f.root/'output'),
+                       edition_options={f.expected['edition']:{}})
+            inventory=_initial_sealed_write(f.root/'pending-python-inventory.json',dict(
+                head=cfg['source']['head'],files={'tools/custody_fixture_helper.py':_initial_sealed_reference(f.python)},
+                modes={'tools/custody_fixture_helper.py':0o644}))
+            cfg['source']['inventory']=inventory
+            folder=f.root/'pending-preparation-attempt';folder.mkdir()
+            prefix=str(folder/'unwritten-python-cache')
+            start_ref=_initial_sealed_write(folder/'start.json',dict(context='context',
+                prepared_source_control=dict(version=1,configuration=cfg,bytecode_prefix=prefix)))
+            _initial_sealed_write(folder/'launch.json',dict(identity={'fixture':'tracked-original'}))
+            with patch.dict(sys._xoptions,{'wikidict_prepared_source':'1'}), \
+                    patch.object(sys,'pycache_prefix',prefix),b.prepared_source_request(start_ref) as request:
+                yield f,request
+
+    def test_pending_adopted_prepare_reaches_real_offer_without_compiler_or_authority(self):
+        with self.pending_preparation_fixture() as (f,request):
+            seen=[]
+            def not_authorized(reference):
+                record=b.prepared_metadata(reference);seen.append(record)
+                self.assertEqual(record['retained_dispatch']['selection'],f.selection)
+                self.assertEqual(record['workspace'],str(f.workspace))
+                self.assertEqual(record['expander'],str(f.expander))
+                self.assertEqual(record['build_identity'],f.identity)
+                raise ValueError('parent has not authorized the request')
+            request.await_authorization=not_authorized
+            before=(f.expander/'.completed-expander.json').read_bytes()
+            with patch.object(b,'source_fingerprint',return_value=f.identity['source']), \
+                    patch.object(b,'run_checked',side_effect=AssertionError('must not compile')), \
+                    patch.object(b,'timed_run',side_effect=AssertionError('must not launch native')), \
+                    patch.object(f.roles,'prepare',wraps=f.roles.prepare) as prepare:
+                tools=b.prepare_blob_tools(f.workspace,str(f.compiler),f.expected['edition'],f.expected['date'],
+                                           f.identity,retained_roles=f.roles)
+                self.assertEqual(prepare.call_count,1)
+                self.assertEqual(set(tools),set(b.BLOB_TOOL_NAMES))
+                with self.assertRaisesRegex(ValueError,'parent has not authorized'):
+                    request.offer(f.workspace,f.dump,tools,f.identity,123)
+            self.assertEqual(len(seen),1)
+            self.assertIsNone(request.generation);self.assertIsNone(getattr(b._PREPARED_SOURCE,'value',None))
+            self.assertEqual((f.expander/'.completed-expander.json').read_bytes(),before)
+            self.assertFalse((f.workspace/'native-blob-tools').exists())
+
+    def test_pending_retained_prepare_refuses_foreign_or_changed_attempt_before_selection(self):
+        modes=('foreign','map','source','workspace','date','edition','start','state','offered','unadopted','noninitial','recompile','authorized')
+        for mode in modes:
+            with self.subTest(mode=mode),self.pending_preparation_fixture() as (f,request):
+                workspace=f.workspace;edition=f.expected['edition'];date=f.expected['date'];args=None
+                if mode=='map':request.configuration['retained_native_roles']['dict-blob-build']['artifact']['sha256']='0'*64
+                elif mode=='source':request.configuration['source']['fingerprint']='0'*64
+                elif mode=='workspace':workspace=f.root/'foreign-workspace'
+                elif mode=='date':date='20261002'
+                elif mode=='edition':edition='foreignwiktionary'
+                elif mode=='start':Path(request.reference['path']).write_text('{}')
+                elif mode=='state':
+                    state=b.read_build_envelope(f.workspace/'state.json');state['native_generation']['seal_sha256']='0'*64
+                    (f.workspace/'state.json').write_text(b.build_envelope_text(state))
+                elif mode=='offered':request.generation=object()
+                elif mode=='unadopted':f.roles.initial_sealed_context=None
+                elif mode=='noninitial':f.roles.initial_sealed_generation=None
+                elif mode=='recompile':args=['dump','output','--expander-only']
+                value=f.generation if mode=='authorized' else None
+                pending=SimpleNamespace() if mode=='foreign' else request
+                with patch.object(b._PREPARED_SOURCE,'request',pending),patch.object(b._PREPARED_SOURCE,'value',value,create=True), \
+                        patch.object(b,'source_fingerprint',return_value=f.identity['source']), \
+                        patch.object(b,'run_checked',side_effect=AssertionError('must not compile')), \
+                        patch.object(b,'timed_run',side_effect=AssertionError('must not launch native')), \
+                        patch.object(f.roles,'prepare',side_effect=AssertionError('must not select tools')) as prepare:
+                    with self.assertRaises(ValueError):
+                        b.prepare_blob_tools(workspace,str(f.compiler),edition,date,f.identity,
+                                             expander_args=args,retained_roles=f.roles)
+                    prepare.assert_not_called()
+                self.assertFalse((request.folder/'prepared-generation.json').exists())
+
     def test_readonly_generation_survives_unrelated_compiler_edit_and_reopens_exact_roles(self):
         with self.fixture() as f:
             before=f.generation.record.copy()

@@ -448,6 +448,29 @@ class PreparedSourceRequest:
             time.sleep(.1)
         raise ValueError('Prepared source parent authorization did not complete')
 
+    def require_retained_preparation(self, roles, workspace, identity, edition, date, expander_args):
+        """Select blob tools before offering this exact adopted generation."""
+        cfg=self.configuration
+        context=roles.initial_sealed_context
+        selection=roles.provenance()
+        selection['dict-bundle-build']['initial_sealed_generation']=roles.initial_sealed_generation
+        if (self.generation is not None or expander_args is not None or context is None
+                or roles.initial_sealed_generation is None or cfg.get('prepared_source_custody') is not True
+                or cfg.get('retained_native_roles')!=selection
+                or cfg.get('source',{}).get('fingerprint')!=identity['source']
+                or cfg.get('date')!=date or set(cfg.get('edition_options',{}))!={edition}
+                or workspace!=Path(cfg['output'])/edition/(date+'.shards')
+                or prepared_metadata(self.reference)!=self.start
+                or self.start.get('prepared_source_control',{}).get('configuration')!=cfg):
+            raise ValueError('Pending retained preparation differs from its selected attempt')
+        state=read_build_envelope(workspace/'state.json')
+        if (state.get('edition')!=edition or state.get('date')!=date
+                or state.get('now_unix')!=cfg['now_unix']
+                or state.get('native_generation')!=dict(seal_sha256=context[2],dump=str(context[1]),
+                    build_inputs=identity,retained_expander_root=str(context[0]))):
+            raise ValueError('Pending retained preparation differs from its adopted state')
+        roles.require_unchanged()
+
     def offer(self, workspace, dump, tools, identity, now_unix):
         import extraction_cache as cache
         if self.generation is not None:
@@ -4434,10 +4457,14 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
             if retained_roles is not None:
                 if (not isinstance(retained_roles, RetainedNativeToolRoles)
                         or retained_roles.zig_sha256 != compiler_sha
-                        or getattr(_PREPARED_SOURCE, 'request', None) is not None
                         or build_identity is None
                         or build_identity.get('native_tool_roles') != retained_roles.provenance()):
                     raise ValueError('Retained roles do not match this ordinary preparation')
+                request=getattr(_PREPARED_SOURCE,'request',None)
+                if request is not None:
+                    if not isinstance(request,PreparedSourceRequest):
+                        raise ValueError('Retained preparation requires its bound pending request')
+                    request.require_retained_preparation(retained_roles,workspace,build_identity,edition,date,expander_args)
                 command_started=time.monotonic()
                 tools=retained_roles.prepare(expander_args, edition, date, workspace=workspace,figure_inputs=figure_inputs)
                 post_started=time.monotonic()
