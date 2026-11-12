@@ -9374,7 +9374,10 @@ class InitialSealedGenerationTests(unittest.TestCase):
         artifacts={}
         for name in b.RETAINED_NATIVE_ROLE_NAMES:
             p=tools/name;p.write_bytes(name.encode());p.chmod(0o555);artifacts[name]=dict(_initial_sealed_reference(p),mode=0o555)
-        dependencies={key:dict(path=str(root/key),bytes=1,sha256='1'*64,mode=0o555) for key in ['modules','llvm','worker_object','value_leaf_bc','worker_main_c','zig']}
+        dependencies={}
+        for key in ['modules','llvm','worker_object','value_leaf_bc','worker_main_c','zig']:
+            path=root/key;path.write_bytes(key.encode());path.chmod(0o555)
+            dependencies[key]=dict(_initial_sealed_reference(path),mode=0o555)
         records={name:dict(artifact=artifacts[name],source_root=str(root),dependencies=dependencies) for name in b.RETAINED_NATIVE_ROLE_NAMES}
         role_ref=_initial_sealed_write(root/'roles.json',records)
         outputs={}
@@ -9384,8 +9387,8 @@ class InitialSealedGenerationTests(unittest.TestCase):
         aux={'language-registry':'a'*64,'namespace-registry':'b'*64};interwiki='c'*64
         expected=dict(version=b.SHARD_STATE_VERSION,edition='viwiktionary',date='20261001',source='d'*64,production_source='e'*64,registry_sha256=aux['language-registry'],auxiliary_snapshot_sha256=aux,interwiki_map_sha256=interwiki)
         identity=dict(source=expected['source'],native_tool_roles=copy.deepcopy(records),zig_sha256='f'*64,auxiliary_snapshot_sha256=aux,interwiki_map_sha256=interwiki)
-        graph={name:dependencies[key]['path'] for name,key in [('extractor','modules'),('llvm','llvm'),('runtime','worker_object'),('leaf','value_leaf_bc'),('main_c','worker_main_c'),('zig','zig')]};graph['project_root']='.'
-        seal=dict(origin_graph=graph,identity=dict(providers={b.auxiliary_snapshot_filename(n):[10,v] for n,v in aux.items()},assets=[[Path(d['path']).name,d['bytes'],d['sha256']] for d in outputs.values()],verified_input=[_initial_sealed_reference(dump)['sha256'],'1'*64]))
+        graph={name:dependencies[key]['path'] for name,key in [('extractor','modules'),('llvm','llvm'),('runtime','worker_object'),('leaf','value_leaf_bc'),('main_c','worker_main_c'),('zig','zig')]};graph['project_root']='.';graph['clang']='clang'
+        seal=dict(provenance='ordinary-linked-expander',origin_graph=graph,identity=dict(producer={'fixture':'qualified native producer'},providers={b.auxiliary_snapshot_filename(n):[10,v] for n,v in aux.items()},assets=[[Path(d['path']).name,d['bytes'],d['sha256']] for d in outputs.values()],verified_input=[_initial_sealed_reference(dump)['sha256'],'1'*64]))
         seal['identity']['providers'].update({'interwiki-map.tsv':[10,interwiki],'wikibase-page-links.tsv':[10,'2'*64],'page-redirects.tsv':[10,'3'*64]})
         seal_ref=_initial_sealed_write(expander/'.completed-expander.json',seal)
         plan=dict(workspace=str(workspace),repository=str(root),dump=_initial_sealed_reference(dump),roles=role_ref,zig_sha256=identity['zig_sha256'],registry=dict(sha256=aux['language-registry']),interwiki=dict(sha256=interwiki),page_links=dict(sha256='2'*64),page_redirects=dict(sha256='3'*64))
@@ -9410,7 +9413,60 @@ class InitialSealedGenerationTests(unittest.TestCase):
         return b.prepare_shard_workspace(f.destination,f.expected,123,**args)
     def contexts(self,f):
         import extraction_cache as cache
-        return patch.object(b,'PROJECT',f.root),patch.object(cache,'frozen_runtime_context',return_value=f.seal),patch.object(cache,'finalize_sealed_expander',return_value=f.seal)
+        return patch.object(b,'PROJECT',f.root),patch.object(cache,'frozen_runtime_context',return_value=f.seal),patch.object(cache,'completed_producer_identity',return_value=(f.seal['identity']['producer'],{}))
+    def reseal_graph(self,f):
+        f.seal_ref=_initial_sealed_write(f.expander/'.completed-expander.json',f.seal)
+        f.result['completed_expander_seal']=f.seal_ref
+        f.result_ref=_initial_sealed_write(f.root/'preparation-result.json',f.result)
+        f.closed.update(completed_expander_seal=f.seal_ref,preparation_result=f.result_ref)
+        closed=_initial_sealed_write(f.root/'closure.json',f.closed)
+        f.selection=_initial_sealed_write(f.root/'selection.json',dict(preparation_result=f.result_ref,preparation_closure=closed))
+
+    def test_initial_relative_default_graph_observes_exact_bound_artifacts_without_refinalizing(self):
+        import extraction_cache as cache
+        for relative in (False,True):
+            with self.subTest(relative=relative),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp))
+                if relative:
+                    for name in ('extractor','llvm','runtime','leaf','main_c'):
+                        f.graph[name]=str(Path(f.graph[name]).relative_to(f.root))
+                self.reseal_graph(f);before=(f.expander/'.completed-expander.json').read_bytes()
+                with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2] as observed, \
+                     patch.object(cache,'finalize_sealed_expander',side_effect=AssertionError('read-only input re-finalized')):
+                    self.assertEqual(self.adopt(f),123)
+                graph=observed.call_args.args[0]
+                self.assertEqual(graph['project_root'],str(f.root))
+                for field,key in (('extractor','modules'),('llvm','llvm'),('runtime','worker_object'),('leaf','value_leaf_bc'),('main_c','worker_main_c'),('zig','zig')):
+                    self.assertEqual(graph[field],f.dependencies[key]['path'])
+                self.assertEqual((f.expander/'.completed-expander.json').read_bytes(),before)
+
+    def test_initial_graph_refuses_foreign_root_escape_symlink_and_wrong_artifact(self):
+        for kind in ('root','escape','symlink','artifact','bytes'):
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp))
+                if kind=='root':f.graph['project_root']=str(f.root/'foreign')
+                elif kind=='escape':f.graph['runtime']='../worker_object'
+                elif kind=='symlink':
+                    (f.root/'alias').symlink_to(f.root/'worker_object');f.graph['runtime']='alias'
+                elif kind=='artifact':f.graph['leaf']='modules'
+                else:(f.root/'worker_object').write_bytes(b'changed selected dependency')
+                self.reseal_graph(f)
+                with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2]:
+                    with self.assertRaises(ValueError):self.adopt(f)
+                self.assertFalse((f.destination/'state.json').exists())
+
+    def test_initial_ready_provenance_and_producer_cannot_be_relabeled(self):
+        for kind in ('provenance','building','producer'):
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp))
+                if kind=='provenance':f.seal['provenance']='ordinary-wikibase-provider-update'
+                elif kind=='building':(f.expander/'.incomplete').write_bytes(b'building')
+                self.reseal_graph(f)
+                with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2] as producer:
+                    if kind=='producer':producer.return_value=({'fixture':'another native producer'}, {})
+                    with self.assertRaises(ValueError):self.adopt(f)
+                self.assertFalse((f.destination/'state.json').exists())
+
     def test_genuine_initial_state_preserves_worker_and_resumes_exact_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             f=self.fixture(Path(tmp));inode=Path(f.outputs['worker']['path']).stat().st_ino

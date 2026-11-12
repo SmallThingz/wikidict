@@ -3222,12 +3222,38 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     root = selected_workspace / 'expander' / '.bundle-expander'
     seal_reference = result['completed_expander_seal']
     seal = prepared_metadata(seal_reference)
-    dependencies = native_roles.records['dict-bundle-build']['dependencies']
+    selected_role = native_roles.records['dict-bundle-build']
+    dependencies = selected_role['dependencies']
     graph = seal['origin_graph']
+    source_root = Path(selected_role['source_root'])
+    if (seal.get('provenance') != 'ordinary-linked-expander'
+            or not source_root.is_absolute() or source_root.resolve() != source_root
+            or any(path.is_symlink() for path in (source_root, *source_root.parents))
+            or not source_root.is_dir()
+            or graph.get('project_root') not in ('.', str(source_root))):
+        raise ValueError('Initial sealed native graph has an unbound project root')
+    source_stamp = source_root.stat()
+    source_identity = (source_stamp.st_dev, source_stamp.st_ino, source_stamp.st_mode, source_stamp.st_uid)
+    # Ordinary default drivers record cache paths relative to their bound
+    # working directory. Normalize observations only; retain the exact seal.
+    observation_graph = dict(graph, project_root=str(source_root))
     for field, dependency in (('extractor', 'modules'), ('llvm', 'llvm'), ('runtime', 'worker_object'),
                               ('leaf', 'value_leaf_bc'), ('main_c', 'worker_main_c'), ('zig', 'zig')):
-        if graph.get(field) != dependencies[dependency]['path']:
+        value = graph.get(field)
+        if not isinstance(value, str) or not value:
             raise ValueError('Initial sealed native graph differs from selected role')
+        path = Path(value)
+        if not path.is_absolute():
+            if '..' in path.parts:
+                raise ValueError('Initial sealed native graph escapes its project root')
+            path = source_root / path
+        if any(node.is_symlink() for node in (path, *path.parents)):
+            raise ValueError('Initial sealed native graph contains a symlink')
+        path = Path(os.path.normpath(str(path)))
+        if (str(path) != dependencies[dependency]['path']
+                or native_roles.bind_input(path) != dependencies[dependency]):
+            raise ValueError('Initial sealed native graph differs from selected role')
+        observation_graph[field] = str(path)
     snapshots = {auxiliary_snapshot_filename(name): digest for name, digest in
                  build_identity.get('auxiliary_snapshot_sha256', {}).items()}
     if (plan['registry']['sha256'] != expected.get('registry_sha256')
@@ -3244,11 +3270,18 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
         raise ValueError('Initial sealed snapshot or dump inputs differ')
     # This existing validator authenticates native mode/toolchain/ABI provenance,
     # source/index/sidecars and physical asset inventory without rehashing payloads.
-    if cache.frozen_runtime_context(root, dump, seal_reference['sha256']) != seal:
+    if (os.path.lexists(root / '.incomplete')
+            or cache.frozen_runtime_context(root, dump, seal_reference['sha256']) != seal):
         raise ValueError('Initial sealed generation is not finalized')
-    observed = cache.finalize_sealed_expander(root, Path(dump), seal_reference['sha256'], graph,
-        project_root=native_roles.records['dict-bundle-build']['source_root'])
-    if observed != seal or cache.frozen_runtime_context(root, dump, seal_reference['sha256']) != seal:
+    # A closed, ready generation cannot enter post-link finalization again.
+    # Retain its producer check without granting scratch or marker mutations.
+    producer, _ = cache.completed_producer_identity(observation_graph)
+    after = source_root.stat()
+    if (producer != seal['identity']['producer']
+            or (after.st_dev, after.st_ino, after.st_mode, after.st_uid) != source_identity):
+        raise ValueError('Initial sealed native producer changed')
+    native_roles.require_unchanged()
+    if cache.frozen_runtime_context(root, dump, seal_reference['sha256']) != seal:
         raise ValueError('Initial sealed generation is not finalized')
     assets = {name: (size, digest) for name, size, digest in seal['identity']['assets']}
     for key, name in (('worker', 'dict-bundle-expander'), ('metadata', 'lua-program.meta'),
