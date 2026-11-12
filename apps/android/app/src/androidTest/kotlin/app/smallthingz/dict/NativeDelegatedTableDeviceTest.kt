@@ -22,6 +22,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
@@ -106,10 +107,11 @@ class NativeDelegatedTableDeviceTest {
     @Composable
     private fun Fixture(table: Table, width: Int, bitmap: Bitmap, holder: Holder,
         actions: MutableList<String>, opened: MutableList<String>, opaqueSibling: Boolean = false,
-        enabled: Boolean = true, recomposeToken: Int = 0) {
+        enabled: Boolean = true, recomposeToken: Int = 0, witness: AdmissionWitness? = null) {
         val settings = AppSettings(allowImages = false, allowAudio = false)
         val media = images.map { Media(it.file, "image", "") }
         MaterialTheme { CompositionLocalProvider(
+            LocalTablePhaseObserver provides (witness?.observer ?: LocalTablePhaseObserver.current),
             LocalUriHandler provides remember { object : UriHandler {
                 override fun openUri(uri: String) { opened += uri }
             } }) {
@@ -127,7 +129,10 @@ class NativeDelegatedTableDeviceTest {
             SideEffect { holder.owner = owner; holder.density = density.density; holder.appliedPulse = recomposeToken }
             CompositionLocalProvider(LocalInlineImageOwner provides owner) {
                 Box(Modifier.testTag("delegated-host").background(Color.White)
-                    .onGloballyPositioned { holder.origin = it.positionInWindow() }) {
+                    .onGloballyPositioned {
+                        holder.origin = it.positionInWindow()
+                        witness?.retainOwners("host-positioned")
+                    }) {
                 Layout(modifier = Modifier.verticalScroll(rememberScrollState()), content = {
                     if (enabled) {
                         val blocks = listOf(Block("paragraph", 0, emptyList(), table = table)) +
@@ -159,6 +164,188 @@ class NativeDelegatedTableDeviceTest {
         it.delegatedCellOwner?.permits(it) == true
     }.sortedBy { it.delegatedCellOwner!!.index }
 
+    /** Failure-only reads of the installed owner; never invokes snapshot/validation or
+     * rebuilds envelopes. The existing phase observer retains owners if fallback removes
+     * their Views before the assertion. It does not change layout or admission. */
+    private class AdmissionWitness(private val views: () -> List<NativeFloatTextView>) {
+        private val tables = linkedSetOf<NativeDelegatedTableOwner>()
+        private val phases = linkedMapOf<String, Int>()
+        private val identities = java.util.IdentityHashMap<Any, Int>()
+        private val observationErrors = linkedSetOf<String>()
+        val observer = TablePhaseObserver { phase, _, _, _ -> retainOwners(phase.name) }
+
+        fun retainOwners(phase: String) {
+            phases[phase] = (phases[phase] ?: 0) + 1
+            try { views().mapNotNull { it.delegatedCellOwner?.table }.forEach(tables::add) }
+            catch (failure: Exception) { observationErrors += "${failure.javaClass.simpleName}:${failure.message}" }
+        }
+
+        private fun id(value: Any?): String = if (value == null) "null" else
+            "${value.javaClass.simpleName}@${identities.getOrPut(value) { identities.size + 1 }}"
+
+        private fun field(value: Any, name: String): Any? = value.javaClass.getDeclaredField(name)
+            .apply { isAccessible = true }.get(value)
+
+        private fun state(value: Any, name: String): Any? =
+            (field(value, name + "\$delegate") as androidx.compose.runtime.State<*>).value
+
+        private fun box(root: LayoutCoordinates, child: LayoutCoordinates): NativeFloatBounds? =
+            geometry("measuredBox", root, child)
+
+        // Invoke only the installed pure coordinate helpers, with no owner callback.
+        private fun geometry(name: String, root: LayoutCoordinates, child: LayoutCoordinates): NativeFloatBounds? =
+            Class.forName("app.smallthingz.dict.NativeDelegatedTableOwnerKt")
+                .getDeclaredMethod(name, LayoutCoordinates::class.java, LayoutCoordinates::class.java)
+                .apply { isAccessible = true }.invoke(null, root, child) as NativeFloatBounds?
+
+        private fun coordinates(value: LayoutCoordinates?, root: LayoutCoordinates?): String = when {
+            value == null -> "null"
+            !value.isAttached -> "${id(value)} detached"
+            root?.isAttached != true -> "${id(value)} size=${value.size} root-not-attached"
+            else -> "${id(value)} size=${value.size} box=${box(root, value)}"
+        }
+
+        private fun view(value: NativeFloatTextView?): String = if (value == null) "null" else
+            "${id(value)} attached=${value.isAttachedToWindow} layoutRequested=${value.isLayoutRequested}" +
+                " size=${value.width}x${value.height} measured=${value.measuredWidth}x${value.measuredHeight}" +
+                " geometry=${id(value.currentMeasuredGeometry)} owner=${id(value.delegatedCellOwner)}"
+
+        fun failure(): String = buildString {
+            retainOwners("assertion-failed")
+            appendLine("181 admission witness; original count failed before these read-only diagnostics")
+            appendLine("phases=$phases observerErrors=$observationErrors")
+            appendLine("nativeViews=${views().size} retainedTables=${tables.size}")
+            views().forEach { appendLine("native ${view(it)}") }
+            tables.forEach { table ->
+                try { describe(table, this) }
+                catch (failure: Exception) {
+                    appendLine("diagnostic-error ${id(table)} ${failure.javaClass.name}: ${failure.message}")
+                }
+            }
+        }
+
+        private fun describe(table: NativeDelegatedTableOwner, out: StringBuilder) {
+            val root = field(table, "rootCoordinates") as LayoutCoordinates?
+            val grid = table.gridCoordinates
+            val generation = checkNotNull(field(table, "generation"))
+            val surroundings = field(table, "measuredSurroundings") as NativeDelegatedSurroundings?
+            val accepted = state(table, "accepted")
+            val fallback = field(table, "fallbackComposed")
+            val acceptedGeneration = field(table, "acceptedGeneration")
+            val acceptedGrid = field(table, "acceptedGrid")
+            out.appendLine("table=${id(table)} reason=${table.fallbackReason} accepted=$accepted" +
+                " fallbackComposed=$fallback awaiting=${field(table, "awaitingNativeComposition")}" +
+                " generation=${id(generation)} acceptedGeneration=${id(acceptedGeneration)}" +
+                " sameGeneration=${generation === acceptedGeneration} source=${id(field(table, "source"))}" +
+                " width=${field(table, "width")}")
+            out.appendLine("root=${coordinates(root, root)} grid=${coordinates(grid, root)} acceptedGrid=$acceptedGrid")
+            out.appendLine("surroundings=$surroundings")
+            val snapshots = table.cells.map { cell -> describeCell(cell, root, generation, out) }
+            val gate = when {
+                table.fallbackReason != null -> "stored fallbackReason"
+                accepted != true -> "accepted=false"
+                fallback == true -> "fallbackComposed"
+                acceptedGeneration !== generation -> "accepted generation changed"
+                root?.isAttached != true -> "root absent/detached"
+                grid?.isAttached != true -> "grid absent/detached"
+                box(root, grid) != acceptedGrid -> "grid box changed"
+                table.cells.any { !it.currentPlacement(root, generation) } -> "cell currentPlacement=false"
+                else -> "all permitsOriginalOwners predicates currently true"
+            }
+            out.appendLine("current-permits-first-gate=$gate")
+            val pending = when {
+                root?.isAttached != true -> "root absent/detached"
+                grid?.isAttached != true -> "grid absent/detached"
+                surroundings == null -> "no measured surroundings"
+                table.cells.any { !it.placementReported() } -> "cell placement not reported"
+                else -> null
+            }
+            if (pending != null) out.appendLine("decision pending: $pending")
+            else if (snapshots.any { it == null }) out.appendLine("decision snapshot unavailable; exact cell stage above")
+            else {
+                val tableBounds = box(checkNotNull(root), checkNotNull(grid))
+                val decision = if (tableBounds == null) "The delegated table transform is not a translation" else
+                    nativeDelegatedPaintDecision(checkNotNull(surroundings).copy(allocation = tableBounds,
+                        atomicAllocation = surroundings.allocation), snapshots.filterNotNull(),
+                        table.cells.map { checkNotNull(it.registeredOwner()) }).toString()
+                out.appendLine("read-only cached-envelope decision=$decision")
+            }
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        private fun describeCell(cell: NativeDelegatedCellOwner, root: LayoutCoordinates?, generation: Any,
+            out: StringBuilder): NativeDelegatedMeasuredCell? {
+            val original = cell.registeredOwner()
+            val surface = field(cell, "physical") as NativeSurfaceGeometry?
+            val context = cell.contextCoordinates
+            val native = cell.viewCoordinates
+            val cellCoords = cell.cellCoordinates
+            val width = field(cell, "logicalWidth") as Int
+            val height = field(cell, "logicalHeight") as Int
+            val stamp = field(cell, "placement")
+            out.appendLine("cell=${cell.index} owner=${id(cell)} original=${view(original)} surface=${id(surface)}" +
+                " logical=${width}x$height reported=${cell.placementReported()} envelopeBuilds=${cell.envelopeBuildCount}")
+            out.appendLine("cellCoordinates=${coordinates(cellCoords, root)} context=${coordinates(context, root)}" +
+                " native=${coordinates(native, root)}")
+            if (stamp != null) {
+                out.appendLine("placement rootSame=${field(stamp, "root") === root}" +
+                    " generationSame=${field(stamp, "generation") === generation} surfaceSame=${field(stamp, "surface") === surface}" +
+                    " cellSame=${field(stamp, "cell") === cellCoords} contextSame=${field(stamp, "context") === context}" +
+                    " viewSame=${field(stamp, "view") === native} clip=${field(stamp, "clip")}")
+                val oldBoxes = field(stamp, "boxes") as List<Pair<LayoutCoordinates, NativeFloatBounds>>
+                oldBoxes.forEachIndexed { index, (coordinate, expected) ->
+                    out.appendLine("placementBox[$index] expected=$expected current=${coordinates(coordinate, root)}")
+                }
+            } else out.appendLine("placement=null")
+            fun unavailable(reason: String): NativeDelegatedMeasuredCell? {
+                out.appendLine("cell[${cell.index}] snapshot-stage=$reason"); return null
+            }
+            if (root?.isAttached != true) return unavailable("root absent/detached")
+            if (original == null) return unavailable("originalView=null")
+            if (surface == null) return unavailable("physical=null")
+            if (!original.isAttachedToWindow) return unavailable("original View detached")
+            if (original.currentMeasuredGeometry !== surface) return unavailable("current measured geometry differs")
+            if (original.width != surface.width || original.height != surface.height)
+                return unavailable("View dimensions differ from physical ${surface.width}x${surface.height}")
+            if (context?.isAttached != true || native?.isAttached != true || cellCoords?.isAttached != true)
+                return unavailable("context/native/cell coordinates absent or detached")
+            if (context.size.width != width || context.size.height != height) return unavailable("logical context dimensions differ")
+            val contextBox = box(root, context) ?: return unavailable("context transform not translation")
+            val x = contextBox.left + surface.surface.left
+            val y = contextBox.top + surface.surface.top
+            val physicalBox = NativeFloatBounds(x, y, x + surface.width, y + surface.height)
+            out.appendLine("physicalBox=$physicalBox nativeBox=${box(root, native)} surface=${surface.surface}")
+            if (box(root, native) != physicalBox || original.delegatedCellOwner !== cell)
+                return unavailable("physical/native box or View backreference differs")
+            val cellBox = box(root, cellCoords) ?: return unavailable("cell transform not translation")
+            val clip = geometry("actualInputClip", root, native) ?: return unavailable("actual input clip unavailable")
+            out.appendLine("actualInputClip=$clip")
+            val ancestors = mutableListOf(NativeDelegatedInputAncestor(clip, true))
+            var cursor: LayoutCoordinates? = native
+            var containsRoot = false
+            while (cursor != null) {
+                val bounds = box(root, cursor) ?: return unavailable("ancestor transform not translation")
+                out.appendLine("ancestor=${id(cursor)} bounds=$bounds root=${cursor === root}")
+                ancestors += NativeDelegatedInputAncestor(bounds, false)
+                if (cursor === root) containsRoot = true
+                cursor = cursor.parentLayoutCoordinates
+            }
+            if (!containsRoot) return unavailable("root not in native ancestry")
+            val envelopes = field(cell, "envelopes") ?: return unavailable("envelopes not yet cached; diagnostic does not build them")
+            if (field(cell, "envelopeSurface") !== surface) return unavailable("cached envelope surface differs")
+            fun rectangles(name: String) = (field(envelopes, name) as List<NativeFloatBounds>).map { it.translated(x, y) }
+            val ink = rectangles("ink"); val deferred = rectangles("deferred")
+            val input = rectangles("input"); val ordinary = rectangles("ordinary")
+            if (deferred.isEmpty()) return unavailable("deferred envelope empty")
+            val touchWidth = field(cell, "minimumTouchWidth") as Float
+            val touchHeight = field(cell, "minimumTouchHeight") as Float
+            out.appendLine("minimumTouch=${touchWidth}x$touchHeight ink=$ink deferred=$deferred input=$input ordinary=$ordinary")
+            out.appendLine("cell[${cell.index}] snapshot-stage=complete currentPlacement=${cell.currentPlacement(root, generation)}")
+            return NativeDelegatedMeasuredCell(original, generation, cellBox, physicalBox, ancestors,
+                ink, deferred, input, touchWidth, touchHeight, ordinary)
+        }
+    }
+
     private fun point(view: NativeFloatTextView, rect: android.graphics.RectF, holder: Holder): Offset {
         val location = IntArray(2); view.getLocationInWindow(location)
         return Offset(location[0] + rect.centerX() - holder.origin.x,
@@ -178,14 +365,17 @@ class NativeDelegatedTableDeviceTest {
         val width = mutableStateOf(260)
         val source = table()
         val holder = Holder()
+        val witness = AdmissionWitness(::nativeViews)
         val actions = mutableListOf<String>(); val opened = mutableListOf<String>()
         val bitmap = Bitmap.createBitmap(46, 60, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
         try {
             compose.activityRule.scenario.onActivity { decorView = it.window.decorView; it.setContent {
-                Fixture(source, width.value, bitmap, holder, actions, opened)
+                Fixture(source, width.value, bitmap, holder, actions, opened, witness = witness)
             } }
             compose.waitForIdle()
-            val originals = compose.runOnIdle { admittedViews().also { assertEquals(2, it.size) } }
+            val originals = compose.runOnIdle { admittedViews().also {
+                assertEquals(if (it.size == 2) null else witness.failure(), 2, it.size)
+            } }
             compose.runOnIdle {
                 assertEquals(1, holder.created); assertEquals(0, holder.disposed)
                 originals.forEachIndexed { index, view ->

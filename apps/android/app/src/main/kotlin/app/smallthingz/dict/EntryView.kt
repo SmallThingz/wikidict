@@ -1307,7 +1307,8 @@ private fun nativeTableConsumesMargins(table: Table?): Boolean = table?.style?.l
 private fun FloatBlockSequence(blocks: List<Block>, onLink: (EntryLink) -> Unit, path: String,
     modifier: Modifier = Modifier, inCell: Boolean = false, gridPath: String = "root", gapDp: Float,
     trailingGap: Boolean) {
-    if (blocks.any { it.needsNativeBlockContext() }) {
+    val delegatedSource = LocalNativeDelegatedCell.current?.sourceBlock
+    if (blocks.needsNativeBlockSequence(delegatedSource)) {
         NativeFloatBlockContext(blocks, onLink, path, modifier, inCell, gridPath, gapDp, trailingGap)
     } else {
         val content: @Composable () -> Unit = {

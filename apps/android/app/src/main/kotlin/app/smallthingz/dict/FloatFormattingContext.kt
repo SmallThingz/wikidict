@@ -25,3 +25,9 @@ internal fun floatBodyRuns(rows: List<ReadingRow>): List<IntRange> {
 
 /** An authored Container needs the same block context even when its active style has no float. */
 internal fun Block.needsNativeBlockContext(): Boolean = container != null || hasBodyFloat()
+
+/** An enrolled table cell needs its original native context even when its Figure
+ * does not float. Only that exact source block receives the delegated owner. */
+internal fun List<Block>.needsNativeBlockSequence(delegatedSource: Block?): Boolean =
+    any { it.needsNativeBlockContext() } ||
+        delegatedSource != null && size == 1 && single() === delegatedSource
