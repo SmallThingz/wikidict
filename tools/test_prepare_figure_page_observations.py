@@ -23,6 +23,86 @@ def mutate(raw, change):
     return observed.encoded(value)
 
 
+class SourceLinkBoundaryTest(unittest.TestCase):
+    def test_telaio_nested_caption_keeps_outer_suffix_and_byte_offsets(self):
+        # Exact retained token; the historical first-]] lookup stopped at189.
+        token = (b'[[File:TRANSPORT SENEGAL USINE SENBUS 17.jpg|thumb|upright|'
+                 b"Produzione di '''telai''' per autobus in [[Senegal]] (2).]]")
+        source = b'x' * 78 + token + b'\nfollowing source'
+        self.assertEqual(observed.source_link_end(source, 78), 196)
+        self.assertEqual(source.find(b']]', 78) + 2, 189)
+        with self.assertRaisesRegex(ValueError, 'Incomplete'):
+            observed.source_link_end(source[:189], 78)
+        prefix = '\u00e9\u65e5'.encode()
+        self.assertEqual(observed.source_link_end(prefix + token, len(prefix)), len(prefix + token))
+
+    def test_comments_nowiki_and_tag_attributes_do_not_close_link(self):
+        for protected in (b'<!-- ]] [[ -->', b'<nowiki>]] [[</nowiki>',
+                          b'<NoWiKi a=">">]]</NoWiKi >', b'<nowiki/>',
+                          b'<span title="]] [[">caption</span>',
+                          b'<ref>]] [[</ref>', b'<math>]]</math>'):
+            token = b'[[File:A.jpg|caption ' + protected + b' [[place]] end]]'
+            with self.subTest(protected=protected):
+                self.assertEqual(observed.source_link_end(token + b' tail', 0), len(token))
+
+    def test_templates_and_parameters_keep_inner_brackets_protected(self):
+        for caption in (b'{{x|]]}}', b'{{{x|]]}}}', b'[[place|{{x|]]}}]]'):
+            token = b'[[File:A.jpg|' + caption + b' end]]'
+            with self.subTest(caption=caption):
+                self.assertEqual(observed.source_link_end(token, 0), len(token))
+
+    def test_invalid_pre_extension_boundary_uses_html_attribute_boundary(self):
+        token = b'[[File:A.jpg|<pre/foo title="]]">caption end]]'
+        self.assertEqual(observed.source_link_end(token, 0), len(token))
+        # Ordinary fallback pre is not an opaque strip body.
+        token = b'[[File:A.jpg|<pre/foo>]]</pre>tail'
+        self.assertEqual(observed.source_link_end(token, 0), token.index(b']]', 2) + 2)
+
+    def test_malformed_start_unclosed_link_and_unclosed_comment_refuse(self):
+        for source, start in ((b'File:A.jpg]]', 0), (b'[[File:A.jpg]]', -1),
+                              (b'[[File:A.jpg|[[place]]', 0),
+                              (b'[[File:A.jpg|<!-- ]]', 0)):
+            with self.subTest(source=source, start=start), self.assertRaises(ValueError):
+                observed.source_link_end(source, start)
+        # An unmatched nowiki opener does not hide the active remainder.
+        source = b'[[File:A.jpg|<nowiki>[[place]] end]]'
+        self.assertEqual(observed.source_link_end(source, 0), len(source))
+
+    def test_normal_intake_rejects_inner_close_even_with_rehashed_evidence(self):
+        raw, namespace, defaults = inputs()
+        doc = observed.decode(raw)
+        page = doc['pages'][0]
+        occurrence = page['occurrences'][0]
+        parsed = observed.decode(page['response'])
+        original = parsed['parse']['wikitext'].encode()
+        # Controlled source/transport rehash tests the boundary, not stale hashes.
+        addition = b' [[Senegal]] (2).'
+        insertion = occurrence['end'] - 2
+        source = original[:insertion] + addition + original[insertion:]
+        for row in page['occurrences']:
+            if row['start'] >= insertion:
+                row['start'] += len(addition)
+                row['end'] += len(addition)
+        occurrence['end'] += len(addition)
+        params = dict(observed.urllib.parse.parse_qsl(page['form_body'], keep_blank_values=True))
+        params['text'] = source.decode()
+        page['form_body'] = observed.urllib.parse.urlencode(params)
+        request = observed.decode(page['request'])
+        request['form'].update(bytes=len(page['form_body'].encode()), sha256=observed.digest(page['form_body'].encode()))
+        request['text_source'].update(bytes=len(source), sha256=observed.digest(source))
+        parsed['parse']['wikitext'] = source.decode()
+        page['request'] = observed.encoded(request).decode()
+        page['response'] = observed.encoded(parsed).decode()
+        receipt = observed.decode(page['receipt'])
+        for key in ('request', 'response'):
+            receipt[key].update(bytes=len(page[key].encode()), sha256=observed.digest(page[key].encode()))
+        page['receipt'] = observed.encoded(receipt).decode()
+        self.assertEqual(observed.validate_document(observed.encoded(doc), namespace, defaults), doc)
+        occurrence['end'] = insertion + addition.index(b']]') + 2
+        with self.assertRaisesRegex(ValueError, 'complete source link'):
+            observed.validate_document(observed.encoded(doc), namespace, defaults)
+
+
 class ObservationContractTest(unittest.TestCase):
     def test_height_only_intake_is_independent_and_preserves_complete_el_response(self):
         raw, namespace, defaults = inputs('el-height')

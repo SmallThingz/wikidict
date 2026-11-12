@@ -23,6 +23,97 @@ MISSING_LINK_SITES = {'enwiktionary': 'en', 'viwiktionary': 'vi'}
 MISSING_LINK_SHA256 = 'ecbc7435843a302ddba3652426b60f876a56950eeebdd1b9df0332aefeabd5fb'
 
 
+def source_link_end(source, start):
+    """Return a complete source link's byte end; never select the first inner ]].
+
+    This is a packaging boundary check, not File identity/options authority.
+    Keep delimiters and protected regions consistent with wikitext_syntax's
+    balancedWithOpaqueScan; the native Book still validates the whole occurrence.
+    """
+    if type(source) is not bytes or type(start) is not int or start < 0 or source[start:start + 2] != b'[[':
+        raise ValueError('Invalid source link start')
+    opaque = {b'nowiki', b'pre', b'gallery', b'indicator', b'ref', b'references',
+              b'templatestyles', b'math', b'ce', b'chem', b'score', b'syntaxhighlight',
+              b'source', b'timeline', b'hiero', b'poem', b'categorytree', b'charinsert',
+              b'graph', b'mapframe', b'maplink', b'section', b'inputbox', b'imagemap',
+              b'dynamicpagelist'}
+
+    def raw_nowiki(at):
+        opening = re.match(rb'<nowiki(?=[\s/>])', source[at:], re.I)
+        if opening is None:
+            return None
+        boundary = at + opening.end()
+        if source[boundary:boundary + 1] == b'/' and source[boundary:boundary + 2] != b'/>':
+            return None
+        gt = source.find(b'>', boundary)
+        if gt < 0:
+            return None
+        if source[gt - 1:gt] == b'/':
+            return gt + 1
+        close = re.compile(rb'</nowiki\s*>', re.I).search(source, gt + 1)
+        return close.end() if close else None
+
+    def tag(at):
+        match = re.match(rb'<(/?)([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])', source[at:])
+        if match is None:
+            return None
+        closing, name = bool(match[1]), match[2].lower()
+        cursor = at + match.end()
+        invalid_extension_boundary = not closing and name in opaque and source[cursor:cursor + 1] == b'/' and source[cursor:cursor + 2] != b'/>'
+        html_pre = invalid_extension_boundary and name == b'pre'
+        if invalid_extension_boundary and not html_pre:
+            return None
+        while cursor < len(source):
+            if source[cursor:cursor + 1] == b'>':
+                return cursor + 1, name, closing, source[cursor - 1:cursor] == b'/', html_pre
+            if source[cursor:cursor + 1] == b'<':
+                protected = raw_nowiki(cursor)
+                if protected is not None:
+                    cursor = protected
+                    continue
+                if closing or name not in (b'ref', b'references'):
+                    return None
+            cursor += 1
+        return None
+
+    stack, at = [], start
+    while at < len(source):
+        if source.startswith(b'<!--', at):
+            close = source.find(b'-->', at + 4)
+            at = close + 3 if close >= 0 else len(source)
+            continue
+        if source[at:at + 1] == b'<':
+            protected = raw_nowiki(at)
+            if protected is not None:
+                at = protected
+                continue
+            found = tag(at)
+            if found is not None:
+                end, name, closing, short, html_pre = found
+                if not closing and name in opaque and name != b'nowiki' and not html_pre:
+                    close = re.compile(rb'</' + name + rb'\s*>', re.I).search(source, end)
+                    at = end if short or close is None else close.end()
+                    continue
+                if stack == [b']]']:
+                    at = end
+                    continue
+        for opening, closing in ((b'{{{', b'}}}'), (b'{{', b'}}'), (b'[[', b']]')):
+            if source.startswith(opening, at):
+                if len(stack) == 128:
+                    raise ValueError('Source link nesting limit')
+                stack.append(closing)
+                at += len(opening)
+                break
+        else:
+            if stack and source.startswith(stack[-1], at):
+                at += len(stack.pop())
+                if not stack:
+                    return at
+            else:
+                at += 1
+    raise ValueError('Incomplete source link')
+
+
 def validate_missing_link_styles(value, defaults, wiki):
     # Independently observed EN and VI public module responses, not core guesses.
     language = MISSING_LINK_SITES.get(wiki)
@@ -274,6 +365,8 @@ def validate_document(raw, namespace, defaults):
                     not 0 <= item['start'] < item['end'] <= len(source) or
                     not isinstance(item.get('canonical_file'), str) or not item['canonical_file']):
                 raise ValueError('Invalid selected occurrence range or file')
+            if source_link_end(source, item['start']) != item['end']:
+                raise ValueError('Selected occurrence is not one complete source link')
             if missing:
                 # This packages retained occurrence evidence only. The native
                 # Book must separately validate Registry missing=true and HTML.
