@@ -717,6 +717,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             font.setFontPointSize(record.value.value(QStringLiteral("table_origin_points")).toDouble(points));
             before.setBlockCharFormat(font);
         }
+        bool cellFormatsChanged = false;
         for (int row = 0; row < table->rows(); ++row) {
             if (!rows[row].isArray()) throw std::runtime_error("invalid table style row metadata");
             const QJsonArray cells = rows[row].toArray(); int index = 0;
@@ -761,6 +762,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                 if (present(cellStyle.value(QStringLiteral("width"))))
                     cellFormat.setProperty(cellWidthProperty, tableBoxLength(cellStyle.value(QStringLiteral("width")), points, true));
                 cell.setFormat(cellFormat);
+                cellFormatsChanged = true;
                 if (present(cellStyle.value(QStringLiteral("letter_spacing")))) {
                     const double spacing = tableBoxLength(cellStyle.value(QStringLiteral("letter_spacing")), points, false)
                         .value(QStringLiteral("value")).toDouble();
@@ -851,6 +853,12 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             character.setFontPointSize(points);
             cursor.setBlockCharFormat(character);
             cursor.createList(list);
+        }
+        if (cellFormatsChanged) {
+            // The first cell's delimiter precedes the Table's content range.
+            // Its format edit alone cannot invalidate the cached Table size.
+            document->markContentsDirty(table->firstPosition(),
+                table->lastPosition() - table->firstPosition() + 1);
         }
     }
 }
