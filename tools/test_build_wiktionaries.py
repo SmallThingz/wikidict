@@ -7,6 +7,7 @@ import io
 import lzma
 import json
 import os
+import stat
 import subprocess
 import sys
 import threading
@@ -9290,5 +9291,184 @@ class FigureTupleGuardDigestTests(unittest.TestCase):
 
 
 
+
+
+
+def _initial_sealed_reference(p):
+    raw=p.read_bytes();return dict(path=str(p),bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+
+def _initial_sealed_write(p,value):
+    p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(value,sort_keys=True)+'\n');return _initial_sealed_reference(p)
+
+class InitialSealedGenerationTests(unittest.TestCase):
+    def fixture(self,root):
+        workspace=root/'retained-generation';expander=workspace/'expander/.bundle-expander';expander.mkdir(parents=True)
+        tools=workspace/'native-blob-tools/bin';tools.mkdir(parents=True)
+        artifacts={}
+        for name in b.RETAINED_NATIVE_ROLE_NAMES:
+            p=tools/name;p.write_bytes(name.encode());p.chmod(0o555);artifacts[name]=dict(_initial_sealed_reference(p),mode=0o555)
+        dependencies={key:dict(path=str(root/key),bytes=1,sha256='1'*64,mode=0o555) for key in ['modules','llvm','worker_object','value_leaf_bc','worker_main_c','zig']}
+        records={name:dict(artifact=artifacts[name],source_root=str(root),dependencies=dependencies) for name in b.RETAINED_NATIVE_ROLE_NAMES}
+        role_ref=_initial_sealed_write(root/'roles.json',records)
+        outputs={}
+        for key,name in [('worker','dict-bundle-expander'),('metadata','lua-program.meta'),('source_receipt','extraction-source.json')]:
+            p=expander/name;p.write_bytes(key.encode());outputs[key]=_initial_sealed_reference(p)
+        dump=root/'pages.xml.zst';dump.write_bytes(b'dump')
+        aux={'language-registry':'a'*64,'namespace-registry':'b'*64};interwiki='c'*64
+        expected=dict(version=b.SHARD_STATE_VERSION,edition='viwiktionary',date='20261001',source='d'*64,production_source='e'*64,registry_sha256=aux['language-registry'],auxiliary_snapshot_sha256=aux,interwiki_map_sha256=interwiki)
+        identity=dict(source=expected['source'],native_tool_roles=copy.deepcopy(records),zig_sha256='f'*64,auxiliary_snapshot_sha256=aux,interwiki_map_sha256=interwiki)
+        graph={name:dependencies[key]['path'] for name,key in [('extractor','modules'),('llvm','llvm'),('runtime','worker_object'),('leaf','value_leaf_bc'),('main_c','worker_main_c'),('zig','zig')]};graph['project_root']='.'
+        seal=dict(origin_graph=graph,identity=dict(providers={b.auxiliary_snapshot_filename(n):[10,v] for n,v in aux.items()},assets=[[Path(d['path']).name,d['bytes'],d['sha256']] for d in outputs.values()],verified_input=[_initial_sealed_reference(dump)['sha256'],'1'*64]))
+        seal['identity']['providers'].update({'interwiki-map.tsv':[10,interwiki],'wikibase-page-links.tsv':[10,'2'*64],'page-redirects.tsv':[10,'3'*64]})
+        seal_ref=_initial_sealed_write(expander/'.completed-expander.json',seal)
+        plan=dict(workspace=str(workspace),repository=str(root),dump=_initial_sealed_reference(dump),roles=role_ref,zig_sha256=identity['zig_sha256'],registry=dict(sha256=aux['language-registry']),interwiki=dict(sha256=interwiki),page_links=dict(sha256='2'*64),page_redirects=dict(sha256='3'*64))
+        plan_ref=_initial_sealed_write(root/'preparation-data.json',plan)
+        result=dict(passed=True,source_after=True,inputs_after=True,pages_executed=0,whole_dictionary=False,native_generation_state_created=False,input_authority=plan_ref,role_map=role_ref,expander=str(expander),completed_expander_seal=seal_ref,installed_tools={n:{k:v for k,v in d.items()if k!='mode'} for n,d in artifacts.items() if n in b.BLOB_TOOL_NAMES},**outputs)
+        result_ref=_initial_sealed_write(root/'preparation-result.json',result)
+        closed=dict(outcome='PASSED-PHYSICALLY-SOURCE-CLOSED',source_after=True,source_lease_released=True,allocation_released=True,pages_executed=0,native_generation_state_created=False,preparation_result=result_ref,completed_expander_seal=seal_ref,installed_tools=result['installed_tools'],**outputs)
+        closed_ref=_initial_sealed_write(root/'closure.json',closed)
+        selection=_initial_sealed_write(root/'selection.json',dict(preparation_result=result_ref,preparation_closure=closed_ref))
+        destination=root/'output/viwiktionary/20261001.shards'
+        calls=[0];hook=[None]
+        def unchanged():
+            calls[0]+=1
+            if hook[0]:hook[0]()
+        def bind(p):return dict(_initial_sealed_reference(p),mode=stat.S_IMODE(p.stat().st_mode))
+        roles=object.__new__(b.RetainedNativeToolRoles)
+        roles.records=records;roles.require_unchanged=unchanged;roles.provenance=lambda:copy.deepcopy(records);roles.bind_input=bind
+        roles.directories={};roles.inputs={};roles.initial_sealed_context=None;roles.initial_sealed_generation=selection
+        return SimpleNamespace(**locals())
+    def adopt(self,f,**changes):
+        args=dict(initial_generation=f.selection,native_roles=f.roles,build_identity=f.identity,dump=f.dump);args.update(changes)
+        return b.prepare_shard_workspace(f.destination,f.expected,123,**args)
+    def contexts(self,f):
+        import extraction_cache as cache
+        return patch.object(b,'PROJECT',f.root),patch.object(cache,'frozen_runtime_context',return_value=f.seal),patch.object(cache,'finalize_sealed_expander',return_value=f.seal)
+    def test_genuine_initial_state_preserves_worker_and_resumes_exact_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f=self.fixture(Path(tmp));inode=Path(f.outputs['worker']['path']).stat().st_ino
+            with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2]:
+                self.assertEqual(self.adopt(f),123);state=json.loads((f.destination/'state.json').read_text())
+                self.assertEqual(state,dict(f.expected,now_unix=123,native_generation=dict(seal_sha256=f.seal_ref['sha256'],dump=str(f.dump),build_inputs=f.identity,retained_expander_root=str(f.expander))))
+                self.assertEqual(self.adopt(f),123)
+            self.assertEqual(Path(f.outputs['worker']['path']).stat().st_ino,inode)
+            self.assertEqual(f.roles.records,f.records)
+    def test_changed_source_inputs_tools_and_unfinalized_seal_refuse_without_state(self):
+        for kind in ['source','auxiliary','zig','roles','graph','seal']:
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp));identity=copy.deepcopy(f.identity)
+                if kind=='source':identity['source']='0'*64
+                if kind=='auxiliary':identity['auxiliary_snapshot_sha256']['language-registry']='0'*64
+                if kind=='zig':identity['zig_sha256']='0'*64
+                if kind=='roles':identity['native_tool_roles']={}
+                if kind=='graph':f.roles.records['dict-bundle-build']['dependencies']['zig']['path']='/wrong/zig'
+                with self.contexts(f)[0],self.contexts(f)[1] as frozen,self.contexts(f)[2]:
+                    if kind=='seal':frozen.return_value=None
+                    with self.assertRaises(ValueError):self.adopt(f,build_identity=identity)
+                self.assertFalse((f.destination/'state.json').exists());self.assertTrue(Path(f.outputs['worker']['path']).exists())
+    def test_native_mode_validation_failure_and_installed_mode_mutation_are_fatal(self):
+        for kind in ['native_mode','installed_mode']:
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp))
+                with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2] as final:
+                    if kind=='native_mode':final.side_effect=ValueError('native mode changed')
+                    else:Path(f.result['installed_tools']['dict-blob-build']['path']).chmod(0o755)
+                    with self.assertRaises(ValueError):self.adopt(f)
+                self.assertFalse((f.destination/'state.json').exists())
+    def test_partial_output_and_mid_validation_directory_mutation_refuse(self):
+        for kind in ['partial','mutation','raw']:
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp))
+                if kind=='partial':(f.workspace/'shards').mkdir()
+                if kind=='mutation':
+                    def mutate():
+                        if f.calls[0]>=2:(f.workspace/'foreign.part').write_text('partial')
+                    f.hook[0]=mutate
+                if kind=='raw':
+                    raw=f.root/'raw';b.external_raw_shards(f.destination,raw,create=True);(raw/'partial.wikblb').write_text('partial');f.expected['raw_shards_path']=str(raw)
+                with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2]:
+                    with self.assertRaises(ValueError):self.adopt(f)
+                self.assertFalse((f.destination/'state.json').exists())
+    def test_closed_provenance_and_partial_state_cannot_be_relabelled(self):
+        for kind in ['closure','state','symlink']:
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp))
+                if kind=='closure':
+                    f.closed['source_after']=False;closed=_initial_sealed_write(f.root/'closure.json',f.closed);f.selection=_initial_sealed_write(f.root/'selection.json',dict(preparation_result=f.result_ref,preparation_closure=closed))
+                if kind=='state':
+                    f.destination.mkdir(parents=True);(f.destination/'state.json').write_text('{}')
+                if kind=='symlink':
+                    f.destination.mkdir(parents=True);(f.destination/'state.json').symlink_to(f.root/'foreign')
+                with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2]:
+                    with self.assertRaises(ValueError):self.adopt(f)
+    def test_ordinary_entry_holds_existing_compiler_input_lock_until_build_returns(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as tmp:
+            f=self.fixture(Path(tmp));f.roles.initial_sealed_generation=f.selection
+            lock_path=f.expander/'.compiler-inputs.lock'
+            def ordinary(*args,**kwargs):
+                with lock_path.open('r+') as other:
+                    with self.assertRaises(BlockingIOError):fcntl.flock(other,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                self.assertIs(kwargs['retained_roles'],f.roles)
+                return 'selected-existing-generation'
+            with patch.object(b,'PROJECT',f.root),patch.object(b,'build_locked',side_effect=ordinary),patch.object(b,'validate_item'):
+                self.assertEqual(b.build([dict(wiki='viwiktionary',date='20261001')],f.root/'downloads',f.root/'output','zig',retained_roles=f.roles),'selected-existing-generation')
+            with lock_path.open('r+') as released:fcntl.flock(released,fcntl.LOCK_EX|fcntl.LOCK_NB)
+
+    def test_unselected_normal_reset_keeps_existing_behavior(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f=self.fixture(Path(tmp))
+            self.assertEqual(b.prepare_shard_workspace(f.workspace,dict(source='fresh'),123),123)
+            self.assertFalse((f.workspace/'expander').exists())
+            self.assertEqual(json.loads((f.workspace/'state.json').read_text()),dict(source='fresh',now_unix=123))
+
+class OwnedRootInitialSealedTests(unittest.TestCase):
+    fixture=InitialSealedGenerationTests.fixture
+    adopt=InitialSealedGenerationTests.adopt
+    contexts=InitialSealedGenerationTests.contexts
+    def active(self,f):
+        import build_artifact_root as artifacts
+        output=f.root/'output';raw=f.root/'raw';output.mkdir(exist_ok=True);raw.mkdir(exist_ok=True)
+        st=f.root.stat();identity=dict(path=str(f.root),device=st.st_dev,inode=st.st_ino,mode=0o700,uid=st.st_uid)
+        artifacts.configure_artifact_root(identity,output,raw)
+        self.addCleanup(artifacts.configure_artifact_root,None,output,raw)
+        return artifacts
+    def retained_inventory(self,f):
+        return {str(p.relative_to(f.workspace)):(p.stat().st_dev,p.stat().st_ino,p.stat().st_mode,p.read_bytes() if p.is_file() else None) for p in [f.workspace,*f.workspace.rglob('*')]}
+    def test_active_roots_adopt_only_normal_output_state_and_cleanup_preserves_retained_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f=self.fixture(Path(tmp));artifacts=self.active(f);before=self.retained_inventory(f);paths=artifacts._ACTIVE_PATHS
+            with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2]:
+                self.assertEqual(self.adopt(f),123)
+                self.assertEqual(artifacts.artifact_path(f.destination),f.destination)
+                with self.assertRaisesRegex(ValueError,'outside selected output and raw roots'):artifacts.artifact_path(f.workspace)
+                self.assertFalse((f.workspace/'state.json').exists())
+                b.cleanup_shard_workspace(f.destination)
+                self.assertFalse(f.destination.exists())
+                self.assertEqual(artifacts._ACTIVE_PATHS,paths)
+                with self.assertRaisesRegex(ValueError,'outside selected output and raw roots'):b.remove_artifact_tree(f.workspace)
+            self.assertEqual(self.retained_inventory(f),before)
+    def test_active_roots_partial_failure_preserves_all_retained_members_and_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f=self.fixture(Path(tmp));artifacts=self.active(f);before=self.retained_inventory(f);paths=artifacts._ACTIVE_PATHS
+            f.destination.mkdir(parents=True);(f.destination/'foreign.part').write_bytes(b'partial')
+            with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2]:
+                with self.assertRaisesRegex(ValueError,'partial ordinary workspace'):self.adopt(f)
+                self.assertFalse((f.destination/'state.json').exists())
+                b.cleanup_shard_workspace(f.destination)
+            self.assertEqual(self.retained_inventory(f),before);self.assertEqual(artifacts._ACTIVE_PATHS,paths)
+    def test_sharded_entry_reads_retained_expander_without_prepare_reset_and_guard_refuses_mutation(self):
+        class ReachedIndex(Exception):pass
+        with tempfile.TemporaryDirectory() as tmp:
+            f=self.fixture(Path(tmp));self.active(f)
+            with self.contexts(f)[0],self.contexts(f)[1] as frozen,self.contexts(f)[2]:
+                self.adopt(f)
+                with patch.object(b,'expander_ready',return_value=True) as ready,patch.object(b,'inspect_page_index',side_effect=ReachedIndex) as index,patch.object(b,'prepare_blob_tools') as prepare,patch.object(b,'remove_artifact_tree') as remove:
+                    with self.assertRaises(ReachedIndex):
+                        b.build_sharded(f.dump,f.root/'output/staging',f.destination,f.root/'registry','zig',1,[dict(wiki='viwiktionary',date='20261001')],123,compress_shards=True,build_identity=f.identity,auxiliary_hashes=f.expected['auxiliary_snapshot_sha256'],interwiki_sha=f.expected['interwiki_map_sha256'],retained_roles=f.roles)
+                    self.assertEqual(ready.call_args.args[0],f.workspace/'expander')
+                    self.assertEqual(index.call_args.args[0],f.expander/'page-index.tsv');prepare.assert_not_called();remove.assert_not_called()
+                frozen.return_value=None
+                with self.assertRaisesRegex(ValueError,'Retained initial sealed input changed'):b.RetainedNativeToolRoles.require_inputs_unchanged(f.roles)
 
 if __name__=='__main__':unittest.main()

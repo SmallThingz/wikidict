@@ -256,6 +256,13 @@ linking a fresh worker. Every cached object is hashed before reuse. Missing or
 corrupt entries are rebuilt independently, and successful corpus publication
 removes the staging workspace and these transient caches.
 
+A source-bound caller can explicitly select an independently closed, sealed
+native generation as read-only input to an ordinary sharded build. The builder
+validates the dump, snapshots, native roles, ABI, toolchain and seal before
+creating current state in the owned output workspace. The retained generation
+never becomes eligible for output cleanup; an incompatible selection stops
+without resetting it. Reuse does not grant page or publication acceptance.
+
 Up to four compiler workers take missing batches from one shared queue. A worker
 starts its next batch as soon as its current compiler exits, while the final
 link retains the original object order. A full cache hit launches no batch

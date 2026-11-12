@@ -3131,7 +3131,165 @@ def writer_figure_adopt_workspace(workspace, expected, now_unix, build_identity,
     return desired['now_unix']
 
 
-def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None, *, provider_update=None, build_identity=None, dump=None, sealed_recovery=None, native_roles=None, writer_figure_transition=None):
+def initial_sealed_generation(reference, native_roles):
+    """Read a selected closed direct preparation, without inventing old shard state."""
+    selected = prepared_metadata(reference)
+    if set(selected) != {'preparation_result', 'preparation_closure'}:
+        raise ValueError('Invalid initial sealed generation selection')
+    result = prepared_metadata(selected['preparation_result'])
+    closed = prepared_metadata(selected['preparation_closure'])
+    plan = prepared_metadata(result['input_authority'])
+    if (not all(result.get(k) is True for k in ('passed', 'source_after', 'inputs_after'))
+            or result.get('pages_executed') != 0 or result.get('whole_dictionary') is not False
+            or result.get('native_generation_state_created') is not False
+            or closed.get('outcome') != 'PASSED-PHYSICALLY-SOURCE-CLOSED'
+            or not all(closed.get(k) is True for k in ('source_after', 'source_lease_released', 'allocation_released'))
+            or closed.get('pages_executed') != 0
+            or closed.get('native_generation_state_created') is not False
+            or closed.get('preparation_result') != selected['preparation_result']
+            or plan['roles'] != result['role_map']
+            or result.get('installed_tools') != closed.get('installed_tools')):
+        raise ValueError('Initial sealed preparation is not independently closed')
+    original_roles = prepared_metadata(plan['roles'])
+    if original_roles != native_roles.records:
+        raise ValueError('Initial sealed preparation selected different native roles')
+    workspace = Path(plan['workspace'])
+    if (not workspace.is_absolute() or workspace.resolve() != workspace
+            or any(p.is_symlink() for p in (workspace, *workspace.parents))
+            or not workspace.is_dir() or plan['repository'] != str(PROJECT)):
+        raise ValueError('Unsafe initial sealed workspace')
+    root = workspace / 'expander' / '.bundle-expander'
+    for key, name in (('completed_expander_seal', '.completed-expander.json'),
+                      ('worker', 'dict-bundle-expander'), ('metadata', 'lua-program.meta'),
+                      ('source_receipt', 'extraction-source.json')):
+        if (result[key] != closed.get(key) or result[key]['path'] != str(root / name)):
+            raise ValueError('Initial sealed preparation changed its output origin')
+    if result['expander'] != str(root):
+        raise ValueError('Initial sealed preparation selected another expander')
+    native_roles.require_unchanged()
+    return selected, result, plan, workspace
+
+
+def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity, dump, reference, native_roles):
+    """Create genuine ordinary initial state for an explicitly selected sealed worker."""
+    import extraction_cache as cache
+    selected, result, plan, selected_workspace = initial_sealed_generation(reference, native_roles)
+    if (workspace.is_relative_to(selected_workspace) or selected_workspace.is_relative_to(workspace)
+            or dump is None or str(dump) != plan['dump']['path']
+            or build_identity is None or expected.get('source') != build_identity.get('source')
+            or native_roles.provenance() != build_identity.get('native_tool_roles')
+            or plan['zig_sha256'] != build_identity.get('zig_sha256')
+            or expected.get('auxiliary_snapshot_sha256', {}) != build_identity.get('auxiliary_snapshot_sha256', {})
+            or expected.get('interwiki_map_sha256') != build_identity.get('interwiki_map_sha256')):
+        raise ValueError('Initial sealed generation differs from ordinary inputs or tools')
+    root = selected_workspace / 'expander' / '.bundle-expander'
+    seal_reference = result['completed_expander_seal']
+    seal = prepared_metadata(seal_reference)
+    dependencies = native_roles.records['dict-bundle-build']['dependencies']
+    graph = seal['origin_graph']
+    for field, dependency in (('extractor', 'modules'), ('llvm', 'llvm'), ('runtime', 'worker_object'),
+                              ('leaf', 'value_leaf_bc'), ('main_c', 'worker_main_c'), ('zig', 'zig')):
+        if graph.get(field) != dependencies[dependency]['path']:
+            raise ValueError('Initial sealed native graph differs from selected role')
+    snapshots = {auxiliary_snapshot_filename(name): digest for name, digest in
+                 build_identity.get('auxiliary_snapshot_sha256', {}).items()}
+    if (plan['registry']['sha256'] != expected.get('registry_sha256')
+            or plan['interwiki']['sha256'] != expected.get('interwiki_map_sha256')):
+        raise ValueError('Initial sealed registry or interwiki source differs')
+    snapshots.update({'interwiki-map.tsv': expected.get('interwiki_map_sha256'),
+                      'wikibase-page-links.tsv': plan['page_links']['sha256'],
+                      'page-redirects.tsv': plan['page_redirects']['sha256']})
+    providers = seal['identity']['providers']
+    if (any(value is not None and value[1] != snapshots.get(name) for name, value in providers.items())
+            or any(name not in providers or providers[name] is None or providers[name][1] != value
+                   for name, value in snapshots.items())
+            or seal['identity']['verified_input'][0] != plan['dump']['sha256']):
+        raise ValueError('Initial sealed snapshot or dump inputs differ')
+    # This existing validator authenticates native mode/toolchain/ABI provenance,
+    # source/index/sidecars and physical asset inventory without rehashing payloads.
+    if cache.frozen_runtime_context(root, dump, seal_reference['sha256']) != seal:
+        raise ValueError('Initial sealed generation is not finalized')
+    observed = cache.finalize_sealed_expander(root, Path(dump), seal_reference['sha256'], graph,
+        project_root=native_roles.records['dict-bundle-build']['source_root'])
+    if observed != seal or cache.frozen_runtime_context(root, dump, seal_reference['sha256']) != seal:
+        raise ValueError('Initial sealed generation is not finalized')
+    assets = {name: (size, digest) for name, size, digest in seal['identity']['assets']}
+    for key, name in (('worker', 'dict-bundle-expander'), ('metadata', 'lua-program.meta'),
+                      ('source_receipt', 'extraction-source.json')):
+        if assets.get(name) != (result[key]['bytes'], result[key]['sha256']):
+            raise ValueError('Initial sealed output proof differs from native assets')
+    state_path = workspace / 'state.json'
+    if state_path.is_symlink():
+        raise ValueError('Unsafe initial sealed state')
+    binding = dict(seal_sha256=seal_reference['sha256'], dump=str(dump), build_inputs=build_identity, retained_expander_root=str(root))
+    # Before the initial publication, only the two actual preparation products
+    # are owned here. A partial blob/output or foreign entry cannot be adopted.
+    def inventory():
+        found = {}
+        for path in (selected_workspace, selected_workspace / 'native-blob-tools', selected_workspace / 'native-blob-tools' / 'bin'):
+            st = path.lstat()
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+                raise ValueError('Unsafe initial sealed preparation directory')
+            found[str(path)] = (st.st_dev, st.st_ino, st.st_mode, st.st_mtime_ns, st.st_ctime_ns)
+        if ({p.name for p in selected_workspace.iterdir()} != {'expander', 'native-blob-tools'}
+                or {p.name for p in (selected_workspace / 'native-blob-tools').iterdir()} != {'bin'}
+                or {p.name for p in (selected_workspace / 'native-blob-tools' / 'bin').iterdir()} != set(RETAINED_NATIVE_ROLE_NAMES)):
+            raise ValueError('Initial sealed workspace has partial or unexpected output')
+        return found
+    raw_path = expected.get('raw_shards_path')
+    if raw_path is not None:
+        raw_input = Path(raw_path)
+        if raw_input.is_relative_to(selected_workspace) or selected_workspace.is_relative_to(raw_input):
+            raise ValueError('Ordinary raw shards overlap retained sealed input')
+        raw = external_raw_shards(workspace, raw_path)
+        if not state_path.exists() and raw.exists() and any(p.name != RAW_SHARD_OWNER for p in raw.iterdir()):
+            raise ValueError('Initial sealed adoption has partial raw shards')
+    before = inventory()
+    if set(result['installed_tools']) != set(BLOB_TOOL_NAMES):
+        raise ValueError('Initial sealed installed role inventory differs')
+    for name in RETAINED_NATIVE_ROLE_NAMES:
+        expected_artifact = native_roles.records[name]['artifact']
+        descriptor = result['installed_tools'].get(name, dict(expected_artifact, path=str(selected_workspace / 'native-blob-tools' / 'bin' / name)))
+        if (descriptor['path'] != str(selected_workspace / 'native-blob-tools' / 'bin' / name)
+                or any(descriptor[k] != expected_artifact[k] for k in ('bytes', 'sha256'))):
+            raise ValueError('Initial sealed installed role differs')
+        actual = native_roles.bind_input(Path(descriptor['path']))
+        if any(actual[k] != descriptor[k] for k in ('path', 'bytes', 'sha256')) or actual['mode'] != 0o555:
+            raise ValueError('Initial sealed installed role bytes or mode changed')
+    native_roles.require_unchanged()
+    prepared_metadata(reference); prepared_metadata(selected['preparation_result']); prepared_metadata(selected['preparation_closure'])
+    if inventory() != before or cache.frozen_runtime_context(root, dump, seal_reference['sha256']) != seal:
+        raise ValueError('Initial sealed workspace changed during adoption')
+    native_roles.initial_sealed_context = (root, Path(dump), seal_reference['sha256'])
+    if os.path.lexists(state_path):
+        state = read_small_json(state_path)
+        epoch = state.get('now_unix')
+        validate_now_unix(epoch)
+        if (epoch is None or now_unix not in (None, epoch)
+                or state != dict(expected, now_unix=epoch, native_generation=binding)):
+            raise ValueError('Initial sealed ordinary state differs')
+        return epoch
+    if workspace.exists():
+        if workspace.is_symlink() or not workspace.is_dir() or any(workspace.iterdir()):
+            raise ValueError('Initial sealed adoption has partial ordinary workspace')
+    else:
+        workspace.mkdir(parents=True, mode=0o700)
+    epoch = now_unix if now_unix is not None else int(time.time())
+    state = dict(expected, now_unix=epoch, native_generation=binding)
+    temporary = state_path.with_suffix('.part')
+    if os.path.lexists(temporary):
+        raise ValueError('Unexpected initial sealed state transaction')
+    try:
+        with temporary.open('x') as stream:
+            json.dump(state, stream, sort_keys=True); stream.write('\n')
+        # Publish without replacing a concurrent state or following a symlink.
+        os.link(temporary, state_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return epoch
+
+
+def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None, *, provider_update=None, build_identity=None, dump=None, sealed_recovery=None, native_roles=None, writer_figure_transition=None, initial_generation=None):
     expected=dict(expected)
     if 'raw_shards_path' in expected: raise ValueError('Raw shard path must be supplied explicitly')
     artifact_path(workspace)
@@ -3151,6 +3309,10 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
             raise ValueError('Own-cap retry requires the exact original prepared workspace and epoch')
         return generation.record['now_unix']
     if workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
+    if initial_generation is not None:
+        if sealed_recovery is not None or writer_figure_transition is not None:
+            raise ValueError('Initial sealed adoption cannot borrow another transition')
+        return adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity, dump, initial_generation, native_roles)
     if writer_figure_transition is not None:
         if sealed_recovery is not None or generation is not None:
             raise ValueError('Writer Figure transition requires an ordinary completed worker')
@@ -3538,10 +3700,14 @@ class RetainedNativeToolRoles:
         if set(roles) != set(RETAINED_NATIVE_ROLE_NAMES):
             raise ValueError('Incomplete retained native tool roles')
         self.records = copy.deepcopy(roles)
+        self.initial_sealed_context = None
+        self.initial_sealed_generation = self.records['dict-bundle-build'].pop('initial_sealed_generation', None)
         self.sealed_expander_recovery = self.records['dict-bundle-build'].pop('sealed_expander_recovery', None)
         self.writer_figure_transition = self.records['dict-blob-build'].pop('writer_figure_transition', None)
         if self.writer_figure_transition is not None and self.sealed_expander_recovery is not None:
             raise ValueError('Writer observation and pre-blob recovery transitions are distinct')
+        if self.initial_sealed_generation is not None and (self.sealed_expander_recovery is not None or self.writer_figure_transition is not None):
+            raise ValueError('Initial sealed adoption requires its own selection')
         self.tools, self.inputs, self.input_identities, self.directories = {}, {}, {}, {}
         self.zig_sha256 = zig_sha256
         self.compilation_payloads = {}
@@ -3628,6 +3794,9 @@ class RetainedNativeToolRoles:
             if actual != artifact or not actual['mode'] & 0o111:
                 raise ValueError('Retained native artifact bytes or mode differ')
             self.tools[role] = self.bind_tool(role,path) if not actual['mode'] & 0o222 else None
+        if self.initial_sealed_generation is not None:
+            initial_sealed_generation(self.initial_sealed_generation, self)
+            self.bind_input(Path(self.initial_sealed_generation['path']))
         if self.sealed_expander_recovery is not None:
             prepared_metadata(self.sealed_expander_recovery)
             self.bind_input(Path(self.sealed_expander_recovery['path']))
@@ -3786,6 +3955,11 @@ class RetainedNativeToolRoles:
         self.require_unchanged()
 
     def require_inputs_unchanged(self):
+        context=getattr(self, 'initial_sealed_context', None)
+        if context is not None:
+            import extraction_cache as native_cache
+            if native_cache.frozen_runtime_context(*context) is None:
+                raise ValueError('Retained initial sealed input changed')
         for path,expected in getattr(self,'borrowed_capture_directories',{}).items():
             st=path.stat()
             if (any(parent.is_symlink() for parent in (path,*path.parents)) or
@@ -4421,7 +4595,9 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     expansion_workers=workers if expansion_workers is None else expansion_workers
     if type(expansion_workers) is not int or not 1 <= expansion_workers <= MAX_PAGE_EXPANSION_WORKERS:
         raise ValueError('Invalid page expansion worker count')
-    expander_build=workspace/'expander'
+    initial_reference=getattr(retained_roles, 'initial_sealed_generation', None) if retained_roles is not None else None
+    retained_workspace=initial_sealed_generation(initial_reference, retained_roles)[3] if initial_reference is not None else None
+    expander_build=(retained_workspace if retained_workspace is not None else workspace)/'expander'
     page_links_sha=sha256_file(page_links_snapshot) if page_links_snapshot is not None else None
     page_redirects_sha=sha256_file(page_redirects_snapshot) if page_redirects_snapshot is not None else None
     generation=getattr(_PREPARED_SOURCE,'value',None)
@@ -4454,9 +4630,12 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         binding=read_small_json(state_path).get('native_generation') if state_path.is_file() else None
         if binding is not None:
             import extraction_cache as native_cache
-            if (not isinstance(binding,dict) or set(binding)!=({'seal_sha256','dump','build_inputs','writer_figure_transition'} if writer_transition is not None else {'seal_sha256','dump','build_inputs'})
+            expected_binding_keys=({'seal_sha256','dump','build_inputs','retained_expander_root'} if initial_reference is not None else {'seal_sha256','dump','build_inputs','writer_figure_transition'} if writer_transition is not None else {'seal_sha256','dump','build_inputs'})
+            if (not isinstance(binding,dict) or set(binding)!=expected_binding_keys
                     or binding['dump']!=str(dump)):
                 raise ValueError('Bound ordinary native generation changed')
+            if initial_reference is not None and binding['retained_expander_root']!=str(expander_build/'.bundle-expander'):
+                raise ValueError('Retained initial sealed root changed')
             if writer_transition is not None:
                 if binding['writer_figure_transition']!=writer_transition:
                     raise ValueError('Writer Figure transition binding changed')
@@ -4465,6 +4644,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     worker_ready=native_ready and expander_ready(expander_build,worker_auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha) if generation is None else True
     if writer_transition is not None and not worker_ready:
         raise ValueError('Selected Writer Figure transition worker changed; existing generation preserved')
+    if getattr(retained_roles, 'initial_sealed_generation', None) is not None and not worker_ready:
+        raise ValueError('Selected initial sealed worker inputs changed; existing generation preserved')
     if generation is None and not worker_ready:
         if expander_build.exists(): remove_artifact_tree(expander_build)
         staged=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
@@ -4746,6 +4927,10 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     raise ValueError(f'Build already running: {parent / date}') from None
+                initial_reference = getattr(retained_roles, 'initial_sealed_generation', None) if retained_roles is not None else None
+                if initial_reference is not None:
+                    selected_workspace = initial_sealed_generation(initial_reference, retained_roles)[3]
+                    owned.enter_context(acquire_build_resource_lock(selected_workspace/'expander'/'.bundle-expander'/'.compiler-inputs.lock'))
                 # An existing publication is verification-only even when input or
                 # publication checks fail before build_locked can return its mode.
                 # Legitimate producers share this edition lock; success still overrides.
@@ -5191,6 +5376,14 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         if generation is not None:generation.require_identity(build_identity)
         auxiliary_hashes=build_identity['auxiliary_snapshot_sha256']
     target = output / edition / date
+    initial_generation = getattr(retained_roles, 'initial_sealed_generation', None) if retained_roles is not None else None
+    initial_workspace = initial_sealed_generation(initial_generation, retained_roles)[3] if initial_generation is not None else None
+    if initial_workspace is not None:
+        if not (target.with_name(date+'.shards')/'state.json').exists() and any(os.path.lexists(p) for p in (target, target.with_name(date + '.building'))):
+            raise ValueError('Initial sealed adoption refuses existing ordinary output')
+        for published in (target, target.with_name(date + '.building')):
+            if published.is_relative_to(initial_workspace) or initial_workspace.is_relative_to(published):
+                raise ValueError('Initial sealed workspace overlaps ordinary output')
     if retained_roles is not None and retained_roles.sealed_expander_recovery is not None:
         recovery=prepared_metadata(retained_roles.sealed_expander_recovery)
         recovery_workspace=target.with_name(date+'.shards')
@@ -5290,6 +5483,9 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
                                build_identity=build_identity, dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
         if writer_transition is not None:
             update_args=dict(writer_figure_transition=writer_transition, native_roles=retained_roles,
+                             build_identity=build_identity, dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
+        if initial_generation is not None:
+            update_args=dict(initial_generation=initial_generation, native_roles=retained_roles,
                              build_identity=build_identity, dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
         now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}),**update_args)
         if reviewed is not None:nonlexical.pin_review(reviewed,workspace/'reviewed-nonlexical-source.json')
