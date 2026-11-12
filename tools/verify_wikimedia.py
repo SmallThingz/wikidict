@@ -126,7 +126,7 @@ def source_at(dump, page):
 
 
 def request_payload(root, dump, now, page, source):
-    """Version4 row identity is taken from the selected index row, never inferred."""
+    """Version5 row identity is taken from the selected index row, never inferred."""
     parts = [str(root).encode(), str(dump).encode(), page['title'].encode(), source.encode()]
     if not all(0 < len(part) <= 4096 for part in parts[:3]) or len(parts[3]) > 16 * 1024 * 1024:
         raise ValueError('Request exceeds worker protocol field limits')
@@ -136,7 +136,7 @@ def request_payload(root, dump, now, page, source):
     namespace = page['namespace']
     if type(namespace) is not int or not 0 <= namespace < 2**32:
         raise ValueError('Invalid selected page namespace')
-    payload = struct.pack('<BqQQQQIIIII', 4, now, *values, namespace, *map(len, parts)) + b''.join(parts)
+    payload = struct.pack('<BqQQQQIIIII', 5, now, *values, namespace, *map(len, parts)) + b''.join(parts)
     if len(payload) > 32 * 1024 * 1024:
         raise ValueError('Request exceeds worker frame limit')
     return payload
@@ -147,9 +147,12 @@ class NativeWorker:
         self.executable, self.root, self.dump = executable, root, dump
         self.now, self.timeout, self.log, self.child = now, timeout, log, None
         self.ready_received = False
+        self._child_cpu_ns = None
+        self.last_reply_cpu_ns = None
 
     def close(self):
         self.ready_received = False
+        self._child_cpu_ns = None
         if self.child is not None:
             self.child.kill()
             self.child.wait()
@@ -178,6 +181,7 @@ class NativeWorker:
         return bytes(out)
 
     def expand(self, page, source):
+        self.last_reply_cpu_ns = None
         payload = request_payload(self.root, self.dump, self.now, page, source)
         try:
             if self.child is None:
@@ -199,14 +203,28 @@ class NativeWorker:
             if not 0 < size <= 32 * 1024 * 1024:
                 raise ValueError('Invalid native reply length')
             payload = self.transfer(self.child.stdout, size, False, deadline)
+            if len(payload) <= 9 or payload[0] != 0x85:
+                raise ValueError('Invalid native CPU reply envelope')
+            cpu_ns = struct.unpack_from('<Q', payload, len(payload) - 8)[0]
+            payload = payload[1:-8]
+            if self._child_cpu_ns is not None and cpu_ns < self._child_cpu_ns:
+                raise ValueError('Native worker CPU stamp regressed')
             if payload == b'\x03':
                 if self.ready_received:
                     raise ValueError('Duplicate native readiness')
                 self.ready_received = True
+                self._child_cpu_ns = cpu_ns
                 continue
             if not self.ready_received and (not payload or payload[0] != 1):
                 raise ValueError('Native output before readiness')
-            return decode_reply(payload)
+            try:
+                result = decode_reply(payload)
+            except RuntimeError:
+                # A decoded failure is still a completed, CPU-stamped reply.
+                self._child_cpu_ns = self.last_reply_cpu_ns = cpu_ns
+                raise
+            self._child_cpu_ns = self.last_reply_cpu_ns = cpu_ns
+            return result
 
 
 def decode_reply(payload):

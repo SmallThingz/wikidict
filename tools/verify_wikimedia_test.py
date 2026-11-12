@@ -4,6 +4,7 @@ import struct
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from types import SimpleNamespace
 
 sys.dont_write_bytecode = True
@@ -32,12 +33,12 @@ class VerifyWikimediaTest(unittest.TestCase):
                          (1, len(header + first), 8451, 32521, 0))
         self.assertEqual(index.read_bytes()[exact['index_offset']:], second)
 
-    def test_v4_request_serializes_selected_identity_and_fragment(self):
+    def test_v5_request_serializes_selected_identity_and_fragment(self):
         page = dict(title="Acara:Wikilatih Wikioca'", ordinal=7, index_offset=123,
                     page_id=8451, revision=32521, namespace=0)
         payload = request_payload('root', 'dump.xml', 42, page, 'redirect tail')
         header = struct.unpack('<BqQQQQIIIII', payload[:61])
-        self.assertEqual(header[:7], (4, 42, 7, 123, 8451, 32521, 0))
+        self.assertEqual(header[:7], (5, 42, 7, 123, 8451, 32521, 0))
         self.assertEqual(header[7:], (4, 8, len(page['title'].encode()), 13))
         self.assertEqual(payload[61:], b'rootdump.xml' + page['title'].encode() + b'redirect tail')
         for key in ('index_offset', 'page_id', 'revision', 'namespace'):
@@ -49,32 +50,144 @@ class VerifyWikimediaTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 request_payload('root', 'dump', 42, dict(page, **{key: value}), '')
 
+    @staticmethod
+    def timed(payload, cpu_ns):
+        return b'\x85' + payload + struct.pack('<Q', cpu_ns)
+
+    def worker_with(self, frames):
+        worker = NativeWorker(None, None, None, 42, 1, None)
+        worker.child = SimpleNamespace(stdout=object())
+        pieces = []
+        for frame in frames:
+            pieces.extend((struct.pack('<I', len(frame)), frame))
+        def transfer(pipe, size, writing, deadline):
+            value = pieces.pop(0)
+            self.assertFalse(writing)
+            self.assertEqual(size, len(value))
+            return value
+        worker.transfer = transfer
+        return worker
+
     def test_native_ready_handshake_is_once_per_child(self):
         success = b'\0' + struct.pack('<II', 1, 0) + b'\0x'
-        def worker_with(frames):
-            worker = NativeWorker(None, None, None, 42, 1, None)
-            worker.child = SimpleNamespace(stdout=object())
-            pieces = []
-            for frame in frames:
-                pieces.extend((struct.pack('<I', len(frame)), frame))
-            def transfer(pipe, size, writing, deadline):
-                value = pieces.pop(0)
-                self.assertFalse(writing)
-                self.assertEqual(size, len(value))
-                return value
-            worker.transfer = transfer
-            return worker
-        worker = worker_with([b'\3', success, success])
+        worker = self.worker_with([self.timed(b'\3', 10), self.timed(success, 20), self.timed(success, 20)])
         self.assertEqual(worker.read_reply(1), ('x', ''))
         self.assertTrue(worker.ready_received)
+        self.assertEqual(worker.last_reply_cpu_ns, 20)
         self.assertEqual(worker.read_reply(1), ('x', ''))
         with self.assertRaisesRegex(ValueError, 'before readiness'):
-            worker_with([success]).read_reply(1)
+            self.worker_with([self.timed(success, 20)]).read_reply(1)
         with self.assertRaisesRegex(ValueError, 'Duplicate'):
-            worker_with([b'\3', b'\3']).read_reply(1)
+            self.worker_with([self.timed(b'\3', 10), self.timed(b'\3', 20)]).read_reply(1)
         failure = b'\1' + struct.pack('<III', 6, 3, 0) + b'assetsbad'
+        worker = self.worker_with([self.timed(failure, 5)])
         with self.assertRaisesRegex(RuntimeError, 'assets: bad'):
-            worker_with([failure]).read_reply(1)
+            worker.read_reply(1)
+        self.assertEqual(worker.last_reply_cpu_ns, 5)
+        self.assertFalse(worker.ready_received)
+
+    def test_timed_envelope_rejects_legacy_truncation_and_regression(self):
+        success = b'\0' + struct.pack('<II', 1, 0) + b'\0x'
+        ready = self.timed(b'\3', 10)
+        for bad in (b'\3', success, b'\x84' + ready[1:], ready[:-1], ready + b'x',
+                    self.timed(b'\3x', 10), self.timed(b'\x85', 10)):
+            with self.subTest(frame=bad):
+                worker = self.worker_with([bad])
+                with self.assertRaises(ValueError):
+                    worker.read_reply(1)
+                self.assertIsNone(worker.last_reply_cpu_ns)
+        worker = self.worker_with([ready, self.timed(success, 9)])
+        with self.assertRaisesRegex(ValueError, 'CPU stamp regressed'):
+            worker.read_reply(1)
+        self.assertIsNone(worker.last_reply_cpu_ns)
+        for size in (0, 32 * 1024 * 1024 + 1):
+            worker = self.worker_with([])
+            worker.transfer = lambda *args: struct.pack('<I', size)
+            with self.assertRaisesRegex(ValueError, 'reply length'):
+                worker.read_reply(1)
+
+    def test_timed_variants_preserve_metadata_errors_and_cpu(self):
+        for tag, metadata in ((0, []), (4, [b'poem']), (5, [b'missing']), (6, [b'poem', b'missing'])):
+            payload = bytes([tag]) + struct.pack('<II', 2, 3) + b'\0'
+            payload += struct.pack('<' + 'I' * len(metadata), *map(len, metadata))
+            payload += 'é字'.encode() + b''.join(metadata)
+            worker = self.worker_with([self.timed(b'\3', 0), self.timed(payload, 2**64 - 1)])
+            self.assertEqual(worker.read_reply(1), ('é', '字'))
+            self.assertEqual(worker.last_reply_cpu_ns, 2**64 - 1)
+            bad = self.worker_with([self.timed(b'\3', 0), self.timed(payload[:-1], 5)])
+            with self.assertRaises(ValueError):
+                bad.read_reply(1)
+            self.assertIsNone(bad.last_reply_cpu_ns)
+        for payload, message in ((b'\1' + struct.pack('<III', 6, 3, 6) + b'expandbaddetail', 'expand: bad: detail'),
+                                 (b'\0' + struct.pack('<II', 1, 0) + b'\1x', 'Native expansion unverified')):
+            worker = self.worker_with([self.timed(b'\3', 10), self.timed(payload, 15)])
+            with self.assertRaisesRegex(RuntimeError, message):
+                worker.read_reply(1)
+            self.assertEqual(worker.last_reply_cpu_ns, 15)
+        with self.assertRaisesRegex(ValueError, 'noncanonical'):
+            self.worker_with([self.timed(b'\3', 0), self.timed(b'\2', 5)]).read_reply(1)
+
+    def test_expand_keeps_deadline_identity_and_error_cleanup(self):
+        page = dict(title='title', ordinal=7, index_offset=123, page_id=8451, revision=32521, namespace=0)
+        success = b'\0' + struct.pack('<II', 1, 0) + b'\0x'
+        worker = NativeWorker(Path('worker'), 'root', 'dump', 42, 2.5, None)
+        child = mock.Mock()
+        frames = [self.timed(b'\3', 10), self.timed(success, 20)]
+        pieces = [piece for frame in frames for piece in (struct.pack('<I', len(frame)), frame)]
+        expected = request_payload('root', 'dump', 42, page, 'exact source')
+        def transfer(pipe, value, writing, deadline):
+            self.assertEqual(deadline, 1002.5)
+            if writing:
+                self.assertIs(pipe, child.stdin)
+                self.assertEqual(value, struct.pack('<I', len(expected)) + expected)
+                return b''
+            self.assertIs(pipe, child.stdout)
+            piece = pieces.pop(0)
+            self.assertEqual(len(piece), value)
+            return piece
+        worker.transfer = transfer
+        with mock.patch('verify_wikimedia.subprocess.Popen', return_value=child) as popen, \
+             mock.patch('verify_wikimedia.os.set_blocking'), \
+             mock.patch('verify_wikimedia.time.monotonic', return_value=1000):
+            self.assertEqual(worker.expand(page, 'exact source'), ('x', ''))
+            self.assertEqual(popen.call_args.args, (['worker'],))
+            self.assertEqual(worker.last_reply_cpu_ns, 20)
+            worker.transfer = mock.Mock(side_effect=TimeoutError('deadline'))
+            with self.assertRaisesRegex(TimeoutError, 'deadline'):
+                worker.expand(page, 'exact source')
+        child.kill.assert_called_once()
+        child.wait.assert_called_once()
+        child.stdin.close.assert_called_once()
+        child.stdout.close.assert_called_once()
+        self.assertIsNone(worker.child)
+        self.assertFalse(worker.ready_received)
+        self.assertIsNone(worker._child_cpu_ns)
+        self.assertIsNone(worker.last_reply_cpu_ns)
+        # A new child may start from a smaller cumulative CPU stamp.
+        fresh = self.worker_with([self.timed(b'\3', 1), self.timed(success, 2)])
+        worker.child, worker.transfer = fresh.child, fresh.transfer
+        self.assertEqual(worker.read_reply(1), ('x', ''))
+        self.assertEqual(worker.last_reply_cpu_ns, 2)
+
+    def test_completed_failure_keeps_cpu_stamp_after_child_cleanup(self):
+        failure = b'\1' + struct.pack('<III', 6, 3, 6) + b'expandbaddetail'
+        worker = self.worker_with([self.timed(b'\3', 10), self.timed(failure, 15)])
+        read = worker.transfer
+        worker.transfer = lambda pipe, value, writing, deadline: b'' if writing else read(pipe, value, writing, deadline)
+        child = mock.Mock()
+        worker.child = child
+        worker.root, worker.dump = 'root', 'dump'
+        page = dict(title='title', ordinal=1, index_offset=10, page_id=2, revision=3, namespace=0)
+        with self.assertRaisesRegex(RuntimeError, 'expand: bad: detail'):
+            worker.expand(page, 'exact source')
+        self.assertEqual(worker.last_reply_cpu_ns, 15)
+        self.assertIsNone(worker._child_cpu_ns)
+        self.assertFalse(worker.ready_received)
+        child.kill.assert_called_once()
+        child.wait.assert_called_once()
+        with self.assertRaises(KeyError):
+            worker.expand({}, 'source')
+        self.assertIsNone(worker.last_reply_cpu_ns)
 
     def test_current_success_metadata_variants_keep_output_and_validate_lengths(self):
         for tag, metadata in ((4, [b'poem']), (5, [b'missing']), (6, [b'poem', b'missing'])):
