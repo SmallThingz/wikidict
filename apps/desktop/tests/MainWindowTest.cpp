@@ -477,6 +477,171 @@ private:
     }
 
 private slots:
+    void typedFontFeaturesResetReplaceAndPreserveSpanOrigins()
+    {
+        MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        window.readingPointSize_ = 12;
+        const QMap<QFont::Tag, quint32> seven{{"liga", 1}, {"clig", 1}, {"kern", 1}, {"ccmp", 1},
+                                             {"dist", 1}, {"mark", 1}, {"mkmk", 1}};
+        const auto mapOf = [](const QFont &font) {
+            QMap<QFont::Tag, quint32> result;
+            for (auto tag : font.featureTags()) result.insert(tag, font.featureValue(tag));
+            return result;
+        };
+        for (int inherited = 0; inherited != 2; ++inherited) for (int mode = 0; mode != 3; ++mode) {
+            QFont body(QStringLiteral("DejaVu Sans"), 24); body.setKerning(false);
+            body.setLetterSpacing(QFont::AbsoluteSpacing, 3);
+            body.setStyleStrategy(QFont::StyleStrategy(QFont::NoFontMerging | QFont::PreferNoShaping));
+            const auto parent = inherited ? seven : QMap<QFont::Tag, quint32>{{"dlig", 1}, {"ss01", 1}};
+            for (auto it = parent.cbegin(); it != parent.cend(); ++it) body.setFeature(it.key(), it.value());
+            const QJsonValue policy = mode == 0 ? QJsonValue(QJsonValue::Null) : QJsonValue(mode == 1 ? "normal" : "seven_on");
+            const auto expected = mode == 0 ? parent : mode == 1 ? QMap<QFont::Tag, quint32>{} : seven;
+            for (qreal size : {-1.0, 12.0, 0.0}) {
+                QTextDocument document; document.setDefaultFont(body);
+                QJsonObject span{{"kind", "link"}, {"text", "ffi AV"}, {"target", "FeatureTarget"}, {"target_fragment", "part"},
+                    {"bold", true}, {"italic", true}, {"code", true}, {"font_features", policy}};
+                if (size >= 0) { span.insert("font_scale", size); span.insert("font_scale_basis", "css_px"); }
+                if (mode == 0) {
+                    auto omitted = span; omitted.remove("font_features");
+                    QCOMPARE(window.spansHtml(QJsonArray{span}, 0, {}, {}, 24), window.spansHtml(QJsonArray{omitted}, 0, {}, {}, 24));
+                }
+                SemanticHtml::setHtml(&document, window.spansHtml(QJsonArray{span}, 0, {}, {}, 24));
+                const auto selected = document.find("ffi AV"); QVERIFY(!selected.isNull());
+                const auto format = selected.charFormat(); const QFont font = format.font();
+                QTextDocument legacy; legacy.setDefaultFont(body);
+                auto legacySpan = span; legacySpan.remove("font_features");
+                SemanticHtml::setHtml(&legacy, window.spansHtml(QJsonArray{legacySpan}, 0, {}, {}, 24));
+                const auto legacySelection = legacy.find("ffi AV"); QVERIFY(!legacySelection.isNull());
+                const auto legacyStrategy = legacySelection.charFormat().font().styleStrategy();
+                QCOMPARE(format.anchorHref(), QStringLiteral("dict:FeatureTarget#part"));
+                QCOMPARE(format.hasProperty(QTextFormat::FontFeatures), mode != 0);
+                QCOMPARE(mapOf(font), expected);
+                QCOMPARE(font.styleStrategy(), mode == 0 ? legacyStrategy
+                    : QFont::StyleStrategy(int(legacyStrategy) & ~int(QFont::PreferNoShaping)));
+                QVERIFY(font.styleStrategy() & QFont::NoFontMerging);
+                QVERIFY(!font.kerning()); QCOMPARE(font.letterSpacing(), 3.0);
+                if (size > 0) QVERIFY(qAbs(font.pointSizeF() - size * 72 / QFontMetricsF(QFont()).fontDpi()) < .0001);
+                if (size == 0) QVERIFY(font.families().contains(SemanticHtml::zeroFontFamilyName));
+                else { QVERIFY(font.bold()); QVERIFY(font.italic()); QVERIFY(!font.families().contains(SemanticHtml::zeroFontFamilyName)); }
+                const auto raw = document.toRawText(); const int revision = document.revision();
+                document.setTextWidth(500); document.size();
+                QImage image(600, 150, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
+                QPainter painter(&image); document.drawContents(&painter); painter.end();
+                QCOMPARE(document.toRawText(), raw); QCOMPARE(document.revision(), revision);
+                if (size != 0) {
+                    const auto line = selected.block().layout()->lineAt(0); QVERIFY(line.isValid());
+                    QVERIFY(!line.glyphRuns().isEmpty());
+                }
+            }
+            const QJsonObject image{{"file", "Features.png"}, {"width_px", 24}, {"height_px", 12}, {"alt", "ffi AV"}};
+            const QJsonObject span{{"kind", "link"}, {"text", ""}, {"target", "File:Features.png"}, {"image", image}, {"font_features", policy}};
+            QTextDocument document; document.setDefaultFont(body);
+            SemanticHtml::setHtml(&document, window.spansHtml(QJsonArray{span}));
+            QTextFragment stored;
+            for (auto block = document.begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it)
+                    if (it.fragment().charFormat().isImageFormat()) stored = it.fragment();
+            QVERIFY(stored.isValid()); QCOMPARE(stored.length(), 1);
+            QCOMPARE(mapOf(stored.charFormat().font()), expected);
+            QCOMPARE(InlineVectorImages::compiledImage(stored.charFormat().toImageFormat()), image);
+            QCOMPARE(stored.charFormat().anchorHref(), QStringLiteral("media-source:File%3AFeatures.png"));
+            InlineVectorImages handler(document.documentLayout());
+            QImage bitmap(24, 12, QImage::Format_ARGB32_Premultiplied); bitmap.fill(Qt::magenta);
+            document.addResource(QTextDocument::ImageResource, QUrl(stored.charFormat().toImageFormat().name()), bitmap);
+            auto ready = stored.charFormat().toImageFormat();
+            ready.setProperty(SemanticHtml::inlineImageStateProperty, int(MediaPanel::InlineImageState::Ready));
+            const auto raw = document.toRawText(); const int revision = document.revision();
+            const auto size = handler.intrinsicSize(&document, stored.position(), ready);
+            QCOMPARE(size, QSizeF(24, 12));
+            QImage painted(40, 30, QImage::Format_ARGB32_Premultiplied); painted.fill(Qt::white);
+            QPainter painter(&painted); handler.drawObject(&painter, QRectF(QPointF(5, 5), size), &document, stored.position(), ready); painter.end();
+            for (int y = 6; y < 16; ++y) for (int x = 6; x < 28; ++x) QCOMPARE(painted.pixelColor(x, y), QColor(Qt::magenta));
+            QCOMPARE(document.toRawText(), raw); QCOMPARE(document.revision(), revision);
+        }
+        for (const auto &invalid : {QJsonValue(true), QJsonValue(1), QJsonValue("inherit"), QJsonValue("liga"), QJsonValue(QJsonObject{})}) {
+            const QJsonObject span{{"kind", "text"}, {"text", "Invalid"}, {"font_features", invalid}};
+            QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{span}), std::runtime_error);
+        }
+        QFont source(QStringLiteral("DejaVu Sans"), 24); source.setFeature("dlig", 1); source.setFeature("ss01", 1);
+        source.setKerning(false); source.setLetterSpacing(QFont::AbsoluteSpacing, 3);
+        source.setStyleStrategy(QFont::StyleStrategy(QFont::PreferNoShaping | QFont::NoFontMerging));
+        auto normal = source, enabled = source, absent = source;
+        SemanticHtml::applyFontFeatures(normal, SemanticHtml::FontFeaturePolicy::Normal);
+        SemanticHtml::applyFontFeatures(enabled, SemanticHtml::FontFeaturePolicy::SevenOn);
+        SemanticHtml::applyFontFeatures(absent, SemanticHtml::FontFeaturePolicy::Legacy);
+        QCOMPARE(absent, source); QVERIFY(normal.featureTags().isEmpty()); QCOMPARE(mapOf(enabled), seven);
+        for (const auto &font : {normal, enabled}) {
+            QCOMPARE(font.styleStrategy(), QFont::NoFontMerging); QVERIFY(!font.kerning()); QCOMPARE(font.letterSpacing(), 3.0);
+            QCOMPARE(font.families(), source.families()); QCOMPARE(font.pointSizeF(), source.pointSizeF());
+        }
+    }
+
+    void typedFontFeaturesReachFigureStrutCaptionAndMissingLabel()
+    {
+        QSettings().setValue("media/allowImages", false);
+        MainWindow window{QString()}; window.resize(900, 700); window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        const QMap<QFont::Tag, quint32> seven{{"liga", 1}, {"clig", 1}, {"kern", 1}, {"ccmp", 1},
+                                             {"dist", 1}, {"mark", 1}, {"mkmk", 1}};
+        const auto mapOf = [](const QFont &font) {
+            QMap<QFont::Tag, quint32> result;
+            for (auto tag : font.featureTags()) result.insert(tag, font.featureValue(tag));
+            return result;
+        };
+        const auto px = [](qreal n) { return QJsonObject{{"unit", "px"}, {"value", n}}; };
+        for (bool missing : {false, true}) for (const QString &policy : {QStringLiteral("normal"), QStringLiteral("seven_on")}) {
+            const auto expected = policy == "normal" ? QMap<QFont::Tag, quint32>{} : seven;
+            auto figure = tableCaptionFigureFixture(); auto input = figure.value("table_caption_layout").toObject();
+            auto media = input.value("media").toObject();
+            QJsonObject strut{{"font_scale", 1}, {"direction", "ltr"}, {"bold", true}, {"italic", true}, {"code", true}, {"font_features", policy}};
+            media.insert("strut", strut); input.insert("viewport_states", QJsonArray{});
+            figure.insert("caption", QJsonArray{QJsonObject{{"kind", "link"}, {"text", "Feature caption ffi"}, {"target", "FeatureCaption"},
+                {"font_features", policy}, {"italic", true}, {"font_scale", 12}, {"font_scale_basis", "css_px"}}});
+            if (missing) {
+                figure.remove("image_span"); figure.remove("sizing");
+                figure.insert("missing_content", QJsonObject{{"label", QJsonObject{{"kind", "external_link"}, {"text", "Missing feature ffi"},
+                    {"target", "https://example.test/missing-feature"}, {"font_features", policy}}}, {"width", px(180)},
+                    {"line_height", QJsonObject{{"unit", "em"}, {"value", 1.504}}}});
+                media = QJsonObject{{"strut", strut}, {"vertical_align", "baseline"}};
+                input.insert("missing_link_paint", figureLinkPaintFixture(true)); input.insert("wrapper", QJsonObject{});
+            } else {
+                auto span = figure.value("image_span").toObject(); span.insert("font_features", policy); figure.insert("image_span", span);
+            }
+            input.insert("media", media); figure.insert("table_caption_layout", input);
+            const QJsonObject block{{"kind", "paragraph"}, {"depth", 0}, {"list_path", ""}, {"spans", QJsonArray{}}, {"figure", figure}};
+            QVERIFY(composeReadingBlocks(window, QJsonArray{block})); window.readingPaneAction_->trigger();
+            auto *document = window.reading_->document(); auto *layout = document->documentLayout(); layout->documentSize();
+            QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const auto caption = document->find("Feature caption ffi"); QVERIFY(!caption.isNull());
+            QCOMPARE(mapOf(caption.charFormat().font()), expected);
+            QCOMPARE(caption.charFormat().anchorHref(), QStringLiteral("dict:FeatureCaption"));
+            QVERIFY(caption.charFormat().fontItalic()); QVERIFY(!(caption.charFormat().font().styleStrategy() & QFont::PreferNoShaping));
+            int struts = 0;
+            const auto visit = [&](auto &&self, QTextFrame *frame) -> void {
+                const auto native = frame->frameFormat().property(SemanticFigure::tableCaptionProperty).toMap();
+                if (native.contains("strut_font")) {
+                    ++struts; const auto font = native.value("strut_font").value<QFont>();
+                    QCOMPARE(mapOf(font), expected); QVERIFY(font.bold() && font.italic());
+                    QVERIFY(!(font.styleStrategy() & QFont::PreferNoShaping));
+                    QCOMPARE(native.value("source_media").value<QJsonObject>().value("strut").toObject(), strut);
+                }
+                for (auto *child : frame->childFrames()) self(self, child);
+            }; visit(visit, document->rootFrame()); QCOMPARE(struts, 1);
+            if (missing) {
+                const auto label = document->find("Missing feature ffi"); QVERIFY(!label.isNull());
+                QCOMPARE(mapOf(label.charFormat().font()), expected);
+                QCOMPARE(label.charFormat().anchorHref(), QStringLiteral("https://example.test/missing-feature"));
+                QVERIFY(MissingFigurePaint::ownerAt(document, label.selectionStart()) >= (qint64(1) << 32));
+            }
+            const QString raw = document->toRawText(); const int revision = document->revision();
+            QImage image(1000, 700, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
+            QPainter painter(&image); document->drawContents(&painter); painter.end();
+            QCOMPARE(document->toRawText(), raw); QCOMPARE(document->revision(), revision);
+            auto bad = figure; auto badInput = input; auto badMedia = media; auto badStrut = strut;
+            badStrut.insert("font_features", "unknown"); badMedia.insert("strut", badStrut); badInput.insert("media", badMedia); bad.insert("table_caption_layout", badInput);
+            QVERIFY_EXCEPTION_THROWN(SemanticFigure::validate(bad, 16, window.reading_->palette()), std::runtime_error);
+        }
+    }
+
     void retainedItalianPianoforteReportsHorizontalBounds()
     {
         // Complete authenticated Stored response from the ordinary Reader. This

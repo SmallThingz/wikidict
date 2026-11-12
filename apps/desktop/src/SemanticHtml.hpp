@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QHash>
+#include <QMap>
 #include <QSet>
 #include <QScopeGuard>
 #include <QPointer>
@@ -51,6 +52,35 @@ inline QString spanExplanation(const QTextCharFormat &format) {
 }
 
 enum class Basis { Context, NormalBody, CssPx };
+enum class FontFeaturePolicy { Legacy, Normal, SevenOn };
+inline FontFeaturePolicy fontFeaturePolicy(const QJsonValue &value) {
+    if (value.isUndefined() || value.isNull()) return FontFeaturePolicy::Legacy;
+    if (value.isString() && value.toString() == QStringLiteral("normal")) return FontFeaturePolicy::Normal;
+    if (value.isString() && value.toString() == QStringLiteral("seven_on")) return FontFeaturePolicy::SevenOn;
+    throw std::runtime_error("invalid typed font feature policy");
+}
+inline QMap<QFont::Tag, quint32> fontFeatureMap(FontFeaturePolicy policy) {
+    QMap<QFont::Tag, quint32> features;
+    if (policy == FontFeaturePolicy::SevenOn)
+        for (const auto tag : {QFont::Tag("liga"), QFont::Tag("clig"), QFont::Tag("kern"), QFont::Tag("ccmp"),
+                               QFont::Tag("dist"), QFont::Tag("mark"), QFont::Tag("mkmk")}) features.insert(tag, 1);
+    return features;
+}
+inline void applyFontFeatures(QFont &font, FontFeaturePolicy policy) {
+    if (policy == FontFeaturePolicy::Legacy) return;
+    font.clearFeatures();
+    font.setResolveMask(font.resolveMask() | QFont::FeaturesResolved);
+    const auto features = fontFeatureMap(policy);
+    for (auto it = features.cbegin(); it != features.cend(); ++it) font.setFeature(it.key(), it.value());
+    font.setStyleStrategy(QFont::StyleStrategy(int(font.styleStrategy()) & ~int(QFont::PreferNoShaping)));
+}
+inline void applyFontFeatures(QTextCharFormat &format, FontFeaturePolicy policy, const QFont &ownerFont) {
+    if (policy == FontFeaturePolicy::Legacy) return;
+    // Earlier size edits may have invalidated the document-resolved font cache.
+    const auto strategy = format.font().resolve(ownerFont).styleStrategy();
+    format.setFontFeatures(fontFeatureMap(policy));
+    format.setFontStyleStrategy(QFont::StyleStrategy(int(strategy) & ~int(QFont::PreferNoShaping)));
+}
 inline const QString zeroFontFamilyName = QStringLiteral("Wikidict Zero Probe");
 
 inline qreal maximumFontPoints(const QTextDocument *document = nullptr) {
@@ -1359,8 +1389,9 @@ inline void normalizeImages(QTextDocument *document) {
 inline QString scaledText(const QString &html, double scale, const QString &tooltip,
                           Basis basis = Basis::Context, qreal normalBodyPoints = 0,
                           bool small = false, bool superscript = false, bool subscript = false, qreal contextPoints = 0,
-                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false) {
+                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}) {
     QJsonObject metadata{{"scale", scale}, {"tooltip", tooltip}};
+    if (fontFeaturePolicy(fontFeatures) != FontFeaturePolicy::Legacy) metadata.insert("font_features", fontFeatures);
     if (!linkPaint.isEmpty()) {
         MissingFigurePaint::validate(linkPaint, linkEm);
         if (linkOwner < (qint64(1) << 32) || linkOwner >= (qint64(1) << 33))
@@ -1403,6 +1434,7 @@ struct ScaleInfo {
     qint64 linkOwner = -1;
     qreal linkEm = 0;
     bool linkUnderline = false;
+    FontFeaturePolicy fontFeatures = FontFeaturePolicy::Legacy;
 };
 
 inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) {
@@ -1438,6 +1470,7 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
         const QJsonValue sourceRun = value.value(QStringLiteral("source_run"));
         const bool hasSourceRun = !sourceRun.isUndefined();
         const bool hasLinkPaint = present(value.value("link_paint"));
+        const auto fontFeatures = fontFeaturePolicy(value.value("font_features"));
         const double run = sourceRun.toDouble(-1);
         if (error.error != QJsonParseError::NoError || !payload.isObject()
             || !value.value(QStringLiteral("scale")).isDouble() || !std::isfinite(scale)
@@ -1446,7 +1479,7 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
             || (present(advisory) && !advisory.isString())
             || (hasSourceRun && (!sourceRun.isDouble() || !std::isfinite(run)
                 || run < 0 || run > std::numeric_limits<int>::max() || std::floor(run) != run))
-            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint)
+            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && fontFeatures == FontFeaturePolicy::Legacy)
                 || value.contains(QStringLiteral("context_points")) || value.contains(QStringLiteral("legacy_flags"))))
             || (!basisValue.isUndefined() && (!basisValue.isString()
                 || (basisValue.toString() != QStringLiteral("context") && !absolute))))
@@ -1464,6 +1497,7 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
             info.linkUnderline = value.value("link_underline").toBool();
         } else if (value.contains("link_owner") || value.contains("link_em") || value.contains("link_underline"))
             throw std::runtime_error("unowned compiled link span metadata");
+        info.fontFeatures = fontFeatures;
         info.advisory = advisory;
         info.metadataOnly = metadataOnly;
         if (hasSourceRun) info.sourceRun = int(run);
@@ -1590,7 +1624,7 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
             const QString tooltip = format.toolTip();
             const auto marker = markers.constFind(tooltip);
             if (marker != markers.cend()) {
-                // Advisory-only metadata must not resolve or reset any font property.
+                // Scale-free metadata leaves size and other inherited font traits intact.
                 if (!marker->metadataOnly) {
                     const bool adjusted = format.hasProperty(QTextFormat::FontSizeAdjustment);
                     if (marker->scale == 0) {
@@ -1666,6 +1700,7 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                             format.setFontFamilies(document->defaultFont().families());
                     }
                 }
+                applyFontFeatures(format, marker->fontFeatures, document->defaultFont());
                 if (!marker->linkPaint.isEmpty()) {
                     if (!format.isAnchor() || format.anchorHref().isEmpty() || format.isImageFormat())
                         throw std::runtime_error("compiled link span lost its action");

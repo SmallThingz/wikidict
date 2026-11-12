@@ -3986,6 +3986,8 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
         QString out;
         for (const QJsonValue &value : parts) {
             const QJsonObject span = value.toObject();
+            const QJsonValue fontFeatures = span.value(QStringLiteral("font_features"));
+            const bool hasFontFeatures = SemanticHtml::fontFeaturePolicy(fontFeatures) != SemanticHtml::FontFeaturePolicy::Legacy;
             const QJsonValue advisory = span.value(QStringLiteral("tooltip"));
             const bool hasAdvisory = SemanticHtml::present(advisory);
             if (hasAdvisory && !advisory.isString()) throw DictApiError("invalid semantic span tooltip");
@@ -4026,12 +4028,12 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 const QString lineBreak = QStringLiteral("<br>");
                 if (cssPx)
                     out += SemanticHtml::scaledText(lineBreak, numericScale.toDouble(), {}, SemanticHtml::Basis::CssPx,
-                        readingPointSize_, false, false, false, 0, {}, false, sourceRun);
+                        readingPointSize_, false, false, false, 0, {}, false, sourceRun, {}, -1, 0, false, fontFeatures);
                 else if (zeroFontContext && !absoluteFont)
                     out += SemanticHtml::scaledText(lineBreak, 0, {}, SemanticHtml::Basis::Context,
-                        0, false, false, false, 0, {}, false, sourceRun);
-                else out += sourceRun < 0 ? lineBreak : SemanticHtml::scaledText(lineBreak, 1,
-                    {}, SemanticHtml::Basis::Context, 0, false, false, false, 0, {}, true, sourceRun);
+                        0, false, false, false, 0, {}, false, sourceRun, {}, -1, 0, false, fontFeatures);
+                else out += sourceRun < 0 && !hasFontFeatures ? lineBreak : SemanticHtml::scaledText(lineBreak, 1,
+                    {}, SemanticHtml::Basis::Context, 0, false, false, false, 0, {}, true, sourceRun, {}, -1, 0, false, fontFeatures);
                 if (span.value(QStringLiteral("trail")).toString().isEmpty()) continue;
             }
             const bool zeroScale = (!inlineImage || cssPx) && ((zeroFontContext && !absoluteFont)
@@ -4045,10 +4047,10 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 text = SemanticHtml::scaledText(text, zeroScale ? 0 : numericScale.toDouble(), explanation,
                     cssPx ? SemanticHtml::Basis::CssPx : normalBody ? SemanticHtml::Basis::NormalBody : SemanticHtml::Basis::Context, readingPointSize_,
                     span.value(QStringLiteral("small")).toBool(), span.value(QStringLiteral("superscript")).toBool(),
-                    span.value(QStringLiteral("subscript")).toBool(), basePoints, advisory, false, sourceRun, fixedLink ? linkPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool());
-            else if (hasAdvisory || sourceRun >= 0 || fixedLink)
+                    span.value(QStringLiteral("subscript")).toBool(), basePoints, advisory, false, sourceRun, fixedLink ? linkPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures);
+            else if (hasAdvisory || sourceRun >= 0 || fixedLink || hasFontFeatures)
                 text = SemanticHtml::scaledText(text, 1, explanation, SemanticHtml::Basis::Context,
-                    0, false, false, false, 0, advisory, true, sourceRun, fixedLink ? linkPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool());
+                    0, false, false, false, 0, advisory, true, sourceRun, fixedLink ? linkPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures);
             if (!explanation.isEmpty() && !hasAdvisory)
                 text = QStringLiteral("<span title=\"%1\">%2</span>")
                     .arg(explanation.toHtmlEscaped(), text);

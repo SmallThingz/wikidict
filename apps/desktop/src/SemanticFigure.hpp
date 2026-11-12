@@ -360,7 +360,8 @@ inline QJsonObject captionMedia(const QJsonValue &value, const QJsonObject &figu
          QStringLiteral("after"), QStringLiteral("focus_outline")}, {QStringLiteral("strut"), QStringLiteral("vertical_align")});
     const auto strut = CompiledContent::containerObject(media.value(QStringLiteral("strut")),
         {QStringLiteral("font_scale"), QStringLiteral("bold"), QStringLiteral("italic"), QStringLiteral("code"),
-         QStringLiteral("language"), QStringLiteral("direction")}, {QStringLiteral("font_scale"), QStringLiteral("direction")});
+         QStringLiteral("language"), QStringLiteral("direction"), QStringLiteral("font_features")}, {QStringLiteral("font_scale"), QStringLiteral("direction")});
+    SemanticHtml::fontFeaturePolicy(strut.value(QStringLiteral("font_features")));
     require(strut.value(QStringLiteral("font_scale")).isDouble());
     const qreal scale = strut.value(QStringLiteral("font_scale")).toDouble();
     require(std::isfinite(scale) && scale >= 0 && std::isfinite(scale * em) && scale * em < 8388607.0);
@@ -613,6 +614,7 @@ inline QFont tableCaptionStrutFont(const QJsonObject &media, qreal em, const QFo
     else font.setPointSizeF(pixels * 72 / QFontMetricsF(QFont()).fontDpi());
     font.setWeight(strut.value(QStringLiteral("bold")).toBool() ? QFont::Bold : QFont::Normal);
     font.setItalic(strut.value(QStringLiteral("italic")).toBool());
+    SemanticHtml::applyFontFeatures(font, SemanticHtml::fontFeaturePolicy(strut.value(QStringLiteral("font_features"))));
     return font;
 }
 inline QVariantMap tableCaptionMediaPolicy(const TableCaptionInput &input, const QJsonObject &figure,

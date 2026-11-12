@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "aabdf834d2603dba0ded654e41bb68348be9cfc9b8d73b8bf80fed28be5f889e",
-      "bytes": 519627,
+      "sha256": "682ded6c15547b12e45072c70f4c821bf5811a6006935748032b71f10aa43cd3",
+      "bytes": 520254,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -147,13 +147,20 @@
           "upstream_sha256": "30205a2d638d5a30ebe4b7fe30f41542576dc8a10f5da8cc58cf717901a30429",
           "qualified_sha256": "c00d5c20e2d22db77cbaf9aedb41d271a8dc0f3dae7549ee7d1ed9d5d6316660",
           "bytes": 6873
+        },
+        {
+          "path": "src/gui/text/qtextformat.cpp",
+          "new_file": false,
+          "upstream_sha256": "cca39e4448f7585e9868f0adc7b655ca88e521077e14d9353611ea4898ef842b",
+          "qualified_sha256": "e4ed9fa480e1e37d35c7b2c154f560eeb799206c69c6fa7a9b8e2837cc599326",
+          "bytes": 114857
         }
       ]
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "44851388e9b955bcce0e744faf73cca0a72b1a11cc8120a317c4a4bc89e227a7",
-      "bytes": 704088,
+      "sha256": "3e198f138211caa91cd335f8c3ac298d5da4ebc65dc2f8e85f67782438c2e676",
+      "bytes": 709800,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -166,8 +173,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "c3d54699e344a7d59afdfe3d5a8b74a6a36a0029f18cf0861da34986e86c3ce3",
-          "bytes": 715782
+          "qualified_sha256": "8bf6a1453797553b97771a5772afbf222acee313e335cf87c3933b9af94b0605",
+          "bytes": 721415
         }
       ]
     },
@@ -195,215 +202,107 @@
   ],
   "qualification": {
     "date": "2026-11-12",
-    "scope": "Exclude only undecorated, unowned table-boundary caret storage from glyph traversal while retaining caret layout, painted/owned empty blocks and real overflow. Genuine Italian pianoforte fits at 900 and 640 pixels.",
-    "source_inventory_sha256": "31348d85d8f229c7f42134ec428097716475878a74d341e6c27ee641e2159a1a",
+    "scope": "Typed font-feature lists replace inherited settings, including an explicit empty reset; absence preserves inheritance. Feature mapping precedes automatic kerning/tracking while font origin and zero-font policy remain intact.",
+    "component": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/th-font-features01/preparation01.json",
+      "bytes": 27882,
+      "sha256": "6f8d707b4e5aff00ea5de6bc1ca55cc3224078924abe2fb156860f2bd45ebd17"
+    },
+    "component_peer": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/th-font-features01/source-peer01.json",
+      "bytes": 1998,
+      "sha256": "e45bb951cad4b087dee364efb8a58a20b64aab1dbacc158e2a13e9064b16c9ca"
+    },
+    "source_inventory_sha256": "dd8793bca313143322ce620d03911d5440a5e070dc8da84d8fcc049d733c1a4a",
     "native_product_build": {
       "closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold96/independent-closure01.json",
-        "bytes": 89037,
-        "sha256": "2ee3b25071b7ce971ad6bff7a5badd625943009ddd1c771186145b0865c0c561"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold98/independent-closure01.json",
+        "bytes": 90574,
+        "sha256": "412625f6fa5eec4531c7d6d29cbf384a490ebf11eeeab0910822d3577777a3c6"
       },
       "release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold96/release01.json",
-        "bytes": 548,
-        "sha256": "5f40bb09f8962e0ca21d9945387d96210335e7c3ee35ab25fdedd80d75c170d1"
-      },
-      "current_test_correction": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold97/independent-closure01.json",
-        "bytes": 84717,
-        "sha256": "91193f5feece883ee352a87ae2b54a738609bec579d2c8ad2b80151a2a4df22d"
-      },
-      "current_release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold97/release01.json",
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold98/release01.json",
         "bytes": 547,
-        "sha256": "34c685886ed990860268d50fe91f82f566da8dfa9e3944e412aa0cff18416d13"
+        "sha256": "7dbc33bd07429a405d70f13d62e6c9cacff050a46120808b0005512353fc267c"
       },
       "methods": [
-        "tableBoundaryCaretDoesNotExpandGlyphTraversal"
+        "explicitFontFeatureMapReplacesInheritedListIncludingEmpty",
+        "explicitFontFeaturesReachShaperBeforeAutomaticKerningAndTracking",
+        "plainContainerTypographyUsesPaintDeviceAndPrimaryFontMetrics",
+        "plainContainerTypographyUsesOwnerStrutAndEachChildFont"
       ],
-      "retained_product_equal_methods": [
-        "relativeAutoCellOverflowSurvivesPartialNativeRepaint",
-        "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
-        "figureCaptionPublicCaretRequiresCurrentFigureOwner"
-      ],
-      "retained_method_source_equality": [
-        {
-          "method": "relativeAutoCellOverflowSurvivesPartialNativeRepaint",
-          "before": {
-            "method": "relativeAutoCellOverflowSurvivesPartialNativeRepaint",
-            "bytes": 3434,
-            "sha256": "900c00cf77a096c715301631e44ee1468ec49781e6136d0d90c8a7a56676b9de"
-          },
-          "after": {
-            "method": "relativeAutoCellOverflowSurvivesPartialNativeRepaint",
-            "bytes": 3434,
-            "sha256": "900c00cf77a096c715301631e44ee1468ec49781e6136d0d90c8a7a56676b9de"
-          },
-          "equal": true
-        },
-        {
-          "method": "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
-          "before": {
-            "method": "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
-            "bytes": 4212,
-            "sha256": "8fdd456d1bb5f0103cd935c427e8c4a67e0367617a4ca35bcf9863a4affd9041"
-          },
-          "after": {
-            "method": "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
-            "bytes": 4212,
-            "sha256": "8fdd456d1bb5f0103cd935c427e8c4a67e0367617a4ca35bcf9863a4affd9041"
-          },
-          "equal": true
-        },
-        {
-          "method": "figureCaptionPublicCaretRequiresCurrentFigureOwner",
-          "before": {
-            "method": "figureCaptionPublicCaretRequiresCurrentFigureOwner",
-            "bytes": 6768,
-            "sha256": "161fe3559edaa0685f28bad6e22b526f7eb221137be36192f23fa4c1294ef093"
-          },
-          "after": {
-            "method": "figureCaptionPublicCaretRequiresCurrentFigureOwner",
-            "bytes": 6768,
-            "sha256": "161fe3559edaa0685f28bad6e22b526f7eb221137be36192f23fa4c1294ef093"
-          },
-          "equal": true
-        }
-      ],
-      "qualification": "One current boundary control plus three actual96 passes with exact product and whole-method equality; original96 sample-premise failure retained.",
+      "all_selected_passed": true,
       "full_native_suite_passed": false
     },
     "app_pairing": {
       "closure": {
-        "path": ".tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile120/independent-closure01.json",
-        "bytes": 299468,
-        "sha256": "f118d046212792edc3309e5088dc8e2259a00b2f128d8e3342ebf4dd15bf1511"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile121/independent-closure01.json",
+        "bytes": 40317,
+        "sha256": "0ca796e41f0becaafc5e603857e3adb69b4cc9f1ad319a9dee814170d1dff459"
       },
       "release": {
-        "path": ".tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile120/release01.json",
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile121/release01.json",
         "bytes": 483,
-        "sha256": "05e53ec42d506305f849d5b8ff77c972ecf4acd01ccce8a06764df523ae6b8ff"
+        "sha256": "5e79c4f54949267b793df1f9e526a38c138a5abfcff3abf5ab78899ffba406f5"
       },
       "methods": [
-        "retainedItalianPianoforteReportsHorizontalBounds"
+        "typedFontFeaturesResetReplaceAndPreserveSpanOrigins",
+        "typedFontFeaturesReachFigureStrutCaptionAndMissingLabel"
       ],
       "test_xml": [
         {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile120/commands/reader-pianoforte-width.xml",
-          "bytes": 104066,
-          "sha256": "c5358b2ceb5712e6f3aa6514283876a96e87e0375bc1f883a5a1e55e6b42010c"
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile121/commands/reader-font-features.xml",
+          "bytes": 1489,
+          "sha256": "6ce67fecc6b10e27b04d15f38b21b7179180112c55e214928f68d2e59688021c"
         }
       ],
       "all_selected_passed": true,
-      "reader_only_build": true,
+      "gui_and_reader_built": true,
       "full_frontend_acceptance": false
     },
     "real_gui": {
       "closure": {
-        "path": ".tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core347-gui10/it-pianoforte02/independent-closure01.json",
-        "bytes": 16940,
-        "sha256": "2af362dcc791827d543461b3163c73799010da59c329b526fec5fa0e86775c7f"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core347-gui10/it-pianoforte05/independent-closure01.json",
+        "bytes": 39454,
+        "sha256": "39164a0bd65e37074d75cf08849a40fe4e1e7f7afebcb218b6cd0e0854d2dc18"
       },
       "release": {
-        "path": ".tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core347-gui10/it-pianoforte02/release01.json",
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core347-gui10/it-pianoforte05/release01.json",
         "bytes": 513,
-        "sha256": "0b57feb63161d1c0eef6a0b3f2644eae43fef6986eb6996085a7ec464a681158"
+        "sha256": "ead729392e57395c9852c2336b450e9dd553dce2940e627edd6bdced5dca4cba"
       },
-      "corrected_manual_review": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/desktop-unified-oct28/current-core347-it-pianoforte02/manual-review02.json",
-        "bytes": 19856,
-        "sha256": "13ab7796e1867b773cd9013be7cfa13a31d16981f9207046fc6dfaee75b1a8a9"
+      "manual_review": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/desktop-unified-oct28/current-core347-it-pianoforte05/manual-review01.json",
+        "bytes": 21186,
+        "sha256": "7f39e661ac5a01c0cf309a244c7ade4d839952d8aad97cc23980e06b59be5b70"
       },
-      "original_report_schema_failure_preserved": true,
-      "root_viewed_frames": [
-        "0005",
-        "0012",
-        "0015"
-      ],
-      "scope": "Wide and narrow quote/table fit with no horizontal bar; vertical scrolling retained; images/audio OFF."
+      "scope": "Retained Italian invalid-import refusal and recovery; prior current-binary Ctrl+End and semantic Tab focus are retained separately. Images/audio OFF; transient loading and reading focus indicator not qualified."
     },
     "normal_app_ctest": {
-      "closure": {
+      "status": "historical_prior_product",
+      "prior_closure": {
         "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest120/independent-closure01.json",
         "bytes": 5018,
         "sha256": "f27d6b79745c8cc979021fab77c41923d1a383e60a56137682aabdc7579d606b"
       },
-      "release": {
+      "prior_release": {
         "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest120/release01.json",
         "bytes": 422,
         "sha256": "acb13c98662dd060ecd640c89b69be9ea57db01d3c145f536a699f29e563f5b7"
       },
-      "all_seven_registered_tests_passed": true,
-      "build_executed": false,
-      "configure_executed": false,
-      "total_test_seconds": 208.58,
-      "tests": [
-        {
-          "name": "native-install-core-selection",
-          "seconds": 0.341951,
-          "passed": true
-        },
-        {
-          "name": "native-unified-entry",
-          "seconds": 31.5092,
-          "passed": true
-        },
-        {
-          "name": "native-reader-ux",
-          "seconds": 144.575,
-          "passed": true
-        },
-        {
-          "name": "native-media-ux",
-          "seconds": 13.6165,
-          "passed": true
-        },
-        {
-          "name": "native-library-storage",
-          "seconds": 11.1687,
-          "passed": true
-        },
-        {
-          "name": "native-library-ux",
-          "seconds": 6.16942,
-          "passed": true
-        },
-        {
-          "name": "native-library-catalogue-ux",
-          "seconds": 1.07991,
-          "passed": true
-        }
-      ],
-      "qtest_counts": {
-        "reader": {
-          "passed_incidents": 307,
-          "failed": 0,
-          "skipped": 2
-        },
-        "media": {
-          "passed_incidents": 58,
-          "failed": 0,
-          "skipped": 1
-        }
-      },
-      "qtest_skips": [
-        "SKIP   : MainWindowTest::plainContainerCompilerDiagnosticKeepsFitContentRefusal() The retained compiler diagnostic is a selected external fixture, not a full-page acceptance fixture.",
-        "SKIP   : MainWindowTest::plainContainerCompilerSubtreeKeepsHierarchyAndActions() The retained compiler diagnostic is a selected external component fixture.",
-        "SKIP   : MediaPanelTest::privateNullOutputDecodesAndUpdatesPlaybackAccessibleNames() Opt-in private null-output backend check; never use a user's audio session."
-      ],
-      "installation_and_relocation_executed": true,
-      "hardware_audio_qualified": false,
-      "full_frontend_acceptance": false
+      "repeated_for_this_component": false,
+      "current_affected_native_methods": 4,
+      "current_affected_app_methods": 2
     },
     "preserved_failures": [
-      "Original real GUI01 Italian horizontal overflow",
-      "App118 null-API startup fixture crash and partial XML",
-      "Native96 sample outside-root premise failure",
-      "GUI02 original manual-review schema failure"
+      "Initial source-only feature resolution F1 finding",
+      "GUI03 Ctrl+O rejected before input",
+      "GUI04 invoke omitted index before action"
     ],
     "limitations": [
-      "Full native suite, image paint, internal destination, full accessibility and whole frontend remain unqualified.",
-      "Historical Cell/API04/AS/ANG results remain at their original identities. Current full7 CTest passed with two optional Reader fixture skips and one opt-in private audio-backend skip; these skipped scopes remain unqualified."
+      "Component qualification is not genuine TH encoded page acceptance; qualified producer and paired Reader remain required.",
+      "Prior full seven-test CTest and optional skips retain their original source and binary identities.",
+      "Full native suite, online image paint, hardware audio, full accessibility, whole frontend and release remain unqualified."
     ]
   },
   "packaged_distribution_source_equivalence": false,
@@ -1055,5 +954,218 @@
       "hardware_audio_qualified": false,
       "full_frontend_acceptance": false
     }
+  },
+  "historical_qualification_pre_font_features": {
+    "date": "2026-11-12",
+    "scope": "Exclude only undecorated, unowned table-boundary caret storage from glyph traversal while retaining caret layout, painted/owned empty blocks and real overflow. Genuine Italian pianoforte fits at 900 and 640 pixels.",
+    "source_inventory_sha256": "31348d85d8f229c7f42134ec428097716475878a74d341e6c27ee641e2159a1a",
+    "native_product_build": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold96/independent-closure01.json",
+        "bytes": 89037,
+        "sha256": "2ee3b25071b7ce971ad6bff7a5badd625943009ddd1c771186145b0865c0c561"
+      },
+      "release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold96/release01.json",
+        "bytes": 548,
+        "sha256": "5f40bb09f8962e0ca21d9945387d96210335e7c3ee35ab25fdedd80d75c170d1"
+      },
+      "current_test_correction": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold97/independent-closure01.json",
+        "bytes": 84717,
+        "sha256": "91193f5feece883ee352a87ae2b54a738609bec579d2c8ad2b80151a2a4df22d"
+      },
+      "current_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold97/release01.json",
+        "bytes": 547,
+        "sha256": "34c685886ed990860268d50fe91f82f566da8dfa9e3944e412aa0cff18416d13"
+      },
+      "methods": [
+        "tableBoundaryCaretDoesNotExpandGlyphTraversal"
+      ],
+      "retained_product_equal_methods": [
+        "relativeAutoCellOverflowSurvivesPartialNativeRepaint",
+        "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
+        "figureCaptionPublicCaretRequiresCurrentFigureOwner"
+      ],
+      "retained_method_source_equality": [
+        {
+          "method": "relativeAutoCellOverflowSurvivesPartialNativeRepaint",
+          "before": {
+            "method": "relativeAutoCellOverflowSurvivesPartialNativeRepaint",
+            "bytes": 3434,
+            "sha256": "900c00cf77a096c715301631e44ee1468ec49781e6136d0d90c8a7a56676b9de"
+          },
+          "after": {
+            "method": "relativeAutoCellOverflowSurvivesPartialNativeRepaint",
+            "bytes": 3434,
+            "sha256": "900c00cf77a096c715301631e44ee1468ec49781e6136d0d90c8a7a56676b9de"
+          },
+          "equal": true
+        },
+        {
+          "method": "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
+          "before": {
+            "method": "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
+            "bytes": 4212,
+            "sha256": "8fdd456d1bb5f0103cd935c427e8c4a67e0367617a4ca35bcf9863a4affd9041"
+          },
+          "after": {
+            "method": "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
+            "bytes": 4212,
+            "sha256": "8fdd456d1bb5f0103cd935c427e8c4a67e0367617a4ca35bcf9863a4affd9041"
+          },
+          "equal": true
+        },
+        {
+          "method": "figureCaptionPublicCaretRequiresCurrentFigureOwner",
+          "before": {
+            "method": "figureCaptionPublicCaretRequiresCurrentFigureOwner",
+            "bytes": 6768,
+            "sha256": "161fe3559edaa0685f28bad6e22b526f7eb221137be36192f23fa4c1294ef093"
+          },
+          "after": {
+            "method": "figureCaptionPublicCaretRequiresCurrentFigureOwner",
+            "bytes": 6768,
+            "sha256": "161fe3559edaa0685f28bad6e22b526f7eb221137be36192f23fa4c1294ef093"
+          },
+          "equal": true
+        }
+      ],
+      "qualification": "One current boundary control plus three actual96 passes with exact product and whole-method equality; original96 sample-premise failure retained.",
+      "full_native_suite_passed": false
+    },
+    "app_pairing": {
+      "closure": {
+        "path": ".tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile120/independent-closure01.json",
+        "bytes": 299468,
+        "sha256": "f118d046212792edc3309e5088dc8e2259a00b2f128d8e3342ebf4dd15bf1511"
+      },
+      "release": {
+        "path": ".tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile120/release01.json",
+        "bytes": 483,
+        "sha256": "05e53ec42d506305f849d5b8ff77c972ecf4acd01ccce8a06764df523ae6b8ff"
+      },
+      "methods": [
+        "retainedItalianPianoforteReportsHorizontalBounds"
+      ],
+      "test_xml": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile120/commands/reader-pianoforte-width.xml",
+          "bytes": 104066,
+          "sha256": "c5358b2ceb5712e6f3aa6514283876a96e87e0375bc1f883a5a1e55e6b42010c"
+        }
+      ],
+      "all_selected_passed": true,
+      "reader_only_build": true,
+      "full_frontend_acceptance": false
+    },
+    "real_gui": {
+      "closure": {
+        "path": ".tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core347-gui10/it-pianoforte02/independent-closure01.json",
+        "bytes": 16940,
+        "sha256": "2af362dcc791827d543461b3163c73799010da59c329b526fec5fa0e86775c7f"
+      },
+      "release": {
+        "path": ".tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core347-gui10/it-pianoforte02/release01.json",
+        "bytes": 513,
+        "sha256": "0b57feb63161d1c0eef6a0b3f2644eae43fef6986eb6996085a7ec464a681158"
+      },
+      "corrected_manual_review": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/desktop-unified-oct28/current-core347-it-pianoforte02/manual-review02.json",
+        "bytes": 19856,
+        "sha256": "13ab7796e1867b773cd9013be7cfa13a31d16981f9207046fc6dfaee75b1a8a9"
+      },
+      "original_report_schema_failure_preserved": true,
+      "root_viewed_frames": [
+        "0005",
+        "0012",
+        "0015"
+      ],
+      "scope": "Wide and narrow quote/table fit with no horizontal bar; vertical scrolling retained; images/audio OFF."
+    },
+    "normal_app_ctest": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest120/independent-closure01.json",
+        "bytes": 5018,
+        "sha256": "f27d6b79745c8cc979021fab77c41923d1a383e60a56137682aabdc7579d606b"
+      },
+      "release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest120/release01.json",
+        "bytes": 422,
+        "sha256": "acb13c98662dd060ecd640c89b69be9ea57db01d3c145f536a699f29e563f5b7"
+      },
+      "all_seven_registered_tests_passed": true,
+      "build_executed": false,
+      "configure_executed": false,
+      "total_test_seconds": 208.58,
+      "tests": [
+        {
+          "name": "native-install-core-selection",
+          "seconds": 0.341951,
+          "passed": true
+        },
+        {
+          "name": "native-unified-entry",
+          "seconds": 31.5092,
+          "passed": true
+        },
+        {
+          "name": "native-reader-ux",
+          "seconds": 144.575,
+          "passed": true
+        },
+        {
+          "name": "native-media-ux",
+          "seconds": 13.6165,
+          "passed": true
+        },
+        {
+          "name": "native-library-storage",
+          "seconds": 11.1687,
+          "passed": true
+        },
+        {
+          "name": "native-library-ux",
+          "seconds": 6.16942,
+          "passed": true
+        },
+        {
+          "name": "native-library-catalogue-ux",
+          "seconds": 1.07991,
+          "passed": true
+        }
+      ],
+      "qtest_counts": {
+        "reader": {
+          "passed_incidents": 307,
+          "failed": 0,
+          "skipped": 2
+        },
+        "media": {
+          "passed_incidents": 58,
+          "failed": 0,
+          "skipped": 1
+        }
+      },
+      "qtest_skips": [
+        "SKIP   : MainWindowTest::plainContainerCompilerDiagnosticKeepsFitContentRefusal() The retained compiler diagnostic is a selected external fixture, not a full-page acceptance fixture.",
+        "SKIP   : MainWindowTest::plainContainerCompilerSubtreeKeepsHierarchyAndActions() The retained compiler diagnostic is a selected external component fixture.",
+        "SKIP   : MediaPanelTest::privateNullOutputDecodesAndUpdatesPlaybackAccessibleNames() Opt-in private null-output backend check; never use a user's audio session."
+      ],
+      "installation_and_relocation_executed": true,
+      "hardware_audio_qualified": false,
+      "full_frontend_acceptance": false
+    },
+    "preserved_failures": [
+      "Original real GUI01 Italian horizontal overflow",
+      "App118 null-API startup fixture crash and partial XML",
+      "Native96 sample outside-root premise failure",
+      "GUI02 original manual-review schema failure"
+    ],
+    "limitations": [
+      "Full native suite, image paint, internal destination, full accessibility and whole frontend remain unqualified.",
+      "Historical Cell/API04/AS/ANG results remain at their original identities. Current full7 CTest passed with two optional Reader fixture skips and one opt-in private audio-backend skip; these skipped scopes remain unqualified."
+    ]
   }
 }

@@ -31,7 +31,7 @@ renderer patch.
 
 Apply these three patches, in order, to that QtBase source:
 
-1. `0001-logical-flow-renderer.patch`: the 20 renderer source files.
+1. `0001-logical-flow-renderer.patch`: the 21 renderer source files.
 2. `0002-layout-regressions.patch`: the native regression target and tests.
 3. `0003-bounded-gcc-link-policy.patch`: the separately maintained GNU LTO policy.
 
@@ -110,14 +110,38 @@ horizontal bar. Images and audio stayed off, so this does not qualify image pain
 or whole frontend behavior. The GUI's first manual report had a schema error;
 the corrected report authenticates the same actual frames without a replay.
 
-The cached app CTest run passed all seven registered tests on these promoted
-bytes without rebuilding or configuring: Reader, media, library storage, both
+Before the font-feature change below, the cached app CTest run passed all seven
+registered tests on the recorded earlier bytes without rebuilding or configuring: Reader, media, library storage, both
 library UI modes, core selection, and install/relocation. Reader reported 307
 passing incidents and two optional compiler-fixture skips; media reported 58
 passing incidents and one opt-in private audio-backend skip. The retained Italian
 regression also passed separately at both widths. The full native suite, source
 metadata destination, full accessibility, whole edition and release qualification
 are not inferred.
+
+## Typed font-feature policy
+
+Explicit typed font-feature lists replace inherited settings, including an empty
+list that resets them. An absent list retains inheritance. The app resolves the
+font against its owner before applying the list, preserves span sizing origins
+and the zero-font merging policy, and maps Figure struts, captions and Missing
+labels through the same policy. Qt records an explicit empty feature property as
+a resolved reset and applies explicit shaping features before automatic kerning
+and tracking choices.
+
+Four affected native controls passed: replacement/reset and shaper precedence,
+plus the existing primary-font and owner-strut typography controls. Both app
+controls passed with the current GUI and Reader binaries. The previous seven-test
+CTest result and its optional skips remain historical; this focused component did
+not repeat that healthy suite. The maintained patch series was checked forward
+and backward against all 25 exact source targets.
+
+Owned retained-Italian GUI checks also verified end-of-document keyboard input,
+semantic Tab focus, a clear invalid-import error and recovery with the installed
+dictionaries preserved. Two caller mistakes were rejected by the harness before
+input/action and remain recorded. Images and audio stayed disabled. The media
+placeholder border is not evidence of a reading-pane focus indicator. This does
+not qualify transient loading, a genuine TH encoded page, or the full frontend.
 
 ## Source and build layout
 

@@ -9155,3 +9155,15 @@
      QTextBlock blockWithMarkerUnderMouse;
      bool hadSelectionOnMousePress;
  
+--- a/src/gui/text/qtextformat.cpp
++++ b/src/gui/text/qtextformat.cpp
+@@ -392,6 +392,9 @@
+             case QTextFormat::FontFeatures:
+             {
+                 const auto fontFeatures = props.at(i).value.value<QMap<QFont::Tag, quint32>>();
++                // Presence is a complete replacement, including an explicit empty map.
++                f.clearFeatures();
++                f.setResolveMask(f.resolveMask() | QFont::FeaturesResolved);
+                 for (auto it = fontFeatures.constBegin(); it != fontFeatures.constEnd(); ++it)
+                     f.setFeature(it.key(), it.value());
+                 break;

@@ -19,7 +19,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,11 +3,44 @@
+@@ -3,11 +3,45 @@
  
  
  #include <QTest>
@@ -33,6 +33,7 @@
 +#include <QtCore/qpointer.h>
 +
 +#include <QCoreApplication>
++#include <QGuiApplication>
 +#include <QDir>
 +#include <QFile>
 +#include <QFileInfo>
@@ -64,7 +65,7 @@
  #include <qtexttable.h>
  #ifndef QT_NO_WIDGETS
  #include <qtextedit.h>
-@@ -16,11 +49,8875 @@
+@@ -16,11 +50,8953 @@
  
  using namespace Qt::StringLiterals;
  
@@ -299,6 +300,84 @@
      Q_OBJECT
  
  private slots:
++    void explicitFontFeatureMapReplacesInheritedListIncludingEmpty()
++    {
++        const QFont previous = QGuiApplication::font();
++        const auto restore = qScopeGuard([&] { QGuiApplication::setFont(previous); });
++        QFont application(QStringLiteral("DejaVu Sans"), 24);
++        application.setFeature("dlig", 1); application.setFeature("ss01", 1);
++        QGuiApplication::setFont(application);
++        const QMap<QFont::Tag, quint32> seven{{"liga", 1}, {"clig", 1}, {"kern", 1}, {"ccmp", 1},
++                                             {"dist", 1}, {"mark", 1}, {"mkmk", 1}};
++        for (const auto &inherited : {seven, QMap<QFont::Tag, quint32>{{"dlig", 1}, {"ss01", 1}}}) {
++            QFont body = application; body.clearFeatures(); body.setResolveMask(body.resolveMask() | QFont::FeaturesResolved);
++            for (auto it = inherited.cbegin(); it != inherited.cend(); ++it) body.setFeature(it.key(), it.value());
++            for (int mode = 0; mode != 4; ++mode) {
++                QTextDocument document; document.setDefaultFont(body);
++                QTextCharFormat format; format.setFontItalic(true);
++                const auto expected = mode == 0 ? inherited : mode == 1 ? QMap<QFont::Tag, quint32>{}
++                    : mode == 2 ? QMap<QFont::Tag, quint32>{{"kern", 1}} : seven;
++                if (mode != 0) format.setFontFeatures(expected);
++                QTextCursor cursor(&document); cursor.insertText(QStringLiteral("Feature owner"), format);
++                document.setTextWidth(500); document.size();
++                const auto stored = document.firstBlock().begin().fragment().charFormat();
++                QCOMPARE(stored.hasProperty(QTextFormat::FontFeatures), mode != 0);
++                const QFont actual = stored.font();
++                QMap<QFont::Tag, quint32> actualFeatures;
++                for (const auto tag : actual.featureTags()) actualFeatures.insert(tag, actual.featureValue(tag));
++                QCOMPARE(actualFeatures, expected);
++                QCOMPARE(bool(actual.resolveMask() & QFont::FeaturesResolved), mode != 0);
++                QVERIFY(actual.italic()); QCOMPARE(actual.pointSizeF(), body.pointSizeF());
++                QCOMPARE(document.toPlainText(), QStringLiteral("Feature owner"));
++            }
++        }
++    }
++
++    void explicitFontFeaturesReachShaperBeforeAutomaticKerningAndTracking()
++    {
++        const QMap<QFont::Tag, quint32> seven{{"liga", 1}, {"clig", 1}, {"kern", 1}, {"ccmp", 1},
++                                             {"dist", 1}, {"mark", 1}, {"mkmk", 1}};
++        struct Shape { bool valid = false; QList<quint32> glyphs; QList<QPointF> positions; qreal width = 0; QFont font; };
++        const auto shape = [&](const QString &text, bool kerning, qreal tracking,
++                               const QMap<QFont::Tag, quint32> &features, bool noShaping) {
++            QTextDocument document;
++            QFont body(QStringLiteral("DejaVu Sans"), 32); body.setKerning(kerning);
++            body.setLetterSpacing(QFont::AbsoluteSpacing, tracking);
++            body.setStyleStrategy(QFont::StyleStrategy(QFont::NoFontMerging | QFont::PreferNoShaping));
++            document.setDefaultFont(body);
++            QTextCharFormat format; format.setFontFeatures(features);
++            format.setFontStyleStrategy(noShaping ? body.styleStrategy() : QFont::NoFontMerging);
++            QTextCursor cursor(&document); cursor.insertText(text, format);
++            document.setTextWidth(1000); document.size();
++            Shape result; const auto *layout = document.firstBlock().layout();
++            if (layout->lineCount() != 1) return result;
++            const auto line = layout->lineAt(0);
++            result.valid = line.isValid(); result.width = line.horizontalAdvance();
++            result.font = document.firstBlock().begin().fragment().charFormat().font();
++            for (const auto &run : line.glyphRuns()) { result.glyphs.append(run.glyphIndexes()); result.positions.append(run.positions()); }
++            return result;
++        };
++        auto noLigatures = seven; noLigatures[QFont::Tag("liga")] = 0; noLigatures[QFont::Tag("clig")] = 0;
++        const auto ligated = shape(QStringLiteral("ffi"), false, 3, seven, false);
++        const auto unligated = shape(QStringLiteral("ffi"), false, 3, noLigatures, false);
++        const auto bypassed = shape(QStringLiteral("ffi"), false, 3, seven, true);
++        QVERIFY(ligated.valid && unligated.valid && bypassed.valid);
++        QVERIFY(!ligated.glyphs.isEmpty()); QVERIFY(ligated.glyphs.size() < unligated.glyphs.size());
++        QVERIFY(ligated.glyphs.size() < bypassed.glyphs.size());
++        QCOMPARE(ligated.font.styleStrategy(), QFont::NoFontMerging);
++        QVERIFY(!ligated.font.kerning()); QCOMPARE(ligated.font.letterSpacing(), 3.0);
++        QCOMPARE(ligated.font.featureValue("liga"), quint32(1));
++        const auto defaultKerning = shape(QStringLiteral("ffi"), true, 3, seven, false);
++        QCOMPARE(defaultKerning.glyphs, ligated.glyphs); QCOMPARE(defaultKerning.positions, ligated.positions);
++        auto noKerning = seven; noKerning[QFont::Tag("kern")] = 0;
++        const auto kerned = shape(QStringLiteral("AV"), false, 1, seven, false);
++        const auto kernedDefault = shape(QStringLiteral("AV"), true, 1, seven, false);
++        const auto unkerned = shape(QStringLiteral("AV"), true, 1, noKerning, false);
++        QVERIFY(kerned.valid && kernedDefault.valid && unkerned.valid);
++        QCOMPARE(kerned.glyphs, kernedDefault.glyphs); QCOMPARE(kerned.positions, kernedDefault.positions);
++        QVERIFY(kerned.width < unkerned.width);
++    }
++
 +    void tableBoundaryCaretDoesNotExpandGlyphTraversal()
 +    {
 +        constexpr int plain = QTextFormat::UserProperty + 0x57e0;
