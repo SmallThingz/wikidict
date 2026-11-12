@@ -4249,7 +4249,7 @@ class RetainedNativeToolRoles:
         snapshots={name:Path(value['path'] if isinstance(value,dict) else value)
                    for name,value in option.get('auxiliary_snapshots',{}).items()}
         figures=validated_figure_tuple(snapshots,edition,cfg['date'])
-        owned=tuple(Path(value).resolve() for value in
+        owned=tuple(Path(value['path'] if isinstance(value,dict) else value).resolve() for value in
             (cfg['output'],cfg['raw_shard_root'],option['extraction_cache_root']))
         def overlaps(path):
             path=path.resolve()

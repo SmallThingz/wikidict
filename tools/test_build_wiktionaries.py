@@ -10135,6 +10135,82 @@ class ReadonlyPreparedRetainedTests(unittest.TestCase):
             self.assertEqual(f.expander.joinpath('.completed-expander.json').read_bytes(),before)
             self.assertFalse((folder/'native-blob-tools').exists())
 
+    def test_descriptor_cache_root_reaches_real_parent_authorization_and_child_reopen(self):
+        import corpus_controller as controller
+        import prepare_figure_metadata as figure
+        for mode in ('unchanged','omitted-sql','omitted-directory'):
+            with self.subTest(mode=mode),self.fixture() as f:
+                capture=f.root/'capture';capture.mkdir();path=capture/b.auxiliary_snapshot_filename('figure-sizing')
+                path.write_bytes(b'exact replayed capture member')
+                sql=f.root/'source.sql';sql.write_bytes(b'original SQL evidence')
+                def identity(path):
+                    raw=path.read_bytes();return b._figure_replay_identity(path),dict(size=len(raw),sha1=hashlib.sha1(raw).hexdigest(),sha256=hashlib.sha256(raw).hexdigest())
+                members={str(path):identity(path),str(sql):identity(sql)}
+                st=capture.stat();guard=((figure.producer(),figure.metadata.producer(),figure.site_info.producer()),members,
+                    {str(capture):(st.st_dev,st.st_ino,tuple(sorted(capture.iterdir())),b._figure_replay_identity(capture,directory=True))})
+                inventory={path.name:b.sha256_file(path)}
+                f.roles.bind_capture(capture,inventory,figure_guard=guard)
+                cache=f.root/'cache-owned';cache.mkdir();st=cache.stat()
+                cache_descriptor=dict(path=str(cache),device=st.st_dev,inode=st.st_ino,mode=stat.S_IMODE(st.st_mode),uid=st.st_uid)
+                source_inventory=_initial_sealed_write(f.root/'parent-python-inventory.json',dict(
+                    head=f.cfg['source']['head'],files={'tools/custody_fixture_helper.py':_initial_sealed_reference(f.python)},
+                    modes={'tools/custody_fixture_helper.py':0o644}))
+                cfg=copy.deepcopy(f.cfg);cfg['source']['inventory']=source_inventory
+                manifest=_initial_sealed_write(f.root/'parent-manifest.json',{})
+                cfg.update(date=f.expected['date'],output=str(f.root/'output'),raw_shard_root=str(f.root/'raw-owned'),
+                    compiler=_initial_sealed_reference(f.compiler),manifest=manifest,downloads=str(f.root/'downloads'),
+                    expansion_timeout_ms=60000,build_timeout_seconds=60,
+                    edition_options={f.expected['edition']:dict(auxiliary_snapshots={'figure-sizing':_initial_sealed_reference(path)},
+                                                               extraction_cache_root=cache_descriptor)})
+                folder=f.root/'descriptor-parent-attempt';folder.mkdir();prefix=str(folder/'unwritten-python-cache')
+                start=dict(context=controller.production_context(cfg),date=cfg['date'],edition=f.expected['edition'],
+                    prepared_source_control=dict(version=1,configuration=cfg,bytecode_prefix=prefix))
+                start_ref=_initial_sealed_write(folder/'start.json',start)
+                process_identity=dict(pid=123,start_time_ticks=456)
+                launch=folder/'launch.json';_initial_sealed_write(launch,dict(identity=process_identity))
+                process=SimpleNamespace(pid=123,poll=lambda:None)
+                observed=[]
+                def authorize(reference):
+                    if mode!='unchanged':
+                        record=b.prepared_metadata(reference)
+                        if mode=='omitted-sql':record['retained_dispatch']['inputs']=[row for row in record['retained_dispatch']['inputs'] if row['identity']['path']!=str(sql)]
+                        else:del record['retained_dispatch']['capture_directories'][str(capture)]
+                        Path(reference['path']).write_text(json.dumps(record));reference=b.prepared_metadata_ref(reference['path'])
+                    binding=controller.authorize_prepared_source(cfg,start,start_ref,launch,reference,process=process)
+                    observed.append(binding)
+                    return b.prepared_authorized_generation(cfg,start,binding['authorization'])
+                def source_guard(value):
+                    self.assertEqual(value,cfg)
+                    return dict(qualified_head=cfg['source']['head'],current_head=cfg['source']['head'],
+                                producer_inventory=cfg['source']['inventory'],apps_acceptance=False)
+                key=(('figure-sizing',str(path.absolute())),)
+                # Only external source/Git/process witnesses and the synthetic
+                # Figure replay are mocked; request, roles, offer and parent run.
+                with patch.dict(sys._xoptions,{'wikidict_prepared_source':'1'}),patch.object(sys,'pycache_prefix',prefix), \
+                        patch.object(sys,'path',[sys._stdlib_dir,sys._stdlib_dir+'/lib-dynload']), \
+                        patch.object(b,'source_fingerprint',return_value=f.identity['source']), \
+                        patch.object(b,'run_checked',side_effect=AssertionError('must not compile')), \
+                        patch.object(b,'timed_run',side_effect=AssertionError('must not launch native')), \
+                        patch.object(b,'validated_figure_tuple',return_value={'figure-sizing':({},inventory)}), \
+                        patch.dict(b._FIGURE_TUPLE_REPLAYS,{key:(guard,{})},clear=True), \
+                        patch.object(controller,'source_guard',side_effect=source_guard), \
+                        patch.object(controller,'prepared_git_source_authority',return_value={'fixture':'immutable-original'}), \
+                        patch.object(controller,'process_identity',return_value=process_identity), \
+                        b.prepared_source_request(start_ref) as request:
+                    request.await_authorization=authorize
+                    tools=b.prepare_blob_tools(f.workspace,str(f.compiler),f.expected['edition'],cfg['date'],
+                                               f.identity,retained_roles=f.roles)
+                    if mode=='unchanged':
+                        generation=request.offer(f.workspace,f.dump,tools,f.identity,123)
+                        self.assertIs(generation,getattr(b._PREPARED_SOURCE,'value'))
+                        self.assertEqual(generation.record['retained_dispatch']['selection'],f.selection)
+                        self.assertEqual(len(observed),1);generation.require_unchanged()
+                    else:
+                        with self.assertRaisesRegex(ValueError,'omitted a borrowed'):
+                            request.offer(f.workspace,f.dump,tools,f.identity,123)
+                        self.assertFalse(observed)
+                        self.assertNotIn('prepared_source_authorization',controller.read_json(launch))
+
     def test_parent_independently_requires_complete_borrowed_capture_readset(self):
         import hashlib
         with self.fixture() as f:
