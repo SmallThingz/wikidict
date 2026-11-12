@@ -167,6 +167,75 @@ bool settingsPathsAreIsolated(const QString &root) {
 class MediaPanelTest : public QObject {
     Q_OBJECT
 private slots:
+    void staticPosterUsesIdentityPngDemandAndClosedCacheVariant() {
+        using State = MediaPanel::InlineImageState;
+        const QJsonObject policy{{"policy", "three_d_stl_v1"}, {"label", "3D"},
+            {"file_sha1", QString(40, QChar('a'))}, {"file_timestamp", "2020-02-29T07:26:20Z"}};
+        const QJsonObject image{{"file", "Controlled.stl"}, {"width_px", 250}, {"height_px", 188}, {"static_poster", policy}};
+        const QJsonObject value{{"title", "Poster"}, {"media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", "Controlled.stl"}}}},
+            {"sections", QJsonArray{QJsonObject{{"blocks", QJsonArray{QJsonObject{{"kind", "paragraph"},
+                {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", ""}, {"image", image}}}}}}}}}}};
+        const auto info = [&](int width) {
+            return QJsonObject{{"mime", "application/sla"}, {"mediatype", "3D"}, {"width", 5120}, {"height", 2880},
+                {"sha1", policy.value("file_sha1")}, {"timestamp", policy.value("file_timestamp")},
+                {"url", "https://upload.wikimedia.org/wikipedia/commons/a/a1/Controlled.stl"},
+                {"descriptionurl", "https://commons.wikimedia.org/wiki/File:Controlled.stl"},
+                {"thumburl", QStringLiteral("https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a1/Controlled.stl/%1px-Controlled.stl.png").arg(width)},
+                {"thumbmime", "image/png"}, {"thumbwidth", width}, {"thumbheight", (width * 3 + 2) / 4}};
+        };
+        const auto response = [](const QJsonObject &info) {
+            return QJsonDocument(QJsonObject{{"query", QJsonObject{{"pages", QJsonArray{QJsonObject{{"ns", 6},
+                {"title", "File:Controlled.stl"}, {"missing", true}, {"known", true}, {"imageinfo", QJsonArray{info}}}}}}}}).toJson();
+        };
+        const auto pixels = [](int width, const char *type = "PNG") {
+            QImage raster(width, (width * 3 + 2) / 4, QImage::Format_RGB32); raster.fill(QColor("#5a80c0"));
+            QByteArray bytes; QBuffer buffer(&bytes); buffer.open(QIODevice::WriteOnly); raster.save(&buffer, type); return bytes;
+        };
+        Network network; network.responses = {{response(info(250))}, {pixels(250)}};
+        MediaPanel panel(nullptr, &network); panel.setEntry(value); panel.show(); QObject owner;
+        MediaPanel::InlineImageAsset last{State::Loading}; const auto changed = [&](const auto &asset) { last = asset; };
+        QCOMPARE(panel.requestInlineImage(image, "requested_fit", 1, &owner, "poster", changed).state, State::Disabled);
+        QVERIFY(network.urls.isEmpty()); enableImages(panel);
+        QTRY_COMPARE(last.state, State::Ready); QCOMPARE(network.urls.size(), 2);
+        QCOMPARE(QUrlQuery(network.urls.first()).queryItemValue("iiurlwidth"), QStringLiteral("250"));
+        const auto properties = QUrlQuery(network.urls.first()).queryItemValue("iiprop").split(QChar('|'));
+        for (const QString &property : {QStringLiteral("sha1"), QStringLiteral("timestamp"), QStringLiteral("thumbmime")}) QVERIFY(properties.contains(property));
+        QCOMPARE(last.image.size(), QSize(250, 188)); QCOMPARE(last.intrinsic, QSizeF(4, 3)); QVERIFY(!last.vector);
+        auto generic = image; generic.remove("static_poster");
+        QCOMPARE(panel.requestInlineImage(generic, "requested_fit", 1, &owner, "generic", changed).state, State::Error);
+        auto wrong = image; auto otherPolicy = policy; otherPolicy.insert("file_sha1", QString(40, QChar('b'))); wrong.insert("static_poster", otherPolicy);
+        QCOMPARE(panel.requestInlineImage(wrong, "requested_fit", 1, &owner, "wrong", changed).state, State::Error);
+        network.responses = {{response(info(500))}, {pixels(500)}};
+        last = panel.requestInlineImage(image, "requested_fit", 2, &owner, "poster", changed);
+        QTRY_COMPARE(last.state, State::Ready); QCOMPARE(network.urls.size(), 4); QCOMPARE(last.image.size(), QSize(500, 375));
+        QCOMPARE(QUrlQuery(network.urls[2]).queryItemValue("iiurlwidth"), QStringLiteral("500"));
+        const int count = network.urls.size(); panel.setEntry(value);
+        last = panel.requestInlineImage(image, "requested_fit", 2, &owner, "cached", changed);
+        QTRY_COMPARE(last.state, State::Ready); QCOMPARE(network.urls.size(), count);
+        for (const QString &kind : {QStringLiteral("sha1"), QStringLiteral("timestamp"), QStringLiteral("thumburl"),
+                QStringLiteral("thumbmime"), QStringLiteral("thumbheight"), QStringLiteral("undersized"), QStringLiteral("payload")}) {
+            panel.findChild<QPushButton *>("mediaClearCache")->click(); panel.setEntry(value);
+            auto bad = info(kind == "undersized" ? 249 : 250);
+            if (kind == "sha1") bad.insert("sha1", QString(40, QChar('b')));
+            if (kind == "timestamp") bad.insert("timestamp", "2020-03-01T07:26:20Z");
+            if (kind == "thumburl") bad.remove("thumburl");
+            if (kind == "thumbmime") bad.insert("thumbmime", "image/jpeg");
+            if (kind == "thumbheight") bad.insert("thumbheight", 187);
+            network.responses = {{response(bad)}};
+            if (kind == "payload") network.responses.append({pixels(250, "BMP")});
+            const int before = network.urls.size();
+            last = panel.requestInlineImage(image, "requested_fit", 1, &owner, kind, changed);
+            QTRY_COMPARE(last.state, State::Error); QVERIFY(last.image.isNull());
+            QCOMPARE(network.urls.size(), before + (kind == "payload" ? 2 : 1));
+        }
+        panel.setEntry(value); network.responses = {{response(info(250)), -1, 1000}};
+        last = panel.requestInlineImage(image, "requested_fit", 1, &owner, "cancelled", changed);
+        QCOMPARE(last.state, State::Loading); const int cancelled = network.cancelled;
+        panel.setEntry(QJsonObject{{"title", "Replacement"}}); QCOMPARE(network.cancelled, cancelled + 1);
+        QVERIFY(std::none_of(network.urls.cbegin(), network.urls.cend(), [](const QUrl &url) {
+            return url.path().endsWith(QStringLiteral(".stl"), Qt::CaseInsensitive);
+        }));
+    }
     void svgLanguageIdentityRejectsWrongRenditionsAndKeepsOriginalAxes() {
         const QString file = QStringLiteral("Logo NIKE.svg");
         QJsonObject info{{"mime", "image/svg+xml"}, {"mediatype", "DRAWING"}, {"width", 800}, {"height", 400},

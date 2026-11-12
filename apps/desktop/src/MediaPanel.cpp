@@ -1,6 +1,7 @@
 #include "MediaPanel.hpp"
 #include "CompiledContent.hpp"
 #include "SvgRasterIdentity.hpp"
+#include "SemanticHtml.hpp"
 #include <QResizeEvent>
 
 #include <QAudioOutput>
@@ -447,6 +448,7 @@ public:
     }
     QString kind, file, key, sourceHost, display;
     std::optional<QString> svgLanguage;
+    QJsonObject staticPoster;
     QList<QPair<QJsonObject, QString>> occurrences;
     qreal requestedDpr = 1;
     quint32 requestedPixels = 0, rasterPixels = 0;
@@ -497,7 +499,8 @@ struct MediaPanel::Impl {
             || std::floor(width) != width || std::floor(height) != height) return {};
         return QSizeF(width, height);
     }
-    static QString resourceKey(const QString &file, const std::optional<QString> &language) {
+    static QString resourceKey(const QString &file, const std::optional<QString> &language, const QJsonObject &poster = {}) {
+        if (!poster.isEmpty()) return QString::fromUtf8(QJsonDocument(QJsonArray{file, QJsonValue::Null, poster}).toJson(QJsonDocument::Compact));
         return language ? QString::fromUtf8(QJsonDocument(QJsonArray{file, *language}).toJson(QJsonDocument::Compact)) : file;
     }
     std::optional<quint32> rasterDemand(const MediaCard *card, const QJsonObject &original) const {
@@ -520,8 +523,59 @@ struct MediaPanel::Impl {
         }
         return result;
     }
+    std::optional<quint32> posterDemand(const MediaCard *card) const {
+        double required = 1;
+        for (const auto &occurrence : card->occurrences) {
+            try { if (SemanticHtml::checkedStaticPoster(occurrence.first) != card->staticPoster) return std::nullopt; }
+            catch (const std::exception &) { return std::nullopt; }
+            required = std::max(required, std::ceil(occurrence.first.value("width_px").toDouble() * card->requestedDpr));
+        }
+        if (card->catalogRequested)
+            required = std::max(required, std::ceil(card->image->width() * card->image->devicePixelRatioF()));
+        if (!std::isfinite(required) || required <= 0 || required > 4294967295.0) return std::nullopt;
+        return quint32(required);
+    }
+    bool posterIdentity(MediaCard *card, const QJsonObject &page, const QJsonObject &info, quint32 requested) const {
+        if (card->staticPoster.isEmpty() || requested == 0 || card->occurrences.isEmpty()) return false;
+        try { if (SemanticHtml::checkedStaticPoster(card->occurrences.first().first) != card->staticPoster) return false; }
+        catch (const std::exception &) { return false; }
+        QString title = page.value("title").toString(); title.replace(QChar('_'), QChar(' '));
+        if (page.value("ns").toInt(-1) != 6 || title != QStringLiteral("File:") + card->file) return false;
+        for (const QString &key : {QStringLiteral("invalid"), QStringLiteral("filemissing"), QStringLiteral("filehidden"), QStringLiteral("suppressed")})
+            if (page.contains(key) && page.value(key) != false) return false;
+        if (info.contains("thumberror") || info.value("mime") != QStringLiteral("application/sla")
+            || info.value("mediatype") != QStringLiteral("3D")
+            || info.value("sha1") != card->staticPoster.value("file_sha1")
+            || info.value("timestamp") != card->staticPoster.value("file_timestamp")
+            || info.value("thumbmime") != QStringLiteral("image/png")) return false;
+        const QUrl original(info.value("url").toString()), raster(info.value("thumburl").toString());
+        if (!allowedUrl(original, true) || !allowedUrl(raster, true) || raster == original
+            || !raster.path().endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) return false;
+        const auto originalAxes = originalImageSize(info, "width", "height");
+        const auto axes = originalImageSize(info, "thumbwidth", "thumbheight");
+        if (!originalAxes.isValid() || !axes.isValid() || axes.width() < requested
+            || quint64(axes.height()) != (quint64(axes.width()) * 3 + 2) / 4) return false;
+        return true;
+    }
+    bool validatePosterMetadata(MediaCard *card, const QJsonObject &metadata) {
+        const auto page = metadata.value("poster_page").toObject();
+        const auto info = metadata.value("poster_info").toObject();
+        const auto requested = metadata.value("poster_requested");
+        const auto required = posterDemand(card);
+        if (!SvgRasterIdentity::axis(requested) || !required
+            || metadata.value("static_poster") != card->staticPoster
+            || !posterIdentity(card, page, info, quint32(requested.toDouble()))
+            || info.value("thumbwidth").toDouble() < *required
+            || metadata.value("url") != info.value("thumburl")
+            || metadata.value("original_mime") != info.value("mime")
+            || originalImageSize(metadata, "intrinsic_width", "intrinsic_height") != QSizeF(4, 3)) return false;
+        card->verifiedOriginal = info; card->verifiedPage = page;
+        card->rasterPixels = quint32(info.value("thumbwidth").toDouble());
+        return true;
+    }
     bool adequate(const MediaCard *card) const {
         if (card->decodedImage.isNull() || !card->intrinsicImage.isValid()) return false;
+        if (!card->staticPoster.isEmpty()) { const auto required = posterDemand(card); return required && card->rasterPixels >= *required && card->decodedImage.width() >= *required; }
         if (!card->svgLanguage) return true;
         const auto required = rasterDemand(card, card->verifiedOriginal);
         return required && card->rasterPixels >= *required && card->decodedImage.width() >= *required;
@@ -557,7 +611,7 @@ struct MediaPanel::Impl {
     }
     void notifyInline(MediaCard *card) {
         if (card->kind != QStringLiteral("image")) return;
-        auto &subscribers = inlineSubscribers[resourceKey(card->file, card->svgLanguage)];
+        auto &subscribers = inlineSubscribers[resourceKey(card->file, card->svgLanguage, card->staticPoster)];
         subscribers.removeIf([](const InlineSubscriber &item) { return item.owner.isNull(); });
         const auto copy = subscribers;
         const auto asset = inlineAsset(card);
@@ -566,6 +620,9 @@ struct MediaPanel::Impl {
     MediaPanel::InlineImageAsset inlineImage(const QJsonObject &image, const QString &sizing, qreal dpr,
             QObject *owner, const QString &key, std::function<void(const MediaPanel::InlineImageAsset &)> changed) {
         using State = MediaPanel::InlineImageState;
+        QJsonObject poster;
+        try { SemanticHtml::checkedImage(image); poster = SemanticHtml::checkedStaticPoster(image); }
+        catch (const std::exception &) { return {State::Error, {}, QStringLiteral("Invalid compiled image request.")}; }
         const QString file = image.value(QStringLiteral("file")).toString();
         const auto value = image.value(QStringLiteral("svg_language"));
         const std::optional<QString> lang = value.isUndefined() || value.isNull() ? std::nullopt : std::optional<QString>(value.toString());
@@ -574,12 +631,12 @@ struct MediaPanel::Impl {
         for (auto it = inlineSubscribers.begin(); it != inlineSubscribers.end(); ++it)
             it.value().removeIf([&](const InlineSubscriber &item) { return item.owner.isNull() || (item.owner == owner && item.key == key); });
         for (MediaCard *card : cards) {
-            if (card->kind != QStringLiteral("image") || card->file != file || card->svgLanguage != lang) continue;
+            if (card->kind != QStringLiteral("image") || card->file != file || card->svgLanguage != lang || card->staticPoster != poster) continue;
             card->inlineRequested = true;
             card->requestedDpr = std::max(card->requestedDpr, dpr);
             const QPair<QJsonObject, QString> occurrence{image, sizing};
-            if (lang && !card->occurrences.contains(occurrence)) card->occurrences.append(occurrence);
-            auto &subscribers = inlineSubscribers[resourceKey(file, lang)];
+            if ((lang || !poster.isEmpty()) && !card->occurrences.contains(occurrence)) card->occurrences.append(occurrence);
+            auto &subscribers = inlineSubscribers[resourceKey(file, lang, poster)];
             subscribers.append({owner, key, std::move(changed)});
             enqueueInline(card);
             return inlineAsset(card);
@@ -759,7 +816,7 @@ struct MediaPanel::Impl {
             updateButton(card);
             if (kind == QStringLiteral("image")) {
                 notifyInline(card);
-                if (enabled && !inlineSubscribers.value(resourceKey(card->file, card->svgLanguage)).isEmpty()) { card->inlineFailure.clear(); enqueueInline(card); }
+                if (enabled && !inlineSubscribers.value(resourceKey(card->file, card->svgLanguage, card->staticPoster)).isEmpty()) { card->inlineFailure.clear(); enqueueInline(card); }
             }
         }
     }
@@ -858,31 +915,34 @@ struct MediaPanel::Impl {
             if ((kind != QStringLiteral("image") && kind != QStringLiteral("audio")) ||
                 media.value(QStringLiteral("file")).toString().trimmed().isEmpty()) continue;
             const QString canonicalFile = media.value(QStringLiteral("file")).toString();
-            QList<std::optional<QString>> variants;
+            using Variant = QPair<std::optional<QString>, QJsonObject>;
+            QList<Variant> variants;
             if (kind == QStringLiteral("image")) for (const auto &item : occurrenceImages.value(canonicalFile)) {
                 const auto value = item.first.value(QStringLiteral("svg_language"));
                 const std::optional<QString> lang = value.isUndefined() || value.isNull() ? std::nullopt : std::optional<QString>(value.toString());
-                if (!variants.contains(lang)) variants.append(lang);
+                const Variant variant{lang, item.first.value("static_poster").toObject()};
+                if (!variants.contains(variant)) variants.append(variant);
             }
-            if (variants.isEmpty()) variants.append(std::nullopt);
+            if (variants.isEmpty()) variants.append(Variant{std::nullopt, {}});
             for (const auto &variant : variants) {
             auto *card = new MediaCard(media, cardsBody, inlineFiles.contains(canonicalFile));
-            card->svgLanguage = variant;
+            card->svgLanguage = variant.first; card->staticPoster = variant.second;
             for (const auto &item : occurrenceImages.value(canonicalFile)) {
                 const auto value = item.first.value(QStringLiteral("svg_language"));
                 const std::optional<QString> lang = value.isUndefined() || value.isNull() ? std::nullopt : std::optional<QString>(value.toString());
-                if (lang == variant) card->occurrences.append(item);
+                if (lang == variant.first && item.first.value("static_poster").toObject() == variant.second) card->occurrences.append(item);
             }
-            if (variant) {
-                card->setTitle(QStringLiteral("SVG language: %1").arg(*variant));
-                card->display += QStringLiteral(" [SVG %1]").arg(*variant);
+            if (variant.first) {
+                card->setTitle(QStringLiteral("SVG language: %1").arg(*variant.first));
+                card->display += QStringLiteral(" [SVG %1]").arg(*variant.first);
             }
             if (QRegularExpression(QStringLiteral("^[a-z0-9-]+\\.wiktionary\\.org$")).match(sourceHost).hasMatch()) card->sourceHost = sourceHost;
             card->key = QString::fromLatin1(QCryptographicHash::hash((card->sourceHost + QChar(':') + kind + QChar(':') + card->file).toUtf8(), QCryptographicHash::Sha256).toHex());
-            if (variant) card->key = QString::fromLatin1(QCryptographicHash::hash((card->key + QChar(':') + *variant).toUtf8(), QCryptographicHash::Sha256).toHex());
+            if (variant.first) card->key = QString::fromLatin1(QCryptographicHash::hash((card->key + QChar(':') + *variant.first).toUtf8(), QCryptographicHash::Sha256).toHex());
+            else if (!variant.second.isEmpty()) card->key = QString::fromLatin1(QCryptographicHash::hash((card->key + QChar(':') + resourceKey(card->file, variant.first, variant.second)).toUtf8(), QCryptographicHash::Sha256).toHex());
             card->image->resized = [this, guard = QPointer<MediaCard>(card)] {
                 QTimer::singleShot(0, q, [this, guard] {
-                    if (guard && guard->svgLanguage && guard->catalogRequested && !guard->busy) enqueueInline(guard);
+                    if (guard && (guard->svgLanguage || !guard->staticPoster.isEmpty()) && guard->catalogRequested && !guard->busy) enqueueInline(guard);
                 });
             };
             cards.append(card);
@@ -892,7 +952,7 @@ struct MediaPanel::Impl {
             updateButton(card);
             QObject::connect(card->button, &QPushButton::clicked, q, [this, card] {
                 if (!allowed(card) || card->busy) return;
-                if (card->svgLanguage) { card->catalogRequested = true; card->image->show(); }
+                if (card->svgLanguage || !card->staticPoster.isEmpty()) { card->catalogRequested = true; card->image->show(); }
                 if (card->kind == QStringLiteral("audio") && !card->data.isEmpty()) play(card);
                 else {
                     if (!card->data.isEmpty() || !card->decodedImage.isNull()) { removeCached(card); card->data.clear(); card->decodedImage = {}; card->vectorImage.reset(); }
@@ -1039,6 +1099,7 @@ struct MediaPanel::Impl {
             removeCached(card); return false; // Refresh old manual-cache metadata through the same resolver.
         }
         if (card->svgLanguage && !validateRasterMetadata(card, info)) { removeCached(card); return false; }
+        if (!card->staticPoster.isEmpty() && !validatePosterMetadata(card, info)) { removeCached(card); return false; }
         if (!present(card, payload.readAll(), info)) {
             removeCached(card);
             return false;
@@ -1116,7 +1177,15 @@ struct MediaPanel::Impl {
                     fail(card, QStringLiteral("This image format could not be opened."));
                     return false;
                 }
-                if (card->svgLanguage) {
+                if (!card->staticPoster.isEmpty()) {
+                    const auto required = posterDemand(card);
+                    const auto expectedHeight = (quint64(card->rasterPixels) * 3 + 2) / 4;
+                    if (reader.format().toLower() != QByteArrayLiteral("png") || !required
+                        || dimensions.width() != qint64(card->rasterPixels) || dimensions.height() != qint64(expectedHeight)
+                        || dimensions.width() < *required || quint64(dimensions.width()) * quint64(dimensions.height()) > 64 * 1024 * 1024) {
+                        fail(card, QStringLiteral("The static PNG poster is invalid or undersized.")); return false;
+                    }
+                } else if (card->svgLanguage) {
                     const auto required = rasterDemand(card, card->verifiedOriginal);
                     const auto expectedHeight = FigureSizing::positiveRound(
                         quint64(card->verifiedOriginal.value(QStringLiteral("height")).toDouble()) * card->rasterPixels,
@@ -1222,8 +1291,13 @@ struct MediaPanel::Impl {
         query.addQueryItem(QStringLiteral("format"), QStringLiteral("json"));
         query.addQueryItem(QStringLiteral("formatversion"), QStringLiteral("2"));
         query.addQueryItem(QStringLiteral("prop"), QStringLiteral("imageinfo"));
-        query.addQueryItem(QStringLiteral("iiprop"), card->svgLanguage ? QStringLiteral("url|size|mime|mediatype|sha1|timestamp|thumbmime|extmetadata") : QStringLiteral("url|size|mime|extmetadata"));
-        if (!card->svgLanguage) query.addQueryItem(QStringLiteral("iiurlwidth"), QStringLiteral("960"));
+        query.addQueryItem(QStringLiteral("iiprop"), (card->svgLanguage || !card->staticPoster.isEmpty()) ? QStringLiteral("url|size|mime|mediatype|sha1|timestamp|thumbmime|extmetadata") : QStringLiteral("url|size|mime|extmetadata"));
+        if (!card->staticPoster.isEmpty()) {
+            const auto required = posterDemand(card);
+            if (!required) { fail(card, QStringLiteral("Invalid static poster request.")); return; }
+            card->requestedPixels = *required;
+            query.addQueryItem(QStringLiteral("iiurlwidth"), QString::number(*required));
+        } else if (!card->svgLanguage) query.addQueryItem(QStringLiteral("iiurlwidth"), QStringLiteral("960"));
         else if (rendition) {
             const auto required = rasterDemand(card, card->verifiedOriginal);
             if (!required) { fail(card, QStringLiteral("The compiled SVG sizing request is unsupported.")); return; }
@@ -1237,14 +1311,14 @@ struct MediaPanel::Impl {
             QJsonParseError error;
             const QJsonDocument document = QJsonDocument::fromJson(bytes, &error);
             if (error.error != QJsonParseError::NoError) { fail(card, QStringLiteral("The media server sent an unreadable response.")); return; }
-            if (card->svgLanguage && (document.object().contains(QStringLiteral("error")) || document.object().contains(QStringLiteral("warnings")))) {
+            if ((card->svgLanguage || !card->staticPoster.isEmpty()) && (document.object().contains(QStringLiteral("error")) || document.object().contains(QStringLiteral("warnings")))) {
                 fail(card, QStringLiteral("The SVG handler did not accept this rendition request without warnings.")); return;
             }
             const QJsonArray pages = document.object().value(QStringLiteral("query")).toObject().value(QStringLiteral("pages")).toArray();
             QJsonObject info, selectedPage;
             for (const QJsonValue &page : pages) {
                 const QJsonArray media = page.toObject().value(QStringLiteral("imageinfo")).toArray();
-                if (!media.isEmpty()) { if (card->svgLanguage && (pages.size() != 1 || media.size() != 1)) { fail(card, QStringLiteral("Ambiguous SVG metadata.")); return; } info = media.first().toObject(); selectedPage = page.toObject(); break; }
+                if (!media.isEmpty()) { if ((card->svgLanguage || !card->staticPoster.isEmpty()) && (pages.size() != 1 || media.size() != 1)) { fail(card, QStringLiteral("Ambiguous SVG metadata.")); return; } info = media.first().toObject(); selectedPage = page.toObject(); break; }
             }
             if (info.isEmpty()) {
                 if (hostIndex == 0 && !card->sourceHost.isEmpty()) resolve(card, 1);
@@ -1264,7 +1338,12 @@ struct MediaPanel::Impl {
                 if (*bucket < *required) { resolve(card, hostIndex, true); return; }
                 card->rasterPixels = *bucket;
             }
-            const QUrl mediaUrl(card->svgLanguage ? info.value(QStringLiteral("thumburl")).toString() : card->kind == QStringLiteral("image") && !svgMime(info.value(QStringLiteral("mime")).toString())
+            if (!card->staticPoster.isEmpty()) {
+                if (!posterIdentity(card, selectedPage, info, requested)) { fail(card, QStringLiteral("The static PNG poster identity could not be verified.")); return; }
+                card->verifiedOriginal = info; card->verifiedPage = selectedPage;
+                card->rasterPixels = quint32(info.value("thumbwidth").toDouble());
+            }
+            const QUrl mediaUrl((card->svgLanguage || !card->staticPoster.isEmpty()) ? info.value(QStringLiteral("thumburl")).toString() : card->kind == QStringLiteral("image") && !svgMime(info.value(QStringLiteral("mime")).toString())
                 && !info.value(QStringLiteral("thumburl")).toString().isEmpty()
                 ? info.value(QStringLiteral("thumburl")).toString() : info.value(QStringLiteral("url")).toString());
             if (!allowedUrl(mediaUrl, true)) { fail(card, QStringLiteral("The media server returned an unsupported address.")); return; }
@@ -1286,7 +1365,13 @@ struct MediaPanel::Impl {
                 metadata.insert(QStringLiteral("svg_identity"), SvgRasterIdentity::cacheIdentity(card->file, *card->svgLanguage, info, card->rasterPixels));
             }
             if (info.value(QStringLiteral("mime")).isString()) metadata.insert(QStringLiteral("original_mime"), info.value(QStringLiteral("mime")));
-            const QSizeF original = originalImageSize(info, QStringLiteral("width"), QStringLiteral("height"));
+            if (!card->staticPoster.isEmpty()) {
+                metadata.insert("poster_page", selectedPage); metadata.insert("poster_info", info);
+                metadata.insert("poster_requested", double(requested)); metadata.insert("static_poster", card->staticPoster);
+            }
+            // Source API metadata axes are identity evidence, not STL layout.
+            const QSizeF original = !card->staticPoster.isEmpty() ? QSizeF(4, 3)
+                : originalImageSize(info, QStringLiteral("width"), QStringLiteral("height"));
             if (original.isValid()) { metadata.insert(QStringLiteral("intrinsic_width"), original.width()); metadata.insert(QStringLiteral("intrinsic_height"), original.height()); }
             else if (card->inlineRequested) { fail(card, QStringLiteral("Original image dimensions are unavailable.")); return; }
             card->status->setText(QStringLiteral("Downloading media..."));
@@ -1296,6 +1381,11 @@ struct MediaPanel::Impl {
                     const auto required = rasterDemand(card, card->verifiedOriginal);
                     if (required && card->rasterPixels < *required) { resolve(card, 0); return; }
                     if (!validateRasterMetadata(card, metadata)) { fail(card, QStringLiteral("The SVG raster transaction did not match its request.")); return; }
+                }
+                if (!card->staticPoster.isEmpty()) {
+                    const auto required = posterDemand(card);
+                    if (required && card->rasterPixels < *required) { resolve(card, 0); return; }
+                    if (!validatePosterMetadata(card, metadata)) { fail(card, QStringLiteral("The static poster transaction did not match its request.")); return; }
                 }
                 if (!present(card, payload, metadata)) return;
                 writeCached(card);

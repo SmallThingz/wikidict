@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "30ae1c68d83812c5e36729bcee91e8f45903a46b7579fd455c445861ff50a72b",
-      "bytes": 290338,
+      "sha256": "62efd14c41446682bb5097640b47665e563976c2c0ffe101f34f3241a954e4d0",
+      "bytes": 519016,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -47,22 +47,22 @@
           "path": "src/gui/text/qtextdocumentfragment.cpp",
           "new_file": false,
           "upstream_sha256": "71b970a50e0a14f509ed6982680d22665a267dd70f6824d3ddc5c0666dfe159c",
-          "qualified_sha256": "ef97e33a7f310d64db3792ae41db070e8b597cecab83c4101f502e277ab5816b",
-          "bytes": 48545
+          "qualified_sha256": "2c8e6aac403d440cc03b2af29824c9c3e6f0cefd2e1c0bd9cece42ab58153097",
+          "bytes": 49579
         },
         {
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "48a1c7e7112d5c0bda458d931e9002017c5b576378008622774396625ad07cfb",
-          "bytes": 315887
+          "qualified_sha256": "9f929c56dd07d5485a81150c99e0e21f9506ed0f76ca3e79b7e0e1296b238c60",
+          "bytes": 501842
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
           "new_file": false,
           "upstream_sha256": "a224d6ab662371428e13c565112893284938824d5a9d2cf9c268eb17072c21f3",
-          "qualified_sha256": "2e0f1d503b76afa983a854bb6b7376e26a6b9be3216a07600c8fa8a7fc4a23d4",
-          "bytes": 4600
+          "qualified_sha256": "9e27688c23d0ea2316868347534b84545bd14965f16b587ac0620cc6dcf64af3",
+          "bytes": 5217
         },
         {
           "path": "src/gui/text/qtextengine.cpp",
@@ -89,15 +89,15 @@
           "path": "src/gui/text/qtextlayout.cpp",
           "new_file": false,
           "upstream_sha256": "a6b8d41c3b4f0d81777edbc84ca53037940ddf3066fa95223fb95cd56ee9c2a8",
-          "qualified_sha256": "806651f5a1bc88e0150b9bb7e57cfb57c88f7d74924fff27c512359d4b30ee1f",
-          "bytes": 122948
+          "qualified_sha256": "981bebcaee0e9152c0fd95f1835281991a2964df2060a6497f23a20ad1600bb2",
+          "bytes": 129043
         },
         {
           "path": "src/gui/text/qtextlogicalflow_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "qualified_sha256": "c4e45ba9a2ccd542099421c21a5a647baaa07cd4a053ab7c5cb9d7b0910620aa",
-          "bytes": 36652
+          "qualified_sha256": "09997b8cf067f1eb8a51950dbdd63b5b145fbdd6ae5f28c641126d12734374b6",
+          "bytes": 36714
         },
         {
           "path": "src/gui/text/qtextsourceprovenance_p.h",
@@ -114,11 +114,11 @@
           "bytes": 39216
         },
         {
-          "path": "src/widgets/widgets/qwidgettextcontrol.cpp",
+          "path": "src/widgets/widgets/qtextbrowser.cpp",
           "new_file": false,
-          "upstream_sha256": "41b0bfa7c8e4b3d89b5fe4c534c0e5830738a84ecb573acb9e98755053fced55",
-          "qualified_sha256": "fbe1adb0872026d093d9cfa4ff85006beea35e233e4bf372af5c364025c14601",
-          "bytes": 119731
+          "upstream_sha256": "f098dd5cdc3eb5ca74835740f5eeed6f4956a29ca7a668578b7702c64b223302",
+          "qualified_sha256": "b6d681c6c5a3276686c052d8807496b36cc58e65f8755408c00beddc0e27791e",
+          "bytes": 29552
         },
         {
           "path": "src/widgets/widgets/qtextedit.cpp",
@@ -135,32 +135,39 @@
           "bytes": 3063
         },
         {
-          "path": "src/widgets/widgets/qtextbrowser.cpp",
+          "path": "src/widgets/widgets/qwidgettextcontrol.cpp",
           "new_file": false,
-          "upstream_sha256": "f098dd5cdc3eb5ca74835740f5eeed6f4956a29ca7a668578b7702c64b223302",
-          "qualified_sha256": "b6d681c6c5a3276686c052d8807496b36cc58e65f8755408c00beddc0e27791e",
-          "bytes": 29552
+          "upstream_sha256": "41b0bfa7c8e4b3d89b5fe4c534c0e5830738a84ecb573acb9e98755053fced55",
+          "qualified_sha256": "2f5c8d38b837bceb3561d53d658d7f9df612d53494031658ed4620b2a4812136",
+          "bytes": 122442
+        },
+        {
+          "path": "src/widgets/widgets/qwidgettextcontrol_p_p.h",
+          "new_file": false,
+          "upstream_sha256": "30205a2d638d5a30ebe4b7fe30f41542576dc8a10f5da8cc58cf717901a30429",
+          "qualified_sha256": "c00d5c20e2d22db77cbaf9aedb41d271a8dc0f3dae7549ee7d1ed9d5d6316660",
+          "bytes": 6873
         }
       ]
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "5a72ce9423f0d220d20737cb782dcf14143e7b208ce0502e12fa470fb0512aec",
-      "bytes": 399264,
+      "sha256": "66bf388597f4381d3fb6ae7abedcc74ce6e896594d6774262ed340abbf370d8b",
+      "bytes": 696770,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
           "new_file": false,
           "upstream_sha256": "3af4695773348d1837743ef0df49759831928302e39a4fed17def51cf93adf1c",
-          "qualified_sha256": "f0d31af492900718d5b80bfb048d1313c85208f1343205b48e3afb3ce6970106",
-          "bytes": 832
+          "qualified_sha256": "baf110637e25695c747209a9d58d00d455d8438f03053a4f74813af42c4824e9",
+          "bytes": 1028
         },
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "1fe3c80b2b595212156c827eabcdc10702ed8cedf1b5db104a996d3276dd89d8",
-          "bytes": 414829
+          "qualified_sha256": "598ab0e59c40c2cea07f26b9d7eebca503b89075fb729e3af061d4f71288a3f8",
+          "bytes": 708550
         }
       ]
     },
@@ -187,94 +194,176 @@
     }
   ],
   "qualification": {
-    "date": "2026-11-11",
-    "source_inventory_sha256": "f12d824a5bdc7c33b9539955cb29e7a4f53792d7da041ed9ffab42f28c92f7d6",
+    "date": "2026-11-12",
+    "scope": "Typed Cell source-block inheritance on cumulative API04 Figure/font/wrapper and caption fixes; two current native controls plus both focused app controls and all seven registered app CTests. The full native suite and whole frontend are not inferred.",
+    "source_inventory_sha256": "07be41fc0ea91167eaa7e3541bec0b8595d5387ebabb90ca88b91803f0227c10",
     "native_product_build": {
       "closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold53/independent-closure01.json",
-        "bytes": 43240,
-        "sha256": "f3074b08337d77b5f1f9bb7ecf3ebcd69c752e9886bd8e48a5c35993fee4a9db"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold95/independent-closure01.json",
+        "bytes": 87666,
+        "sha256": "73c2e126715d3db382f565c8f62b574cd9e01e8d30545692af7b55aa41582b0c"
       },
-      "original_whole_pass": false,
-      "eleven_methods_passed": [
-        "plainContainerSharesExclusionsAndKeepsLogicalSource",
-        "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
-        "plainContainerPolicyRefusesUnsupportedFramesAndRecovers",
-        "plainContainerSignedFloatInkAndBfcIsolation",
-        "plainContainerIncomingAndExportedInlineFloatsPaintOnce",
-        "plainContainerGlyphBearingsAndBaselineInkRemainReachable",
-        "cachedFloatLineDisplacementAdvancesFollowingBlock",
-        "logicalRootNoWrapKeepsStockNaturalWidth",
-        "logicalCellGeometryWaitsForLayout",
-        "ownedFloatTableGridDoesNotAcquirePageMargin",
-        "nativeLogicalOwnerKeepsRealCaptionsAndOriginalOffsets"
-      ]
-    },
-    "native_corrected_two_controls": {
-      "closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold54/independent-closure01.json",
-        "bytes": 34503,
-        "sha256": "537585996555fe5092999e1dcfeee30364fe04379852fc30a7df351e11e54cd6"
+      "release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold95/release01.json",
+        "bytes": 546,
+        "sha256": "6053c34fdbd2aacd2998cadc70bdbb6830e90bb4874300bc8f3303b5b5d5f63d"
       },
       "methods": [
-        "plainContainerExportsOwnFloatOnceAndPreservesSelection",
-        "plainContainerRemovalRestoresStockParticipation"
+        "cellLineHeightUsesImportedOwnerAndIndependentTextMetrics",
+        "cellLineHeightKeepsEmptyBaselineAndRefusesForeignPolicy"
       ],
-      "libraries_unchanged": true
+      "all_selected_passed": true,
+      "test_xml": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold95/commands/layout.xml",
+        "bytes": 984,
+        "sha256": "93d1bee76e9b1ad6d01a62ef2cb7c08405c9b2169db45e22902ffebaf389e569"
+      },
+      "full_native_suite_passed": false
     },
     "app_pairing": {
-      "build": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile71/independent-closure01.json",
-        "bytes": 17206,
-        "sha256": "6d3900fc4620fda4f314d9c35ab04b181b869f9bb425f1e1a5115c6189a6ff4b"
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/independent-closure01.json",
+        "bytes": 38862,
+        "sha256": "e6609f00e71e1fca4164387550b370b7ce1be2a50aa7986338c4f702eef28f0e"
       },
-      "product_build": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile71/independent-closure01.json",
-        "bytes": 17206,
-        "sha256": "6d3900fc4620fda4f314d9c35ab04b181b869f9bb425f1e1a5115c6189a6ff4b"
-      },
-      "affected": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/controlled-tests01/run90/independent-closure01.json",
-        "bytes": 42054,
-        "sha256": "234629f33e404607413b45b9f79e7408becc35783959ac70466cb8b79ad690e7"
-      },
-      "default_registrations": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/controlled-tests01/run82/independent-closure01.json",
-        "bytes": 34883,
-        "sha256": "a97cbe999bf377b425357bc8471b0d0c7405eeb0c30e75f0abb3a3409b692b00"
+      "release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/release01.json",
+        "bytes": 483,
+        "sha256": "a9ed8f29eb6549694e29d3b468b570c622b9bf96304bd4c41136618b83d0ee52"
       },
       "methods": [
-        "plainContainerMaterializesHierarchyAndNativeSource",
-        "plainContainerEmptyStorageAndAuthoredEmptyLineStayDistinct",
-        "plainContainerStyleAdmissionKeepsRequestedBoxAndRefusals",
-        "plainContainerCompilerDiagnosticKeepsFitContentRefusal",
-        "plainContainerStructuralEdgesDoNotConsumeAuthoredEmptyParagraphs",
-        "plainContainerCompilerSubtreeKeepsHierarchyAndActions",
-        "compiledContainerRenderingRefusesBeforeSilentBodyLoss",
-        "failedReadingPreservesSourceHistoryAndKeyboardRecovery"
-      ]
+        "typedCellLineHeightKeepsOwnerFontTraitsAndTextOrigins",
+        "typedCellLineHeightKeepsNestedOwnersContainersAndRealEmptyCells"
+      ],
+      "all_selected_passed": true,
+      "test_xml": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/commands/reader-cell-line-height.xml",
+          "bytes": 1681,
+          "sha256": "eb62f7fe2a79fcfa91ee89f63f73732d759df009fbf17588a6e89a18a55418ef"
+        }
+      ],
+      "reader_only_build": true,
+      "app_product_bytes_retained": true,
+      "controlled_frames": [
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/commands/.tmp/ui-screenshots/cell-line-height-owner.png",
+            "bytes": 7875,
+            "sha256": "a84315dce3d2ddff148d7885ef13e61729b755f94e0fbdd48967dd8898026493"
+          },
+          "width": 850,
+          "height": 400
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile117/commands/.tmp/ui-screenshots/cell-line-height-nested.png",
+            "bytes": 60631,
+            "sha256": "98047a9d64d7cbf2278c363905b5208d86d317db47788c7d1ab9a6f7e10e1009"
+          },
+          "width": 1000,
+          "height": 800
+        }
+      ],
+      "full_reader_suite_passed": true,
+      "full_frontend_acceptance": false
     },
-    "plain_container_support": {
-      "capability": "wikidict.plain-container/1",
-      "ordinary_inflow": true,
-      "nested_hierarchy": true,
-      "authored_empty_line": true,
-      "compiler_subtree_only": true,
-      "unsupported_styles_refused": true
-    },
-    "default_media_optional_skip": true,
-    "private_silent_audio_closure": {
-      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/controlled-tests01/run83/independent-closure01.json",
-      "bytes": 36645,
-      "sha256": "ae11746174fd35e497ed2bcfbadc1d19c93847ae561774eca229d611127ad4fd"
-    },
-    "hardware_audio_acceptance": false,
-    "full_current_native_suite_run": false,
-    "full_current_reader_suite_run": false,
-    "genuine_container_writer_reader_pairing": false,
-    "container_dprl_support": false,
-    "global_bundle_pass": false,
-    "full_frontend_acceptance": false
+    "source_features": [
+      "API04 typed Figure wrapper sizing and physical auto margins",
+      "Owner-specific fixed link palette, fragment focus, and stale-release cancellation",
+      "Absolute CSS pixel text and image typography with distinct owner basis",
+      "Authenticated caption Container ancestry, exact image decoration format, and caption hit traversal",
+      "Typed Cell line height, empty-cell layout, zero owner font registration, and projected source-block inheritance"
+    ],
+    "preserved_failures": [
+      "Native91 fixture setup refusals",
+      "Native92 first error4, SIGSEGV139, and partial XML with no second verdict",
+      "App114/115/116 Cell fixture and projected baseline failures"
+    ],
+    "limitations": [
+      "The two native controls are focused regression evidence, not a complete native suite. The registered app CTest suite passed, with two optional Reader fixture skips and one private audio-backend skip recorded explicitly.",
+      "Earlier API04, caption, status, AS03, and ANG146 observations remain historical at their recorded artifacts and source identities.",
+      "Controlled owner/nested images are not genuine produced-entry or full frontend acceptance.",
+      "No physical audio, full accessibility interaction, whole-corpus frontend, or release qualification is granted."
+    ],
+    "normal_app_ctest": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest117/independent-closure01.json",
+        "bytes": 4983,
+        "sha256": "12314c4c7a1e7f9c8f32076d1d1c7bf01d5c16f2f47faad7001dfec2e5ce7c49"
+      },
+      "release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest117/release01.json",
+        "bytes": 405,
+        "sha256": "cbc3bce9768e7462cfeafcb93c56f49e7a5ad4adfb34063d900719ed67d25942"
+      },
+      "all_seven_registered_tests_passed": true,
+      "build_executed": false,
+      "configure_executed": false,
+      "total_test_seconds": 126.65,
+      "tests": [
+        {
+          "name": "native-install-core-selection",
+          "seconds": 0.168284,
+          "passed": true
+        },
+        {
+          "name": "native-unified-entry",
+          "seconds": 17.561,
+          "passed": true
+        },
+        {
+          "name": "native-reader-ux",
+          "seconds": 89.7788,
+          "passed": true
+        },
+        {
+          "name": "native-media-ux",
+          "seconds": 7.70492,
+          "passed": true
+        },
+        {
+          "name": "native-library-storage",
+          "seconds": 4.37708,
+          "passed": true
+        },
+        {
+          "name": "native-library-ux",
+          "seconds": 5.37837,
+          "passed": true
+        },
+        {
+          "name": "native-library-catalogue-ux",
+          "seconds": 1.61158,
+          "passed": true
+        }
+      ],
+      "qtest_counts": {
+        "reader": {
+          "passed_incidents": 306,
+          "failed": 0,
+          "skipped": 2
+        },
+        "media": {
+          "passed_incidents": 58,
+          "failed": 0,
+          "skipped": 1
+        }
+      },
+      "qtest_skips": [
+        "SKIP   : MainWindowTest::plainContainerCompilerDiagnosticKeepsFitContentRefusal() The retained compiler diagnostic is a selected external fixture, not a full-page acceptance fixture.",
+        "SKIP   : MainWindowTest::plainContainerCompilerSubtreeKeepsHierarchyAndActions() The retained compiler diagnostic is a selected external component fixture.",
+        "SKIP   : MediaPanelTest::privateNullOutputDecodesAndUpdatesPlaybackAccessibleNames() Opt-in private null-output backend check; never use a user's audio session."
+      ],
+      "full_test_log": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest117/ctest-last-test.log",
+        "bytes": 539054,
+        "sha256": "3beb79aec660fa815026e609d8d55a0305bbd140e156c40b98a3d4c0391e6493"
+      },
+      "installation_and_relocation_passed": true,
+      "hardware_audio_qualified": false,
+      "full_frontend_acceptance": false
+    }
   },
   "packaged_distribution_source_equivalence": false,
   "build_override": {
@@ -660,6 +749,96 @@
     "full_current_native_suite_run": false,
     "all_six_ctest_registrations_rerun_current": false,
     "genuine_tallrik_writer_reader_pairing": false,
+    "container_dprl_support": false,
+    "global_bundle_pass": false,
+    "full_frontend_acceptance": false
+  },
+  "historical_qualification_pre_api04_and_cell": {
+    "date": "2026-11-11",
+    "source_inventory_sha256": "f12d824a5bdc7c33b9539955cb29e7a4f53792d7da041ed9ffab42f28c92f7d6",
+    "native_product_build": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold53/independent-closure01.json",
+        "bytes": 43240,
+        "sha256": "f3074b08337d77b5f1f9bb7ecf3ebcd69c752e9886bd8e48a5c35993fee4a9db"
+      },
+      "original_whole_pass": false,
+      "eleven_methods_passed": [
+        "plainContainerSharesExclusionsAndKeepsLogicalSource",
+        "plainContainerDirectInkKeepsUsedBoxAndNativeHit",
+        "plainContainerPolicyRefusesUnsupportedFramesAndRecovers",
+        "plainContainerSignedFloatInkAndBfcIsolation",
+        "plainContainerIncomingAndExportedInlineFloatsPaintOnce",
+        "plainContainerGlyphBearingsAndBaselineInkRemainReachable",
+        "cachedFloatLineDisplacementAdvancesFollowingBlock",
+        "logicalRootNoWrapKeepsStockNaturalWidth",
+        "logicalCellGeometryWaitsForLayout",
+        "ownedFloatTableGridDoesNotAcquirePageMargin",
+        "nativeLogicalOwnerKeepsRealCaptionsAndOriginalOffsets"
+      ]
+    },
+    "native_corrected_two_controls": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold54/independent-closure01.json",
+        "bytes": 34503,
+        "sha256": "537585996555fe5092999e1dcfeee30364fe04379852fc30a7df351e11e54cd6"
+      },
+      "methods": [
+        "plainContainerExportsOwnFloatOnceAndPreservesSelection",
+        "plainContainerRemovalRestoresStockParticipation"
+      ],
+      "libraries_unchanged": true
+    },
+    "app_pairing": {
+      "build": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile71/independent-closure01.json",
+        "bytes": 17206,
+        "sha256": "6d3900fc4620fda4f314d9c35ab04b181b869f9bb425f1e1a5115c6189a6ff4b"
+      },
+      "product_build": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile71/independent-closure01.json",
+        "bytes": 17206,
+        "sha256": "6d3900fc4620fda4f314d9c35ab04b181b869f9bb425f1e1a5115c6189a6ff4b"
+      },
+      "affected": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/controlled-tests01/run90/independent-closure01.json",
+        "bytes": 42054,
+        "sha256": "234629f33e404607413b45b9f79e7408becc35783959ac70466cb8b79ad690e7"
+      },
+      "default_registrations": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/controlled-tests01/run82/independent-closure01.json",
+        "bytes": 34883,
+        "sha256": "a97cbe999bf377b425357bc8471b0d0c7405eeb0c30e75f0abb3a3409b692b00"
+      },
+      "methods": [
+        "plainContainerMaterializesHierarchyAndNativeSource",
+        "plainContainerEmptyStorageAndAuthoredEmptyLineStayDistinct",
+        "plainContainerStyleAdmissionKeepsRequestedBoxAndRefusals",
+        "plainContainerCompilerDiagnosticKeepsFitContentRefusal",
+        "plainContainerStructuralEdgesDoNotConsumeAuthoredEmptyParagraphs",
+        "plainContainerCompilerSubtreeKeepsHierarchyAndActions",
+        "compiledContainerRenderingRefusesBeforeSilentBodyLoss",
+        "failedReadingPreservesSourceHistoryAndKeyboardRecovery"
+      ]
+    },
+    "plain_container_support": {
+      "capability": "wikidict.plain-container/1",
+      "ordinary_inflow": true,
+      "nested_hierarchy": true,
+      "authored_empty_line": true,
+      "compiler_subtree_only": true,
+      "unsupported_styles_refused": true
+    },
+    "default_media_optional_skip": true,
+    "private_silent_audio_closure": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/controlled-tests01/run83/independent-closure01.json",
+      "bytes": 36645,
+      "sha256": "ae11746174fd35e497ed2bcfbadc1d19c93847ae561774eca229d611127ad4fd"
+    },
+    "hardware_audio_acceptance": false,
+    "full_current_native_suite_run": false,
+    "full_current_reader_suite_run": false,
+    "genuine_container_writer_reader_pairing": false,
     "container_dprl_support": false,
     "global_bundle_pass": false,
     "full_frontend_acceptance": false

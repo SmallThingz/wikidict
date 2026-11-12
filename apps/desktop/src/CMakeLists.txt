@@ -92,7 +92,7 @@ if(BUILD_TESTING)
             "-DTEST_ROOT=${CMAKE_BINARY_DIR}/.tmp/install-core-selection"
             -P "${CMAKE_SOURCE_DIR}/tests/install_core_selection_check.cmake")
     set_tests_properties(native-install-core-selection PROPERTIES TIMEOUT 120)
-    find_package(Qt6 6.6 REQUIRED COMPONENTS Test)
+    find_package(Qt6 6.6 REQUIRED COMPONENTS Test GuiPrivate)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_library(wikidict-test-settings SHARED ../tests/UnifiedSettingsBootstrap.cpp)
         target_compile_features(wikidict-test-settings PRIVATE cxx_std_20)
@@ -132,7 +132,7 @@ if(BUILD_TESTING)
     target_compile_features(dict-qt-tests PRIVATE cxx_std_20)
     target_compile_options(dict-qt-tests PRIVATE -Wall -Wextra -Wpedantic)
     target_include_directories(dict-qt-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${WIKIDICT_CORE}/src/ffi")
-    target_link_libraries(dict-qt-tests PRIVATE wikidict-product Qt6::Widgets Qt6::Test Qt6::Concurrent Qt6::Network Qt6::Multimedia Qt6::Svg "${DICT_FFI_LIBRARY}")
+    target_link_libraries(dict-qt-tests PRIVATE wikidict-product Qt6::Widgets Qt6::GuiPrivate Qt6::Test Qt6::Concurrent Qt6::Network Qt6::Multimedia Qt6::Svg "${DICT_FFI_LIBRARY}")
     qt_add_resources(dict-qt-tests test_reader_font PREFIX "/fonts"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/../web"
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/../web/reader.ttf")

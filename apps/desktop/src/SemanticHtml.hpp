@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CompiledImageMap.hpp"
+#include "MissingFigurePaint.hpp"
 #include "LogicalFlow.hpp"
 #include <QByteArray>
 #include <QJsonDocument>
@@ -16,6 +17,7 @@
 #include <QTextImageFormat>
 #include <QUrl>
 #include <QImage>
+#include <QDateTime>
 #include <algorithm>
 #include <limits>
 #include <QAbstractTextDocumentLayout>
@@ -48,7 +50,7 @@ inline QString spanExplanation(const QTextCharFormat &format) {
         ? format.stringProperty(spanExpansionProperty) : format.toolTip();
 }
 
-enum class Basis { Context, NormalBody };
+enum class Basis { Context, NormalBody, CssPx };
 inline const QString zeroFontFamilyName = QStringLiteral("Wikidict Zero Probe");
 
 inline qreal maximumFontPoints(const QTextDocument *document = nullptr) {
@@ -67,6 +69,13 @@ inline qreal boundedFontPoints(qreal base, double scale, qreal maximum, qreal ra
     return (base * ratio) * scale;
 }
 
+inline qreal cssPixelFontBase(qreal readingPoints) {
+    const qreal dpi = QFontMetricsF(QFont()).fontDpi();
+    if (!std::isfinite(readingPoints) || readingPoints <= 0 || !std::isfinite(dpi) || dpi <= 0)
+        throw std::runtime_error("invalid CSS pixel font origin");
+    return (readingPoints / 12.0) * 72.0 / dpi;
+}
+
 // Table metadata belongs only to generated semantic HTML, never authored text.
 inline const QString tableMarkerOpen = QStringLiteral("<!--wikidict-table-style:");
 inline constexpr int tableListOwnerProperty = QTextFormat::UserProperty + 0x5750;
@@ -78,6 +87,12 @@ inline QString textAlignment(const QJsonValue &value) {
     if (!value.isString() || (alignment != QStringLiteral("left") && alignment != QStringLiteral("center") && alignment != QStringLiteral("right")))
         throw std::runtime_error("invalid typed text alignment");
     return alignment;
+}
+inline bool cellTopAlignment(const QJsonValue &value) {
+    if (!present(value)) return false;
+    if (!value.isString() || value.toString() != QStringLiteral("top"))
+        throw std::runtime_error("invalid typed cell vertical alignment");
+    return true;
 }
 inline QJsonObject typedStyle(const QJsonValue &value, const QStringList &keys) {
     if (!present(value)) return {};
@@ -127,11 +142,84 @@ inline constexpr int tableLineHeightProperty = QTextFormat::UserProperty + 0x57d
 inline constexpr int generatedParentStrutProperty = QTextFormat::UserProperty + 0x57d9;
 inline constexpr int cellStylePolicyProperty = QTextFormat::UserProperty + 0x57da;
 inline constexpr int cellWidthProperty = QTextFormat::UserProperty + 0x57db;
+inline constexpr int cellMinimumWidthProperty = QTextFormat::UserProperty + 0x57dc;
+inline constexpr int cellLineHeightProperty = QTextFormat::UserProperty + 0x57dd;
+inline constexpr int cellOwnerFontProperty = QTextFormat::UserProperty + 0x57f0;
+inline constexpr int tablePhysicalEdgesProperty = QTextFormat::UserProperty + 0x57de;
+inline constexpr int cellHiddenEdgesProperty = QTextFormat::UserProperty + 0x57df;
 inline const QString cellStyleCapability = QStringLiteral("wikidict.cell-style/1");
+struct CellLineInput {
+    bool present = false;
+    bool strut = false;
+    qreal strutPoints = 0;
+    QString kind;
+    qreal value = 0; // A fixed text length is in the native default-DPI coordinate.
+};
+inline CellLineInput cellLineHeight(const QJsonValue &value, qreal bodyPoints,
+                                    const QTextDocument *document = nullptr) {
+    CellLineInput result;
+    if (!present(value)) return result;
+    const auto object = value.toObject();
+    if (!value.isObject() || object.size() != 2 || !object.contains(QStringLiteral("strut"))
+        || !object.contains(QStringLiteral("height"))) throw std::runtime_error("invalid cell line-height owner");
+    const auto metric = [&](const QJsonValue &input, const QString &number, bool font) {
+        const auto spec = input.toObject();
+        const auto amount = spec.value(number);
+        const auto basis = spec.value(QStringLiteral("font_scale_basis"));
+        if (!input.isObject() || spec.size() != 2 || !amount.isDouble()
+            || !std::isfinite(amount.toDouble()) || amount.toDouble() < 0
+            || amount.toDouble() > std::numeric_limits<float>::max() || !basis.isString()
+            || (basis.toString() != QStringLiteral("normal_body") && basis.toString() != QStringLiteral("css_px")))
+            throw std::runtime_error("invalid cell text metric");
+        const qreal base = basis.toString() == QStringLiteral("css_px") ? cssPixelFontBase(bodyPoints) : bodyPoints;
+        if (!std::isfinite(base) || base <= 0) throw std::runtime_error("invalid cell body metric");
+        if (amount.toDouble() == 0) return qreal(0);
+        if (font) return boundedFontPoints(base, amount.toDouble(), maximumFontPoints(document));
+        const qreal resolved = base * amount.toDouble() * QFontMetricsF(QFont()).fontDpi() / 72;
+        if (!std::isfinite(resolved)) throw std::runtime_error("unrepresentable cell line height");
+        return resolved;
+    };
+    result.present = true;
+    if (present(object.value(QStringLiteral("strut")))) {
+        result.strut = true;
+        result.strutPoints = metric(object.value(QStringLiteral("strut")), QStringLiteral("font_scale"), true);
+    }
+    const auto height = object.value(QStringLiteral("height"));
+    const auto spec = height.toObject();
+    if (!height.isObject() || spec.size() != 1) throw std::runtime_error("invalid cell line-height kind");
+    result.kind = spec.keys().first();
+    const auto amount = spec.value(result.kind);
+    if (result.kind == QStringLiteral("normal")) {
+        if (!amount.isObject() || !amount.toObject().isEmpty()) throw std::runtime_error("invalid normal cell height");
+    } else if (result.kind == QStringLiteral("multiplier")) {
+        if (!amount.isDouble() || !std::isfinite(amount.toDouble()) || amount.toDouble() < 0
+            || amount.toDouble() > std::numeric_limits<float>::max()) throw std::runtime_error("invalid cell multiplier");
+        result.value = amount.toDouble();
+    } else if (result.kind == QStringLiteral("length")) result.value = metric(amount, QStringLiteral("value"), false);
+    else throw std::runtime_error("unknown cell line-height kind");
+    return result;
+}
+inline bool cellLineHeightOwner(const QTextBlock &block) {
+    for (auto *frame = block.document()->frameAt(block.position()); frame; frame = frame->parentFrame())
+        if (auto *table = qobject_cast<QTextTable *>(frame)) {
+            const auto cell = table->cellAt(block.position());
+            if (cell.isValid() && cell.format().hasProperty(cellLineHeightProperty)) return true;
+        }
+    return false;
+}
+inline bool emptyCompiledCell(const QJsonObject &cell) {
+    if (present(cell.value(QStringLiteral("nested_table")))) return false;
+    if (present(cell.value(QStringLiteral("blocks")))) return cell.value(QStringLiteral("blocks")).isArray()
+        && cell.value(QStringLiteral("blocks")).toArray().isEmpty();
+    return cell.value(QStringLiteral("spans")).isArray() && cell.value(QStringLiteral("spans")).toArray().isEmpty();
+}
 inline bool hasExtendedCellStyle(const QJsonObject &style) {
-    return present(style.value(QStringLiteral("border_edges")))
+    return style.value(QStringLiteral("border")).toObject().contains(QStringLiteral("edges"))
+         || present(style.value(QStringLiteral("border_edges")))
         || present(style.value(QStringLiteral("letter_spacing")))
-        || present(style.value(QStringLiteral("width")));
+        || present(style.value(QStringLiteral("width")))
+        || present(style.value(QStringLiteral("min_width")))
+        || present(style.value(QStringLiteral("line_height")));
 }
 inline bool hasTableFlowStyle(const QJsonObject &style) {
     return present(style.value(QStringLiteral("display"))) || present(style.value(QStringLiteral("vertical_align")))
@@ -149,21 +237,38 @@ inline QStringList inlineTableClasses(QString value) {
     for (const QChar space : {QChar('\t'), QChar('\r'), QChar('\n'), QChar('\v'), QChar('\f')}) value.replace(space, QChar(' '));
     return value.split(QChar(' '), Qt::SkipEmptyParts);
 }
-inline QHash<QString, bool> inlineTableAudioOwners(const QJsonArray &media) {
+inline QHash<QString, bool> inlineTableMediaOwners(const QJsonArray &media, const QString &kind) {
     QHash<QString, bool> owners;
     for (const auto &value : media) {
         if (!value.isObject()) throw std::runtime_error("invalid inline table media catalog");
         const auto item = value.toObject();
         const QString key = QStringLiteral("wikidict-media-file-") + QString::fromLatin1(item.value(QStringLiteral("file")).toString().toUtf8().toHex());
-        const bool audio = !item.value(QStringLiteral("file")).toString().isEmpty() && !owners.contains(key)
-            && item.value(QStringLiteral("kind")).toString() == QStringLiteral("audio");
-        owners.insert(key, audio);
+        const bool valid = !item.value(QStringLiteral("file")).toString().isEmpty() && !owners.contains(key)
+            && item.value(QStringLiteral("kind")).toString() == kind;
+        owners.insert(key, valid);
     }
     return owners;
 }
+inline QHash<QString, bool> inlineTableAudioOwners(const QJsonArray &media) {
+    return inlineTableMediaOwners(media, QStringLiteral("audio"));
+}
+inline QHash<QString, bool> inlineTableImageOwners(const QJsonArray &media) {
+    return inlineTableMediaOwners(media, QStringLiteral("image"));
+}
+inline QJsonObject checkedImage(const QJsonValue &value);
 inline void validateInlineTableDomain(const QJsonObject &table, int tableDepth, int contentDepth,
-                                     bool inReference, const QHash<QString, bool> &audioOwners) {
-    if (!tableDisplay(table.value(QStringLiteral("style")).toObject())) return;
+                                     bool inReference, const QHash<QString, bool> &audioOwners,
+                                     const QHash<QString, bool> &imageOwners = {}) {
+    const auto style = table.value(QStringLiteral("style")).toObject();
+    const auto alignment = style.value(QStringLiteral("vertical_align"));
+    if (present(alignment) && (!alignment.isString()
+        || !QStringList{"baseline", "middle", "top"}.contains(alignment.toString())))
+        throw std::runtime_error("invalid inline table alignment");
+    if (!tableDisplay(style)) {
+        if (style.value(QStringLiteral("vertical_align")) == QStringLiteral("top"))
+            throw std::runtime_error("top alignment requires an inline table");
+        return;
+    }
     const auto array = [](const QJsonValue &value) {
         if (present(value) && !value.isArray()) throw std::runtime_error("invalid inline table array");
         return value.toArray();
@@ -182,7 +287,28 @@ inline void validateInlineTableDomain(const QJsonObject &table, int tableDepth, 
             for (const auto &spanValue : array(cell.value(QStringLiteral("spans")))) {
                 if (!spanValue.isObject()) throw std::runtime_error("invalid inline table span");
                 const auto span = spanValue.toObject(); const auto classes = inlineTableClasses(span.value(QStringLiteral("classes")).toString());
-                if (present(span.value(QStringLiteral("image")))) throw std::runtime_error("unsupported inline table image");
+                QString imageOwner;
+                if (present(span.value(QStringLiteral("image")))) {
+                    const auto kind = span.value(QStringLiteral("kind"));
+                    const auto target = span.value(QStringLiteral("target"));
+                    const auto emptyText = [&](const char *key) {
+                        const auto value = span.value(QLatin1StringView(key));
+                        return !present(value) || (value.isString() && value.toString().isEmpty());
+                    };
+                    if (!kind.isString() || !emptyText("text") || !emptyText("trail")
+                        || (kind == QStringLiteral("text") ? !emptyText("target")
+                            : (kind != QStringLiteral("link") && kind != QStringLiteral("external_link"))
+                                || !target.isString() || target.toString().isEmpty()))
+                        throw std::runtime_error("invalid inline table image action");
+                    const auto image = checkedImage(span.value(QStringLiteral("image")));
+                    if (present(image.value(QStringLiteral("map"))) || present(image.value(QStringLiteral("static_poster")))
+                        || present(image.value(QStringLiteral("dark_mode_filter"))))
+                        throw std::runtime_error("unsupported inline table image policy");
+                    imageOwner = QStringLiteral("wikidict-media-file-")
+                        + QString::fromLatin1(image.value(QStringLiteral("file")).toString().toUtf8().toHex());
+                    if (!imageOwners.value(imageOwner, false))
+                        throw std::runtime_error("unresolved inline table image owner");
+                }
                 if (!span.value(QStringLiteral("code")).toBool() && span.value(QStringLiteral("font_scale")).toDouble(1) != 0
                     && classes.contains(QStringLiteral("Egyp"))) {
                     const QString text = span.value(QStringLiteral("kind")).toString() == QStringLiteral("line_break") ? QStringLiteral("\n") : span.value(QStringLiteral("text")).toString();
@@ -199,7 +325,10 @@ inline void validateInlineTableDomain(const QJsonObject &table, int tableDepth, 
                         if (target.startsWith(QStringLiteral("File:"))) owner = QStringLiteral("wikidict-media-file-")
                             + QString::fromLatin1(QString(target.mid(5)).replace(QChar('_'), QChar(' ')).toUtf8().toHex());
                     }
-                    if (!audioOwners.value(owner, false)) throw std::runtime_error("unresolved inline table audio owner");
+                    if (!imageOwner.isEmpty()) {
+                        if (owner != imageOwner || !imageOwners.value(owner, false))
+                            throw std::runtime_error("mismatched inline table image owner");
+                    } else if (!audioOwners.value(owner, false)) throw std::runtime_error("unresolved inline table audio owner");
                 }
             }
         }
@@ -323,6 +452,10 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
             QJsonObject shape{{"rowspan", qMax(1, cell.value(QStringLiteral("rowspan")).toInt(1))},
                 {"colspan", qMax(1, cell.value(QStringLiteral("colspan")).toInt(1))}};
             if (present(cell.value(QStringLiteral("style")))) { shape.insert(QStringLiteral("style"), cell.value(QStringLiteral("style"))); styled = true; }
+            if (present(cell.value(QStringLiteral("style")).toObject().value(QStringLiteral("line_height")))) {
+                shape.insert(QStringLiteral("header"), cell.value(QStringLiteral("header")).toBool());
+                shape.insert(QStringLiteral("empty_content"), emptyCompiledCell(cell));
+            }
             cells.append(shape);
         }
         rows.append(cells);
@@ -554,10 +687,29 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
     if (records.isEmpty()) return;
     bool needsTableBoxLayout = false;
     bool needsCellStyleLayout = false;
+    bool needsCellMinimum = false;
+    bool needsCellPreferredWidth = false;
     for (const TableInfo &record : records)
         for (const QJsonValue &row : record.value.value(QStringLiteral("rows")).toArray())
             for (const QJsonValue &cell : row.toArray())
-                needsCellStyleLayout |= hasExtendedCellStyle(cell.toObject().value(QStringLiteral("style")).toObject());
+            {
+                const auto style = cell.toObject().value(QStringLiteral("style")).toObject();
+                needsCellStyleLayout |= hasExtendedCellStyle(style);
+                needsCellMinimum |= present(style.value(QStringLiteral("min_width")));
+                needsCellPreferredWidth |= present(style.value(QStringLiteral("width")));
+            }
+    if (needsCellPreferredWidth) {
+        const auto capability = document->documentLayout()->property("_wikidictCellPreferredWidthCapability");
+        if (capability.metaType().id() != QMetaType::QString
+            || capability.toString() != QStringLiteral("wikidict.cell-preferred-width/1"))
+            throw std::runtime_error("missing paired cell preferred width layout");
+    }
+    if (needsCellMinimum) {
+        const auto capability = document->documentLayout()->property("_wikidictCellMinimumWidthCapability");
+        if (capability.metaType().id() != QMetaType::QString
+            || capability.toString() != QStringLiteral("wikidict.cell-minimum-width/1"))
+            throw std::runtime_error("missing paired cell minimum width layout");
+    }
     if (needsCellStyleLayout) {
         requireTableBoxLayout(document);
         const auto capability = document->documentLayout()->property("_wikidictCellStyleLayoutCapability");
@@ -613,6 +765,31 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             return Border{length(payload.toObject().value(QStringLiteral("width"))),
                 QTextFrameFormat::BorderStyle_Double, styleColor(payload.toObject().value(QStringLiteral("color")))};
         };
+        const auto physicalBorder = [&](const QJsonValue &value) {
+            const auto physical = typedStyle(value, {"top", "right", "bottom", "left"});
+            if (physical.size() != 4) throw std::runtime_error("incomplete physical border");
+            QVariantList result;
+            for (const QString &side : {QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")}) {
+                const auto edge = physical.value(side).toObject();
+                if (!physical.value(side).isObject() || edge.size() != 1) throw std::runtime_error("invalid physical border edge");
+                const QString kind = edge.keys().first(); const auto payload = edge.value(kind);
+                const int mode = QStringList{"none", "hidden", "solid", "dotted"}.indexOf(kind);
+                if (mode < 0 || !payload.isObject() || payload.toObject().size() != (mode < 2 ? 0 : 2))
+                    throw std::runtime_error("invalid physical border style");
+                const qreal width = mode < 2 ? 0 : tableBoxLength(payload.toObject().value(QStringLiteral("width")), points, false).value(QStringLiteral("value")).toDouble();
+                const QColor color = mode < 2 ? QColor(Qt::transparent) : styleColor(payload.toObject().value(QStringLiteral("color")));
+                result.append(QVariantMap{{QStringLiteral("style"), mode}, {QStringLiteral("width"), width}, {QStringLiteral("color"), color}});
+            }
+            QPointer<QTextDocument> live(document);
+            QPointer<QAbstractTextDocumentLayout> native(document->documentLayout());
+            const int revision = document->revision(), count = document->characterCount();
+            const auto capability = native ? native->property("_wikidictPhysicalBorderCapability") : QVariant();
+            if (!live || !native || live->documentLayout() != native || live->revision() != revision
+                || live->characterCount() != count || capability.metaType().id() != QMetaType::QString
+                || capability.toString() != QStringLiteral("wikidict.physical-border/1"))
+                throw std::runtime_error("missing paired physical border layout");
+            return result;
+        };
         QTextTableFormat format = table ? table->format() : record.empty >= 0 ? emptyTableDefaults(record, indent) : QTextTableFormat();
         if (table) {
             // Ownership follows the decoded table association, even when its
@@ -642,7 +819,20 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             format.setPosition(side.toString() == QStringLiteral("left") ? QTextFrameFormat::FloatLeft : QTextFrameFormat::FloatRight);
         }
         if (present(style.value(QStringLiteral("background")))) format.setBackground(styleColor(style.value(QStringLiteral("background"))));
-        if (present(style.value(QStringLiteral("border")))) { const Border b = border(style.value(QStringLiteral("border"))); format.setBorder(b.width); format.setBorderStyle(b.style); format.setBorderBrush(b.color); }
+        if (present(style.value(QStringLiteral("border")))) {
+            const auto spec = style.value(QStringLiteral("border")).toObject();
+            if (spec.contains(QStringLiteral("edges"))) {
+                if (spec.size() != 1 || !table) throw std::runtime_error("physical table border requires a real table owner");
+                format.setProperty(tablePhysicalEdgesProperty, QVariantMap{
+                    {QStringLiteral("padding"), QVariantList{0.0, 0.0, 0.0, 0.0}},
+                    {QStringLiteral("borders"), physicalBorder(spec.value(QStringLiteral("edges")))}});
+                format.setProperty(cellStylePolicyProperty, cellStyleCapability);
+                format.setBorder(0); format.setBorderStyle(QTextFrameFormat::BorderStyle_None);
+            } else {
+                const Border b = border(style.value(QStringLiteral("border")));
+                format.setBorder(b.width); format.setBorderStyle(b.style); format.setBorderBrush(b.color);
+            }
+        }
         if (present(style.value(QStringLiteral("collapse")))) {
             const QString collapse = style.value(QStringLiteral("collapse")).toString();
             if (collapse != QStringLiteral("separate") && collapse != QStringLiteral("collapse")) throw std::runtime_error("invalid border collapse");
@@ -666,13 +856,27 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             format.setProperty(tableDisplayProperty, tableDisplay(style));
             if (present(style.value(QStringLiteral("vertical_align")))) {
                 const auto value = style.value(QStringLiteral("vertical_align"));
-                const int alignment = QStringList{"baseline", "middle"}.indexOf(value.toString());
+                const int alignment = QStringList{"baseline", "middle", "top"}.indexOf(value.toString());
                 if (!value.isString() || alignment < 0) throw std::runtime_error("invalid inline table alignment");
+                if (alignment == 2 && format.intProperty(tableDisplayProperty) == 0)
+                    throw std::runtime_error("top alignment requires an inline table");
                 format.setProperty(tableVerticalAlignProperty, alignment);
             }
             if (present(style.value(QStringLiteral("line_height"))))
                 format.setProperty(tableLineHeightProperty, tableComputedLineHeight(style.value(QStringLiteral("line_height")),
                     points, record.value.value(QStringLiteral("table_origin_points")).toDouble(-1)));
+        }
+        if (table && format.intProperty(tableDisplayProperty) > 0) {
+            bool image = false;
+            for (QTextBlock block = document->findBlock(table->firstPosition()); block.isValid() && block.position() < table->lastPosition(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it)
+                    image |= it.fragment().isValid() && it.fragment().charFormat().isImageFormat();
+            if (image || format.intProperty(tableVerticalAlignProperty) == 2) {
+                const auto capability = document->documentLayout()->property("_wikidictInlineTableImageTopCapability");
+                if (capability.metaType().id() != QMetaType::QString
+                    || capability.toString() != QStringLiteral("wikidict.inline-table-image-top/1"))
+                    throw std::runtime_error("missing paired inline table image/top layout");
+            }
         }
         if (!table) {
             for (const QJsonValue &row : rows)
@@ -743,16 +947,77 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                 }
                 const QJsonObject expected = cells[index++].toObject();
                 if (expected.value(QStringLiteral("rowspan")).toInt() != cell.rowSpan() || expected.value(QStringLiteral("colspan")).toInt() != cell.columnSpan()) throw std::runtime_error("table style span mismatch");
-                const QJsonObject cellStyle = typedStyle(expected.value(QStringLiteral("style")), {"border", "padding", "text_align", "border_edges", "letter_spacing", "width"});
+                const QJsonObject cellStyle = typedStyle(expected.value(QStringLiteral("style")), {"border", "padding", "text_align", "border_edges", "letter_spacing", "width", "min_width", "vertical_align", "line_height"});
                 if (cellStyle.isEmpty()) continue;
                 QTextTableCellFormat cellFormat = cell.format().toTableCellFormat();
-                if (present(cellStyle.value(QStringLiteral("border")))) { const Border b = border(cellStyle.value(QStringLiteral("border"))); cellFormat.setBorder(b.width); cellFormat.setBorderStyle(b.style); cellFormat.setBorderBrush(b.color); }
+                const auto line = cellLineHeight(cellStyle.value(QStringLiteral("line_height")), points, document);
+                if (line.present) {
+                    const auto capability = document->documentLayout()->property("_wikidictCellLineHeightCapability");
+                    const auto captured = cellFormat.property(cellOwnerFontProperty);
+                    const auto imported = captured.toMap();
+                    if (capability.metaType().id() != QMetaType::QString
+                        || capability.toString() != QStringLiteral("wikidict.cell-line-height/1")
+                        || captured.metaType().id() != QMetaType::QVariantMap || imported.size() != 2
+                        || imported.value(QStringLiteral("capability")).toString() != capability.toString()
+                        || imported.value(QStringLiteral("font")).metaType().id() != QMetaType::QFont
+                        || !expected.value(QStringLiteral("header")).isBool()
+                        || !expected.value(QStringLiteral("empty_content")).isBool())
+                        throw std::runtime_error("missing native cell owner metrics");
+                    QFont font = imported.value(QStringLiteral("font")).value<QFont>();
+                    if (expected.value(QStringLiteral("header")).toBool() && font.weight() != QFont::Bold)
+                        throw std::runtime_error("inconsistent typed header cell font");
+                    if (line.strut) {
+                        if (line.strutPoints > 0) font.setPointSizeF(line.strutPoints);
+                        else { font.setFamilies(QStringList{zeroFontFamilyName}); font.setStyleStrategy(QFont::NoFontMerging); }
+                    }
+                    const QFontMetricsF metrics(font);
+                    const qreal pixels = metrics.ascent() == 0 && metrics.descent() == 0 ? 0
+                        : font.pixelSize() > 0 ? qreal(font.pixelSize()) : font.pointSizeF() * metrics.fontDpi() / 72;
+                    if (!std::isfinite(pixels) || pixels < 0) throw std::runtime_error("invalid native cell font");
+                    cellFormat.clearProperty(cellOwnerFontProperty);
+                    cellFormat.setProperty(cellLineHeightProperty, QVariantMap{
+                        {QStringLiteral("capability"), capability.toString()}, {QStringLiteral("font"), font},
+                        {QStringLiteral("owner_px"), pixels}, {QStringLiteral("kind"), line.kind},
+                        {QStringLiteral("value"), line.value},
+                        {QStringLiteral("empty"), expected.value(QStringLiteral("empty_content")).toBool()}});
+                }
+                if (cellTopAlignment(cellStyle.value(QStringLiteral("vertical_align"))))
+                    cellFormat.setVerticalAlignment(QTextCharFormat::AlignTop);
+                if (present(cellStyle.value(QStringLiteral("border")))) {
+                    const auto spec = cellStyle.value(QStringLiteral("border")).toObject();
+                    if (spec.contains(QStringLiteral("edges"))) {
+                        if (spec.size() != 1) throw std::runtime_error("invalid cell border union");
+                        const auto physical = physicalBorder(spec.value(QStringLiteral("edges")));
+                        int hidden = 0;
+                        for (int i = 0; i < 4; ++i) {
+                            const auto edge = physical[i].toMap();
+                            const int mode = edge.value(QStringLiteral("style")).toInt();
+                            const qreal width = edge.value(QStringLiteral("width")).toDouble();
+                            const auto style = mode == 2 ? QTextFrameFormat::BorderStyle_Solid : mode == 3
+                                ? QTextFrameFormat::BorderStyle_Dotted : QTextFrameFormat::BorderStyle_None;
+                            const QColor color = edge.value(QStringLiteral("color")).value<QColor>();
+                            if (mode == 1) hidden |= 1 << i;
+                            if (i == 0) { cellFormat.setTopBorder(width); cellFormat.setTopBorderStyle(style); cellFormat.setTopBorderBrush(color); }
+                            else if (i == 1) { cellFormat.setRightBorder(width); cellFormat.setRightBorderStyle(style); cellFormat.setRightBorderBrush(color); }
+                            else if (i == 2) { cellFormat.setBottomBorder(width); cellFormat.setBottomBorderStyle(style); cellFormat.setBottomBorderBrush(color); }
+                            else { cellFormat.setLeftBorder(width); cellFormat.setLeftBorderStyle(style); cellFormat.setLeftBorderBrush(color); }
+                        }
+                        cellFormat.setProperty(cellHiddenEdgesProperty, hidden);
+                    } else {
+                        const Border b = border(cellStyle.value(QStringLiteral("border")));
+                        cellFormat.setBorder(b.width); cellFormat.setBorderStyle(b.style); cellFormat.setBorderBrush(b.color);
+                    }
+                }
                 if (present(cellStyle.value(QStringLiteral("padding")))) { const auto e = edges(cellStyle.value(QStringLiteral("padding"))); cellFormat.setTopPadding(e[0]); cellFormat.setRightPadding(e[1]); cellFormat.setBottomPadding(e[2]); cellFormat.setLeftPadding(e[3]); }
                 if (present(cellStyle.value(QStringLiteral("border_edges")))) {
                     const auto physical = typedStyle(cellStyle.value(QStringLiteral("border_edges")), {"top", "right", "bottom", "left"});
                     for (const QString &edge : {QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")}) {
                         if (!present(physical.value(edge))) continue;
                         const Border b = cellBorder(physical.value(edge));
+                        if (cellFormat.hasProperty(cellHiddenEdgesProperty)) {
+                            const int side = QStringList{"top", "right", "bottom", "left"}.indexOf(edge);
+                            cellFormat.setProperty(cellHiddenEdgesProperty, cellFormat.intProperty(cellHiddenEdgesProperty) & ~(1 << side));
+                        }
                         if (edge == QStringLiteral("top")) { cellFormat.setTopBorder(b.width); cellFormat.setTopBorderStyle(b.style); cellFormat.setTopBorderBrush(b.color); }
                         else if (edge == QStringLiteral("right")) { cellFormat.setRightBorder(b.width); cellFormat.setRightBorderStyle(b.style); cellFormat.setRightBorderBrush(b.color); }
                         else if (edge == QStringLiteral("bottom")) { cellFormat.setBottomBorder(b.width); cellFormat.setBottomBorderStyle(b.style); cellFormat.setBottomBorderBrush(b.color); }
@@ -761,6 +1026,9 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                 }
                 if (present(cellStyle.value(QStringLiteral("width"))))
                     cellFormat.setProperty(cellWidthProperty, tableBoxLength(cellStyle.value(QStringLiteral("width")), points, true));
+                if (present(cellStyle.value(QStringLiteral("min_width"))))
+                    cellFormat.setProperty(cellMinimumWidthProperty,
+                        tableBoxLength(cellStyle.value(QStringLiteral("min_width")), points, false));
                 cell.setFormat(cellFormat);
                 cellFormatsChanged = true;
                 if (present(cellStyle.value(QStringLiteral("letter_spacing")))) {
@@ -897,6 +1165,36 @@ inline constexpr int figureImageProperty = QTextFormat::UserProperty + 0x57b0;
 inline constexpr int imageOriginalSizeProperty = figureImageProperty + 1;
 inline constexpr int imageLayoutSizeProperty = figureImageProperty + 2;
 inline constexpr int imageCompiledDataProperty = figureImageProperty + 3;
+inline QJsonObject checkedStaticPoster(const QJsonObject &image) {
+    const auto value = image.value(QStringLiteral("static_poster"));
+    if (!present(value)) return {};
+    if (!value.isObject()) throw std::runtime_error("invalid static poster");
+    const auto poster = value.toObject();
+    if (poster.size() != 4 || poster.value("policy") != QStringLiteral("three_d_stl_v1")
+        || !poster.value("label").isString() || poster.value("label").toString().toUtf8().size() > 32 * 1024 * 1024
+        || !poster.value("file_sha1").isString() || !poster.value("file_timestamp").isString()
+        || !image.value("file").toString().endsWith(QStringLiteral(".stl"), Qt::CaseInsensitive))
+        throw std::runtime_error("invalid static poster policy");
+    const QString hash = poster.value("file_sha1").toString();
+    if (hash.size() != 40) throw std::runtime_error("invalid static poster identity");
+    for (QChar ch : hash)
+        if (!(ch >= QChar('0') && ch <= QChar('9')) && !(ch >= QChar('a') && ch <= QChar('f')))
+            throw std::runtime_error("invalid static poster identity");
+    const QString stamp = poster.value("file_timestamp").toString();
+    const auto parsed = QDateTime::fromString(stamp, Qt::ISODate);
+    if (stamp.size() != 20 || !parsed.isValid()
+        || parsed.toUTC().toString(QStringLiteral("yyyy-MM-dd'T'HH:mm:ss'Z'")) != stamp)
+        throw std::runtime_error("invalid static poster timestamp");
+    const auto axis = [](const QJsonValue &v) {
+        const double n = v.toDouble(-1);
+        return v.isDouble() && std::isfinite(n) && n > 0 && n <= 4294967295.0 && std::floor(n) == n;
+    };
+    if (!axis(image.value("width_px")) || !axis(image.value("height_px"))
+        || quint64(image.value("height_px").toDouble()) != (quint64(image.value("width_px").toDouble()) * 3 + 2) / 4
+        || present(image.value("map")) || present(image.value("svg_language")) || present(image.value("dark_mode_filter")))
+        throw std::runtime_error("unsupported static poster geometry or combination");
+    return poster;
+}
 inline QJsonObject checkedImage(const QJsonValue &value) {
     if (!value.isObject()) throw std::runtime_error("invalid inline image");
     const QJsonObject image = value.toObject();
@@ -912,7 +1210,8 @@ inline QJsonObject checkedImage(const QJsonValue &value) {
         if (it.key() != QStringLiteral("file") && it.key() != QStringLiteral("width_px") && it.key() != QStringLiteral("height_px")
             && it.key() != QStringLiteral("alt") && it.key() != QStringLiteral("tooltip")
             && it.key() != QStringLiteral("border") && it.key() != QStringLiteral("map")
-            && it.key() != QStringLiteral("dark_mode_filter") && it.key() != QStringLiteral("svg_language")) throw std::runtime_error("unknown inline image field");
+            && it.key() != QStringLiteral("dark_mode_filter") && it.key() != QStringLiteral("svg_language")
+            && it.key() != QStringLiteral("static_poster")) throw std::runtime_error("unknown inline image field");
     for (const QString &key : {QStringLiteral("width_px"), QStringLiteral("height_px")}) {
         const QJsonValue axis = image.value(key); if (!present(axis)) continue;
         const double n = axis.toDouble(-1);
@@ -938,6 +1237,7 @@ inline QJsonObject checkedImage(const QJsonValue &value) {
         }
         if (!segment || svgLanguage.toString().toUtf8().size() > 32 * 1024 * 1024) throw std::runtime_error("invalid SVG language");
     }
+    checkedStaticPoster(image);
     return image;
 }
 inline QUrl inlineImageUrl(const QJsonObject &image) {
@@ -965,14 +1265,15 @@ inline QString inlineImageHtml(const QJsonValue &value) {
 inline void imageDimensions(QTextImageFormat &format, const QJsonObject &image, const QTextDocument *document, const QSizeF &intrinsic = {}, bool vectorImage = false) {
     const qreal maximum = maximumFontPoints(document) * QFontMetricsF(QFont()).fontDpi() / 72;
     const QJsonObject figure = QJsonDocument::fromJson(format.property(figureImageProperty).toByteArray()).object();
-    const bool framed = figure.value(QStringLiteral("format")).toString() == QStringLiteral("framed");
+    const bool framed = figure.value(QStringLiteral("format")).toString() == QStringLiteral("framed")
+        && !present(image.value("static_poster"));
     const bool hasWidth = !framed && present(image.value(QStringLiteral("width_px")));
     const bool hasHeight = !framed && present(image.value(QStringLiteral("height_px")));
     const qreal width = hasWidth ? image.value(QStringLiteral("width_px")).toDouble() : (intrinsic.isValid() ? intrinsic.width() : 1);
     const qreal height = hasHeight ? image.value(QStringLiteral("height_px")).toDouble() : (intrinsic.isValid() ? intrinsic.height() : 1);
     qreal w = qMin(maximum, width), h = qMin(maximum, height);
     qreal layoutWidth = w, layoutHeight = h;
-    if (intrinsic.isValid()) {
+    if (intrinsic.isValid() && !present(image.value("static_poster"))) {
         const auto fitBoxWidth = [&](qreal boundHeight) {
             const qreal ideal = intrinsic.width() * boundHeight / intrinsic.height();
             const qreal up = std::ceil(ideal);
@@ -1015,6 +1316,7 @@ inline void normalizeImages(QTextDocument *document) {
             const QUrl url(format.name()); if (url.scheme() != inlineImageScheme) continue;
             const QJsonObject image = inlineImageData(url);
             format.setProperty(inlineImageExplanationProperty, spanExplanation(format));
+            if (present(image.value("static_poster"))) format.setVerticalAlignment(QTextCharFormat::AlignTop);
             if (present(image.value(QStringLiteral("alt")))) format.setProperty(QTextFormat::ImageAltText, image.value(QStringLiteral("alt")).toString());
             else format.clearProperty(QTextFormat::ImageAltText);
             if (present(image.value(QStringLiteral("tooltip")))) {
@@ -1057,8 +1359,14 @@ inline void normalizeImages(QTextDocument *document) {
 inline QString scaledText(const QString &html, double scale, const QString &tooltip,
                           Basis basis = Basis::Context, qreal normalBodyPoints = 0,
                           bool small = false, bool superscript = false, bool subscript = false, qreal contextPoints = 0,
-                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1) {
+                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false) {
     QJsonObject metadata{{"scale", scale}, {"tooltip", tooltip}};
+    if (!linkPaint.isEmpty()) {
+        MissingFigurePaint::validate(linkPaint, linkEm);
+        if (linkOwner < (qint64(1) << 32) || linkOwner >= (qint64(1) << 33))
+            throw std::runtime_error("invalid compiled link span owner");
+        metadata.insert("link_paint", linkPaint); metadata.insert("link_owner", double(linkOwner)); metadata.insert("link_em", linkEm); metadata.insert("link_underline", linkUnderline);
+    }
     if (present(advisory)) {
         if (!advisory.isString()) throw std::runtime_error("invalid span advisory");
         metadata.insert(QStringLiteral("advisory"), advisory);
@@ -1066,8 +1374,8 @@ inline QString scaledText(const QString &html, double scale, const QString &tool
     if (sourceRun < -1) throw std::runtime_error("invalid renderer source run");
     if (sourceRun >= 0) metadata.insert(QStringLiteral("source_run"), sourceRun);
     if (metadataOnly) metadata.insert(QStringLiteral("metadata_only"), true);
-    if (basis == Basis::NormalBody) {
-        metadata.insert(QStringLiteral("basis"), QStringLiteral("normal_body"));
+    if (basis == Basis::NormalBody || basis == Basis::CssPx) {
+        metadata.insert(QStringLiteral("basis"), basis == Basis::CssPx ? QStringLiteral("css_px") : QStringLiteral("normal_body"));
         metadata.insert(QStringLiteral("body_points"), normalBodyPoints);
         metadata.insert(QStringLiteral("legacy_flags"), (small ? 1 : 0) | (superscript ? 2 : 0) | (subscript ? 4 : 0));
     }
@@ -1091,6 +1399,10 @@ struct ScaleInfo {
     QJsonValue advisory;
     bool metadataOnly = false;
     int sourceRun = -1;
+    QJsonObject linkPaint;
+    qint64 linkOwner = -1;
+    qreal linkEm = 0;
+    bool linkUnderline = false;
 };
 
 inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) {
@@ -1118,40 +1430,55 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
         const double scale = value.value(QStringLiteral("scale")).toDouble(-1);
         const QJsonValue basisValue = value.value(QStringLiteral("basis"));
         const bool normalBody = basisValue.isString() && basisValue.toString() == QStringLiteral("normal_body");
+        const bool cssPx = basisValue.isString() && basisValue.toString() == QStringLiteral("css_px");
+        const bool absolute = normalBody || cssPx;
         const QJsonValue metadataValue = value.value(QStringLiteral("metadata_only"));
         const bool metadataOnly = metadataValue.toBool();
         const QJsonValue advisory = value.value(QStringLiteral("advisory"));
         const QJsonValue sourceRun = value.value(QStringLiteral("source_run"));
         const bool hasSourceRun = !sourceRun.isUndefined();
+        const bool hasLinkPaint = present(value.value("link_paint"));
         const double run = sourceRun.toDouble(-1);
         if (error.error != QJsonParseError::NoError || !payload.isObject()
             || !value.value(QStringLiteral("scale")).isDouble() || !std::isfinite(scale)
-            || scale < 0 || (!normalBody && scale == 1 && !metadataOnly) || !value.value(QStringLiteral("tooltip")).isString()
+            || scale < 0 || (!absolute && scale == 1 && !metadataOnly) || !value.value(QStringLiteral("tooltip")).isString()
             || (!metadataValue.isUndefined() && !metadataValue.isBool())
             || (present(advisory) && !advisory.isString())
             || (hasSourceRun && (!sourceRun.isDouble() || !std::isfinite(run)
                 || run < 0 || run > std::numeric_limits<int>::max() || std::floor(run) != run))
-            || (metadataOnly && (scale != 1 || normalBody || (!present(advisory) && !hasSourceRun)
+            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint)
                 || value.contains(QStringLiteral("context_points")) || value.contains(QStringLiteral("legacy_flags"))))
             || (!basisValue.isUndefined() && (!basisValue.isString()
-                || (basisValue.toString() != QStringLiteral("context") && !normalBody))))
+                || (basisValue.toString() != QStringLiteral("context") && !absolute))))
             throw std::runtime_error("invalid renderer font-scale metadata");
         ScaleInfo info{scale, value.value(QStringLiteral("tooltip")).toString()};
+        if (hasLinkPaint) {
+            const auto owner = value.value("link_owner"); const auto em = value.value("link_em");
+            const double id = owner.toDouble(-1);
+            if (!owner.isDouble() || !std::isfinite(id) || std::floor(id) != id
+                || id < double(qint64(1) << 32) || id >= double(qint64(1) << 33) || !em.isDouble())
+                throw std::runtime_error("invalid compiled link span identity");
+            info.linkPaint = MissingFigurePaint::validate(value.value("link_paint"), em.toDouble());
+            info.linkOwner = qint64(id); info.linkEm = em.toDouble();
+            if (!value.value("link_underline").isBool()) throw std::runtime_error("invalid compiled link decoration");
+            info.linkUnderline = value.value("link_underline").toBool();
+        } else if (value.contains("link_owner") || value.contains("link_em") || value.contains("link_underline"))
+            throw std::runtime_error("unowned compiled link span metadata");
         info.advisory = advisory;
         info.metadataOnly = metadataOnly;
         if (hasSourceRun) info.sourceRun = int(run);
-        if (normalBody) {
+        if (absolute) {
             const QJsonValue body = value.value(QStringLiteral("body_points"));
             const QJsonValue flags = value.value(QStringLiteral("legacy_flags"));
             const double n = flags.toDouble(-1);
             if (!body.isDouble() || !std::isfinite(body.toDouble()) || body.toDouble() <= 0
                 || !flags.isDouble() || n < 0 || n > 7 || std::floor(n) != n)
                 throw std::runtime_error("invalid normal-body font-scale metadata");
-            info.basis = Basis::NormalBody;
+            info.basis = cssPx ? Basis::CssPx : Basis::NormalBody;
             info.normalBodyPoints = body.toDouble();
             info.legacyFlags = int(n);
         }
-        if (!normalBody && scale > 0) {
+        if (!absolute && scale > 0) {
             const QJsonValue context = value.value(QStringLiteral("context_points"));
             if (!context.isUndefined()) {
                 if (!context.isDouble() || !std::isfinite(context.toDouble()) || context.toDouble() <= 0)
@@ -1290,7 +1617,7 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                         zero->characters += fragment.length();
                     } else {
                         qreal points;
-                        if (marker->basis == Basis::NormalBody) {
+                        if (marker->basis == Basis::NormalBody || marker->basis == Basis::CssPx) {
                             qreal ratio = 1;
                             if (marker->legacyFlags & 1) {
                                 QFont bodyFont = document->defaultFont();
@@ -1321,7 +1648,8 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                                     remainingLegacyRatios.insert(key, ratio);
                                 }
                             }
-                            points = boundedFontPoints(marker->normalBodyPoints, marker->scale, maximumFontPoints(document), ratio);
+                            points = boundedFontPoints(marker->basis == Basis::CssPx ? cssPixelFontBase(marker->normalBodyPoints)
+                                : marker->normalBodyPoints, marker->scale, maximumFontPoints(document), ratio);
                         } else {
                             // Qt overrides raw points in adjusted context fragments;
                             // the observed effective font is the unscaled control.
@@ -1333,7 +1661,25 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                         format.clearProperty(QTextFormat::FontSizeAdjustment);
                         format.clearProperty(QTextFormat::FontPixelSize);
                         format.setFontPointSize(points);
+                        if (marker->basis == Basis::CssPx
+                            && format.fontFamilies().toStringList().contains(zeroFontFamilyName))
+                            format.setFontFamilies(document->defaultFont().families());
                     }
+                }
+                if (!marker->linkPaint.isEmpty()) {
+                    if (!format.isAnchor() || format.anchorHref().isEmpty() || format.isImageFormat())
+                        throw std::runtime_error("compiled link span lost its action");
+                    format.setProperty(MissingFigurePaint::policyProperty, MissingFigurePaint::fixedPolicy);
+                    format.setProperty(MissingFigurePaint::ownerProperty, marker->linkOwner);
+                    format.setProperty(MissingFigurePaint::fixedPolicyProperty, marker->linkPaint.toVariantMap());
+                    format.setProperty(MissingFigurePaint::outlineProperty, MissingFigurePaint::outline(marker->linkPaint, marker->linkEm));
+                    format.setProperty(MissingFigurePaint::underlineProperty, marker->linkUnderline);
+                    const bool zeroLink = marker->scale == 0 || format.fontFamilies().toStringList().contains(zeroFontFamilyName);
+                    format.setProperty(MissingFigurePaint::zeroFontProperty, zeroLink);
+                    format.setForeground(zeroLink ? QColor(Qt::transparent)
+                        : QColor(marker->linkPaint.value("normal").toObject().value("foreground").toString()));
+                    format.setUnderlineStyle(!zeroLink && (marker->linkUnderline || marker->linkPaint.value("normal").toObject().value("underline").toBool())
+                        ? QTextCharFormat::SingleUnderline : QTextCharFormat::NoUnderline);
                 }
                 if (marker->sourceRun >= 0) format.setProperty(sourceRunProperty, marker->sourceRun);
                 if (present(marker->advisory)) {

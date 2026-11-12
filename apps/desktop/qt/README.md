@@ -31,7 +31,7 @@ renderer patch.
 
 Apply these three patches, in order, to that QtBase source:
 
-1. `0001-logical-flow-renderer.patch`: the 19 renderer source files.
+1. `0001-logical-flow-renderer.patch`: the 20 renderer source files.
 2. `0002-layout-regressions.patch`: the native regression target and tests.
 3. `0003-bounded-gcc-link-policy.patch`: the separately maintained GNU LTO policy.
 
@@ -62,10 +62,12 @@ renderer-created storage paragraphs remain zero-height. Unsupported Container
 styles fail visibly and preserve history, source and recovery instead of dropping
 the body or substituting stock frame layout. Flex and floating Containers,
 fit-content, max-width and line-height overrides, responsive rules, unequal
-padding, nonzero vertical margins, table ancestry and nonempty zero-width boxes
-remain outside this implementation.
+padding, nonzero vertical margins, general table ancestry and nonempty zero-width
+boxes remain outside this implementation. A current registered Figure caption
+provides a separately authenticated ancestry boundary for supported Containers.
 
-Qualification combines eleven passing methods from the original native build
+The historical plain-Container qualification combines eleven passing methods from
+the original native build
 with the two corrected selection/stock-oracle controls on the same product
 libraries. The original two failures are retained. Eight app controls cover
 hierarchy, authored-empty behavior, requested geometry, the exact retained
@@ -76,6 +78,37 @@ acceptance. Current default media and unified-entry registrations run separately
 the opt-in audio skip is explicitly unqualified unless the manifest records the
 separate owned silent-output check. Hardware audio, the complete native/Reader
 suites and whole-corpus frontend acceptance are not claimed.
+
+## Typed Figures and Cell typography
+
+The cumulative patch also implements the API04 Figure contract: physical wrapper
+margins and direction, caption-owned inline links, per-owner fixed link colors,
+fragment focus geometry, and cancellation when a pointer release reaches a
+changed link owner. Imported inline image helpers retain their real document
+identity. Caption hit testing and image decoration use those same stored owners.
+The app keeps CSS pixel text sizing separate from the reading-font zoom basis.
+
+Typed Cell line height uses the Cell owner's font, including an explicit zero
+basis, rather than inheriting a descendant's font. Stock and projected paragraphs
+use their actual source block to resolve that owner. Signed glyph ink remains
+separate from the used line allocation. Empty cells are inspected without
+constructing a cursor during layout, and captions or nested owners retain their
+own typography boundaries.
+
+The current focused qualification covers both native Cell controls and both app
+Cell controls on the same patched libraries. It checks baseline and advance,
+source hard breaks, hit positions, ownership, empty cells, resize and repeated
+public queries. The owner and nested screenshots are controlled fixtures; they do
+not establish whole-page or full frontend acceptance. Earlier Figure, caption,
+AS03 history and ANG146 table/navigation results remain recorded at their original
+source and artifact identities. `manifest.json` preserves their prior qualification
+and the failed Cell attempts separately. The separate normal app CTest run passed
+all seven registered tests without rebuilding: Reader, media, library storage,
+both library UI modes, core selection, and install/relocation. The Reader reported
+306 passing incidents and two optional compiler-fixture skips; media reported 58
+passing incidents and one opt-in private audio-backend skip. These skips remain
+unqualified. The full native suite and whole frontend are not inferred from these
+results.
 
 ## Source and build layout
 

@@ -50,10 +50,41 @@ inline void containerEdges(const QJsonValue &value) {
     const auto edges = containerObject(value, keys, keys);
     for (const auto &key : keys) containerLength(edges.value(key));
 }
+inline void containerMargins(const QJsonValue &value) {
+    const QStringList keys{QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")};
+    const auto edges = containerObject(value, keys, keys);
+    for (const auto &key : keys) {
+        const auto length = containerObject(edges.value(key), {QStringLiteral("unit"), QStringLiteral("value")},
+            {QStringLiteral("unit"), QStringLiteral("value")});
+        require(length.value(QStringLiteral("unit")) == QStringLiteral("px")
+            || length.value(QStringLiteral("unit")) == QStringLiteral("em"));
+        const auto number = length.value(QStringLiteral("value"));
+        require(number.isDouble() && std::isfinite(number.toDouble())
+            && std::abs(number.toDouble()) <= std::numeric_limits<float>::max());
+    }
+}
 inline QString containerUnion(const QJsonValue &value, const QStringList &keys) {
     const auto tagged = containerObject(value, keys);
     require(tagged.size() == 1);
     return tagged.begin().key();
+}
+inline void containerMarginValues(const QJsonValue &value) {
+    const QStringList keys{QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")};
+    const auto edges = containerObject(value, keys, keys);
+    for (const auto &key : keys) {
+        const auto tag = containerUnion(edges.value(key), {QStringLiteral("auto"), QStringLiteral("length")});
+        const auto payload = edges.value(key).toObject().value(tag);
+        if (tag == QStringLiteral("auto")) require(containerObject(payload, {}).isEmpty());
+        else {
+            const auto length = containerObject(payload, {QStringLiteral("unit"), QStringLiteral("value")},
+                {QStringLiteral("unit"), QStringLiteral("value")});
+            require(length.value(QStringLiteral("unit")) == QStringLiteral("px")
+                || length.value(QStringLiteral("unit")) == QStringLiteral("em"));
+            const auto number = length.value(QStringLiteral("value"));
+            require(number.isDouble() && std::isfinite(number.toDouble())
+                && std::abs(number.toDouble()) <= std::numeric_limits<float>::max());
+        }
+    }
 }
 inline void containerWidth(const QJsonValue &value, bool maximum = false) {
     const QString kind = containerUnion(value, maximum
@@ -86,21 +117,38 @@ inline void containerLineHeight(const QJsonValue &value) {
     else if (kind == QStringLiteral("multiplier")) containerNumber(data);
     else containerLength(data);
 }
+inline void containerBorderEdge(const QJsonValue &value) {
+    const auto kind = containerUnion(value, {QStringLiteral("none"), QStringLiteral("hidden"),
+        QStringLiteral("solid"), QStringLiteral("dotted")});
+    const auto payload = value.toObject().value(kind);
+    if (kind == QStringLiteral("none") || kind == QStringLiteral("hidden"))
+        require(containerObject(payload, {}).isEmpty());
+    else {
+        const auto edge = containerObject(payload, {QStringLiteral("width"), QStringLiteral("color")},
+            {QStringLiteral("width"), QStringLiteral("color")});
+        containerLength(edge.value(QStringLiteral("width"))); containerColor(edge.value(QStringLiteral("color")));
+    }
+}
 inline QJsonObject containerStyle(const QJsonValue &value) {
     if (value.isUndefined()) return {};
     const auto style = containerObject(value, {QStringLiteral("margins"), QStringLiteral("padding"),
         QStringLiteral("width"), QStringLiteral("float_side"), QStringLiteral("clear"), QStringLiteral("max_width"),
         QStringLiteral("box_sizing"), QStringLiteral("layout"), QStringLiteral("align_items"), QStringLiteral("flex_item"),
         QStringLiteral("background"), QStringLiteral("border"), QStringLiteral("line_height"),
-        QStringLiteral("text_align"), QStringLiteral("screen_max_width")});
+        QStringLiteral("text_align"), QStringLiteral("screen_max_width"), QStringLiteral("owner_font_scale"), QStringLiteral("height"), QStringLiteral("columns"), QStringLiteral("positioning"), QStringLiteral("min_height"), QStringLiteral("margin_values"), QStringLiteral("overflow")});
     const auto enumeration = [](const QJsonObject &owner, const QString &key, const QStringList &choices) {
         const auto field = owner.value(key);
         if (present(field)) require(field.isString() && choices.contains(field.toString()));
     };
-    for (const auto &key : {QStringLiteral("margins"), QStringLiteral("padding")})
-        if (present(style.value(key))) containerEdges(style.value(key));
+    if (present(style.value(QStringLiteral("margins")))) containerMargins(style.value(QStringLiteral("margins")));
+    if (present(style.value(QStringLiteral("margin_values")))) {
+        require(!present(style.value(QStringLiteral("margins"))));
+        containerMarginValues(style.value(QStringLiteral("margin_values")));
+    }
+    if (present(style.value(QStringLiteral("padding")))) containerEdges(style.value(QStringLiteral("padding")));
     if (present(style.value(QStringLiteral("width")))) containerWidth(style.value(QStringLiteral("width")));
     if (present(style.value(QStringLiteral("max_width")))) containerWidth(style.value(QStringLiteral("max_width")), true);
+    enumeration(style, QStringLiteral("overflow"), {QStringLiteral("visible"), QStringLiteral("auto")});
     enumeration(style, QStringLiteral("float_side"), {QStringLiteral("left"), QStringLiteral("right")});
     enumeration(style, QStringLiteral("clear"), {QStringLiteral("none"), QStringLiteral("left"), QStringLiteral("right"), QStringLiteral("both")});
     enumeration(style, QStringLiteral("box_sizing"), {QStringLiteral("content_box"), QStringLiteral("border_box")});
@@ -112,8 +160,13 @@ inline QJsonObject containerStyle(const QJsonValue &value) {
     if (present(style.value(QStringLiteral("background")))) containerColor(style.value(QStringLiteral("background")));
     if (present(style.value(QStringLiteral("border")))) {
         const auto border = style.value(QStringLiteral("border"));
-        const auto kind = containerUnion(border, {QStringLiteral("none"), QStringLiteral("solid")});
+        const auto kind = containerUnion(border, {QStringLiteral("none"), QStringLiteral("solid"), QStringLiteral("edges")});
         if (kind == QStringLiteral("none")) require(containerObject(border.toObject().value(kind), {}).isEmpty());
+        else if (kind == QStringLiteral("edges")) {
+            const QStringList keys{QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")};
+            const auto edges = containerObject(border.toObject().value(kind), keys, keys);
+            for (const auto &key : keys) containerBorderEdge(edges.value(key));
+        }
         else {
             const auto solid = containerObject(border.toObject().value(kind), {QStringLiteral("width"), QStringLiteral("color")},
                                                {QStringLiteral("width"), QStringLiteral("color")});
@@ -121,6 +174,25 @@ inline QJsonObject containerStyle(const QJsonValue &value) {
         }
     }
     if (present(style.value(QStringLiteral("line_height")))) containerLineHeight(style.value(QStringLiteral("line_height")));
+    if (present(style.value(QStringLiteral("owner_font_scale")))) containerNumber(style.value(QStringLiteral("owner_font_scale")));
+    if (present(style.value(QStringLiteral("height")))) containerLength(style.value(QStringLiteral("height")));
+    if (present(style.value(QStringLiteral("min_height")))) {
+        containerLength(style.value(QStringLiteral("min_height")));
+        require(!present(style.value(QStringLiteral("columns")))
+            && style.value(QStringLiteral("layout")) != QStringLiteral("flex_row"));
+    }
+    if (present(style.value(QStringLiteral("positioning"))))
+        require(style.value(QStringLiteral("positioning")) == QStringLiteral("relative_auto"));
+    if (present(style.value(QStringLiteral("columns")))) {
+        const auto columns = containerObject(style.value(QStringLiteral("columns")),
+            {QStringLiteral("count"), QStringLiteral("gap")}, {QStringLiteral("count"), QStringLiteral("gap")});
+        const auto count = columns.value(QStringLiteral("count"));
+        require(count.isDouble() && std::isfinite(count.toDouble()) && count.toDouble() >= 1
+            && count.toDouble() <= 65535 && std::floor(count.toDouble()) == count.toDouble());
+        containerLength(columns.value(QStringLiteral("gap")));
+        require(!present(style.value(QStringLiteral("height")))
+            && style.value(QStringLiteral("layout")) != QStringLiteral("flex_row"));
+    }
     if (present(style.value(QStringLiteral("screen_max_width")))) {
         const auto screen = containerObject(style.value(QStringLiteral("screen_max_width")),
             {QStringLiteral("max_width_px"), QStringLiteral("width"), QStringLiteral("max_width"),
@@ -168,7 +240,7 @@ inline QJsonObject containerBlock(const QJsonObject &block, int depth = 1) {
     const auto owned = containerObject(block.value(QStringLiteral("container")), {QStringLiteral("blocks"), QStringLiteral("style")}, {QStringLiteral("blocks")});
     require(owned.value(QStringLiteral("blocks")).isArray() && owned.value(QStringLiteral("blocks")).toArray().size() <= (1 << 20));
     const auto style = containerStyle(owned.value(QStringLiteral("style")));
-    require(present(style.value(QStringLiteral("float_side"))) || !containerVerticalMargins(style.value(QStringLiteral("margins"))));
+    // Native admission owns signed ordinary margins; child BlockStyle spacing remains a separate protocol.
     for (const auto &value : owned.value(QStringLiteral("blocks")).toArray()) {
         const auto child = object(value);
         require(child.value(QStringLiteral("kind")) != QStringLiteral("heading"));
@@ -230,7 +302,12 @@ struct Depth {
 
 enum class TableSpans { Stored, VisibleBody };
 
-struct Context { QString language; };
+struct Context {
+    QString language;
+    // Value-owned because some metadata visitors retain Context after walking.
+    // Only the direct Figure-media visit carries this ownership evidence.
+    QJsonObject figureMediaOwner;
+};
 inline QString languageForSpan(const QJsonObject &span, const Context &context) {
     // Empty Span.language is the legacy default; only Scope.language can reset.
     const QString explicitLanguage = span.value(QStringLiteral("language")).toString();
@@ -295,8 +372,10 @@ public:
     }
     void figure(const QJsonObject &value, Depth depth, Context context = {}) {
         require(value.value(QStringLiteral("caption")).isArray());
-        visit_(QJsonArray{figureSpan(value)}, context);
-        caption(value, depth, context);
+        Context content = context; content.figureMediaOwner = {};
+        Context media = content; media.figureMediaOwner = value;
+        visit_(QJsonArray{figureSpan(value)}, media);
+        caption(value, depth, content);
     }
     void table(const QJsonObject &value, Depth depth, Context context = {}) {
         caption(value, depth, context);

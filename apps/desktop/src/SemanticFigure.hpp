@@ -7,6 +7,7 @@
 #include <QPalette>
 #include <QPointer>
 #include <QTextDocumentFragment>
+#include <QTextTable>
 #include <QScopeGuard>
 #include <optional>
 
@@ -171,7 +172,7 @@ inline bool missingLabelFragments(QTextFrame *frame, const QJsonObject &label) {
     return anchors > 0 && controls == (opening ? 2 : 0);
 }
 inline void markMissingLabel(QTextFrame *frame, int owner, const QJsonObject &content,
-                             qreal normalBodyEm, const QPalette &palette) {
+                             qreal normalBodyEm, const QPalette &palette, const QJsonObject &fixedPaint = {}) {
     const QPointer<QTextFrame> guard(frame);
     const QPointer<QTextDocument> document(frame ? frame->document() : nullptr);
     const QPointer<QAbstractTextDocumentLayout> layout(document ? document->documentLayout() : nullptr);
@@ -187,10 +188,11 @@ inline void markMissingLabel(QTextFrame *frame, int owner, const QJsonObject &co
     const qreal lineHeight = length(content.value("line_height"), normalBodyEm) / scaling;
     require(std::isfinite(lineHeight) && lineHeight > 0 && lineHeight < 1e6);
     const auto label = content.value("label").toObject();
-    const bool paint = SemanticHtml::present(content.value("link_paint"));
+    const bool fixed = !fixedPaint.isEmpty();
+    const bool paint = fixed || SemanticHtml::present(content.value("link_paint"));
     if (paint) require(missingLabelFragments(frame, label));
     auto frameFormat = frame->frameFormat();
-    if (paint) {
+    if (paint && !fixed) {
         frameFormat.setProperty(MissingFigurePaint::policyProperty, MissingFigurePaint::policy);
         frameFormat.setProperty(MissingFigurePaint::ownerProperty, owner);
         frame->setFrameFormat(frameFormat);
@@ -218,6 +220,20 @@ inline void markMissingLabel(QTextFrame *frame, int owner, const QJsonObject &co
             // generated isolation controls remain outside the actual link paint.
             if (!character.isAnchor()) continue;
             const bool zero = character.fontFamilies().toStringList().contains(SemanticHtml::zeroFontFamilyName);
+            if (fixed) {
+                require(character.stringProperty(MissingFigurePaint::policyProperty) == MissingFigurePaint::fixedPolicy
+                    && QJsonObject::fromVariantMap(character.property(MissingFigurePaint::fixedPolicyProperty).toMap()) == fixedPaint);
+                character.setProperty(MissingFigurePaint::atomicProperty, true);
+                frameFormat.setProperty(MissingFigurePaint::policyProperty, MissingFigurePaint::fixedPolicy);
+                frameFormat.setProperty(MissingFigurePaint::ownerProperty, character.property(MissingFigurePaint::ownerProperty));
+                frameFormat.setProperty(MissingFigurePaint::outlineProperty, character.property(MissingFigurePaint::outlineProperty));
+                frameFormat.setProperty(MissingFigurePaint::fixedPolicyProperty, fixedPaint.toVariantMap());
+                character.setForeground(zero ? QColor(Qt::transparent) : QColor(fixedPaint.value("normal").toObject().value("foreground").toString()));
+                character.setUnderlineStyle(!zero && (label.value("underline").toBool() || fixedPaint.value("normal").toObject().value("underline").toBool())
+                    ? QTextCharFormat::SingleUnderline : QTextCharFormat::NoUnderline);
+                characters.append({fragment.position(), fragment.position() + fragment.length(), character});
+                continue;
+            }
             character.setProperty(MissingFigurePaint::policyProperty, MissingFigurePaint::policy);
             character.setProperty(MissingFigurePaint::ownerProperty, owner);
             character.setProperty(MissingFigurePaint::underlineProperty, label.value("underline").toBool());
@@ -229,6 +245,7 @@ inline void markMissingLabel(QTextFrame *frame, int owner, const QJsonObject &co
             characters.append({fragment.position(), fragment.position() + fragment.length(), character});
         }
     }
+    if (fixed) { frame->setFrameFormat(frameFormat); require(current()); }
     for (const auto &block : blocks) {
         require(current());
         QTextCursor change(document); change.setPosition(block.position); change.setBlockFormat(block.format);
@@ -242,6 +259,222 @@ inline void markMissingLabel(QTextFrame *frame, int owner, const QJsonObject &co
     }
 }
 
+// API03: these are source-resolved values, not a second CSS evaluator.
+inline constexpr int tableCaptionProperty = ownerProperty + 14;
+inline const QString tableCaptionCapability = QStringLiteral("wikidict.figure-table-caption/4");
+struct TableCaptionInput {
+    QVariantList tableBorders;
+    QVariantList captionBorders;
+    std::optional<qreal> mediaLimitSubtract;
+    QJsonObject media;
+    QJsonObject wrapper;
+    std::optional<QJsonObject> before;
+    bool viewportState = false;
+};
+inline QJsonObject captionWrapperStyle(const QJsonValue &value, qreal em) {
+    const auto style = CompiledContent::containerStyle(value);
+    for (auto it = style.begin(); it != style.end(); ++it)
+        require(!CompiledContent::present(it.value()) || QStringList{
+            QStringLiteral("margins"), QStringLiteral("margin_values"),
+            QStringLiteral("float_side"), QStringLiteral("clear")}.contains(it.key()));
+    if (CompiledContent::present(style.value(QStringLiteral("margins"))))
+        edges(style.value(QStringLiteral("margins")), em);
+    if (CompiledContent::present(style.value(QStringLiteral("margin_values")))) {
+        const auto values = style.value(QStringLiteral("margin_values")).toObject();
+        for (const auto &side : {QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")}) {
+            const auto tagged = values.value(side).toObject();
+            if (tagged.contains(QStringLiteral("auto")))
+                require(side == QStringLiteral("left") || side == QStringLiteral("right"));
+            else length(tagged.value(QStringLiteral("length")), em);
+        }
+    }
+    return style;
+}
+inline std::optional<QJsonObject> captionBeforeStyle(const QJsonValue &value, qreal em) {
+    if (!CompiledContent::present(value)) return std::nullopt;
+    const auto style = CompiledContent::containerStyle(value);
+    for (auto it = style.begin(); it != style.end(); ++it)
+        require(!CompiledContent::present(it.value()) || QStringList{
+            QStringLiteral("width"), QStringLiteral("height"), QStringLiteral("float_side"),
+            QStringLiteral("margins"), QStringLiteral("layout"), QStringLiteral("box_sizing"),
+            QStringLiteral("background"), QStringLiteral("border")}.contains(it.key()));
+    const auto width = style.value(QStringLiteral("width")).toObject();
+    require(width.size() == 1 && width.contains(QStringLiteral("length")));
+    length(width.value(QStringLiteral("length")), em);
+    length(style.value(QStringLiteral("height")), em);
+    require(style.value(QStringLiteral("float_side")) == QStringLiteral("left")
+        || style.value(QStringLiteral("float_side")) == QStringLiteral("right"));
+    if (CompiledContent::present(style.value(QStringLiteral("margins"))))
+        edges(style.value(QStringLiteral("margins")), em);
+    require(!CompiledContent::present(style.value(QStringLiteral("layout")))
+        || style.value(QStringLiteral("layout")) == QStringLiteral("flow"));
+    require(!CompiledContent::present(style.value(QStringLiteral("box_sizing")))
+        || style.value(QStringLiteral("box_sizing")) == QStringLiteral("content_box"));
+    if (CompiledContent::present(style.value(QStringLiteral("background"))))
+        require(CompiledContent::containerUnion(style.value(QStringLiteral("background")),
+            {QStringLiteral("transparent")}) == QStringLiteral("transparent"));
+    if (CompiledContent::present(style.value(QStringLiteral("border"))))
+        require(CompiledContent::containerUnion(style.value(QStringLiteral("border")),
+            {QStringLiteral("none")}) == QStringLiteral("none"));
+    return style;
+}
+inline QVariantList captionPhysicalBorders(const QJsonValue &value, qreal em, const QPalette &palette) {
+    const QStringList sides{QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")};
+    const auto physical = CompiledContent::containerObject(value, sides, sides);
+    QVariantList result;
+    for (const auto &side : sides) {
+        const auto edge = physical.value(side).toObject();
+        require(physical.value(side).isObject() && edge.size() == 1);
+        const QString kind = edge.keys().first();
+        const int mode = QStringList{QStringLiteral("none"), QStringLiteral("hidden"),
+            QStringLiteral("solid"), QStringLiteral("dotted")}.indexOf(kind);
+        const auto payload = edge.value(kind);
+        require(mode >= 0 && payload.isObject() && payload.toObject().size() == (mode < 2 ? 0 : 2));
+        qreal width = 0; QColor ink(Qt::transparent);
+        if (mode >= 2) {
+            const auto line = CompiledContent::containerObject(payload,
+                {QStringLiteral("width"), QStringLiteral("color")},
+                {QStringLiteral("width"), QStringLiteral("color")});
+            width = length(line.value(QStringLiteral("width")), em);
+            ink = color(line.value(QStringLiteral("color")), palette, QPalette::Mid);
+        }
+        result.append(QVariantMap{{QStringLiteral("style"), mode},
+            {QStringLiteral("width"), width}, {QStringLiteral("color"), ink}});
+    }
+    return result;
+}
+inline qreal captionSignedLength(const QJsonValue &value, qreal em) {
+    const auto spec = CompiledContent::containerObject(value,
+        {QStringLiteral("unit"), QStringLiteral("value")}, {QStringLiteral("unit"), QStringLiteral("value")});
+    require(spec.value(QStringLiteral("value")).isDouble());
+    const qreal n = spec.value(QStringLiteral("value")).toDouble();
+    const auto unit = spec.value(QStringLiteral("unit")).toString();
+    require((unit == QStringLiteral("px") || unit == QStringLiteral("em")) && std::isfinite(n));
+    const qreal result = n * (unit == QStringLiteral("em") ? em : 1);
+    require(std::isfinite(result) && qAbs(result) < 8388607.0);
+    return result;
+}
+inline QJsonObject captionMedia(const QJsonValue &value, const QJsonObject &figure, qreal em, const QPalette &palette) {
+    const auto media = CompiledContent::containerObject(value,
+        {QStringLiteral("strut"), QStringLiteral("vertical_align"), QStringLiteral("max_width"), QStringLiteral("positioning"),
+         QStringLiteral("after"), QStringLiteral("focus_outline")}, {QStringLiteral("strut"), QStringLiteral("vertical_align")});
+    const auto strut = CompiledContent::containerObject(media.value(QStringLiteral("strut")),
+        {QStringLiteral("font_scale"), QStringLiteral("bold"), QStringLiteral("italic"), QStringLiteral("code"),
+         QStringLiteral("language"), QStringLiteral("direction")}, {QStringLiteral("font_scale"), QStringLiteral("direction")});
+    require(strut.value(QStringLiteral("font_scale")).isDouble());
+    const qreal scale = strut.value(QStringLiteral("font_scale")).toDouble();
+    require(std::isfinite(scale) && scale >= 0 && std::isfinite(scale * em) && scale * em < 8388607.0);
+    for (const auto &key : {QStringLiteral("bold"), QStringLiteral("italic"), QStringLiteral("code")})
+        require(!strut.contains(key) || strut.value(key).isBool());
+    require(!strut.contains(QStringLiteral("language")) || strut.value(QStringLiteral("language")).isString());
+    const QString language = strut.value(QStringLiteral("language")).toString();
+    const auto bytes = language.toUtf8();
+    require(bytes.size() <= 32 * 1024 * 1024 && QString::fromUtf8(bytes) == language);
+    require(strut.value(QStringLiteral("direction")) == QStringLiteral("ltr") || strut.value(QStringLiteral("direction")) == QStringLiteral("rtl"));
+    const bool missingMedia = CompiledContent::present(figure.value(QStringLiteral("missing_content")));
+    require(media.value(QStringLiteral("vertical_align")) == (missingMedia ? QStringLiteral("baseline") : QStringLiteral("middle")));
+    const auto span = figure.value(QStringLiteral("image_span")).toObject();
+    const auto image = span.value(QStringLiteral("image")).toObject();
+    require(!CompiledContent::present(image.value(QStringLiteral("map"))));
+    const bool action = (span.value(QStringLiteral("kind")) == QStringLiteral("link")
+        || span.value(QStringLiteral("kind")) == QStringLiteral("external_link"))
+        && span.value(QStringLiteral("target")).isString() && !span.value(QStringLiteral("target")).toString().isEmpty();
+    const bool positioned = CompiledContent::present(media.value(QStringLiteral("positioning")));
+    if (positioned) require(!missingMedia && media.value(QStringLiteral("positioning")) == QStringLiteral("relative_auto"));
+    if (CompiledContent::present(media.value(QStringLiteral("max_width")))) {
+        require(!missingMedia);
+        const auto cap = CompiledContent::containerObject(media.value(QStringLiteral("max_width")),
+            {QStringLiteral("percent"), QStringLiteral("subtract")}, {QStringLiteral("percent"), QStringLiteral("subtract")});
+        require(cap.value(QStringLiteral("percent")).isDouble() && cap.value(QStringLiteral("percent")).toDouble() == 100);
+        length(cap.value(QStringLiteral("subtract")), em);
+    }
+    if (CompiledContent::present(media.value(QStringLiteral("after")))) {
+        require(!missingMedia && positioned && action);
+        const auto after = CompiledContent::containerObject(media.value(QStringLiteral("after")),
+            {QStringLiteral("width"), QStringLiteral("height"), QStringLiteral("side"), QStringLiteral("inset"),
+             QStringLiteral("bottom"), QStringLiteral("paint")},
+            {QStringLiteral("width"), QStringLiteral("height"), QStringLiteral("side"), QStringLiteral("inset"), QStringLiteral("bottom")});
+        const auto fixed = [&](const char *key, qreal expected) {
+            const auto n = after.value(QLatin1StringView(key));
+            require(n.isObject() && n.toObject().value(QStringLiteral("unit")) == QStringLiteral("px"));
+            require(captionSignedLength(n, em) == expected);
+        };
+        fixed("width", 15); fixed("height", 11); fixed("inset", 6); fixed("bottom", -11);
+        require(after.value(QStringLiteral("side")) == QStringLiteral("left") || after.value(QStringLiteral("side")) == QStringLiteral("right"));
+        if (CompiledContent::present(after.value(QStringLiteral("paint")))) {
+            const auto paint = CompiledContent::containerObject(after.value(QStringLiteral("paint")),
+                {QStringLiteral("graphic"), QStringLiteral("invert")}, {QStringLiteral("graphic")});
+            require(paint.value(QStringLiteral("graphic")) == QStringLiteral("magnify_clip_ltr_v1")
+                || paint.value(QStringLiteral("graphic")) == QStringLiteral("magnify_clip_rtl_v1"));
+            require(!paint.contains(QStringLiteral("invert")) || paint.value(QStringLiteral("invert")).isBool());
+        }
+    }
+    if (CompiledContent::present(media.value(QStringLiteral("focus_outline")))) {
+        require(!missingMedia && action);
+        const auto focus = CompiledContent::containerObject(media.value(QStringLiteral("focus_outline")),
+            {QStringLiteral("width"), QStringLiteral("color"), QStringLiteral("radius"), QStringLiteral("offset")},
+            {QStringLiteral("width"), QStringLiteral("color"), QStringLiteral("radius"), QStringLiteral("offset")});
+        length(focus.value(QStringLiteral("width")), em); length(focus.value(QStringLiteral("radius")), em);
+        captionSignedLength(focus.value(QStringLiteral("offset")), em);
+        color(focus.value(QStringLiteral("color")), palette, QPalette::Text);
+    }
+    return media;
+}
+inline std::optional<TableCaptionInput> tableCaptionInput(const QJsonObject &figure,
+                                                        qreal em, const QPalette &palette,
+                                                        qreal rootViewportCssPixels) {
+    const auto value = figure.value(QStringLiteral("table_caption_layout"));
+    if (!CompiledContent::present(value)) return std::nullopt;
+    require(std::isfinite(rootViewportCssPixels) && rootViewportCssPixels >= 0);
+    const auto layout = CompiledContent::containerObject(value,
+        {QStringLiteral("collapse"), QStringLiteral("table_border"), QStringLiteral("caption_border"),
+         QStringLiteral("media"), QStringLiteral("caption_before"), QStringLiteral("viewport_states"), QStringLiteral("wrapper"), QStringLiteral("missing_link_paint"), QStringLiteral("caption_link_paint")},
+        {QStringLiteral("collapse"), QStringLiteral("table_border"), QStringLiteral("caption_border"), QStringLiteral("media"), QStringLiteral("wrapper")});
+    require(layout.value(QStringLiteral("collapse")) == QStringLiteral("collapse"));
+    require(figure.value(QStringLiteral("frame_border")).isObject()
+        && figure.value(QStringLiteral("frame_border")).toObject().size() == 1
+        && figure.value(QStringLiteral("frame_border")).toObject().value(QStringLiteral("kind")) == QStringLiteral("none"));
+    const auto image = figure.value(QStringLiteral("image_span")).toObject().value(QStringLiteral("image")).toObject();
+    require(!CompiledContent::present(image.value(QStringLiteral("static_poster"))));
+    const auto missingPaint = MissingFigurePaint::validate(layout.value("missing_link_paint"), em);
+    MissingFigurePaint::validate(layout.value("caption_link_paint"), em);
+    if (!missingPaint.isEmpty()) {
+        require(missing(figure) && !SemanticHtml::present(figure.value("missing_content").toObject().value("link_paint")));
+        const auto label = figure.value("missing_content").toObject().value("label").toObject();
+        require((label.value("kind") == "link" || label.value("kind") == "external_link") && !label.value("target").toString().isEmpty());
+        require(!SemanticHtml::present(label.value("foreground")) || label.value("foreground") == missingPaint.value("normal").toObject().value("foreground"));
+    }
+    TableCaptionInput input;
+    input.wrapper = captionWrapperStyle(layout.value(QStringLiteral("wrapper")), em);
+    input.tableBorders = captionPhysicalBorders(layout.value(QStringLiteral("table_border")), em, palette);
+    input.captionBorders = captionPhysicalBorders(layout.value(QStringLiteral("caption_border")), em, palette);
+    input.media = captionMedia(layout.value(QStringLiteral("media")), figure, em, palette);
+    input.before = captionBeforeStyle(layout.value(QStringLiteral("caption_before")), em);
+    const auto states = layout.value(QStringLiteral("viewport_states"));
+    require(states.isUndefined() || states.isArray());
+    require(states.toArray().size() <= 16);
+    double previous = 4294967296.0;
+    for (const auto &stateValue : states.toArray()) {
+        const auto state = CompiledContent::containerObject(stateValue,
+            {QStringLiteral("max_width_px"), QStringLiteral("wrapper"), QStringLiteral("media"), QStringLiteral("caption_before")},
+            {QStringLiteral("max_width_px"), QStringLiteral("wrapper"), QStringLiteral("media")});
+        const auto maximum = state.value(QStringLiteral("max_width_px"));
+        require(maximum.isDouble() && std::isfinite(maximum.toDouble())
+            && maximum.toDouble() >= 0 && maximum.toDouble() < previous
+            && std::floor(maximum.toDouble()) == maximum.toDouble());
+        previous = maximum.toDouble();
+        const auto wrapper = captionWrapperStyle(state.value(QStringLiteral("wrapper")), em);
+        const auto media = captionMedia(state.value(QStringLiteral("media")), figure, em, palette);
+        const auto before = captionBeforeStyle(state.value(QStringLiteral("caption_before")), em);
+        if (rootViewportCssPixels <= maximum.toDouble()) {
+            input.viewportState = true; input.wrapper = wrapper; input.before = before; input.media = media;
+        }
+    }
+    if (CompiledContent::present(input.media.value(QStringLiteral("max_width"))))
+        input.mediaLimitSubtract = length(input.media.value(QStringLiteral("max_width")).toObject().value(QStringLiteral("subtract")), em);
+    return input;
+}
+
 inline QJsonObject validate(const QJsonValue &value, qreal em, const QPalette &palette) {
     require(value.isObject());
     const auto object = value.toObject();
@@ -252,7 +485,7 @@ inline QJsonObject validate(const QJsonValue &value, qreal em, const QPalette &p
     else required.append({QStringLiteral("image_span"), QStringLiteral("sizing")});
     for (const auto &key : required) require(object.contains(key));
     for (auto it = object.begin(); it != object.end(); ++it)
-        require(required.contains(it.key()) || it.key() == "caption_blocks" || it.key() == "caption_text_align" || it.key() == "frame_min_width");
+        require(required.contains(it.key()) || it.key() == "caption_blocks" || it.key() == "caption_text_align" || it.key() == "frame_min_width" || it.key() == "table_caption_layout");
     require(QStringList{"thumbnail", "framed"}.contains(object.value("format").toString())
         && QStringList{"none", "center", "float_left", "float_right"}.contains(object.value("placement").toString())
         && QStringList{"none", "left", "right", "both"}.contains(object.value("clear").toString()));
@@ -267,6 +500,7 @@ inline QJsonObject validate(const QJsonValue &value, qreal em, const QPalette &p
         FigureSizing::request(object);
     }
     frameMinWidth(object.value(QStringLiteral("frame_min_width")));
+    tableCaptionInput(object, em, palette, 0);
     require(object.value("caption").isArray());
     if (SemanticHtml::present(object.value("caption_blocks")))
         require(object.value("caption_blocks").isArray() && object.value("caption").toArray().isEmpty());
@@ -322,6 +556,32 @@ inline void margins(QTextFrameFormat &format, Edges values) {
     format.setTopMargin(values.top); format.setRightMargin(values.right);
     format.setBottomMargin(values.bottom); format.setLeftMargin(values.left);
 }
+inline constexpr int posterCaptionProperty = ownerProperty + 13;
+inline const QString posterCaptionCapability = QStringLiteral("wikidict.stl-caption-exclusion/1");
+inline bool staticPoster(const QJsonObject &figure) {
+    return !missing(figure) && !SemanticHtml::checkedStaticPoster(
+        figure.value("image_span").toObject().value("image").toObject()).isEmpty();
+}
+inline bool posterNarrow(const QJsonObject &figure, qreal rootViewportWidth) {
+    if (!staticPoster(figure)) return false;
+    require(figure.value("format") == QStringLiteral("thumbnail")
+        && figure.value("sizing") == QStringLiteral("requested_fit"));
+    require(std::isfinite(rootViewportWidth) && rootViewportWidth > 0);
+    return rootViewportWidth <= 639;
+}
+inline void posterPlacement(QTextFrameFormat &format, const QJsonObject &figure,
+                            qreal normalBodyEm, qreal rootViewportWidth) {
+    if (!staticPoster(figure)) return;
+    const bool narrow = posterNarrow(figure, rootViewportWidth);
+    margins(format, narrow ? Edges{0, 0, 0, 0} : edges(figure.value("margins"), normalBodyEm));
+    const int placement = narrow ? 1 : QStringList{"none", "center", "float_left", "float_right"}
+        .indexOf(figure.value("placement").toString());
+    format.setPosition(placement == 2 ? QTextFrameFormat::FloatLeft
+        : placement == 3 ? QTextFrameFormat::FloatRight : QTextFrameFormat::InFlow);
+    format.setProperty(placementProperty, placement);
+    // The narrow source rule does not reset authored clearance.
+}
+
 inline QTextFrameFormat ownedFormat(const QString &role, int owner = -1) {
     QTextFrameFormat format; format.setMargin(0); format.setPadding(0); format.setBorder(0);
     format.setProperty(ownerProperty, capability); format.setProperty(clearProperty, 0);
@@ -329,6 +589,170 @@ inline QTextFrameFormat ownedFormat(const QString &role, int owner = -1) {
     if (owner >= 0) format.setProperty(helperOwnerProperty, owner);
     return format;
 }
+inline QVariantMap tableCaptionMarker() {
+    return {{QStringLiteral("capability"), tableCaptionCapability}};
+}
+inline QVariantMap tableCaptionBefore(const std::optional<QJsonObject> &source, qreal em) {
+    if (!source) return {};
+    const auto &style = *source;
+    const auto margin = CompiledContent::present(style.value(QStringLiteral("margins")))
+        ? edges(style.value(QStringLiteral("margins")), em) : Edges{0, 0, 0, 0};
+    return {{QStringLiteral("width"), length(style.value(QStringLiteral("width")).toObject().value(QStringLiteral("length")), em)},
+        {QStringLiteral("height"), length(style.value(QStringLiteral("height")), em)},
+        {QStringLiteral("margins"), QVariantList{margin.top, margin.right, margin.bottom, margin.left}},
+        {QStringLiteral("side"), style.value(QStringLiteral("float_side")) == QStringLiteral("left") ? 2 : 3}};
+}
+inline QFont tableCaptionStrutFont(const QJsonObject &media, qreal em, const QFont &body) {
+    const auto strut = media.value(QStringLiteral("strut")).toObject();
+    const qreal pixels = em * strut.value(QStringLiteral("font_scale")).toDouble();
+    QFont font = body;
+    if (strut.value(QStringLiteral("code")).toBool()) {
+        font.setFamilies(QStringList{QStringLiteral("monospace")}); font.setStyleHint(QFont::Monospace);
+    }
+    if (pixels == 0) { font.setFamilies(QStringList{SemanticHtml::zeroFontFamilyName}); font.setPointSizeF(1); }
+    else font.setPointSizeF(pixels * 72 / QFontMetricsF(QFont()).fontDpi());
+    font.setWeight(strut.value(QStringLiteral("bold")).toBool() ? QFont::Bold : QFont::Normal);
+    font.setItalic(strut.value(QStringLiteral("italic")).toBool());
+    return font;
+}
+inline QVariantMap tableCaptionMediaPolicy(const TableCaptionInput &input, const QJsonObject &figure,
+                                           qreal em, const QPalette &palette, const QFont &body, qreal sourceWidth) {
+    auto policy = tableCaptionMarker();
+    const auto &media = input.media;
+    const auto strut = media.value(QStringLiteral("strut")).toObject();
+    policy.insert(QStringLiteral("source_media"), media);
+    policy.insert(QStringLiteral("source_width"), sourceWidth);
+    policy.insert(QStringLiteral("strut_font"), tableCaptionStrutFont(media, em, body));
+    policy.insert(QStringLiteral("strut_zero"), strut.value(QStringLiteral("font_scale")).toDouble() == 0);
+    policy.insert(QStringLiteral("direction"), strut.value(QStringLiteral("direction")) == QStringLiteral("rtl") ? int(Qt::RightToLeft) : int(Qt::LeftToRight));
+    policy.insert(QStringLiteral("language"), strut.value(QStringLiteral("language")).toString());
+    policy.insert(QStringLiteral("middle"), media.value(QStringLiteral("vertical_align")) == QStringLiteral("middle"));
+    policy.insert(QStringLiteral("positioned"), media.value(QStringLiteral("positioning")) == QStringLiteral("relative_auto"));
+    const auto inset = edges(figure.value(QStringLiteral("image_insets")), em);
+    const qreal border = borderWidth(figure.value(QStringLiteral("image_border")), em);
+    policy.insert(QStringLiteral("box"), QVariantList{inset.top + border, inset.right + border, inset.bottom + border, inset.left + border});
+    const auto sourceBorder = figure.value(QStringLiteral("image_border")).toObject();
+    policy.insert(QStringLiteral("image_paint"), QVariantMap{{QStringLiteral("border_width"), border},
+        {QStringLiteral("border_color"), sourceBorder.value(QStringLiteral("kind")) == QStringLiteral("solid")
+            ? color(sourceBorder.value(QStringLiteral("color")), palette, QPalette::Mid) : QColor(Qt::transparent)},
+        {QStringLiteral("background"), color(figure.value(QStringLiteral("image_background")), palette, QPalette::Base)}});
+    if (input.mediaLimitSubtract) policy.insert(QStringLiteral("subtract"), *input.mediaLimitSubtract);
+    QVariantMap after;
+    if (CompiledContent::present(media.value(QStringLiteral("after")))) {
+        const auto source = media.value(QStringLiteral("after")).toObject();
+        after = {{QStringLiteral("width"), length(source.value(QStringLiteral("width")), em)},
+            {QStringLiteral("height"), length(source.value(QStringLiteral("height")), em)},
+            {QStringLiteral("inset"), length(source.value(QStringLiteral("inset")), em)},
+            {QStringLiteral("bottom"), captionSignedLength(source.value(QStringLiteral("bottom")), em)},
+            {QStringLiteral("right"), source.value(QStringLiteral("side")) == QStringLiteral("right")}};
+        if (CompiledContent::present(source.value(QStringLiteral("paint")))) {
+            const auto paint = source.value(QStringLiteral("paint")).toObject();
+            after.insert(QStringLiteral("graphic"), paint.value(QStringLiteral("graphic")).toString());
+            after.insert(QStringLiteral("invert"), paint.value(QStringLiteral("invert")).toBool());
+        }
+    }
+    policy.insert(QStringLiteral("after"), after);
+    QVariantMap focus;
+    if (CompiledContent::present(media.value(QStringLiteral("focus_outline")))) {
+        const auto source = media.value(QStringLiteral("focus_outline")).toObject();
+        focus = {{QStringLiteral("width"), length(source.value(QStringLiteral("width")), em)},
+            {QStringLiteral("radius"), length(source.value(QStringLiteral("radius")), em)},
+            {QStringLiteral("offset"), captionSignedLength(source.value(QStringLiteral("offset")), em)},
+            {QStringLiteral("color"), color(source.value(QStringLiteral("color")), palette, QPalette::Text)}};
+    }
+    policy.insert(QStringLiteral("focus"), focus);
+    return policy;
+}
+inline void tableCaptionMediaFrame(QTextFrame *image, const QVariantMap &policy, QTextDocument *document) {
+    auto format = image->frameFormat(); format.setMargin(0); format.setPadding(0); format.setBorder(0);
+    format.setBorderStyle(QTextFrameFormat::BorderStyle_None); format.setBackground(Qt::transparent);
+    format.setProperty(tableCaptionProperty, policy);
+    format.setLayoutDirection(Qt::LayoutDirection(policy.value(QStringLiteral("direction")).toInt()));
+    if (format != image->frameFormat()) image->setFrameFormat(format);
+    for (auto it = image->begin(); !it.atEnd(); ++it) {
+        const auto block = it.currentBlock(); if (!block.isValid()) continue;
+        if (!policy.value(QStringLiteral("middle")).toBool()) continue;
+        auto blockFormat = block.blockFormat(); blockFormat.setAlignment(Qt::AlignHCenter | Qt::AlignAbsolute);
+        blockFormat.clearProperty(QTextFormat::LineHeight); blockFormat.clearProperty(QTextFormat::LineHeightType);
+        blockFormat.setLayoutDirection(format.layoutDirection());
+        QTextCursor edit(block);
+        if (blockFormat != block.blockFormat()) edit.setBlockFormat(blockFormat);
+        auto character = block.charFormat(); character.setFont(policy.value(QStringLiteral("strut_font")).value<QFont>());
+        if (character != block.charFormat()) edit.setBlockCharFormat(character);
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+            auto object = fragment.charFormat(); object.setVerticalAlignment(QTextCharFormat::AlignNormal);
+            QTextCursor change(document); change.setPosition(fragment.position());
+            change.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
+            if (object != fragment.charFormat()) change.setCharFormat(object);
+        }
+    }
+    document->markContentsDirty(image->firstPosition(), image->lastPosition() - image->firstPosition() + 1);
+}
+inline void tableCaptionPlacement(QTextFrameFormat &format, const TableCaptionInput &input,
+                                  const QJsonObject &figure, qreal em) {
+    Q_UNUSED(figure);
+    Edges margin{0, 0, 0, 0};
+    int placement = 0, clear = 0;
+    QVariantList autos{false, false, false, false};
+    {
+        // Base and selected viewport wrappers are complete physical states.
+        const auto &style = input.wrapper;
+        if (CompiledContent::present(style.value(QStringLiteral("margins"))))
+            margin = edges(style.value(QStringLiteral("margins")), em);
+        if (CompiledContent::present(style.value(QStringLiteral("margin_values")))) {
+            const auto values = style.value(QStringLiteral("margin_values")).toObject();
+            qreal *sides[]{&margin.top, &margin.right, &margin.bottom, &margin.left};
+            const QStringList names{"top", "right", "bottom", "left"};
+            for (int i = 0; i < 4; ++i) {
+                const auto tagged = values.value(names[i]).toObject();
+                autos[i] = tagged.contains(QStringLiteral("auto"));
+                *sides[i] = autos[i].toBool() ? 0 : length(tagged.value(QStringLiteral("length")), em);
+            }
+        }
+        if (style.value(QStringLiteral("float_side")) == QStringLiteral("left")) placement = 2;
+        else if (style.value(QStringLiteral("float_side")) == QStringLiteral("right")) placement = 3;
+        if (CompiledContent::present(style.value(QStringLiteral("clear"))))
+            clear = QStringList{"none", "left", "right", "both"}.indexOf(style.value(QStringLiteral("clear")).toString());
+    }
+    margins(format, margin);
+    format.setPosition(placement == 2 ? QTextFrameFormat::FloatLeft
+        : placement == 3 ? QTextFrameFormat::FloatRight : QTextFrameFormat::InFlow);
+    format.setProperty(placementProperty, placement); format.setProperty(clearProperty, clear);
+    auto policy = tableCaptionMarker(); policy.insert(QStringLiteral("autos"), autos);
+    const auto oldPolicy = format.property(tableCaptionProperty).toMap();
+    if (oldPolicy.contains(QStringLiteral("palette"))) policy.insert(QStringLiteral("palette"), oldPolicy.value(QStringLiteral("palette")));
+    format.setProperty(tableCaptionProperty, policy);
+}
+inline QTextTableFormat tableCaptionTableFormat(const QString &role, int owner,
+                                                const QVariantList &physical, bool collapse) {
+    QTextTableFormat format;
+    format.merge(ownedFormat(role, owner));
+    format.setProperty(tableCaptionProperty, tableCaptionMarker());
+    format.setProperty(SemanticHtml::tableBoxOwnerProperty, SemanticHtml::tableBoxCapability);
+    format.setProperty(SemanticHtml::tableBoxClearProperty, 0);
+    format.setProperty(SemanticHtml::cellStylePolicyProperty, SemanticHtml::cellStyleCapability);
+    format.setProperty(SemanticHtml::tablePhysicalEdgesProperty, QVariantMap{
+        {QStringLiteral("padding"), QVariantList{0.0, 0.0, 0.0, 0.0}},
+        {QStringLiteral("borders"), physical}});
+    // The existing allocator resolves this request after its intrinsic pass.
+    format.setProperty(SemanticHtml::tableBoxWidthProperty, QVariantMap{
+        {QStringLiteral("unit"), QStringLiteral("percent")}, {QStringLiteral("value"), 100.0}});
+    format.setProperty(SemanticHtml::tableBoxPaddingProperty, QVariantList{0.0, 0.0, 0.0, 0.0});
+    format.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+    format.setBorderStyle(QTextFrameFormat::BorderStyle_None);
+    format.setCellPadding(0); format.setCellSpacing(0); format.setBorderCollapse(collapse);
+    format.setAlignment(Qt::AlignLeft | Qt::AlignAbsolute);
+    return format;
+}
+inline void initializeCaptionCell(QTextTable *table) {
+    require(table && table->rows() == 1 && table->columns() == 1);
+    auto cell = table->cellAt(0, 0); auto format = cell.format().toTableCellFormat();
+    format.setPadding(0); format.setBorder(0); format.setBorderStyle(QTextFrameFormat::BorderStyle_None);
+    format.setVerticalAlignment(QTextCharFormat::AlignTop); cell.setFormat(format);
+}
+
 inline bool belongs(QTextFrame *frame, const QString &role, int owner) {
     const auto format = frame->frameFormat();
     return format.stringProperty(ownerProperty) == capability && format.stringProperty(roleProperty) == role
@@ -433,7 +857,13 @@ inline bool applyAsset(QTextImageFormat &format, const QJsonObject &figure, cons
     const auto fallback = format.property(placeholderSizeProperty).toSizeF();
     require(std::isfinite(fallback.width()) && fallback.width() > 0
         && std::isfinite(fallback.height()) && fallback.height() >= 0);
-    const auto resolved = asset.originalVerified
+    const auto posterImage = figure.value("image_span").toObject().value("image").toObject();
+    const auto poster = SemanticHtml::checkedStaticPoster(posterImage);
+    const auto resolved = !poster.isEmpty()
+        ? (asset.state == MediaPanel::InlineImageState::Ready
+            ? std::optional<QSizeF>(QSizeF(posterImage.value("width_px").toDouble(), posterImage.value("height_px").toDouble()))
+            : std::nullopt)
+        : asset.originalVerified
         ? FigureSizing::resolveOriginal(FigureSizing::request(figure), asset.intrinsic)
         : FigureSizing::resolve(FigureSizing::request(figure), asset);
     const bool ready = resolved && std::isfinite(resolved->width()) && resolved->width() > 0 && resolved->width() < 8388607.0
@@ -451,11 +881,12 @@ inline bool applyAsset(QTextImageFormat &format, const QJsonObject &figure, cons
     format.clearProperty(SemanticHtml::inlineImageBorderProperty);
     return ready;
 }
-inline void reflow(QTextDocument *document);
+inline void reflow(QTextDocument *document, qreal rootViewportWidth = std::numeric_limits<qreal>::quiet_NaN());
 // Initial construction only, before registration. The caller recursively expands
 // caption flows and registers the complete inventory after construction finishes.
 inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
-        QVector<FlowConstruction::Owner> &owners, const QPalette &palette) {
+        QVector<FlowConstruction::Owner> &owners, const QPalette &palette,
+        qreal rootViewportWidth = std::numeric_limits<qreal>::quiet_NaN()) {
     const QPointer<QTextDocument> guard(document);
     require(guard && !document->isLayoutEnabled());
     const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
@@ -492,6 +923,11 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
         const qreal em = meta.value("normal_body_em").toDouble();
         const qreal points = meta.value("caption_points").toDouble();
         const auto figure = validate(meta.value("figure"), em, palette);
+        const auto tableCaption = tableCaptionInput(figure, em, palette, rootViewportWidth);
+        const auto sourceLayout = figure.value("table_caption_layout").toObject();
+        if (SemanticHtml::present(sourceLayout.value("missing_link_paint")) || SemanticHtml::present(sourceLayout.value("caption_link_paint")))
+            require(layout->property("_wikidictFigureLinkStateCapability").toString() == MissingFigurePaint::fixedPolicy);
+        if (tableCaption) require(layout->property("_wikidictFigureTableCaptionCapability").toString() == tableCaptionCapability);
         if (missing(figure)) require(layout->property("_wikidictFigureMissingWrapCapability").toString() == missingWrapCapability);
         require(meta.value("caption_present").toBool() == captionPresent(figure) && std::isfinite(points) && points >= 0);
         const auto alignmentName = SemanticHtml::textAlignment(meta.value("caption_alignment"));
@@ -512,6 +948,12 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
         outer.setProperty(placementProperty, placement);
         const int clear = QStringList{"none", "left", "right", "both"}.indexOf(figure.value("clear").toString());
         outer.setProperty(clearProperty, clear);
+        posterPlacement(outer, figure, em, rootViewportWidth);
+        if (tableCaption) {
+            tableCaptionPlacement(outer, *tableCaption, figure, em);
+            auto policy = outer.property(tableCaptionProperty).toMap(); policy.insert(QStringLiteral("palette"), palette);
+            outer.setProperty(tableCaptionProperty, policy);
+        }
         outer.setProperty(dataProperty, QJsonDocument(meta).toJson(QJsonDocument::Compact)); outer.setProperty(pointsProperty, points);
         const auto frame = FlowConstruction::insertFigure(owners[item.owner], item.cursor, item.run, outer, [&](QTextFrame *rawFrame) {
             const QPointer<QTextFrame> frame(rawFrame);
@@ -520,6 +962,14 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
             border(imageFormat, figure.value("image_border"), em, palette);
             imageFormat.setBackground(color(figure.value("image_background"), palette, QPalette::Base));
             auto cursor = frame->firstCursorPosition();
+            QPointer<QTextTable> mediaGrid;
+            if (tableCaption) {
+                mediaGrid = cursor.insertTable(1, 1, tableCaptionTableFormat(
+                    QStringLiteral("media-grid"), ownerIndex, tableCaption->tableBorders, true));
+                initializeCaptionCell(mediaGrid);
+                cursor = mediaGrid->cellAt(0, 0).firstCursorPosition();
+                imageFormat.setProperty(tableCaptionProperty, tableCaptionMarker());
+            }
             const QPointer<QTextFrame> imageFrame(cursor.insertFrame(imageFormat));
             require(guard && frame && imageFrame);
             if (missing(figure)) {
@@ -530,10 +980,12 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
                 require(guard && frame && imageFrame && label);
                 insertHtml(label->firstCursorPosition(), meta.value("image_html").toString(), -1, Qt::AlignHCenter);
                 require(guard && frame && imageFrame && label);
-                markMissingLabel(label, ownerIndex, content, em, palette);
+                markMissingLabel(label, ownerIndex, content, em, palette,
+                    figure.value("table_caption_layout").toObject().value("missing_link_paint").toObject());
                 hideGeneratedEmptyBlocks(imageFrame);
             } else {
-                insertHtml(imageFrame->firstCursorPosition(), meta.value("image_html").toString(), -1, Qt::AlignLeft | Qt::AlignAbsolute);
+                insertHtml(imageFrame->firstCursorPosition(), meta.value("image_html").toString(),
+                    -1, Qt::AlignLeft | Qt::AlignAbsolute);
                 require(guard && frame && imageFrame);
                 QTextFragment image;
                 for (auto it = imageFrame->begin(); !it.atEnd(); ++it) {
@@ -556,14 +1008,31 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
                 QTextCursor change(document); change.setPosition(image.position()); change.setPosition(image.position() + 1, QTextCursor::KeepAnchor); change.setCharFormat(format);
             }
             const auto padding = edges(figure.value("caption_padding"), em);
-            if (meta.value("caption_present").toBool() || padding.top || padding.right || padding.bottom || padding.left) {
-                cursor.setPosition(imageFrame->lastPosition() + 1);
+            if (mediaGrid) hideGeneratedEmptyBlocks(mediaGrid);
+            if (tableCaption || staticPoster(figure) || meta.value("caption_present").toBool() || padding.top || padding.right || padding.bottom || padding.left) {
+                cursor.setPosition(mediaGrid ? mediaGrid->lastPosition() + 1 : imageFrame->lastPosition() + 1);
                 auto captionFormat = ownedFormat("caption", ownerIndex);
                 captionFormat.setBackground(color(figure.value("caption_background"), palette, QPalette::AlternateBase));
-                const QPointer<QTextFrame> caption(cursor.insertFrame(captionFormat));
+                QPointer<QTextFrame> caption;
+                if (tableCaption) {
+                    auto format = tableCaptionTableFormat(QStringLiteral("caption"), ownerIndex, tableCaption->captionBorders, false);
+                    format.setBackground(captionFormat.background());
+                    auto *table = cursor.insertTable(1, 1, format);
+                    initializeCaptionCell(table); caption = table;
+                } else caption = cursor.insertFrame(captionFormat);
                 require(guard && frame && caption);
                 cursor = caption->firstCursorPosition();
                 auto contentFormat = ownedFormat("caption-content", ownerIndex); margins(contentFormat, padding);
+                if (tableCaption) {
+                    auto policy = tableCaptionMarker();
+                    policy.insert(QStringLiteral("before"), tableCaptionBefore(tableCaption->before, em));
+                    contentFormat.setProperty(tableCaptionProperty, policy);
+                }
+                if (staticPoster(figure)) {
+                    require(layout->property("_wikidictPosterCaptionCapability").toString() == posterCaptionCapability);
+                    if (!posterNarrow(figure, rootViewportWidth))
+                        contentFormat.setProperty(posterCaptionProperty, posterCaptionCapability);
+                }
                 const QPointer<QTextFrame> content(cursor.insertFrame(contentFormat));
                 require(guard && frame && caption && content);
                 if (meta.value("caption_present").toBool()) {
@@ -583,7 +1052,7 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
 }
 // Format edits only. The caller owns the editFormats batch and re-registration;
 // this function never enables layout or starts a second registration lifecycle.
-inline void reflow(QTextDocument *document) {
+inline void reflow(QTextDocument *document, qreal rootViewportWidth) {
     const QPointer<QTextDocument> guard(document);
     require(guard && !document->isLayoutEnabled());
     const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
@@ -603,13 +1072,31 @@ inline void reflow(QTextDocument *document) {
         const auto meta = QJsonDocument::fromJson(outer.property(dataProperty).toByteArray()).object();
         const auto figure = meta.value("figure").toObject();
         const qreal em = meta.value("normal_body_em").toDouble();
-        const auto outside = edges(figure.value("margins"), em), inset = edges(figure.value("image_insets"), em), padding = edges(figure.value("caption_padding"), em);
+        const auto savedPalette = outer.property(tableCaptionProperty).toMap().value(QStringLiteral("palette"));
+        const auto tableCaption = tableCaptionInput(figure, em,
+            savedPalette.metaType().id() == QMetaType::QPalette ? savedPalette.value<QPalette>() : QPalette(), rootViewportWidth);
+        if (tableCaption) require(savedPalette.metaType().id() == QMetaType::QPalette);
+        if (tableCaption) {
+            require(layout->property("_wikidictFigureTableCaptionCapability").toString() == tableCaptionCapability);
+            tableCaptionPlacement(outer, *tableCaption, figure, em);
+        }
+        posterPlacement(outer, figure, em, rootViewportWidth);
+        const auto outside = Edges{outer.topMargin(), outer.rightMargin(), outer.bottomMargin(), outer.leftMargin()};
+        const auto inset = edges(figure.value("image_insets"), em), padding = edges(figure.value("caption_padding"), em);
         const qreal outerBorder = borderWidth(figure.value("frame_border"), em), imageBorder = borderWidth(figure.value("image_border"), em);
         QPointer<QTextFrame> imageFrame, captionFrame, contentFrame;
+        QPointer<QTextTable> mediaGrid;
         for (auto *child : frame->childFrames()) {
             if (belongs(child, "image", frame->objectIndex())) { require(!imageFrame); imageFrame = child; }
             if (belongs(child, "caption", frame->objectIndex())) { require(!captionFrame); captionFrame = child; }
+            if (tableCaption && belongs(child, "media-grid", frame->objectIndex())) {
+                require(!mediaGrid); mediaGrid = qobject_cast<QTextTable *>(child); require(mediaGrid);
+                for (auto *plane : mediaGrid->childFrames()) if (belongs(plane, "image", frame->objectIndex())) {
+                    require(!imageFrame); imageFrame = plane;
+                }
+            }
         }
+        require(bool(mediaGrid) == bool(tableCaption));
         require(imageFrame);
         if (captionFrame) for (auto *child : captionFrame->childFrames())
             if (belongs(child, "caption-content", frame->objectIndex())) { require(!contentFrame); contentFrame = child; }
@@ -621,7 +1108,13 @@ inline void reflow(QTextDocument *document) {
             QPointer<QTextFrame> label;
             for (auto *child : imageFrame->childFrames()) if (belongs(child, "missing-label", frame->objectIndex())) { require(!label); label = child; }
             require(label); auto labelFormat = label->frameFormat();
-            labelFormat.setWidth(QTextLength(QTextLength::FixedLength, width));
+            if (tableCaption) {
+                margins(labelFormat, inset);
+                border(labelFormat, figure.value("image_border"), em, savedPalette.value<QPalette>());
+                labelFormat.setBackground(color(figure.value("image_background"), savedPalette.value<QPalette>(), QPalette::Base));
+            }
+            labelFormat.setWidth(QTextLength(QTextLength::FixedLength,
+                tableCaption ? metric(width + inset.left + inset.right + 2 * imageBorder) : width));
             if (labelFormat != label->frameFormat()) label->setFrameFormat(labelFormat);
             require(guard && label && frame && imageFrame);
         } else {
@@ -643,25 +1136,52 @@ inline void reflow(QTextDocument *document) {
         qreal contentWidth = qMax(imageBox, metric(padding.left + padding.right));
         if (const auto minimum = frameMinWidth(figure.value(QStringLiteral("frame_min_width")))) {
             require(layout->property("_wikidictFigureMinWidthCapability").toString() == frameMinWidthCapability);
-            outer.setProperty(frameMinWidthProperty, *minimum);
+            if (tableCaption) outer.clearProperty(frameMinWidthProperty);
+            else outer.setProperty(frameMinWidthProperty, *minimum);
             contentWidth = qMax(contentWidth, *minimum);
         } else outer.clearProperty(frameMinWidthProperty);
         outer.setWidth(QTextLength(QTextLength::FixedLength, metric(contentWidth + outside.left + outside.right + 2 * outerBorder)));
+        if (tableCaption) {
+            // Rebuild from the original media dimensions; a previous caption
+            // floor must never become the next resource/font/viewport baseline.
+            const auto policy = tableCaptionMediaPolicy(*tableCaption, figure, em, savedPalette.value<QPalette>(), document->defaultFont(), width);
+            tableCaptionMediaFrame(imageFrame, policy, document);
+            auto cell = mediaGrid->cellAt(0, 0); auto cellFormat = cell.format().toTableCellFormat();
+            if (const auto minimum = frameMinWidth(figure.value(QStringLiteral("frame_min_width"))))
+                cellFormat.setProperty(SemanticHtml::cellMinimumWidthProperty,
+                    QVariantMap{{QStringLiteral("unit"), QStringLiteral("fixed")}, {QStringLiteral("value"), *minimum}});
+            else cellFormat.clearProperty(SemanticHtml::cellMinimumWidthProperty);
+            if (cellFormat != cell.format()) cell.setFormat(cellFormat);
+            require(contentFrame);
+            auto contentFormat = contentFrame->frameFormat(); auto beforePolicy = tableCaptionMarker();
+            beforePolicy.insert(QStringLiteral("before"), tableCaptionBefore(tableCaption->before, em));
+            contentFormat.setProperty(tableCaptionProperty, beforePolicy);
+            if (contentFormat != contentFrame->frameFormat()) contentFrame->setFrameFormat(contentFormat);
+        }
         if (outer != frame->frameFormat()) frame->setFrameFormat(outer);
         require(guard && layout && frame && imageFrame && document->documentLayout() == layout);
         // Only our three structural helpers follow the outer content width.
         // Authored rich-caption tables and nested figures retain their formats.
         for (const auto &helper : {imageFrame, captionFrame, contentFrame}) if (helper) {
             auto helperFormat = helper->frameFormat(); helperFormat.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+            if (helper == contentFrame && staticPoster(figure)) {
+                require(layout->property("_wikidictPosterCaptionCapability").toString() == posterCaptionCapability);
+                if (!posterNarrow(figure, rootViewportWidth))
+                    helperFormat.setProperty(posterCaptionProperty, posterCaptionCapability);
+                else helperFormat.clearProperty(posterCaptionProperty);
+            }
             if (helperFormat != helper->frameFormat()) helper->setFrameFormat(helperFormat);
             require(guard && layout && frame && imageFrame && document->documentLayout() == layout);
         }
+        if (tableCaption) {
+            document->markContentsDirty(frame->firstPosition(), frame->lastPosition() - frame->firstPosition() + 1);
+        }
         if (missing(figure)) continue;
-        if (height == 0 && imageSizingReady) {
+        if (!tableCaption && height == 0 && imageSizingReady) {
             auto block = document->findBlock(imagePosition); auto blockFormat = block.blockFormat();
             blockFormat.setLineHeight(0, QTextBlockFormat::FixedHeight);
             QTextCursor change(block); change.setBlockFormat(blockFormat);
-        } else {
+        } else if (!tableCaption) {
             auto block = document->findBlock(imagePosition); auto blockFormat = block.blockFormat();
             if (blockFormat.lineHeightType() == QTextBlockFormat::FixedHeight && blockFormat.lineHeight() == 0) {
                 blockFormat.clearProperty(QTextFormat::LineHeight); blockFormat.clearProperty(QTextFormat::LineHeightType);

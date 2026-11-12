@@ -284,7 +284,9 @@ inline bool project(QTextDocument *document, QVector<FlowConstruction::Owner> &o
                 format.setProperty(endProperty, double(p.end));
                 format.setProperty(emptyProperty, p.empty);
             }
-            mutations.append({paragraph.first, format});
+            // Insertion keeps the saved cursor's position but advances its anchor.
+            // Apply only this authored block, never the inserted Figure subtree.
+            mutations.append({QTextCursor(paragraph.first.block()), format});
         }
         // The stock hidden-empty-before-table branch reads the preceding
         // physical block rather than previousBlockFormat, and uses unscaled
