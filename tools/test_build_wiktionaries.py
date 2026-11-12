@@ -8498,6 +8498,128 @@ class PresentationInputContinuationTests(unittest.TestCase):
 
 
 
+class PlainCategoryBorrowTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);source=root/'source';source.mkdir()
+            paths={name:source/(name+'.tsv') for name in ('category-tree','category-stats')}
+            paths['category-tree'].write_bytes(b'English nouns\tNouns\n')
+            paths['category-stats'].write_bytes(b'English nouns\t42\t0\t0\n')
+            native=root/'native';native.mkdir()
+            records,compiler=RetainedNativeRoleTests().fixture(native)
+            roles=b.RetainedNativeToolRoles(records,zig_sha256=b.sha256_file(compiler))
+            hashes={name:b.sha256_file(path) for name,path in paths.items()}
+            yield SimpleNamespace(**locals())
+
+    def test_optional_empty_snapshots_preserve_borrower_contract(self):
+        for snapshots in (None,{}):
+            with self.subTest(snapshots=snapshots),self.fixture() as f:
+                with patch.object(b,'copy_verified_snapshot',side_effect=AssertionError('must not copy')):
+                    self.assertEqual(b.pinned_auxiliary_snapshots(snapshots,{},f.root/'workspace',borrower=f.roles),{})
+                self.assertEqual(f.roles.last_capture_borrow['borrowed_plain_category_files'],0)
+                self.assertEqual(f.roles.last_capture_borrow['avoided_copy_bytes'],0)
+
+    def test_exact_category_pair_borrows_without_copy_and_records_exact_bytes(self):
+        with self.fixture() as f:
+            original={name:(path.stat().st_ino,path.read_bytes()) for name,path in f.paths.items()}
+            with patch.object(b,'copy_verified_snapshot',wraps=b.copy_verified_snapshot) as copied:
+                cold=b.pinned_auxiliary_snapshots(f.paths,f.hashes,f.root/'cold-workspace')
+            self.assertEqual(copied.call_count,2)
+            with patch.object(b,'copy_verified_snapshot',side_effect=AssertionError('must not copy selected source')) as copied:
+                pinned=b.pinned_auxiliary_snapshots(f.paths,f.hashes,f.root/'borrowed-workspace',borrower=f.roles)
+            copied.assert_not_called();self.assertEqual(pinned,f.paths)
+            for name,path in pinned.items():self.assertEqual(cold[name].read_bytes(),path.read_bytes())
+            amount=sum(len(value[1]) for value in original.values())
+            self.assertEqual(f.roles.last_capture_borrow['avoided_plain_category_copy_bytes'],amount)
+            self.assertEqual(f.roles.last_capture_borrow['borrowed_plain_category_files'],2)
+            self.assertEqual(f.roles.last_capture_borrow['borrowed_capture_files'],0)
+            self.assertEqual(f.roles.last_capture_borrow['borrowed_roles'],sorted(f.paths))
+            self.assertFalse((f.root/'borrowed-workspace').exists())
+            for name,path in f.paths.items():self.assertEqual((path.stat().st_ino,path.read_bytes()),original[name])
+            args=b.pipeline_snapshot_args(f.root/'language-registry.tsv',pinned)
+            for name,path in pinned.items():self.assertIn(str(path),args)
+            # Unrelated sibling membership is not part of this two-file readset.
+            (f.source/'unrelated-note').write_text('not an input')
+            f.roles.require_unchanged()
+            print('CATEGORY_BORROW_COUNTER '+json.dumps(dict(cold_copy_calls=2,cold_copy_bytes=amount,
+                  borrowed_copy_calls=0,avoided_copy_bytes=amount),sort_keys=True))
+
+    def test_unbound_unknown_alias_and_owned_paths_keep_verified_copy_fallback(self):
+        for mode in ('unbound','unknown','alias','owned','wrong-name'):
+            with self.subTest(mode=mode),self.fixture() as f:
+                paths=dict(f.paths);kwargs=dict(borrower=f.roles)
+                if mode=='unbound':kwargs={}
+                elif mode=='unknown':
+                    path=f.source/'language-registry.tsv';path.write_bytes(b'en\tEnglish\n');paths={'language-registry':path}
+                elif mode=='alias':
+                    folder=f.root/'alias';folder.mkdir()
+                    paths={name:folder/path.name for name,path in f.paths.items()}
+                    for name,path in paths.items():path.symlink_to(f.paths[name])
+                elif mode=='owned':kwargs['owned_roots']=(f.source,)
+                elif mode=='wrong-name':
+                    path=f.source/'renamed-tree.tsv';path.write_bytes(f.paths['category-tree'].read_bytes())
+                    paths={'category-tree':path}
+                hashes={name:b.sha256_file(path) for name,path in paths.items()}
+                with patch.object(b,'copy_verified_snapshot',wraps=b.copy_verified_snapshot) as copied:
+                    pinned=b.pinned_auxiliary_snapshots(paths,hashes,f.root/'workspace',**kwargs)
+                self.assertEqual(copied.call_count,len(paths))
+                for name,path in pinned.items():self.assertEqual(path.read_bytes(),paths[name].read_bytes())
+                if kwargs:self.assertEqual(f.roles.last_capture_borrow['borrowed_plain_category_files'],0)
+
+    def test_wrong_selected_bytes_and_missing_source_refuse_before_copy(self):
+        for mode in ('digest','missing'):
+            with self.subTest(mode=mode),self.fixture() as f:
+                if mode=='digest':f.hashes['category-tree']='0'*64
+                else:f.paths['category-tree'].unlink()
+                with patch.object(b,'copy_verified_snapshot',side_effect=AssertionError('must not copy')) as copied:
+                    with self.assertRaises((ValueError,OSError)):
+                        b.pinned_auxiliary_snapshots(f.paths,f.hashes,f.root/'workspace',borrower=f.roles)
+                    copied.assert_not_called()
+
+    def test_borrowed_payload_and_source_directory_replacement_refuse(self):
+        for mode in ('bytes','replacement','missing','symlink','directory'):
+            with self.subTest(mode=mode),self.fixture() as f:
+                shadow=f.root/'shadow'
+                if mode=='directory':
+                    shadow.mkdir()
+                    for path in f.paths.values():os.link(path,shadow/path.name)
+                b.pinned_auxiliary_snapshots(f.paths,f.hashes,f.root/'workspace',borrower=f.roles)
+                path=f.paths['category-tree']
+                if mode=='bytes':path.write_bytes(path.read_bytes()+b'changed')
+                elif mode=='replacement':
+                    replacement=f.root/'replacement';replacement.write_bytes(path.read_bytes());replacement.replace(path)
+                elif mode=='missing':path.unlink()
+                elif mode=='symlink':
+                    target=f.root/'target';target.write_bytes(path.read_bytes());path.unlink();path.symlink_to(target)
+                else:f.source.rename(f.root/'retired-source');shadow.rename(f.source)
+                with self.assertRaises((ValueError,OSError)):f.roles.require_unchanged()
+
+    def test_parent_derives_both_category_payloads_and_source_route(self):
+        for mode in ('unchanged','missing-tree','missing-stats','missing-route','wrong-digest'):
+            with self.subTest(mode=mode),ReadonlyPreparedRetainedTests().fixture() as f:
+                source=f.root/'categories';source.mkdir()
+                paths={name:source/(name+'.tsv') for name in ('category-tree','category-stats')}
+                for name,path in paths.items():path.write_bytes((name+' selected bytes\n').encode())
+                hashes={name:b.sha256_file(path) for name,path in paths.items()}
+                b.pinned_auxiliary_snapshots(paths,hashes,f.workspace,borrower=f.roles)
+                binding=f.roles.prepared_dispatch()
+                cache=f.root/'cache-owned';cache.mkdir();st=cache.stat()
+                cfg=dict(f.cfg,date='20261001',output=str(f.root/'output'),raw_shard_root=str(f.root/'raw-owned'),
+                    edition_options={'toy':dict(auxiliary_snapshots={name:_initial_sealed_reference(path) for name,path in paths.items()},
+                        extraction_cache_root=dict(path=str(cache),device=st.st_dev,inode=st.st_ino,uid=st.st_uid,mode=stat.S_IMODE(st.st_mode)))})
+                if mode.startswith('missing-') and mode!='missing-route':
+                    name='category-tree' if mode=='missing-tree' else 'category-stats'
+                    binding['inputs']=[row for row in binding['inputs'] if row['identity']['path']!=str(paths[name])]
+                elif mode=='missing-route':del binding['directories'][str(source)]
+                elif mode=='wrong-digest':cfg['edition_options']['toy']['auxiliary_snapshots']['category-tree']['sha256']='0'*64
+                original=b.RetainedNativeToolRoles(f.selection,zig_sha256=f.identity['zig_sha256'])
+                if mode=='unchanged':original.authenticate_prepared_dispatch(binding,cfg)
+                else:
+                    with self.assertRaisesRegex(ValueError,'category'):
+                        original.authenticate_prepared_dispatch(binding,cfg)
+
+
 class ImmutableCaptureBorrowTests(unittest.TestCase):
     def selection(self, root):
         root.mkdir()

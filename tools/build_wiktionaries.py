@@ -2198,6 +2198,10 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                 return any(path==root or path in root.parents or root in path.parents for root in owned)
             bound_figures={}
             capture_bindings=0;reused_capture_bindings=0
+            for name,source in (snapshots or {}).items():
+                if name in captures or name not in ('category-tree','category-stats'):continue
+                if borrower.bind_plain_category(name,Path(source),hashes[name],owned_roots=owned):
+                    pinned[name]=Path(source);borrowed.add(name)
             for name,inventory in captures.items():
                 source=Path(snapshots[name]);root=source.parent
                 if source.name!=auxiliary_snapshot_filename(name):continue
@@ -2272,8 +2276,12 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         if borrower is not None:
             borrower.require_unchanged()
             avoided=set(copies)-needed
-            borrower.last_capture_borrow=dict(borrowed_roles=sorted(borrowed),borrowed_capture_files=len(avoided),
-                avoided_copy_bytes=sum(copies[key][0].stat().st_size for key in avoided))
+            plain=borrowed & {'category-tree','category-stats'}
+            borrower.last_capture_borrow=dict(borrowed_roles=sorted(borrowed),borrowed_capture_files=len(avoided)-len(plain),
+                avoided_copy_bytes=sum(copies[key][0].stat().st_size for key in avoided),
+                borrowed_plain_category_files=len(plain),
+                avoided_plain_category_copy_bytes=sum(Path(snapshots[name]).stat().st_size
+                    for name in plain))
             if phase_outcome is not None:
                 phase_outcome.update(capture_bindings=capture_bindings,
                                      reused_capture_bindings=reused_capture_bindings)
@@ -4260,7 +4268,16 @@ class RetainedNativeToolRoles:
                     or root.resolve()!=root or overlaps(root)
                     or any(node.is_symlink() for node in (root,*root.parents))):continue
             capture=figures.get(name) if name in figures else validated_auxiliary_capture(name,path,edition,cfg['date'])
-            if capture is None:continue
+            if capture is None:
+                if name in ('category-tree','category-stats'):
+                    declared=option['auxiliary_snapshots'][name]
+                    digest=declared['sha256'] if isinstance(declared,dict) else sha256_file(path)
+                    if self.bind_plain_category(name,path,digest,owned_roots=owned):
+                        if (observed.input_identities.get(path)!=self.input_identities[path]
+                                or observed.inputs.get(path)!=self.inputs[path]
+                                or observed.directories.get(root)!=self.directories[root]):
+                            raise ValueError('Prepared retained binding omitted a borrowed category input or route')
+                continue
             _,inventory=capture
             if name in figures:
                 key=tuple(sorted((role,str(snapshots[role].absolute())) for role in figures))
@@ -4326,6 +4343,25 @@ class RetainedNativeToolRoles:
             self.inputs[path] = stamp
             self.input_identities[path]=identity
         return dict(identity)
+
+    def bind_plain_category(self, name, path, digest, *, owned_roots):
+        """Borrow an authenticated category payload, not an inferred capture."""
+        if name not in ('category-tree','category-stats'):return False
+        root=path.parent
+        if (path.name!=auxiliary_snapshot_filename(name) or not path.is_absolute()
+                or path.resolve()!=path or any(node.is_symlink() for node in (path,*path.parents))
+                or any(root==owned or root in owned.parents or owned in root.parents for owned in owned_roots)):
+            return False
+        st=root.stat();identity=(st.st_dev,st.st_ino,st.st_mode,st.st_uid)
+        if root in self.directories and self.directories[root]!=identity:
+            raise ValueError('Borrowed category source directory changed')
+        if self.bind_input(path)['sha256']!=digest:
+            raise ValueError('Borrowed category input differs from selected bytes')
+        after=root.stat()
+        if identity!=(after.st_dev,after.st_ino,after.st_mode,after.st_uid):
+            raise ValueError('Borrowed category source directory changed while binding')
+        self.directories[root]=identity
+        return True
 
     def bind_capture(self, root, inventory, *, figure_guard=None):
         """Borrow only a complete freshly replayed capture under dispatch guards."""
