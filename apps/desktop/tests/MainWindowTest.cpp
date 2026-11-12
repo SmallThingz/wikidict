@@ -3141,7 +3141,8 @@ private slots:
                     QCOMPARE(all.selectedText(), sourceSelection);
                     QCOMPARE(figure->frameFormat(), originalFrame);
                     QCOMPARE(text->characterCount(), sourceCount - 1);
-                    QCOMPARE(text->text(0, -1), QString(sourceSelection).replace(QChar::ParagraphSeparator, QChar('\n')));
+                    QCOMPARE(text->text(0, -1), QString(sourceSelection).replace(QChar::ParagraphSeparator, QChar('\n'))
+                        .replace(QChar(u'\ufdd0'), QChar('\n')).replace(QChar(u'\ufdd1'), QChar('\n')));
                     QVariantMap prefixGeometry, suffixGeometry;
                     QVERIFY(QMetaObject::invokeMethod(layout, "wikidictLogicalPosition", Qt::DirectConnection,
                         Q_RETURN_ARG(QVariantMap, prefixGeometry), Q_ARG(int, first + 2)));
@@ -16795,6 +16796,76 @@ private slots:
         QCOMPARE(browser->toPlainText(), originalText);
     }
 
+    void readerAccessibilityKeepsTableSelectionSourceIntervals() {
+        MainWindow window{QString()}; window.resize(1180, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        QVERIFY(replaceStockReading(window, QString::fromUtf8(
+            "<p>Before</p><table border='1'><tr><td>Outside A</td><td rowspan='2'>Span e\xcc\x81 \xf0\x9f\x98\x80</td>"
+            "<td>Selected B</td><td>Outside B</td></tr><tr><td></td><td>Selected C</td><td>Outside C</td></tr></table><p>After</p>")));
+        auto *browser = window.reading_; auto *doc = browser->document();
+        auto span = doc->find("Span"); QVERIFY(!span.isNull()); auto *table = span.currentTable(); QVERIFY(table);
+        QImage pixels(6, 6, QImage::Format_ARGB32_Premultiplied); pixels.fill(Qt::blue);
+        doc->addResource(QTextDocument::ImageResource, QUrl("selection-object"), pixels);
+        QTextImageFormat image; image.setName("selection-object"); image.setWidth(6); image.setHeight(6);
+        QTextCursor imageCursor = span; imageCursor.setPosition(span.selectionEnd()); imageCursor.insertImage(image);
+        const auto spanCell = table->cellAt(0, 1), bCell = table->cellAt(0, 2), cCell = table->cellAt(1, 2);
+        QCOMPARE(spanCell.rowSpan(), 2); QCOMPARE(spanCell, table->cellAt(1, 1));
+        const QString raw = doc->toRawText(); const int revision = doc->revision();
+        auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->textInterface());
+        auto *text = accessible->textInterface(); QCOMPARE(text->characterCount(), doc->characterCount() - 1);
+        QString expected;
+        for (int i = 0; i < doc->characterCount() - 1; ++i) {
+            const QChar character = doc->characterAt(i);
+            expected += character == QChar::ParagraphSeparator || character.unicode() == 0xfdd0 || character.unicode() == 0xfdd1 ? QChar('\n') : character;
+        }
+        QCOMPARE(text->text(0, -1), expected); QCOMPARE(expected.size(), text->characterCount());
+        QVERIFY(expected.contains(QChar::ObjectReplacementCharacter)); QVERIFY(expected.contains(QString::fromUtf8("e\xcc\x81 \xf0\x9f\x98\x80")));
+        for (int i = 0; i < text->characterCount(); ++i) QCOMPARE(text->text(i, i + 1), expected.mid(i, 1));
+        QCOMPARE(text->text(spanCell.firstPosition() + 1, cCell.firstPosition() + 3),
+                 expected.mid(spanCell.firstPosition() + 1, cCell.firstPosition() + 3 - spanCell.firstPosition() - 1));
+        // Native selection expands the requested interior endpoints to real cells.
+        text->setSelection(0, spanCell.firstPosition() + 1, cCell.lastPosition() - 1);
+        const auto native = browser->textCursor(); QVERIFY(native.hasComplexSelection());
+        int firstRow = -1, rows = -1, firstColumn = -1, columns = -1;
+        native.selectedTableCells(&firstRow, &rows, &firstColumn, &columns);
+        QCOMPARE(firstRow, 0); QCOMPARE(rows, 2); QCOMPARE(firstColumn, 1); QCOMPARE(columns, 2);
+        QCOMPARE(text->selectionCount(), 2);
+        int begin = -1, end = -1;
+        text->selection(0, &begin, &end); QCOMPARE(begin, spanCell.firstPosition()); QCOMPARE(end, bCell.lastPosition());
+        const QString firstSelected = text->text(begin, end); QCOMPARE(firstSelected.count("Span"), 1);
+        QVERIFY(firstSelected.contains("Selected B")); QVERIFY(!firstSelected.contains("Outside"));
+        const int firstEnd = end;
+        text->selection(1, &begin, &end); QCOMPARE(begin, cCell.firstPosition()); QCOMPARE(end, cCell.lastPosition());
+        QCOMPARE(text->text(begin, end), QString("Selected C")); QVERIFY(firstEnd < begin);
+        const auto emptyUnselected = table->cellAt(1, 0);
+        QCOMPARE(emptyUnselected.firstPosition(), emptyUnselected.lastPosition());
+        QVERIFY(emptyUnselected.firstPosition() > firstEnd && emptyUnselected.firstPosition() < begin);
+        QCOMPARE(native.selectedText().count("Span"), 1); QVERIFY(native.selectedText().contains("Selected B")); QVERIFY(native.selectedText().contains("Selected C"));
+        QVERIFY(!native.selectedText().contains("Outside"));
+        text->selection(2, &begin, &end); QCOMPARE(begin, -1); QCOMPARE(end, -1);
+        // Individual source projections are read-only; they are not separate
+        // independently mutable native selections.
+        for (int index : {0, 1}) {
+            text->setSelection(index, cCell.firstPosition() + 1, cCell.lastPosition() - 1);
+            QVERIFY(browser->textCursor() == native); QCOMPARE(text->selectionCount(), 2);
+            text->removeSelection(index);
+            QVERIFY(browser->textCursor() == native); QCOMPARE(text->selectionCount(), 2);
+            int rowAfter = -1, rowsAfter = -1, columnAfter = -1, columnsAfter = -1;
+            browser->textCursor().selectedTableCells(&rowAfter, &rowsAfter, &columnAfter, &columnsAfter);
+            QCOMPARE(rowAfter, firstRow); QCOMPARE(rowsAfter, rows); QCOMPARE(columnAfter, firstColumn); QCOMPARE(columnsAfter, columns);
+        }
+        text->addSelection(cCell.firstPosition() + 1, cCell.lastPosition() - 1);
+        QVERIFY(!browser->textCursor().hasComplexSelection()); QCOMPARE(text->selectionCount(), 1);
+        text->selection(0, &begin, &end); QCOMPARE(begin, cCell.firstPosition() + 1); QCOMPARE(end, cCell.lastPosition() - 1);
+        QCOMPARE(text->text(begin, end), QString("elected ")); QCOMPARE(browser->textCursor().selectedText(), QString("elected "));
+        text->removeSelection(0); QCOMPARE(text->selectionCount(), 0);
+        text->addSelection(spanCell.firstPosition(), cCell.lastPosition()); QCOMPARE(text->selectionCount(), 2);
+        text->setCursorPosition(cCell.firstPosition() + 2);
+        QCOMPARE(text->selectionCount(), 0); QVERIFY(!browser->textCursor().hasSelection());
+        QCOMPARE(text->cursorPosition(), cCell.firstPosition() + 2);
+        QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->revision(), revision);
+    }
+
     void tableTextAccessibilityGeometryMatchesVisibleCursor() {
         MainWindow window(fixture_, QStringLiteral("cat")); window.resize(780, 480); window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
@@ -16890,7 +16961,8 @@ private slots:
         auto *editable = accessible->editableTextInterface(); QVERIFY(editable);
         QCOMPARE(text->characterCount(), browser->document()->characterCount() - 1);
         QTextCursor all(browser->document()); all.select(QTextCursor::Document);
-        const QString original = all.selectedText().replace(QChar(QChar::ParagraphSeparator), QChar('\n'));
+        const QString original = all.selectedText().replace(QChar(QChar::ParagraphSeparator), QChar('\n'))
+            .replace(QChar(u'\ufdd0'), QChar('\n')).replace(QChar(u'\ufdd1'), QChar('\n'));
         QCOMPARE(text->text(0, -1), original);
         const auto bold = browser->document()->find(QStringLiteral("BoldWord")); QVERIFY(!bold.isNull());
         int start = -1, end = -1;

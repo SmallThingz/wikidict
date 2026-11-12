@@ -923,9 +923,14 @@ public:
     QString text(int start, int end) const override {
         if (end == -1) end = characterCount();
         if (!validRange(start, end)) return {};
-        QTextCursor cursor(browser_->document()); cursor.setPosition(start);
-        cursor.setPosition(end, QTextCursor::KeepAnchor);
-        return cursor.selectedText().replace(QChar(QChar::ParagraphSeparator), QChar('\n'));
+        // A QTextCursor spanning cells selects complete cells, so it cannot
+        // implement a source-offset text slice. Keep every UTF-16 position.
+        QString result = browser_->document()->toRawText().mid(start, end - start);
+        for (QChar &character : result) {
+            if (character == QChar::ParagraphSeparator || character.unicode() == 0xfdd0 || character.unicode() == 0xfdd1)
+                character = QChar('\n');
+        }
+        return result;
     }
     QString textAtOffset(int offset, QAccessible::TextBoundaryType boundary, int *start, int *end) const override {
         if (boundary == QAccessible::LineBoundary) return visualLine(offset, 0, start, end);
@@ -947,20 +952,28 @@ public:
         if (!validRange(offset, offset)) return;
         QTextCursor cursor(browser_->document()); cursor.setPosition(offset); browser_->setTextCursor(cursor);
     }
-    int selectionCount() const override { return browser_->textCursor().hasSelection() ? 1 : 0; }
+    int selectionCount() const override { return int(selectedSourceRanges().size()); }
     void selection(int index, int *start, int *end) const override {
         *start = *end = -1;
-        if (index != 0 || !selectionCount()) return;
-        const auto cursor = browser_->textCursor(); *start = cursor.selectionStart(); *end = cursor.selectionEnd();
+        const auto ranges = selectedSourceRanges();
+        if (index < 0 || index >= ranges.size()) return;
+        *start = ranges[index].first; *end = ranges[index].second;
     }
     void setSelection(int index, int start, int end) override {
-        if (index != 0 || !validRange(start, end)) return;
+        // Disjoint text ranges project one native cell rectangle. Per-range
+        // mutation is unsupported: it must not silently change the other ranges.
+        if (index != 0 || selectionCount() > 1 || !validRange(start, end)) return;
         QTextCursor cursor(browser_->document()); cursor.setPosition(start);
         cursor.setPosition(end, QTextCursor::KeepAnchor); browser_->setTextCursor(cursor);
     }
-    void addSelection(int start, int end) override { setSelection(0, start, end); }
+    void addSelection(int start, int end) override {
+        // Qt supports one native selection: this explicit operation replaces it.
+        if (!validRange(start, end)) return;
+        QTextCursor cursor(browser_->document()); cursor.setPosition(start);
+        cursor.setPosition(end, QTextCursor::KeepAnchor); browser_->setTextCursor(cursor);
+    }
     void removeSelection(int index) override {
-        if (index != 0) return;
+        if (index != 0 || selectionCount() != 1) return;
         auto cursor = browser_->textCursor(); cursor.clearSelection(); browser_->setTextCursor(cursor);
     }
     QRect characterRect(int offset) const override {
@@ -1133,6 +1146,42 @@ public:
         cursor.setPosition(end, QTextCursor::KeepAnchor); cursor.insertText(value);
     }
 private:
+    QList<std::pair<int, int>> selectedSourceRanges() const {
+        const auto cursor = browser_->textCursor();
+        if (!cursor.hasSelection()) return {};
+        if (!cursor.hasComplexSelection()) return {{cursor.selectionStart(), cursor.selectionEnd()}};
+        auto *table = cursor.currentTable();
+        if (!table) return {};
+        int firstRow = -1, rows = 0, firstColumn = -1, columns = 0;
+        cursor.selectedTableCells(&firstRow, &rows, &firstColumn, &columns);
+        if (firstRow < 0 || firstColumn < 0 || rows <= 0 || columns <= 0) return {};
+        QList<std::pair<int, int>> cells;
+        QSet<int> seen;
+        for (int row = firstRow; row < firstRow + rows; ++row) {
+            for (int column = firstColumn; column < firstColumn + columns; ++column) {
+                const auto cell = table->cellAt(row, column);
+                // Match native cell copying: a spanning cell contributes at
+                // its own origin, once, rather than at each covered grid slot.
+                if (!cell.isValid() || cell.row() != row || cell.column() != column || seen.contains(cell.firstPosition())) continue;
+                seen.insert(cell.firstPosition());
+                cells.append({cell.firstPosition(), cell.lastPosition()});
+            }
+        }
+        std::sort(cells.begin(), cells.end());
+        QList<std::pair<int, int>> ranges;
+        for (const auto &cell : cells) {
+            bool adjacent = !ranges.isEmpty() && cell.first <= ranges.last().second;
+            if (!ranges.isEmpty() && cell.first == ranges.last().second + 1) {
+                const auto separator = browser_->document()->characterAt(ranges.last().second);
+                // Include only the structural boundary between selected cells.
+                // A skipped cell, even empty, leaves a larger source gap.
+                adjacent = separator == QChar::ParagraphSeparator || separator.unicode() == 0xfdd0 || separator.unicode() == 0xfdd1;
+            }
+            if (adjacent) ranges.last().second = qMax(ranges.last().second, cell.second);
+            else ranges.append(cell);
+        }
+        return ranges;
+    }
     std::optional<QString> logicalBoundaryText(int offset, int step, QAccessible::TextBoundaryType boundary,
                                                int *start, int *end) const {
         *start = *end = -1;
