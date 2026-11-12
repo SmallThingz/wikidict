@@ -139,6 +139,7 @@ class PreparedSourceGeneration:
         self.require_unchanged()
 
     def require_python(self, *, force=False):
+        if not hasattr(self,'_python_stamps'):self._python_stamps={}
         tooling=self.record.get('python_tooling')
         if tooling is not None:
             selected=bootstrap_python_tooling(tooling)
@@ -148,7 +149,6 @@ class PreparedSourceGeneration:
                 raise ValueError('Prepared selected Python import authority changed')
             selected.require_unchanged()
             return
-        if not hasattr(self,'_python_stamps'):self._python_stamps={}
         if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')=='1':
             standard=[sys._stdlib_dir,sys._stdlib_dir+'/lib-dynload']
             if sys.path not in (standard,standard+[str(PROJECT/'tools')]):

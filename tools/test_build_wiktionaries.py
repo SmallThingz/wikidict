@@ -10135,6 +10135,96 @@ class ReadonlyPreparedRetainedTests(unittest.TestCase):
             self.assertEqual(f.expander.joinpath('.completed-expander.json').read_bytes(),before)
             self.assertFalse((folder/'native-blob-tools').exists())
 
+    def test_real_catalog_bootstrap_survives_parent_child_and_retired_reopen(self):
+        import corpus_controller as controller
+        import importlib.util
+        for mode in ('unchanged','catalog-mutation'):
+            with self.subTest(mode=mode):
+                case=ReadonlyPreparedRetainedTests()
+                original_fixture=case.fixture
+                original_authorize=controller.authorize_prepared_source
+                original_reopen=b.prepared_authorized_generation
+                active=[];children=[];authorizations=[]
+                @contextlib.contextmanager
+                def selected_fixture():
+                    with original_fixture() as f:
+                        selector=Path(controller.__file__).with_name('build_python_tooling.py')
+                        def reference(path):
+                            return dict(_initial_sealed_reference(path),mode=stat.S_IMODE(Path(path).stat().st_mode))
+                        st=f.root.stat();directory=dict(path=str(f.root),device=st.st_dev,inode=st.st_ino,
+                                                       uid=st.st_uid,mode=stat.S_IMODE(st.st_mode))
+                        spec=dict(source_root=directory,workspace_root=directory,selector=reference(selector),modules={
+                            'build_wiktionaries':reference(Path(b.__file__)),
+                            'corpus_controller':reference(Path(controller.__file__)),
+                            'custody_fixture_helper':reference(f.python)})
+                        f.cfg['python_tooling']=spec;f.identity['python_tooling']=spec
+                        # Re-adopt through the real helper after adding the
+                        # selected catalog to this synthetic original identity.
+                        (f.workspace/'state.json').unlink()
+                        f.helper.adopt(f.f,native_roles=f.roles)
+                        loader=importlib.util.spec_from_file_location('wikidict_python_tooling',str(selector))
+                        module=importlib.util.module_from_spec(loader)
+                        prefix=str(f.root/'descriptor-parent-attempt'/'unwritten-python-cache')
+                        with patch.dict(sys.modules,{'wikidict_python_tooling':module}), \
+                                patch.object(sys,'meta_path',list(sys.meta_path)), \
+                                patch.object(sys,'path',[sys._stdlib_dir,sys._stdlib_dir+'/lib-dynload']), \
+                                patch.object(sys,'pycache_prefix',prefix), \
+                                patch.dict(sys._xoptions,{'wikidict_prepared_source':'1'}):
+                            loader.loader.exec_module(module)
+                            selected=module.select(spec,role='build_wiktionaries',origin=b.__file__)
+                            with patch.object(b,'_PYTHON_TOOLING',selected), \
+                                    patch.object(b,'_PREPARED_BOOTSTRAP_PYTHON_GUARD',None):
+                                active[:]=[f];children.clear()
+                                try:yield f
+                                finally:
+                                    if children:
+                                        generation=children[-1]
+                                        generation.require_identity(f.identity)
+                                        for tool in generation.tools.values():
+                                            self.assertTrue(tool.command(['fixture-read-only']))
+                                        staging=f.root/'catalog-verified-staging';staging.mkdir()
+                                        (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+                                        (staging/b.BUILD_IDENTITY_NAME).write_text(b.build_envelope_text(f.identity))
+                                        generation.finalize(staging);self.assertTrue(generation.retired)
+                                        authorization=b.prepared_metadata(generation.authorization)['prepared_source_authorization']
+                                        retired=original_reopen(authorization['configuration'],authorization['attempt_start'],
+                                                               generation.authorization,retired=True)
+                                        self.assertTrue(retired.retired);retired.require_python(force=True)
+                                        with patch.object(b._PREPARED_SOURCE,'value',retired,create=True):
+                                            b.require_build_source(f.identity)
+                                        with self.assertRaisesRegex(ValueError,'already been finalized'):
+                                            generation.require_unchanged()
+                def authorize(cfg,start,start_ref,launch,reference,**kwargs):
+                    # The real child bootstrap has a selected-catalog guard.
+                    # The independently executing parent has no child guard.
+                    with patch.dict(os.environ,{'WIKIDICT_PREPARED_SOURCE_ATTEMPT':json.dumps(start_ref)}):
+                        b.prepared_child_imports()
+                    guard=b._PREPARED_BOOTSTRAP_PYTHON_GUARD
+                    self.assertIsInstance(guard,b.PreparedSourceGeneration)
+                    self.assertEqual(guard.record['python_tooling'],cfg['python_tooling'])
+                    with patch.object(b,'_PREPARED_BOOTSTRAP_PYTHON_GUARD',None):
+                        binding=original_authorize(cfg,start,start_ref,launch,reference,**kwargs)
+                    authorizations.append(binding)
+                    if mode=='catalog-mutation':active[0].python.write_text('VALUE=2\n')
+                    return binding
+                def reopen(cfg,*args,**kwargs):
+                    generation=original_reopen(cfg,*args,**kwargs)
+                    if cfg.get('python_tooling') is not None and not kwargs.get('retired'):
+                        self.assertEqual(generation._python_stamps,{})
+                        children.append(generation)
+                    return generation
+                with patch.object(case,'fixture',selected_fixture), \
+                        patch.object(controller,'authorize_prepared_source',side_effect=authorize), \
+                        patch.object(b,'prepared_authorized_generation',side_effect=reopen):
+                    if mode=='unchanged':
+                        case.test_descriptor_cache_root_reaches_real_parent_authorization_and_child_reopen()
+                        self.assertEqual(len(authorizations),1)
+                    else:
+                        with self.assertRaisesRegex(ValueError,'Selected Python source identity changed'):
+                            case.test_descriptor_cache_root_reaches_real_parent_authorization_and_child_reopen()
+                        self.assertEqual(len(authorizations),1)
+                        self.assertFalse(children)
+
     def test_descriptor_cache_root_reaches_real_parent_authorization_and_child_reopen(self):
         import corpus_controller as controller
         import prepare_figure_metadata as figure
