@@ -1,8 +1,11 @@
 package app.smallthingz.dict
 
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.IntrinsicMeasurable
@@ -22,6 +25,7 @@ import kotlin.math.ceil
 internal fun SelectionAutoMarginTable(margins: NativeTableAutoMargins?,
     containingDirection: TableContainingDirection?, gridDirection: BidiResolvedDirection,
     inline: Boolean, captionGap: Int, sink: SelectionGeometrySink, preparationFailure: String? = null,
+    retainFailureIntrinsics: Boolean = false,
     caption: (@Composable (SelectionGeometrySink) -> Unit)?,
     grid: @Composable (NativeLayoutInput<Int>, NativeLayoutInput<Int>, SelectionGeometrySink) -> Unit) {
     val semantic = rememberNativeSemanticMeasurement()
@@ -44,14 +48,23 @@ internal fun SelectionAutoMarginTable(margins: NativeTableAutoMargins?,
             CompositionLocalProvider(LocalStaticCaptionInput provides null) {
                 grid(containingWidth, captionMinimum) { publish(1, it) }
             }
-            NativeLayoutMessage(message)
+            if (retainFailureIntrinsics && margins == null && preparationFailure != null)
+                Text(preparationFailure)
+            else NativeLayoutMessage(message)
         }, measurePolicy = object : MeasurePolicy {
             private fun intrinsic(measurables: List<IntrinsicMeasurable>, maximum: Boolean): Int {
-                val fixed = margins?.fixed ?: return Constraints.Infinity
-                val minimumCaption = if (hasCaption) measurables.first().minIntrinsicWidth(Constraints.Infinity) else 0
+                val fixed = margins?.fixed
+                val retainedFailure = fixed == null && retainFailureIntrinsics && preparationFailure != null
+                if (fixed == null && !retainedFailure) return Constraints.Infinity
+                val minimumCaption = if (!hasCaption) 0 else if (retainedFailure && maximum)
+                    measurables.first().maxIntrinsicWidth(Constraints.Infinity)
+                else measurables.first().minIntrinsicWidth(Constraints.Infinity)
                 val child = measurables[if (hasCaption) 1 else 0]
                 val table = if (maximum) child.maxIntrinsicWidth(Constraints.Infinity) else child.minIntrinsicWidth(Constraints.Infinity)
-                val width = maxOf(minimumCaption, table).toDouble() + fixed.left + fixed.right
+                val warning = if (!retainedFailure) 0 else if (maximum)
+                    measurables.last().maxIntrinsicWidth(Constraints.Infinity)
+                else measurables.last().minIntrinsicWidth(Constraints.Infinity)
+                val width = maxOf(minimumCaption, table, warning).toDouble() + (fixed?.left ?: 0f) + (fixed?.right ?: 0f)
                 return if (!width.isFinite() || width > TablePixelLimit) Constraints.Infinity else ceil(width).toInt()
             }
             override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsic(measurables, false)
@@ -162,7 +175,8 @@ internal fun SelectionAutoMarginTable(margins: NativeTableAutoMargins?,
                         if (hasCaption) fallbackGeometry += PositionedSemanticChild(NoPaintGeometry(checkNotNull(text)),
                             0f, captionTop.toFloat(), gridDirection)
                         fallbackGeometry += PositionedSemanticChild(NoPaintGeometry(checkNotNull(table)),
-                            0f, fallbackGridTop.toFloat(), gridDirection, if (hasCaption && text?.text?.isNotEmpty() == true) "\n" else "")
+                            0f, fallbackGridTop.toFloat(), gridDirection, if (hasCaption && text?.text?.isNotEmpty() == true &&
+                                (!retainFailureIntrinsics || table?.text?.isNotEmpty() == true)) "\n" else "")
                     }
                     // An unavailable child cannot acquire fabricated copy/action geometry.
                     sink(if (complete) NativeSemanticGroup(width, fallbackHeight, fallbackGeometry) else null)
@@ -176,5 +190,67 @@ internal fun SelectionAutoMarginTable(margins: NativeTableAutoMargins?,
                 }
             }
         })
+    }
+}
+
+/** Responsive source TABLE block: caption and cells share one local clipped scroll body.
+ * The common owner measures the anonymous grid before publishing this immutable placement. */
+@Composable
+internal fun SelectionBlockViewportTable(table: Table, policy: TableBlockViewport,
+    captionGap: Int, sink: SelectionGeometrySink,
+    caption: (@Composable (SelectionGeometrySink) -> Unit)?,
+    grid: @Composable (NativeLayoutInput<Int>, SelectionGeometrySink) -> Unit) {
+    val identity = NativeDelegatedTableIdentity(table)
+    val captionMinimum = remember(identity, policy) { NativeLayoutInput(0) }
+    val published = remember(identity, policy, caption != null, captionGap) { arrayOfNulls<FloatTextGeometry>(2) }
+    val publication = remember(identity, policy, caption != null, captionGap) { NativeTableViewportPublication() }
+    DisposableEffect(publication) { onDispose { publication.close() } }
+    val direction = when (policy.gridDirection) {
+        TableContainingDirection.Ltr -> BidiResolvedDirection.Ltr
+        TableContainingDirection.Rtl -> BidiResolvedDirection.Rtl
+    }
+    TableBlockViewportBox(table = table, policy = policy, captionMinimum = captionMinimum,
+        hasCaption = caption != null, spacing = captionGap,
+        onUnavailable = { sink(null); publication.publish(null, null) }, onPlacement = { placement ->
+            val body = published[1]
+            val heading = published[0]
+            val failure = when {
+                body == null -> "Table viewport grid selection geometry is unavailable"
+                body.width != placement.gridWidth || body.height != placement.gridHeight ->
+                    "Table viewport grid geometry differs from its measured anonymous grid"
+                caption != null && heading == null -> "Table viewport caption selection geometry is unavailable"
+                caption != null && (heading!!.width != placement.captionWidth || heading.height != placement.captionHeight) ->
+                    "Table viewport caption geometry differs from its measured caption"
+                caption != null && table.rows.any { it.isNotEmpty() } && !placement.unavailable && placement.captionWidth != placement.gridWidth ->
+                    "Table viewport caption and anonymous grid widths differ"
+                else -> null
+            }
+            if (failure != null) {
+                sink(null)
+                publication.publish(null, null)
+            } else {
+                val children = mutableListOf<PositionedSemanticChild>()
+                if (caption != null) children += PositionedSemanticChild(NoPaintGeometry(checkNotNull(heading)),
+                    0f, placement.captionY, direction)
+                children += PositionedSemanticChild(NoPaintGeometry(checkNotNull(body)), 0f, placement.gridY,
+                    direction, if (caption != null && heading?.text?.isNotEmpty() == true && body?.text?.isNotEmpty() == true) "\n" else "")
+                val content = NativeSemanticGroup(maxOf(placement.gridWidth, placement.captionWidth),
+                    ceil(maxOf(placement.gridY.toDouble() + placement.gridHeight,
+                        placement.captionY.toDouble() + placement.captionHeight)).toInt(), children)
+                sink(NativeTableViewportGeometry(content, placement, publication::afterPublication))
+                publication.publish(content, placement)
+            }
+            failure
+        }) {
+        val semantic = LocalNativeSemanticMeasurement.current
+        SideEffect { publication.invalidate = semantic?.let { owner -> { owner.changed() } } }
+        fun publish(index: Int, value: FloatTextGeometry?) {
+            if (published[index] !== value) { published[index] = value; semantic?.changed() }
+        }
+        // The source block establishes a BFC; ancestor caption exclusions stay outside it.
+        CompositionLocalProvider(LocalStaticCaptionInput provides null) {
+            caption?.invoke { publish(0, it) }
+            grid(captionMinimum) { publish(1, it) }
+        }
     }
 }

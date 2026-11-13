@@ -1,5 +1,6 @@
 package app.smallthingz.dict
 
+import android.graphics.RectF
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -484,11 +485,21 @@ private fun clippingSegments(root: LayoutCoordinates, child: LayoutCoordinates,
     append(" grid not reached within finite ancestry")
 }
 
+private fun nativeDelegatedClip(bounds: NativeFloatBounds, clip: RectF?): NativeFloatBounds? {
+    if (clip == null) return bounds
+    val left = maxOf(bounds.left, clip.left); val top = maxOf(bounds.top, clip.top)
+    val right = minOf(bounds.right, clip.right); val bottom = minOf(bounds.bottom, clip.bottom)
+    return if (left < right && top < bottom) NativeFloatBounds(left, top, right, bottom) else null
+}
+
 private fun nativeDelegatedFocusInk(nodes: List<FloatInteractionNode>, density: Float): List<NativeFloatBounds> = buildList {
     nativeFocusInk(nodes)?.let(::add)
     nodes.filter { it.focusPaint == null }.forEach { node ->
-        node.bounds.forEach { add(nativeDelegatedDefaultFocusInk(
-            NativeFloatBounds(it.left, it.top, it.right, it.bottom), density, node.missingLinkPaint != null)) }
+        node.bounds.forEach {
+            val ink = nativeDelegatedDefaultFocusInk(NativeFloatBounds(it.left, it.top, it.right, it.bottom),
+                density, node.missingLinkPaint != null)
+            nativeDelegatedClip(ink, node.clipBounds)?.let(::add)
+        }
     }
 }
 
@@ -514,11 +525,12 @@ internal fun nativeDelegatedSelectionInk(geometry: FloatTextGeometry, density: F
     val radius = minOf(6 * density, minOf(owner.width, owner.height) / 2f)
     for (position in 0..geometry.text.length) {
         val caret = geometry.caretRect(position).apply { offset(x, y) }
-        add(NativeFloatBounds(caret.left, caret.top, caret.left + maxOf(1f, density), caret.bottom))
+        val clip = geometry.clipForOffset(position)?.let { RectF(it).apply { offset(x, y) } }
+        nativeDelegatedClip(NativeFloatBounds(caret.left, caret.top, caret.left + maxOf(1f, density), caret.bottom), clip)?.let(::add)
         val cx = caret.left.coerceIn(owner.left + radius, maxOf(owner.left + radius, owner.right - radius))
         val cy = (caret.bottom + 7 * density).coerceIn(owner.top + radius, maxOf(owner.top + radius, owner.bottom - radius))
-        add(NativeFloatBounds(cx - radius, cy - radius, cx + radius, cy + radius))
-        add(NativeFloatBounds(caret.left, minOf(caret.bottom, cy), caret.left + density, maxOf(caret.bottom, cy)))
+        nativeDelegatedClip(NativeFloatBounds(cx - radius, cy - radius, cx + radius, cy + radius), clip)?.let(::add)
+        nativeDelegatedClip(NativeFloatBounds(caret.left, minOf(caret.bottom, cy), caret.left + density, maxOf(caret.bottom, cy)), clip)?.let(::add)
     }
 }
 
@@ -530,10 +542,11 @@ internal fun nativeDelegatedSelectionInput(geometry: FloatTextGeometry, density:
 ): List<NativeFloatBounds> {
     if (geometry.text.isEmpty()) return emptyList()
     val radius = 24f * density
-    return (0..geometry.text.length).map { offset ->
+    return (0..geometry.text.length).mapNotNull { offset ->
         val (cx, cy) = nativeSelectionHandleCenter(geometry, offset, density, x, y, owner)
-        NativeFloatBounds(maxOf(owner.left, cx - radius), maxOf(owner.top, cy - radius),
-            minOf(owner.right, cx + radius), minOf(owner.bottom, cy + radius))
+        val clip = geometry.clipForOffset(offset)?.let { RectF(it).apply { offset(x, y) } }
+        nativeDelegatedClip(NativeFloatBounds(maxOf(owner.left, cx - radius), maxOf(owner.top, cy - radius),
+            minOf(owner.right, cx + radius), minOf(owner.bottom, cy + radius)), clip)
     }
 }
 

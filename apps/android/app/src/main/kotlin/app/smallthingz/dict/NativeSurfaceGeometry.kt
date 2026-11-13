@@ -41,6 +41,11 @@ internal class NativeSurfaceGeometry(val content: FloatTextGeometry,
         .map { RectF(it).apply { offset(dx, dy) } }
     override fun characterRects(start: Int, length: Int): List<RectF?> = content.characterRects(start, length)
         .map { it?.let { bounds -> RectF(bounds).apply { offset(dx, dy) } } }
+    override fun revealOffset(offset: Int, onRevealed: () -> Unit) = content.revealOffset(offset, onRevealed)
+    override fun clipForOffset(offset: Int): RectF? = content.clipForOffset(offset)
+        ?.let { RectF(it).apply { offset(dx, dy) } }
+    override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? =
+        content.horizontalScrollTargetAt(x - dx, y - dy)
     override fun caretRect(offset: Int): RectF = RectF(content.caretRect(offset)).apply { offset(dx, dy) }
     override fun lineRange(offset: Int): Pair<Int, Int> = content.lineRange(offset)
     override fun visualOffset(offset: Int, direction: Int): Int = content.visualOffset(offset, direction)

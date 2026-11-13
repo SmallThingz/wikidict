@@ -24,7 +24,7 @@ internal fun floatBodyRuns(rows: List<ReadingRow>): List<IntRange> {
 }
 
 /** An authored Container needs the same block context even when its active style has no float. */
-internal fun Block.needsNativeBlockContext(): Boolean = container != null || hasBodyFloat() ||
+internal fun Block.needsNativeBlockContext(): Boolean = container != null || table?.blockViewport != null || hasBodyFloat() ||
     table?.style?.let { it.marginValues != null && !it.isInline } == true
 
 /** An enrolled table cell needs its original native context even when its Figure

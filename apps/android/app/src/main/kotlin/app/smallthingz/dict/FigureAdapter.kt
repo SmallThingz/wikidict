@@ -245,12 +245,12 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
 
 /** A declared unavailable layout retains data and compiled actions; it is not a float/bidi projection. */
 @Composable
-private fun UnavailableAnonymousContent(block: Block, modifier: Modifier, reason: String,
-    style: TextStyle, reader: FigureReaderContext) {
+internal fun UnavailableAnonymousContent(block: Block, modifier: Modifier, reason: String,
+    style: TextStyle, reader: FigureReaderContext, reasonVisible: Boolean = false) {
     val runs = remember(block) { buildList<List<Span>> { block.visitSpanRuns { spans, _ -> add(spans) } } }
     val uri = LocalUriHandler.current
     Column(modifier) {
-        ReaderLayoutUnavailable(reason)
+        if (reasonVisible) Text(reason, style = MaterialTheme.typography.bodyMedium) else ReaderLayoutUnavailable(reason)
         runs.forEach { spans ->
             // A mapped image has no implicit File click. Its authored actions stay separately usable.
             val visible = spans.map { span -> if (span.image?.map == null) span else span.copy(

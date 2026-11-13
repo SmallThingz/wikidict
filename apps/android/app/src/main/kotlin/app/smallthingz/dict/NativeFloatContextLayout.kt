@@ -22,6 +22,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.PointerInputModifierNode
+import androidx.compose.ui.platform.InspectorInfo
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.IntrinsicMeasurable
@@ -87,7 +93,9 @@ internal sealed interface NativeFloatContextSpec {
         val preferredWidth: (Int) -> Int? = { null }, val overflowViewport: Boolean = false,
         val scrollport: NativeScrollportSpec? = null,
         val delegatedTable: Table? = null, val autoMarginTable: Table? = null,
-        val autoMargins: NativeTableAutoMargins? = null) : NativeFloatContextSpec
+        val autoMargins: NativeTableAutoMargins? = null,
+        val blockViewport: TableBlockViewport? = null,
+        val blockBox: ((Int) -> NativeTableBlockBox)? = null) : NativeFloatContextSpec
 }
 
 /** Keep an unavailable fallback within both the parent's bounds and Compose's packed range. */
@@ -499,18 +507,23 @@ internal fun NativeFloatContextLayout(
                             is NativeFloatContextSpec.Child -> {
                                 val autoTable = part.autoMarginTable
                                 val autoMargins = part.autoMargins
+                                val tableStyle = part.blockViewport?.boxStyle ?: autoTable?.style
                                 val containingDirection = if (autoTable != null || autoMargins != null) {
-                                    if (autoTable == null || autoMargins == null || autoTable.style?.marginValues == null ||
-                                        autoTable.style.isInline || autoTable.style.floatSide != null ||
+                                    if (autoTable == null || autoMargins == null || tableStyle?.marginValues == null ||
+                                        tableStyle.isInline || tableStyle.floatSide != null ||
                                         part.atomicInline || part.floatSide != null || !part.widthFromContent || part.scrollport != null)
                                         throw UnsupportedFloatLayout("Table automatic margin owner is inconsistent")
-                                    autoTable.style.containingDirection
+                                    tableStyle.containingDirection
                                         ?: throw UnsupportedFloatLayout("Table containing direction is unavailable")
                                 } else null
+                                if ((part.blockViewport != null) != (part.blockBox != null) ||
+                                    part.blockViewport != null && (autoTable == null || autoTable.blockViewport !== part.blockViewport))
+                                    throw UnsupportedFloatLayout("Table block viewport owner is inconsistent")
+                                val blockBox = part.blockBox?.invoke(containingWidth)
                                 widths.getValue(index).update(containingWidth)
                                 val atomic = if (part.atomicInline) measurePart(index, Constraints(maxWidth = containingWidth)) else null
                                 var intrinsicMinimum: Int? = null
-                                val allocated = atomic?.width ?: if (part.widthFromContent) {
+                                val allocated = blockBox?.let { ceil(it.borderWidth).toInt() } ?: atomic?.width ?: if (part.widthFromContent) {
                                     val measurable = childMeasurables.getValue(index)
                                     val minimum = measurable.minIntrinsicWidth(Constraints.Infinity)
                                     val maximum = measurable.maxIntrinsicWidth(Constraints.Infinity)
@@ -525,21 +538,24 @@ internal fun NativeFloatContextLayout(
                                     if (part.overflowViewport) minOf(available, used) else used
                                 } else part.width(containingWidth).coerceAtLeast(0)
                                 if (autoTable != null) {
-                                    val minimum = intrinsicMinimum
+                                    val minimum = blockBox?.let { allocated } ?: intrinsicMinimum
                                         ?: throw UnsupportedFloatLayout("Table intrinsic minimum is unavailable")
                                     if (minimum !in 0..TablePixelLimit || allocated !in 0..TablePixelLimit)
                                         throw UnsupportedFloatLayout("Table automatic margin measurement exceeds the native range")
                                     val input = tableMarginInputs[index]
                                         ?: throw UnsupportedFloatLayout("Table automatic margin measure owner is unavailable")
-                                    input.begin(containingWidth, allocated, minimum)
+                                    if (blockBox == null) input.begin(containingWidth, allocated, minimum)
+                                    else input.beginBlock(containingWidth, blockBox)
                                     val placeable = measurePart(index, Constraints(minWidth = allocated, maxWidth = allocated))
                                     val box = input.ready(placeable.width, placeable.height)
                                     // The one real measurement supplies the final caption/grid border box.
                                     // Exclusion placement may move it but must not remeasure its Compose owner.
-                                    NativeFloatContextPart.Child(part.id, NativeBlockWidth.FixedPx(box.borderWidth.toFloat()), { request ->
-                                        if (request.requestedWidth != box.borderWidth.toFloat())
+                                    NativeFloatContextPart.Child(part.id, NativeBlockWidth.FixedPx(box.placementWidth), { request ->
+                                        if (request.requestedWidth != box.placementWidth)
                                             throw UnsupportedFloatLayout("Table automatic margin placement changed its measured width")
-                                        NativeBlockMeasure(box.borderWidth.toFloat(), box.minimumWidth.toFloat(), box.borderHeight.toFloat())
+                                        NativeBlockMeasure(box.placementWidth,
+                                            if (box.blockBox == null) box.minimumWidth.toFloat() else box.placementWidth,
+                                            box.placementHeight)
                                     }, part.gapAfter, margins = checkNotNull(autoMargins).fixed,
                                         requiresUnobstructedText = part.requiresUnobstructedText, gapBefore = part.gapBefore,
                                         clear = part.clear, logicalObject = part.logicalObject,
@@ -913,6 +929,20 @@ private class NativeContextPass(val width: Int?, val result: Result<NativeFloatC
     val fallbackTops = linkedMapOf<Int, Long>()
 }
 
+/** Sharing belongs to this direct sibling wrapper; the nested AndroidView's flag
+ * does not cross a Compose LayoutNode boundary. Native owners still decide input. */
+private data object NativeDelegatedPointerSharing : ModifierNodeElement<NativeDelegatedPointerSharingNode>() {
+    override fun create() = NativeDelegatedPointerSharingNode()
+    override fun update(node: NativeDelegatedPointerSharingNode) = Unit
+    override fun InspectorInfo.inspectableProperties() { name = "nativeDelegatedPointerSharing" }
+}
+
+private class NativeDelegatedPointerSharingNode : Modifier.Node(), PointerInputModifierNode {
+    override fun sharePointerInputWithSiblings() = true
+    override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) = Unit
+    override fun onCancelPointerInput() = Unit
+}
+
 /** Only native surfaces and failure text are subcomposed; live child controls stay in their slots. */
 @Composable
 private fun NativeFloatAuxiliary(input: NativeLayoutInput<NativeContextPass?>, parts: List<NativeFloatContextSpec>,
@@ -922,7 +952,8 @@ private fun NativeFloatAuxiliary(input: NativeLayoutInput<NativeContextPass?>, p
     val minimumTouch = LocalViewConfiguration.current.minimumTouchTargetSize
     val minimumTouchWidth = with(LocalDensity.current) { minimumTouch.width.toPx() }
     val minimumTouchHeight = with(LocalDensity.current) { minimumTouch.height.toPx() }
-    SubcomposeLayout(input.modifier.fillMaxWidth()) { constraints ->
+    val sharing = if (stateTable != null) NativeDelegatedPointerSharing else Modifier
+    SubcomposeLayout(input.modifier.fillMaxWidth().then(sharing)) { constraints ->
         val pass = checkNotNull(input.value)
         val geometry = pass.result.getOrNull()
         if (geometry == null) {

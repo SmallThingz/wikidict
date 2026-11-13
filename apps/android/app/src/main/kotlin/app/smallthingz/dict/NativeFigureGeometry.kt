@@ -117,6 +117,17 @@ internal class NativeFigureGeometry(
     }
     override fun offsetForPosition(x: Float, y: Float): Int =
         positionedGroups.lastOrNull { it.contains(x, y) }?.sourceOffset ?: caption.offsetForPosition(x - captionX, y - captionY)
+    override fun revealOffset(offset: Int, onRevealed: () -> Unit) = caption.revealOffset(offset, onRevealed)
+    override fun clipForOffset(offset: Int): RectF? = caption.clipForOffset(offset)
+        ?.let { RectF(it).apply { offset(captionX, captionY) } }
+    override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? {
+        val localX = x - captionX; val localY = y - captionY
+        // Caption groups follow this Figure's own deferred media in paint order.
+        if (caption.positionedGroups.any { it.contains(localX, localY) })
+            return caption.horizontalScrollTargetAt(localX, localY)
+        if (deferredMedia && mediaBounds().any { it.contains(x, y) }) return null
+        return if (caption.containsInput(localX, localY)) caption.horizontalScrollTargetAt(localX, localY) else null
+    }
     override fun caretRect(offset: Int): RectF = caption.caretRect(offset).apply { offset(captionX, captionY) }
     override fun lineRange(offset: Int): Pair<Int, Int> = caption.lineRange(offset)
     override fun visualOffset(offset: Int, direction: Int): Int = caption.visualOffset(offset, direction)

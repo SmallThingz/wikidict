@@ -208,6 +208,33 @@ internal class NativeFloatContextGeometry private constructor(
     }
     private fun paragraphAt(offset: Int): Paragraph? = paragraphs.lastOrNull { offset >= it.offset }
         ?.takeIf { offset <= it.offset + it.geometry.text.length }
+    override fun revealOffset(offset: Int, onRevealed: () -> Unit) {
+        require(offset in 0..text.length)
+        paragraphAt(offset)?.let { it.geometry.revealOffset(offset - it.offset, onRevealed); return }
+        if (children.any { it.logicalObject && it.offset == offset }) { onRevealed(); return }
+        val next = paragraphs.firstOrNull { it.offset > offset }
+        if (next == null) onRevealed() else next.geometry.revealOffset(0, onRevealed)
+    }
+    override fun clipForOffset(offset: Int): RectF? {
+        require(offset in 0..text.length)
+        val paragraph = paragraphAt(offset)
+        if (paragraph != null) return paragraph.geometry.clipForOffset(offset - paragraph.offset)
+            ?.let { RectF(it).apply { offset(paragraph.x, paragraph.y) } }
+        if (children.any { it.logicalObject && it.offset == offset }) return null
+        val next = paragraphs.firstOrNull { it.offset > offset } ?: return null
+        return next.geometry.clipForOffset(0)?.let { RectF(it).apply { offset(next.x, next.y) } }
+    }
+    override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? {
+        val positioned = paragraphs.asReversed().firstOrNull { paragraph ->
+            paragraph.geometry.positionedGroups.any { it.contains(x - paragraph.x, y - paragraph.y) }
+        }
+        if (positioned != null) return positioned.geometry.horizontalScrollTargetAt(x - positioned.x, y - positioned.y)
+        if (children.any { it.bounds.contains(x, y) }) return null
+        val paragraph = paragraphs.asReversed().firstOrNull { it.geometry.containsInteraction(x - it.x, y - it.y) }
+            ?: paragraphs.asReversed().firstOrNull { it.geometry.containsInput(x - it.x, y - it.y) }
+            ?: return null
+        return paragraph.geometry.horizontalScrollTargetAt(x - paragraph.x, y - paragraph.y)
+    }
     override fun caretRect(offset: Int): RectF {
         require(offset in 0..text.length)
         paragraphAt(offset)?.let { return it.geometry.caretRect(offset - it.offset).apply { offset(it.x, it.y) } }
@@ -746,15 +773,15 @@ internal class NativeFloatContextGeometry private constructor(
                             val actualMargins = if (adjoining)
                                 margins.copy(fixed = margins.fixed.copy(top = 0f, bottom = 0f)) else margins
                             val placed = placeNativeAutoMarginTable(width.toFloat(), y, exclusions, actualMargins,
-                                direction, NativeBlockWidth.FixedPx(box.borderWidth.toFloat()),
+                                direction, NativeBlockWidth.FixedPx(box.placementWidth),
                                 if (adjoining) FigureClear.None else part.clear, measure = part.measure)
                             // A local scroll surface clips the real table border box. Its initial
                             // physical viewport follows the independently authored containing direction.
-                            val left = placed.content.left + if (box.scrolling && direction == TableContainingDirection.Rtl)
+                            val left = placed.content.left + if (box.blockBox == null && box.scrolling && direction == TableContainingDirection.Rtl)
                                 box.borderWidth - box.viewportWidth else 0
                             children += PlacedFloatContextChild(part.id, text.length,
-                                RectF(left, placed.content.top, left + box.viewportWidth,
-                                    placed.content.top + box.viewportHeight), part.logicalObject)
+                                RectF(left, placed.content.top, left + if (box.blockBox == null) box.viewportWidth.toFloat() else box.placementWidth,
+                                    placed.content.top + if (box.blockBox == null) box.viewportHeight.toFloat() else box.placementHeight), part.logicalObject)
                             y = placed.nextY + if (adjoining) 0f else part.gapAfter
                             if (adjoining) {
                                 borderTop = placed.content.top

@@ -263,7 +263,9 @@ class InlineTableImageTopTest {
                 read(fixture(version, cellStyle = { byte(reserved); repeat(32) { byte(0) } }))
             }
         }
-        assertThrows(Exception::class.java) { read(fixture(cellStyle = { byte(128); byte(1) })) }
+        assertEquals(CellVerticalAlign.Middle,
+            table(read(fixture(cellStyle = { byte(128); byte(1) }))).rows.single().single().style!!.verticalAlign)
+        assertThrows(Exception::class.java) { read(fixture(cellStyle = { byte(128); byte(2) })) }
         for (size in bytes.indices) assertThrows(Exception::class.java) { read(bytes.copyOf(size)) }
         assertThrows(Exception::class.java) { read(bytes + byteArrayOf(0)) }
     }

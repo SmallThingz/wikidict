@@ -89,7 +89,8 @@ internal fun tableStyleEdgesPixels(value: StyleEdges, density: Float, containerF
     return TablePixelInsets(length(value.top), length(value.right), length(value.bottom), length(value.left))
 }
 internal fun resolveTableStyle(table: Table, grid: TableGrid, density: Float, containerFontPixels: Float,
-    defaultPadding: Int, legacyBorder: Int, decorationScale: Double = 1.0, rtl: Boolean = false): TableResolvedStyle {
+    defaultPadding: Int, legacyBorder: Int, decorationScale: Double = 1.0, rtl: Boolean = false,
+    tableStyle: TableStyle? = table.style): TableResolvedStyle {
     require(decorationScale.isFinite() && decorationScale in 0.0..1.0)
     fun length(value: StyleLength) = (tableStyleLengthPixels(value, density, containerFontPixels) * decorationScale).toFloat()
     fun edges(value: StyleEdges) = tableStyleEdgesPixels(value, density, containerFontPixels, decorationScale)
@@ -111,7 +112,7 @@ internal fun resolveTableStyle(table: Table, grid: TableGrid, density: Float, co
     }
     // Validate the actual cell floor before composition chooses its ordinary unavailable path.
     grid.cells.forEach { it.cell.style?.minWidth?.let { value -> exactCellStylePixels(value, density, containerFontPixels) } }
-    val collapse = table.style?.collapse == TableCollapse.Collapse
+    val collapse = tableStyle?.collapse == TableCollapse.Collapse
     val borders = grid.cells.map { border(it.cell.style?.border) }
     fun side(value: CellBorder?, fallback: TableStyleBorder): TableStyleBorder = when (value) {
         null -> fallback
@@ -128,7 +129,7 @@ internal fun resolveTableStyle(table: Table, grid: TableGrid, density: Float, co
         TableCellBorders(side(edge?.top, fallback.top), side(edge?.right, fallback.right),
             side(edge?.bottom, fallback.bottom), side(edge?.left, fallback.left))
     }
-    val outer = border(table.style?.border)
+    val outer = border(tableStyle?.border)
     val padding = grid.cells.map { placed ->
         val fallback = (defaultPadding * decorationScale).roundToInt()
         placed.cell.style?.padding?.let(::edges) ?: TablePixelInsets(fallback, fallback, fallback, fallback)
@@ -140,10 +141,10 @@ internal fun resolveTableStyle(table: Table, grid: TableGrid, density: Float, co
                 p.bottom + ceil(edge.bottom.width).toInt(), p.left + ceil(edge.left.width).toInt())
         }
     val tablePadding = if (collapse) TablePixelInsets(0, 0, 0, 0)
-        else table.style?.padding?.let { tableBoxPaddingPixels(it, density, containerFontPixels) }
+        else tableStyle?.padding?.let { tableBoxPaddingPixels(it, density, containerFontPixels) }
             ?: TablePixelInsets(0, 0, 0, 0)
-    return TableResolvedStyle(table.style?.background, outer.top, collapse,
-        table.style?.margins?.let(::edges) ?: TablePixelInsets(0, 0, 0, 0), borders.map { it.top }, insets, decorationScale, tablePadding, cellEdges, rtl, outer)
+    return TableResolvedStyle(tableStyle?.background, outer.top, collapse,
+        tableStyle?.margins?.let(::edges) ?: TablePixelInsets(0, 0, 0, 0), borders.map { it.top }, insets, decorationScale, tablePadding, cellEdges, rtl, outer)
 }
 
 /** Shared collapsed-edge allocation for ordinary cells and the Figure's anonymous media cell. */

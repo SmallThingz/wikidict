@@ -70,6 +70,27 @@ internal class NativeSemanticGroup(
         return segments.firstOrNull { offset in it.start until it.end }
             ?: segments.lastOrNull { it.end == offset && it.end > it.start }
     }
+    override fun revealOffset(offset: Int, onRevealed: () -> Unit) {
+        require(offset in 0..text.length)
+        val segment = at(offset) ?: segments.firstOrNull { it.start >= offset }
+        if (segment == null) onRevealed() else segment.child.geometry.revealOffset(
+            (offset - segment.start).coerceIn(0, segment.end - segment.start), onRevealed)
+    }
+    override fun clipForOffset(offset: Int): RectF? {
+        require(offset in 0..text.length)
+        val segment = at(offset) ?: segments.firstOrNull { it.start >= offset } ?: return null
+        return segment.child.geometry.clipForOffset((offset - segment.start).coerceIn(0, segment.end - segment.start))
+            ?.let { RectF(it).apply { offset(segment.child.x, segment.child.y) } }
+    }
+    override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? {
+        // Deferred groups paint after every ordinary child, including later siblings.
+        val child = children.asReversed().firstOrNull { child ->
+            child.geometry.positionedGroups.any { it.contains(x - child.x, y - child.y) }
+        } ?: children.asReversed().firstOrNull { it.geometry.containsInteraction(x - it.x, y - it.y) }
+            ?: children.asReversed().firstOrNull { it.geometry.containsInput(x - it.x, y - it.y) }
+            ?: return null
+        return child.geometry.horizontalScrollTargetAt(x - child.x, y - child.y)
+    }
     override fun paint(canvas: Canvas) {
         paintOrdinary(canvas)
         positionedGroups.forEach { it.paint(canvas) }

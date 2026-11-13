@@ -521,8 +521,10 @@ object BlobDecoder {
             val width = if (flags and 32 != 0) StyleWidth(
                 StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown cell width unit"), buffer.float) else null
             val minimum = if (flags and 64 != 0) styleLength() else null
-            val vertical = if (flags and 128 != 0)
-                CellVerticalAlign.entries.getOrNull(byte()) ?: error("Unknown cell vertical alignment") else null
+            val vertical = if (flags and 128 != 0) when (byte()) {
+                0 -> CellVerticalAlign.Top; 1 -> CellVerticalAlign.Middle
+                else -> error("Unknown cell vertical alignment")
+            } else null
             return CellStyle(border = border, padding = padding, textAlign = align, width = width, minWidth = minimum,
                 verticalAlign = vertical, lineHeight = if (flags and 8 != 0) cellLineHeight() else null)
         }
@@ -584,8 +586,19 @@ object BlobDecoder {
             return TableStyle(background, border, collapse, margins, floatSide, width, padding, clear, display, align,
                 lineHeight, marginValues, containingDirection)
         }
+        private fun tableBlockViewport(): TableBlockViewport {
+            require(containerFonts) { "Table block viewport requires M" }
+            return TableBlockViewport(u32(), tableStyle() ?: error("Missing table viewport box style"),
+                ContainerBoxSizing.entries.getOrNull(byte()) ?: error("Unknown table viewport box sizing"),
+                StyleWidth(StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown table viewport max-width unit"), buffer.float),
+                tableStyle() ?: error("Missing anonymous table grid style"),
+                TableContainingDirection.entries.getOrNull(byte()) ?: error("Unknown anonymous table grid direction"),
+                string())
+        }
         private fun table(depth: Int): Table? {
-            if (!presence()) return null
+            val tableFlags = byte()
+            if (tableFlags == 0) return null
+            require(tableFlags == 1 || containerFonts && tableFlags == 3) { "Invalid table presence flags" }
             require(depth <= MaxTableDepth) { "Table nesting is too deep" }
             val geometry = if (!nestedTables) null else {
                 val flags = byte()
@@ -614,10 +627,11 @@ object BlobDecoder {
                 Cell(content, header, cols, rowspan, background, child, blocks, cellStyle())
             } }
             val style = tableStyle(); val rich = captionBlocks(caption, depth)
+            val blockViewport = if (tableFlags and 2 != 0) tableBlockViewport() else null
             require(containerFonts || style?.isInline != true || rows.all { row ->
                 row.all { cell -> cell.spans.none { it.image != null } }
             }) { "Inline table images require M" }
-            return Table(caption, rows, geometry, style, rich).also { tableGrid(it) }
+            return Table(caption, rows, geometry, style, rich, blockViewport).also { tableGrid(it) }
         }
         fun block(tableDepth: Int = 0): Block {
             val kind = enum(if (containers) kinds else kinds.dropLast(1)); val depth = byte(); val level = byte()

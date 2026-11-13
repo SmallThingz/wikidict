@@ -27,12 +27,27 @@ internal fun nativeTableTextBaselines(cells: List<NativeTextBaselines?>, rows: L
     return NativeTextBaselines.of(first, last)
 }
 
+/** One real local scroll owner; positive distance moves content physically left. */
+internal interface NativeHorizontalScrollTarget {
+    fun scrollBy(physicalDistance: Float): Float
+    fun fling(physicalVelocity: Float)
+    fun cancel()
+}
+
 /** All offsets are UTF-16 indices in [text]; layout must never insert line breaks. */
 internal interface FloatTextGeometry {
     val text: CharSequence
     val width: Int
     val height: Int
     val nodes: List<FloatInteractionNode>
+    /** Completion follows the owner's actual scroll and fresh geometry publication. */
+    fun revealOffset(offset: Int, onRevealed: () -> Unit) { onRevealed() }
+    fun revealNode(id: Int, onRevealed: () -> Unit) {
+        nodes.firstOrNull { it.id == id }?.onReveal?.invoke(onRevealed) ?: onRevealed()
+    }
+    /** Null is unbounded; an empty rectangle is completely clipped. Caret positions stay logical. */
+    fun clipForOffset(offset: Int): RectF? = null
+    fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? = null
     /** Actual line baselines; absent for a true empty box, even if it has borders or padding. */
     val textBaselines: NativeTextBaselines? get() = null
     /** Deferred paint groups retain this owner's text and node indices; no second child graph. */
@@ -88,12 +103,16 @@ internal data class FloatInteractionNode(
     val hitTest: ((Float, Float) -> Boolean)? = null,
     val missingLinkPaint: NativeMissingLinkPaint? = null,
     val focusPaint: NativeNodeFocusPaint? = null,
+    val onReveal: ((() -> Unit) -> Unit)? = null,
+    val clipBounds: RectF? = null,
 ) {
-    fun contains(x: Float, y: Float): Boolean = bounds.any { it.contains(x, y) } && (hitTest?.invoke(x, y) ?: true)
+    fun contains(x: Float, y: Float): Boolean = (clipBounds?.contains(x, y) ?: true) &&
+        bounds.any { it.contains(x, y) } && (hitTest?.invoke(x, y) ?: true)
     fun translated(x: Float, y: Float): FloatInteractionNode = copy(
         bounds = bounds.map { RectF(it).apply { offset(x, y) } },
         hitTest = hitTest?.let { test -> { px, py -> test(px - x, py - y) } },
         focusPaint = focusPaint?.translated(x, y),
+        clipBounds = clipBounds?.let { RectF(it).apply { offset(x, y) } },
     )
 }
 
@@ -120,11 +139,19 @@ internal fun NativeNodeFocusPaint.outlines(): List<NativeNodeFocusPaint.Outline>
     is NativeNodeFocusPaint.Connected -> outlines
 }
 
-internal fun nativeFocusInk(nodes: List<FloatInteractionNode>): NativeFloatBounds? = nodes
-    .flatMap { it.focusPaint?.outlines().orEmpty() }.mapNotNull { outline ->
+internal fun nativeFocusInk(nodes: List<FloatInteractionNode>): NativeFloatBounds? = nodes.mapNotNull { node ->
+    val ink = node.focusPaint?.outlines().orEmpty().mapNotNull { outline ->
         if (outline.color ushr 24 == 0) null else nativeOutlineGeometry(NativeFloatBounds(outline.bounds.left,
             outline.bounds.top, outline.bounds.right, outline.bounds.bottom), outline.width, outline.radius, outline.offset)?.ink
     }.reduceOrNull { a, b -> a.enclosing(b) }
+    // Enclose this owner's connected outline before clipping, so a bridge crossing the
+    // viewport remains covered even when its endpoint outlines lie outside the clip.
+    if (ink == null || node.clipBounds == null) ink else {
+        val clipped = RectF(ink.left, ink.top, ink.right, ink.bottom)
+        if (!clipped.intersect(node.clipBounds) || clipped.isEmpty) null
+        else NativeFloatBounds(clipped.left, clipped.top, clipped.right, clipped.bottom)
+    }
+}.reduceOrNull { a, b -> a.enclosing(b) }
 
 /** Region-based hit rectangles omit zero advances. Focus retains the actual native
  * caret positions and line bands, without promoting the caret's one-pixel width to a hit. */

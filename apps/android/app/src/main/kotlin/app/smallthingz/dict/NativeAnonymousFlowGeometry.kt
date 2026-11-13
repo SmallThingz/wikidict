@@ -131,6 +131,34 @@ internal class NativeAnonymousFlowGeometry private constructor(
         return selection.semanticOffset(native.offsetForPosition(x, y))
     }
 
+    override fun revealOffset(offset: Int, onRevealed: () -> Unit) {
+        require(offset in 0..text.length)
+        val segment = selection.at(offset)
+        if (segment is AnonymousSelectionSegment.Figure)
+            figureById.getValue(segment.anchor.event.id).measured.geometry.revealOffset(offset - segment.start, onRevealed)
+        else native.revealOffset(selection.nativeOffset(offset), onRevealed)
+    }
+    override fun clipForOffset(offset: Int): RectF? {
+        require(offset in 0..text.length)
+        val segment = selection.at(offset)
+        if (segment is AnonymousSelectionSegment.Figure) {
+            val placed = figureById.getValue(segment.anchor.event.id)
+            return placed.measured.geometry.clipForOffset(offset - segment.start)
+                ?.let { RectF(it).apply { offset(placed.bounds.left, placed.bounds.top) } }
+        }
+        return native.clipForOffset(selection.nativeOffset(offset))
+    }
+    override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? {
+        val figure = figures.asReversed().firstOrNull { placed ->
+            placed.measured.geometry.positionedGroups.any { it.contains(x - placed.bounds.left, y - placed.bounds.top) }
+        } ?: figures.asReversed().firstOrNull {
+            it.measured.geometry.containsInteraction(x - it.bounds.left, y - it.bounds.top)
+        } ?: figures.asReversed().firstOrNull {
+            it.measured.geometry.containsInput(x - it.bounds.left, y - it.bounds.top)
+        } ?: return native.horizontalScrollTargetAt(x, y)
+        return figure.measured.geometry.horizontalScrollTargetAt(x - figure.bounds.left, y - figure.bounds.top)
+    }
+
     override fun caretRect(offset: Int): RectF {
         require(offset in 0..text.length)
         val segment = selection.at(offset)

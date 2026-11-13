@@ -369,19 +369,116 @@ class NativeDelegatedTableDeviceTest {
         }
     }
 
+    /** Observes one real tap without consuming it or invoking an action. Reflection failures
+     * are diagnostic limits; an unreadable original listener is never replaced. */
+    private class TapWitness(private val views: () -> List<NativeFloatTextView>) {
+        private val rows = mutableListOf<String>()
+        private val identities = java.util.IdentityHashMap<Any, Int>()
+        private data class Installed(val view: NativeFloatTextView, val previous: View.OnTouchListener?,
+            val observer: View.OnTouchListener, val windowPoint: Offset)
+        private val installed = mutableListOf<Installed>()
+        private var eventCount = 0
+        private fun id(value: Any?): String = if (value == null) "null" else
+            "${value.javaClass.simpleName}@${identities.getOrPut(value) { identities.size + 1 }}"
+        private fun read(value: Any, name: String): Any? = value.javaClass.getDeclaredField(name)
+            .apply { isAccessible = true }.get(value)
+        private fun listener(view: View): View.OnTouchListener? {
+            val info = View::class.java.getDeclaredField("mListenerInfo")
+                .apply { isAccessible = true }.get(view) ?: return null
+            return read(info, "mOnTouchListener") as View.OnTouchListener?
+        }
+        private fun probe(label: String, read: () -> Any?): String = try { "$label=${read()}" }
+            catch (failure: Exception) { "$label=OBSERVATION_LIMIT:${failure.javaClass.simpleName}:${failure.message}" }
+        private fun call(view: NativeFloatTextView, name: String, types: Array<Class<*>> = emptyArray(),
+            vararg args: Any?): Any? = NativeFloatTextView::class.java.getDeclaredMethod(name, *types)
+                .apply { isAccessible = true }.invoke(view, *args)
+        private fun node(value: FloatInteractionNode?): String = value?.let {
+            "id=${it.id}/${it.kind}/range=${it.start}..${it.end}/bounds=${it.bounds}" +
+                "/click=${id(it.onClick)}/long=${id(it.onLongClick)}"
+        } ?: "null"
+        private fun capture(view: NativeFloatTextView, x: Float, y: Float): String = buildString {
+            val window = IntArray(2); view.getLocationInWindow(window)
+            val screen = IntArray(2); view.getLocationOnScreen(screen)
+            val visible = android.graphics.Rect(); val isVisible = view.getGlobalVisibleRect(visible)
+            val g = view.currentMeasuredGeometry
+            val gx = x - view.paddingLeft; val gy = y - view.paddingTop
+            append("view=${id(view)} cell=${view.delegatedCellOwner?.index} stateOwner=${id(view.delegatedStateOwner)}")
+            append(" attached=${view.isAttachedToWindow} enabled=${view.isEnabled} visibility=${view.visibility}")
+            append(" local=$x,$y window=${window.toList()} screen=${screen.toList()} size=${view.width}x${view.height}")
+            append(" globalVisible=$isVisible/$visible matrix=${view.matrix} geometry=${id(g)}")
+            append(" ${probe("admitted") { call(view, "originalOwnerAvailable") }}")
+            append(" ${probe("clip") { call(view, "pointInScrollport", arrayOf(Float::class.javaPrimitiveType!!, Float::class.javaPrimitiveType!!), x, y) }}")
+            append(" ${probe("containsInput") { g?.containsInput(gx, gy) }}")
+            append(" ${probe("hit") { node(g?.interactionNodeAt(gx, gy)) }}")
+            append(" ${probe("capturedCurrent") { call(view, "capturedOwnerIsCurrent", arrayOf(Boolean::class.javaPrimitiveType!!), true) }}")
+            append(" ${probe("capturedHitCurrent") { call(view, "capturedHitIsCurrent", arrayOf(FloatInteractionNode::class.java), g?.interactionNodeAt(gx, gy)) }}")
+            listOf("needsGeometry", "bindGeneration", "measuredGeneration", "selecting", "anchor", "extent",
+                "draggedHandle", "rejectedOwnerSequence", "pointerId").forEach { name ->
+                append(" ${probe(name) { read(view, name) }}")
+            }
+            append(" ${probe("capturedOwner") { id(read(view, "capturedPointerOwner")) }}")
+        }
+        fun begin(target: NativeFloatTextView, rect: android.graphics.RectF, at: Offset, holder: Holder) {
+            val windowPoint = at + holder.origin
+            rows += "target=${id(target)} rectangle=${android.graphics.RectF(rect)} hostOrigin=${holder.origin} hostTap=$at"
+            views().forEach { view ->
+                val window = IntArray(2); view.getLocationInWindow(window)
+                rows += probe("before") { capture(view, windowPoint.x - window[0], windowPoint.y - window[1]) }
+                try {
+                    val previous = listener(view)
+                    val observer = View.OnTouchListener { _, event ->
+                        eventCount++
+                        if (eventCount <= 24) rows += probe("event") {
+                            "action=${event.actionMasked} time=${event.eventTime} downTime=${event.downTime}" +
+                                " raw=${event.rawX},${event.rawY} ${capture(view, event.x, event.y)}"
+                        }
+                        // Preserve the original listener's exact return and subsequent View dispatch.
+                        val consumed = previous?.onTouch(view, event) ?: false
+                        if (eventCount <= 24) rows += "listener-return view=${id(view)} consumed=$consumed"
+                        consumed
+                    }
+                    rows += "listener view=${id(view)} previous=${id(previous)} observer=${id(observer)}"
+                    view.setOnTouchListener(observer)
+                    installed += Installed(view, previous, observer, windowPoint)
+                } catch (failure: Exception) {
+                    rows += "listener-not-installed ${id(view)} OBSERVATION_LIMIT:${failure.javaClass.simpleName}:${failure.message}"
+                }
+            }
+        }
+        fun finish() {
+            installed.forEach { entry ->
+                rows += probe("after") {
+                    val window = IntArray(2); entry.view.getLocationInWindow(window)
+                    capture(entry.view, entry.windowPoint.x - window[0], entry.windowPoint.y - window[1])
+                }
+                rows += probe("listener-restore") {
+                    if (listener(entry.view) === entry.observer) {
+                        entry.view.setOnTouchListener(entry.previous); "${id(entry.view)} original=${id(entry.previous)}"
+                    } else "${id(entry.view)} changed externally; left untouched"
+                }
+            }
+            installed.clear()
+        }
+        fun failure(): String = "197 original tap witness; eventCount=$eventCount\n" + rows.joinToString("\n")
+    }
+
     private fun point(view: NativeFloatTextView, rect: android.graphics.RectF, holder: Holder): Offset {
         val location = IntArray(2); view.getLocationInWindow(location)
         return Offset(location[0] + rect.centerX() - holder.origin.x,
             location[1] + rect.centerY() - holder.origin.y)
     }
 
-    private fun tap(view: NativeFloatTextView, kind: FloatInteractionKind, holder: Holder, after: Boolean = false) {
+    private fun tap(view: NativeFloatTextView, kind: FloatInteractionKind, holder: Holder, after: Boolean = false,
+        witness: TapWitness? = null) {
         val at = compose.runOnIdle {
             val node = checkNotNull(view.currentMeasuredGeometry).nodes.single { it.kind == kind }
-            point(view, if (after) node.bounds.last() else node.bounds.first(), holder)
+            val rect = if (after) node.bounds.last() else node.bounds.first()
+            point(view, rect, holder).also { witness?.begin(view, rect, it, holder) }
         }
-        compose.onNodeWithTag("delegated-host").performTouchInput { click(at) }
-        compose.waitForIdle()
+        try {
+            compose.onNodeWithTag("delegated-host").performTouchInput { click(at) }
+            compose.waitForIdle()
+        } finally { if (witness != null) compose.runOnIdle { witness.finish() } }
     }
 
     @Test fun actualTableCellsRetainOriginalPaintInputAccessibilityAndSelectionOwnersAcrossReflow() {
@@ -410,7 +507,27 @@ class NativeDelegatedTableDeviceTest {
                         val info = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
                         assertTrue(info.isClickable)
                     }
-                    assertEquals(190f * holder.density,
+                    // Bitmap paint uses rounded content pixels; the action anchor owns both authored 3px insets.
+                    val expectedPaintWidth = kotlin.math.floor(190.0 * holder.density + .5).toFloat()
+                    val paintBounds = mutableListOf<android.graphics.RectF>()
+                    val paintTarget = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+                    try {
+                        val paintCanvas = object : android.graphics.Canvas(paintTarget) {
+                            override fun drawBitmap(image: Bitmap, src: android.graphics.Rect?,
+                                dst: android.graphics.RectF, paint: android.graphics.Paint?) {
+                                assertSame(bitmap, image)
+                                paintBounds.add(android.graphics.RectF(dst))
+                                super.drawBitmap(image, src, dst, paint)
+                            }
+                        }
+                        // This input View suppresses paint; its parent uses these original media callbacks.
+                        g.positionedGroups.forEach { it.paint(paintCanvas) }
+                    } finally { paintTarget.recycle() }
+                    assertEquals("One original image paint", 1, paintBounds.size)
+                    assertEquals("Image content width", expectedPaintWidth, paintBounds.single().width(), .01f)
+                    val inset = 3f * holder.density
+                    val expectedAnchorWidth = kotlin.math.ceil((expectedPaintWidth + inset + inset).toDouble()).toFloat()
+                    assertEquals("Padded image action anchor width", expectedAnchorWidth,
                         g.nodes.single { it.kind == FloatInteractionKind.IMAGE }.bounds.first().width(), .01f)
                 }
                 val counts = originals.map { it.delegatedCellOwner!!.envelopeBuildCount }
@@ -430,12 +547,13 @@ class NativeDelegatedTableDeviceTest {
                         counts, originals.map { it.delegatedCellOwner!!.envelopeBuildCount })
                 } finally { canvasBitmap.recycle() }
             }
-            tap(originals[0], FloatInteractionKind.IMAGE, holder, after = true)
-            assertEquals(listOf(urls[0]), opened)
+            val tapWitness = TapWitness(::nativeViews)
+            tap(originals[0], FloatInteractionKind.IMAGE, holder, after = true, witness = tapWitness)
+            assertEquals(tapWitness.failure(), listOf(urls[0]), opened)
             tap(originals[0], FloatInteractionKind.LINK, holder)
             assertEquals(listOf("caption-0"), actions)
-            // Actual source paint remains present; the original view still draws the media
-            // group and owns focus. No root duplicate renderer is substituted.
+            // The parent paints the original media groups; the original View owns input,
+            // focus and selection. No duplicate renderer is substituted.
             val imagePoint = compose.runOnIdle {
                 point(originals[0], checkNotNull(originals[0].currentMeasuredGeometry).nodes
                     .single { it.kind == FloatInteractionKind.IMAGE }.bounds.first(), holder)

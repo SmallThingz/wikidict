@@ -302,7 +302,7 @@ internal fun prepareNativeFloatText(
         prepared.values.any { !it.available } -> "Egyptian glyph layout unavailable"
         else -> null
     }
-    val direction = nativeParagraphDirection(annotated, rtl)
+    val direction = nativeParagraphDirection(annotated, rtl, LocalCompiledTableTextDirection.current)
     val nativeSource: ((Int) -> Spanned)? =
         if (runs.isNotEmpty() && prepared.size != runs.size) null else { width ->
                 val native = SpannableString(annotated.text)
@@ -530,8 +530,13 @@ internal fun prepareNativeFloatText(
 }
 
 /** Public native paragraph heuristic retains authored paragraph direction without inserting isolates. */
-private fun nativeParagraphDirection(text: AnnotatedString, fallbackRtl: Boolean): TextDirectionHeuristic {
-    val fallback = if (fallbackRtl) TextDirectionHeuristics.FIRSTSTRONG_RTL else TextDirectionHeuristics.FIRSTSTRONG_LTR
+private fun nativeParagraphDirection(text: AnnotatedString, fallbackRtl: Boolean,
+    tableDirection: TableContainingDirection?): TextDirectionHeuristic {
+    val fallback = when (tableDirection) {
+        TableContainingDirection.Ltr -> TextDirectionHeuristics.LTR
+        TableContainingDirection.Rtl -> TextDirectionHeuristics.RTL
+        null -> if (fallbackRtl) TextDirectionHeuristics.FIRSTSTRONG_RTL else TextDirectionHeuristics.FIRSTSTRONG_LTR
+    }
     val starts = listOf(0) + text.text.indices.filter { text.text[it] == '\n' && it + 1 < text.length }.map { it + 1 }
     val policies = starts.map { start ->
         when (text.paragraphStyles.lastOrNull { start >= it.start && start < it.end }?.item?.textDirection) {

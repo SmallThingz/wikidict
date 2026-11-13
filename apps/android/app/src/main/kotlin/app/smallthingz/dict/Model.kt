@@ -334,7 +334,7 @@ enum class TableFloatSide { Left, Right }
 enum class TableDisplay { Table, InlineBlock, InlineTable }
 enum class TableContainingDirection { Ltr, Rtl }
 enum class InlineBoxVerticalAlign { Baseline, Middle, Top }
-enum class CellVerticalAlign { Top }
+enum class CellVerticalAlign { Top, Middle }
 /** Computed once at the table origin; a cell font change does not rescale it. */
 data class ComputedLineHeight(val value: Float, val fontScaleBasis: FontScaleBasis = FontScaleBasis.Context) {
     init {
@@ -410,14 +410,47 @@ data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, va
         require(blocks == null || (spans.isEmpty() && nestedTable == null)) { "Ordered cell blocks cannot also contain legacy content" }
     }
 }
-data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geometry: TableGeometry? = null,
-    val style: TableStyle? = null, val captionBlocks: List<Block>? = null) {
+/** One source block viewport around this Table's existing anonymous grid and caption. */
+data class TableBlockViewport(val maxViewportWidthPx: Long, val boxStyle: TableStyle,
+    val boxSizing: ContainerBoxSizing, val maxWidth: StyleWidth, val gridStyle: TableStyle,
+    val gridDirection: TableContainingDirection, val language: String) {
     init {
+        require(language.isNotEmpty() && validPresentationString(language)) { "Invalid table source language" }
+        require(maxViewportWidthPx in 0L..0xffff_ffffL) { "Invalid table viewport threshold" }
+        require(boxStyle.width != null && boxStyle.width.value > 0f && boxStyle.marginValues != null &&
+            boxStyle.margins == null && boxStyle.floatSide == null && boxStyle.display == null &&
+            boxStyle.verticalAlign == null && boxStyle.collapse == null && boxStyle.lineHeight == null) {
+            "Unsupported table viewport box style"
+        }
+        require(gridStyle.collapse == TableCollapse.Collapse && gridStyle.background == null &&
+            gridStyle.border == null && gridStyle.padding == null && gridStyle.width == null &&
+            gridStyle.margins == null && gridStyle.marginValues == null && gridStyle.containingDirection == null &&
+            gridStyle.floatSide == null && gridStyle.clear == null && gridStyle.display == null &&
+            gridStyle.verticalAlign == null) { "Unsupported anonymous table grid style" }
+    }
+}
+
+data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geometry: TableGeometry? = null,
+    val style: TableStyle? = null, val captionBlocks: List<Block>? = null,
+    val blockViewport: TableBlockViewport? = null) {
+    init {
+        require(blockViewport == null || geometry == null && style?.isInline != true && style?.floatSide == null) {
+            "Table block viewport requires nonfloating block content without legacy geometry"
+        }
         require(captionBlocks == null || caption.isEmpty()) { "Rich table caption owns its content" }
         require(style?.isInline != true || caption.isEmpty() && captionBlocks == null) { "Inline table cannot have a caption" }
         require(style?.isInline != true || rows.any { it.isNotEmpty() }) { "Inline table requires a cell" }
         require(style?.isInline != true || rows.all { row -> row.all(::inlineTableCellShape) }) { "Unsupported inline table cell shape" }
     }
+}
+
+/** Compare the document CSS viewport before rounding; a narrow cell is not a viewport. */
+internal fun Table.blockViewportAt(documentViewportCssPx: Float): TableBlockViewport? =
+    blockViewportAt(documentViewportCssPx.toDouble())
+
+internal fun Table.blockViewportAt(documentViewportCssPx: Double): TableBlockViewport? {
+    require(documentViewportCssPx.isFinite() && documentViewportCssPx >= 0.0) { "Invalid document CSS viewport" }
+    return blockViewport?.takeIf { documentViewportCssPx <= it.maxViewportWidthPx.toDouble() }
 }
 
 /** Cells whose existing text/image layout exposes actual intrinsic widths. Wire versions gate new shapes separately. */

@@ -77,30 +77,39 @@ internal class NativeContextPaintInput(private val context: NativeFloatContextGe
     private data class TextTarget(val leaf: NativeContextInputLeaf, val rank: Int)
     private data class ChildTarget(val child: PlacedFloatContextChild, val rank: Int)
     private data class BoxTarget(val box: NativePaintBox, val bounds: android.graphics.RectF)
+    private data class GroupTarget(val rank: Int, val group: NativePositionedGroup, val leaf: NativeContextInputLeaf)
     private data class Winner(val rank: Int, val text: NativeContextInputLeaf? = null,
         val child: PlacedFloatContextChild? = null, val box: NativePaintBox? = null,
         val group: NativePositionedGroup? = null)
     private val groupTargets = groupRanks.flatMap { (source, rank) ->
-        context.positionedGroupsAtSource(source).map { rank to it }
-    }.sortedBy { it.first }
+        context.inputLeaves().filter { it.sourceIndex == source }.flatMap { leaf ->
+            leaf.geometry.positionedGroups.map { group ->
+                GroupTarget(rank, group.translated(leaf.x, leaf.y, leaf.offset) { id ->
+                    leaf.nodeBase + leaf.geometry.nodes.indexOfFirst { it.id == id }.also { check(it >= 0) }
+                }, leaf)
+            }
+        }
+    }.sortedBy { it.rank }
     private val textTargets = context.inputLeaves().map { TextTarget(it, leafRanks[it.sourceIndex]
         ?: throw UnsupportedFloatLayout("Text paint priority needs its original source owner")) }
     private val childTargets = context.children.map { ChildTarget(it, childRanks[it.id]
         ?: throw UnsupportedFloatLayout("Delegated paint priority needs its original source owner")) }
     private val boxTargets = boxes.mapNotNull { box -> context.ordinaryBounds[box.id]?.let { BoxTarget(box, it) } }
 
-    private fun winner(x: Float, y: Float): Winner? {
+    private fun winner(x: Float, y: Float, input: Boolean = false): Winner? {
         var best: Winner? = null
         fun accept(candidate: Winner) { if (best == null || candidate.rank > checkNotNull(best).rank) best = candidate }
         textTargets.forEach { target ->
             val leaf = target.leaf
-            if (leaf.geometry.containsInteraction(x - leaf.x, y - leaf.y)) accept(Winner(target.rank, text = leaf))
+            val contains = if (input) leaf.geometry.containsInput(x - leaf.x, y - leaf.y)
+                else leaf.geometry.containsInteraction(x - leaf.x, y - leaf.y)
+            if (contains) accept(Winner(target.rank, text = leaf))
         }
         childTargets.forEach { if (it.child.bounds.contains(x, y)) accept(Winner(it.rank, child = it.child)) }
         boxTargets.forEach { if (it.bounds.contains(x, y)) accept(Winner(it.box.rank, box = it.box)) }
         // Later media groups at the same Flow source retain DOM order within that phase.
-        groupTargets.forEach { (rank, group) -> if (group.contains(x, y) && (best == null || rank >= checkNotNull(best).rank))
-            best = Winner(rank, group = group)
+        groupTargets.forEach { (rank, group, leaf) -> if (group.contains(x, y) && (best == null || rank >= checkNotNull(best).rank))
+            best = Winner(rank, text = leaf, group = group)
         }
         return best
     }
@@ -108,6 +117,13 @@ internal class NativeContextPaintInput(private val context: NativeFloatContextGe
     override fun containsInput(x: Float, y: Float): Boolean = when (val hit = winner(x, y)) {
         null -> context.containsInput(x, y)
         else -> hit.child == null
+    }
+
+    override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? {
+        // Scrollports own their blank viewport area too. A covering child/box still blocks
+        // lower paint ranks; a deferred group retains its actual leaf, not an ambiguous offset.
+        val leaf = winner(x, y, input = true)?.text ?: return null
+        return leaf.geometry.horizontalScrollTargetAt(x - leaf.x, y - leaf.y)
     }
 
     override fun interactionNodeAt(x: Float, y: Float): FloatInteractionNode? {

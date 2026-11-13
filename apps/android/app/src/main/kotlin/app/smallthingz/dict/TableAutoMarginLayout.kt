@@ -25,17 +25,31 @@ import kotlin.math.ceil
 import kotlin.math.floor
 
 internal data class NativeTableMarginBox(val borderWidth: Int, val borderHeight: Int,
-    val viewportWidth: Int, val viewportHeight: Int, val minimumWidth: Int, val scrolling: Boolean) {
+    val viewportWidth: Int, val viewportHeight: Int, val minimumWidth: Int, val scrolling: Boolean,
+    val blockBox: NativeTableBlockBox? = null, val gridWidth: Int? = null, val gridHeight: Int? = null,
+    val actualBorderHeight: Float? = null) {
+    val placementWidth: Float get() = blockBox?.borderWidth ?: borderWidth.toFloat()
+    val placementHeight: Float get() = actualBorderHeight ?: borderHeight.toFloat()
     init {
         require(listOf(borderWidth, borderHeight, viewportWidth, viewportHeight, minimumWidth).all { it in 0..TablePixelLimit })
-        require(borderWidth >= minimumWidth && borderHeight == viewportHeight)
-        require(if (scrolling) borderWidth >= viewportWidth else borderWidth == viewportWidth)
+        if (blockBox == null) {
+            require(gridWidth == null && gridHeight == null && actualBorderHeight == null)
+            require(borderWidth >= minimumWidth && borderHeight == viewportHeight)
+            require(if (scrolling) borderWidth >= viewportWidth else borderWidth == viewportWidth)
+        } else {
+            require(borderWidth == ceil(blockBox.borderWidth).toInt() && viewportWidth == borderWidth)
+            require(borderHeight == viewportHeight && minimumWidth == borderWidth)
+            require(gridWidth != null && gridWidth in 0..TablePixelLimit && gridHeight != null && gridHeight in 0..TablePixelLimit)
+            require(actualBorderHeight != null && actualBorderHeight.isFinite() && actualBorderHeight in 0f..TablePixelLimit.toFloat() &&
+                ceil(actualBorderHeight).toInt() == borderHeight)
+        }
     }
 }
 
 /** One source owner publishes its measured border box separately from its scroll viewport. */
 internal class NativeTableMarginMeasureInput(val table: Table) {
-    private data class Request(val containingWidth: Int, val viewportWidth: Int, val minimumWidth: Int)
+    private data class Request(val containingWidth: Int, val viewportWidth: Int, val minimumWidth: Int,
+        val blockBox: NativeTableBlockBox? = null)
     private var request: Request? = null
     private var binding: Any? = null
     private var publishedBinding: Any? = null
@@ -45,6 +59,7 @@ internal class NativeTableMarginMeasureInput(val table: Table) {
     val modifier: Modifier get() = input.modifier
     val containingWidth: Int? get() = request?.containingWidth
     val viewportWidth: Int? get() = request?.viewportWidth
+    val blockBox: NativeTableBlockBox? get() = request?.blockBox
 
     fun bind(owner: Any) {
         if (binding === owner) return
@@ -61,10 +76,18 @@ internal class NativeTableMarginMeasureInput(val table: Table) {
     private fun clear() { box = null; publishedBinding = null; publishedRequest = null }
     fun refuse(owner: Any) { if (binding === owner) clear() }
     fun begin(containingWidth: Int, viewportWidth: Int, minimumWidth: Int) {
+        begin(Request(containingWidth, viewportWidth, minimumWidth))
+    }
+    fun beginBlock(containingWidth: Int, blockBox: NativeTableBlockBox) {
+        val width = ceil(blockBox.borderWidth).toInt()
+        begin(Request(containingWidth, width, width, blockBox))
+    }
+    private fun begin(next: Request) {
         clear()
-        if (listOf(containingWidth, viewportWidth, minimumWidth).any { it !in 0..TablePixelLimit })
+        if (next.blockBox != null && next.blockBox.policy !== table.blockViewport)
+            throw UnsupportedFloatLayout("Table block viewport source policy changed")
+        if (listOf(next.containingWidth, next.viewportWidth, next.minimumWidth).any { it !in 0..TablePixelLimit })
             throw UnsupportedFloatLayout("Table automatic margin request exceeds native geometry")
-        val next = Request(containingWidth, viewportWidth, minimumWidth)
         request = next
         input.update(Any())
         // The owning layout is remeasured even when a parent repeats an equal request.
@@ -73,12 +96,25 @@ internal class NativeTableMarginMeasureInput(val table: Table) {
     fun publish(owner: Any, source: Table, borderWidth: Int, borderHeight: Int,
         viewportWidth: Int, scrolling: Boolean) {
         val current = request ?: throw UnsupportedFloatLayout("Table automatic margin request is unavailable")
-        if (source !== table || binding !== owner || current.viewportWidth != viewportWidth)
+        if (source !== table || binding !== owner || current.viewportWidth != viewportWidth || current.blockBox != null)
             throw UnsupportedFloatLayout("Table automatic margin measure ownership changed")
         val actual = try { NativeTableMarginBox(borderWidth, borderHeight, viewportWidth, borderHeight,
             current.minimumWidth, scrolling) }
         catch (_: IllegalArgumentException) {
             throw UnsupportedFloatLayout("Table automatic margin border and viewport are inconsistent")
+        }
+        box = actual; publishedBinding = owner; publishedRequest = current
+    }
+    fun publishBlock(owner: Any, source: Table, blockHeight: Int, gridWidth: Int, gridHeight: Int,
+        actualBorderHeight: Float = blockHeight.toFloat()) {
+        val current = request ?: throw UnsupportedFloatLayout("Table block viewport request is unavailable")
+        val block = current.blockBox ?: throw UnsupportedFloatLayout("Table block viewport width is unavailable")
+        if (source !== table || binding !== owner)
+            throw UnsupportedFloatLayout("Table block viewport measure ownership changed")
+        val actual = try { NativeTableMarginBox(current.viewportWidth, blockHeight, current.viewportWidth,
+            blockHeight, current.viewportWidth, true, block, gridWidth, gridHeight, actualBorderHeight) }
+        catch (_: IllegalArgumentException) {
+            throw UnsupportedFloatLayout("Table block viewport and anonymous grid are inconsistent")
         }
         box = actual; publishedBinding = owner; publishedRequest = current
     }
