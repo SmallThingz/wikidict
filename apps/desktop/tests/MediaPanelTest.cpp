@@ -182,6 +182,130 @@ bool settingsPathsAreIsolated(const QString &root) {
 class MediaPanelTest : public QObject {
     Q_OBJECT
 private slots:
+    void blockMediaPinsDensityPixelsAndCacheToCompiledRendition()
+    {
+        using State = MediaPanel::InlineImageState;
+        const auto png = [](int width, int height, QColor color) {
+            QImage image(width, height, QImage::Format_RGB32); image.fill(color);
+            QByteArray bytes; QBuffer buffer(&bytes); buffer.open(QIODevice::WriteOnly); image.save(&buffer, "PNG"); return bytes;
+        };
+        const QByteArray one = png(60, 55, QColor("#235691")), two = png(120, 110, QColor("#739124"));
+        const auto rendition = [](const QString &url, const QByteArray &body) {
+            return QJsonObject{{"url", url}, {"sha256", QString::fromLatin1(QCryptographicHash::hash(body, QCryptographicHash::Sha256).toHex())}};
+        };
+        const auto first = rendition("https://upload.wikimedia.org/controlled/logo-1.png", one);
+        const auto second = rendition("https://upload.wikimedia.org/controlled/logo-2.png", two);
+        const QJsonObject image{{"file", "Controlled.svg"}, {"width_px", 44}, {"height_px", 40}};
+        const QJsonObject source{{"natural_width", 60}, {"natural_height", 55}, {"rendition_1x", first}, {"rendition_2x", second}};
+        const QJsonObject figure{{"image_span", QJsonObject{{"kind", "text"}, {"text", ""}, {"image", image}}},
+            {"sizing", "requested_fit"}, {"block_media_layout", source}};
+        const auto value = [&](const QJsonArray &figures) {
+            QJsonArray blocks; for (const auto &item : figures) blocks.append(QJsonObject{{"kind", "figure"}, {"figure", item}});
+            return QJsonObject{{"title", "Controlled block"}, {"media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", "Controlled.svg"}}}},
+                {"sections", QJsonArray{QJsonObject{{"blocks", blocks}}}}};
+        };
+        Network network; network.responses = {{one}, {two}};
+        MediaPanel panel(nullptr, &network); panel.setEntry(value({figure})); panel.show(); QObject owner;
+        MediaPanel::InlineImageAsset low{State::Loading}, high{State::Loading};
+        const auto changedLow = [&](const auto &asset) { low = asset; };
+        const auto changedHigh = [&](const auto &asset) { high = asset; };
+        QCOMPARE(panel.requestBlockImage(figure, 1, &owner, "low", changedLow).state, State::Disabled);
+        QCOMPARE(panel.requestBlockImage(figure, 2, &owner, "high", changedHigh).state, State::Disabled);
+        QVERIFY(network.urls.isEmpty()); enableImages(panel);
+        QTRY_COMPARE(low.state, State::Ready); QTRY_COMPARE(high.state, State::Ready);
+        QCOMPARE(network.urls, QList<QUrl>({QUrl(first.value("url").toString()), QUrl(second.value("url").toString())}));
+        QCOMPARE(low.image.size(), QSize(60, 55)); QCOMPARE(high.image.size(), QSize(120, 110));
+        QCOMPARE(low.image.pixelColor(20, 20), QColor("#235691")); QCOMPARE(high.image.pixelColor(20, 20), QColor("#739124"));
+        QCOMPARE(low.intrinsic, QSizeF(60, 55)); QCOMPARE(high.intrinsic, QSizeF(120, 110));
+        QCOMPARE(low.originalMime, QStringLiteral("image/png")); QVERIFY(!low.vector); QVERIFY(!high.vector);
+        QCOMPARE(low.pinnedRendition.value("sha256"), first.value("sha256")); QCOMPARE(high.pinnedRendition.value("sha256"), second.value("sha256"));
+        QCOMPARE(low.pinnedRendition.value("width").toInt(), 60); QCOMPARE(high.pinnedRendition.value("height").toInt(), 110);
+        const int downloads = network.urls.size();
+        panel.setEntry(value({figure}));
+        low = panel.requestBlockImage(figure, .75, &owner, "low-cache", changedLow);
+        high = panel.requestBlockImage(figure, 3, &owner, "high-cache", changedHigh);
+        QTRY_COMPARE(low.state, State::Ready); QTRY_COMPARE(high.state, State::Ready); QCOMPARE(network.urls.size(), downloads);
+        auto foreign = figure; auto otherSource = source;
+        auto other = first; other.insert("url", "https://upload.wikimedia.org/controlled/different.png");
+        otherSource.insert("rendition_1x", other); foreign.insert("block_media_layout", otherSource);
+        QCOMPARE(panel.requestBlockImage(foreign, 1, &owner, "foreign", changedLow).state, State::Error);
+        QCOMPARE(network.urls.size(), downloads);
+        panel.setEntry(value({figure, foreign})); network.responses = {{one}};
+        low = panel.requestBlockImage(foreign, 1, &owner, "distinct", changedLow);
+        QTRY_COMPARE(low.state, State::Ready); QCOMPARE(network.urls.size(), downloads + 1); QCOMPARE(network.urls.last(), QUrl(other.value("url").toString()));
+        // The same body at a different source URL owns a distinct cache entry.
+        panel.setEntry(value({figure, foreign})); low = panel.requestBlockImage(figure, 1, &owner, "original-cache", changedLow);
+        QTRY_COMPARE(low.state, State::Ready); QCOMPARE(network.urls.size(), downloads + 1);
+        QVERIFY(std::none_of(network.urls.cbegin(), network.urls.cend(), [](const QUrl &url) {
+            return url.path().endsWith(QStringLiteral(".svg")) || url.path().contains(QStringLiteral("api.php"));
+        }));
+    }
+
+    void blockMediaRejectsWrongHashAxesEncodingAndStaleOwnedRequests()
+    {
+        using State = MediaPanel::InlineImageState;
+        const auto pixels = [](int width, int height, const char *format = "PNG") {
+            QImage image(width, height, QImage::Format_RGB32); image.fill(QColor("#305080"));
+            QByteArray bytes; QBuffer buffer(&bytes); buffer.open(QIODevice::WriteOnly); image.save(&buffer, format); return bytes;
+        };
+        const QByteArray body = pixels(60, 55), big = pixels(120, 110);
+        const auto hash = [](const QByteArray &bytes) { return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()); };
+        const QJsonObject image{{"file", "Controlled.svg"}, {"width_px", 44}, {"height_px", 40}};
+        const auto figureFor = [&](const QByteArray &bytes, int width = 60, int height = 55) {
+            return QJsonObject{{"image_span", QJsonObject{{"kind", "text"}, {"text", ""}, {"image", image}}}, {"sizing", "requested_fit"},
+                {"block_media_layout", QJsonObject{{"natural_width", width}, {"natural_height", height},
+                    {"rendition_1x", QJsonObject{{"url", "https://upload.wikimedia.org/controlled/check-1.png"}, {"sha256", hash(bytes)}}},
+                    {"rendition_2x", QJsonObject{{"url", "https://upload.wikimedia.org/controlled/check-2.png"}, {"sha256", hash(big)}}}}}};
+        };
+        const auto value = [](const QJsonObject &figure) {
+            return QJsonObject{{"title", "Controlled refusal"}, {"media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", "Controlled.svg"}}}},
+                {"sections", QJsonArray{QJsonObject{{"blocks", QJsonArray{QJsonObject{{"kind", "figure"}, {"figure", figure}}}}}}}};
+        };
+        Network network; MediaPanel panel(nullptr, &network); panel.show(); enableImages(panel); QObject owner;
+        MediaPanel::InlineImageAsset last{State::Loading}; int callbacks = 0;
+        const auto changed = [&](const auto &asset) { ++callbacks; last = asset; };
+        for (const QString &kind : {QStringLiteral("hash"), QStringLiteral("axes"), QStringLiteral("encoding")}) {
+            const QByteArray payload = kind == "encoding" ? pixels(60, 55, "BMP") : body;
+            const auto figure = figureFor(kind == "hash" ? QByteArrayLiteral("different body") : payload, kind == "axes" ? 61 : 60);
+            panel.setEntry(value(figure)); network.responses = {{payload}}; const int before = network.urls.size();
+            last = panel.requestBlockImage(figure, 1, &owner, kind, changed);
+            QTRY_COMPARE(last.state, State::Error); QVERIFY(last.image.isNull()); QVERIFY(!last.vector);
+            QCOMPARE(network.urls.size(), before + 1);
+        }
+        const auto good = figureFor(body); panel.setEntry(value(good)); network.responses = {{body}};
+        last = panel.requestBlockImage(good, 1, &owner, "valid", changed); QTRY_COMPARE(last.state, State::Ready);
+        const auto pair = good.value("block_media_layout").toObject().value("rendition_1x").toObject();
+        const QString key = hash(QJsonDocument(QJsonArray{pair.value("url"), pair.value("sha256")}).toJson(QJsonDocument::Compact));
+        QFile cached(cacheRoot() + QChar('/') + key + QStringLiteral(".bin"));
+        QVERIFY(cached.open(QIODevice::WriteOnly | QIODevice::Truncate)); QCOMPARE(cached.write(pixels(60, 55, "BMP")), qint64(pixels(60, 55, "BMP").size())); cached.close();
+        panel.setEntry(value(good)); network.responses = {{body}}; const int before = network.urls.size();
+        last = panel.requestBlockImage(good, 1, &owner, "revalidate", changed);
+        QTRY_COMPARE(last.state, State::Ready); QCOMPARE(network.urls.size(), before + 1); QCOMPARE(last.image.size(), QSize(60, 55));
+        panel.findChild<QPushButton *>("mediaClearCache")->click(); panel.setEntry(value(good));
+        network.responses = {{body, -1, 0, true}};
+        auto *shortOwner = new QObject; last = panel.requestBlockImage(good, 1, shortOwner, "held", changed);
+        QTRY_VERIFY(network.heldReply); const int priorCallbacks = callbacks; delete shortOwner;
+        const int cancelled = network.cancelled; panel.setEntry(QJsonObject{{"title", "Replacement"}});
+        QCOMPARE(network.cancelled, cancelled + 1); QCOMPARE(callbacks, priorCallbacks);
+        bool navigated = false;
+        const auto navigateOnReady = [&](const MediaPanel::InlineImageAsset &asset) {
+            if (asset.state != State::Ready) return;
+            navigated = true; panel.setEntry(QJsonObject{{"title", "Replacement during callback"}});
+        };
+        panel.setEntry(value(good)); network.responses = {{body}};
+        panel.requestBlockImage(good, 1, &owner, "navigate-ready", navigateOnReady);
+        QTRY_VERIFY(navigated);
+        // A cached synchronous callback has the same ownership boundary.
+        panel.setEntry(value(good)); network.responses = {{body}};
+        last = panel.requestBlockImage(good, 1, &owner, "cache-seed", changed); QTRY_COMPARE(last.state, State::Ready);
+        panel.setEntry(value(good)); navigated = false; const int cachedDownloads = network.urls.size();
+        const auto stale = panel.requestBlockImage(good, 1, &owner, "navigate-cache", navigateOnReady);
+        QVERIFY(navigated); QCOMPARE(stale.state, State::Error); QCOMPARE(network.urls.size(), cachedDownloads);
+        QVERIFY(std::none_of(network.urls.cbegin(), network.urls.cend(), [](const QUrl &url) {
+            return url.path().endsWith(QStringLiteral(".svg")) || url.path().contains(QStringLiteral("api.php"));
+        }));
+    }
+
     void staticPosterUsesIdentityPngDemandAndClosedCacheVariant() {
         using State = MediaPanel::InlineImageState;
         const QJsonObject policy{{"policy", "three_d_stl_v1"}, {"label", "3D"},

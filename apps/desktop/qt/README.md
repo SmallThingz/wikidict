@@ -262,6 +262,53 @@ same pinned-source recipe below. Focused reproduction additionally uses:
 Use the isolated environment described under Native validation. This command is a
 reproduction recipe, not a claim that these historical scopes ran as one suite.
 
+## Source-owned block media and responsive flex rows
+
+Ordinary links retain their authored paint states and action ownership across real
+text owners. Source-owned block media keeps its intrinsic ratio and CSS middle
+alignment when text shaping revisits an inline object. Responsive flex rows use
+word-based intrinsic minimums, preserve explicit anywhere wrapping, and retain
+real item frames. Ordinary nested containers may cross a floating flex boundary
+only after the row, direct item, ordinal and source ownership are authenticated.
+Arbitrary floating ancestors and malformed ownership are still refused.
+
+The app carries complete block-media states and pinned rendition identity through
+its existing media pipeline. Eight focused native controls, eight Reader controls
+and two Media controls passed on native115/App144. The cumulative patches below
+contain the implementation and native regressions; the app source and tests are
+tracked alongside them. The GNU native test target retains its existing LTO
+opt-out; Qt product IPO policy is unchanged.
+
+The three constructed captures at 900, 719 and 639 pixels show a readable image
+and text row, with the following rule and attribution separate. The source selects
+FloatRight at 900 and 719 pixels and InFlow only at 639. At 639 pixels the authored
+100% border-box width equals the available width, while the retained 0.45em left
+margin adds 9 CSS pixels at the fixture font size of 20. This retains a horizontal
+scrollbar. This is not a claim of zero overflow. The blue square is
+geometry test data, not a retained dictionary image. These captures and focused
+checks do not qualify a genuine VI/Mai entry or the whole frontend. Earlier
+CENTER, table-float, named-anchor, peili and full-suite results retain their
+original scope. Original native112/native113/App143 failures remain recorded.
+
+Use the pinned-source recipe and isolated environment below. Current focused
+native reproduction uses:
+
+```sh
+"$qt_build/qtbase/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout" \
+  ordinaryLinkOutlineKeepsStockAndProjectedSourceGeometry \
+  figureBlockMediaKeepsSourceRatioMiddleAndNonzeroStrut \
+  figureBlockMediaRejectsForeignPolicyAndRecoversSameSource \
+  containerFlexShrinksByBasisAndFreezesNoneWithoutGrowing \
+  containerFlexAutoMarginsCrossOverflowAndRealLinkGeometry \
+  containerFlexRejectsForeignItemsAndRecoversSameSource \
+  containerFlexStrictMetadataCacheKeepsTypesAndRecovers \
+  containerFlexFloatingRowsKeepOrdinaryDescendantOwnership
+```
+
+The app's focused Reader and Media commands are listed in the qualification
+manifest. Reusing qualified binaries requires exact source, dependency and runtime
+library identity; a source-only promotion is not a fresh full-suite execution.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,

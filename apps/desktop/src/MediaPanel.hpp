@@ -22,10 +22,12 @@ public:
     void stopPlayback();
 
     enum class InlineImageState { Disabled, Loading, Ready, Error };
-    struct InlineImageAsset { InlineImageState state; QImage image; QString message; QSizeF intrinsic; QString originalMime; std::shared_ptr<QSvgRenderer> vector; bool originalVerified = false; };
+    struct InlineImageAsset { InlineImageState state; QImage image; QString message; QSizeF intrinsic; QString originalMime; std::shared_ptr<QSvgRenderer> vector; bool originalVerified = false; QJsonObject pinnedRendition; };
     InlineImageAsset requestInlineImage(const QString &file, QObject *owner, const QString &key,
         std::function<void(const InlineImageAsset &)> changed);
     InlineImageAsset requestInlineImage(const QJsonObject &image, const QString &sizing, qreal devicePixelRatio,
+        QObject *owner, const QString &key, std::function<void(const InlineImageAsset &)> changed);
+    InlineImageAsset requestBlockImage(const QJsonObject &figure, qreal devicePixelRatio,
         QObject *owner, const QString &key, std::function<void(const InlineImageAsset &)> changed);
     QUrl inlineImageSource(const QString &compiledTarget, const std::optional<QString> &fragment = std::nullopt) const;
     bool openInlineImageSource(const QString &compiledTarget, const std::optional<QString> &fragment = std::nullopt);

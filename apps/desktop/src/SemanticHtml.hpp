@@ -2025,11 +2025,62 @@ inline QJsonObject checkedImage(const QJsonValue &value) {
     checkedStaticPoster(image);
     return image;
 }
+inline QJsonObject checkedBlockMediaResource(const QJsonValue &value) {
+    const auto object = CompiledContent::containerObject(value,
+        {QStringLiteral("natural_width"), QStringLiteral("natural_height"), QStringLiteral("rendition_1x"), QStringLiteral("rendition_2x")},
+        {QStringLiteral("natural_width"), QStringLiteral("natural_height"), QStringLiteral("rendition_1x"), QStringLiteral("rendition_2x")});
+    for (const auto &key : {QStringLiteral("natural_width"), QStringLiteral("natural_height")}) {
+        const auto axis = object.value(key); const double n = axis.toDouble(-1);
+        if (!axis.isDouble() || !std::isfinite(n) || n < 1 || n > 2147483647.0 || std::floor(n) != n)
+            throw std::runtime_error("invalid block image natural dimensions");
+    }
+    for (const auto &key : {QStringLiteral("rendition_1x"), QStringLiteral("rendition_2x")}) {
+        const auto rendition = CompiledContent::containerObject(object.value(key), {QStringLiteral("url"), QStringLiteral("sha256")}, {QStringLiteral("url"), QStringLiteral("sha256")});
+        if (!rendition.value("url").isString() || !rendition.value("sha256").isString())
+            throw std::runtime_error("invalid block image rendition");
+        const QString url = rendition.value("url").toString(), hash = rendition.value("sha256").toString();
+        if (url.size() > 8192 || !url.startsWith(QStringLiteral("https://")) || hash.size() != 64)
+            throw std::runtime_error("invalid block image rendition");
+        for (QChar ch : hash) if (!((ch >= QChar('0') && ch <= QChar('9')) || (ch >= QChar('a') && ch <= QChar('f'))))
+            throw std::runtime_error("invalid block image digest");
+        const int slash = url.indexOf(QChar('/'), 8);
+        if (slash <= 8 || slash + 1 >= url.size()) throw std::runtime_error("invalid block image URL");
+        const QString host = url.mid(8, slash - 8);
+        if (host.startsWith(QChar('.')) || host.endsWith(QChar('.')) || !host.contains(QChar('.')))
+            throw std::runtime_error("invalid block image URL");
+        for (QChar ch : host) if (!((ch >= QChar('a') && ch <= QChar('z')) || (ch >= QChar('A') && ch <= QChar('Z'))
+            || (ch >= QChar('0') && ch <= QChar('9')) || ch == QChar('.') || ch == QChar('-')))
+            throw std::runtime_error("invalid block image URL");
+        for (QChar ch : url) if (ch.unicode() <= 0x20 || ch.unicode() >= 0x7f || ch == QChar('\\') || ch == QChar('#'))
+            throw std::runtime_error("invalid block image URL");
+    }
+    const auto one = object.value("rendition_1x").toObject(), two = object.value("rendition_2x").toObject();
+    if (one.value("url") == two.value("url") || one.value("sha256") == two.value("sha256"))
+        throw std::runtime_error("ambiguous block image density renditions");
+    return object;
+}
+inline QJsonObject blockMediaResource(const QJsonObject &figure) {
+    const auto layout = figure.value(QStringLiteral("block_media_layout")).toObject();
+    QJsonObject result;
+    for (const auto &key : {QStringLiteral("natural_width"), QStringLiteral("natural_height"), QStringLiteral("rendition_1x"), QStringLiteral("rendition_2x")})
+        result.insert(key, layout.value(key));
+    return checkedBlockMediaResource(result);
+}
+inline QJsonObject blockMediaRendition(const QJsonObject &resource, qreal density) {
+    const auto checked = checkedBlockMediaResource(resource);
+    if (!std::isfinite(density) || density <= 0) throw std::runtime_error("invalid image density");
+    const int multiplier = density <= 1 ? 1 : 2;
+    auto selected = checked.value(multiplier == 1 ? "rendition_1x" : "rendition_2x").toObject();
+    selected.insert("width", checked.value("natural_width").toDouble() * multiplier);
+    selected.insert("height", checked.value("natural_height").toDouble() * multiplier);
+    return selected;
+}
+
 inline QUrl inlineImageUrl(const QJsonObject &image) {
     return QUrl(inlineImageScheme + QChar(':') + QString::fromLatin1(QJsonDocument(image).toJson(QJsonDocument::Compact)
         .toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals)));
 }
-inline QJsonObject inlineImageData(const QUrl &url) {
+inline QJsonObject inlineImagePayload(const QUrl &url) {
     if (url.scheme() != inlineImageScheme || url.hasQuery() || url.hasFragment() || !url.host().isEmpty())
         throw std::runtime_error("invalid inline image resource");
     const QByteArray encoded = url.path().toLatin1();
@@ -2037,7 +2088,24 @@ inline QJsonObject inlineImageData(const QUrl &url) {
     QJsonParseError error; const QJsonDocument value = QJsonDocument::fromJson(bytes, &error);
     if (bytes.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals) != encoded || error.error != QJsonParseError::NoError || !value.isObject())
         throw std::runtime_error("invalid inline image metadata");
-    return checkedImage(value.object());
+    return value.object();
+}
+inline QJsonObject inlineImageData(const QUrl &url) {
+    const auto value = inlineImagePayload(url);
+    if (!value.contains(QStringLiteral("block_media"))) return checkedImage(value);
+    if (value.size() != 2 || !value.value(QStringLiteral("image")).isObject()) throw std::runtime_error("invalid block image resource");
+    checkedBlockMediaResource(value.value(QStringLiteral("block_media")));
+    return checkedImage(value.value(QStringLiteral("image")));
+}
+inline QJsonObject inlineImageBlockResource(const QUrl &url) {
+    const auto value = inlineImagePayload(url);
+    if (!value.contains(QStringLiteral("block_media"))) return {};
+    inlineImageData(url);
+    return checkedBlockMediaResource(value.value(QStringLiteral("block_media")));
+}
+inline QUrl inlineBlockMediaUrl(const QJsonObject &figure) {
+    const auto image = checkedImage(figure.value(QStringLiteral("image_span")).toObject().value(QStringLiteral("image")));
+    return inlineImageUrl(QJsonObject{{QStringLiteral("image"), image}, {QStringLiteral("block_media"), blockMediaResource(figure)}});
 }
 inline QString inlineImageHtml(const QJsonValue &value) {
     const QJsonObject image = checkedImage(value);
@@ -2144,14 +2212,16 @@ inline void normalizeImages(QTextDocument *document) {
 inline QString scaledText(const QString &html, double scale, const QString &tooltip,
                           Basis basis = Basis::Context, qreal normalBodyPoints = 0,
                           bool small = false, bool superscript = false, bool subscript = false, qreal contextPoints = 0,
-                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}) {
+                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}, bool ordinaryLink = false) {
     QJsonObject metadata{{"scale", scale}, {"tooltip", tooltip}};
     if (fontFeaturePolicy(fontFeatures) != FontFeaturePolicy::Legacy) metadata.insert("font_features", fontFeatures);
     if (!linkPaint.isEmpty()) {
-        MissingFigurePaint::validate(linkPaint, linkEm);
+        if (ordinaryLink) MissingFigurePaint::validateOrdinary(linkPaint, linkEm);
+        else MissingFigurePaint::validate(linkPaint, linkEm);
         if (linkOwner < (qint64(1) << 32) || linkOwner >= (qint64(1) << 33))
             throw std::runtime_error("invalid compiled link span owner");
         metadata.insert("link_paint", linkPaint); metadata.insert("link_owner", double(linkOwner)); metadata.insert("link_em", linkEm); metadata.insert("link_underline", linkUnderline);
+        if (ordinaryLink) metadata.insert("ordinary_link", true);
     }
     if (present(advisory)) {
         if (!advisory.isString()) throw std::runtime_error("invalid span advisory");
@@ -2189,6 +2259,7 @@ struct ScaleInfo {
     qint64 linkOwner = -1;
     qreal linkEm = 0;
     bool linkUnderline = false;
+    bool ordinaryLink = false;
     FontFeaturePolicy fontFeatures = FontFeaturePolicy::Legacy;
 };
 
@@ -2246,11 +2317,19 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
             if (!owner.isDouble() || !std::isfinite(id) || std::floor(id) != id
                 || id < double(qint64(1) << 32) || id >= double(qint64(1) << 33) || !em.isDouble())
                 throw std::runtime_error("invalid compiled link span identity");
-            info.linkPaint = MissingFigurePaint::validate(value.value("link_paint"), em.toDouble());
+            info.linkPaint = value.value("ordinary_link").toBool()
+                ? MissingFigurePaint::validateOrdinary(value.value("link_paint"), em.toDouble())
+                : MissingFigurePaint::validate(value.value("link_paint"), em.toDouble());
             info.linkOwner = qint64(id); info.linkEm = em.toDouble();
             if (!value.value("link_underline").isBool()) throw std::runtime_error("invalid compiled link decoration");
             info.linkUnderline = value.value("link_underline").toBool();
-        } else if (value.contains("link_owner") || value.contains("link_em") || value.contains("link_underline"))
+            if (value.contains("ordinary_link")) {
+                if (!value.value("ordinary_link").isBool() || !value.value("ordinary_link").toBool()
+                    || info.linkUnderline != info.linkPaint.value("normal").toObject().value("underline").toBool())
+                    throw std::runtime_error("invalid ordinary link decoration metadata");
+                info.ordinaryLink = true;
+            }
+        } else if (value.contains("link_owner") || value.contains("link_em") || value.contains("link_underline") || value.contains("ordinary_link"))
             throw std::runtime_error("unowned compiled link span metadata");
         info.fontFeatures = fontFeatures;
         info.advisory = advisory;
@@ -2459,7 +2538,9 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                 if (!marker->linkPaint.isEmpty()) {
                     if (!format.isAnchor() || format.anchorHref().isEmpty() || format.isImageFormat())
                         throw std::runtime_error("compiled link span lost its action");
-                    format.setProperty(MissingFigurePaint::policyProperty, MissingFigurePaint::fixedPolicy);
+                    if (marker->ordinaryLink && document->documentLayout()->property("_wikidictOrdinaryLinkStateCapability").toString() != MissingFigurePaint::ordinaryPolicy)
+                        throw std::runtime_error("ordinary link paint requires paired native support");
+                    format.setProperty(MissingFigurePaint::policyProperty, marker->ordinaryLink ? MissingFigurePaint::ordinaryPolicy : MissingFigurePaint::fixedPolicy);
                     format.setProperty(MissingFigurePaint::ownerProperty, marker->linkOwner);
                     format.setProperty(MissingFigurePaint::fixedPolicyProperty, marker->linkPaint.toVariantMap());
                     format.setProperty(MissingFigurePaint::outlineProperty, MissingFigurePaint::outline(marker->linkPaint, marker->linkEm));
@@ -2468,7 +2549,7 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                     format.setProperty(MissingFigurePaint::zeroFontProperty, zeroLink);
                     format.setForeground(zeroLink ? QColor(Qt::transparent)
                         : QColor(marker->linkPaint.value("normal").toObject().value("foreground").toString()));
-                    format.setUnderlineStyle(!zeroLink && (marker->linkUnderline || marker->linkPaint.value("normal").toObject().value("underline").toBool())
+                    format.setUnderlineStyle(!zeroLink && ((!marker->ordinaryLink && marker->linkUnderline) || marker->linkPaint.value("normal").toObject().value("underline").toBool())
                         ? QTextCharFormat::SingleUnderline : QTextCharFormat::NoUnderline);
                 }
                 if (marker->sourceRun >= 0) format.setProperty(sourceRunProperty, marker->sourceRun);

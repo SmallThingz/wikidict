@@ -30,6 +30,7 @@ inline constexpr int fixedPolicyProperty = policyProperty + 5;
 inline constexpr int outlineProperty = policyProperty + 6;
 inline constexpr int atomicProperty = policyProperty + 7;
 inline const QString fixedPolicy = QStringLiteral("wikidict.figure-link-state/1");
+inline const QString ordinaryPolicy = QStringLiteral("wikidict.ordinary-link-state/1");
 inline bool present(const QJsonValue &v) { return !v.isUndefined() && !v.isNull(); }
 inline void require(bool condition) { if (!condition) throw std::runtime_error("invalid Figure link paint"); }
 inline bool canonicalRgb(const QJsonValue &value) {
@@ -69,6 +70,17 @@ inline QJsonObject validate(const QJsonValue &value, qreal em) {
     }
     return object;
 }
+inline QJsonObject validateOrdinary(const QJsonValue &value, qreal em) {
+    require(value.isObject());
+    const auto object = value.toObject(); auto base = object;
+    for (const auto &key : {"hover_active", "visited_hover_active"}) {
+        const auto value = base.take(QLatin1String(key));
+        require(value.isObject()); const auto state = value.toObject();
+        require(state.size() == 2 && canonicalRgb(state.value("foreground")) && state.value("underline").isBool());
+    }
+    validate(base, em);
+    return object;
+}
 inline QVariantMap outline(const QJsonObject &paint, qreal em) {
     if (!present(paint.value("focus_outline"))) return {};
     const auto source = paint.value("focus_outline").toObject();
@@ -104,7 +116,8 @@ inline QColor foreground(bool dark, bool visited, Interaction interaction) {
     return QColor(QString::fromLatin1(dark ? night[index] : light[index]));
 }
 inline bool owns(const QTextCharFormat &format) {
-    return (format.stringProperty(policyProperty) == policy || format.stringProperty(policyProperty) == fixedPolicy)
+    return (format.stringProperty(policyProperty) == policy || format.stringProperty(policyProperty) == fixedPolicy
+            || format.stringProperty(policyProperty) == ordinaryPolicy)
         && format.isAnchor() && !format.anchorHref().isEmpty()
         && format.hasProperty(ownerProperty) && format.property(ownerProperty).toLongLong() >= 0;
 }
@@ -127,10 +140,12 @@ inline QList<QTextEdit::ExtraSelection> selections(QTextDocument *document, cons
             const auto interaction = owner == state.pressed ? Interaction::Active
                 : owner == state.hovered ? Interaction::Hover : Interaction::Rest;
             const bool zero = format.boolProperty(zeroFontProperty);
-            const bool fixed = format.stringProperty(policyProperty) == fixedPolicy;
+            const bool ordinary = format.stringProperty(policyProperty) == ordinaryPolicy;
+            const bool fixed = ordinary || format.stringProperty(policyProperty) == fixedPolicy;
             const auto paint = QJsonObject::fromVariantMap(format.property(fixedPolicyProperty).toMap());
             const bool visited = state.visitedTargets.contains(fixed ? fixedTargetKey(state, format.anchorHref()) : targetKey(state, format.anchorHref()));
-            const QString stateName = visited
+            const QString stateName = ordinary && owner == state.hovered && owner == state.pressed
+                ? (visited ? QStringLiteral("visited_hover_active") : QStringLiteral("hover_active")) : visited
                 ? (interaction == Interaction::Active ? QStringLiteral("visited_active") : interaction == Interaction::Hover ? QStringLiteral("visited_hover") : QStringLiteral("visited"))
                 : (interaction == Interaction::Active ? QStringLiteral("active") : interaction == Interaction::Hover ? QStringLiteral("hover") : QStringLiteral("normal"));
             const auto selected = paint.value(stateName).toObject();
@@ -139,7 +154,7 @@ inline QList<QTextEdit::ExtraSelection> selections(QTextDocument *document, cons
             QTextCharFormat overlay;
             overlay.setProperty(overlayProperty, true);
             overlay.setForeground(ink);
-            const bool underline = !zero && (format.boolProperty(underlineProperty) || (fixed
+            const bool underline = !zero && ((!ordinary && format.boolProperty(underlineProperty)) || (fixed
                 ? selected.value("underline").toBool() || (owner == state.focused && paint.value("underline_on_focus").toBool())
                 : interaction != Interaction::Rest));
             overlay.setUnderlineStyle(underline ? QTextCharFormat::SingleUnderline : QTextCharFormat::NoUnderline);

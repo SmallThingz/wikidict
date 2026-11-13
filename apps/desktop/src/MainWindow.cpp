@@ -3125,7 +3125,7 @@ void MainWindow::bindInlineImages() {
         QPointer<QTextBrowser> widget(browser);
         QPointer<QTextDocument> document(browser->document());
         QPointer<InlineVectorImages> vectors(new InlineVectorImages(document->documentLayout()));
-        struct PendingImage { QJsonObject image; MediaPanel::InlineImageAsset asset; };
+        struct PendingImage { QJsonObject image; MediaPanel::InlineImageAsset asset; qreal density; };
         struct PendingUpdates {
             QHash<QUrl, PendingImage> images;
             quint64 generation = 0;
@@ -3138,20 +3138,23 @@ void MainWindow::bindInlineImages() {
         document->setResourceProvider([this, self, widget, document, vectors, pending](const QUrl &url) -> QVariant {
             if (url.scheme() != SemanticHtml::inlineImageScheme || !self || !widget || !document || widget->document() != document) return {};
             const QJsonObject image = SemanticHtml::inlineImageData(url);
+            const auto blockResource = SemanticHtml::inlineImageBlockResource(url);
             const quint64 generation = inlineImageGeneration_;
             const quint64 composition = document == reading_->document() ? readingComposition_ : 0;
-            QTimer::singleShot(0, document, [this, self, widget, document, vectors, pending, url, image, generation, composition] {
+            QTimer::singleShot(0, document, [this, self, widget, document, vectors, pending, url, image, blockResource, generation, composition] {
                 if (!self || !widget || !document || widget->document() != document || generation != inlineImageGeneration_
                     || (document == reading_->document() && composition != readingComposition_)) return;
-                const auto apply = [this, self, widget, document, vectors, pending, url, image, generation, composition](const MediaPanel::InlineImageAsset &asset) {
+                const qreal requestedDensity = widget->devicePixelRatioF();
+                const auto apply = [this, self, widget, document, vectors, pending, url, image, blockResource, requestedDensity, generation, composition](const MediaPanel::InlineImageAsset &asset) {
                     if (!self || !widget || !document || widget->document() != document || generation != inlineImageGeneration_
                         || (document == reading_->document() && composition != readingComposition_)) return;
+                    if (!blockResource.isEmpty() && widget->devicePixelRatioF() != requestedDensity) return;
                     if (pending->generation != generation || pending->composition != composition) {
                         pending->images.clear();
                         pending->generation = generation;
                         pending->composition = composition;
                     }
-                    pending->images.insert(url, PendingImage{image, asset});
+                    pending->images.insert(url, PendingImage{image, asset, requestedDensity});
                     if (pending->scheduled) return;
                     pending->scheduled = true;
                     QTimer::singleShot(0, document, [this, self, widget, document, vectors, pending] {
@@ -3162,7 +3165,11 @@ void MainWindow::bindInlineImages() {
                             pending->images.clear();
                             return;
                         }
-                        const auto updates = std::exchange(pending->images, {});
+                        auto updates = std::exchange(pending->images, {});
+                        for (auto it = updates.begin(); it != updates.end();) {
+                            if (!SemanticHtml::inlineImageBlockResource(it.key()).isEmpty() && it->density != widget->devicePixelRatioF()) it = updates.erase(it);
+                            else ++it;
+                        }
                         if (updates.isEmpty()) return;
                         QStringList descriptions;
                         try {
@@ -3249,17 +3256,31 @@ void MainWindow::bindInlineImages() {
                         widget->viewport()->update();
                     });
                 };
-                QString sizing;
+                QString sizing; QJsonObject blockFigure; bool currentOccurrence = false;
                 for (auto block = document->begin(); block.isValid(); block = block.next())
                     for (auto it = block.begin(); !it.atEnd(); ++it) {
                         const auto fragment = it.fragment();
                         if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
                         const auto format = fragment.charFormat().toImageFormat();
                         if (QUrl(format.name()) != url) continue;
+                        currentOccurrence = true;
                         const auto figure = QJsonDocument::fromJson(format.property(SemanticHtml::figureImageProperty).toByteArray()).object();
                         if (!figure.isEmpty()) sizing = figure.value(QStringLiteral("sizing")).toString();
+                        if (!blockResource.isEmpty()) {
+                            try {
+                                if (SemanticHtml::blockMediaResource(figure) != blockResource) throw std::runtime_error("mismatched block image source");
+                            } catch (const std::exception &) {
+                                apply({MediaPanel::InlineImageState::Error, {}, QStringLiteral("Invalid compiled image resource.")}); return;
+                            }
+                            if (blockFigure.isEmpty()) blockFigure = figure;
+                        }
                     }
-                const auto asset = media_->requestInlineImage(image, sizing, widget->devicePixelRatioF(), document, url.toString(), apply);
+                // A queued request from the temporary HTML import may no longer
+                // name a current image after its semantic owner is materialized.
+                if (!currentOccurrence) return;
+                const auto asset = blockResource.isEmpty()
+                    ? media_->requestInlineImage(image, sizing, requestedDensity, document, url.toString(), apply)
+                    : media_->requestBlockImage(blockFigure, requestedDensity, document, url.toString(), apply);
                 apply(asset);
             });
             QImage pending(1, 1, QImage::Format_ARGB32_Premultiplied); pending.fill(Qt::transparent); return pending;
@@ -3367,8 +3388,10 @@ void MainWindow::reflowFigures() {
         const bool figures = hasFigure(hasFigure, document->rootFrame());
         const bool tables = SemanticHtml::hasTableBlockViewports(document);
         const bool floatTables = SemanticHtml::hasTableFloatViewports(document);
-        if (!figures && !tables && !floatTables) return;
+        const bool containers = FlowConstruction::hasResponsiveContainers(document);
+        if (!figures && !tables && !floatTables && !containers) return;
         if (!editDocumentFormats(reading_, [&] {
+                if (containers) FlowConstruction::reflowContainers(document, qreal(contentsRect().width()));
                 if (figures) SemanticFigure::reflow(document, contentsRect().width());
                 if (tables) SemanticHtml::reflowTableBlockViewports(document, qreal(contentsRect().width()));
                 if (floatTables) SemanticHtml::reflowTableFloatViewports(document, qreal(contentsRect().width()));
@@ -3707,6 +3730,7 @@ bool MainWindow::refreshReading() {
         }
     }
     beginEdit();
+    if (FlowConstruction::hasResponsiveContainers(document)) FlowConstruction::reflowContainers(document, qreal(contentsRect().width()));
     if (SemanticHtml::hasTableBlockViewports(document)) {
         SemanticHtml::reflowTableBlockViewports(document, qreal(contentsRect().width()));
         CompiledContent::require(current());
@@ -4061,16 +4085,30 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (absoluteFont && (!numericScale.isDouble() || !std::isfinite(numericScale.toDouble()) || numericScale.toDouble() < 0))
                 throw DictApiError("normal-body font-scale basis requires a numeric scale");
             const QString kind = span.value(QStringLiteral("kind")).toString();
-            const bool fixedLink = !linkPaint.isEmpty() && (kind == QStringLiteral("link") || kind == QStringLiteral("external_link"))
+            const auto ownPaint = span.value(QStringLiteral("link_paint"));
+            const bool ordinaryLink = SemanticHtml::present(ownPaint);
+            if (ordinaryLink && (!ownPaint.isObject() || !linkPaint.isEmpty()
+                || (kind != QStringLiteral("link") && kind != QStringLiteral("external_link"))
+                || SemanticHtml::present(span.value(QStringLiteral("image")))
+                || !span.value(QStringLiteral("target")).isString() || span.value(QStringLiteral("target")).toString().isEmpty()))
+                throw DictApiError("invalid ordinary link paint owner");
+            const QJsonObject selectedPaint = ordinaryLink ? ownPaint.toObject() : linkPaint;
+            const bool fixedLink = (ordinaryLink || !selectedPaint.isEmpty()) && (kind == QStringLiteral("link") || kind == QStringLiteral("external_link"))
                 && !SemanticHtml::present(span.value(QStringLiteral("image")));
             qint64 linkOwner = -1; qreal linkEm = 0;
             if (fixedLink) {
                 if (span.value("target").toString().isEmpty() || nextLinkPaintOwner_ == std::numeric_limits<quint32>::max())
                     throw DictApiError("invalid compiled caption link owner");
                 linkEm = documentBodyEm(reading_->document(), readingPointSize_) / documentVerticalScale(reading_->document());
-                MissingFigurePaint::validate(linkPaint, linkEm);
+                if (ordinaryLink) MissingFigurePaint::validateOrdinary(selectedPaint, linkEm);
+                else MissingFigurePaint::validate(selectedPaint, linkEm);
+                if (ordinaryLink && (selectedPaint.isEmpty()
+                    || reading_->document()->documentLayout()->property("_wikidictOrdinaryLinkStateCapability").toString() != MissingFigurePaint::ordinaryPolicy
+                    || (span.contains("underline") && !span.value("underline").isBool())
+                    || span.value("underline").toBool() != selectedPaint.value("normal").toObject().value("underline").toBool()))
+                    throw DictApiError("ordinary link static decoration conflicts with its state policy");
                 const auto staticInk = span.value("foreground");
-                if (SemanticHtml::present(staticInk) && staticInk != linkPaint.value("normal").toObject().value("foreground"))
+                if (SemanticHtml::present(staticInk) && staticInk != selectedPaint.value("normal").toObject().value("foreground"))
                     throw DictApiError("caption link static foreground conflicts with its state policy");
                 linkOwner = (qint64(1) << 32) + nextLinkPaintOwner_++;
             }
@@ -4105,10 +4143,10 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 text = SemanticHtml::scaledText(text, zeroScale ? 0 : numericScale.toDouble(), explanation,
                     cssPx ? SemanticHtml::Basis::CssPx : normalBody ? SemanticHtml::Basis::NormalBody : SemanticHtml::Basis::Context, readingPointSize_,
                     span.value(QStringLiteral("small")).toBool(), span.value(QStringLiteral("superscript")).toBool(),
-                    span.value(QStringLiteral("subscript")).toBool(), basePoints, advisory, false, sourceRun, fixedLink ? linkPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures);
+                    span.value(QStringLiteral("subscript")).toBool(), basePoints, advisory, false, sourceRun, fixedLink ? selectedPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures, ordinaryLink);
             else if (hasAdvisory || sourceRun >= 0 || fixedLink || hasFontFeatures)
                 text = SemanticHtml::scaledText(text, 1, explanation, SemanticHtml::Basis::Context,
-                    0, false, false, false, 0, advisory, true, sourceRun, fixedLink ? linkPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures);
+                    0, false, false, false, 0, advisory, true, sourceRun, fixedLink ? selectedPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures, ordinaryLink);
             if (!explanation.isEmpty() && !hasAdvisory)
                 text = QStringLiteral("<span title=\"%1\">%2</span>")
                     .arg(explanation.toHtmlEscaped(), text);
@@ -4538,13 +4576,13 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
                 != QStringLiteral("wikidict.container-columns/1"))
             throw DictApiError("compiled Container columns are not available");
         try {
-            FlowConstruction::plainContainerFormat(block, context.normalBodyEm / context.legacyVerticalScale,
-                reading_->document()->property(SemanticHtml::imageDarkThemeProperty).toBool());
+            FlowConstruction::containerFrameFormat(block, context.normalBodyEm / context.legacyVerticalScale,
+                reading_->document()->property(SemanticHtml::imageDarkThemeProperty).toBool(), context.flexItem, qreal(contentsRect().width()));
         } catch (const std::exception &) {
             throw DictApiError("compiled Container style is not available");
         }
         const auto style = owned.value(QStringLiteral("style")).toObject();
-        const auto inputs = FlowConstruction::containerInputs(block, 0, 1,
+        const auto inputs = FlowConstruction::containerInputs(block, qreal(contentsRect().width()), 1,
             context.normalBodyEm / context.legacyVerticalScale,
             reading_->document()->property(SemanticHtml::imageDarkThemeProperty).toBool());
         if (inputs.heightAuthored) {
@@ -4560,8 +4598,14 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
             if (ratio > SemanticHtml::maximumFontPoints(reading_->document()) / readingPointSize_)
                 throw DictApiError("compiled Container font is not representable");
             context.pointSize = readingPointSize_ * ratio;
-            context.zeroFontContext = ratio == 0; context.containerTypography = true;
+            context.zeroFontContext = ratio == 0; context.containerTypography = true; context.baseContainerTypography = true;
         }
+        const auto baseLine = FlowConstruction::containerBaseLine(style.value(QStringLiteral("line_height")),
+            context.normalBodyEm / context.legacyVerticalScale);
+        if (baseLine.mode != FlowConstruction::ContainerLineInput::Mode::Inherit) {
+            context.baseContainerLineHeight = baseLine; context.baseContainerTypography = true;
+        }
+        context.responsiveContainerTypography |= CompiledContent::present(style.value(QStringLiteral("screen_max_width")));
         if (inputs.lineHeight.mode != FlowConstruction::ContainerLineInput::Mode::Inherit) {
             context.containerLineHeight = inputs.lineHeight; context.containerTypography = true;
         }
@@ -4576,9 +4620,10 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
         CompiledContent::require(context.contentDepth <= 16);
         FlowConstruction::Rendered rendered;
         const auto children = owned.value(QStringLiteral("blocks")).toArray();
+        auto childContext = context; childContext.flexItem = inputs.layout == QStringLiteral("flex_row");
         for (qsizetype index = 0; index < children.size(); ++index)
             rendered.html += blockHtml(CompiledContent::object(children.at(index)), cellBackground, tableDepth,
-                location + QStringLiteral("/container/%1").arg(index), context.alignment, context);
+                location + QStringLiteral("/container/%1").arg(index), context.alignment, childContext);
         return QStringLiteral("<p style='margin:0'>%1</p>").arg(FlowConstruction::placeholder(block, rendered, context));
     }
     const bool explicitProjection = CompiledContent::present(block.value(QStringLiteral("flow")))

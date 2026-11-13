@@ -194,20 +194,39 @@ inline QJsonObject containerStyle(const QJsonValue &value) {
             && style.value(QStringLiteral("layout")) != QStringLiteral("flex_row"));
     }
     if (present(style.value(QStringLiteral("screen_max_width")))) {
-        const auto screen = containerObject(style.value(QStringLiteral("screen_max_width")),
-            {QStringLiteral("max_width_px"), QStringLiteral("width"), QStringLiteral("max_width"),
-             QStringLiteral("box_sizing"), QStringLiteral("line_height")}, {QStringLiteral("max_width_px")});
-        const auto bound = screen.value(QStringLiteral("max_width_px"));
-        require(bound.isDouble() && std::isfinite(bound.toDouble()) && bound.toDouble() >= 0
-            && bound.toDouble() <= 4294967295.0 && std::floor(bound.toDouble()) == bound.toDouble());
-        bool hasOverride = false;
-        for (const auto &key : {QStringLiteral("width"), QStringLiteral("max_width"), QStringLiteral("box_sizing"), QStringLiteral("line_height")})
-            hasOverride |= present(screen.value(key));
-        require(hasOverride);
-        if (present(screen.value(QStringLiteral("width")))) containerWidth(screen.value(QStringLiteral("width")));
-        if (present(screen.value(QStringLiteral("max_width")))) containerWidth(screen.value(QStringLiteral("max_width")), true);
-        enumeration(screen, QStringLiteral("box_sizing"), {QStringLiteral("content_box"), QStringLiteral("border_box")});
-        if (present(screen.value(QStringLiteral("line_height")))) containerLineHeight(screen.value(QStringLiteral("line_height")));
+        const auto root = object(style.value(QStringLiteral("screen_max_width")));
+        QJsonArray rules{root};
+        const auto following = root.value(QStringLiteral("following_rules"));
+        if (present(following)) {
+            require(following.isArray());
+            for (const auto &rule : following.toArray()) rules.append(rule);
+        }
+        require(rules.size() <= 16);
+        qreal previous = 4294967296.0;
+        for (qsizetype index = 0; index < rules.size(); ++index) {
+            const auto screen = containerObject(rules[index],
+                {QStringLiteral("max_width_px"), QStringLiteral("width"), QStringLiteral("max_width"),
+                 QStringLiteral("box_sizing"), QStringLiteral("line_height"), QStringLiteral("float_side"),
+                 QStringLiteral("margins"), QStringLiteral("clear"), QStringLiteral("following_rules")}, {QStringLiteral("max_width_px")});
+            const auto bound = screen.value(QStringLiteral("max_width_px"));
+            require(bound.isDouble() && std::isfinite(bound.toDouble()) && bound.toDouble() >= 0
+                && bound.toDouble() < previous && std::floor(bound.toDouble()) == bound.toDouble());
+            previous = bound.toDouble();
+            if (index && present(screen.value(QStringLiteral("following_rules"))))
+                require(screen.value(QStringLiteral("following_rules")).isArray() && screen.value(QStringLiteral("following_rules")).toArray().isEmpty());
+            bool hasOverride = false;
+            for (const auto &key : {QStringLiteral("width"), QStringLiteral("max_width"), QStringLiteral("box_sizing"),
+                    QStringLiteral("line_height"), QStringLiteral("float_side"), QStringLiteral("margins"), QStringLiteral("clear")})
+                hasOverride |= present(screen.value(key));
+            require(hasOverride);
+            if (present(screen.value(QStringLiteral("width")))) containerWidth(screen.value(QStringLiteral("width")));
+            if (present(screen.value(QStringLiteral("max_width")))) containerWidth(screen.value(QStringLiteral("max_width")), true);
+            if (present(screen.value(QStringLiteral("line_height")))) containerLineHeight(screen.value(QStringLiteral("line_height")));
+            if (present(screen.value(QStringLiteral("margins")))) containerMarginValues(screen.value(QStringLiteral("margins")));
+            enumeration(screen, QStringLiteral("box_sizing"), {QStringLiteral("content_box"), QStringLiteral("border_box")});
+            enumeration(screen, QStringLiteral("float_side"), {QStringLiteral("none"), QStringLiteral("left"), QStringLiteral("right")});
+            enumeration(screen, QStringLiteral("clear"), {QStringLiteral("none"), QStringLiteral("left"), QStringLiteral("right"), QStringLiteral("both")});
+        }
     }
     return style;
 }

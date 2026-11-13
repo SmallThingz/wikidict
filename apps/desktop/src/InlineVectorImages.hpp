@@ -103,6 +103,9 @@ public:
     static QVariantMap figureMediaPolicy(QTextDocument *document, int position) {
         auto *frame = document->frameAt(position);
         if (!frame || frame->frameFormat().stringProperty(SemanticFigure::roleProperty) != QStringLiteral("image")) return {};
+        const auto block = frame->frameFormat().property(SemanticFigure::blockMediaProperty).toMap();
+        if (block.value(QStringLiteral("capability")).toString() == SemanticFigure::blockMediaCapability)
+            return block;
         const auto policy = frame->frameFormat().property(SemanticFigure::tableCaptionProperty).toMap();
         return policy.value(QStringLiteral("capability")).toString() == SemanticFigure::tableCaptionCapability ? policy : QVariantMap();
     }
@@ -255,6 +258,16 @@ public:
                 Q_RETURN_ARG(double, width), Q_ARG(int, position));
             if (!self || !guard || !queried || !std::isfinite(width) || width < 0) return {};
             const qreal scale = QFontMetricsF(document->defaultFont(), document->documentLayout()->paintDevice()).fontDpi() / QFontMetricsF(QFont()).fontDpi();
+            if (media.value(QStringLiteral("capability")).toString() == SemanticFigure::blockMediaCapability) {
+                const qreal naturalWidth = media.value(QStringLiteral("natural_width")).toDouble();
+                const qreal naturalHeight = media.value(QStringLiteral("natural_height")).toDouble();
+                const qreal height = width * naturalHeight / naturalWidth;
+                if (!std::isfinite(naturalWidth) || naturalWidth <= 0 || !std::isfinite(naturalHeight)
+                    || naturalHeight <= 0 || !std::isfinite(height) || height < 0) return {};
+                // The exact source ratio and native used width own geometry in
+                // every resource state, including missing/loading/error.
+                return QSizeF(width, height);
+            }
             const bool ready = format.boolProperty(SemanticFigure::sizingReadyProperty)
                 && format.intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Ready);
             QSizeF content;
@@ -387,7 +400,10 @@ public:
             content = rect.adjusted(box[3].toDouble() * scale, box[0].toDouble() * scale, -box[1].toDouble() * scale, -box[2].toDouble() * scale);
             paintFigureImageBox(painter, rect, media, document);
             if (!resolvedFigure) {
+                const bool block = media.value(QStringLiteral("capability")).toString() == SemanticFigure::blockMediaCapability;
+                if (block) { painter->save(); painter->setClipRect(content, Qt::IntersectClip); }
                 figureStatusText(document, format, media, content.width(), painter, content.topLeft());
+                if (block) painter->restore();
                 return;
             }
             if (content.isEmpty()) return;

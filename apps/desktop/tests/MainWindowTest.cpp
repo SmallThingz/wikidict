@@ -155,6 +155,31 @@ static QJsonObject tableCaptionFigureFixture()
             {"caption_before", before}, {"viewport_states", QJsonArray{narrow}}}}};
 }
 
+static QJsonObject blockMediaFigureFixture()
+{
+    auto figure = tableCaptionFigureFixture(); figure.remove("table_caption_layout");
+    figure.insert("placement", "none"); figure.insert("clear", "none"); figure.insert("caption", QJsonArray{});
+    const auto px = [](qreal n) { return QJsonObject{{"unit", "px"}, {"value", n}}; };
+    const QJsonObject edges{{"top", px(0)}, {"right", px(0)}, {"bottom", px(0)}, {"left", px(0)}};
+    for (const QString &key : {QStringLiteral("margins"), QStringLiteral("image_insets"), QStringLiteral("caption_padding")}) figure.insert(key, edges);
+    auto span = figure.value("image_span").toObject(); auto image = span.value("image").toObject();
+    span.insert("kind", "text"); span.insert("target", ""); image.insert("file", "Controlled block.svg");
+    image.insert("width_px", 44); image.insert("height_px", 40); image.insert("alt", "Controlled source logo");
+    span.insert("image", image); figure.insert("image_span", span);
+    const QJsonObject zero{{"length", px(0)}}, automatic{{"auto", QJsonObject{}}};
+    QJsonObject wrapper{{"width", automatic}, {"owner_font_scale", 1.0}, {"line_height", QJsonObject{{"multiplier", 1.625}}},
+        {"text_align", "center"}, {"margin_values", QJsonObject{{"top", zero}, {"right", automatic}, {"bottom", zero}, {"left", automatic}}}};
+    const QJsonObject media{{"strut", QJsonObject{{"font_scale", 1.0}, {"direction", "ltr"}, {"language", "vi"}}},
+        {"vertical_align", "middle"}, {"max_width", QJsonObject{{"percent", 100.0}, {"subtract", px(0)}}}};
+    auto narrow = wrapper; narrow.insert("line_height", QJsonObject{{"multiplier", 1.5}});
+    figure.insert("block_media_layout", QJsonObject{{"wrapper", wrapper}, {"media", media},
+        {"preferred_width_px", 44}, {"natural_width", 60}, {"natural_height", 55},
+        {"rendition_1x", QJsonObject{{"url", "https://upload.wikimedia.org/controlled/logo-60.png"}, {"sha256", QString(64, QChar('a'))}}},
+        {"rendition_2x", QJsonObject{{"url", "https://upload.wikimedia.org/controlled/logo-120.png"}, {"sha256", QString(64, QChar('b'))}}},
+        {"viewport_states", QJsonArray{QJsonObject{{"max_width_px", 719}, {"wrapper", narrow}, {"media", media}}}}});
+    return figure;
+}
+
 static QJsonObject figureLinkPaintFixture(bool missing)
 {
     const char *const blue[] = {"#123456", "#234567", "#345678", "#456789", "#56789a", "#6789ab"};
@@ -503,6 +528,156 @@ private:
     }
 
 private slots:
+    void blockMediaRequiresCompleteSourceStatesAndPinnedResourceIdentity()
+    {
+        const auto source = blockMediaFigureFixture(); const QPalette palette;
+        QCOMPARE(SemanticFigure::validate(source, 16, palette), source);
+        for (qreal viewport : {900.0, 719.25, 719.0, 718.75, 0.0}) {
+            const auto input = SemanticFigure::blockMediaInput(source, 16, palette, viewport); QVERIFY(input);
+            QCOMPARE(input->state, viewport <= 719 ? 0 : -1);
+            QCOMPARE(input->wrapper.value("line_height").toObject().value("multiplier").toDouble(), viewport <= 719 ? 1.5 : 1.625);
+            QCOMPARE(input->preferredWidth, qreal(44)); QCOMPARE(input->naturalWidth, quint32(60)); QCOMPARE(input->naturalHeight, quint32(55));
+        }
+        const auto originalImage = source.value("image_span").toObject().value("image").toObject();
+        const QUrl plainUrl = SemanticHtml::inlineImageUrl(originalImage);
+        const QUrl blockUrl = SemanticHtml::inlineBlockMediaUrl(source);
+        QVERIFY(plainUrl != blockUrl); QCOMPARE(SemanticHtml::inlineImageData(blockUrl), originalImage);
+        QCOMPARE(SemanticHtml::inlineImageBlockResource(blockUrl), SemanticHtml::blockMediaResource(source));
+        QVERIFY(SemanticHtml::inlineImageBlockResource(plainUrl).isEmpty());
+        for (const QString &kind : {QStringLiteral("ratio"), QStringLiteral("url"), QStringLiteral("hash"), QStringLiteral("pair"),
+                QStringLiteral("state"), QStringLiteral("strut"), QStringLiteral("caption"), QStringLiteral("action"), QStringLiteral("table")}) {
+            auto bad = source; auto layout = bad.value("block_media_layout").toObject();
+            if (kind == "ratio") layout.insert("natural_height", 0);
+            else if (kind == "url" || kind == "hash") {
+                auto resource = layout.value("rendition_1x").toObject();
+                resource.insert(kind == "url" ? "url" : "sha256", kind == "url" ? "https://user@upload.wikimedia.org/logo.png" : QString(64, QChar('A')));
+                layout.insert("rendition_1x", resource);
+            } else if (kind == "pair") layout.insert("rendition_2x", layout.value("rendition_1x"));
+            else if (kind == "state") layout.insert("viewport_states", QJsonArray{QJsonObject{{"max_width_px", 719}, {"wrapper", layout.value("wrapper")}}});
+            else if (kind == "strut") { auto wrapper = layout.value("wrapper").toObject(); wrapper.insert("owner_font_scale", 2.0); layout.insert("wrapper", wrapper); }
+            else if (kind == "caption") bad.insert("caption", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Not hidden"}}});
+            else if (kind == "action") { auto span = bad.value("image_span").toObject(); span.insert("kind", "link"); span.insert("target", "File:Other"); bad.insert("image_span", span); }
+            else bad.insert("table_caption_layout", tableCaptionFigureFixture().value("table_caption_layout"));
+            bad.insert("block_media_layout", layout);
+            QVERIFY_EXCEPTION_THROWN(SemanticFigure::validate(bad, 16, palette), std::runtime_error);
+        }
+        QTextImageFormat format; format.setName(blockUrl.toString(QUrl::FullyEncoded));
+        format.setProperty(SemanticHtml::figureImageProperty, QJsonDocument(source).toJson(QJsonDocument::Compact));
+        MediaPanel::InlineImageAsset asset{}; asset.state = MediaPanel::InlineImageState::Ready;
+        asset.image = QImage(60, 55, QImage::Format_RGB32); asset.image.fill(Qt::blue);
+        asset.intrinsic = QSizeF(60, 55); asset.originalMime = QStringLiteral("image/png");
+        const auto resource = SemanticHtml::blockMediaResource(source);
+        asset.pinnedRendition = SemanticHtml::blockMediaRendition(resource, 1);
+        QVERIFY(SemanticFigure::applyAsset(format, source, asset));
+        QVERIFY(qAbs(format.height() - 44.0 * 55 / 60) < 1e-10); QCOMPARE(format.width(), qreal(44));
+        asset.pinnedRendition.insert("sha256", QString(64, QChar('c')));
+        QVERIFY_EXCEPTION_THROWN(SemanticFigure::applyAsset(format, source, asset), std::runtime_error);
+    }
+
+    void blockMediaCopiesOneSourceAndKeepsGeometryAcrossStatesAndStatus()
+    {
+        QSettings().setValue("media/allowImages", false); QSettings().setValue("media/allowAudio", false);
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        const auto source = blockMediaFigureFixture();
+        const QJsonObject figureBlock{{"kind", "paragraph"}, {"spans", QJsonArray{}},
+            {"flow", QJsonArray{QJsonObject{{"kind", "figure"}, {"figure", source}, {"spans", QJsonArray{}}}}}};
+        for (qreal containing : {8.0, 100.0}) {
+            const QJsonObject parent{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{
+                {"style", QJsonObject{{"width", QJsonObject{{"length", QJsonObject{{"unit", "px"}, {"value", containing}}}}}}},
+                {"blocks", QJsonArray{figureBlock}}}}};
+            QVERIFY(composeReadingBlocks(window, QJsonArray{parent}, Qt::RightToLeft));
+            window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+            auto *browser = window.reading_; auto *doc = browser->document(); auto *native = qobject_cast<QTextDocumentLayout *>(doc->documentLayout()); QVERIFY(native);
+            QTextFrame *root = nullptr; QTextFragment object;
+            const auto visit = [&](auto &&self, QTextFrame *frame) -> void {
+                if (frame->frameFormat().stringProperty(SemanticFigure::roleProperty) == "figure") { QVERIFY(!root); root = frame; }
+                for (auto *child : frame->childFrames()) self(self, child);
+            }; visit(visit, doc->rootFrame());
+            QVERIFY(root); QVERIFY(!qobject_cast<QTextTable *>(root)); QCOMPARE(root->childFrames().size(), 1);
+            auto *image = root->childFrames().first(); QVERIFY(!qobject_cast<QTextTable *>(image));
+            for (auto block = doc->begin(); block.isValid(); block = block.next()) for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment(); if (!fragment.charFormat().hasProperty(SemanticHtml::figureImageProperty)) continue;
+                QVERIFY(!object.isValid()); object = fragment;
+            }
+            QVERIFY(object.isValid()); QCOMPARE(object.length(), 1); QVERIFY(!object.charFormat().isAnchor());
+            QCOMPARE(object.charFormat().toImageFormat().name(), SemanticHtml::inlineBlockMediaUrl(source).toString(QUrl::FullyEncoded));
+            const QString raw = doc->toRawText(); const int count = doc->characterCount(), index = root->objectIndex(), position = object.position();
+            const auto entry = window.currentEntry_;
+            auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->textInterface());
+            auto *text = accessible->textInterface();
+            QCOMPARE(text->text(position, position + 1), QString(QChar::ObjectReplacementCharacter));
+            for (int width : {900, 719, 639, 900}) {
+                window.resize(width, 700);
+                QString viewportDetails;
+                const auto viewportSettled = [&] {
+                    const qreal viewport = window.contentsRect().width();
+                    const auto rootPolicy = root->frameFormat().property(SemanticFigure::blockMediaProperty).toMap();
+                    const auto imagePolicy = image->frameFormat().property(SemanticFigure::blockMediaProperty).toMap();
+                    viewportDetails = QString::fromUtf8(QJsonDocument(QJsonObject{
+                        {"requested_width", width}, {"root_viewport", viewport}, {"containing_width", containing},
+                        {"root_policy_viewport", rootPolicy.value("viewport").toDouble()},
+                        {"image_policy_viewport", imagePolicy.value("viewport").toDouble()},
+                        {"root_state", rootPolicy.value("state").toInt()},
+                        {"image_state", imagePolicy.value("state").toInt()},
+                        {"resize_callback_pending", window.readingFloatLayoutScheduled_},
+                        {"revision", doc->revision()}}).toJson(QJsonDocument::Compact));
+                    return !window.readingFloatLayoutScheduled_
+                        && rootPolicy.value("viewport").toDouble() == viewport
+                        && imagePolicy.value("viewport").toDouble() == viewport;
+                };
+                QTRY_VERIFY2(viewportSettled(), qPrintable(viewportDetails));
+                qInfo().noquote() << "BLOCK_MEDIA_SETTLED_VIEWPORT" << viewportDetails;
+                QTRY_COMPARE(root->frameFormat().property(SemanticFigure::blockMediaProperty).toMap().value("state").toInt(), width <= 719 ? 0 : -1);
+                native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+                const auto policy = image->frameFormat().property(SemanticFigure::blockMediaProperty).toMap();
+                QCOMPARE(policy.value("source").value<QJsonObject>(), source.value("block_media_layout").toObject());
+                QCOMPARE(policy.value("line_value").toDouble(), width <= 719 ? 1.5 : 1.625);
+                const int revision = doc->revision(); const auto beforeRoot = root->frameFormat(), beforeImage = image->frameFormat();
+                const bool enabled = doc->isLayoutEnabled(); doc->setLayoutEnabled(false);
+                SemanticFigure::reflow(doc, window.contentsRect().width()); SemanticFigure::reflow(doc, window.contentsRect().width());
+                QCOMPARE(doc->revision(), revision); QCOMPARE(root->frameFormat(), beforeRoot); QCOMPARE(image->frameFormat(), beforeImage);
+                doc->setLayoutEnabled(enabled);
+                auto *device = native->paintDevice(); const qreal scale = device ? device->logicalDpiY() / QFontMetricsF(QFont()).fontDpi() : 1;
+                for (auto state : {MediaPanel::InlineImageState::Disabled, MediaPanel::InlineImageState::Loading, MediaPanel::InlineImageState::Ready, MediaPanel::InlineImageState::Error}) {
+                    MediaPanel::InlineImageAsset asset{}; asset.state = state; asset.originalMime = QStringLiteral("image/png");
+                    asset.image = QImage(60, 55, QImage::Format_RGB32); asset.image.fill(QColor("#2864ac")); asset.intrinsic = QSizeF(60, 55);
+                    asset.pinnedRendition = SemanticHtml::blockMediaRendition(SemanticHtml::blockMediaResource(source), 1);
+                    bool changed = false;
+                    QVERIFY(window.editDocumentFormats(browser, [&] {
+                        QTextCursor cursor(doc); cursor.setPosition(position); cursor.setPosition(position + 1, QTextCursor::KeepAnchor);
+                        auto format = cursor.charFormat().toImageFormat(); changed = SemanticFigure::applyAsset(format, source, asset);
+                        format.setProperty(SemanticHtml::inlineImageStateProperty, int(state));
+                        doc->addResource(QTextDocument::ImageResource, QUrl(format.name()), asset.image); cursor.setCharFormat(format);
+                        SemanticFigure::reflow(doc, window.contentsRect().width());
+                    }));
+                    QCOMPARE(changed, state == MediaPanel::InlineImageState::Ready);
+                    native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+                    const auto geometry = native->wikidictFigureMediaGeometry(position); QVERIFY(geometry.value("handled").toBool());
+                    const auto pixels = geometry.value("image").toRectF(), line = geometry.value("anchor").toRectF();
+                    const qreal used = qMin(qreal(44), containing) * scale;
+                    QVERIFY(qAbs(pixels.width() - used) < .04); QVERIFY(qAbs(pixels.height() - used * 55 / 60) < .04);
+                    const QFontMetricsF font(policy.value("strut_font").value<QFont>(), device);
+                    const qreal strut = policy.value("owner_pixels").toDouble() * scale * policy.value("line_value").toDouble();
+                    const qreal leading = (strut - font.ascent() - font.descent()) / 2;
+                    const qreal above = qMax(font.ascent() + leading, pixels.height() / 2 + font.xHeight() / 2);
+                    const qreal below = qMax(font.descent() + leading, pixels.height() / 2 - font.xHeight() / 2);
+                    QVERIFY(qAbs(line.height() - above - below) < .06);
+                    if (containing == 8) QVERIFY(line.height() > pixels.height());
+                    QCOMPARE(native->hitTest(pixels.center(), Qt::ExactHit), position); QVERIFY(native->anchorAt(pixels.center()).isEmpty());
+                    QVERIFY(!text->characterRect(position).isEmpty());
+                    text->addSelection(position, position + 1); QCOMPARE(browser->textCursor().selectedText(), QString(QChar::ObjectReplacementCharacter)); text->removeSelection(0);
+                    QImage painted(1200, 1600, QImage::Format_ARGB32_Premultiplied); painted.fill(Qt::white);
+                    { QPainter painter(&painted); native->draw(&painter, {}); }
+                    if (state == MediaPanel::InlineImageState::Ready) QCOMPARE(painted.pixelColor(pixels.center().toPoint()), QColor("#2864ac"));
+                    QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(root->objectIndex(), index);
+                    QCOMPARE(window.currentEntry_, entry); QCOMPARE(object.position(), position);
+                }
+            }
+        }
+        QVERIFY(!QSettings().value("media/allowImages").toBool());
+    }
+
     void readingPaneKeyboardFocusCueRepaintsScrolledBackingStore()
     {
         MainWindow window{QString()}; window.resize(900, 700); window.show(); window.activateWindow();
@@ -2707,6 +2882,159 @@ private slots:
         window.readingPointSize_ = 12;
     }
 
+    void ordinaryLinkPaintUsesEightStatesAcrossRealTextOwners()
+    {
+        const auto oldPoints = QSettings().value("reader/pointSize");
+        const auto restorePoints = qScopeGuard([&] { if (oldPoints.isValid()) QSettings().setValue("reader/pointSize",oldPoints); else QSettings().remove("reader/pointSize"); });
+        QSettings().setValue("reader/pointSize",12);
+        MainWindow window{QString()}; window.resize(639, 700); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        QPushButton *larger = nullptr;
+        for (auto *button : window.findChildren<QPushButton *>()) if (button->text()==QStringLiteral("A+")) larger=button;
+        QVERIFY(larger);
+        auto paint = figureLinkPaintFixture(false);
+        paint.insert("hover_active", QJsonObject{{"foreground", "#789abc"}, {"underline", true}});
+        paint.insert("visited_hover_active", QJsonObject{{"foreground", "#89abcd"}, {"underline", true}});
+        for (const auto &key : {"normal", "active", "visited_active"}) {
+            auto state = paint.value(QLatin1String(key)).toObject(); state.insert("underline", QString(key)=="normal"); paint.insert(QLatin1String(key), state);
+        }
+        auto hover = paint.value("hover").toObject(); hover.insert("underline", false); paint.insert("hover", hover);
+        auto outline = paint.value("focus_outline").toObject(); outline.insert("width", QJsonObject{{"unit", "em"}, {"value", .125}}); paint.insert("focus_outline", outline);
+        const QString firstText = QStringLiteral("Paint first"), secondText = QStringLiteral("Paint second");
+        const QJsonObject first{{"kind", "link"}, {"text", firstText}, {"target", "PaintShared"}, {"target_fragment", "part"},
+            {"underline", true}, {"foreground", "#123456"}, {"font_scale", 2}, {"font_scale_basis", "normal_body"}, {"link_paint", paint}};
+        auto second = first; second.insert("text", secondText);
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{first, second}}};
+        const QJsonObject table{{"kind", "table"}, {"table", QJsonObject{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{
+            QJsonObject{{"spans", paragraph.value("spans")}}}}}}}}}};
+        const QJsonObject container{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{{"blocks", QJsonArray{paragraph}}}}};
+        auto *browser = window.reading_;
+        for (const auto &source : {paragraph, table, container}) {
+            QVERIFY(composeReadingBlocks(window, QJsonArray{source})); window.readingPaneAction_->trigger(); QTRY_VERIFY(browser->isVisible());
+            auto *doc = browser->document(); doc->documentLayout()->documentSize();
+            QCOMPARE(doc->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const auto firstCursor = doc->find(firstText), secondCursor = doc->find(secondText); QVERIFY(!firstCursor.isNull() && !secondCursor.isNull());
+            const auto firstOwner = MissingFigurePaint::ownerAt(doc, firstCursor.selectionStart()), secondOwner = MissingFigurePaint::ownerAt(doc, secondCursor.selectionStart());
+            QVERIFY(firstOwner >= (qint64(1) << 32)); QVERIFY(firstOwner != secondOwner);
+            for (const auto &cursor : {firstCursor, secondCursor}) {
+                const auto format = cursor.charFormat(); QCOMPARE(format.stringProperty(MissingFigurePaint::policyProperty), MissingFigurePaint::ordinaryPolicy);
+                QCOMPARE(QJsonObject::fromVariantMap(format.property(MissingFigurePaint::fixedPolicyProperty).toMap()), paint);
+                const qreal body = window.readingPointSize_ * QFontMetricsF(QFont()).fontDpi() / 72.0;
+                QVERIFY(qAbs(format.property(MissingFigurePaint::outlineProperty).toMap().value("width").toDouble() - body * .125) < .0001);
+                QCOMPARE(format.anchorHref(), QStringLiteral("dict:PaintShared#part"));
+            }
+            const QString raw = doc->toRawText(); const int count = doc->characterCount(), revision = doc->revision(); const auto entry = window.currentEntry_;
+            MissingFigurePaint::State state; state.fixedContext = QStringLiteral("ordinary-controlled-root");
+            const auto overlay = [&] {
+                for (const auto &value : MissingFigurePaint::selections(doc, browser->palette(), state))
+                    if (MissingFigurePaint::ownerAt(doc, value.cursor.selectionStart()) == firstOwner) return value.format;
+                return QTextCharFormat();
+            };
+            for (bool visited : {false, true}) for (bool hovered : {false, true}) for (bool active : {false, true}) {
+                state.visitedTargets.clear(); if (visited) state.visitedTargets.insert(MissingFigurePaint::fixedTargetKey(state, firstCursor.charFormat().anchorHref()));
+                state.hovered = hovered ? firstOwner : -1; state.pressed = active ? firstOwner : -1; state.focused = -1;
+                const QString key = visited ? (hovered && active ? "visited_hover_active" : active ? "visited_active" : hovered ? "visited_hover" : "visited")
+                    : (hovered && active ? "hover_active" : active ? "active" : hovered ? "hover" : "normal");
+                const auto expected = paint.value(key).toObject(); const auto actual = overlay();
+                QCOMPARE(actual.foreground().color(), QColor(expected.value("foreground").toString()));
+                QCOMPARE(actual.underlineStyle() != QTextCharFormat::NoUnderline, expected.value("underline").toBool());
+                state.focused = firstOwner; QVERIFY(overlay().underlineStyle() != QTextCharFormat::NoUnderline);
+                QCOMPARE(overlay().foreground(), actual.foreground());
+            }
+            state.pressed = state.hovered = state.focused = -1; state.fixedContext = QStringLiteral("unobserved-other-root");
+            QCOMPARE(overlay().foreground().color(), QColor("#123456"));
+            QObject::disconnect(browser, nullptr, &window, nullptr); QSignalSpy actions(browser, &QTextBrowser::anchorClicked);
+            browser->setFocus(Qt::TabFocusReason); QTRY_VERIFY(browser->hasFocus());
+            QTextCursor reset(doc); reset.setPosition(0); browser->setTextCursor(reset);
+            QTest::keyClick(browser, Qt::Key_Tab); QTRY_COMPARE(browser->textCursor().selectedText(), firstText);
+            const auto liveInk = [&] {
+                for (const auto &value : browser->extraSelections()) if (value.format.boolProperty(MissingFigurePaint::overlayProperty)
+                    && MissingFigurePaint::ownerAt(doc, value.cursor.selectionStart()) == firstOwner) return value.format.foreground().color();
+                return QColor();
+            };
+            QTest::keyClick(browser, Qt::Key_Return); QTRY_COMPARE(actions.size(), 1); QCOMPARE(actions.first().first().toUrl(), QUrl("dict:PaintShared#part"));
+            QTRY_COMPARE(liveInk(), QColor(paint.value("visited").toObject().value("foreground").toString()));
+            QTest::keyClick(browser, Qt::Key_Tab); QTRY_COMPARE(browser->textCursor().selectedText(), secondText);
+            QCOMPARE(MissingFigurePaint::ownerAt(doc,browser->textCursor().selectionStart()),secondOwner);
+            QTest::keyClick(browser, Qt::Key_Backtab); QTRY_COMPARE(browser->textCursor().selectedText(), firstText);
+            const auto pixels = browser->grab().toImage(); int outlinePixels = 0;
+            for (int y=0;y<pixels.height();++y) for(int x=0;x<pixels.width();++x) outlinePixels += pixels.pixelColor(x,y)==QColor("#00cc44");
+            QVERIFY(outlinePixels > 0);
+            auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->textInterface());
+            const auto point = browser->viewport()->mapFromGlobal(accessible->textInterface()->characterRect(firstCursor.selectionStart()).center());
+            QCOMPARE(browser->anchorAt(point), QStringLiteral("dict:PaintShared#part"));
+            QTest::mouseMove(browser->viewport(), point); QTest::mousePress(browser->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+            QTRY_COMPARE(liveInk(), QColor(paint.value("visited_hover_active").toObject().value("foreground").toString()));
+            QTest::mouseRelease(browser->viewport(), Qt::LeftButton, Qt::NoModifier, point); QTRY_COMPARE(actions.size(), 2);
+            QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(doc->revision(), revision); QCOMPARE(window.currentEntry_, entry);
+            window.resize(900, 700); QTRY_VERIFY(!window.readingFloatLayoutScheduled_); doc->documentLayout()->documentSize();
+            QCOMPARE(MissingFigurePaint::ownerAt(doc, doc->find(firstText).selectionStart()), firstOwner); QCOMPARE(doc->toRawText(), raw);
+            const auto currentPoint=browser->viewport()->mapFromGlobal(accessible->textInterface()->characterRect(doc->find(firstText).selectionStart()).center());
+            QCOMPARE(browser->anchorAt(currentPoint),QStringLiteral("dict:PaintShared#part"));
+            QTest::mousePress(browser->viewport(),Qt::LeftButton,Qt::NoModifier,currentPoint);
+            QVERIFY(composeReadingBlocks(window, QJsonArray{source}));
+            QVERIFY(MissingFigurePaint::ownerAt(doc, doc->find(firstText).selectionStart()) != firstOwner);
+            QTest::mouseRelease(browser->viewport(),Qt::LeftButton,Qt::NoModifier,currentPoint); QCOMPARE(actions.size(),2);
+            const auto beforeZoom=MissingFigurePaint::ownerAt(doc,doc->find(firstText).selectionStart());
+            const int points=window.readingPointSize_; QVERIFY(points<24); QTRY_VERIFY(larger->isVisible()&&larger->isEnabled());
+            QTest::mouseClick(larger,Qt::LeftButton); QTRY_COMPARE(window.readingPointSize_,points+1);
+            QTRY_VERIFY(!window.readingFloatLayoutScheduled_); doc->documentLayout()->documentSize();
+            const auto zoomed=doc->find(firstText); QVERIFY(!zoomed.isNull());
+            QVERIFY(MissingFigurePaint::ownerAt(doc,zoomed.selectionStart())!=beforeZoom);
+            const qreal zoomBody=window.readingPointSize_*QFontMetricsF(QFont()).fontDpi()/72.0;
+            QVERIFY(qAbs(zoomed.charFormat().property(MissingFigurePaint::outlineProperty).toMap().value("width").toDouble()-zoomBody*.125)<.0001);
+            QCOMPARE(QJsonObject::fromVariantMap(zoomed.charFormat().property(MissingFigurePaint::fixedPolicyProperty).toMap()),paint);
+            QCOMPARE(doc->toRawText(),raw); QCOMPARE(doc->characterCount(),count); QCOMPARE(window.currentEntry_, entry); window.resize(639, 700);
+        }
+    }
+
+    void ordinaryLinkPaintRejectsWrongOwnersAndPreservesCaptionBoundary()
+    {
+        MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        auto paint = figureLinkPaintFixture(false);
+        paint.insert("hover_active", QJsonObject{{"foreground", "#789abc"}, {"underline", true}});
+        paint.insert("visited_hover_active", QJsonObject{{"foreground", "#89abcd"}, {"underline", true}});
+        const QJsonObject span{{"kind", "link"}, {"text", "Owned link"}, {"target", "Owned"}, {"link_paint", paint}};
+        const auto block = [](const QJsonObject &value) { return QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{value}}}; };
+        QVERIFY(composeReadingBlocks(window, QJsonArray{block(span)}));
+        const auto refuse = [&](const QJsonObject &value) {
+            QVERIFY(!composeReadingBlocks(window, QJsonArray{block(value)}));
+            QCOMPARE(window.currentEntry_.value("sections").toArray()[0].toObject().value("blocks").toArray(), QJsonArray{block(value)});
+            QVERIFY(composeReadingBlocks(window, QJsonArray{block(span)}));
+        };
+        for (const auto &key : {"hover_active", "visited_hover_active"}) { auto bad=span;auto p=paint;p.remove(QLatin1String(key));bad.insert("link_paint",p);refuse(bad); }
+        { auto bad=span;bad.insert("kind","text");refuse(bad); }
+        { auto bad=span;bad.insert("target","");refuse(bad); }
+        { auto bad=span;bad.insert("text","");bad.insert("image",QJsonObject{{"file","Controlled.png"},{"width_px",1},{"height_px",1}});refuse(bad); }
+        { auto bad=span;bad.insert("underline",true);refuse(bad); }
+        { auto bad=span;bad.insert("foreground","#ffffff");refuse(bad); }
+        { auto bad=span;auto p=paint;p.insert("unknown",true);bad.insert("link_paint",p);refuse(bad); }
+        { auto bad=span;auto p=paint;auto state=p.value("hover_active").toObject();state.insert("foreground","#ABCDEF");p.insert("hover_active",state);bad.insert("link_paint",p);refuse(bad); }
+        auto *layout = window.reading_->document()->documentLayout(); const auto capability = layout->property("_wikidictOrdinaryLinkStateCapability");
+        layout->setProperty("_wikidictOrdinaryLinkStateCapability", QVariant()); QVERIFY(!composeReadingBlocks(window, QJsonArray{block(span)}));
+        layout->setProperty("_wikidictOrdinaryLinkStateCapability", capability); QVERIFY(composeReadingBlocks(window, QJsonArray{block(span)}));
+        auto figure = tableCaptionFigureFixture(); figure.insert("caption", QJsonArray{span});
+        auto figureBlock = QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{}}, {"figure", figure}};
+        QVERIFY(composeReadingBlocks(window, QJsonArray{figureBlock}));
+        auto input = figure.value("table_caption_layout").toObject(); input.insert("caption_link_paint", figureLinkPaintFixture(false));
+        figure.insert("table_caption_layout", input); figureBlock.insert("figure", figure);
+        QVERIFY(!composeReadingBlocks(window, QJsonArray{figureBlock}));
+        const auto px = [](qreal value) { return QJsonObject{{"unit","px"},{"value",value}}; };
+        const QJsonObject missing{{"missing_content",QJsonObject{{"label",span},{"width",px(30)},
+            {"line_height",px(20)},{"link_paint","vector_new_link_v1"}}}};
+        QVERIFY_EXCEPTION_THROWN(SemanticFigure::missingContent(missing,16),std::runtime_error);
+        auto inner = tableCaptionFigureFixture(); inner.insert("caption",QJsonArray{span});
+        figure.insert("caption",QJsonArray{});
+        figure.insert("caption_blocks",QJsonArray{QJsonObject{{"kind","paragraph"},{"spans",QJsonArray{}},{"figure",inner}}});
+        figureBlock.insert("figure",figure); QVERIFY(composeReadingBlocks(window,QJsonArray{figureBlock}));
+        figure.insert("caption_blocks",QJsonArray{QJsonObject{{"kind","container"},{"spans",QJsonArray{}},
+            {"container",QJsonObject{{"blocks",QJsonArray{block(span)}}}}}});
+        figureBlock.insert("figure",figure); QVERIFY(!composeReadingBlocks(window,QJsonArray{figureBlock}));
+        auto legacy = span; legacy.remove("link_paint"); QVERIFY(composeReadingBlocks(window, QJsonArray{block(legacy)}));
+        const auto selected = window.reading_->document()->find("Owned link"); QVERIFY(!selected.isNull());
+        QVERIFY(!MissingFigurePaint::owns(selected.charFormat())); QCOMPARE(selected.charFormat().anchorHref(), QStringLiteral("dict:Owned"));
+    }
+
     void figureApi04CompleteBaseWrapperAndClosedPolicyValidation()
     {
         const auto source = tableCaptionFigureFixture(); const QPalette palette;
@@ -4778,6 +5106,337 @@ private slots:
         QVERIFY_EXCEPTION_THROWN(window.blockHtml(box(QJsonObject{{"positioning", "relative_auto"}}, QJsonArray{staticHead})), std::exception);
         QVERIFY_EXCEPTION_THROWN(window.blockHtml(box(QJsonObject{{"positioning", "relative_auto"}, {"columns", QJsonObject{{"count", 2}, {"gap", height}}}}, QJsonArray{headParagraph})), std::exception);
         QVERIFY(composeReadingBlocks(window, QJsonArray{staticHead, table})); QCOMPARE(window.reading_->document()->toRawText(), raw);
+    }
+
+    void containerFlexViewportBandsKeepRealFramesActionsAndAccessibleGeometry() {
+        MainWindow window{QString()}; window.resize(1180, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const qreal dpi = QFontMetricsF(QFont()).fontDpi(); window.readingPointSize_ = 20 * 72 / dpi;
+        const auto length = [](qreal value, const QString &unit = QStringLiteral("px")) { return QJsonObject{{"unit", unit}, {"value", value}}; };
+        const auto box = [](const QJsonObject &style, const QJsonArray &children) { return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}},
+            {"container", QJsonObject{{"style", style}, {"blocks", children}}}}; };
+        const auto paragraph = [](const QString &text, const QString &target) { return QJsonObject{{"kind", "paragraph"},
+            {"spans", QJsonArray{QJsonObject{{"kind", "external_link"}, {"text", text}, {"target", target}}}}}; };
+        const auto logo = box(QJsonObject{{"flex_item", "none"}, {"width", QJsonObject{{"length", length(44)}}}},
+            QJsonArray{paragraph("Logo", "https://example.test/flex-logo")});
+        const auto text = box(QJsonObject{{"margins", QJsonObject{{"top", length(0)}, {"right", length(0)},
+            {"bottom", length(0)}, {"left", length(.495, "em")}}}}, QJsonArray{box({},
+                QJsonArray{paragraph("TextLink alpha beta gamma delta epsilon zeta eta theta", "https://example.test/flex-text")})});
+        const QJsonObject band{{"max_width_px", 719}, {"width", QJsonObject{{"length", length(100, "percent")}}},
+            {"max_width", QJsonObject{{"length", length(100, "percent")}}}, {"box_sizing", "border_box"},
+            {"line_height", QJsonObject{{"multiplier", 1.5}}}, {"following_rules", QJsonArray{
+                QJsonObject{{"max_width_px", 639}, {"float_side", "none"}, {"clear", "both"}}}}};
+        const QJsonObject style{{"layout", "flex_row"}, {"align_items", "center"}, {"owner_font_scale", .9},
+            {"width", QJsonObject{{"length", length(250)}}}, {"float_side", "right"}, {"clear", "right"},
+            {"padding", QJsonObject{{"top", length(4)}, {"right", length(4)}, {"bottom", length(4)}, {"left", length(4)}}},
+            {"border", QJsonObject{{"solid", QJsonObject{{"width", length(1)}, {"color", QJsonObject{{"rgb", "#777777"}}}}}}},
+            {"margins", QJsonObject{{"top", length(0)}, {"right", length(0)}, {"bottom", length(.45, "em")}, {"left", length(.45, "em")}}},
+            {"line_height", QJsonObject{{"normal", QJsonObject{}}}}, {"screen_max_width", band}};
+        const auto source = box(style, QJsonArray{logo, text}); const auto bytes = QJsonDocument(source).toJson(QJsonDocument::Compact);
+        for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+            QVERIFY(composeReadingBlocks(window, QJsonArray{source}, direction)); window.readingPaneAction_->trigger();
+            QTRY_VERIFY(window.reading_->isVisible()); auto *doc = window.reading_->document(); auto *layout = doc->documentLayout();
+            const auto first = doc->find("Logo"), second = doc->find("TextLink"); QVERIFY(!first.isNull() && !second.isNull());
+            QPointer<QTextFrame> firstItem(first.currentFrame()), textInner(second.currentFrame());
+            QVERIFY(firstItem && textInner && textInner->parentFrame()); QPointer<QTextFrame> secondItem(textInner->parentFrame());
+            QPointer<QTextFrame> row(firstItem->parentFrame()); QVERIFY(row); QCOMPARE(secondItem->parentFrame(), row.data());
+            const auto raw = doc->toRawText(); const auto count = doc->characterCount();
+            QTextCursor selected(doc); selected.setPosition(first.selectionStart()); selected.setPosition(second.selectionEnd(), QTextCursor::KeepAnchor);
+            const auto selection = selected.selectedText(); qreal wide = 0;
+            const qreal containingWidth = doc->textWidth();
+            for (qreal css : {719.25, 719.0, 639.25, 639.0, 900.0}) {
+                QVERIFY(window.editDocumentFormats(window.reading_, [&] { FlowConstruction::reflowContainers(doc, css); }));
+                layout->documentSize(); QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                QCOMPARE(doc->textWidth(), containingWidth);
+                QCOMPARE(row->frameFormat().position(), css <= 639 ? QTextFrameFormat::InFlow : QTextFrameFormat::FloatRight);
+                QCOMPARE(row->frameFormat().intProperty(FlowConstruction::containerClearProperty), css <= 639 ? 3 : 2);
+                QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count);
+            }
+            QVERIFY(window.editDocumentFormats(window.reading_, [&] { FlowConstruction::reflowContainers(doc, qreal(window.contentsRect().width())); }));
+            for (int width : {1180, 719, 639, 719, 1180}) {
+                window.resize(width, 700); window.readingPaneAction_->trigger();
+                QTRY_VERIFY(!window.readingFloatLayoutScheduled_ && window.reading_->isVisible());
+                QTRY_COMPARE(row->frameFormat().property(FlowConstruction::containerViewportProperty).toDouble(), qreal(window.contentsRect().width()));
+                layout->documentSize(); QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                QVERIFY(firstItem && secondItem && textInner && row); QCOMPARE(firstItem->parentFrame(), row.data());
+                QCOMPARE(secondItem->parentFrame(), row.data()); QCOMPARE(textInner->parentFrame(), secondItem.data());
+                QCOMPARE(row->frameFormat().position(), width <= 639 ? QTextFrameFormat::InFlow : QTextFrameFormat::FloatRight);
+                QCOMPARE(row->frameFormat().intProperty(FlowConstruction::containerClearProperty), width <= 639 ? 3 : 2);
+                const auto a = layout->frameBoundingRect(firstItem), b = layout->frameBoundingRect(secondItem), outer = layout->frameBoundingRect(row);
+                QVERIFY(qAbs(a.width() - 44) < 1); QVERIFY(a.width() < b.width());
+                // The second item's physical left margin separates items in
+                // LTR; in RTL it lies after that item at the row's left edge.
+                const qreal gap = direction == Qt::LeftToRight ? b.left() - a.right() : a.left() - b.right();
+                QVERIFY(qAbs(gap - (direction == Qt::LeftToRight ? 9.9 : 0)) < .04);
+                if (width == 1180) { if (!wide) wide = outer.width(); else QVERIFY(qAbs(outer.width() - wide) < .1); }
+                const auto policy = second.blockFormat().property(FlowConstruction::containerTypographyProperty).toMap();
+                QCOMPARE(policy.value("kind").toString(), width <= 719 ? QStringLiteral("multiplier") : QStringLiteral("normal"));
+                if (width <= 719) QCOMPARE(policy.value("value").toDouble(), qreal(1.5));
+                for (const auto &cursor : {first, second}) {
+                    const auto position = LogicalFlow::position(doc, cursor.selectionStart()); QCOMPARE(position.status, LogicalFlow::Status::Handled);
+                    const auto rect = position.values.value("characterRect").toRectF(); QVERIFY(!rect.isEmpty());
+                    const int hit = layout->hitTest(rect.center(), Qt::ExactHit); QVERIFY(hit >= cursor.selectionStart() && hit < cursor.selectionEnd());
+                    QCOMPARE(layout->anchorAt(rect.center()), cursor.charFormat().anchorHref());
+                    auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+                    const QPointF offset = window.reading_->viewport()->mapToGlobal(QPoint())
+                        - QPointF(window.reading_->horizontalScrollBar()->value(), window.reading_->verticalScrollBar()->value());
+                    const auto ax = accessible->textInterface()->characterRect(cursor.selectionStart());
+                    QCOMPARE(ax, rect.translated(offset).toAlignedRect()); QCOMPARE(accessible->textInterface()->offsetAtPoint(ax.center()), hit);
+                }
+                QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(selected.selectedText(), selection);
+                QCOMPARE(row->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray(), bytes);
+            }
+        }
+        ExternalUrlReceiver receiver; QDesktopServices::setUrlHandler("https", &receiver, "capture");
+        const auto restore = qScopeGuard([] { QDesktopServices::unsetUrlHandler("https"); });
+        window.activateWindow(); auto *browser = window.reading_; browser->setFocus(); QTRY_VERIFY(browser->hasFocus());
+        QTest::keyClick(browser, Qt::Key_Home, Qt::ControlModifier);
+        const auto href = [&]() { auto cursor = browser->textCursor(); if (!cursor.hasSelection()) return QString();
+            const int start = cursor.selectionStart(); cursor.setPosition(start); cursor.setPosition(start + 1, QTextCursor::KeepAnchor); return cursor.charFormat().anchorHref(); };
+        for (int tries = 0; tries < 8 && href() != "https://example.test/flex-text"; ++tries) QTest::keyClick(browser, Qt::Key_Tab);
+        QCOMPARE(href(), QStringLiteral("https://example.test/flex-text")); QTest::keyClick(browser, Qt::Key_Return);
+        QTRY_COMPARE(receiver.opened, QList<QUrl>{QUrl("https://example.test/flex-text")});
+        // The logo item's basis comes from the real Figure, with no item width
+        // suggestion. The sibling keeps its ordinary shrink/min-content rules.
+        QSettings().setValue("media/allowImages", false);
+        const auto figureSource = blockMediaFigureFixture();
+        const QJsonObject figureBlock{{"kind", "paragraph"}, {"spans", QJsonArray{}},
+            {"flow", QJsonArray{QJsonObject{{"kind", "figure"}, {"figure", figureSource}, {"spans", QJsonArray{}}}}}};
+        const auto figureItemSource = box(QJsonObject{{"flex_item", "none"}}, QJsonArray{figureBlock});
+        auto figureTextSource = text;
+        auto figureTextOwner = figureTextSource.value("container").toObject();
+        figureTextOwner.insert("blocks", QJsonArray{box({}, QJsonArray{paragraph(
+            QStringLiteral("FigureText alpha beta gamma delta epsilon zeta eta theta ").repeated(3),
+            QStringLiteral("https://example.test/figure-flex-text"))})});
+        figureTextSource.insert("container", figureTextOwner);
+        const auto figureRowSource = box(style, QJsonArray{figureItemSource, figureTextSource});
+        const auto figureRowBytes = QJsonDocument(figureRowSource).toJson(QJsonDocument::Compact);
+        const auto figureItemBytes = QJsonDocument(figureItemSource).toJson(QJsonDocument::Compact);
+        const auto figureTextBytes = QJsonDocument(figureTextSource).toJson(QJsonDocument::Compact);
+        QList<int> capturedFigureWidths;
+        for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+            window.resize(1180, 700);
+            QVERIFY(composeReadingBlocks(window, QJsonArray{figureRowSource}, direction));
+            window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+            auto *doc = browser->document(); auto *native = qobject_cast<QTextDocumentLayout *>(doc->documentLayout()); QVERIFY(native);
+            QPointer<QTextFrame> row, logoItem, textItem, figure;
+            const auto locate = [&](auto &&self, QTextFrame *frame) -> void {
+                const auto format = frame->frameFormat();
+                const auto source = format.property(FlowConstruction::containerSourceProperty).toByteArray();
+                if (source == figureRowBytes) { QVERIFY(!row); row = frame; }
+                if (source == figureItemBytes) { QVERIFY(!logoItem); logoItem = frame; }
+                if (source == figureTextBytes) { QVERIFY(!textItem); textItem = frame; }
+                if (format.stringProperty(SemanticFigure::roleProperty) == "figure") { QVERIFY(!figure); figure = frame; }
+                for (auto *child : frame->childFrames()) self(self, child);
+            }; locate(locate, doc->rootFrame());
+            QVERIFY(row && logoItem && textItem && figure); QCOMPARE(row->childFrames().size(), 2);
+            QCOMPARE(logoItem->parentFrame(), row.data()); QCOMPARE(textItem->parentFrame(), row.data());
+            bool figureInLogo = false;
+            for (auto *owner = figure->parentFrame(); owner; owner = owner->parentFrame()) if (owner == logoItem) figureInLogo = true;
+            QVERIFY(figureInLogo); QVERIFY(!qobject_cast<QTextTable *>(figure.data())); QCOMPARE(figure->childFrames().size(), 1);
+            QPointer<QTextFrame> image(figure->childFrames().first()); QVERIFY(image);
+            QTextFragment object;
+            for (auto block = doc->begin(); block.isValid(); block = block.next()) for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment(); if (!fragment.charFormat().hasProperty(SemanticHtml::figureImageProperty)) continue;
+                QVERIFY(!object.isValid()); object = fragment;
+            }
+            QVERIFY(object.isValid()); QCOMPARE(object.length(), 1); QVERIFY(!object.charFormat().isAnchor());
+            const int position = object.position(); const auto label = doc->find("FigureText"); QVERIFY(!label.isNull());
+            const auto raw = doc->toRawText(); const int count = doc->characterCount(); const auto entry = window.currentEntry_;
+            const int rowIndex = row->objectIndex(), logoIndex = logoItem->objectIndex(), figureIndex = figure->objectIndex();
+            QTextCursor selected(doc); selected.setPosition(position); selected.setPosition(label.selectionEnd(), QTextCursor::KeepAnchor);
+            const auto selection = selected.selectedText();
+            auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->textInterface());
+            auto *accessibleText = accessible->textInterface();
+            QCOMPARE(accessibleText->text(position, position + 1), QString(QChar::ObjectReplacementCharacter));
+            MediaPanel::InlineImageAsset ready{}; ready.state = MediaPanel::InlineImageState::Ready;
+            ready.originalMime = QStringLiteral("image/png"); ready.image = QImage(60, 55, QImage::Format_RGB32);
+            ready.image.fill(QColor("#2864ac")); ready.intrinsic = QSizeF(60, 55);
+            ready.pinnedRendition = SemanticHtml::blockMediaRendition(SemanticHtml::blockMediaResource(figureSource), 1);
+            const auto applyReady = [&] {
+                QTextCursor cursor(doc); cursor.setPosition(position); cursor.setPosition(position + 1, QTextCursor::KeepAnchor);
+                auto format = cursor.charFormat().toImageFormat(); QVERIFY(SemanticFigure::applyAsset(format, figureSource, ready));
+                format.setProperty(SemanticHtml::inlineImageStateProperty, int(ready.state));
+                doc->addResource(QTextDocument::ImageResource, QUrl(format.name()), ready.image); cursor.setCharFormat(format);
+            };
+            const qreal containingWidth = doc->textWidth();
+            for (qreal css : {719.25, 719.0, 639.25, 639.0, 900.0}) {
+                QVERIFY(window.editDocumentFormats(browser, [&] {
+                    FlowConstruction::reflowContainers(doc, css); SemanticFigure::reflow(doc, css);
+                }));
+                native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+                QCOMPARE(doc->textWidth(), containingWidth);
+                QCOMPARE(row->frameFormat().position(), css <= 639 ? QTextFrameFormat::InFlow : QTextFrameFormat::FloatRight);
+                QCOMPARE(image->frameFormat().property(SemanticFigure::blockMediaProperty).toMap().value("line_value").toDouble(), css <= 719 ? 1.5 : 1.625);
+            }
+            QVERIFY(window.editDocumentFormats(browser, [&] {
+                FlowConstruction::reflowContainers(doc, window.contentsRect().width()); SemanticFigure::reflow(doc, window.contentsRect().width());
+            }));
+            for (int width : {900, 719, 639, 719, 900}) {
+                window.resize(width, 700); window.readingPaneAction_->trigger();
+                QTRY_VERIFY(!window.readingFloatLayoutScheduled_ && browser->isVisible());
+                const qreal viewport = window.contentsRect().width();
+                QTRY_COMPARE(row->frameFormat().property(FlowConstruction::containerViewportProperty).toDouble(), viewport);
+                QTRY_COMPARE(figure->frameFormat().property(SemanticFigure::blockMediaProperty).toMap().value("state").toInt(), viewport <= 719 ? 0 : -1);
+                QVERIFY(window.editDocumentFormats(browser, applyReady));
+                native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+                const auto a = native->frameBoundingRect(logoItem), b = native->frameBoundingRect(textItem), outer = native->frameBoundingRect(row);
+                auto *device = native->paintDevice(); const qreal scale = device ? device->logicalDpiY() / QFontMetricsF(QFont()).fontDpi() : 1;
+                const qreal logoWidth = 44 * scale, physicalMargin = 9.9 * scale;
+                const qreal remaining = outer.width() - 10 * scale - logoWidth - physicalMargin;
+                const auto sourceBlock = label.block(); auto *used = sourceBlock.layout(); QVERIFY(used);
+                const auto usedOption = used->textOption(); const auto usedBounds = used->boundingRect();
+                const int usedLines = used->lineCount(), revision = doc->revision();
+                const auto sourceFormat = sourceBlock.blockFormat(); const auto sourceStrut = sourceBlock.charFormat();
+                QTextLayout words(sourceBlock); auto options = usedOption; options.setWrapMode(QTextOption::WordWrap); words.setTextOption(options);
+                words.beginLayout(); int covered = 0;
+                for (;;) { auto line = words.createLine(); if (!line.isValid()) break; line.setLineWidth(0);
+                    QCOMPARE(line.textStart(), covered); covered += line.textLength(); }
+                words.endLayout(); QCOMPARE(covered, sourceBlock.text().size());
+                QVERIFY(words.minimumWidth() < remaining); QVERIFY(words.maximumWidth() > remaining);
+                QCOMPARE(doc->revision(), revision); QCOMPARE(sourceBlock.blockFormat(), sourceFormat); QCOMPARE(sourceBlock.charFormat(), sourceStrut);
+                QCOMPARE(used->textOption().alignment(), usedOption.alignment()); QCOMPARE(used->textOption().textDirection(), usedOption.textDirection());
+                QCOMPARE(used->textOption().wrapMode(), usedOption.wrapMode()); QCOMPARE(used->textOption().flags(), usedOption.flags());
+                QCOMPARE(used->textOption().tabStopDistance(), usedOption.tabStopDistance()); QCOMPARE(used->textOption().tabs(), usedOption.tabs());
+                QCOMPARE(used->textOption().useDesignMetrics(), usedOption.useDesignMetrics());
+                QCOMPARE(used->boundingRect(), usedBounds); QCOMPARE(used->lineCount(), usedLines);
+                QVERIFY(qAbs(a.width() - logoWidth) < .04); QVERIFY(qAbs(b.width() - remaining) < .08);
+                const qreal gap = direction == Qt::LeftToRight ? b.left() - a.right() : a.left() - b.right();
+                QVERIFY(qAbs(gap - (direction == Qt::LeftToRight ? physicalMargin : 0)) < .04);
+                QVERIFY(qAbs(a.center().y() - b.center().y()) < .04);
+                QVERIFY(qAbs(outer.height() - 10 * scale - qMax(a.height(), b.height())) < .08);
+                const auto geometry = native->wikidictFigureMediaGeometry(position); QVERIFY(geometry.value("handled").toBool());
+                const auto pixels = geometry.value("image").toRectF(), line = geometry.value("anchor").toRectF();
+                QVERIFY(qAbs(pixels.width() - logoWidth) < .04); QVERIFY(qAbs(pixels.height() - logoWidth * 55 / 60) < .04);
+                QVERIFY(a.adjusted(-.04, -.04, .04, .04).contains(pixels));
+                const auto policy = image->frameFormat().property(SemanticFigure::blockMediaProperty).toMap();
+                QCOMPARE(policy.value("source").value<QJsonObject>(), figureSource.value("block_media_layout").toObject());
+                QCOMPARE(policy.value("line_value").toDouble(), viewport <= 719 ? 1.5 : 1.625);
+                const QFontMetricsF font(policy.value("strut_font").value<QFont>(), device);
+                const qreal strut = policy.value("owner_pixels").toDouble() * scale * policy.value("line_value").toDouble();
+                const qreal leading = (strut - font.ascent() - font.descent()) / 2;
+                const qreal above = qMax(font.ascent() + leading, pixels.height() / 2 + font.xHeight() / 2);
+                const qreal below = qMax(font.descent() + leading, pixels.height() / 2 - font.xHeight() / 2);
+                QVERIFY(qAbs(line.height() - above - below) < .06);
+                QCOMPARE(native->hitTest(pixels.center(), Qt::ExactHit), position); QVERIFY(native->anchorAt(pixels.center()).isEmpty());
+                const auto textPosition = LogicalFlow::position(doc, label.selectionStart()); QCOMPARE(textPosition.status, LogicalFlow::Status::Handled);
+                const auto textRect = textPosition.values.value("characterRect").toRectF(); QVERIFY(!textRect.isEmpty());
+                const int hit = native->hitTest(textRect.center(), Qt::ExactHit); QVERIFY(hit >= label.selectionStart() && hit < label.selectionEnd());
+                QCOMPARE(native->anchorAt(textRect.center()), QStringLiteral("https://example.test/figure-flex-text"));
+                const QPointF offset = browser->viewport()->mapToGlobal(QPoint())
+                    - QPointF(browser->horizontalScrollBar()->value(), browser->verticalScrollBar()->value());
+                QCOMPARE(accessibleText->characterRect(label.selectionStart()), textRect.translated(offset).toAlignedRect());
+                QCOMPARE(accessibleText->offsetAtPoint(textRect.translated(offset).center().toPoint()), hit);
+                QVERIFY(!accessibleText->characterRect(position).isEmpty());
+                QImage painted(1600, 1600, QImage::Format_ARGB32_Premultiplied); painted.fill(Qt::white);
+                { QPainter painter(&painted); native->draw(&painter, {}); }
+                QCOMPARE(painted.pixelColor(pixels.center().toPoint()), QColor("#2864ac"));
+                QCOMPARE(row->objectIndex(), rowIndex); QCOMPARE(logoItem->objectIndex(), logoIndex); QCOMPARE(figure->objectIndex(), figureIndex);
+                QCOMPARE(logoItem->parentFrame(), row.data()); QCOMPARE(textItem->parentFrame(), row.data());
+                QCOMPARE(row->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray(), figureRowBytes);
+                QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(selected.selectedText(), selection); QCOMPARE(window.currentEntry_, entry);
+                if (direction == Qt::LeftToRight && !capturedFigureWidths.contains(width)) {
+                    const auto folder = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                    if (!folder.isEmpty()) {
+                        QVERIFY(QDir().mkpath(folder));
+                        QVERIFY(window.grab().save(QDir(folder).filePath(QString("constructed-block-figure-flex-%1.png").arg(width))));
+                    }
+                    capturedFigureWidths.append(width);
+                }
+            }
+            receiver.opened.clear(); browser->setFocus(); QTRY_VERIFY(browser->hasFocus());
+            QTest::keyClick(browser, Qt::Key_Home, Qt::ControlModifier);
+            for (int tries = 0; tries < 8 && href() != "https://example.test/figure-flex-text"; ++tries) QTest::keyClick(browser, Qt::Key_Tab);
+            QCOMPARE(href(), QStringLiteral("https://example.test/figure-flex-text")); QTest::keyClick(browser, Qt::Key_Return);
+            QTRY_COMPARE(receiver.opened, QList<QUrl>{QUrl("https://example.test/figure-flex-text")});
+        }
+    }
+
+    void containerFlexStrictBandsAndSourceItemAdmission() {
+        {
+        MainWindow window{QString()}; window.resize(1180, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const qreal dpi = QFontMetricsF(QFont()).fontDpi(); window.readingPointSize_ = 20 * 72 / dpi;
+        const auto box = [](const QJsonObject &style, const QJsonArray &children) { return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}},
+            {"container", QJsonObject{{"style", style}, {"blocks", children}}}}; };
+        for (bool ownScale : {false, true}) {
+            const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{
+                QJsonObject{{"kind", "text"}, {"text", "Large"}, {"font_scale", 2.0}, {"font_scale_basis", "normal_body"}},
+                QJsonObject{{"kind", "text"}, {"text", " primary strut is independent"}}}}};
+            QJsonObject style{{"layout", "flex_row"}, {"screen_max_width", QJsonObject{{"max_width_px", 719},
+                {"line_height", QJsonObject{{"multiplier", 1.5}}}}}};
+            if (ownScale) style.insert("owner_font_scale", .9);
+            const QJsonObject normalParagraph{{"kind", "paragraph"}, {"spans", QJsonArray{
+                QJsonObject{{"kind", "text"}, {"text", "Nearer normal"}}}}};
+            const auto source = box(style, QJsonArray{box({}, QJsonArray{paragraph}),
+                box({}, QJsonArray{box(QJsonObject{{"line_height", QJsonObject{{"normal", QJsonObject{}}}}}, QJsonArray{normalParagraph})})});
+            QVERIFY(composeReadingBlocks(window, QJsonArray{source})); auto *doc = window.reading_->document();
+            auto text = doc->find("Large"); QVERIFY(!text.isNull()); QPointer<QTextFrame> item(text.currentFrame());
+            QVERIFY(item); QPointer<QTextFrame> row(item->parentFrame()); QVERIFY(row);
+            const auto nearer = doc->find("Nearer normal"); QVERIFY(!nearer.isNull());
+            const auto normalPolicy = nearer.blockFormat().property(FlowConstruction::containerTypographyProperty);
+            QCOMPARE(normalPolicy.toMap().value("kind").toString(), QStringLiteral("normal"));
+            QCOMPARE(normalPolicy.toMap().value("value").toDouble(), qreal(0));
+            const auto raw = doc->toRawText(); const auto original = text.blockFormat().property(FlowConstruction::containerTypographyProperty);
+            QCOMPARE(original.isValid(), ownScale);
+            const auto backup = text.blockFormat().property(FlowConstruction::containerFlexProperty).toMap();
+            QCOMPARE(backup.value("base_present").toBool(), ownScale);
+            const qreal owner = backup.value("owner_px").toDouble(); QVERIFY(owner > 0);
+            const auto enlarged = text.charFormat().font();
+            const qreal largePx = enlarged.pointSizeF() * QFontMetricsF(enlarged).fontDpi() / 72;
+            QVERIFY(largePx > owner * 1.5);
+            for (qreal viewport : {719.0, 900.0, 719.0, 900.0}) {
+                QVERIFY(window.editDocumentFormats(window.reading_, [&] { FlowConstruction::reflowContainers(doc, viewport); }));
+                doc->documentLayout()->documentSize(); QCOMPARE(doc->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                const auto current = text.blockFormat().property(FlowConstruction::containerTypographyProperty);
+                if (viewport <= 719) {
+                    QVERIFY(current.isValid()); const auto policy = current.toMap();
+                    QCOMPARE(policy.value("kind").toString(), QStringLiteral("multiplier"));
+                    QCOMPARE(policy.value("value").toDouble(), qreal(1.5)); QCOMPARE(policy.value("owner_px").toDouble(), owner);
+                } else QCOMPARE(current, original);
+                QCOMPARE(nearer.blockFormat().property(FlowConstruction::containerTypographyProperty), normalPolicy);
+                QVERIFY(item && row); QCOMPARE(item->parentFrame(), row.data()); QCOMPARE(doc->toRawText(), raw);
+            }
+        }
+        }
+
+        const auto width = [](qreal pixels) { return QJsonObject{{"length", QJsonObject{{"unit", "px"}, {"value", pixels}}}}; };
+        const QJsonObject small{{"max_width_px", 639}, {"float_side", "none"}, {"clear", "both"}};
+        const QJsonObject band{{"max_width_px", 719}, {"width", width(100)}, {"following_rules", QJsonArray{small}}};
+        const QJsonObject style{{"layout", "flex_row"}, {"screen_max_width", band}};
+        QCOMPARE(CompiledContent::containerStyle(style), style);
+        for (int failure = 0; failure < 5; ++failure) {
+            auto badStyle = style, badBand = band, child = small;
+            switch (failure) {
+            case 0: child.insert("max_width_px", 719); break;
+            case 1: child.insert("max_width_px", 720); break;
+            case 2: child.insert("following_rules", QJsonArray{small}); break;
+            case 3: child.insert("float_side", "inline_start"); break;
+            case 4: child.insert("extra_css", "display:flex"); break;
+            }
+            badBand.insert("following_rules", QJsonArray{child}); badStyle.insert("screen_max_width", badBand);
+            QVERIFY_EXCEPTION_THROWN(CompiledContent::containerStyle(badStyle), std::runtime_error);
+        }
+        QJsonObject oversized = band; QJsonArray many;
+        for (int i = 0; i < 16; ++i) many.append(QJsonObject{{"max_width_px", 638 - i}, {"clear", "none"}});
+        oversized.insert("following_rules", many);
+        QVERIFY_EXCEPTION_THROWN(CompiledContent::containerStyle(QJsonObject{{"screen_max_width", oversized}}), std::runtime_error);
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Direct text"}}}}};
+        const QJsonObject unsupported{{"kind", "container"}, {"spans", QJsonArray{}},
+            {"container", QJsonObject{{"style", style}, {"blocks", QJsonArray{paragraph}}}}};
+        QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerFrameFormat(unsupported, 16, false), std::runtime_error);
+        const auto px = [](qreal value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const QJsonObject signedItem{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{
+            {"style", QJsonObject{{"margins", QJsonObject{{"top", px(0)}, {"right", px(0)}, {"bottom", px(0)}, {"left", px(-120)}}}}},
+            {"blocks", QJsonArray{paragraph}}}}};
+        QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerFrameFormat(signedItem, 16, false, true), std::runtime_error);
+        const QJsonObject floatedFlow{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{
+            {"style", QJsonObject{{"layout", "flow"}, {"width", width(100)}, {"float_side", "right"},
+                {"screen_max_width", QJsonObject{{"max_width_px", 719}, {"width", QJsonObject{{"auto", QJsonObject{}}}}}}}},
+            {"blocks", QJsonArray{paragraph}}}}};
+        const auto floatedFlowBytes = QJsonDocument(floatedFlow).toJson(QJsonDocument::Compact);
+        QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerFrameFormat(floatedFlow, 16, false, false, 900), std::runtime_error);
+        QCOMPARE(QJsonDocument(floatedFlow).toJson(QJsonDocument::Compact), floatedFlowBytes);
     }
 
     void plainContainerColumnsKeepCellFlowSourceActionsAndAccessibleGeometry() {
@@ -7655,7 +8314,21 @@ private slots:
         }
         auto unknownStyle = style; unknownStyle.insert("following_rules", "auto");
         QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerInputs(box(unknownStyle), 900, 120, 20, false), std::runtime_error);
-        for (const auto &key : {QStringLiteral("float_side"), QStringLiteral("margins"), QStringLiteral("clear"), QStringLiteral("following_rules")}) {
+        for (const auto &key : {QStringLiteral("float_side"), QStringLiteral("clear")}) {
+            auto resetStyle = style; resetStyle.insert("float_side", "right"); resetStyle.insert("clear", "right");
+            auto screen = style.value("screen_max_width").toObject(); screen.insert(key, "none"); resetStyle.insert("screen_max_width", screen);
+            const auto authored = box(resetStyle); const auto bytes = QJsonDocument(authored).toJson(QJsonDocument::Compact);
+            const auto wide = FlowConstruction::containerInputs(authored, 900, 120, 20, false);
+            const auto narrow = FlowConstruction::containerInputs(authored, 719, 120, 20, false);
+            QVERIFY(!wide.screenActive && narrow.screenActive); QCOMPARE(wide.floatSide, QStringLiteral("right")); QCOMPARE(wide.clear, QStringLiteral("right"));
+            QCOMPARE(narrow.floatSide, key == "float_side" ? QString() : QStringLiteral("right"));
+            QCOMPARE(narrow.clear, key == "clear" ? QStringLiteral("none") : QStringLiteral("right"));
+            QCOMPARE(wide.source, authored); QCOMPARE(narrow.source, authored); QCOMPARE(QJsonDocument(authored).toJson(QJsonDocument::Compact), bytes);
+            QVERIFY_EXCEPTION_THROWN(FlowConstruction::plainContainerFormat(authored, 20, false), std::runtime_error);
+            screen.insert(key, "inline_start"); resetStyle.insert("screen_max_width", screen);
+            QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerInputs(box(resetStyle), 900, 120, 20, false), std::runtime_error);
+        }
+        for (const auto &key : {QStringLiteral("margins"), QStringLiteral("following_rules")}) {
             auto badStyle = style; auto screen = style.value("screen_max_width").toObject(); screen.insert(key, "none"); badStyle.insert("screen_max_width", screen);
             QVERIFY_EXCEPTION_THROWN(FlowConstruction::containerInputs(box(badStyle), 900, 120, 20, false), std::runtime_error);
         }
@@ -8155,10 +8828,24 @@ private slots:
         document->documentLayout()->documentSize();
         QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
         QCOMPARE(QJsonDocument(paddingSource).toJson(QJsonDocument::Compact), paddingBytes);
+        const auto responsiveSource = box(QJsonObject{{"screen_max_width", QJsonObject{{"max_width_px", 719},
+            {"width", QJsonObject{{"auto", QJsonObject{}}}}}}}, QJsonArray{child});
+        const auto responsiveBytes = QJsonDocument(responsiveSource).toJson(QJsonDocument::Compact);
+        QVERIFY(!window.blockHtml(responsiveSource).isEmpty());
+        QVERIFY(composeReadingBlocks(window, QJsonArray{responsiveSource}));
+        auto *responsiveDocument = window.reading_->document(); const auto responsiveChild = responsiveDocument->find("Live child");
+        QVERIFY(!responsiveChild.isNull());
+        QCOMPARE(responsiveChild.currentFrame()->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray(), responsiveBytes);
+        QVERIFY(responsiveChild.currentFrame()->frameFormat().hasProperty(FlowConstruction::containerFlexProperty));
+        responsiveDocument->documentLayout()->documentSize();
+        QCOMPARE(responsiveDocument->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QVERIFY(FlowConstruction::containerInputs(responsiveSource, 719, 120, 20, false).screenActive);
+        QVERIFY(!FlowConstruction::containerInputs(responsiveSource, 900, 120, 20, false).screenActive);
+        QVERIFY_EXCEPTION_THROWN(FlowConstruction::plainContainerFormat(responsiveSource, 20, false), std::runtime_error);
+        QCOMPARE(QJsonDocument(responsiveSource).toJson(QJsonDocument::Compact), responsiveBytes);
         const QVector<QJsonObject> unsupported{
             {{"layout", "flex_row"}}, {{"float_side", "left"}}, {{"width", QJsonObject{{"fit_content", QJsonObject{}}}}},
             {{"max_width", QJsonObject{{"length", length("px", 50)}}}}, {{"line_height", QJsonObject{{"multiplier", -1}}}},
-            {{"screen_max_width", QJsonObject{{"max_width_px", 719}, {"width", QJsonObject{{"auto", QJsonObject{}}}}}}},
             {{"float_side", "left"}, {"margins", edges(1)}}, {{"overflow", "hidden"}},
             {{"padding", QJsonObject{{"top", length("px", 0)}, {"right", length("px", -1)}, {"bottom", length("px", 0)}, {"left", length("px", 0)}}}},
             {{"width", QJsonObject{{"length", length("percent", 50)}}}, {"padding", edges(1)}}};

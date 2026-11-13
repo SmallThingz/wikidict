@@ -117,7 +117,8 @@ inline QJsonObject missingContent(const QJsonObject &figure, qreal em) {
     require(!classes.contains(QStringLiteral("wikidict-media")));
     if (SemanticHtml::present(object.value("link_paint")))
         require(object.value("link_paint").isString() && object.value("link_paint").toString() == MissingFigurePaint::policy
-            && (kind == "link" || kind == "external_link") && !SemanticHtml::present(label.value("foreground")));
+            && (kind == "link" || kind == "external_link") && !SemanticHtml::present(label.value("foreground"))
+            && !SemanticHtml::present(label.value("link_paint")));
     return object;
 }
 inline QString missingLabelText(QString text) {
@@ -476,6 +477,117 @@ inline std::optional<TableCaptionInput> tableCaptionInput(const QJsonObject &fig
     return input;
 }
 
+inline constexpr int blockMediaProperty = QTextFormat::UserProperty + 0x57fd;
+inline const QString blockMediaCapability = QStringLiteral("wikidict.figure-block-media/1");
+struct BlockMediaInput {
+    QJsonObject source, wrapper, media;
+    qreal preferredWidth = 0, viewport = 0;
+    quint32 naturalWidth = 0, naturalHeight = 0;
+    int state = -1;
+};
+inline QJsonObject blockMediaRendition(const QJsonValue &value) {
+    const auto source = CompiledContent::containerObject(value,
+        {QStringLiteral("url"), QStringLiteral("sha256")}, {QStringLiteral("url"), QStringLiteral("sha256")});
+    require(source.value("url").isString() && source.value("sha256").isString());
+    const QString url = source.value("url").toString(), sha = source.value("sha256").toString();
+    require(url.size() <= 8192 && url.startsWith(QStringLiteral("https://")) && sha.size() == 64);
+    for (QChar ch : sha) require((ch >= QChar('0') && ch <= QChar('9')) || (ch >= QChar('a') && ch <= QChar('f')));
+    const int path = url.indexOf(QChar('/'), 8);
+    require(path > 8 && path + 1 < url.size());
+    const QString host = url.mid(8, path - 8);
+    require(!host.startsWith(QChar('.')) && !host.endsWith(QChar('.')) && host.contains(QChar('.')));
+    for (QChar ch : host) require((ch >= QChar('a') && ch <= QChar('z')) || (ch >= QChar('A') && ch <= QChar('Z'))
+        || (ch >= QChar('0') && ch <= QChar('9')) || ch == QChar('.') || ch == QChar('-'));
+    for (QChar ch : url) require(ch.unicode() > 0x20 && ch.unicode() < 0x7f && ch != QChar('\\') && ch != QChar('#'));
+    return source;
+}
+inline QJsonObject blockMediaWrapper(const QJsonValue &value, const QJsonObject &media, qreal em) {
+    const auto wrapper = CompiledContent::containerStyle(value);
+    for (auto it = wrapper.begin(); it != wrapper.end(); ++it)
+        require(!CompiledContent::present(it.value()) || QStringList{"width", "line_height", "text_align",
+            "owner_font_scale", "margins", "margin_values"}.contains(it.key()));
+    require(CompiledContent::containerUnion(wrapper.value("width"), {QStringLiteral("auto")}) == QStringLiteral("auto"));
+    require(CompiledContent::present(wrapper.value("line_height")) && CompiledContent::present(wrapper.value("text_align"))
+        && wrapper.value("owner_font_scale").isDouble()
+        && wrapper.value("owner_font_scale") == media.value("strut").toObject().value("font_scale")
+        && (CompiledContent::present(wrapper.value("margins")) || CompiledContent::present(wrapper.value("margin_values"))));
+    if (CompiledContent::present(wrapper.value("margins")))
+        for (const auto &side : {QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")})
+            captionSignedLength(wrapper.value("margins").toObject().value(side), em);
+    return wrapper;
+}
+inline std::optional<BlockMediaInput> blockMediaInput(const QJsonObject &figure, qreal em,
+                                                     const QPalette &palette, qreal viewport) {
+    const auto value = figure.value(QStringLiteral("block_media_layout"));
+    if (!CompiledContent::present(value)) return std::nullopt;
+    require(std::isfinite(viewport) && viewport >= 0 && !missing(figure)
+        && !CompiledContent::present(figure.value("table_caption_layout"))
+        && !CompiledContent::present(figure.value("frame_min_width"))
+        && figure.value("placement") == QStringLiteral("none") && figure.value("clear") == QStringLiteral("none")
+        && figure.value("caption").isArray() && figure.value("caption").toArray().isEmpty()
+        && (!CompiledContent::present(figure.value("caption_blocks"))
+            || (figure.value("caption_blocks").isArray() && figure.value("caption_blocks").toArray().isEmpty()))
+        && !CompiledContent::present(figure.value("caption_text_align")));
+    for (const QString &key : {QStringLiteral("frame_background"), QStringLiteral("image_background"), QStringLiteral("caption_background")})
+        require(figure.value(key).toObject() == QJsonObject{{"kind", "transparent"}});
+    for (const QString &key : {QStringLiteral("frame_border"), QStringLiteral("image_border")})
+        require(figure.value(key).toObject() == QJsonObject{{"kind", "none"}});
+    for (const QString &key : {QStringLiteral("margins"), QStringLiteral("image_insets"), QStringLiteral("caption_padding")}) {
+        const auto e = edges(figure.value(key), em); require(e.top == 0 && e.right == 0 && e.bottom == 0 && e.left == 0);
+    }
+    const auto span = figure.value("image_span").toObject(), image = span.value("image").toObject();
+    require(span.value("kind") == QStringLiteral("text") && span.value("target").toString().isEmpty()
+        && !CompiledContent::present(image.value("static_poster")) && !CompiledContent::present(image.value("map")));
+    const auto source = CompiledContent::containerObject(value,
+        {QStringLiteral("wrapper"), QStringLiteral("media"), QStringLiteral("preferred_width_px"), QStringLiteral("natural_width"),
+         QStringLiteral("natural_height"), QStringLiteral("rendition_1x"), QStringLiteral("rendition_2x"), QStringLiteral("viewport_states")},
+        {QStringLiteral("wrapper"), QStringLiteral("media"), QStringLiteral("preferred_width_px"), QStringLiteral("natural_width"),
+         QStringLiteral("natural_height"), QStringLiteral("rendition_1x"), QStringLiteral("rendition_2x")});
+    const auto axis = [&](const char *key, double maximum) {
+        const auto n = source.value(QLatin1StringView(key));
+        require(n.isDouble() && std::isfinite(n.toDouble()) && n.toDouble() >= 1
+            && n.toDouble() <= maximum && std::floor(n.toDouble()) == n.toDouble());
+        return quint32(n.toDouble());
+    };
+    BlockMediaInput input; input.source = source; input.viewport = viewport;
+    input.preferredWidth = metric(axis("preferred_width_px", 4294967295.0));
+    input.naturalWidth = axis("natural_width", 2147483647.0); input.naturalHeight = axis("natural_height", 2147483647.0);
+    const auto one = blockMediaRendition(source.value("rendition_1x")), two = blockMediaRendition(source.value("rendition_2x"));
+    require(one.value("url") != two.value("url") && one.value("sha256") != two.value("sha256"));
+    const auto stateInput = [&](const QJsonObject &state, QJsonObject &wrapper, QJsonObject &media) {
+        media = captionMedia(state.value("media"), figure, em, palette);
+        require(!CompiledContent::present(media.value("positioning")) && !CompiledContent::present(media.value("after"))
+            && !CompiledContent::present(media.value("focus_outline")));
+        if (CompiledContent::present(media.value("max_width")))
+            require(length(media.value("max_width").toObject().value("subtract"), em) == 0);
+        wrapper = blockMediaWrapper(state.value("wrapper"), media, em);
+    };
+    stateInput(source, input.wrapper, input.media);
+    const auto states = source.value("viewport_states"); require(states.isUndefined() || states.isArray());
+    require(states.toArray().size() <= 16); double previous = 4294967296.0; int index = 0;
+    for (const auto &item : states.toArray()) {
+        const auto state = CompiledContent::containerObject(item,
+            {QStringLiteral("max_width_px"), QStringLiteral("wrapper"), QStringLiteral("media")},
+            {QStringLiteral("max_width_px"), QStringLiteral("wrapper"), QStringLiteral("media")});
+        const auto maximum = state.value("max_width_px");
+        require(maximum.isDouble() && std::isfinite(maximum.toDouble()) && maximum.toDouble() >= 0
+            && maximum.toDouble() < previous && std::floor(maximum.toDouble()) == maximum.toDouble());
+        previous = maximum.toDouble(); QJsonObject wrapper, media; stateInput(state, wrapper, media);
+        if (viewport <= maximum.toDouble()) { input.wrapper = wrapper; input.media = media; input.state = index; }
+        ++index;
+    }
+    metric(input.preferredWidth * qreal(input.naturalHeight) / input.naturalWidth);
+    return input;
+}
+inline QJsonObject blockMediaSelectedRendition(const BlockMediaInput &input, qreal density) {
+    require(std::isfinite(density) && density > 0);
+    const int multiple = density <= 1 ? 1 : 2;
+    auto rendition = blockMediaRendition(input.source.value(multiple == 1 ? "rendition_1x" : "rendition_2x"));
+    rendition.insert("width", double(input.naturalWidth) * multiple);
+    rendition.insert("height", double(input.naturalHeight) * multiple);
+    return rendition;
+}
+
 inline QJsonObject validate(const QJsonValue &value, qreal em, const QPalette &palette) {
     require(value.isObject());
     const auto object = value.toObject();
@@ -486,7 +598,7 @@ inline QJsonObject validate(const QJsonValue &value, qreal em, const QPalette &p
     else required.append({QStringLiteral("image_span"), QStringLiteral("sizing")});
     for (const auto &key : required) require(object.contains(key));
     for (auto it = object.begin(); it != object.end(); ++it)
-        require(required.contains(it.key()) || it.key() == "caption_blocks" || it.key() == "caption_text_align" || it.key() == "frame_min_width" || it.key() == "table_caption_layout");
+        require(required.contains(it.key()) || it.key() == "caption_blocks" || it.key() == "caption_text_align" || it.key() == "frame_min_width" || it.key() == "table_caption_layout" || it.key() == "block_media_layout");
     require(QStringList{"thumbnail", "framed"}.contains(object.value("format").toString())
         && QStringList{"none", "center", "float_left", "float_right"}.contains(object.value("placement").toString())
         && QStringList{"none", "left", "right", "both"}.contains(object.value("clear").toString()));
@@ -502,6 +614,7 @@ inline QJsonObject validate(const QJsonValue &value, qreal em, const QPalette &p
     }
     frameMinWidth(object.value(QStringLiteral("frame_min_width")));
     tableCaptionInput(object, em, palette, 0);
+    blockMediaInput(object, em, palette, 0);
     require(object.value("caption").isArray());
     if (SemanticHtml::present(object.value("caption_blocks")))
         require(object.value("caption_blocks").isArray() && object.value("caption").toArray().isEmpty());
@@ -665,6 +778,121 @@ inline QVariantMap tableCaptionMediaPolicy(const TableCaptionInput &input, const
     policy.insert(QStringLiteral("focus"), focus);
     return policy;
 }
+inline QVariantMap blockMediaPolicy(const BlockMediaInput &input, const QJsonObject &figure,
+                                    qreal em, const QPalette &palette, const QFont &body) {
+    // Reuse the existing media metrics serialization; this remains a distinct
+    // block capability and creates no table or caption owner.
+    TableCaptionInput metrics; metrics.media = input.media;
+    if (CompiledContent::present(input.media.value(QStringLiteral("max_width")))) metrics.mediaLimitSubtract = 0;
+    auto policy = tableCaptionMediaPolicy(metrics, figure, em, palette, body, input.preferredWidth);
+    policy.insert(QStringLiteral("capability"), blockMediaCapability);
+    policy.insert(QStringLiteral("source"), input.source);
+    policy.insert(QStringLiteral("wrapper"), input.wrapper);
+    policy.insert(QStringLiteral("state"), input.state);
+    policy.insert(QStringLiteral("viewport"), input.viewport);
+    policy.insert(QStringLiteral("normal_body_em"), em);
+    policy.insert(QStringLiteral("natural_width"), double(input.naturalWidth));
+    policy.insert(QStringLiteral("natural_height"), double(input.naturalHeight));
+    const auto line = input.wrapper.value(QStringLiteral("line_height")).toObject();
+    int lineMode = 0; qreal lineValue = 0;
+    if (line.contains(QStringLiteral("multiplier"))) {
+        lineMode = 1; lineValue = line.value(QStringLiteral("multiplier")).toDouble();
+    } else if (line.contains(QStringLiteral("length"))) {
+        lineMode = 2; lineValue = length(line.value(QStringLiteral("length")), em);
+    } else require(line.contains(QStringLiteral("normal")));
+    require(std::isfinite(lineValue) && lineValue >= 0);
+    policy.insert(QStringLiteral("line_mode"), lineMode);
+    policy.insert(QStringLiteral("line_value"), lineValue);
+    policy.insert(QStringLiteral("owner_pixels"), metric(em * input.media.value(QStringLiteral("strut")).toObject()
+        .value(QStringLiteral("font_scale")).toDouble()));
+    const QString align = input.wrapper.value(QStringLiteral("text_align")).toString();
+    policy.insert(QStringLiteral("alignment"), int(align == QStringLiteral("center") ? Qt::AlignHCenter
+        : align == QStringLiteral("right") ? Qt::AlignRight | Qt::AlignAbsolute : Qt::AlignLeft | Qt::AlignAbsolute));
+    return policy;
+}
+inline void blockMediaPlacement(QTextFrameFormat &format, const BlockMediaInput &input,
+                                qreal em, const QPalette &palette) {
+    Edges margin{0, 0, 0, 0}; QVariantList autos{false, false, false, false};
+    if (CompiledContent::present(input.wrapper.value(QStringLiteral("margins")))) {
+        const auto values = input.wrapper.value(QStringLiteral("margins")).toObject();
+        margin = {captionSignedLength(values.value("top"), em), captionSignedLength(values.value("right"), em),
+            captionSignedLength(values.value("bottom"), em), captionSignedLength(values.value("left"), em)};
+    }
+    if (CompiledContent::present(input.wrapper.value(QStringLiteral("margin_values")))) {
+        const auto values = input.wrapper.value(QStringLiteral("margin_values")).toObject();
+        qreal *sides[]{&margin.top, &margin.right, &margin.bottom, &margin.left};
+        const QStringList names{"top", "right", "bottom", "left"};
+        for (int i = 0; i < 4; ++i) {
+            const auto tagged = values.value(names[i]).toObject();
+            autos[i] = tagged.contains(QStringLiteral("auto"));
+            *sides[i] = autos[i].toBool() ? 0 : captionSignedLength(tagged.value(QStringLiteral("length")), em);
+        }
+    }
+    margins(format, margin);
+    format.setPosition(QTextFrameFormat::InFlow);
+    format.setProperty(placementProperty, 0); format.setProperty(clearProperty, 0);
+    format.setWidth(QTextLength(QTextLength::VariableLength, 0));
+    format.setProperty(blockMediaProperty, QVariantMap{{QStringLiteral("capability"), blockMediaCapability},
+        {QStringLiteral("source"), input.source}, {QStringLiteral("wrapper"), input.wrapper},
+        {QStringLiteral("state"), input.state}, {QStringLiteral("viewport"), input.viewport}, {QStringLiteral("normal_body_em"), em},
+        {QStringLiteral("autos"), autos}, {QStringLiteral("palette"), palette}});
+}
+inline bool blockMediaImageStorage(QTextFrame *image, int position) {
+    if (!image || position < image->firstPosition() || position > image->lastPosition()) return false;
+    QTextFragment object;
+    for (auto it = image->begin(); !it.atEnd(); ++it) {
+        const auto block = it.currentBlock(); if (!block.isValid()) continue;
+        for (auto piece = block.begin(); !piece.atEnd(); ++piece) {
+            const auto fragment = piece.fragment();
+            if (!fragment.isValid() || fragment.length() != 1 || !fragment.charFormat().isImageFormat()
+                || fragment.position() != position || object.isValid()) return false;
+            object = fragment;
+        }
+    }
+    if (!object.isValid()) return false;
+    const auto children = image->childFrames(); const int index = object.charFormat().objectIndex();
+    if (children.isEmpty()) return index == -1;
+    if (children.size() != 1 || index < 0) return false;
+    const auto *helper = children.first(); QTextFrameFormat neutral;
+    neutral.setPosition(QTextFrameFormat::InFlow);
+    // Fragment copies may retain Qt's empty image-object frame at the ORC.
+    // It is storage for this exact object, not an additional semantic child.
+    return helper->document() == image->document() && helper->parentFrame() == image
+        && !qobject_cast<const QTextTable *>(helper) && helper->childFrames().isEmpty()
+        && image->document()->object(index) == helper && helper->objectIndex() == index
+        && helper->firstPosition() == position + 1 && helper->lastPosition() == position
+        && helper->frameFormat() == neutral;
+}
+inline void blockMediaFrame(QTextFrame *image, const QVariantMap &policy, QTextDocument *document) {
+    auto format = image->frameFormat();
+    format.setMargin(0); format.setPadding(0); format.setBorder(0);
+    format.setBorderStyle(QTextFrameFormat::BorderStyle_None); format.setBackground(Qt::transparent);
+    format.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+    format.setProperty(blockMediaProperty, policy);
+    format.setLayoutDirection(Qt::LayoutDirection(policy.value(QStringLiteral("direction")).toInt()));
+    if (format != image->frameFormat()) image->setFrameFormat(format);
+    for (auto it = image->begin(); !it.atEnd(); ++it) {
+        const auto block = it.currentBlock(); if (!block.isValid()) continue;
+        auto blockFormat = block.blockFormat();
+        blockFormat.setAlignment(Qt::Alignment(policy.value(QStringLiteral("alignment")).toInt()));
+        blockFormat.clearProperty(QTextFormat::LineHeight); blockFormat.clearProperty(QTextFormat::LineHeightType);
+        blockFormat.setLayoutDirection(format.layoutDirection());
+        QTextCursor edit(block);
+        if (blockFormat != block.blockFormat()) edit.setBlockFormat(blockFormat);
+        auto character = block.charFormat(); character.setFont(policy.value(QStringLiteral("strut_font")).value<QFont>());
+        if (character != block.charFormat()) edit.setBlockCharFormat(character);
+        for (auto fragment = block.begin(); !fragment.atEnd(); ++fragment) {
+            const auto run = fragment.fragment();
+            if (!run.isValid() || !run.charFormat().isImageFormat()) continue;
+            auto object = run.charFormat(); object.setVerticalAlignment(QTextCharFormat::AlignNormal);
+            QTextCursor change(document); change.setPosition(run.position());
+            change.setPosition(run.position() + run.length(), QTextCursor::KeepAnchor);
+            if (object != run.charFormat()) change.setCharFormat(object);
+        }
+    }
+    document->markContentsDirty(image->firstPosition(), image->lastPosition() - image->firstPosition() + 1);
+}
+
 inline void tableCaptionMediaFrame(QTextFrame *image, const QVariantMap &policy, QTextDocument *document) {
     auto format = image->frameFormat(); format.setMargin(0); format.setPadding(0); format.setBorder(0);
     format.setBorderStyle(QTextFrameFormat::BorderStyle_None); format.setBackground(Qt::transparent);
@@ -856,6 +1084,30 @@ inline void insertHtml(QTextCursor cursor, const QString &html, qreal points,
 inline bool applyAsset(QTextImageFormat &format, const QJsonObject &figure, const MediaPanel::InlineImageAsset &asset) {
     require(format.hasProperty(SemanticHtml::figureImageProperty)
         && QJsonDocument::fromJson(format.property(SemanticHtml::figureImageProperty).toByteArray()).object() == figure);
+    if (CompiledContent::present(figure.value(QStringLiteral("block_media_layout")))) {
+        const auto source = figure.value(QStringLiteral("block_media_layout")).toObject();
+        const auto resource = SemanticHtml::blockMediaResource(figure);
+        require(source.value(QStringLiteral("preferred_width_px")).isDouble());
+        const qreal preferred = metric(source.value(QStringLiteral("preferred_width_px")).toDouble());
+        require(preferred > 0 && std::floor(preferred) == preferred);
+        const QSizeF size(preferred, metric(preferred * resource.value("natural_height").toDouble() / resource.value("natural_width").toDouble()));
+        const bool ready = asset.state == MediaPanel::InlineImageState::Ready;
+        if (ready) {
+            require(!asset.vector && asset.originalMime == QStringLiteral("image/png")
+                && (asset.pinnedRendition == SemanticHtml::blockMediaRendition(resource, 1)
+                    || asset.pinnedRendition == SemanticHtml::blockMediaRendition(resource, 2))
+                && asset.image.width() == asset.pinnedRendition.value("width").toDouble()
+                && asset.image.height() == asset.pinnedRendition.value("height").toDouble()
+                && asset.intrinsic == QSizeF(asset.image.size()));
+            format.setProperty(SemanticHtml::imageOriginalSizeProperty, asset.intrinsic);
+        } else format.clearProperty(SemanticHtml::imageOriginalSizeProperty);
+        // Resource availability does not replace the source ratio or strut.
+        format.setWidth(size.width()); format.setHeight(size.height());
+        format.setProperty(SemanticHtml::imageLayoutSizeProperty, size);
+        format.setProperty(sizingReadyProperty, ready);
+        format.clearProperty(SemanticHtml::inlineImageBorderProperty);
+        return ready;
+    }
     const auto fallback = format.property(placeholderSizeProperty).toSizeF();
     require(std::isfinite(fallback.width()) && fallback.width() > 0
         && std::isfinite(fallback.height()) && fallback.height() >= 0);
@@ -926,6 +1178,8 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
         const qreal points = meta.value("caption_points").toDouble();
         const auto figure = validate(meta.value("figure"), em, palette);
         const auto tableCaption = tableCaptionInput(figure, em, palette, rootViewportWidth);
+        const auto blockMedia = blockMediaInput(figure, em, palette, rootViewportWidth);
+        if (blockMedia) require(layout->property("_wikidictFigureBlockMediaCapability").toString() == blockMediaCapability);
         const auto sourceLayout = figure.value("table_caption_layout").toObject();
         if (SemanticHtml::present(sourceLayout.value("missing_link_paint")) || SemanticHtml::present(sourceLayout.value("caption_link_paint")))
             require(layout->property("_wikidictFigureLinkStateCapability").toString() == MissingFigurePaint::fixedPolicy);
@@ -956,6 +1210,7 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
             auto policy = outer.property(tableCaptionProperty).toMap(); policy.insert(QStringLiteral("palette"), palette);
             outer.setProperty(tableCaptionProperty, policy);
         }
+        if (blockMedia) blockMediaPlacement(outer, *blockMedia, em, palette);
         outer.setProperty(dataProperty, QJsonDocument(meta).toJson(QJsonDocument::Compact)); outer.setProperty(pointsProperty, points);
         const auto frame = FlowConstruction::insertFigure(owners[item.owner], item.cursor, item.run, outer, [&](QTextFrame *rawFrame) {
             const QPointer<QTextFrame> frame(rawFrame);
@@ -1005,9 +1260,16 @@ inline QVector<QPointer<QTextFrame>> materialize(QTextDocument *document,
                 format.setProperty(placeholderSizeProperty, QSizeF(metric(format.width()), metric(format.height())));
                 require(format.width() > 0);
                 format.setProperty(sizingReadyProperty, false);
+                if (blockMedia) {
+                    format.setName(SemanticHtml::inlineBlockMediaUrl(figure).toString(QUrl::FullyEncoded));
+                    format.setWidth(blockMedia->preferredWidth);
+                    format.setHeight(blockMedia->preferredWidth * qreal(blockMedia->naturalHeight) / blockMedia->naturalWidth);
+                }
                 format.clearProperty(SemanticHtml::imageOriginalSizeProperty); format.clearProperty(SemanticHtml::imageLayoutSizeProperty);
                 format.clearProperty(SemanticHtml::inlineImageBorderProperty); format.clearBackground();
                 QTextCursor change(document); change.setPosition(image.position()); change.setPosition(image.position() + 1, QTextCursor::KeepAnchor); change.setCharFormat(format);
+                if (blockMedia) blockMediaFrame(imageFrame,
+                    blockMediaPolicy(*blockMedia, figure, em, palette, document->defaultFont()), document);
             }
             const auto padding = edges(figure.value("caption_padding"), em);
             if (mediaGrid) hideGeneratedEmptyBlocks(mediaGrid);
@@ -1074,6 +1336,11 @@ inline void reflow(QTextDocument *document, qreal rootViewportWidth) {
         const auto meta = QJsonDocument::fromJson(outer.property(dataProperty).toByteArray()).object();
         const auto figure = meta.value("figure").toObject();
         const qreal em = meta.value("normal_body_em").toDouble();
+        const auto savedBlockPalette = outer.property(blockMediaProperty).toMap().value(QStringLiteral("palette"));
+        const auto blockMedia = blockMediaInput(figure, em,
+            savedBlockPalette.metaType().id() == QMetaType::QPalette ? savedBlockPalette.value<QPalette>() : QPalette(), rootViewportWidth);
+        if (blockMedia) require(savedBlockPalette.metaType().id() == QMetaType::QPalette
+            && layout->property("_wikidictFigureBlockMediaCapability").toString() == blockMediaCapability);
         const auto savedPalette = outer.property(tableCaptionProperty).toMap().value(QStringLiteral("palette"));
         const auto tableCaption = tableCaptionInput(figure, em,
             savedPalette.metaType().id() == QMetaType::QPalette ? savedPalette.value<QPalette>() : QPalette(), rootViewportWidth);
@@ -1133,6 +1400,16 @@ inline void reflow(QTextDocument *document, qreal rootViewportWidth) {
             const auto format = image.charFormat().toImageFormat();
             width = metric(format.width()); height = metric(format.height()); require(width > 0);
             imageSizingReady = format.boolProperty(sizingReadyProperty);
+        }
+        if (blockMedia) {
+            require(!captionFrame && !contentFrame && !mediaGrid && frame->childFrames().size() == 1
+                && blockMediaImageStorage(imageFrame, imagePosition));
+            blockMediaPlacement(outer, *blockMedia, em, savedBlockPalette.value<QPalette>());
+            if (outer != frame->frameFormat()) frame->setFrameFormat(outer);
+            require(guard && layout && frame && imageFrame && document->documentLayout() == layout);
+            blockMediaFrame(imageFrame, blockMediaPolicy(*blockMedia, figure, em,
+                savedBlockPalette.value<QPalette>(), document->defaultFont()), document);
+            continue;
         }
         const qreal imageBox = metric(width + inset.left + inset.right + 2 * imageBorder);
         qreal contentWidth = qMax(imageBox, metric(padding.left + padding.right));

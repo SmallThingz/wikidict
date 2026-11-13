@@ -39,6 +39,10 @@ struct RenderContext {
     bool computedCellTraits = false;
     bool cellLineInheritance = false;
     bool ordinaryCellContainers = false;
+    bool flexItem = false;
+    bool responsiveContainerTypography = false;
+    bool baseContainerTypography = false;
+    ContainerLineInput baseContainerLineHeight;
     int contentDepth = 0;
     bool inReference = false;
     QHash<QString, bool> inlineTableAudioOwners;
@@ -108,12 +112,24 @@ inline ContainerInputs containerInputs(const QJsonObject &containerBlock, qreal 
     result.containingContentCssPixels = containingContentCssPixels;
     result.normalBodyCssPixels = normalBodyCssPixels;
     auto style = CompiledContent::containerStyle(owned.value(QStringLiteral("style")));
-    const auto screen = style.value(QStringLiteral("screen_max_width"));
-    if (CompiledContent::present(screen) && rootViewportCssPixels <= screen.toObject().value(QStringLiteral("max_width_px")).toDouble()) {
-        result.screenActive = true;
-        for (const auto &key : {QStringLiteral("width"), QStringLiteral("max_width"), QStringLiteral("box_sizing"), QStringLiteral("line_height")})
-            if (CompiledContent::present(screen.toObject().value(key))) style.insert(key, screen.toObject().value(key));
+    const auto screen = style.value(QStringLiteral("screen_max_width")).toObject();
+    QJsonArray bands;
+    if (!screen.isEmpty()) {
+        bands.append(screen);
+        for (const auto &rule : screen.value(QStringLiteral("following_rules")).toArray()) bands.append(rule);
     }
+    for (const auto &value : bands) {
+        const auto rule = value.toObject();
+        if (rootViewportCssPixels > rule.value(QStringLiteral("max_width_px")).toDouble()) continue;
+        result.screenActive = true;
+        for (const auto &key : {QStringLiteral("width"), QStringLiteral("max_width"), QStringLiteral("box_sizing"),
+                QStringLiteral("line_height"), QStringLiteral("float_side"), QStringLiteral("clear")})
+            if (CompiledContent::present(rule.value(key))) style.insert(key, rule.value(key));
+        if (CompiledContent::present(rule.value(QStringLiteral("margins")))) {
+            style.remove(QStringLiteral("margins")); style.insert(QStringLiteral("margin_values"), rule.value(QStringLiteral("margins")));
+        }
+    }
+    if (style.value(QStringLiteral("float_side")) == QStringLiteral("none")) style.remove(QStringLiteral("float_side"));
     result.effectiveStyle = style;
     const auto length = [&](const QJsonValue &value) {
         const auto spec = value.toObject();
@@ -424,6 +440,159 @@ inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal nor
     return format;
 }
 
+inline constexpr int containerFlexProperty = QTextFormat::UserProperty + 0x5800;
+inline constexpr int containerFlexItemProperty = QTextFormat::UserProperty + 0x5801;
+inline constexpr int containerViewportProperty = QTextFormat::UserProperty + 0x5802;
+
+inline bool extendedContainer(const QJsonObject &block, bool flexItem = false) {
+    const auto style = CompiledContent::containerBlock(block).value(QStringLiteral("style")).toObject();
+    return flexItem || style.value(QStringLiteral("layout")) == QStringLiteral("flex_row")
+        || CompiledContent::present(style.value(QStringLiteral("flex_item")))
+        || CompiledContent::present(style.value(QStringLiteral("screen_max_width")));
+}
+
+inline QTextFrameFormat containerFrameFormat(const QJsonObject &block, qreal em, bool dark, bool flexItem = false, qreal viewport = 0) {
+    if (!extendedContainer(block, flexItem)) return plainContainerFormat(block, em, dark);
+    const auto owned = CompiledContent::containerBlock(block);
+    const auto input = containerInputs(block, viewport, 1, em, dark);
+    const auto sourceStyle = input.effectiveStyle;
+    CompiledContent::require(!input.relativeAuto && !input.columnCount && !input.minimumHeightAuthored
+        && !input.localScrollport && input.width.mode != ContainerWidthInput::Mode::FitContent
+        && input.maximumWidth.mode != ContainerWidthInput::Mode::FitContent
+        && (input.layout == QStringLiteral("flow") || input.layout == QStringLiteral("flex_row")));
+    if (!flexItem && !input.floatSide.isEmpty())
+        CompiledContent::require(input.layout == QStringLiteral("flex_row") && input.width.mode == ContainerWidthInput::Mode::Length);
+    // The closed row contribution model retains nonnegative physical item edges.
+    // Root float margins have their independent checked margin-box path.
+    if (flexItem) CompiledContent::require(input.margins.left() >= 0 && input.margins.right() >= 0);
+    if (input.layout == QStringLiteral("flex_row"))
+        for (const auto &child : owned.value(QStringLiteral("blocks")).toArray())
+            CompiledContent::require(child.toObject().value(QStringLiteral("kind")) == QStringLiteral("container"));
+    // The existing plain formatter owns decoration/height. Width, float and
+    // margins are retained below as semantic requests for the row allocator.
+    auto decorationStyle = sourceStyle;
+    for (const auto &key : {QStringLiteral("width"), QStringLiteral("max_width"), QStringLiteral("screen_max_width"),
+             QStringLiteral("flex_item"), QStringLiteral("align_items"), QStringLiteral("float_side"),
+             QStringLiteral("margins"), QStringLiteral("margin_values")}) decorationStyle.remove(key);
+    decorationStyle.insert(QStringLiteral("layout"), QStringLiteral("flow"));
+    auto decorationOwner = owned; decorationOwner.insert(QStringLiteral("style"), decorationStyle);
+    auto decorationBlock = block; decorationBlock.insert(QStringLiteral("container"), decorationOwner);
+    auto format = plainContainerFormat(decorationBlock, em, dark);
+    format.setProperty(containerSourceProperty, QJsonDocument(block).toJson(QJsonDocument::Compact));
+    format.setProperty(containerFlexProperty, QVariantMap{
+        {QStringLiteral("capability"), QStringLiteral("wikidict.container-flex/1")}, {QStringLiteral("em"), em}});
+    format.setProperty(containerFlexItemProperty, flexItem);
+    format.setProperty(containerViewportProperty, viewport);
+    format.setProperty(containerMarginsProperty, QVariantMap{
+        {QStringLiteral("edges"), QVariantList{input.margins.top(), input.margins.right(), input.margins.bottom(), input.margins.left()}},
+        {QStringLiteral("auto_width"), true}});
+    format.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+    if (!flexItem) format.setPosition(input.floatSide == QStringLiteral("left") ? QTextFrameFormat::FloatLeft
+        : input.floatSide == QStringLiteral("right") ? QTextFrameFormat::FloatRight : QTextFrameFormat::InFlow);
+    return format;
+}
+
+inline ContainerLineInput containerBaseLine(const QJsonValue &value, qreal em) {
+    ContainerLineInput line;
+    if (!CompiledContent::present(value)) return line;
+    CompiledContent::containerLineHeight(value); const auto object = value.toObject();
+    if (object.contains(QStringLiteral("normal"))) line.mode = ContainerLineInput::Mode::Normal;
+    else if (object.contains(QStringLiteral("multiplier"))) {
+        line.mode = ContainerLineInput::Mode::Multiplier; line.value = object.value(QStringLiteral("multiplier")).toDouble();
+    } else {
+        line.mode = ContainerLineInput::Mode::Length; const auto length = object.value(QStringLiteral("length")).toObject();
+        line.value = length.value(QStringLiteral("value")).toDouble() * (length.value(QStringLiteral("unit")) == QStringLiteral("em") ? em : 1);
+    }
+    return line;
+}
+
+inline QJsonObject containerBaseTypography(const RenderContext &context) {
+    const auto line = context.baseContainerLineHeight;
+    const QString kind = line.mode == ContainerLineInput::Mode::Multiplier ? QStringLiteral("multiplier")
+        : line.mode == ContainerLineInput::Mode::Length ? QStringLiteral("length") : QStringLiteral("normal");
+    // This is the same pre-existing primary-strut policy constructor as the
+    // ordinary placeholder, applied to its parallel unbanded render context.
+    const qreal px = context.zeroFontContext ? 0 : context.pointSize * QFontMetricsF(QFont()).fontDpi() / 72;
+    return QJsonObject{{"kind", kind}, {"value", line.value}, {"owner_px", px}};
+}
+
+inline void reflowContainerTypography(QTextFrame *frame, const ContainerLineInput &inherited) {
+    for (auto it = frame->begin(); !it.atEnd(); ++it) {
+        if (it.currentFrame()) continue;
+        const auto block = it.currentBlock(); if (!block.isValid()) continue;
+        auto format = block.blockFormat();
+        if (!format.hasProperty(containerFlexProperty) || format.hasProperty(QTextFormat::LineHeight)) continue;
+        const auto value = format.property(containerFlexProperty); const auto backup = value.toMap();
+        CompiledContent::require(value.metaType().id() == QMetaType::QVariantMap && backup.size() == 4
+            && backup.value("capability").toString() == QStringLiteral("wikidict.container-flex-typography/1")
+            && backup.value("base_present").metaType().id() == QMetaType::Bool
+            && backup.value("base").metaType().id() == QMetaType::QVariantMap
+            && backup.value("owner_px").metaType().id() == QMetaType::Double);
+        const qreal owner = backup.value("owner_px").toDouble(); CompiledContent::require(std::isfinite(owner) && owner >= 0);
+        if (inherited.mode == ContainerLineInput::Mode::Inherit) {
+            if (backup.value("base_present").toBool()) format.setProperty(containerTypographyProperty, backup.value("base"));
+            else format.clearProperty(containerTypographyProperty);
+        } else {
+            const QString kind = inherited.mode == ContainerLineInput::Mode::Normal ? QStringLiteral("normal")
+                : inherited.mode == ContainerLineInput::Mode::Multiplier ? QStringLiteral("multiplier") : QStringLiteral("length");
+            format.setProperty(containerTypographyProperty, QVariantMap{{"kind", kind}, {"value", inherited.value}, {"owner_px", owner}});
+        }
+        QTextCursor(block).setBlockFormat(format);
+    }
+}
+
+inline bool hasResponsiveContainers(QTextDocument *document) {
+    const auto visit = [&](auto &&visit, QTextFrame *frame) -> bool {
+        if (frame->frameFormat().hasProperty(containerFlexProperty)) return true;
+        for (auto *child : frame->childFrames()) if (visit(visit, child)) return true;
+        return false;
+    };
+    return document && visit(visit, document->rootFrame());
+}
+
+inline void reflowContainers(QTextDocument *document, qreal viewportCssPixels) {
+    CompiledContent::require(document && std::isfinite(viewportCssPixels) && viewportCssPixels >= 0);
+    const auto visit = [&](auto &&visit, QTextFrame *frame, ContainerLineInput inherited) -> void {
+        auto format = frame->frameFormat();
+        if (format.hasProperty(containerSourceProperty)) {
+            const auto source = QJsonDocument::fromJson(format.property(containerSourceProperty).toByteArray());
+            CompiledContent::require(source.isObject());
+            const qreal em = format.property(containerFlexProperty).toMap().value(QStringLiteral("em")).toDouble();
+            if (format.hasProperty(containerFlexProperty)) {
+                const auto inputs = containerInputs(source.object(), viewportCssPixels, 1, em,
+                    document->property(SemanticHtml::imageDarkThemeProperty).toBool());
+                if (inputs.lineHeight.mode != ContainerLineInput::Mode::Inherit) inherited = inputs.lineHeight;
+            } else {
+                const auto style = CompiledContent::containerBlock(source.object()).value(QStringLiteral("style")).toObject();
+                const auto line = style.value(QStringLiteral("line_height")).toObject();
+                if (line.contains(QStringLiteral("normal"))) {
+                    inherited.mode = ContainerLineInput::Mode::Normal; inherited.value = 0;
+                }
+                else if (line.contains(QStringLiteral("multiplier"))) {
+                    inherited.mode = ContainerLineInput::Mode::Multiplier; inherited.value = line.value(QStringLiteral("multiplier")).toDouble();
+                } else if (line.contains(QStringLiteral("length"))) {
+                    // A nearer fixed height already has its normalized metric;
+                    // preserve that direct block policy and stop inheritance.
+                    inherited.mode = ContainerLineInput::Mode::Inherit;
+                }
+            }
+        }
+        if (format.hasProperty(containerFlexProperty)) {
+            const auto capability = document->documentLayout()->property("_wikidictContainerFlexCapability");
+            CompiledContent::require(capability.toString() == QStringLiteral("wikidict.container-flex/1"));
+            const auto source = QJsonDocument::fromJson(format.property(containerSourceProperty).toByteArray()).object();
+            auto next = containerFrameFormat(source, format.property(containerFlexProperty).toMap().value(QStringLiteral("em")).toDouble(),
+                document->property(SemanticHtml::imageDarkThemeProperty).toBool(), format.boolProperty(containerFlexItemProperty), viewportCssPixels);
+            next.setLayoutDirection(format.layoutDirection());
+            next.setProperty(QTextFormat::ObjectIndex, format.property(QTextFormat::ObjectIndex));
+            frame->setFrameFormat(next);
+        }
+        if (format.hasProperty(containerSourceProperty)) reflowContainerTypography(frame, inherited);
+        for (auto *child : frame->childFrames()) visit(visit, child, inherited);
+    };
+    visit(visit, document->rootFrame(), {});
+}
+
 template <typename InlineRenderer, typename FigureRenderer>
 Rendered render(const QJsonArray &parts, CompiledContent::Depth depth, RenderContext context,
                 InlineRenderer &inlineRenderer, FigureRenderer &figureRenderer, int &nextRun) {
@@ -479,7 +648,8 @@ inline QString placeholder(const QJsonObject &block, const Rendered &rendered, c
         {QStringLiteral("alignment"), context.alignment},
         {QStringLiteral("normal_body_em"), context.normalBodyEm},
         {QStringLiteral("legacy_vertical_scale"), context.legacyVerticalScale},
-        {QStringLiteral("context_points"), context.pointSize}};
+        {QStringLiteral("context_points"), context.pointSize},
+        {QStringLiteral("flex_item"), context.flexItem}};
     if (context.containerTypography) {
         const auto mode = context.containerLineHeight.mode;
         const QString kind = mode == ContainerLineInput::Mode::Multiplier ? QStringLiteral("multiplier")
@@ -490,6 +660,8 @@ inline QString placeholder(const QJsonObject &block, const Rendered &rendered, c
         metadata.insert(QStringLiteral("owner_zero"), context.zeroFontContext);
         if (context.cellLineInheritance) metadata.insert(QStringLiteral("cell_line_inherited"), true);
     }
+    if (context.responsiveContainerTypography) metadata.insert(QStringLiteral("responsive_typography"), QJsonObject{
+        {"base", context.baseContainerTypography ? QJsonValue(containerBaseTypography(context)) : QJsonValue(QJsonValue::Null)}});
     const auto payload = QJsonDocument(metadata).toJson(QJsonDocument::Compact)
         .toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
     // The caller supplies the existing block's role/prefix/indent exactly once.
@@ -635,6 +807,34 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 paragraph.setBlockFormat(format);
             }
         }
+        const auto restoreTypography = item.metadata.value(QStringLiteral("responsive_typography"));
+        if (CompiledContent::present(restoreTypography)) {
+            CompiledContent::require(restoreTypography.isObject() && restoreTypography.toObject().size() == 1
+                && restoreTypography.toObject().contains(QStringLiteral("base")));
+            const auto baseValue = restoreTypography.toObject().value(QStringLiteral("base"));
+            CompiledContent::require(baseValue.isNull() || baseValue.isObject());
+            qreal owner = zeroOwner ? 0 : contextFont.pointSizeF() > 0
+                ? contextFont.pointSizeF() * QFontMetricsF(contextFont).fontDpi() / 72 : contextFont.pixelSize();
+            CompiledContent::require(std::isfinite(owner) && owner >= 0);
+            QVariantMap base;
+            if (baseValue.isObject()) {
+                const auto object = baseValue.toObject();
+                CompiledContent::require(object.size() == 3 && object.value("kind").isString() && object.value("value").isDouble()
+                    && object.value("owner_px").isDouble());
+                const auto kind = object.value("kind").toString();
+                CompiledContent::require((kind == "normal" || kind == "multiplier" || kind == "length")
+                    && std::isfinite(object.value("value").toDouble()) && object.value("value").toDouble() >= 0);
+                base = QVariantMap{{"kind", kind}, {"value", object.value("value").toDouble()}, {"owner_px", owner}};
+            }
+            for (auto block = temporary.begin(); block.isValid(); block = block.next()) {
+                auto format = block.blockFormat();
+                if (SemanticHtml::cellLineHeightOwner(block) || format.hasProperty(SemanticHtml::tableLineHeightProperty)
+                    || format.hasProperty(QTextFormat::LineHeight)) continue;
+                format.setProperty(containerFlexProperty, QVariantMap{{"capability", QStringLiteral("wikidict.container-flex-typography/1")},
+                    {"base_present", baseValue.isObject()}, {"base", base}, {"owner_px", owner}});
+                QTextCursor(block).setBlockFormat(format);
+            }
+        }
         // Fragment copying retains explicit formats, not the temporary
         // document's default font. Keep inherited weight and tracking concrete
         // across this boundary, including markers expanded in a later pass.
@@ -682,7 +882,7 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 && insertion.selectedText() == QString(QChar::ObjectReplacementCharacter)
                 && insertion.block().position() == insertion.selectionStart() && insertion.block().length() == 2);
             const QPointer<QTextFrame> parent(insertion.currentFrame());
-            auto format = plainContainerFormat(sourceBlock, em / scale, effectiveDark);
+            auto format = containerFrameFormat(sourceBlock, em / scale, effectiveDark, item.metadata.value(QStringLiteral("flex_item")).toBool());
             const bool columns = format.hasProperty(containerColumnsProperty);
             const bool positioned = format.hasProperty(containerPositioningProperty);
             QPointer<QTextTable> containingTable(insertion.currentTable());
@@ -822,6 +1022,12 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 const auto direction = insertion.blockFormat().layoutDirection();
                 format.setLayoutDirection(direction == Qt::LayoutDirectionAuto
                     ? document->defaultTextOption().textDirection() : direction);
+            }
+            if (format.hasProperty(containerFlexProperty)) {
+                CompiledContent::require(layout->property("_wikidictContainerFlexCapability").toString()
+                    == QStringLiteral("wikidict.container-flex/1"));
+                const auto direction = insertion.blockFormat().layoutDirection();
+                format.setLayoutDirection(direction == Qt::LayoutDirectionAuto ? document->defaultTextOption().textDirection() : direction);
             }
             const QPointer<QTextFrame> frame(insertion.insertFrame(format));
             CompiledContent::require(guard && layout && document->documentLayout() == layout && parent && frame
