@@ -10939,4 +10939,171 @@ print('ACTUAL_HELPER_IMPORT_OK')
             self.assertEqual(result.stdout.strip(),'ACTUAL_HELPER_IMPORT_OK')
             self.assertFalse(Path(bytecode).exists())
 
+
+
+class FigureBorrowDigestReuseTests(unittest.TestCase):
+    setUp = CompleteParentTupleReplayTests.setUp
+    selection = ImmutableCaptureBorrowTests.selection
+
+    def verified_guard(self):
+        import copy
+        result = b.validated_figure_tuple(self.paths, self.fixture.wiki, self.fixture.date)
+        key = tuple(sorted((name, str(path.absolute())) for name, path in self.paths.items()))
+        guard = copy.deepcopy(b._FIGURE_TUPLE_REPLAYS[key][0])
+        return guard, dict(next(iter(result.values()))[1])
+
+    def test_guarded_borrow_eliminates_duplicate_hash_calls_and_bytes_with_identical_input_maps(self):
+        guard, inventory = self.verified_guard()
+        covered = {Path(path) for path in guard[1]}
+        roles = self.selection(self.fixture.root/'native-reuse')
+        cold = self.selection(self.fixture.root/'native-cold')
+        self.assertFalse(covered & set(roles.inputs))
+        original = b.sha256_file
+        cold_reads, reused_reads = [], []
+        def counted(rows, path):
+            if path in covered:
+                rows.append((path, path.stat().st_size))
+            return original(path)
+        with patch.object(b, 'sha256_file', side_effect=lambda path: counted(cold_reads, path)):
+            for path in sorted(covered):
+                cold.bind_input(path)
+        hashes = {name: guard[1][str(path)][1]['sha256'] for name, path in self.paths.items()}
+        with patch.object(b, 'sha256_file', side_effect=lambda path: counted(reused_reads, path)), \
+                patch.object(b, 'copy_verified_snapshot', side_effect=AssertionError('Borrowed Figure copy')):
+            pinned = b.pinned_auxiliary_snapshots(self.paths, hashes,
+                self.fixture.root/'borrowed-workspace', borrower=roles)
+        self.assertEqual(pinned, self.paths)
+        self.assertEqual(len(cold_reads), len(covered))
+        self.assertEqual(sum(size for _, size in cold_reads), sum(row[1]['size'] for row in guard[1].values()))
+        self.assertGreater(sum(size for _, size in cold_reads), 0)
+        self.assertEqual(reused_reads, [])
+        for path in covered:
+            self.assertEqual(roles.inputs[path], cold.inputs[path])
+            self.assertEqual(roles.input_identities[path], cold.input_identities[path])
+        self.assertIn(self.args.sql[0], covered)
+        self.assertIn(self.parent, roles.borrowed_capture_directories)
+        self.assertIn(self.child, roles.borrowed_capture_directories)
+        roles.require_unchanged()
+
+    def test_uncovered_and_unknown_fingerprint_inputs_keep_ordinary_hashing(self):
+        import copy
+        guard, inventory = self.verified_guard()
+        path = self.paths['figure-sizing-raw']
+        original = b.sha256_file
+        for mode in ('uncovered', 'future-schema', 'invalid-size', 'invalid-sha1'):
+            with self.subTest(mode=mode):
+                selected = copy.deepcopy(guard)
+                if mode == 'uncovered':
+                    del selected[1][str(path)]
+                elif mode == 'future-schema':
+                    selected[1][str(path)][1]['future'] = True
+                elif mode == 'invalid-size':
+                    selected[1][str(path)][1]['size'] = True
+                else:
+                    selected[1][str(path)][1]['sha1'] = 'invalid'
+                roles = self.selection(self.fixture.root/('native-'+mode))
+                with patch.object(b, 'sha256_file', wraps=original) as hashed:
+                    roles.bind_capture(self.args.output, inventory, figure_guard=selected)
+                self.assertEqual([Path(call.args[0]) for call in hashed.call_args_list].count(path), 1)
+                self.assertEqual(roles.input_identities[path]['sha256'], inventory[path.name])
+                roles.require_unchanged()
+
+    def test_uncovered_digest_failure_does_not_publish_reused_entries(self):
+        guard, inventory = self.verified_guard()
+        path = self.paths['figure-sizing-raw']
+        del guard[1][str(path)]
+        inventory[path.name] = '0'*64
+        roles = self.selection(self.fixture.root/'native-bad-uncovered')
+        covered = {Path(name) for name in guard[1]}
+        self.assertFalse(covered & set(roles.inputs))
+        with self.assertRaisesRegex(ValueError, 'differs from validated bytes'):
+            roles.bind_capture(self.args.output, inventory, figure_guard=guard)
+        self.assertFalse(covered & set(roles.inputs))
+        self.assertFalse(covered & set(roles.input_identities))
+
+    def test_guarded_capture_rejects_changed_bytes_replacement_symlink_mode_membership_and_sql(self):
+        path = self.paths['figure-sizing-raw']
+        for mode in ('bytes', 'replacement', 'symlink', 'mode', 'membership', 'sql'):
+            with self.subTest(mode=mode):
+                b._FIGURE_TUPLE_REPLAYS.clear()
+                guard, inventory = self.verified_guard()
+                roles = self.selection(self.fixture.root/('native-before-'+mode))
+                covered = {Path(name) for name in guard[1]}
+                selected = self.args.sql[0] if mode == 'sql' else path
+                raw, permissions = selected.read_bytes(), stat.S_IMODE(selected.stat().st_mode)
+                extra = self.args.output/'unrecorded.raw'
+                replacement = self.fixture.root/'replacement.raw'
+                try:
+                    if mode in ('bytes', 'sql'):
+                        selected.write_bytes(raw+b' ')
+                    elif mode == 'replacement':
+                        replacement.write_bytes(raw); replacement.chmod(permissions); replacement.replace(selected)
+                    elif mode == 'symlink':
+                        replacement.write_bytes(raw); selected.unlink(); selected.symlink_to(replacement)
+                    elif mode == 'mode':
+                        selected.chmod(permissions ^ stat.S_IXUSR)
+                    else:
+                        extra.write_bytes(b'unrecorded')
+                    with self.assertRaises((ValueError, OSError)):
+                        roles.bind_capture(self.args.output, inventory, figure_guard=guard)
+                    self.assertFalse(covered & set(roles.inputs))
+                finally:
+                    if selected.is_symlink(): selected.unlink()
+                    selected.write_bytes(raw); selected.chmod(permissions)
+                    extra.unlink(missing_ok=True); replacement.unlink(missing_ok=True)
+
+    def test_changes_during_uncovered_hashing_cannot_publish_reused_guard_authority(self):
+        uncovered = self.paths['figure-sizing-raw']
+        guarded = self.args.sql[0]
+        original_hash = b.sha256_file
+        for mode in ('sql-bytes', 'sql-replacement', 'membership', 'helper'):
+            with self.subTest(mode=mode):
+                b._FIGURE_TUPLE_REPLAYS.clear()
+                guard, inventory = self.verified_guard()
+                del guard[1][str(uncovered)]
+                roles = self.selection(self.fixture.root/('native-during-'+mode))
+                covered = {Path(name) for name in guard[1]}
+                raw, permissions = guarded.read_bytes(), stat.S_IMODE(guarded.stat().st_mode)
+                extra = self.args.output/'unrecorded-during.raw'
+                replacement = self.fixture.root/'sql-replacement.raw'
+                changed = False
+                def hashed(path):
+                    nonlocal changed
+                    value = original_hash(path)
+                    if path == uncovered:
+                        changed = True
+                        if mode == 'sql-bytes': guarded.write_bytes(raw+b' ')
+                        elif mode == 'sql-replacement':
+                            replacement.write_bytes(raw); replacement.chmod(permissions); replacement.replace(guarded)
+                        elif mode == 'membership': extra.write_bytes(b'unrecorded')
+                    return value
+                producer = self.figures.producer
+                def observed_producer():
+                    return 'changed helper' if mode == 'helper' and changed else producer()
+                try:
+                    with patch.object(b, 'sha256_file', side_effect=hashed), \
+                            patch.object(self.figures, 'producer', side_effect=observed_producer):
+                        with self.assertRaises((ValueError, OSError)):
+                            roles.bind_capture(self.args.output, inventory, figure_guard=guard)
+                    self.assertTrue(changed)
+                    self.assertFalse(covered & set(roles.inputs))
+                    self.assertFalse(covered & set(roles.input_identities))
+                finally:
+                    guarded.write_bytes(raw); guarded.chmod(permissions)
+                    extra.unlink(missing_ok=True); replacement.unlink(missing_ok=True)
+
+    def test_reused_entries_remain_bound_by_normal_dispatch_mutation_checks(self):
+        guard, inventory = self.verified_guard()
+        roles = self.selection(self.fixture.root/'native-after')
+        roles.bind_capture(self.args.output, inventory, figure_guard=guard)
+        roles.require_unchanged()
+        source = self.args.sql[0]
+        original = source.read_bytes()
+        source.write_bytes(original+b' ')
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            roles.require_unchanged()
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            roles.bind_capture(self.args.output, inventory, figure_guard=guard)
+
+
 if __name__=='__main__':unittest.main()

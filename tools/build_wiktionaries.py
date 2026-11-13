@@ -4485,12 +4485,38 @@ class RetainedNativeToolRoles:
                 raise ValueError('Borrowed capture directory changed')
             guards[directory]=guard
         self.borrowed_capture_directories=guards
+        reused={}
         for path,digest in expected.items():
-            if self.bind_input(path)['sha256']!=digest:
+            proof=identities.get(str(path)) if figure_guard is not None else None
+            identity=None if proof is None else proof[1]
+            if (path not in self.inputs and isinstance(identity,dict)
+                    and set(identity)=={'size','sha1','sha256'}
+                    and type(identity['size']) is int and identity['size']==proof[0][1][6]
+                    and all(isinstance(identity[key],str) and re.fullmatch(pattern,identity[key])
+                            for key,pattern in (('sha1','[0-9a-f]{40}'),('sha256','[0-9a-f]{64}')))):
+                # The completed Figure replay already hashed these exact bytes.
+                # Keep the normal borrower guard; publish only after final checks.
+                if (not path.is_absolute() or any(parent.is_symlink() for parent in (path,*path.parents))
+                        or _figure_replay_identity(path)!=proof[0]):
+                    raise ValueError('Borrowed Figure input changed before binding')
+                actual=dict(path=str(path),bytes=identity['size'],
+                    mode=stat.S_IMODE(proof[0][1][2]),sha256=identity['sha256'])
+                reused[path]=(proof[0],actual)
+            else:
+                actual=self.bind_input(path)
+            if actual['sha256']!=digest:
                 raise ValueError('Borrowed capture input differs from validated bytes')
         if figure_guard is not None and (figure.producer(),figure.metadata.producer(),figure.site_info.producer())!=runtime:
             raise ValueError('Borrowed Figure helper changed while binding')
         self.require_unchanged()
+        for path,(stamp,_) in reused.items():
+            if (any(parent.is_symlink() for parent in (path,*path.parents))
+                    or _figure_replay_identity(path)!=stamp):
+                raise ValueError('Borrowed Figure input changed during binding')
+        for path,(stamp,identity) in reused.items():
+            value=stamp[1]
+            self.inputs[path]=(value[0],value[1],value[2],value[6],value[7],value[8])
+            self.input_identities[path]=identity
 
     def require_inputs_unchanged(self):
         context=(getattr(self, 'initial_sealed_context', None) or getattr(self,'_closed_native_context',None))
