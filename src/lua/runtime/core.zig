@@ -2852,8 +2852,30 @@ pub const Context = struct {
                 }
             };
         }
-        const canonical = self.canonicalModuleName(module_id, requested) orelse return;
-        try self.rawSetRuntimeBookkeeping(loaded, .{ .string = canonical }, value);
+        if (self.module_name) |name| if (name(self.module_lookup_ctx, module_id)) |canonical| {
+            try self.rawSetRuntimeBookkeeping(loaded, .{ .string = canonical }, value);
+            return;
+        };
+        try self.packageLoadedRequestedSet(requested orelse return, value);
+    }
+
+    fn packageLoadedRequestedSet(self: *Context, requested: []const u8, value: Value) !void {
+        const loaded = self.package_loaded orelse return;
+        // Match rawSet's destination: slots retain no key, choices replace
+        // their key, and existing map entries retain theirs (including nil).
+        const suspended = suspendModuleTemplateEffectProbe();
+        defer resumeModuleTemplateEffectProbe(suspended);
+        const key = Value{ .string = requested };
+        const retained: Value = blk: {
+            if (value == .nil or loaded.slotForKey(key) != null) break :blk key;
+            for (loaded.choices) |cell| {
+                if (cell.value != .nil and rawEqual(cell.key, key)) break :blk cell.key;
+            }
+            if (loaded.map.getPtrContext(key, .{}) != null) break :blk key;
+            // The request may belong to a shorter-lived loadData child/caller.
+            break :blk .{ .string = try self.ownString(requested) };
+        };
+        try self.rawSetRuntimeBookkeeping(loaded, retained, value);
     }
 
     pub fn deferStaticRequireRef(self: *Context, module_id: u32, out: *Value) ?*const bool {
@@ -3639,7 +3661,7 @@ pub const Context = struct {
                 if (std.mem.eql(u8, canonical, raw_name)) return;
             if (rawGetRuntimeBookkeeping(loaded, .{ .string = raw_name })) |existing|
                 if (rawEqual(existing, value)) return;
-            try self.target.rawSetRuntimeBookkeeping(loaded, .{ .string = raw_name }, value);
+            try self.target.packageLoadedRequestedSet(raw_name, value);
         }
 
         fn applyTemplateOverrides(
@@ -4610,8 +4632,8 @@ pub const Context = struct {
                 try self.rawSetRuntimeBookkeeping(loaded, .{ .string = raw_name }, .nil);
         };
         const value = try self.loadModuleMode(module_id, raw_name, self.requireMissMustReload(module_id, requested_cache, canonical_cache));
-        if (!canonical_request) if (self.package_loaded) |loaded|
-            try self.rawSetRuntimeBookkeeping(loaded, .{ .string = raw_name }, value);
+        if (!canonical_request)
+            try self.packageLoadedRequestedSet(raw_name, value);
         if (self.moduleState(module_id)) |state| state.deferred_require_visibility = false;
         try self.observeRequiredTemplateValue(module_id, raw_name, value);
         return value;
@@ -11392,5 +11414,236 @@ test "ordinary promotion captures dependency cycles before sealing and retains d
             try std.testing.expectEqualSlices(u32, &.{1}, mutations);
             try std.testing.expectEqual(@as(f64, 2), captured.value.table.rawGet(.{ .string = "value" }).?.number);
         }
+    }
+}
+
+test "module template alias keys outlive requested scratch in promotion and instantiation" {
+    const F = struct {
+        const canonical: []const u8 = "Module:AliasLifetime";
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) canonical else null;
+        }
+        fn root(_: *Context, _: Captures, _: []const Value) ![]const Value {
+            return error.TestUnexpectedResult;
+        }
+    };
+    for ([_]bool{ false, true }) |promotion| {
+        var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer source_arena.deinit();
+        var target_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer target_arena.deinit();
+        var source = try Context.initProgram(source_arena.allocator(), 0, 1);
+        defer source.deinit();
+        var target = try Context.initProgram(target_arena.allocator(), 0, 1);
+        defer target.deinit();
+        const roots = [_]FunctionFn{stabilize(F.root)};
+        source.module_root_entries = &roots;
+        target.module_root_entries = &roots;
+        source.module_name = F.name;
+        target.module_name = F.name;
+        var eligible = [_]bool{true};
+        target.module_template_eligible = &eligible;
+        (try source.ensureModuleState(0)).value = .{ .number = 42 };
+        const shape = Shape{ .keys = .{ .strings = &.{} }, .field_count = 0, .choice_count = 1 };
+        target.package_loaded = try target.newShapedTable(&shape);
+        const choice_key = try target.ownString("Alias:ChoiceLifetime");
+        try target.package_loaded.?.rawSetChoice(0, .{ .string = choice_key }, .{ .number = 41 });
+        var clone = Context.ModuleTemplateClone{
+            .source = &source,
+            .target = &target,
+            .promotion = promotion,
+        };
+        defer clone.deinit();
+        {
+            var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer scratch.deinit();
+            const first = try scratch.allocator().dupe(u8, "Alias:FirstLifetime");
+            const second = try scratch.allocator().dupe(u8, "Alias:SecondLifetime");
+            const choice_alias = try scratch.allocator().dupe(u8, "Alias:ChoiceLifetime");
+            const initial = try clone.cloneModule(0, first);
+            const reused = try clone.cloneModule(0, second);
+            const changed_choice = try clone.cloneModule(0, choice_alias);
+            try std.testing.expect(rawEqual(initial, reused));
+            try std.testing.expect(rawEqual(initial, changed_choice));
+            try std.testing.expect(target.package_loaded.?.choices[0].key.string.ptr == choice_key.ptr);
+            try std.testing.expect(target.package_loaded.?.choices[0].key.string.ptr != choice_alias.ptr);
+            var iterator = target.package_loaded.?.iterator();
+            var alias_count: usize = 0;
+            while (iterator.next()) |entry| {
+                if (entry.key_ptr.* != .string) continue;
+                const key = entry.key_ptr.string;
+                if (std.mem.startsWith(u8, key, "Alias:")) {
+                    try std.testing.expect(key.ptr != first.ptr and key.ptr != second.ptr and key.ptr != choice_alias.ptr);
+                    alias_count += 1;
+                } else if (std.mem.eql(u8, key, F.canonical)) {
+                    try std.testing.expect(key.ptr == F.canonical.ptr);
+                }
+            }
+            try std.testing.expectEqual(@as(usize, 3), alias_count);
+            @memset(first, '!');
+            @memset(second, '?');
+            @memset(choice_alias, '%');
+            try std.testing.expect(rawEqual(initial, target.package_loaded.?.rawGet(.{ .string = "Alias:ChoiceLifetime" }).?));
+            try std.testing.expect(rawEqual(initial, target.package_loaded.?.rawGet(.{ .string = "Alias:FirstLifetime" }).?));
+            try std.testing.expect(rawEqual(initial, target.package_loaded.?.rawGet(.{ .string = "Alias:SecondLifetime" }).?));
+        }
+        const capacity_before = target.package_loaded.?.map.capacity();
+        for (0..128) |index| {
+            var buffer: [64]u8 = undefined;
+            const alias = try std.fmt.bufPrint(&buffer, "Alias:Grow-{d}", .{index});
+            _ = try clone.cloneModule(0, alias);
+            @memset(alias, '#');
+        }
+        try std.testing.expect(target.package_loaded.?.map.capacity() > capacity_before);
+        for ([_][]const u8{ F.canonical, "Alias:FirstLifetime", "Alias:SecondLifetime", "Alias:ChoiceLifetime", "Alias:Grow-0", "Alias:Grow-127" }) |name| {
+            try std.testing.expectEqual(@as(f64, 42), target.package_loaded.?.rawGet(.{ .string = name }).?.number);
+            try std.testing.expect(rawEqual(target.moduleStateConst(0).?.value.?, target.package_loaded.?.rawGet(.{ .string = name }).?));
+        }
+    }
+}
+
+test "ordinary require owns aliases and requested canonical fallback without changing cache identity" {
+    const F = struct {
+        const canonical: []const u8 = "Module:OwnedAlias";
+        const alias: []const u8 = "Alias:OwnedAlias";
+        fn lookup(_: ?*const anyopaque, requested_name: []const u8) ?u32 {
+            return if (std.mem.eql(u8, requested_name, canonical) or std.mem.eql(u8, requested_name, alias)) 0 else null;
+        }
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) canonical else null;
+        }
+        fn root(ctx: *Context, _: Captures, _: []const Value) ![]const Value {
+            const calls: f64 = if (ctx.getGlobal(0) == .number) ctx.getGlobal(0).number else 0;
+            try ctx.setGlobal(0, .{ .number = calls + 1 });
+            const result = try std.heap.smp_allocator.alloc(Value, 1);
+            result[0] = .{ .number = 42 };
+            return result;
+        }
+    };
+    for ([_]bool{ false, true }) |has_canonical_name| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var ctx = try Context.initProgram(arena.allocator(), 1, 1);
+        defer ctx.deinit();
+        const roots = [_]FunctionFn{stabilize(F.root)};
+        ctx.module_root_entries = &roots;
+        ctx.module_lookup = F.lookup;
+        ctx.module_name = if (has_canonical_name) F.name else null;
+        ctx.package_loaded = try ctx.newTable();
+        {
+            var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer scratch.deinit();
+            const requested = try scratch.allocator().dupe(u8, F.alias);
+            try std.testing.expectEqual(@as(f64, 42), (try ctx.requireByName(requested)).number);
+            var iterator = ctx.package_loaded.?.iterator();
+            var found_alias = false;
+            while (iterator.next()) |entry| {
+                if (entry.key_ptr.* == .string and std.mem.eql(u8, entry.key_ptr.string, F.alias)) {
+                    try std.testing.expect(entry.key_ptr.string.ptr != requested.ptr);
+                    found_alias = true;
+                }
+            }
+            try std.testing.expect(found_alias);
+            @memset(requested, '!');
+            try std.testing.expectEqual(@as(f64, 42), (try ctx.requireByName(F.alias)).number);
+        }
+        const capacity_before = ctx.package_loaded.?.map.capacity();
+        for (0..128) |index| {
+            var buffer: [64]u8 = undefined;
+            const key = try std.fmt.bufPrint(&buffer, "unrelated-{d}", .{index});
+            try ctx.packageLoadedRequestedSet(key, .{ .number = @floatFromInt(index) });
+            @memset(key, '#');
+        }
+        try std.testing.expect(ctx.package_loaded.?.map.capacity() > capacity_before);
+        try std.testing.expectEqual(@as(f64, 42), (try ctx.requireByName(F.alias)).number);
+        if (has_canonical_name) {
+            try std.testing.expect(rawEqual(try ctx.requireByName(F.canonical), try ctx.requireByName(F.alias)));
+        }
+        try std.testing.expectEqual(@as(f64, 1), ctx.getGlobal(0).number);
+        try std.testing.expectEqual(@as(f64, 42), ctx.moduleStateConst(0).?.value.?.number);
+    }
+}
+
+test "alias ownership allocation failure preserves promotion rollback and existing cache keys" {
+    const F = struct {
+        const canonical: []const u8 = "Module:AliasAllocation";
+        fn name(_: ?*const anyopaque, id: u32) ?[]const u8 {
+            return if (id == 0) canonical else null;
+        }
+        fn root(_: *Context, _: Captures, _: []const Value) ![]const Value {
+            return error.TestUnexpectedResult;
+        }
+    };
+    const saved_failure = module_template_allocation_failed;
+    defer module_template_allocation_failed = saved_failure;
+    for ([_]bool{ false, true }) |upstream| {
+        module_template_allocation_failed = false;
+        var source_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer source_arena.deinit();
+        var target_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer target_arena.deinit();
+        const target_allocator = target_arena.allocator();
+        var target = try Context.initProgram(target_allocator, 0, 1);
+        defer target.deinit();
+        target.useContextAllocatorForStrings();
+        var source = try Context.initProgram(source_arena.allocator(), 0, 1);
+        defer source.deinit();
+        const roots = [_]FunctionFn{stabilize(F.root)};
+        target.module_root_entries = &roots;
+        source.module_root_entries = &roots;
+        target.module_name = F.name;
+        source.module_name = F.name;
+        var eligible = [_]bool{false};
+        var rejected = [_]bool{false};
+        target.module_template_eligible = &eligible;
+        target.module_template_rejected = &rejected;
+        source.module_template_eligible = &eligible;
+        source.module_template_rejected = &rejected;
+        source.module_template_context = &target;
+        (try source.ensureModuleState(0)).value = .{ .number = 42 };
+        (try target.ensureModuleState(0)).value = .{ .number = 42 };
+        const keys = [_][]const u8{ F.canonical, "Alias:StaticNil" };
+        const shape = Shape{ .keys = .{ .strings = &keys }, .field_count = keys.len, .choice_count = 1 };
+        target.package_loaded = try target.newShapedTable(&shape);
+        try target.packageLoadedModuleSet(0, null, .{ .number = 42 });
+        try target.packageLoadedRequestedSet("Alias:Existing", .{ .number = 7 });
+        const choice_key = try target.ownString("Alias:ChoiceExisting");
+        try target.package_loaded.?.rawSetChoice(0, .{ .string = choice_key }, .{ .number = 10 });
+        try target.packageLoadedRequestedSet("Alias:Tombstone", .{ .number = 11 });
+        try target.packageLoadedRequestedSet("Alias:Tombstone", .nil);
+        try std.testing.expect(target.package_loaded.?.map.getPtrContext(.{ .string = "Alias:Tombstone" }, .{}) != null);
+        var failing = std.testing.FailingAllocator.init(target_allocator, .{ .fail_index = 0 });
+        target.allocator = failing.allocator();
+        defer target.allocator = target_allocator;
+        try target.packageLoadedModuleSet(0, null, .{ .number = 42 });
+        try target.packageLoadedRequestedSet("Alias:Existing", .{ .number = 8 });
+        try target.packageLoadedRequestedSet("Alias:StaticNil", .{ .number = 12 });
+        try target.packageLoadedRequestedSet("Alias:Tombstone", .{ .number = 13 });
+        var choice_request = "Alias:ChoiceExisting".*;
+        try target.packageLoadedRequestedSet(&choice_request, .{ .number = 14 });
+        @memset(&choice_request, '!');
+        try std.testing.expect(target.package_loaded.?.choices[0].key.string.ptr == choice_key.ptr);
+        try std.testing.expectEqual(@as(f64, 12), target.package_loaded.?.rawGet(.{ .string = "Alias:StaticNil" }).?.number);
+        try std.testing.expectEqual(@as(f64, 13), target.package_loaded.?.rawGet(.{ .string = "Alias:Tombstone" }).?.number);
+        try std.testing.expectEqual(@as(f64, 14), target.package_loaded.?.rawGet(.{ .string = "Alias:ChoiceExisting" }).?.number);
+        try target.packageLoadedRequestedSet("Alias:Absent", .nil);
+        try std.testing.expectEqual(@as(f64, 8), target.package_loaded.?.rawGet(.{ .string = "Alias:Existing" }).?.number);
+        const count_before = target.package_loaded.?.map.count();
+        try std.testing.expectError(error.OutOfMemory, target.packageLoadedRequestedSet("Alias:Fresh", .{ .number = 9 }));
+        try std.testing.expectEqual(count_before, target.package_loaded.?.map.count());
+        try std.testing.expect(target.package_loaded.?.rawGet(.{ .string = "Alias:Fresh" }) == null);
+        try std.testing.expect(!moduleTemplateAllocationFailed());
+        if (upstream) {
+            try std.testing.expectError(error.OutOfMemory, source.promoteModuleTemplateUpstream(0, "Alias:Fresh"));
+        } else {
+            try std.testing.expectError(error.OutOfMemory, source.promoteModuleTemplate(0, "Alias:Fresh"));
+        }
+        try std.testing.expect(moduleTemplateAllocationFailed());
+        try std.testing.expect(!eligible[0] and rejected[0]);
+        try std.testing.expect(target.moduleStateConst(0).?.value == null);
+        try std.testing.expect(target.package_loaded.?.rawGet(.{ .string = F.canonical }) == null);
+        try std.testing.expect(target.package_loaded.?.rawGet(.{ .string = "Alias:Fresh" }) == null);
+        try std.testing.expectEqual(@as(f64, 8), target.package_loaded.?.rawGet(.{ .string = "Alias:Existing" }).?.number);
+        try std.testing.expectEqual(@as(f64, 42), source.moduleStateConst(0).?.value.?.number);
     }
 }
