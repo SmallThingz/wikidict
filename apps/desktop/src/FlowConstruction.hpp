@@ -37,6 +37,7 @@ struct RenderContext {
     QJsonObject captionLinkPaint;
     bool computedCellTraits = false;
     bool cellLineInheritance = false;
+    bool ordinaryCellContainers = false;
     int contentDepth = 0;
     bool inReference = false;
     QHash<QString, bool> inlineTableAudioOwners;
@@ -253,6 +254,7 @@ inline constexpr int containerPhysicalEdgesProperty = QTextFormat::UserProperty 
 inline constexpr int containerMarginsProperty = QTextFormat::UserProperty + 0x57e9;
 inline constexpr int containerAutoMarginsProperty = QTextFormat::UserProperty + 0x57ea;
 inline constexpr int containerScrollportProperty = QTextFormat::UserProperty + 0x57eb;
+inline constexpr int containerFixedFloatProperty = QTextFormat::UserProperty + 0x57ec;
 inline void columnsContent(const QJsonObject &owned, bool allowTableCaptionMedia = false) {
     const auto children = owned.value(QStringLiteral("blocks")).toArray();
     for (const auto &childValue : children) {
@@ -293,8 +295,19 @@ inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal nor
     const auto owned = CompiledContent::containerBlock(block);
     const auto input = containerInputs(block, 0, 1, normalBodyCssPixels, effectiveDark);
     const auto &style = input.effectiveStyle;
+    const bool fixedFloat = !input.floatSide.isEmpty();
+    if (fixedFloat) {
+        const auto unit = style.value(QStringLiteral("width")).toObject()
+            .value(QStringLiteral("length")).toObject().value(QStringLiteral("unit"));
+        CompiledContent::require(input.width.mode == ContainerWidthInput::Mode::Length
+            && (unit == QStringLiteral("px") || unit == QStringLiteral("em"))
+            && !input.maximumWidth.authored
+            && !input.heightAuthored && !input.minimumHeightAuthored && !input.columnCount
+            && !input.relativeAuto && !input.localScrollport && !input.marginValuesAuthored
+            && input.margins == QMarginsF());
+    }
     CompiledContent::require(!CompiledContent::present(style.value(QStringLiteral("screen_max_width")))
-        && input.layout == QStringLiteral("flow") && input.floatSide.isEmpty() && !input.flexNone
+        && input.layout == QStringLiteral("flow") && !input.flexNone
         && (input.maximumWidth.mode == ContainerWidthInput::Mode::None || input.marginValuesAuthored || input.localScrollport)
         && input.width.mode != ContainerWidthInput::Mode::FitContent);
     const bool adjoining = input.margins.top() != 0 || input.margins.bottom() != 0
@@ -327,7 +340,11 @@ inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal nor
     const int clear = input.clear == QStringLiteral("left") ? 1 : input.clear == QStringLiteral("right") ? 2
         : input.clear == QStringLiteral("both") ? 3 : 0;
     format.setProperty(containerClearProperty, clear);
-    format.setPosition(QTextFrameFormat::InFlow);
+    format.setPosition(!fixedFloat ? QTextFrameFormat::InFlow : input.floatSide == QStringLiteral("left")
+        ? QTextFrameFormat::FloatLeft : QTextFrameFormat::FloatRight);
+    if (fixedFloat) format.setProperty(containerFixedFloatProperty, QVariantMap{
+        {QStringLiteral("capability"), QStringLiteral("wikidict.container-fixed-float/1")},
+        {QStringLiteral("em"), normalBodyCssPixels}});
     format.setMargin(0);
     if (adjoining) {
         format.setProperty(containerMarginsProperty, QVariantMap{
@@ -742,9 +759,34 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                     }
                     return false;
                 };
-                CompiledContent::require((columns || positioned || captionContent() || typedCell()) && cell.isValid());
+                const auto ordinaryCell = [&] {
+                    if (!cell.isValid() || !parent || containingTable->document() != document
+                        || document->object(containingTable->objectIndex()) != containingTable
+                        || containingTable->format().stringProperty(SemanticHtml::tableBoxOwnerProperty)
+                            != QStringLiteral("wikidict.table-box/1")
+                        || containingTable->format().hasProperty(QTextFormat::UserProperty + 0x57a0)
+                        || containingTable->format().position() != QTextFrameFormat::InFlow
+                        || layout->property("_wikidictContainerFixedFloatCapability").toString()
+                            != QStringLiteral("wikidict.container-fixed-float/1")) return false;
+                    for (auto *owner = parent.data(); owner != containingTable; owner = owner->parentFrame()) {
+                        if (!owner || owner->document() != document || document->object(owner->objectIndex()) != owner)
+                            return false;
+                        const auto parentFormat = owner->frameFormat();
+                        if (parentFormat.stringProperty(containerPolicyProperty) != QStringLiteral("wikidict.plain-container/1")
+                            || parentFormat.hasProperty(containerColumnsProperty)
+                            || parentFormat.hasProperty(containerPositioningProperty)
+                            || parentFormat.hasProperty(containerScrollportProperty)
+                            || (parentFormat.position() != QTextFrameFormat::InFlow
+                                && !parentFormat.hasProperty(containerFixedFloatProperty))) return false;
+                    }
+                    return true;
+                };
+                CompiledContent::require((columns || positioned || captionContent() || typedCell() || ordinaryCell()) && cell.isValid());
                 sourceRow = cell.row(); sourceColumn = cell.column();
             }
+            if (format.hasProperty(containerFixedFloatProperty))
+                CompiledContent::require(containingTable && layout->property("_wikidictContainerFixedFloatCapability").toString()
+                    == QStringLiteral("wikidict.container-fixed-float/1"));
             if (!columns && !positioned) for (auto *ancestor = parent.data(); ancestor; ancestor = ancestor->parentFrame())
                 if (qobject_cast<QTextTable *>(ancestor))
                     CompiledContent::require(layout->property("_wikidictContainerAdjoiningCapability").toString()
@@ -975,6 +1017,10 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
             owner.paragraphs.append({paragraph, format, block.charFormat()});
             format.setLeftMargin(owner.roleFormat.leftMargin() + format.leftMargin());
             format.setRightMargin(owner.roleFormat.rightMargin() + format.rightMargin());
+            if (owner.roleFormat.stringProperty(SemanticHtml::tableCaptionBlockProperty) == QStringLiteral("wikidict.table-caption/1")) {
+                CompiledContent::require(paragraph.currentFrame() == owner.first.currentFrame());
+                format.setProperty(SemanticHtml::tableCaptionBlockProperty, QStringLiteral("wikidict.table-caption/1"));
+            }
             paragraph.setBlockFormat(format);
         }
         // These boundaries predate figure insertion. They are authored storage

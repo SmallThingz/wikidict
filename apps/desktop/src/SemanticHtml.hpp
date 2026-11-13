@@ -164,6 +164,8 @@ inline constexpr int tableBoxOwnerProperty = QTextFormat::UserProperty + 0x57d0;
 inline constexpr int tableBoxPaddingProperty = QTextFormat::UserProperty + 0x57d1;
 inline constexpr int tableBoxClearProperty = QTextFormat::UserProperty + 0x57d2;
 inline constexpr int tableBoxWidthProperty = QTextFormat::UserProperty + 0x57d3;
+inline constexpr int tableAutoMarginsProperty = QTextFormat::UserProperty + 0x57f1;
+inline constexpr int tableCaptionBlockProperty = QTextFormat::UserProperty + 0x57f3;
 inline constexpr int emptyTableRoleProperty = QTextFormat::UserProperty + 0x57d4;
 inline constexpr int emptyTableBoundaryProperty = QTextFormat::UserProperty + 0x57d5;
 inline constexpr int tableDisplayProperty = QTextFormat::UserProperty + 0x57d6;
@@ -388,7 +390,8 @@ inline const QString emptyTableCapability = QStringLiteral("wikidict.empty-table
 inline const QString emptyTableScheme = QStringLiteral("wikidict-empty-table");
 inline bool hasTableBoxStyle(const QJsonObject &style) {
     return present(style.value(QStringLiteral("width"))) || present(style.value(QStringLiteral("padding")))
-        || present(style.value(QStringLiteral("clear"))) || hasTableFlowStyle(style);
+        || present(style.value(QStringLiteral("clear"))) || present(style.value(QStringLiteral("margin_values")))
+        || hasTableFlowStyle(style);
 }
 inline QVariantMap tableBoxLength(const QJsonValue &value, qreal normalBodyPoints, bool allowPercent) {
     const QJsonObject length = value.toObject();
@@ -431,6 +434,46 @@ inline void requireTableBoxLayout(QTextDocument *document, bool empty = false) {
     if (!current() || capability.metaType().id() != QMetaType::QString
         || capability.toString() != (empty ? emptyTableCapability : tableBoxCapability))
         throw std::runtime_error("missing paired table box layout");
+}
+inline void applyTableAutoMargins(QTextTableFormat &format, const QJsonObject &style, qreal normalBodyPoints, qreal indent) {
+    const bool hasMargins = present(style.value(QStringLiteral("margin_values")));
+    const auto sourceDirection = style.value(QStringLiteral("containing_direction"));
+    if (hasMargins != present(sourceDirection))
+        throw std::runtime_error("unpaired table margins and containing direction");
+    if (!hasMargins) return;
+    if (!sourceDirection.isString() || (sourceDirection != QStringLiteral("ltr") && sourceDirection != QStringLiteral("rtl")))
+        throw std::runtime_error("invalid source table containing direction");
+    const int containing = sourceDirection == QStringLiteral("rtl") ? int(Qt::RightToLeft) : int(Qt::LeftToRight);
+    if (present(style.value(QStringLiteral("margins"))))
+        throw std::runtime_error("conflicting table margin representations");
+    const auto value = style.value(QStringLiteral("margin_values"));
+    if (!value.isObject() || value.toObject().size() != 4)
+        throw std::runtime_error("invalid typed table margins");
+    QVariantList autos; qreal lengths[4] = {};
+    const QString names[] = {QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")};
+    for (int i = 0; i < 4; ++i) {
+        const auto edge = value.toObject().value(names[i]);
+        if (!edge.isObject() || edge.toObject().size() != 1)
+            throw std::runtime_error("invalid typed table margin edge");
+        const auto tagged = edge.toObject();
+        const bool automatic = tagged.contains(QStringLiteral("auto"));
+        if (automatic) {
+            if ((i != 1 && i != 3) || !tagged.value(QStringLiteral("auto")).isObject()
+                || !tagged.value(QStringLiteral("auto")).toObject().isEmpty())
+                throw std::runtime_error("invalid automatic table margin");
+        } else {
+            if (!tagged.contains(QStringLiteral("length"))) throw std::runtime_error("invalid table margin tag");
+            lengths[i] = tableBoxLength(tagged.value(QStringLiteral("length")), normalBodyPoints, false)
+                .value(QStringLiteral("value")).toDouble();
+        }
+        autos.append(automatic);
+    }
+    if (!autos[1].toBool() && !autos[3].toBool()) throw std::runtime_error("table margin values require horizontal auto");
+    format.setTopMargin(lengths[0]); format.setRightMargin(lengths[1]);
+    format.setBottomMargin(lengths[2]); format.setLeftMargin(lengths[3] + indent);
+    format.setProperty(tableAutoMarginsProperty, QVariantMap{
+        {QStringLiteral("capability"), QStringLiteral("wikidict.table-auto-margins/1")},
+        {QStringLiteral("autos"), autos}, {QStringLiteral("direction"), containing}});
 }
 inline void applyTableBoxStyle(QTextTableFormat &format, const QJsonObject &style, qreal normalBodyPoints) {
     if (!hasTableBoxStyle(style)) return;
@@ -641,6 +684,8 @@ inline void materializeEmptyTable(QTextDocument *document, const TableInfo &reco
     wrapper.setProperty(emptyTableRoleProperty, QStringLiteral("wrapper"));
     wrapper.setProperty(tableBoxClearProperty, format.hasProperty(tableBoxClearProperty) ? format.intProperty(tableBoxClearProperty) : 0);
     if (format.hasProperty(tableBoxWidthProperty)) wrapper.setProperty(tableBoxWidthProperty, format.property(tableBoxWidthProperty));
+    if (format.hasProperty(tableAutoMarginsProperty))
+        wrapper.setProperty(tableAutoMarginsProperty, format.property(tableAutoMarginsProperty));
     wrapper.setWidth(format.width()); wrapper.setPosition(format.position());
     wrapper.setTopMargin(format.topMargin()); wrapper.setRightMargin(format.rightMargin());
     wrapper.setBottomMargin(format.bottomMargin()); wrapper.setLeftMargin(format.leftMargin());
@@ -839,7 +884,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         // its text. Cell align attributes carry the intended text inheritance;
         // restore the frame's default alignment independently of float position.
         if (resetAlignment.toBool()) format.clearProperty(QTextFormat::BlockAlignment);
-        const QJsonObject style = typedStyle(record.value.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height"});
+        const QJsonObject style = typedStyle(record.value.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "margin_values", "containing_direction", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height"});
         if (present(style.value(QStringLiteral("float_side")))) {
             const QJsonValue side = style.value(QStringLiteral("float_side"));
             if (!side.isString() || (side.toString() != QStringLiteral("left") && side.toString() != QStringLiteral("right")))
@@ -873,6 +918,13 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             const qreal maximum = maximumFontPoints(document) * QFontMetricsF(QFont()).fontDpi() / 72;
             format.setTopMargin(e[0]); format.setRightMargin(e[1]); format.setBottomMargin(e[2]); format.setLeftMargin(qMin(maximum, e[3] + indent));
         }
+        if (present(style.value(QStringLiteral("margin_values")))) {
+            const auto capability = document->documentLayout()->property("_wikidictTableAutoMarginsCapability");
+            if (capability.metaType().id() != QMetaType::QString
+                || capability.toString() != QStringLiteral("wikidict.table-auto-margins/1"))
+                throw std::runtime_error("missing paired table automatic margin layout");
+        }
+        applyTableAutoMargins(format, style, points, indent);
         applyTableBoxStyle(format, style, points);
         if (hasTableFlowStyle(style)) {
             QPointer<QTextDocument> live(document);
@@ -917,7 +969,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         }
         if (format.intProperty(tableDisplayProperty) > 0) {
             format.setLeftMargin(format.leftMargin() - indent);
-            if (!present(style.value(QStringLiteral("margins")))) {
+            if (!present(style.value(QStringLiteral("margins"))) && !present(style.value(QStringLiteral("margin_values")))) {
                 format.setTopMargin(0); format.setBottomMargin(0);
             }
         }

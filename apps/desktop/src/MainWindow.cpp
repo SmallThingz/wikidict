@@ -4331,7 +4331,9 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             .arg((!geometry.value(QStringLiteral("cell_spacing")).isUndefined() && !geometry.value(QStringLiteral("cell_spacing")).isNull()) ? QStringLiteral("separate") : QStringLiteral("collapse"))
             .arg(tableDepth > 1 ? 0 : 8).arg(indent);
     }
-    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height"});
+    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "margin_values", "containing_direction", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height"});
+    if (SemanticHtml::present(tableStyle.value(QStringLiteral("margin_values"))))
+        out.insert(out.indexOf(QChar('>')), QStringLiteral(" data-wikidict-table-auto-margins='1'"));
     const QString tableBackground = SemanticHtml::present(tableStyle.value(QStringLiteral("background")))
         ? SemanticHtml::styleColor(tableStyle.value(QStringLiteral("background"))).name() : inheritedBackground;
     const QJsonArray caption = CompiledContent::array(table.value(QStringLiteral("caption")));
@@ -4340,6 +4342,7 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
     if (CompiledContent::present(captionBlocks)) {
         CompiledContent::require(captionBlocks.isArray() && caption.isEmpty());
         auto captionContext = context;
+        captionContext.ordinaryCellContainers = false;
         captionContext.contentDepth = CompiledContent::Depth{context.contentDepth, tableDepth}.nestedContent().content;
         for (const QJsonValue &value : captionBlocks.toArray())
             captionHtml += blockHtml(CompiledContent::object(value), tableBackground, tableDepth + 1,
@@ -4371,6 +4374,8 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             const QJsonObject cellStyle = SemanticHtml::typedStyle(cell.value(QStringLiteral("style")), {"border", "padding", "text_align", "border_edges", "letter_spacing", "width", "min_width", "vertical_align", "line_height"});
             const auto cellLine = SemanticHtml::cellLineHeight(cellStyle.value(QStringLiteral("line_height")), readingPointSize_, reading_->document());
             auto cellContext = context;
+            cellContext.ordinaryCellContainers = !SemanticHtml::present(tableStyle.value(QStringLiteral("float_side")))
+                && SemanticHtml::tableDisplay(tableStyle) == 0;
             QString metricAttribute;
             if (cellLine.present) {
                 metricAttribute = QStringLiteral(" data-wikidict-cell-line-height='1'");
@@ -4467,7 +4472,11 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
         const auto owned = CompiledContent::containerBlock(block);
         const bool columns = CompiledContent::present(owned.value(QStringLiteral("style")).toObject().value(QStringLiteral("columns")));
         const bool positioned = CompiledContent::present(owned.value(QStringLiteral("style")).toObject().value(QStringLiteral("positioning")));
-        if (tableDepth != 1 && !columns && !positioned && !context.computedCellTraits) throw DictApiError("compiled Container inside table layout is not available");
+        const auto cellFloatCapability = reading_->document()->documentLayout()->property("_wikidictContainerFixedFloatCapability");
+        const bool ordinaryCell = context.ordinaryCellContainers && cellFloatCapability.metaType().id() == QMetaType::QString
+            && cellFloatCapability.toString() == QStringLiteral("wikidict.container-fixed-float/1");
+        if (tableDepth != 1 && !columns && !positioned && !context.computedCellTraits && !ordinaryCell)
+            throw DictApiError("compiled Container inside table layout is not available");
         if (positioned && reading_->document()->documentLayout()->property("_wikidictContainerPositioningCapability").toString()
                 != QStringLiteral("wikidict.relative-auto/1"))
             throw DictApiError("compiled Container positioning is not available");

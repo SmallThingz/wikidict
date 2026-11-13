@@ -60,10 +60,11 @@ The app materializes the supported plain-flow subset through its existing Flow
 composition transaction. Authored empty child paragraphs retain their line;
 renderer-created storage paragraphs remain zero-height. Unsupported Container
 styles fail visibly and preserve history, source and recovery instead of dropping
-the body or substituting stock frame layout. Flex and floating Containers,
-fit-content, max-width and line-height overrides, responsive rules, unequal
-padding, nonzero vertical margins, general table ancestry and nonempty zero-width
-boxes remain outside this implementation. A current registered Figure caption
+the body or substituting stock frame layout. The original subset excluded flex and
+floating Containers, fit-content, max-width and line-height overrides, responsive
+rules, unequal padding, nonzero vertical margins, general table ancestry and
+nonempty zero-width boxes. Later supported Cell and fixed-float cases are described
+below; the remaining unsupported cases retain their refusals. A current registered Figure caption
 provides a separately authenticated ancestry boundary for supported Containers.
 
 The historical plain-Container qualification combines eleven passing methods from
@@ -142,6 +143,44 @@ dictionaries preserved. Two caller mistakes were rejected by the harness before
 input/action and remain recorded. Images and audio stayed disabled. The media
 placeholder border is not evidence of a reading-pane focus indicator. This does
 not qualify transient loading, a genuine TH encoded page, or the full frontend.
+
+## Table auto margins and ordinary-cell fixed floats
+
+Typed table auto margins use the final measured table width and the containing
+block's direction. Caption minimums are measured in the word-wrap domain before
+the final normal wrapping layout. Projected captions keep their source owners and
+allow a bounded signed physical origin while local padding and extents remain
+nonnegative. The table policy retains exact nested value types through the Qt
+format cache, so malformed and valid formats cannot alias through coercive equality.
+
+The supported ordinary-cell float subset is a source-owned Container with a fixed
+px/em width and a physical left/right side. Siblings are placed in source order;
+transparent wrappers keep their zero used height while their floats contribute to
+cell allocation. Unsupported widthless or mixed policies still refuse visibly.
+
+Five affected native controls passed on the current library. Both corrected app
+methods passed, with two unchanged app methods carried from the same product using
+exact whole-method and product equality. Constructed caption and fixed-float views
+were checked at 900 and 640 pixels, including actual Tab/Return actions, source
+invariants and accessible text. The original failures and diagnostic limitations
+remain recorded. These are controlled component views, not a normal Russian
+Writer/Reader page; that producer pairing remains a separate qualification.
+
+The maintained three-patch QtBase series was reconstructed forward and backward
+against all 25 explicit targets. A normal incremental dependency check preceded
+the seven-test CTest run: six suites passed; Reader reported 313 passing incidents,
+one failed legacy rejection and two optional compiler-fixture skips. Media passed
+58 incidents with its private audio-backend opt-in case skipped. The original
+full-run failure remains recorded.
+
+The legacy Cell control now verifies supported ordinary-cell Container geometry,
+measured nearer-owner line spacing, source identity, actions, hit testing and
+paint, and still rejects a genuinely unsupported floating-table case. Only that
+changed Reader method was rebuilt and rerun; it passed, with all preceding typed
+loops and every other method/helper unchanged. Product and native binaries were
+unchanged. The six passed suites and unchanged Reader checks therefore retain
+their exact dependency scope; this is not a restamped successful full-suite run.
+Earlier CTest, media and GUI evidence keeps its original identities.
 
 ## Source and build layout
 

@@ -559,6 +559,224 @@ private slots:
         }
     }
 
+    void typedTableAutoMarginsKeepRealCaptionGridAndSource()
+    {
+        const auto length = [](qreal n, const QString &unit = QStringLiteral("px")) { return QJsonObject{{"unit", unit}, {"value", n}}; };
+        const QJsonObject automatic{{"auto", QJsonObject{}}}, zero{{"length", length(0)}};
+        const QJsonObject margins{{"top", QJsonObject{{"length", length(.2, "em")}}}, {"right", automatic},
+            {"bottom", QJsonObject{{"length", length(.2, "em")}}}, {"left", automatic}};
+        const QJsonObject link{{"kind", "external_link"}, {"text", "Grid action"}, {"target", "https://example.test/table-auto"}};
+        const QJsonObject captionLink{{"kind", "link"}, {"text", "CaptionIntrinsicFloorMMMM"}, {"target", "CaptionTarget"}};
+        MainWindow window{QString()}; window.resize(1100, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        // Source placement direction is independent of the host/document
+        // default and the table grid. Neither may replace this typed fact.
+        for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) for (int mode : {0, 1, 2, 3}) {
+            const bool hasCaption = mode == 1 || mode == 2;
+            QJsonObject table{{"geometry", QJsonObject{{"border", 0}, {"cell_padding", 0}, {"cell_spacing", 0}}},
+                {"style", QJsonObject{{"width", length(hasCaption ? 40 : 70, hasCaption ? "px" : "percent")},
+                    {"margin_values", margins}, {"containing_direction", direction == Qt::LeftToRight ? "ltr" : "rtl"}, {"clear", "none"}, {"collapse", "separate"}}},
+                {"rows", mode == 3 ? QJsonArray{} : QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", QJsonArray{link}}}}}}}}};
+            if (mode == 1) table.insert("caption", QJsonArray{captionLink});
+            if (mode == 2) {
+                auto split = captionLink; split.insert("text", QStringLiteral("CaptionIntrinsicFloorMMMM\u2029CaptionSecond"));
+                table.insert("caption_blocks", QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{split}}}});
+            }
+            const QJsonObject block{{"kind", "table"}, {"table", table}};
+            const QJsonObject container{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{
+                {"style", QJsonObject{{"width", QJsonObject{{"length", length(hasCaption ? 100 : 300)}}}}}, {"blocks", QJsonArray{block}}}}};
+            const auto hostDirection = direction == Qt::LeftToRight ? Qt::RightToLeft : Qt::LeftToRight;
+            const bool composed = composeReadingBlocks(window, QJsonArray{container}, hostDirection);
+            const auto compositionError = window.reading_->document()->documentLayout()->property("_wikidictParagraphBoxLayoutError");
+            QVERIFY2(composed, qPrintable(QStringLiteral("caption composition mode=%1 direction=%2 host=%3 nativeType=%4 nativeError=%5")
+                .arg(mode).arg(int(direction)).arg(int(hostDirection)).arg(compositionError.metaType().id()).arg(compositionError.toInt())));
+            window.showCompactPane(false);
+            auto *doc = window.reading_->document(); auto *native = qobject_cast<QTextDocumentLayout *>(doc->documentLayout()); QVERIFY(native);
+            native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+            QCOMPARE(native->property("_wikidictTableAutoMarginsCapability").toString(), QStringLiteral("wikidict.table-auto-margins/1"));
+            QPointer<QTextFrame> parent, boxOwner, grid;
+            const auto collect = [&](auto &&self, QTextFrame *frame) -> void {
+                if (frame->frameFormat().hasProperty(FlowConstruction::containerSourceProperty)) parent = frame;
+                if (frame->frameFormat().hasProperty(SemanticHtml::tableAutoMarginsProperty)) boxOwner = frame;
+                if (frame->frameFormat().stringProperty(SemanticHtml::emptyTableRoleProperty) == "grid") grid = frame;
+                for (auto *child : frame->childFrames()) self(self, child);
+            };
+            collect(collect, doc->rootFrame()); QVERIFY(parent && boxOwner); QCOMPARE(boxOwner->parentFrame(), parent.data());
+            auto *actualTable = qobject_cast<QTextTable *>(boxOwner.data()); QCOMPARE(actualTable != nullptr, mode != 3);
+            QCOMPARE(QJsonDocument::fromJson(parent->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), container);
+            const auto policy = boxOwner->frameFormat().property(SemanticHtml::tableAutoMarginsProperty).toMap();
+            QCOMPARE(policy.value("autos").toList(), QVariantList({false, true, false, true}));
+            QCOMPARE(policy.value("direction").toInt(), int(direction));
+            QCOMPARE(doc->defaultTextOption().textDirection(), hostDirection);
+            const qreal em = window.readingPointSize_ * QFontMetricsF(QFont()).fontDpi() / 72;
+            QVERIFY(qAbs(boxOwner->frameFormat().topMargin() - .2 * em) < .001);
+            QVERIFY(qAbs(boxOwner->frameFormat().bottomMargin() - .2 * em) < .001);
+            const QString raw = doc->toRawText(); const int count = doc->characterCount();
+            const auto entry = window.currentEntry_; const auto ownerFormat = boxOwner->frameFormat();
+            const int revision = doc->revision(), id = boxOwner->objectIndex();
+            QRectF original;
+            for (int width : {500, 700, 500}) {
+                doc->setTextWidth(width); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+                const QRectF parentBox = native->frameBoundingRect(parent), box = actualTable ? native->tableBoundingRect(actualTable) : native->frameBoundingRect(boxOwner);
+                const qreal remaining = parentBox.width() - box.width();
+                const qreal expected = parentBox.left() + (remaining >= 0 ? remaining / 2 : direction == Qt::RightToLeft ? remaining : 0);
+                QVERIFY2(qAbs(box.left() - expected) < .08, qPrintable(QStringLiteral("mode=%1 direction=%2 left=%3 expected=%4 parent=%5 width=%6")
+                    .arg(mode).arg(int(direction)).arg(box.left()).arg(expected).arg(parentBox.width()).arg(box.width())));
+                if (!hasCaption) QVERIFY(qAbs(box.width() - .7 * parentBox.width()) < .08);
+                if (hasCaption) {
+                    auto selected = doc->find("CaptionIntrinsicFloorMMMM", 0, QTextDocument::FindCaseSensitively); QVERIFY(!selected.isNull());
+                    QCOMPARE(selected.currentFrame(), parent.data()); QCOMPARE(selected.charFormat().anchorHref(), QStringLiteral("dict:CaptionTarget"));
+                    QCOMPARE(selected.blockFormat().stringProperty(SemanticHtml::tableCaptionBlockProperty), QStringLiteral("wikidict.table-caption/1"));
+                    const auto position = LogicalFlow::position(doc, selected.selectionStart());
+                    QVERIFY(position.status != LogicalFlow::Status::Refused);
+                    qreal floor; QPointF point;
+                    if (position.status == LogicalFlow::Status::Handled) {
+                        const auto next = LogicalFlow::position(doc, selected.selectionStart() + 1); QCOMPARE(next.status, LogicalFlow::Status::Handled);
+                        const QRectF caret = position.values.value("cursorRect").toRectF(), after = next.values.value("cursorRect").toRectF();
+                        point = QPointF((caret.left() + after.left()) / 2, caret.center().y());
+                        floor = position.values.value("lineNaturalRight").toDouble() - position.values.value("lineNaturalLeft").toDouble();
+                    } else {
+                        const auto line = selected.block().layout()->lineAt(0); QVERIFY(line.isValid());
+                        auto *used = selected.block().layout();
+                        const auto usedBounds = used->boundingRect(); const int usedLines = used->lineCount();
+                        const auto usedOption = used->textOption(); const qreal usedMinimum = used->minimumWidth();
+                        QTextLayout words(selected.block()); auto wordOption = usedOption; wordOption.setWrapMode(QTextOption::WordWrap);
+                        words.setTextOption(wordOption); words.beginLayout();
+                        while (true) { auto wordLine = words.createLine(); if (!wordLine.isValid()) break; wordLine.setLineWidth(parentBox.width()); }
+                        words.endLayout(); QCOMPARE(words.lineCount(), 1);
+                        QCOMPARE(words.lineAt(0).textLength(), selected.block().length() - 1);
+                        floor = words.minimumWidth();
+                        QCOMPARE(selected.block().layout(), used); QCOMPARE(used->boundingRect(), usedBounds);
+                        QCOMPARE(used->lineCount(), usedLines); QCOMPARE(used->minimumWidth(), usedMinimum);
+                        QCOMPARE(used->textOption().wrapMode(), usedOption.wrapMode()); QCOMPARE(doc->revision(), revision);
+                        point = native->blockBoundingRect(selected.block()).topLeft()
+                            + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
+                    }
+                    QVERIFY2(floor > parentBox.width(), qPrintable(QStringLiteral("caption floor mode=%1 direction=%2 parent=%3 table=%4 floor=%5")
+                        .arg(mode).arg(int(direction)).arg(parentBox.width()).arg(box.width()).arg(floor)));
+                    QVERIFY(box.width() + .08 >= floor);
+                    const int hit = native->hitTest(point, Qt::ExactHit); QVERIFY(hit >= selected.selectionStart() && hit < selected.selectionEnd());
+                    QCOMPARE(native->anchorAt(point), QStringLiteral("dict:CaptionTarget"));
+                    if (mode == 2) {
+                        const auto second = doc->find("CaptionSecond", 0, QTextDocument::FindCaseSensitively); QVERIFY(!second.isNull());
+                        QVERIFY(second.block() != selected.block()); QCOMPARE(second.currentFrame(), parent.data());
+                        QCOMPARE(second.blockFormat().stringProperty(SemanticHtml::tableCaptionBlockProperty), QStringLiteral("wikidict.table-caption/1"));
+                        QCOMPARE(second.charFormat().anchorHref(), QStringLiteral("dict:CaptionTarget"));
+                    }
+                }
+                if (mode == 3) {
+                    QVERIFY(grid); QCOMPARE(grid->parentFrame(), boxOwner.data()); QCOMPARE(grid->firstPosition(), grid->lastPosition());
+                    QCOMPARE(doc->findBlock(grid->firstPosition()).layout()->lineCount(), 0);
+                    QCOMPARE(native->frameBoundingRect(grid).height(), 0.0);
+                }
+                if (width == 500) { if (original.isNull()) original = box; else QCOMPARE(box, original); }
+                QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(doc->revision(), revision);
+                QCOMPARE(boxOwner->objectIndex(), id); QCOMPARE(boxOwner->frameFormat(), ownerFormat); QCOMPARE(window.currentEntry_, entry);
+            }
+            auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+            const auto accessibleText = accessible->textInterface()->text(0, accessible->textInterface()->characterCount());
+            if (hasCaption) QVERIFY(accessibleText.contains("CaptionIntrinsicFloorMMMM"));
+            if (mode != 3) QVERIFY(accessibleText.contains("Grid action"));
+            if (mode == 2 && direction == Qt::LeftToRight) {
+                // Constructed component evidence: the same source graph and
+                // native owners are rendered at real wide/narrow window sizes.
+                auto *browser = window.reading_;
+                QObject::disconnect(browser, nullptr, &window, nullptr);
+                QSignalSpy actions(browser, &QTextBrowser::anchorClicked);
+                for (int viewportWidth : {900, 640}) {
+                    window.resize(viewportWidth, 700); QCoreApplication::processEvents();
+                    window.readingPaneAction_->trigger();
+                    QTRY_COMPARE(window.compactNavigation_, viewportWidth < 720);
+                    QTRY_VERIFY(browser->isVisible() && browser->viewport()->isVisible());
+                    native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+                    const auto currentBox = native->tableBoundingRect(actualTable);
+                    const auto currentParent = native->frameBoundingRect(parent);
+                    const qreal residual = currentParent.width() - currentBox.width();
+                    QVERIFY(qAbs(currentBox.left() - currentParent.left() - qMax(qreal(0), residual / 2)) < .08);
+                    const auto caption = doc->find("CaptionIntrinsicFloorMMMM", 0, QTextDocument::FindCaseSensitively);
+                    QVERIFY(!caption.isNull()); QCOMPARE(caption.currentFrame(), parent.data());
+                    window.activateWindow(); browser->setFocus(Qt::TabFocusReason); QTRY_VERIFY(browser->hasFocus());
+                    // Each size checks first-link traversal from an unselected cursor.
+                    // Ctrl+Home deliberately scrolls without clearing the last link.
+                    browser->setTextCursor(QTextCursor(browser->document()));
+                    QVERIFY(!browser->textCursor().hasSelection());
+                    QTest::keyClick(browser, Qt::Key_Home, Qt::ControlModifier);
+                    QTest::keyClick(browser, Qt::Key_Tab);
+                    QTRY_VERIFY(browser->textCursor().hasSelection());
+                    const auto focused = browser->textCursor();
+                    QCOMPARE(focused.selectionStart(), caption.selectionStart());
+                    QVERIFY(focused.selectedText().contains(QStringLiteral("CaptionIntrinsicFloorMMMM")));
+                    QCOMPARE(focused.charFormat().anchorHref(), QStringLiteral("dict:CaptionTarget"));
+                    const auto mapped = LogicalFlow::position(doc, caption.selectionStart());
+                    QCOMPARE(mapped.status, LogicalFlow::Status::Handled);
+                    const auto character = mapped.values.value("characterRect").toRectF();
+                    QVERIFY(character.width() > 0 && character.height() > 0);
+                    QVERIFY(browser->viewport()->rect().intersects(browser->cursorRect(caption)));
+                    const auto priorActions = actions.size(); QTest::keyClick(browser, Qt::Key_Return);
+                    QTRY_COMPARE(actions.size(), priorActions + 1);
+                    QCOMPARE(actions.last().first().toUrl(), QUrl(QStringLiteral("dict:CaptionTarget")));
+                    const QString folder = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                    if (!folder.isEmpty()) {
+                        QVERIFY(QDir().mkpath(folder));
+                        QVERIFY(window.grab().save(QDir(folder).filePath(QStringLiteral("constructed-ru-caption-%1.png").arg(viewportWidth))));
+                    }
+                    QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(doc->revision(), revision);
+                    QCOMPARE(boxOwner->objectIndex(), id); QCOMPARE(boxOwner->frameFormat(), ownerFormat); QCOMPARE(window.currentEntry_, entry);
+                    QCOMPARE(QJsonDocument::fromJson(parent->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), container);
+                }
+            }
+        }
+    }
+
+    void typedTableAutoMarginsRefuseMalformedAndPreserveLegacyMargins()
+    {
+        MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const auto length = [](qreal n, const QString &unit = QStringLiteral("px")) { return QJsonObject{{"unit", unit}, {"value", n}}; };
+        const QJsonObject automatic{{"auto", QJsonObject{}}}, zero{{"length", length(0)}};
+        const QJsonObject margins{{"top", zero}, {"right", automatic}, {"bottom", zero}, {"left", automatic}};
+        const QJsonObject numeric{{"top", length(2)}, {"right", length(3)}, {"bottom", length(4)}, {"left", length(5)}};
+        const QJsonObject source{{"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Source"}}}}};
+        const QJsonObject base{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{source}}}}},
+            {"geometry", QJsonObject{{"border", 0}, {"cell_padding", 0}, {"cell_spacing", 0}}}};
+        QList<QJsonObject> invalid;
+        invalid.append(QJsonObject{{"margin_values", margins}, {"margins", numeric}});
+        auto bad = margins; bad["top"] = automatic; invalid.append(QJsonObject{{"margin_values", bad}});
+        bad = margins; bad["right"] = zero; bad["left"] = zero; invalid.append(QJsonObject{{"margin_values", bad}});
+        bad = margins; bad["left"] = QJsonObject{{"auto", QJsonValue::Null}}; invalid.append(QJsonObject{{"margin_values", bad}});
+        bad = margins; bad["left"] = QJsonObject{{"auto", QJsonObject{{"extra", 0}}}}; invalid.append(QJsonObject{{"margin_values", bad}});
+        bad = margins; bad["left"] = QJsonObject{{"length", length(-1)}}; invalid.append(QJsonObject{{"margin_values", bad}});
+        bad = margins; bad["left"] = QJsonObject{{"length", length(1, "percent")}}; invalid.append(QJsonObject{{"margin_values", bad}});
+        bad = margins; bad["extra"] = zero; invalid.append(QJsonObject{{"margin_values", bad}});
+        for (const auto &style : invalid) for (bool empty : {false, true}) {
+            auto paired = style; paired.insert("containing_direction", "ltr");
+            auto table = base; table["style"] = paired; if (empty) table["rows"] = QJsonArray{};
+            QTextDocument doc; QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&doc, window.tableHtml(table, 0)), std::runtime_error);
+        }
+        for (const QJsonValue direction : {QJsonValue(QJsonValue::Undefined), QJsonValue(QJsonValue::Null), QJsonValue("auto"),
+                QJsonValue("LTR"), QJsonValue(0), QJsonValue(true), QJsonValue(QJsonObject{})}) {
+            auto table = base; table["style"] = QJsonObject{{"margin_values", margins}, {"containing_direction", direction}};
+            QTextDocument doc; QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&doc, window.tableHtml(table, 0)), std::runtime_error);
+        }
+        for (const auto &direction : {QStringLiteral("ltr"), QStringLiteral("rtl")}) {
+            auto table = base; table["style"] = QJsonObject{{"containing_direction", direction}};
+            QTextDocument doc; QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&doc, window.tableHtml(table, 0)), std::runtime_error);
+        }
+        QTextTableFormat legacyFormat;
+        for (bool explicitNull : {false, true}) {
+            auto style = QJsonObject{{"margins", numeric}, {"width", length(80)}, {"clear", "none"}};
+            if (explicitNull) { style["margin_values"] = QJsonValue::Null; style["containing_direction"] = QJsonValue::Null; }
+            auto table = base; table["style"] = style; QTextDocument doc; doc.setDocumentMargin(0); doc.setTextWidth(300);
+            SemanticHtml::setHtml(&doc, window.tableHtml(table, 0)); auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
+            native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+            const auto selected = doc.find("Source"); QVERIFY(!selected.isNull()); auto *actual = selected.currentTable(); QVERIFY(actual);
+            QVERIFY(!actual->format().hasProperty(SemanticHtml::tableAutoMarginsProperty));
+            if (!explicitNull) legacyFormat = actual->format(); else QCOMPARE(actual->format(), legacyFormat);
+            QCOMPARE(actual->format().topMargin(), 2.0); QCOMPARE(actual->format().rightMargin(), 3.0);
+            QCOMPARE(actual->format().bottomMargin(), 4.0); QCOMPARE(actual->format().leftMargin(), 5.0);
+            QCOMPARE(selected.selectedText(), QStringLiteral("Source"));
+        }
+    }
+
     void typedFontFeaturesResetReplaceAndPreserveSpanOrigins()
     {
         MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
@@ -1214,7 +1432,126 @@ private slots:
         }
         auto legacyCell = outerCell; legacyCell.remove("style");
         const QJsonObject legacy{{"kind", "table"}, {"spans", QJsonArray{}}, {"table", table(QJsonArray{legacyCell})}};
-        QVERIFY(!composeReadingBlocks(window, QJsonArray{legacy}));
+        // Ordinary table cells now admit authenticated Containers without an
+        // outer line-height policy; each nearer typography owner stays intact.
+        const auto legacySource = QJsonDocument(legacy).toJson(QJsonDocument::Compact);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{legacy}));
+        auto *document = window.reading_->document();
+        auto *layout = qobject_cast<QTextDocumentLayout *>(document->documentLayout()); QVERIFY(layout);
+        QCOMPARE(layout->property("_wikidictContainerFixedFloatCapability").toString(), QStringLiteral("wikidict.container-fixed-float/1"));
+        document->setTextWidth(620); const auto size = layout->documentSize();
+        QCOMPARE(layout->wikidictParagraphBoxLayoutError(), 0);
+        const auto select = [document](const QString &text) { return document->find(text, 0, QTextDocument::FindCaseSensitively); };
+        const auto before = select("Before"), child = select("Container child"), legacyNested = select("Nested");
+        const auto owned = select("Owned"), figureCaption = select("Figure own");
+        QVERIFY(!before.isNull() && !child.isNull() && !legacyNested.isNull() && !owned.isNull() && !figureCaption.isNull());
+        auto *outer = before.currentTable(); QVERIFY(outer);
+        QCOMPARE(outer->format().property(SemanticHtml::tableBoxOwnerProperty).toString(), QStringLiteral("wikidict.table-box/1"));
+        const auto ordinaryCell = outer->cellAt(before); QVERIFY(ordinaryCell.isValid());
+        QVERIFY(!ordinaryCell.format().hasProperty(SemanticHtml::cellLineHeightProperty));
+        QVERIFY(!before.blockFormat().hasProperty(FlowConstruction::containerTypographyProperty));
+        auto *owner = child.currentFrame(); QVERIFY(owner); QCOMPARE(owner->parentFrame(), outer);
+        QCOMPARE(owner->frameFormat().position(), QTextFrameFormat::InFlow);
+        QCOMPARE(owner->frameFormat().property(FlowConstruction::containerPolicyProperty).toString(), QStringLiteral("wikidict.plain-container/1"));
+        QCOMPARE(QJsonDocument::fromJson(owner->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), container);
+        const auto childHeight = child.blockFormat().property(FlowConstruction::containerTypographyProperty).toMap();
+        QCOMPARE(childHeight.value("kind").toString(), QStringLiteral("multiplier")); QCOMPARE(childHeight.value("value").toDouble(), 1.5);
+        for (const auto &selection : {legacyNested, owned}) {
+            auto *tableOwner = selection.currentTable(); QVERIFY(tableOwner && tableOwner != outer);
+            const auto height = tableOwner->cellAt(selection).format().property(SemanticHtml::cellLineHeightProperty).toMap();
+            QCOMPARE(height.value("kind").toString(), QStringLiteral("multiplier")); QCOMPARE(height.value("value").toDouble(), 2.0);
+        }
+        QCOMPARE(figureCaption.blockFormat().lineHeightType(), int(QTextBlockFormat::MinimumHeight));
+        QCOMPARE(figureCaption.blockFormat().lineHeight(), 60.0);
+        QVERIFY(!figureCaption.blockFormat().hasProperty(FlowConstruction::containerTypographyProperty));
+        const auto lineMetrics = [document](const QTextCursor &selection, int position) {
+            const auto mapped = LogicalFlow::position(document, position);
+            if (mapped.status == LogicalFlow::Status::Refused) return QVariantMap{};
+            if (mapped.status == LogicalFlow::Status::Handled)
+                return QVariantMap{{"number", mapped.values.value("lineNumber")}, {"y", mapped.values.value("lineY")},
+                    {"ascent", mapped.values.value("lineAscent")}};
+            const auto *text = selection.block().layout();
+            if (!text) return QVariantMap{};
+            const auto line = text->lineForTextPosition(position - selection.block().position());
+            if (!line.isValid()) return QVariantMap{};
+            return QVariantMap{{"number", line.lineNumber()}, {"y", line.y()}, {"ascent", line.ascent()}};
+        };
+        const auto checkNearerLines = [&](const QTextCursor &selection, const QFont &ownerFont, qreal multiplier) {
+            const auto block = selection.block(); QCOMPARE(block.text().count(QChar::LineSeparator), 1);
+            const int hardBreak = block.position() + block.text().indexOf(QChar::LineSeparator);
+            QVERIFY(selection.selectionEnd() <= hardBreak);
+            const auto repeated = document->find(selection.selectedText() + " again", hardBreak + 1, QTextDocument::FindCaseSensitively);
+            QVERIFY(!repeated.isNull()); QCOMPARE(repeated.block(), block); QCOMPARE(repeated.selectionStart(), hardBreak + 1);
+            const auto first = lineMetrics(selection, selection.selectionStart());
+            const auto beforeBreak = lineMetrics(selection, hardBreak - 1), afterBreak = lineMetrics(selection, hardBreak + 1);
+            QVERIFY(!first.isEmpty() && !beforeBreak.isEmpty() && !afterBreak.isEmpty());
+            QCOMPARE(first.value("number").toInt(), 0);
+            QCOMPARE(afterBreak.value("number").toInt(), beforeBreak.value("number").toInt() + 1);
+            qreal above = -1e9, below = -1e9;
+            for (const auto &font : {ownerFont, selection.charFormat().font()}) {
+                const QFontMetricsF metrics(font, layout->paintDevice());
+                const qreal pixels = font.pointSizeF() * metrics.fontDpi() / 72;
+                const qreal halfLeading = (pixels * multiplier - metrics.ascent() - metrics.descent()) / 2;
+                above = qMax(above, metrics.ascent() + halfLeading); below = qMax(below, metrics.descent() + halfLeading);
+            }
+            const qreal advance = qMax(qreal(0), above + below);
+            for (const auto &line : {first, beforeBreak, afterBreak}) {
+                const int number = line.value("number").toInt();
+                const qreal actual = line.value("y").toDouble() + line.value("ascent").toDouble();
+                QVERIFY2(qAbs(actual - above - number * advance) < 1.0/32,
+                    qPrintable(QStringLiteral("legacy %1 line=%2 baseline=%3 expected=%4")
+                        .arg(selection.selectedText()).arg(number).arg(actual).arg(above + number * advance)));
+            }
+            QVERIFY(qAbs(afterBreak.value("y").toDouble() - beforeBreak.value("y").toDouble() - advance) < 1.0/32);
+        };
+        checkNearerLines(child, child.block().charFormat().font(), 1.5);
+        for (const auto &selection : {legacyNested, owned}) {
+            const auto height = selection.currentTable()->cellAt(selection).format().property(SemanticHtml::cellLineHeightProperty).toMap();
+            checkNearerLines(selection, height.value("font").value<QFont>(), 2.0);
+        }
+        const auto *figureLines = figureCaption.block().layout(); QVERIFY(figureLines); QCOMPARE(figureLines->lineCount(), 2);
+        const qreal deviceScale = layout->paintDevice() ? qreal(layout->paintDevice()->logicalDpiY()) / QFontMetricsF(QFont()).fontDpi() : 1;
+        QVERIFY(qAbs(figureLines->lineAt(1).y() - figureLines->lineAt(0).y() - 60 * deviceScale) < 1.0/32);
+        const auto cellBox = layout->tableCellBoundingRect(outer, ordinaryCell), ownerBox = layout->frameBoundingRect(owner);
+        QVERIFY(ownerBox.width() > 0 && ownerBox.height() > 0);
+        QVERIFY(cellBox.adjusted(-.05, -.05, .05, .05).contains(ownerBox));
+        const auto raw = document->toRawText(); const int revision = document->revision(), count = document->characterCount();
+        for (const QString &label : {QStringLiteral("Before"), QStringLiteral("Container child"), QStringLiteral("Nested"),
+                QStringLiteral("Owned"), QStringLiteral("Inherited"), QStringLiteral("Caption"), QStringLiteral("Inner caption"),
+                QStringLiteral("Figure own"), QStringLiteral("After")}) {
+            const auto selected = select(label); QVERIFY(!selected.isNull()); QCOMPARE(selected.selectedText(), label);
+            const QString href = QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(label));
+            QCOMPARE(selected.charFormat().anchorHref(), href);
+            const auto mapped = LogicalFlow::position(document, selected.selectionStart());
+            QVERIFY(mapped.status != LogicalFlow::Status::Refused);
+            QPointF point;
+            if (mapped.status == LogicalFlow::Status::Handled) point = mapped.values.value("characterRect").toRectF().center();
+            else {
+                const auto *text = selected.block().layout(); QVERIFY(text);
+                const int offset = selected.selectionStart() - selected.block().position();
+                const auto line = text->lineForTextPosition(offset); QVERIFY(line.isValid());
+                point = layout->blockBoundingRect(selected.block()).topLeft()
+                    + QPointF((line.cursorToX(offset) + line.cursorToX(offset + 1)) / 2, line.naturalTextRect().center().y());
+            }
+            const int hit = layout->hitTest(point, Qt::ExactHit);
+            QVERIFY(hit >= selected.selectionStart() && hit < selected.selectionEnd());
+            QCOMPARE(layout->anchorAt(point), href);
+        }
+        QVERIFY(size.width() > 0 && size.height() > 0 && size.width() < 4096 && size.height() < 4096);
+        QImage painted(qCeil(size.width()) + 2, qCeil(size.height()) + 2, QImage::Format_ARGB32_Premultiplied); painted.fill(Qt::white);
+        { QPainter painter(&painted); document->drawContents(&painter); }
+        int ink = 0;
+        for (int y = 0; y < painted.height(); ++y) for (int x = 0; x < painted.width(); ++x)
+            if (painted.pixelColor(x, y) != QColor(Qt::white)) ++ink;
+        QVERIFY(ink > 100);
+        QCOMPARE(document->toRawText(), raw); QCOMPARE(document->revision(), revision); QCOMPARE(document->characterCount(), count);
+        QCOMPARE(QJsonDocument(legacy).toJson(QJsonDocument::Compact), legacySource);
+        // The ordinary-cell grant still excludes a Container in a floating table.
+        auto unsupported = legacy; auto floatingTable = unsupported.value("table").toObject();
+        floatingTable.insert("style", QJsonObject{{"float_side", "left"}}); unsupported.insert("table", floatingTable);
+        const auto unsupportedSource = QJsonDocument(unsupported).toJson(QJsonDocument::Compact);
+        QVERIFY(!composeReadingBlocks(window, QJsonArray{unsupported}));
+        QCOMPARE(QJsonDocument(unsupported).toJson(QJsonDocument::Compact), unsupportedSource);
     }
 
 
@@ -6336,6 +6673,234 @@ private slots:
         const auto ordinary = window.blockHtml(paragraph);
         QVERIFY(ordinary.contains(FlowConstruction::scheme));
         QVERIFY(FlowConstruction::decode(firstImageName(ordinary)).value("html").toString().contains(QStringLiteral("Container action body")));
+    }
+
+    void ordinaryCellFixedFloatsKeepTypedOwnersAndPhysicalSides() {
+        MainWindow window(fixture_); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(900, 700); window.show();
+        const auto length = [](double n, const QString &unit = QStringLiteral("px")) { return QJsonObject{{"unit", unit}, {"value", n}}; };
+        const auto paragraph = [](const QString &label) {
+            return QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{
+                {"kind", "link"}, {"text", label}, {"target", label}, {"target_fragment", "Owned"}}}}};
+        };
+        const auto container = [](const QJsonArray &blocks, const QJsonObject &style = {}) {
+            return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{{"style", style}, {"blocks", blocks}}}};
+        };
+        const QJsonObject zero{{"top", length(0)}, {"right", length(0)}, {"bottom", length(0)}, {"left", length(0)}};
+        const QJsonObject automatic{{"auto", QJsonObject{}}};
+        const QJsonObject tableMargins{{"top", QJsonObject{{"length", length(.2, "em")}}}, {"right", automatic},
+            {"bottom", QJsonObject{{"length", length(.2, "em")}}}, {"left", automatic}};
+        for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) for (const QString &side : {QStringLiteral("left"), QStringLiteral("right")}) {
+            QJsonArray children;
+            for (int i = 0; i < 5; ++i) children.append(container(QJsonArray{paragraph(QStringLiteral("A%1").arg(i))},
+                QJsonObject{{"width", QJsonObject{{"length", length(2.1, "em")}}}, {"float_side", side}, {"text_align", "center"}}));
+            const auto wrapper = container(children, QJsonObject{{"text_align", "center"}});
+            const auto cell = [&](const QJsonArray &blocks) { return QJsonObject{{"spans", QJsonArray{}}, {"blocks", blocks},
+                {"style", QJsonObject{{"padding", zero}, {"width", length(50, "percent")}}}}; };
+            const QJsonObject table{{"style", QJsonObject{{"width", length(70, "percent")}, {"clear", "none"}, {"margin_values", tableMargins},
+                {"containing_direction", direction == Qt::LeftToRight ? "ltr" : "rtl"},
+                {"padding", zero}, {"border", QJsonObject{{"none", QJsonObject{}}}}, {"collapse", "separate"}}},
+                {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell(QJsonArray{wrapper}), cell(QJsonArray{paragraph("N")})}}},
+                    QJsonObject{{"cells", QJsonArray{cell(QJsonArray{paragraph("B")}), cell(QJsonArray{})}}}}}};
+            const QJsonObject block{{"kind", "table"}, {"spans", QJsonArray{}}, {"table", table}};
+            const auto outerSource = container(QJsonArray{block}, QJsonObject{{"overflow", "auto"}, {"margins", zero}});
+            const auto source = QJsonDocument(outerSource).toJson(QJsonDocument::Compact);
+            QVERIFY(composeReadingBlocks(window, QJsonArray{outerSource}, direction)); window.readingPaneAction_->trigger();
+            QTRY_VERIFY(window.reading_->isVisible());
+            auto *document = window.reading_->document(); auto *native = qobject_cast<QTextDocumentLayout *>(document->documentLayout()); QVERIFY(native);
+            QCOMPARE(native->property("_wikidictContainerFixedFloatCapability").toString(), QStringLiteral("wikidict.container-fixed-float/1"));
+            const auto first = document->find("A0", 0, QTextDocument::FindCaseSensitively); QVERIFY(!first.isNull());
+            auto *actual = first.currentTable(); QVERIFY(actual);
+            auto *outer = actual->parentFrame(); QVERIFY(outer && outer != document->rootFrame());
+            QCOMPARE(QJsonDocument::fromJson(outer->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), outerSource);
+            QVERIFY(outer->frameFormat().hasProperty(FlowConstruction::containerScrollportProperty));
+            QCOMPARE(actual->frameFormat().property(SemanticHtml::tableAutoMarginsProperty).toMap().value("autos").toList(), QVariantList({false, true, false, true}));
+            QVERIFY(!actual->cellAt(first).format().hasProperty(SemanticHtml::cellLineHeightProperty));
+            auto *actualWrapper = first.currentFrame()->parentFrame(); QVERIFY(actualWrapper); QCOMPARE(actualWrapper->parentFrame(), actual);
+            QCOMPARE(QJsonDocument::fromJson(actualWrapper->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), wrapper);
+            // The table has no outer border, but the existing HTML defaults keep
+            // each cell's own 1px solid border. Floats start at its content edge.
+            QVERIFY(!actual->format().borderCollapse());
+            const auto cellFormat = actual->cellAt(0, 0).format().toTableCellFormat();
+            QCOMPARE(actual->format().border(), qreal(0));
+            QCOMPARE(cellFormat.topPadding(), qreal(0)); QCOMPARE(cellFormat.bottomPadding(), qreal(0));
+            QCOMPARE(cellFormat.leftPadding(), qreal(0)); QCOMPARE(cellFormat.rightPadding(), qreal(0));
+            QCOMPARE(cellFormat.topBorder(), qreal(1)); QCOMPARE(cellFormat.bottomBorder(), qreal(1));
+            QCOMPARE(cellFormat.leftBorder(), qreal(1)); QCOMPARE(cellFormat.rightBorder(), qreal(1));
+            QCOMPARE(cellFormat.topBorderStyle(), QTextFrameFormat::BorderStyle_Solid);
+            QCOMPARE(cellFormat.bottomBorderStyle(), QTextFrameFormat::BorderStyle_Solid);
+            QCOMPARE(cellFormat.leftBorderStyle(), QTextFrameFormat::BorderStyle_Solid);
+            QCOMPARE(cellFormat.rightBorderStyle(), QTextFrameFormat::BorderStyle_Solid);
+            const qreal scale = native->paintDevice() ? native->paintDevice()->logicalDpiY() / 96.0 : QFontMetricsF(document->defaultFont()).fontDpi() / 96.0;
+            const auto raw = document->toRawText(); const int revision = document->revision();
+            QList<QRectF> initial; qreal wideRowHeight = 0;
+            for (qreal available : {600.0, 200.0, 600.0}) {
+                document->setTextWidth(available * scale); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+                const auto outerBox = native->frameBoundingRect(outer), tableBox = native->tableBoundingRect(actual);
+                // The two equal tracks round in device pixels with carried error.
+                // This zero-edge fixture therefore retains the rounded total request.
+                const qreal targetWidth = qRound(.7 * outerBox.width());
+                QVERIFY2(qAbs(tableBox.width() - targetWidth) < .08,
+                    qPrintable(QStringLiteral("available=%1 scale=%2 outer=%3 actual=%4 target=%5")
+                        .arg(available, 0, 'g', 17).arg(scale, 0, 'g', 17)
+                        .arg(outerBox.width(), 0, 'g', 17).arg(tableBox.width(), 0, 'g', 17)
+                        .arg(targetWidth, 0, 'g', 17)));
+                QVERIFY(qAbs(tableBox.left() - outerBox.left() - (outerBox.width() - tableBox.width()) / 2) < .08);
+                const auto cellBox = native->tableCellBoundingRect(actual, actual->cellAt(0, 0));
+                const auto next = native->tableCellBoundingRect(actual, actual->cellAt(1, 0));
+                QList<QRectF> boxes; qreal bottom = cellBox.top();
+                for (int i = 0; i < 5; ++i) {
+                    const QString label = QStringLiteral("A%1").arg(i);
+                    const auto selected = document->find(label, 0, QTextDocument::FindCaseSensitively); QVERIFY(!selected.isNull());
+                    QCOMPARE(selected.selectedText(), label); QCOMPARE(raw.count(label), 1);
+                    auto *frame = selected.currentFrame(); QCOMPARE(frame->parentFrame(), actualWrapper);
+                    const auto format = frame->frameFormat();
+                    QCOMPARE(format.position(), side == "left" ? QTextFrameFormat::FloatLeft : QTextFrameFormat::FloatRight);
+                    QCOMPARE(format.height().type(), QTextLength::VariableLength);
+                    const auto policy = format.property(FlowConstruction::containerFixedFloatProperty).toMap();
+                    QCOMPARE(policy.value("capability").toString(), QStringLiteral("wikidict.container-fixed-float/1"));
+                    QVERIFY(qAbs(format.width().rawValue() - 2.1 * policy.value("em").toDouble()) < .0001);
+                    QCOMPARE(QJsonDocument::fromJson(format.property(FlowConstruction::containerSourceProperty).toByteArray()).object(), children[i].toObject());
+                    const auto box = native->frameBoundingRect(frame); boxes.append(box); bottom = qMax(bottom, box.bottom());
+                    QVERIFY(qAbs(box.width() - format.width().rawValue() * scale) < .05);
+                    QVERIFY(box.left() >= cellBox.left() - .05 && box.right() <= cellBox.right() + .05);
+                    for (int j = 0; j < i; ++j) QVERIFY(!box.adjusted(.1, .1, -.1, -.1).intersects(boxes[j]));
+                    const auto mapped = LogicalFlow::position(document, selected.selectionStart());
+                    QCOMPARE(mapped.status, LogicalFlow::Status::Handled);
+                    const QPointF point = mapped.values.value("characterRect").toRectF().center();
+                    const int hit = native->hitTest(point, Qt::ExactHit); QVERIFY(hit >= selected.selectionStart() && hit < selected.selectionEnd());
+                    QCOMPARE(native->anchorAt(point), selected.charFormat().anchorHref());
+                    QVERIFY(selected.charFormat().anchorHref().contains(label)); QVERIFY(selected.charFormat().anchorHref().endsWith("#Owned"));
+                }
+                // Native cell insets quantize each scaled padding/border to 1/64px.
+                const auto inset = [scale](qreal value) { return std::floor(value * scale * 64) / 64; };
+                const qreal contentLeft = cellBox.left() + inset(cellFormat.leftPadding()) + inset(cellFormat.leftBorder());
+                const qreal contentRight = cellBox.right() - inset(cellFormat.rightPadding()) - inset(cellFormat.rightBorder());
+                const qreal actualEdge = side == "left" ? boxes.first().left() : boxes.first().right();
+                const qreal expectedEdge = side == "left" ? contentLeft : contentRight;
+                QVERIFY2(qAbs(actualEdge - expectedEdge) < .05,
+                    qPrintable(QStringLiteral("available=%1 scale=%2 direction=%3 side=%4 cell=[%5,%6] content=[%7,%8] actual=%9 expected=%10")
+                        .arg(available, 0, 'g', 17).arg(scale, 0, 'g', 17).arg(int(direction)).arg(side)
+                        .arg(cellBox.left(), 0, 'g', 17).arg(cellBox.right(), 0, 'g', 17)
+                        .arg(contentLeft, 0, 'g', 17).arg(contentRight, 0, 'g', 17)
+                        .arg(actualEdge, 0, 'g', 17).arg(expectedEdge, 0, 'g', 17)));
+                QVERIFY(next.top() >= bottom - .05); QVERIFY(cellBox.bottom() >= bottom - .05);
+                QVERIFY(qAbs(native->frameBoundingRect(actualWrapper).height()) < .05);
+                if (available == 200) { QVERIFY(boxes.last().top() > boxes.first().top()); QVERIFY(cellBox.height() > wideRowHeight); }
+                else if (initial.isEmpty()) { initial = boxes; wideRowHeight = cellBox.height(); }
+                else { QCOMPARE(boxes, initial); QCOMPARE(cellBox.height(), wideRowHeight); }
+                QCOMPARE(document->toRawText(), raw); QCOMPARE(document->revision(), revision);
+                QCOMPARE(QJsonDocument(outerSource).toJson(QJsonDocument::Compact), source);
+            }
+            auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+            const auto accessibleText = accessible->textInterface()->text(0, accessible->textInterface()->characterCount());
+            for (int i = 0; i < 5; ++i) QVERIFY(accessibleText.contains(QStringLiteral("A%1").arg(i)));
+            QImage painted(1000, 900, QImage::Format_ARGB32_Premultiplied); painted.fill(Qt::white);
+            { QPainter painter(&painted); QAbstractTextDocumentLayout::PaintContext context; native->draw(&painter, context); }
+            int ink = 0; for (int y = 0; y < painted.height(); ++y) for (int x = 0; x < painted.width(); ++x) if (painted.pixelColor(x, y) != QColor(Qt::white)) ++ink;
+            QVERIFY(ink > 100); QCOMPARE(document->toRawText(), raw); QCOMPARE(document->revision(), revision);
+            if (direction == Qt::LeftToRight && side == QStringLiteral("left")) {
+                auto *browser = window.reading_; const auto entry = window.currentEntry_;
+                QObject::disconnect(browser, nullptr, &window, nullptr);
+                QSignalSpy actions(browser, &QTextBrowser::anchorClicked);
+                for (int viewportWidth : {900, 640}) {
+                    window.resize(viewportWidth, 700); QCoreApplication::processEvents();
+                    window.readingPaneAction_->trigger();
+                    QTRY_COMPARE(window.compactNavigation_, viewportWidth < 720);
+                    QTRY_VERIFY(browser->isVisible() && browser->viewport()->isVisible());
+                    native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+                    const auto outerBox = native->frameBoundingRect(outer), tableBox = native->tableBoundingRect(actual);
+                    QVERIFY(qAbs(tableBox.width() - qRound(.7 * outerBox.width())) < .08);
+                    QVERIFY(qAbs(tableBox.left() - outerBox.left() - (outerBox.width() - tableBox.width()) / 2) < .08);
+                    const auto cellBox = native->tableCellBoundingRect(actual, actual->cellAt(0, 0));
+                    qreal bottom = cellBox.top();
+                    for (int i = 0; i < 5; ++i) {
+                        const auto selected = document->find(QStringLiteral("A%1").arg(i), 0, QTextDocument::FindCaseSensitively);
+                        QVERIFY(!selected.isNull()); QCOMPARE(selected.currentFrame()->parentFrame(), actualWrapper);
+                        const auto box = native->frameBoundingRect(selected.currentFrame());
+                        QVERIFY(box.left() >= cellBox.left() - .05 && box.right() <= cellBox.right() + .05);
+                        bottom = qMax(bottom, box.bottom());
+                    }
+                    QVERIFY(cellBox.bottom() >= bottom - .05);
+                    window.activateWindow(); browser->setFocus(Qt::TabFocusReason); QTRY_VERIFY(browser->hasFocus());
+                    // Each size checks first-link traversal from an unselected cursor.
+                    // Ctrl+Home deliberately scrolls without clearing the last link.
+                    browser->setTextCursor(QTextCursor(browser->document()));
+                    QVERIFY(!browser->textCursor().hasSelection());
+                    QTest::keyClick(browser, Qt::Key_Home, Qt::ControlModifier);
+                    QTest::keyClick(browser, Qt::Key_Tab); QTRY_COMPARE(browser->textCursor().selectedText(), QStringLiteral("A0"));
+                    QCOMPARE(browser->textCursor().charFormat().anchorHref(), first.charFormat().anchorHref());
+                    QVERIFY(browser->viewport()->rect().intersects(browser->cursorRect(first)));
+                    const auto priorActions = actions.size(); QTest::keyClick(browser, Qt::Key_Return);
+                    QTRY_COMPARE(actions.size(), priorActions + 1);
+                    QCOMPARE(actions.last().first().toUrl(), QUrl(first.charFormat().anchorHref()));
+                    const QString folder = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                    if (!folder.isEmpty()) {
+                        QVERIFY(QDir().mkpath(folder));
+                        QVERIFY(window.grab().save(QDir(folder).filePath(QStringLiteral("constructed-ru-floats-%1.png").arg(viewportWidth))));
+                    }
+                    QCOMPARE(document->toRawText(), raw); QCOMPARE(document->revision(), revision); QCOMPARE(window.currentEntry_, entry);
+                    QCOMPARE(QJsonDocument::fromJson(outer->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), outerSource);
+                    QCOMPARE(QJsonDocument(outerSource).toJson(QJsonDocument::Compact), source);
+                }
+            }
+        }
+    }
+
+    void ordinaryCellFixedFloatAdmissionKeepsEmptyAndUnsupportedDistinct() {
+        MainWindow window(fixture_); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const auto length = [](double n, const QString &unit = QStringLiteral("px")) { return QJsonObject{{"unit", unit}, {"value", n}}; };
+        const auto paragraph = [](const QString &text, double scale = 1) { return QJsonObject{{"kind", "paragraph"},
+            {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", text}, {"font_scale", scale}, {"font_scale_basis", "normal_body"}}}}}; };
+        const auto box = [](const QJsonObject &style, const QJsonArray &blocks) { return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}},
+            {"container", QJsonObject{{"style", style}, {"blocks", blocks}}}}; };
+        const QJsonObject style{{"float_side", "left"}, {"width", QJsonObject{{"length", length(33.6)}}}};
+        const QJsonArray content{paragraph("Owned")}; const auto valid = box(style, content);
+        const auto wrap = [](const QJsonObject &child) {
+            const QJsonObject table{{"style", QJsonObject{{"clear", "none"}}}, {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{
+                QJsonObject{{"spans", QJsonArray{}}, {"blocks", QJsonArray{child}}}}}}}}};
+            return QJsonObject{{"kind", "table"}, {"spans", QJsonArray{}}, {"table", table}};
+        };
+        QVERIFY(!composeReadingBlocks(window, QJsonArray{valid})); // No real cell owner.
+        QVERIFY_EXCEPTION_THROWN(window.blockHtml(valid, {}, 2), DictApiError); // Depth alone grants no cell context.
+        const auto source = wrap(valid); const auto bytes = QJsonDocument(source).toJson(QJsonDocument::Compact);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{source}));
+        auto *document = window.reading_->document(); auto *layout = document->documentLayout(); layout->documentSize();
+        QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        const auto capability = layout->property("_wikidictContainerFixedFloatCapability");
+        layout->setProperty("_wikidictContainerFixedFloatCapability", QVariant());
+        QVERIFY(!composeReadingBlocks(window, QJsonArray{source}));
+        layout->setProperty("_wikidictContainerFixedFloatCapability", capability);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{source}));
+        QVector<QJsonObject> badStyles;
+        auto bad = style; bad.remove("width"); badStyles.append(bad);
+        bad = style; bad.insert("width", QJsonObject{{"length", length(50, "percent")}}); badStyles.append(bad);
+        bad = style; bad.insert("height", length(30)); badStyles.append(bad);
+        bad = style; bad.insert("max_width", QJsonObject{{"length", length(20)}}); badStyles.append(bad);
+        bad = style; bad.insert("overflow", "auto"); badStyles.append(bad);
+        bad = style; bad.insert("margins", QJsonObject{{"top", length(0)}, {"right", length(1)}, {"bottom", length(0)}, {"left", length(0)}}); badStyles.append(bad);
+        for (const auto &unsupported : badStyles) {
+            const auto input = box(unsupported, content); const auto before = QJsonDocument(input).toJson(QJsonDocument::Compact);
+            QVERIFY_EXCEPTION_THROWN(FlowConstruction::plainContainerFormat(input, 16, false), std::runtime_error);
+            QCOMPARE(QJsonDocument(input).toJson(QJsonDocument::Compact), before);
+        }
+        auto zero = style; zero.insert("width", QJsonObject{{"length", length(0)}});
+        const auto empty = box(zero, {}); QVERIFY(composeReadingBlocks(window, QJsonArray{wrap(empty)}));
+        layout->documentSize(); QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QList<QTextFrame *> floats;
+        const auto visit = [&](auto &&self, QTextFrame *frame) -> void {
+            if (frame->frameFormat().hasProperty(FlowConstruction::containerFixedFloatProperty)) floats.append(frame);
+            for (auto *child : frame->childFrames()) self(self, child);
+        };
+        visit(visit, document->rootFrame()); QCOMPARE(floats.size(), 1);
+        QCOMPARE(layout->frameBoundingRect(floats.first()).width(), 0.0); QCOMPARE(layout->frameBoundingRect(floats.first()).height(), 0.0);
+        const auto storage = document->findBlock(floats.first()->firstPosition()); QCOMPARE(storage.length(), 1); QVERIFY(!storage.isVisible());
+        for (const auto &realContent : {QJsonArray{paragraph(QString(QChar::Nbsp))}, QJsonArray{paragraph("Zero font", 0)}})
+            QVERIFY_EXCEPTION_THROWN(FlowConstruction::plainContainerFormat(box(zero, realContent), 16, false), std::runtime_error);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{source})); layout->documentSize();
+        QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QCOMPARE(document->find("Owned").selectedText(), QStringLiteral("Owned"));
+        QCOMPARE(QJsonDocument(source).toJson(QJsonDocument::Compact), bytes);
     }
 
     void plainContainerMaterializesHierarchyAndNativeSource() {
