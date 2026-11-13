@@ -477,6 +477,88 @@ private:
     }
 
 private slots:
+    void readingPaneKeyboardFocusCuePreservesContentAndGeometry()
+    {
+        MainWindow window{QString()}; window.resize(900, 700); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        auto *browser = window.reading_; auto *tabs = window.entryTabs_->tabBar();
+        window.entryTabs_->setCurrentWidget(browser); window.showCompactPane(false);
+        const QString oldTheme = window.learning_.settings().theme;
+        const auto restoreTheme = qScopeGuard([&] { browser->setPalette(QPalette()); window.learning_.setTheme(oldTheme); window.applyTheme(); });
+        for (bool dark : {false, true}) {
+            window.resize(dark ? 640 : 900, dark ? 600 : 700); window.showCompactPane(false);
+            browser->setPalette(QPalette());
+            window.learning_.setTheme(dark ? QStringLiteral("dark") : QStringLiteral("light")); window.applyTheme();
+            browser->setPlainText(QStringLiteral("Focus target remains in the same place.\nKeyboard focus belongs to this reading pane."));
+            auto *doc = browser->document(); auto *layout = doc->documentLayout();
+            const QPalette themePalette = browser->palette();
+            for (bool lowContrastHighlight : {false, true}) {
+                QPalette palette = themePalette;
+                if (lowContrastHighlight) palette.setColor(QPalette::Highlight, palette.color(QPalette::Base));
+                browser->setPalette(palette);
+                QTRY_VERIFY(browser->isVisible() && browser->viewport()->width() > 100 && !window.readingFloatLayoutScheduled_);
+                layout->documentSize(); QVERIFY(!doc->property("wikidict.figure.validationPending").toBool());
+                QTextCursor cursor(doc); cursor.movePosition(QTextCursor::Start); browser->setTextCursor(cursor);
+                tabs->setFocus(Qt::TabFocusReason); QTRY_VERIFY(tabs->hasFocus()); QVERIFY(!browser->hasFocus());
+                const QString raw = doc->toRawText(); const int count = doc->characterCount(), revision = doc->revision();
+                const auto entry = window.currentEntry_; const QRect geometry = browser->viewport()->geometry();
+                const QSizeF size = layout->documentSize(); const auto block = doc->begin(); const auto line = block.layout()->lineAt(0); QVERIFY(line.isValid());
+                const QRectF blockBox = layout->blockBoundingRect(block);
+                const QPointF point = blockBox.topLeft() + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
+                const int hit = layout->hitTest(point, Qt::ExactHit); QVERIFY(hit >= block.position() && hit < block.position() + 5);
+                const auto before = browser->viewport()->grab().toImage(); QVERIFY(!before.isNull());
+                QTest::keyClick(tabs, Qt::Key_Tab); QTRY_VERIFY(browser->hasFocus());
+                auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->state().focused);
+                const auto focused = browser->viewport()->grab().toImage(); QCOMPARE(focused.size(), before.size());
+                const int inset = qCeil(8 * focused.devicePixelRatio()); const QRect interior = focused.rect().adjusted(inset, inset, -inset, -inset);
+                QVERIFY(!interior.isEmpty()); QCOMPARE(focused.copy(interior), before.copy(interior));
+                const auto luminance = [](const QColor &color) {
+                    const auto linear = [](double value) { return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4); };
+                    return 0.2126 * linear(color.redF()) + 0.7152 * linear(color.greenF()) + 0.0722 * linear(color.blueF());
+                };
+                QColor expectedCue = palette.color(lowContrastHighlight ? QPalette::Text : QPalette::Highlight); expectedCue.setAlpha(255);
+                int changed = 0, opaqueCuePixels = 0; int edges[4] = {};
+                double minimumContrast = 100;
+                for (int y = 0; y < focused.height(); ++y) for (int x = 0; x < focused.width(); ++x) {
+                    if (focused.pixel(x, y) == before.pixel(x, y)) continue;
+                    ++changed; QVERIFY(!interior.contains(x, y));
+                    if (focused.pixelColor(x, y) == expectedCue) {
+                        ++opaqueCuePixels;
+                        if (x < inset) ++edges[0]; if (x >= focused.width() - inset) ++edges[1];
+                        if (y < inset) ++edges[2]; if (y >= focused.height() - inset) ++edges[3];
+                        const double on = luminance(focused.pixelColor(x, y)), off = luminance(before.pixelColor(x, y));
+                        minimumContrast = qMin(minimumContrast, (qMax(on, off) + 0.05) / (qMin(on, off) + 0.05));
+                    }
+                }
+                QVERIFY2(changed > 0, dark ? "Dark narrow reading pane has no visible keyboard focus cue" : "Light wide reading pane has no visible keyboard focus cue");
+                const double dpr = focused.devicePixelRatio();
+                const int minimumArea = qCeil(3 * dpr * (focused.width() + focused.height()) - 64 * dpr * dpr);
+                QVERIFY2(opaqueCuePixels >= minimumArea, qPrintable(QStringLiteral("Opaque cue area %1 < %2; dark=%3 fallback=%4").arg(opaqueCuePixels).arg(minimumArea).arg(dark).arg(lowContrastHighlight)));
+                QVERIFY2(minimumContrast >= 3.0, qPrintable(QStringLiteral("Cue contrast %1; dark=%2 fallback=%3").arg(minimumContrast).arg(dark).arg(lowContrastHighlight)));
+                for (int edge = 0; edge < 4; ++edge) {
+                    const int length = edge < 2 ? focused.height() : focused.width();
+                    QVERIFY2(edges[edge] >= qCeil(dpr * (length - 2 * inset)), qPrintable(QStringLiteral("Cue edge %1 has only %2 opaque pixels").arg(edge).arg(edges[edge])));
+                }
+                QCOMPARE(browser->viewport()->geometry(), geometry); QCOMPARE(layout->documentSize(), size); QCOMPARE(layout->blockBoundingRect(block), blockBox);
+                QCOMPARE(layout->hitTest(point, Qt::ExactHit), hit); QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(doc->revision(), revision);
+                QCOMPARE(window.currentEntry_, entry); QVERIFY(!browser->textCursor().hasSelection());
+                tabs->setFocus(Qt::BacktabFocusReason); QTRY_VERIFY(tabs->hasFocus()); QVERIFY(!browser->hasFocus());
+                QVERIFY(!accessible->state().focused); QCOMPARE(browser->viewport()->grab().toImage(), before);
+                const QPoint blank(browser->viewport()->width() / 2, browser->viewport()->height() - 24);
+                QTest::mouseClick(browser->viewport(), Qt::LeftButton, Qt::NoModifier, blank); QTRY_VERIFY(browser->hasFocus());
+                QCOMPARE(browser->viewport()->grab().toImage(), before);
+                QCOMPARE(browser->viewport()->geometry(), geometry); QCOMPARE(layout->documentSize(), size); QCOMPARE(layout->blockBoundingRect(block), blockBox);
+                QCOMPARE(layout->hitTest(point, Qt::ExactHit), hit); QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->revision(), revision);
+                const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if (!directory.isEmpty() && !lowContrastHighlight) {
+                    QVERIFY(QDir().mkpath(directory)); const QString suffix = dark ? QStringLiteral("dark-narrow") : QStringLiteral("light-wide");
+                    QVERIFY(before.save(QDir(directory).filePath(QStringLiteral("reading-pane-unfocused-%1.png").arg(suffix))));
+                    QVERIFY(focused.save(QDir(directory).filePath(QStringLiteral("reading-pane-focused-%1.png").arg(suffix))));
+                }
+            }
+        }
+    }
+
     void typedFontFeaturesResetReplaceAndPreserveSpanOrigins()
     {
         MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);

@@ -716,6 +716,23 @@ protected:
         original->setProperty("wikidict.figure.linkFocusOwner", missingState.focusVisible ? QVariant(missingState.focused) : QVariant());
         if (!guard || !original || document() != original) return;
         QTextBrowser::paintEvent(event);
+        if (!guard || !original || document() != original) return;
+        if (hasFocus() && missingState.focusVisible) {
+            const auto luminance = [](const QColor &color) {
+                const auto linear = [](double value) { return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4); };
+                return 0.2126 * linear(color.redF()) + 0.7152 * linear(color.greenF()) + 0.0722 * linear(color.blueF());
+            };
+            const double background = luminance(palette().color(QPalette::Base));
+            QColor cue = palette().color(QPalette::Highlight); cue.setAlpha(255);
+            const double highlight = luminance(cue);
+            if ((qMax(highlight, background) + 0.05) / (qMin(highlight, background) + 0.05) < 3.0) {
+                cue = palette().color(QPalette::Text); cue.setAlpha(255);
+            }
+            QPainter painter(viewport());
+            painter.setPen(QPen(cue, 2)); painter.setBrush(Qt::NoBrush);
+            // Keep an opaque two-DIP cue inside the viewport without tinting text.
+            painter.drawRect(QRectF(viewport()->rect()).adjusted(1, 1, -1, -1));
+        }
         if (!guard || !original || document() != original || !hasFocus() || !missingState.focusVisible
             || !property("wikidict.missing.nativeFocus").toBool()) return;
         const QRectF box = MissingFigurePaint::focusBox(original, missingState.focused);
