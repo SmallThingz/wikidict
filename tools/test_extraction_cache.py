@@ -512,6 +512,160 @@ class ExtractionCacheTest(unittest.TestCase):
 
 
 class CompletedExpanderTests(unittest.TestCase):
+    def _trace_seal_digest_reads(self, paths):
+        import contextlib
+        targets = {Path(path).absolute() for path in paths}
+        counts = {'bytes': 0, 'reads': 0, 'opens': 0}
+        original_open = Path.open
+        class Observed:
+            def __init__(self, stream): self.stream = stream
+            def __enter__(self): self.stream.__enter__(); return self
+            def __exit__(self, *args): return self.stream.__exit__(*args)
+            def __getattr__(self, name): return getattr(self.stream, name)
+            def read(self, *args):
+                value = self.stream.read(*args)
+                if value:
+                    counts['bytes'] += len(value); counts['reads'] += 1
+                return value
+        def opened(path, *args, **kwargs):
+            stream = original_open(path, *args, **kwargs)
+            mode = args[0] if args else kwargs.get('mode', 'r')
+            if mode == 'rb' and path.absolute() in targets:
+                counts['opens'] += 1
+                return Observed(stream)
+            return stream
+        @contextlib.contextmanager
+        def trace():
+            with mock.patch.object(Path, 'open', opened): yield counts
+        return trace()
+
+    def test_seal_digest_memo_preserves_complete_manifest_and_alias_reads(self):
+        original = cache.stable_file_digest
+        for alias in ('symlink', 'hardlink'):
+            with self.subTest(alias=alias):
+                root, dump, snapshots = self.fixture(ready=False)
+                source = Path(snapshots['interface-messages.tsv'])
+                installed = root / 'interface-messages.tsv'
+                if alias == 'hardlink':
+                    installed.unlink(); cache.os.link(source, installed)
+                def without_memo(path, **kwargs):
+                    kwargs.pop('_memo', None)
+                    return original(path, **kwargs)
+                with self._trace_seal_digest_reads((source, installed)) as baseline:
+                    with mock.patch.object(cache, 'stable_file_digest', side_effect=without_memo):
+                        self.assertEqual(0, self.call('seal-expander', root, dump, snapshots))
+                marker = root / cache.COMPLETED_EXPANDER
+                expected = marker.read_bytes(); marker.unlink()
+                with self._trace_seal_digest_reads((source, installed)) as candidate:
+                    self.assertEqual(0, self.call('seal-expander', root, dump, snapshots))
+                self.assertEqual(expected, marker.read_bytes())
+                self.assertEqual({'bytes': source.stat().st_size * 3, 'reads': 3, 'opens': 3}, baseline)
+                self.assertEqual({'bytes': source.stat().st_size, 'reads': 1, 'opens': 3}, candidate)
+                print('SEAL_DIGEST_MEMO_COUNTS ' + json.dumps(dict(alias=alias, baseline=baseline, candidate=candidate), sort_keys=True))
+                # A distinct call must hash again; the first transaction is not authority.
+                marker.unlink()
+                with self._trace_seal_digest_reads((source, installed)) as again:
+                    self.assertEqual(0, self.call('seal-expander', root, dump, snapshots))
+                self.assertEqual(expected, marker.read_bytes())
+                self.assertEqual(candidate, again)
+
+    def test_seal_digest_memo_rehashes_content_ctime_mode_and_inode_changes(self):
+        for changed in ('content-restored-mtime', 'mode', 'atomic-same-bytes', 'removed'):
+            with self.subTest(changed=changed):
+                path = self.base / ('digest-' + changed); path.write_bytes(b'original')
+                memo = {}; original = cache.stable_file_digest(path, _memo=memo)
+                info = path.stat()
+                if changed == 'content-restored-mtime':
+                    path.write_bytes(b'modified')
+                    cache.os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+                    self.assertNotEqual(info.st_ctime_ns, path.stat().st_ctime_ns)
+                    self.assertEqual(info.st_size, path.stat().st_size)
+                    self.assertEqual(info.st_mtime_ns, path.stat().st_mtime_ns)
+                elif changed == 'mode': path.chmod(0o600 if info.st_mode & 0o777 != 0o600 else 0o644)
+                elif changed == 'atomic-same-bytes':
+                    other = path.with_suffix('.new'); other.write_bytes(b'original')
+                    cache.os.utime(other, ns=(info.st_atime_ns, info.st_mtime_ns))
+                    other.replace(path); self.assertNotEqual(info.st_ino, path.stat().st_ino)
+                else: path.unlink()
+                if changed == 'removed':
+                    with self.assertRaises(FileNotFoundError): cache.stable_file_digest(path, _memo=memo)
+                    continue
+                with self._trace_seal_digest_reads((path,)) as counts:
+                    actual = cache.stable_file_digest(path, _memo=memo)
+                self.assertEqual(path.stat().st_size, counts['bytes'])
+                self.assertEqual(1, counts['reads'])
+                if changed == 'content-restored-mtime': self.assertNotEqual(original, actual)
+                else: self.assertEqual(original, actual)
+
+    def test_seal_digest_memo_checks_alias_policy_and_retargeted_payload(self):
+        first = self.base / 'memo-target-first'; first.write_bytes(b'first')
+        second = self.base / 'memo-target-second'; second.write_bytes(b'other')
+        link = self.base / 'memo-link'; link.symlink_to(first)
+        memo = {}; expected = cache.stable_file_digest(first, _memo=memo)
+        with self._trace_seal_digest_reads((first,)) as counts:
+            self.assertEqual(expected, cache.stable_file_digest(link, snapshot=True, _memo=memo))
+        self.assertEqual({'bytes': 0, 'reads': 0, 'opens': 1}, counts)
+        with self.assertRaisesRegex(ValueError, 'Linked expander asset'):
+            cache.stable_file_digest(link, _memo=memo)
+        link.unlink(); link.symlink_to(second)
+        with self._trace_seal_digest_reads((second,)) as counts:
+            changed = cache.stable_file_digest(link, snapshot=True, _memo=memo)
+        self.assertNotEqual(expected, changed); self.assertEqual(5, counts['bytes'])
+
+    def test_seal_digest_memo_rejects_mutation_during_hits_and_misses(self):
+        for cached in (False, True):
+            with self.subTest(cached=cached):
+                path = self.base / ('during-' + str(cached)); path.write_bytes(b'original')
+                memo = {}
+                if cached: cache.stable_file_digest(path, _memo=memo)
+                actual_fstat = cache.os.fstat; calls = 0
+                def changing(fd):
+                    nonlocal calls
+                    result = actual_fstat(fd); calls += 1
+                    if calls == 2:
+                        before = path.stat(); path.write_bytes(b'modified')
+                        cache.os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+                        return actual_fstat(fd)
+                    return result
+                with mock.patch.object(cache.os, 'fstat', side_effect=changing):
+                    with self.assertRaisesRegex(ValueError, 'changed during reading'):
+                        cache.stable_file_digest(path, _memo=memo)
+                self.assertEqual({}, memo)
+                self.assertEqual(cache.stable_file_digest(path), cache.stable_file_digest(path, _memo=memo))
+
+    def test_seal_digest_memo_final_guards_refuse_transaction_changes(self):
+        for changed in ('content-restored-mtime', 'mode', 'atomic-same-bytes', 'retarget-same-inode', 'membership'):
+            with self.subTest(changed=changed):
+                root, dump, snapshots = self.fixture(ready=False)
+                source = Path(snapshots['interface-messages.tsv'])
+                installed = root / 'interface-messages.tsv'
+                alternative = self.base / ('memo-alternative-' + str(self.sequence))
+                if changed == 'retarget-same-inode': cache.os.link(source, alternative)
+                original = cache.stable_file_digest; fired = False
+                def after_selected(path, **kwargs):
+                    nonlocal fired
+                    result = original(path, **kwargs)
+                    if not fired and Path(path) == source and kwargs.get('_memo') is not None:
+                        fired = True; info = source.stat(); raw = source.read_bytes()
+                        if changed == 'content-restored-mtime':
+                            source.write_bytes(bytes([raw[0] ^ 1]) + raw[1:])
+                            cache.os.utime(source, ns=(info.st_atime_ns, info.st_mtime_ns))
+                        elif changed == 'mode': source.chmod(0o644 if info.st_mode & 0o777 == 0o600 else 0o600)
+                        elif changed == 'atomic-same-bytes':
+                            alternative.write_bytes(raw)
+                            cache.os.utime(alternative, ns=(info.st_atime_ns, info.st_mtime_ns))
+                            alternative.replace(source)
+                        elif changed == 'retarget-same-inode':
+                            installed.unlink(); installed.symlink_to(alternative)
+                        else: (root / 'modules/extra.lua').write_bytes(b'return 2')
+                    return result
+                with mock.patch.object(cache, 'stable_file_digest', side_effect=after_selected):
+                    with self.assertRaises(ValueError): self.call('seal-expander', root, dump, snapshots)
+                self.assertTrue(fired)
+                self.assertFalse((root / cache.COMPLETED_EXPANDER).exists())
+                self.assertEqual(b'building', (root / '.incomplete').read_bytes())
+                self.assertEqual(b'linking', (root.parent / '.incomplete').read_bytes())
+
     def test_native_cache_helper_startup_has_no_site_side_effect(self):
         import os
         import re

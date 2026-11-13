@@ -71,7 +71,7 @@ def _full_stamp(info):
             info.st_mtime_ns, info.st_ctime_ns)
 
 
-def stable_file_digest(path, *, snapshot=False):
+def stable_file_digest(path, *, snapshot=False, _memo=None):
     """Hash held regular bytes; only explicitly selected snapshots may be links."""
     import stat
     path = Path(path)
@@ -82,18 +82,31 @@ def stable_file_digest(path, *, snapshot=False):
     before = target.stat()
     if not stat.S_ISREG(before.st_mode):
         raise ValueError("Nonregular expander asset")
-    digest = hashlib.sha256()
-    with target.open("rb") as stream:
-        if _full_stamp(os.fstat(stream.fileno())) != _full_stamp(before):
-            raise ValueError("Expander asset replaced before reading")
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-        if _full_stamp(os.fstat(stream.fileno())) != _full_stamp(before):
-            raise ValueError("Expander asset changed during reading")
-    if (_full_stamp(path.stat()) != _full_stamp(before) or
-            (os.readlink(path) if path.is_symlink() else None) != link):
-        raise ValueError("Expander asset path changed during reading")
-    return [before.st_size, digest.hexdigest()]
+    key = (os.getpid(), *_full_stamp(before)) if _memo is not None else None
+    try:
+        with target.open("rb") as stream:
+            if _full_stamp(os.fstat(stream.fileno())) != _full_stamp(before):
+                raise ValueError("Expander asset replaced before reading")
+            # Only this completed-identity transaction supplies a memo. Every
+            # alias still opens its current target and earns both fd/path guards.
+            value = _memo.get(key) if _memo is not None else None
+            if value is None:
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                value = (before.st_size, digest.hexdigest())
+            if _full_stamp(os.fstat(stream.fileno())) != _full_stamp(before):
+                raise ValueError("Expander asset changed during reading")
+        if (_full_stamp(path.stat()) != _full_stamp(before) or
+                (os.readlink(path) if path.is_symlink() else None) != link):
+            raise ValueError("Expander asset path changed during reading")
+    except BaseException:
+        if _memo is not None:
+            _memo.pop(key, None)
+        raise
+    if _memo is not None:
+        _memo[key] = value
+    return list(value)
 
 
 def _receipt_identity(path, *, index=False):
@@ -188,6 +201,8 @@ def completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshot
     source = completed_source_binding(root, dump)
     validate_extraction_completion(root)
     providers = {}
+    # Operation-local hashes only: no previous seal or caller-provided digest.
+    digests = {}
     for name, selected in snapshots.items():
         installed = root / name
         if selected is None:
@@ -195,8 +210,8 @@ def completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshot
                 raise ValueError("Unexpected expander snapshot")
             providers[name] = None
         else:
-            value = stable_file_digest(Path(selected), snapshot=True)
-            if stable_file_digest(installed, snapshot=True) != value:
+            value = stable_file_digest(Path(selected), snapshot=True, _memo=digests)
+            if stable_file_digest(installed, snapshot=True, _memo=digests) != value:
                 raise ValueError("Selected expander snapshot differs")
             providers[name] = value
     # Generated modules/indexes must remain regular owned assets. Snapshot links
@@ -206,7 +221,8 @@ def completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshot
     if not required <= names:
         raise ValueError("Incomplete native expander output")
     stamps = {name: _full_stamp((root / name).stat()) for name in names}
-    assets = [[name, *stable_file_digest(root / name, snapshot=name in snapshots)]
+    assets = [[name, *stable_file_digest(root / name, snapshot=name in snapshots,
+                                        _memo=digests if name in snapshots else None)]
               for name in sorted(names)]
     runtime_libraries = tool_identity(root / "dict-bundle-expander")
     plans = [[name, *stable_file_digest(root.parent / name)] for name in
