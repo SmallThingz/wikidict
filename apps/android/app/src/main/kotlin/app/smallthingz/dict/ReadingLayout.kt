@@ -178,7 +178,7 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymo
             val key = "block-$sectionIndex-$blockIndex"
             val authoredList = block.listPath.isNotEmpty() && block.kind in
                 setOf("definition", "example", "quotation", "list_item", "list_detail", "term", "indent")
-            if (block.kind == "blank" || (block.style == null && block.table == null && block.figure == null && block.flow == null && block.kind != "rule" && block.spans.isEmpty() && !authoredList && !(block.kind == "heading" && (block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty())))) return@forEachIndexed
+            if (block.kind == "blank" || (block.style == null && block.table == null && block.figure == null && block.flow == null && block.container == null && block.kind != "rule" && block.spans.isEmpty() && !authoredList && !(block.kind == "heading" && (block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty())))) return@forEachIndexed
             // A caption owns one inline media control across all of its typed lines.
             // Splitting its paragraph would append that control to every resulting row.
             if (block.style != null || block.figure != null || block.flow != null || block.kind != "paragraph" || block.spans.size < 80 || block.spans.none { it.kind == "line_break" } || block.spans.any {

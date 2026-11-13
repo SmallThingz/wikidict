@@ -73,6 +73,41 @@ class ReadingLayoutTest {
         assertTrue(readingRows(listOf(Section(2, "", listOf(dense.copy(style = null))))).mapNotNull { it.block }.size > 1)
     }
 
+    @Test fun emptySpanContainersRetainExactTableActionsAndNativeEntryRows() {
+        val zero = ContainerMargin.Length(StyleLength(StyleLengthUnit.Px, 0f))
+        val policy = TableBlockViewport(639,
+            TableStyle(width = StyleWidth(StyleWidthUnit.Percent, 70f),
+                marginValues = ContainerMargins(zero, ContainerMargin.Auto, zero, ContainerMargin.Auto),
+                containingDirection = TableContainingDirection.Ltr),
+            ContainerBoxSizing.ContentBox, StyleWidth(StyleWidthUnit.Percent, 100f),
+            TableStyle(collapse = TableCollapse.Collapse), TableContainingDirection.Rtl, "ru")
+        val action = Span("link", "reset", "native-reset-target")
+        val table = Table(emptyList(), listOf(listOf(Cell(listOf(action), false, 1, 1))), blockViewport = policy)
+        val tableBlock = Block("table", 0, emptyList(), table = table)
+        val container = Container(listOf(tableBlock), ContainerStyle())
+        val outer = Block("container", 0, emptyList(), container = container)
+        val nested = Block("container", 0, emptyList(), container = Container(listOf(outer), ContainerStyle()))
+        val emptyParagraph = Block("paragraph", 0, emptyList())
+        for (source in listOf(outer, nested)) {
+            val entry = Entry("Native source owner", emptyList(), "language", "Japanese", "ja",
+                listOf(Section(2, "", listOf(emptyParagraph, source))), emptyList(), edition = "ja")
+            val rows = entry.readingRows
+            assertEquals(listOf("heading-0", "block-0-1"), rows.map { it.key })
+            assertSame(source, rows.last().block)
+            val visible = visibleEntryReadingRows(entry, setOf("heading-0"))
+            assertEquals(rows, visible)
+            assertEquals(listOf(1..1), floatBodyRuns(visible))
+            val retained = checkNotNull(visible.last().block!!.container)
+            val actual = if (source === outer) retained else checkNotNull(retained.blocks.single().container)
+            assertSame(container, actual)
+            assertSame(tableBlock, actual.blocks.single())
+            assertSame(table, actual.blocks.single().table)
+            assertSame(policy, actual.blocks.single().table!!.blockViewport)
+            assertSame(action, actual.blocks.single().table!!.rows.single().single().spans.single())
+            assertTrue(visible.none { it.block === emptyParagraph })
+        }
+    }
+
     @Test fun descriptionOnlyAndImageOwnedAdviceStayDiscoverableWithoutChangingImageNames() {
         val own = Span("text", "", image = InlineImage("Own.svg", 15, alt = " ", tooltip = "Own D"), tooltip = "Raw C")
         val silent = Span("text", "", image = InlineImage("Silent.svg", 15, alt = "Silent label", tooltip = ""), tooltip = "Raw C")

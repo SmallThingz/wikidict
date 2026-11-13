@@ -430,7 +430,7 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                     return layout(finalScroll.surfaceWidth, height) {
                         fun Placeable.placeAt(y: Int) {
                             val left = floor(finalScroll.childTranslation).toInt()
-                            placeWithLayer(left - (width - measuredWidth) / 2, y - (height - measuredHeight) / 2) {
+                            placeWithLayer(left - (width - measuredWidth) / 2, y - (this.height - measuredHeight) / 2) {
                                 translationX = finalScroll.childTranslation - left
                             }
                         }
@@ -522,8 +522,10 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
             if (failure == null) {
                 unavailable[0] = false
                 message.update(null)
-                warningSource.measure(Constraints.fixed(0, 0))
+                val warning = warningSource.measure(Constraints.fixed(0, 0))
                 return@measureBlock layout(ownerWidth, ownerHeight) {
+                    // Run the empty warning layout so SubcomposeLayout disposes its old slot.
+                    warning.place(0, 0)
                     val x = floor(viewportX).toInt(); val y = floor(viewportY).toInt()
                     checkNotNull(child).placeWithLayer(x, y) { translationX = viewportX - x; translationY = viewportY - y }
                     scrollOwner.placed(publicationRevision, publicationScroll)
