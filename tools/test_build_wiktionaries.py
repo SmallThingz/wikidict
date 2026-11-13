@@ -11541,3 +11541,105 @@ class FigureCaptureHelperInterfaceTests(unittest.TestCase):
         self.assertEqual(original_generator,observed['generator_sha256'])
         self.assertEqual(before,manifest_path.read_bytes())
         self.assertTrue(callable(case.figure.capture_member_paths))
+
+
+class PreparedMetadataPublicationTests(unittest.TestCase):
+    def test_final_name_is_absent_while_writer_is_paused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); destination=root/'prepared-generation.json'
+            entered=threading.Event(); release=threading.Event(); errors=[]; result=[]
+            value={'schema':'fixture','text':'x'*65536,'unicode':'雪'}
+            def paused_dump(value,stream,**options):
+                raw=json.dumps(value,**options); split=len(raw)//2
+                stream.write(raw[:split]);stream.flush();entered.set()
+                if not release.wait(5):raise RuntimeError('fixture release timed out')
+                stream.write(raw[split:])
+            def writer():
+                try:result.append(b.write_prepared_metadata(destination,value))
+                except BaseException as error:errors.append(error)
+            with patch.object(b.json,'dump',paused_dump):
+                thread=threading.Thread(target=writer);thread.start()
+                try:
+                    self.assertTrue(entered.wait(5));self.assertFalse(destination.exists())
+                    self.assertEqual(len(list(root.iterdir())),1)
+                    with self.assertRaises(FileNotFoundError):b.prepared_metadata_ref(destination)
+                finally:release.set();thread.join(5)
+            self.assertFalse(thread.is_alive());self.assertEqual(errors,[])
+            self.assertEqual(b.prepared_metadata(result[0]),value)
+            self.assertEqual([destination],list(root.iterdir()))
+
+    def test_exact_json_mode_and_no_post_publication_inode_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);destination=root/'prepared-generation.json';control=root/'ordinary-mode'
+            with control.open('x') as stream:stream.write('fixture')
+            value={'z':[3,2,1],'a':'雪'};observed=[]
+            publish=b._publish_prepared_metadata_no_replace
+            def observe(temporary,path):
+                publish(temporary,path)
+                observed.append(path.stat())
+                reference=b.prepared_metadata_ref(path)
+                self.assertEqual(b.prepared_metadata(reference),value)
+                return reference
+            with patch.object(b,'_publish_prepared_metadata_no_replace',observe):
+                reference=b.write_prepared_metadata(destination,value)
+            raw=(json.dumps(value,sort_keys=True)+'\n').encode()
+            self.assertEqual(destination.read_bytes(),raw)
+            self.assertEqual(reference,dict(path=str(destination),bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest()))
+            after=destination.stat();before=observed[0]
+            self.assertEqual((before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns),
+                             (after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns))
+            self.assertEqual(after.st_nlink,1)
+            self.assertEqual(stat.S_IMODE(after.st_mode),stat.S_IMODE(control.stat().st_mode))
+
+    def test_existing_destination_or_symlink_is_never_replaced(self):
+        for symlink in (False,True):
+            with self.subTest(symlink=symlink),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);destination=root/'prepared-generation.json';target=root/'target'
+                target.write_bytes(b'original target')
+                if symlink:destination.symlink_to(target.name)
+                else:destination.write_bytes(b'original destination')
+                before=destination.lstat();old=destination.read_bytes()
+                with self.assertRaises(FileExistsError):b.write_prepared_metadata(destination,{'new':True})
+                self.assertEqual(destination.read_bytes(),old)
+                after=destination.lstat()
+                fields=('st_dev','st_ino','st_mode','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
+                self.assertEqual(tuple(getattr(before,k) for k in fields),tuple(getattr(after,k) for k in fields))
+                self.assertEqual(target.read_bytes(),b'original target')
+                self.assertFalse(any(p.name.endswith('.part') for p in root.iterdir()))
+
+    def test_write_or_publish_failure_cleans_unpublished_temporary(self):
+        for phase in ('write','publish','concurrent_destination'):
+            with self.subTest(phase=phase),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);destination=root/'prepared-generation.json'
+                publish=b._publish_prepared_metadata_no_replace
+                def fail_write(value,stream,**options):
+                    stream.write('{"incomplete":');stream.flush();raise OSError('fixture write failed')
+                def fail_publish(temporary,path):raise OSError('fixture publish failed')
+                def concurrent(temporary,path):
+                    path.write_bytes(b'concurrent winner');publish(temporary,path)
+                target=(b.json,'dump',fail_write) if phase=='write' else (b,'_publish_prepared_metadata_no_replace',concurrent if phase=='concurrent_destination' else fail_publish)
+                with patch.object(*target),self.assertRaises(OSError):b.write_prepared_metadata(destination,{'new':True})
+                self.assertFalse(any(p.name.endswith('.part') for p in root.iterdir()))
+                if phase=='concurrent_destination':self.assertEqual(destination.read_bytes(),b'concurrent winner')
+                else:self.assertFalse(destination.exists())
+
+    def test_checked_linux_binding_and_prepared_stdlib_import_closure(self):
+        import ctypes
+        import errno
+        import _ctypes
+        standard=Path(sys._stdlib_dir).resolve()
+        self.assertTrue(Path(ctypes.__file__).resolve().is_relative_to(standard))
+        self.assertTrue(Path(_ctypes.__file__).resolve().is_relative_to(standard/'lib-dynload'))
+        class Rename:
+            def __call__(self,*args):
+                self.args=args;ctypes.set_errno(errno.EOPNOTSUPP);return -1
+        rename=Rename()
+        with patch.object(ctypes,'CDLL',return_value=SimpleNamespace(renameat2=rename)):
+            with self.assertRaises(OSError) as failure:b._publish_prepared_metadata_no_replace(Path('/tmp/source'),Path('/tmp/雪'))
+        self.assertEqual(failure.exception.errno,errno.EOPNOTSUPP)
+        self.assertEqual(rename.args,(-100,os.fsencode('/tmp/source'),-100,os.fsencode('/tmp/雪'),1))
+        self.assertEqual(rename.argtypes,(ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint))
+        self.assertIs(rename.restype,ctypes.c_int)
+        with patch.object(ctypes,'CDLL',return_value=SimpleNamespace()):
+            with self.assertRaises(OSError) as failure:b._publish_prepared_metadata_no_replace(Path('/tmp/source'),Path('/tmp/destination'))
+        self.assertEqual(failure.exception.errno,errno.ENOSYS)

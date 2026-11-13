@@ -351,11 +351,35 @@ def prepared_metadata_ref(path):
     return value
 
 
+def _publish_prepared_metadata_no_replace(temporary,path):
+    # This producer is Linux-only. Atomic no-clobber rename avoids both a
+    # partially visible JSON file and a post-publication hardlink/ctime change.
+    import ctypes
+    import errno
+    library=ctypes.CDLL(None,use_errno=True)
+    rename=getattr(library,'renameat2',None)
+    if rename is None:
+        raise OSError(errno.ENOSYS,'Atomic no-clobber metadata publication is unavailable',str(path))
+    rename.argtypes=(ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint)
+    rename.restype=ctypes.c_int
+    if rename(-100,os.fsencode(temporary),-100,os.fsencode(path),1)!=0:
+        number=ctypes.get_errno()
+        raise OSError(number,os.strerror(number),str(path))
+
+
 def write_prepared_metadata(path,value):
-    # New names only. The existing owner replaces launch.json, never the child.
-    with Path(path).open('x') as stream:
-        json.dump(value,stream,sort_keys=True)
-        stream.write('\n')
+    # New names only. Keep the final name absent until every byte is closed.
+    path=Path(path)
+    temporary=path.with_name('.'+path.name+'.'+uuid.uuid4().hex+'.part')
+    created=False
+    try:
+        with temporary.open('x') as stream:
+            created=True
+            json.dump(value,stream,sort_keys=True)
+            stream.write('\n')
+        _publish_prepared_metadata_no_replace(temporary,path)
+    finally:
+        if created:temporary.unlink(missing_ok=True)
     return prepared_metadata_ref(path)
 
 
