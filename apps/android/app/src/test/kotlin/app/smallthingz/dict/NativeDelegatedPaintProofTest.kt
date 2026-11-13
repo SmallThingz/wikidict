@@ -154,4 +154,31 @@ class NativeDelegatedPaintProofTest {
         assertEquals(NativeDelegatedTableIdentity(first), NativeDelegatedTableIdentity(first))
         assertTrue(NativeDelegatedTableIdentity(first) != NativeDelegatedTableIdentity(equalReplacement))
     }
+
+    @Test fun firstRefusalSurvivesFallbackTeardownUntilARealRevision() {
+        val owner = NativeDelegatedTableOwner(sourceTable()) { }
+        owner.begin("source", 200)
+        val first = "stage=paint/input proof; ink=[1,2,3,4]; clip=[0,0,200,300]"
+        owner.refuse("original overlap", first)
+        owner.composedFallback(true)
+        repeat(3) {
+            owner.begin("source", 200)
+            owner.refuse("The original table cell did not publish current native geometry", "secondary missing binding")
+            assertEquals("original overlap", owner.fallbackReason)
+            assertEquals(first, owner.refusalEvidence)
+            assertTrue(!owner.permitsOriginalOwners())
+        }
+        owner.begin("source", 201)
+        assertNull(owner.fallbackReason)
+        assertNull(owner.refusalEvidence)
+        owner.refuse("prior fallback is still composed", "must not become the next failure")
+        assertNull(owner.refusalEvidence)
+        owner.composedFallback(false)
+        owner.refuse("new snapshot failure", "stage=cell[0] deferred envelope is empty")
+        assertEquals("stage=cell[0] deferred envelope is empty", owner.refusalEvidence)
+        owner.prepared(0, "loading")
+        owner.prepared(0, "ready")
+        assertNull(owner.fallbackReason)
+        assertNull(owner.refusalEvidence)
+    }
 }

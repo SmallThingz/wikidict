@@ -240,6 +240,7 @@ class NativeDelegatedTableDeviceTest {
                 " width=${field(table, "width")}")
             out.appendLine("root=${coordinates(root, root)} grid=${coordinates(grid, root)} acceptedGrid=$acceptedGrid")
             out.appendLine("surroundings=$surroundings")
+            out.appendLine("first-refusal-evidence=${table.refusalEvidence}")
             val snapshots = table.cells.map { cell -> describeCell(cell, root, generation, out) }
             val gate = when {
                 table.fallbackReason != null -> "stored fallbackReason"

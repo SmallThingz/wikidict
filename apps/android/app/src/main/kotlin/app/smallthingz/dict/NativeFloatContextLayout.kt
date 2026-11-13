@@ -582,8 +582,10 @@ internal fun NativeFloatContextLayout(
                     val pass = NativeContextPass(width, result, measured.mapValues { it.value.height }, failed, flowGeometry,
                         preparedSurface, documentExtent.takeIf { result.isSuccess })
                     if (result.isFailure) {
-                        delegatedTables.values.forEach { it.refuse("The containing native layout did not publish current geometry") }
-                        delegatedCell?.table?.refuse("The original table cell did not publish current native geometry")
+                        delegatedTables.values.forEach { it.refuse("The containing native layout did not publish current geometry",
+                            "stage=containing native preparation; cause=${result.exceptionOrNull()}") }
+                        delegatedCell?.let { cell -> cell.table.refuse("The original table cell did not publish current native geometry",
+                            "stage=cell native preparation; cell=${cell.index}; cause=${result.exceptionOrNull()}") }
                     } else {
                         val geometry = result.getOrThrow()
                         val originY = pass.documentExtent?.origin?.toFloat() ?: 0f

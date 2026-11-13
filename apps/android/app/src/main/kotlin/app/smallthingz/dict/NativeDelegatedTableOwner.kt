@@ -99,36 +99,37 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
         return actualInputClip(root, stamp.view) == stamp.clip && view.delegatedCellOwner === this
     }
 
-    fun snapshot(root: LayoutCoordinates, generation: Any): NativeDelegatedMeasuredCell? {
-        val view = originalView ?: return null
-        val surface = physical ?: return null
+    fun snapshot(root: LayoutCoordinates, generation: Any, unavailable: (String) -> Unit): NativeDelegatedMeasuredCell? {
+        fun missing(stage: String): NativeDelegatedMeasuredCell? { unavailable(stage); return null }
+        val view = originalView ?: return missing("original View absent")
+        val surface = physical ?: return missing("physical geometry absent")
         if (!view.isAttachedToWindow || view.currentMeasuredGeometry !== surface ||
-            view.width != surface.width || view.height != surface.height) return null
-        val coordinates = contextCoordinates?.takeIf { it.isAttached } ?: return null
-        val nativeCoordinates = viewCoordinates?.takeIf { it.isAttached } ?: return null
-        val cell = cellCoordinates?.takeIf { it.isAttached } ?: return null
-        if (coordinates.size.width != logicalWidth || coordinates.size.height != logicalHeight) return null
-        val origin = translationTo(root, coordinates) ?: return null
+            view.width != surface.width || view.height != surface.height) return missing("View attachment, geometry or dimensions changed")
+        val coordinates = contextCoordinates?.takeIf { it.isAttached } ?: return missing("context coordinates absent/detached")
+        val nativeCoordinates = viewCoordinates?.takeIf { it.isAttached } ?: return missing("View coordinates absent/detached")
+        val cell = cellCoordinates?.takeIf { it.isAttached } ?: return missing("cell coordinates absent/detached")
+        if (coordinates.size.width != logicalWidth || coordinates.size.height != logicalHeight) return missing("logical context dimensions changed")
+        val origin = translationTo(root, coordinates) ?: return missing("context transform is not a translation")
         val ownerOrigin = Offset(origin.x + surface.surface.left, origin.y + surface.surface.top)
         val physicalBox = NativeFloatBounds(ownerOrigin.x, ownerOrigin.y,
             ownerOrigin.x + surface.width, ownerOrigin.y + surface.height)
-        if (measuredBox(root, nativeCoordinates) != physicalBox || view.delegatedCellOwner !== this) return null
-        val cellBox = measuredBox(root, cell) ?: return null
+        if (measuredBox(root, nativeCoordinates) != physicalBox || view.delegatedCellOwner !== this) return missing("physical View box or owner differs")
+        val cellBox = measuredBox(root, cell) ?: return missing("cell transform is not a translation")
         // Query the actual expanded AndroidView, not its smaller logical context box.
         // Compose intersects only real clipping layers on this existing ancestry.
-        val clip = actualInputClip(root, nativeCoordinates) ?: return null
+        val clip = actualInputClip(root, nativeCoordinates) ?: return missing("actual input clip unavailable")
         val ancestors = mutableListOf(NativeDelegatedInputAncestor(clip, true))
         val boxes = mutableListOf(cell to cellBox, coordinates to checkNotNull(measuredBox(root, coordinates)))
         var cursor: LayoutCoordinates? = nativeCoordinates
         var containsRoot = false
         while (cursor != null) {
-            val bounds = measuredBox(root, cursor) ?: return null
+            val bounds = measuredBox(root, cursor) ?: return missing("ancestor transform is not a translation")
             ancestors += NativeDelegatedInputAncestor(bounds, false)
             boxes += cursor to bounds
             if (cursor === root) containsRoot = true
             cursor = cursor.parentLayoutCoordinates
         }
-        if (!containsRoot) return null
+        if (!containsRoot) return missing("root is not in the View ancestry")
         fun translated(rect: NativeFloatBounds) = rect.translated(ownerOrigin.x, ownerOrigin.y)
         if (envelopeSurface !== surface) {
             val density = view.resources.displayMetrics.density
@@ -148,7 +149,7 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
             envelopeBuildCount++
         }
         val local = checkNotNull(envelopes)
-        if (local.deferred.isEmpty()) return null
+        if (local.deferred.isEmpty()) return missing("deferred envelope is empty")
         placement = Placement(root, generation, surface, cell, coordinates, nativeCoordinates, boxes, clip)
         return NativeDelegatedMeasuredCell(view, generation, cellBox, physicalBox, ancestors,
             local.ink.map(::translated), local.deferred.map(::translated), local.input.map(::translated),
@@ -162,6 +163,8 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
 internal class NativeDelegatedTableOwner(val table: Table, private val invalidateParent: () -> Unit) {
     val cells = tableGrid(table).cells.indices.map { NativeDelegatedCellOwner(it, this) }
     var fallbackReason by mutableStateOf<String?>(null)
+        private set
+    var refusalEvidence: String? = null
         private set
     private var fallbackComposed = false
     private var awaitingNativeComposition = false
@@ -183,6 +186,7 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
             generation = Any()
             awaitingNativeComposition = fallbackComposed
             fallbackReason = null
+            refusalEvidence = null
             measuredSurroundings = null
             cells.forEach { it.admissionChanged() }
             invalidateParent()
@@ -199,6 +203,7 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
             generation = Any()
             awaitingNativeComposition = fallbackComposed
             fallbackReason = null
+            refusalEvidence = null
             if (sourceChanged) cells.forEach { it.admissionChanged() }
         }
     }
@@ -216,10 +221,13 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
         cells.forEach { it.measurementPending() }
     }
 
-    fun refuse(reason: String) {
+    fun refuse(reason: String, evidence: String? = null) {
         // A real revision may arrive during measurement of the prior fallback slot.
         // Let that one slot recompose before judging its new native publication.
-        if (awaitingNativeComposition) return
+        if (awaitingNativeComposition || fallbackReason != null) return
+        // The fallback removes the native slots and can fail preparation in turn. Keep
+        // the first refusal and its value-only evidence, never that secondary teardown.
+        refusalEvidence = evidence ?: "stage=native preparation; reason=$reason"
         accepted = false
         fallbackReason = reason
         cells.forEach { it.admissionChanged() }
@@ -236,8 +244,8 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
 
     fun validateAfterPlacement() {
         if (fallbackReason != null || fallbackComposed) return
-        val decision = decision() ?: return
-        when (decision) {
+        val evaluation = decision() ?: return
+        when (val decision = evaluation.decision) {
             is NativeDelegatedPaintDecision.Permitted -> {
                 if (!accepted) {
                     accepted = true
@@ -247,7 +255,7 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
                 }
             }
             is NativeDelegatedPaintDecision.Unavailable -> {
-                refuse(decision.reason)
+                refuse(decision.reason, evaluation.evidence)
             }
         }
     }
@@ -263,18 +271,41 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
         return measuredBox(root, grid) == acceptedGrid && cells.all { it.currentPlacement(root, generation) }
     }
 
-    private fun decision(): NativeDelegatedPaintDecision? {
+    private data class Evaluation(val decision: NativeDelegatedPaintDecision, val evidence: String? = null)
+
+    private fun decision(): Evaluation? {
         val root = rootCoordinates?.takeIf { it.isAttached } ?: return null
         val grid = gridCoordinates?.takeIf { it.isAttached } ?: return null
         val surroundings = measuredSurroundings ?: return null
         if (cells.any { !it.placementReported() }) return null
-        val tableBounds = measuredBox(root, grid) ?: return NativeDelegatedPaintDecision.Unavailable(
-            "The delegated table transform is not a translation")
-        val measured = cells.map { it.snapshot(root, generation) ?: return NativeDelegatedPaintDecision.Unavailable(
-            "The delegated table's original native owner is not current") }
-        return nativeDelegatedPaintDecision(surroundings.copy(allocation = tableBounds,
-            atomicAllocation = surroundings.allocation), measured,
-            cells.map { it.registeredOwner() ?: return NativeDelegatedPaintDecision.Unavailable("Original cell owner detached") })
+        val measured = mutableListOf<NativeDelegatedMeasuredCell>()
+        fun unavailable(reason: String, stage: String): Evaluation {
+            // Render only on failure. No View or LayoutCoordinates are retained by this
+            // string, and no snapshot/admission function is called while observing it.
+            val evidence = try { buildString {
+                appendLine("stage=$stage; reason=$reason; expectedOwners=${cells.size}")
+                appendLine("rootAttached=${root.isAttached}; gridAttached=${grid.isAttached}; grid=${measuredBox(root, grid)}")
+                appendLine("surroundings=$surroundings")
+                measured.forEachIndexed { index, cell -> appendLine("measured[$index]=$cell") }
+            } } catch (failure: Exception) {
+                "stage=$stage; reason=$reason; evidence unavailable: ${failure.javaClass.name}: ${failure.message}"
+            }
+            return Evaluation(NativeDelegatedPaintDecision.Unavailable(reason), evidence)
+        }
+        val tableBounds = measuredBox(root, grid) ?: return unavailable(
+            "The delegated table transform is not a translation", "table transform")
+        for (cell in cells) {
+            var stage = "snapshot did not report its stage"
+            val snapshot = cell.snapshot(root, generation) { stage = it } ?: return unavailable(
+                "The delegated table's original native owner is not current", "cell[${cell.index}] $stage")
+            measured += snapshot
+        }
+        val expected = cells.map { it.registeredOwner() ?: return unavailable("Original cell owner detached", "owner identity") }
+        val input = surroundings.copy(allocation = tableBounds, atomicAllocation = surroundings.allocation)
+        return when (val decision = nativeDelegatedPaintDecision(input, measured, expected)) {
+            is NativeDelegatedPaintDecision.Permitted -> Evaluation(decision)
+            is NativeDelegatedPaintDecision.Unavailable -> unavailable(decision.reason, "paint/input proof; actualAllocation=$tableBounds")
+        }
     }
 }
 
