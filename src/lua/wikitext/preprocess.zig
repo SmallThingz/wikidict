@@ -212,7 +212,125 @@ fn stripDecodedCommentsPolicy(a: std.mem.Allocator, text: []const u8, preserve_p
 // Sanitizer's post-expansion phase is distinct from authored preprocessing.
 // The input cursor advances once; bounded tail checks also see comment openers
 // formed by elision. A cached literal-space suffix is never scanned repeatedly.
+// Copy intervals from the existing Sanitizer cursor, not a second parser or
+// a search for equal output strings. Synthetic bytes deliberately have no span.
+const CommentCopies = struct {
+    const Span = struct { source: usize, output: usize, len: usize };
+    spans: std.ArrayList(Span) = .empty,
+    limited: bool = false,
+
+    fn copy(self: *@This(), a: std.mem.Allocator, source: usize, output: usize, len: usize) !void {
+        if (len == 0 or self.limited) return;
+        if (self.spans.items.len != 0) {
+            const last = &self.spans.items[self.spans.items.len - 1];
+            if (last.source + last.len == source and last.output + last.len == output) {
+                last.len += len;
+                return;
+            }
+        }
+        if (self.spans.items.len >= dependency.max_metadata_bytes / @sizeOf(Span)) {
+            self.limited = true;
+            self.spans.clearRetainingCapacity();
+            return;
+        }
+        try self.spans.append(a, .{ .source = source, .output = output, .len = len });
+    }
+
+    fn truncate(self: *@This(), end: usize) void {
+        while (self.spans.items.len != 0) {
+            const last = &self.spans.items[self.spans.items.len - 1];
+            if (last.output >= end) {
+                self.spans.items.len -= 1;
+            } else {
+                last.len = @min(last.len, end - last.output);
+                break;
+            }
+        }
+    }
+
+    // The parser replaces one already-emitted '<' with four literal bytes.
+    fn escapeLt(self: *@This(), a: std.mem.Allocator, at: usize) !void {
+        if (self.limited) return;
+        // The active tag opener is in the emitted tail. Earlier spans cannot
+        // move: walk backward only through that affected suffix.
+        var index = self.spans.items.len;
+        while (index != 0) {
+            index -= 1;
+            const old = self.spans.items[index];
+            if (old.output >= at + 1) {
+                self.spans.items[index].output += 3;
+                continue;
+            }
+            if (old.output + old.len > at) {
+                const before = at - old.output;
+                const after = old.len - before - 1;
+                self.spans.items[index].len = before;
+                if (after != 0) {
+                    if (self.spans.items.len >= dependency.max_metadata_bytes / @sizeOf(Span)) {
+                        self.limited = true;
+                        self.spans.clearRetainingCapacity();
+                        return;
+                    }
+                    try self.spans.insert(a, index + 1, .{
+                        .source = old.source + before + 1,
+                        .output = at + 4,
+                        .len = after,
+                    });
+                }
+            }
+            break;
+        }
+    }
+
+    fn mapped(self: *const @This(), start: usize, end: usize, cursor: *usize) ?usize {
+        if (self.limited) return null;
+        while (cursor.* < self.spans.items.len and self.spans.items[cursor.*].source + self.spans.items[cursor.*].len <= start)
+            cursor.* += 1;
+        if (cursor.* == self.spans.items.len) return null;
+        const span = self.spans.items[cursor.*];
+        // Adjacent source and output copies were merged at insertion. A range
+        // crossing a deletion, inserted byte or reconstructed opener is refused.
+        if (span.source > start or span.source + span.len < end) return null;
+        return span.output + start - span.source;
+    }
+};
+
+pub fn stripExpandedCommentsTracked(a: std.mem.Allocator, source: dependency.Text) !dependency.Text {
+    var copies: CommentCopies = .{};
+    defer copies.spans.deinit(a);
+    const bytes = try stripExpandedCommentsImpl(a, source.bytes, &copies);
+    errdefer a.free(bytes);
+    // This entry runs after escapeLiteralCurly. Retain conservative behavior
+    // for callers that have not finalized other in-process provenance yet.
+    if (source.literal_curly_ranges.len != 0 or source.generated_links.len != 0 or source.generated_source != null)
+        return dependency.Text.transformedFrom(source, bytes);
+    var ranges: std.ArrayList(dependency.Range) = .empty;
+    errdefer ranges.deinit(a);
+    var unknown = source.unknown or copies.limited;
+    var lost = source.lost_missing_range;
+    var previous: u32 = 0;
+    var cursor: usize = 0;
+    for (source.ranges) |range| {
+        if (range.start < previous or range.start >= range.end or range.end > source.bytes.len or range.occurrence == 0)
+            return error.InvalidMissingDependencyCopy;
+        previous = range.end;
+        if (copies.mapped(range.start, range.end, &cursor)) |start| {
+            const end = start + range.end - range.start;
+            if (end > std.math.maxInt(u32)) return error.InvalidMissingDependencyCopy;
+            try ranges.append(a, .{ .start = @intCast(start), .end = @intCast(end), .occurrence = range.occurrence });
+        } else {
+            unknown = true;
+            lost = true;
+        }
+    }
+    return .{ .bytes = bytes, .ranges = try ranges.toOwnedSlice(a), .unknown = unknown, .lost_missing_range = lost };
+}
+
 pub fn stripExpandedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
+    return stripExpandedCommentsImpl(a, text, null);
+}
+
+fn stripExpandedCommentsImpl(a: std.mem.Allocator, text: []const u8, copies: ?*CommentCopies) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     var pos: usize = 0;
@@ -226,6 +344,7 @@ pub fn stripExpandedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
     while (pos < text.len or std.mem.endsWith(u8, out.items, "<!--")) {
         if (std.mem.endsWith(u8, out.items, "<!--")) {
             const prefix_end = out.items.len - 4;
+            if (copies) |map| map.truncate(prefix_end);
             out.items.len = prefix_end;
             if (tag_open) |open| {
                 if (open >= prefix_end) tag_open = null else tag_joined = true;
@@ -244,11 +363,13 @@ pub fn stripExpandedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
                 var after = pos;
                 while (after < text.len and text[after] == ' ') : (after += 1) {}
                 if (before > 0 and out.items[before - 1] == '\n' and after < text.len and text[after] == '\n') {
+                    if (copies) |map| map.truncate(before);
                     out.items.len = before;
                     pos = after + 1;
                     spaces_end = before;
                 } else {
                     // Consume this space run once even when it is not collapsed.
+                    if (copies) |map| try map.copy(a, pos, out.items.len, after - pos);
                     try out.appendSlice(a, text[pos..after]);
                     spaces_end = out.items.len;
                     pos = after;
@@ -278,6 +399,7 @@ pub fn stripExpandedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
                 }
             }
             if (protected_end) |end| {
+                if (copies) |map| try map.copy(a, pos, out.items.len, end - pos);
                 try out.appendSlice(a, text[pos..end]);
                 pos = end;
                 tag_open = null;
@@ -287,6 +409,7 @@ pub fn stripExpandedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
             tag_joined = false;
         }
         const byte = text[pos];
+        if (copies) |map| try map.copy(a, pos, out.items.len, 1);
         try out.append(a, byte);
         pos += 1;
         if (byte == '>') {
@@ -299,6 +422,7 @@ pub fn stripExpandedComments(a: std.mem.Allocator, text: []const u8) ![]u8 {
                             std.ascii.eqlIgnoreCase(tag.name, "source") or
                             std.ascii.eqlIgnoreCase(tag.name, "syntaxhighlight"))
                         {
+                            if (copies) |map| try map.escapeLt(a, open);
                             const old_len = out.items.len;
                             try out.resize(a, old_len + 3);
                             std.mem.copyBackwards(u8, out.items[open + 4 ..], out.items[open + 1 .. old_len]);
@@ -1808,4 +1932,113 @@ test "retained complete HU te and motor raw source scans mark only their actual 
         const expected = try std.mem.replaceOwned(u8, a, case.raw, case.literal, case.escaped);
         try std.testing.expectEqualStrings(expected, actual.bytes);
     }
+}
+
+test "expanded comment copies preserve a later missing sibling without cleaning unknown provenance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // The comment delimiters mirror retained Script utilities tag_translit;
+    // this is a controlled intermediate, not a recaptured expansion result.
+    const input = "<span lang=\"hi-Latn\" class=\"tr Latn\" dir=\"ltr\">-{<!---->dekhnā<!---->}-</span>\n* [[:Template:R:hi:Rajpal]]";
+    const expected = "<span lang=\"hi-Latn\" class=\"tr Latn\" dir=\"ltr\">-{dekhnā}-</span>\n* [[:Template:R:hi:Rajpal]]";
+    const start = std.mem.indexOf(u8, input, "[[:Template:").?;
+    const out_start = std.mem.indexOf(u8, expected, "[[:Template:").?;
+    for ([_]bool{ false, true }) |unknown| {
+        const output = try stripExpandedCommentsTracked(a, .{
+            .bytes = input,
+            .ranges = &.{.{ .start = @intCast(start), .end = @intCast(input.len), .occurrence = 1 }},
+            .unknown = unknown,
+        });
+        try std.testing.expectEqualStrings(expected, output.bytes);
+        try std.testing.expectEqual(unknown, output.unknown);
+        try std.testing.expect(!output.lost_missing_range);
+        try std.testing.expectEqual(@as(usize, 1), output.ranges.len);
+        try std.testing.expectEqual(@as(u32, @intCast(out_start)), output.ranges[0].start);
+        try std.testing.expectEqual(@as(u32, @intCast(expected.len)), output.ranges[0].end);
+        try std.testing.expectEqual(@as(u32, 1), output.ranges[0].occurrence);
+    }
+}
+
+test "expanded comment tracking preserves sanitizer edits and refuses edited missing ranges" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_][2][]const u8{
+        .{ "A<!<!--inner-->--outer-->B", "AB" },
+        .{ "A\n <!--x--> \nB", "A\nB" },
+        .{ "A<!--unclosed body", "A&lt;!--unclosed body" },
+        .{ "<no<!--x-->wiki>body</nowiki>", "&lt;nowiki>body</nowiki>" },
+        .{ "<sour<!--x-->ce>body</source>", "&lt;source>body</source>" },
+        .{ "<nowiki><!--literal--></nowiki>", "<nowiki><!--literal--></nowiki>" },
+        .{ "<pre><!--literal--></pre>", "<pre><!--literal--></pre>" },
+    };
+    for (cases) |case| {
+        const input = try std.fmt.allocPrint(a, "{s}|MISSING", .{case[0]});
+        const expected = try std.fmt.allocPrint(a, "{s}|MISSING", .{case[1]});
+        const start = input.len - "MISSING".len;
+        const output = try stripExpandedCommentsTracked(a, .{
+            .bytes = input,
+            .ranges = &.{.{ .start = @intCast(start), .end = @intCast(input.len), .occurrence = 1 }},
+        });
+        try std.testing.expectEqualStrings(expected, output.bytes);
+        try std.testing.expect(!output.unknown and !output.lost_missing_range);
+        try std.testing.expectEqual(@as(usize, 1), output.ranges.len);
+        try std.testing.expectEqualStrings("MISSING", output.bytes[output.ranges[0].start..output.ranges[0].end]);
+        try std.testing.expectEqual(@as(u32, @intCast(expected.len - "MISSING".len)), output.ranges[0].start);
+    }
+    for ([_][]const u8{ "A<!--x-->B", "<!--MISSING-->", "<no<!--x-->wiki>" }) |input| {
+        const output = try stripExpandedCommentsTracked(a, .{
+            .bytes = input,
+            .ranges = &.{.{ .start = 0, .end = @intCast(input.len), .occurrence = 1 }},
+        });
+        try std.testing.expectEqualStrings(try stripExpandedComments(a, input), output.bytes);
+        try std.testing.expect(output.unknown and output.lost_missing_range);
+        try std.testing.expectEqual(@as(usize, 0), output.ranges.len);
+    }
+    const retained = try stripExpandedCommentsTracked(a, .{ .bytes = "A<!--x-->B", .unknown = true, .lost_missing_range = true });
+    try std.testing.expect(retained.unknown and retained.lost_missing_range);
+    var limited: CommentCopies = .{ .limited = true };
+    try limited.copy(a, 0, 0, 1);
+    var cursor: usize = 0;
+    try std.testing.expect(limited.mapped(0, 1, &cursor) == null);
+}
+
+test "expanded comment escape mapping leaves prior spans unchanged across repeated reconstructed tags" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var copies: CommentCopies = .{};
+    for (0..128) |i| try copies.copy(a, i * 4, i * 4, 3);
+    const prior = try a.dupe(CommentCopies.Span, copies.spans.items[0..127]);
+    try copies.escapeLt(a, 127 * 4 + 1);
+    for (prior, copies.spans.items[0..127]) |before, after| {
+        try std.testing.expectEqual(before.source, after.source);
+        try std.testing.expectEqual(before.output, after.output);
+        try std.testing.expectEqual(before.len, after.len);
+    }
+    try std.testing.expectEqual(@as(usize, 129), copies.spans.items.len);
+    try std.testing.expectEqual(@as(usize, 1), copies.spans.items[127].len);
+    try std.testing.expectEqual(@as(usize, 127 * 4 + 2), copies.spans.items[128].source);
+    try std.testing.expectEqual(@as(usize, 127 * 4 + 5), copies.spans.items[128].output);
+    try std.testing.expectEqual(@as(usize, 1), copies.spans.items[128].len);
+    var input: std.ArrayList(u8) = .empty;
+    var expected: std.ArrayList(u8) = .empty;
+    for (0..256) |_| {
+        try input.appendSlice(a, "<no<!--x-->wiki>body</nowiki>");
+        try expected.appendSlice(a, "&lt;nowiki>body</nowiki>");
+    }
+    const start = input.items.len;
+    try input.appendSlice(a, "MISSING");
+    const mapped_start = expected.items.len;
+    try expected.appendSlice(a, "MISSING");
+    const output = try stripExpandedCommentsTracked(a, .{
+        .bytes = input.items,
+        .ranges = &.{.{ .start = @intCast(start), .end = @intCast(input.items.len), .occurrence = 1 }},
+    });
+    try std.testing.expectEqualStrings(expected.items, output.bytes);
+    try std.testing.expect(!output.unknown and !output.lost_missing_range);
+    try std.testing.expectEqual(@as(usize, 1), output.ranges.len);
+    try std.testing.expectEqual(@as(u32, @intCast(mapped_start)), output.ranges[0].start);
+    try std.testing.expectEqual(@as(u32, @intCast(expected.items.len)), output.ranges[0].end);
 }

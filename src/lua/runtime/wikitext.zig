@@ -621,10 +621,10 @@ pub const Expander = struct {
         if (std.mem.indexOf(u8, output, "<!--") != null) {
             if (work_stats.current()) |work| work.comment_bytes +|= output.len;
             const start = work_stats.cpuNow();
-            const normalized = try preprocess.stripExpandedComments(self.runtime.allocator, output);
+            const normalized = try preprocess.stripExpandedCommentsTracked(self.runtime.allocator, output_text);
             self.runtime.allocator.free(output);
-            output = normalized;
-            output_text = dependency.Text.transformed(output);
+            output_text = normalized;
+            output = normalized.bytes;
             if (work_stats.current()) |work| work.comments_ns +|= work_stats.elapsed(start);
         }
         const restored_hiero = try self.restoreHieroMarkers(self.runtime.allocator, output);
@@ -10462,4 +10462,34 @@ test "outer missing invoke uses selected message and preserves page while Lua re
     source.message = null;
     try std.testing.expectError(error.InterfaceMessageSnapshotMissing, expander.expandFragment("Page", "{{#invoke:R:nb:NAOB|main}}", 1_794_174_780));
     try std.testing.expect(runtime.current_frame == null and runtime.aotErrorName() == null and !runtime.last_error_present);
+}
+
+test "native generated comment normalization retains later missing coordinates and Lua unknown refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.initProgram(a, 24, 1);
+    defer runtime.deinit();
+    runtime.namespace_catalog = try rt.namespace_registry.englishTestRegistry();
+    const functions = [_]rt.FunctionFn{rt.stabilize(TestModule.root)};
+    runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TestModule.lookup, TestModule.name);
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists }, .install_scribunto = installTestInvoke };
+    const generated = "Generated A__NOEDITSECTION__B\nISBN 9780306406157\n__TOC__\nISBN 97803__TOC__06406157\nTail\n&lt;nowiki>__NOEDITSECTION__[[B]]</nowiki>\nAB";
+    const input = "{{#invoke:Test|generated_comments}}|{{Missing}}";
+    const output = try expander.expandFragment("Page", input, 1_670_803_200);
+    try std.testing.expectEqualStrings(generated ++ "|[[:Template:Missing]]", output);
+    var phase = try dependency.decode(a, expander.missing_dependency_metadata.?, output, "");
+    defer phase.deinit();
+    try std.testing.expectEqual(@as(usize, 1), phase.occurrences().len);
+    try std.testing.expectEqualStrings("Template:Missing", phase.occurrences()[0].title);
+    try std.testing.expectEqual(@as(usize, 1), phase.output().ranges.len);
+    try std.testing.expectEqual(@as(u32, generated.len + 1), phase.output().ranges[0].start);
+    try std.testing.expectEqual(@as(u32, @intCast(output.len)), phase.output().ranges[0].end);
+    try std.testing.expectEqual(@as(u32, 1), phase.output().ranges[0].occurrence);
+    // A retained known sibling does not grant provenance to arbitrary Lua output.
+    try std.testing.expect(phase.output().unknown);
 }
