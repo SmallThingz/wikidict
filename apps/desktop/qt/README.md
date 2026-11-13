@@ -216,6 +216,52 @@ Genuine Russian Writer-to-Reader interoperability and remaining ordinary-page
 rendered checks retain their separate scope. These constructed views and host
 checks do not establish whole-frontend, hardware-audio or release acceptance.
 
+## Responsive table floats and named links
+
+A typed table float retains one real grid, physical float placement and authored
+margins while selecting its wide or narrow policy from the document CSS viewport.
+Derived empty tracks retain source column spans and Cell typography. The native
+validator authenticates the registered table object, including its index-free
+format, and still refuses a foreign explicit object index.
+
+A named section anchor attached to a link no longer makes only the first Unicode
+scalar keyboard-focusable. The importer preserves the original actionable-link
+flag for the rest of the label while keeping name-only anchors nonactionable.
+The focused native regression covers name-plus-link, name-only, plain links and a
+supplementary first scalar. The app's original full-label Tab selection now passes.
+
+Three focused float controls passed before the importer change. The new importer
+control and the affected app method passed on the subsequent library. Root viewed
+both constructed app frames: at 900 pixels the table floats right; at 639 it moves
+above the following rule and attribution. The green colspan heading is centered,
+labels remain readable, and no overlap or clipping was observed. These are marked
+component fixtures, not a genuine Mai dictionary page or whole-frontend result.
+Earlier CENTER, ordinary-page and full-suite evidence keeps its original scope.
+
+The GNU native regression target alone disables IPO and appends `-fno-lto` to its
+compile and link commands. Qt product libraries retain their existing IPO policy.
+Both test objects were rebuilt and checked for absent LTO sections on the same
+incremental cache; the regression source and inventory were unchanged. Test
+compile/link action times were 85.621/1.098 seconds, versus the retained
+21.949/91.393 seconds with LTO. This is an observational comparison, without a
+matched benchmark or historical test-only CPU/peak baseline.
+The old caption failure from an earlier no-LTO trial remains separate.
+
+The cumulative maintained patches include all implementation and regression
+changes; no product implementation depends on a private postimage tree. Apply the
+same pinned-source recipe below. Focused reproduction additionally uses:
+
+```sh
+"$qt_build/qtbase/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout" \
+  tableFloatViewportKeepsPhysicalFloatDirectedFlowAndSource \
+  tableFloatViewportDerivedSlotsKeepTypographyAndRejectForeignState \
+  tableFloatViewportUsesExistingFloatFreeIntervalAndClearance \
+  namedAnchorPreservesFollowingLinkRangeAndNameOnlySemantics
+```
+
+Use the isolated environment described under Native validation. This command is a
+reproduction recipe, not a claim that these historical scopes ran as one suite.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,

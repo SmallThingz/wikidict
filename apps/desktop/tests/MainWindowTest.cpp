@@ -171,6 +171,29 @@ static QJsonObject figureLinkPaintFixture(bool missing)
     return result;
 }
 
+static QJsonObject tableFloatViewportFixture(const QString &containing = QStringLiteral("ltr"),
+                                           const QString &grid = QStringLiteral("rtl")) {
+    const auto length = [](double value, const QString &unit = QStringLiteral("px")) { return QJsonObject{{"unit", unit}, {"value", value}}; };
+    const auto one = length(1);
+    const QJsonObject padding{{"top", one}, {"right", one}, {"bottom", one}, {"left", one}};
+    const QJsonObject noBorder{{"none", QJsonObject{}}};
+    const QJsonObject cellStyle{{"padding", padding}, {"border", noBorder}, {"vertical_align", "middle"},
+        {"line_height", QJsonObject{{"strut", QJsonValue::Null},
+            {"height", QJsonObject{{"multiplier", 1.25}}}}}};
+    QJsonArray cells;
+    for (const auto &text : {QStringLiteral("First"), QStringLiteral("Second"), QStringLiteral("Third"), QStringLiteral("Last")})
+        cells.append(QJsonObject{{"style", cellStyle}, {"spans", QJsonArray{QJsonObject{
+            {"kind", "link"}, {"text", text}, {"target", QStringLiteral("Mai") + text}}}}});
+    const QJsonObject footer{{"header", true}, {"colspan", 7}, {"style", cellStyle}, {"background", "#c0ffc0"},
+        {"spans", QJsonArray{QJsonObject{{"kind", "link"}, {"text", "Surname header"}, {"target", "MaiSurname"}}}}};
+    return QJsonObject{{"style", QJsonObject{{"float_side", "right"}, {"collapse", "collapse"}, {"border", noBorder},
+        {"margins", QJsonObject{{"top", length(0, "em")}, {"right", length(.5, "em")},
+            {"bottom", length(.5, "em")}, {"left", length(1.5, "em")}}}}},
+        {"float_viewport", QJsonObject{{"max_viewport_width_px", 639}, {"containing_direction", containing},
+            {"grid_direction", grid}, {"language", "ru"}}},
+        {"rows", QJsonArray{QJsonObject{{"cells", cells}}, QJsonObject{{"cells", QJsonArray{footer}}}}}};
+}
+
 class MainWindowTest final : public QObject {
     Q_OBJECT
 
@@ -658,6 +681,207 @@ private slots:
                 }
             }
         }
+    }
+
+    void typedTableFloatViewportKeepsOneOwnerThroughResizeFontAndKeyboard()
+    {
+        const auto oldPointSize = QSettings().value(QStringLiteral("reader/pointSize"));
+        const auto restoreSettings = qScopeGuard([&] { if (oldPointSize.isValid()) QSettings().setValue(QStringLiteral("reader/pointSize"), oldPointSize); else QSettings().remove(QStringLiteral("reader/pointSize")); });
+        QSettings().setValue(QStringLiteral("reader/pointSize"), 12);
+        MainWindow window{QString()}; window.resize(900, 700); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        auto *browser = window.reading_; QPushButton *larger = nullptr;
+        for (auto *button : window.findChildren<QPushButton *>()) if (button->text() == QStringLiteral("A+")) larger = button;
+        QVERIFY(larger);
+        for (const auto &direction : {QStringLiteral("ltr"), QStringLiteral("rtl")}) {
+            const auto tableSource = tableFloatViewportFixture(direction, direction == "ltr" ? "rtl" : "ltr");
+            const QJsonObject source{{"kind", "table"}, {"table", tableSource}};
+            QVERIFY(composeReadingBlocks(window, QJsonArray{source}, direction == "ltr" ? Qt::RightToLeft : Qt::LeftToRight));
+            const auto entry = window.currentEntry_; QCOMPARE(entry.value("language_code").toString(), QStringLiteral("en"));
+            window.readingPaneAction_->trigger(); QTRY_VERIFY(browser->isVisible());
+            for (int fontPass = 0; fontPass < 2; ++fontPass) {
+                if (fontPass) {
+                    window.resize(900, 700); window.readingPaneAction_->trigger();
+                    QTRY_VERIFY(larger->isVisible() && larger->isEnabled());
+                    const int previousPoints = window.readingPointSize_; QVERIFY(previousPoints < 24);
+                    QTest::mouseClick(larger, Qt::LeftButton); QTRY_COMPARE(window.readingPointSize_, previousPoints + 1);
+                    QTRY_VERIFY(!window.readingFloatLayoutScheduled_);
+                }
+                auto *doc = browser->document(); auto *native = qobject_cast<QTextDocumentLayout *>(doc->documentLayout()); QVERIFY(native);
+                QPointer<QTextTable> table;
+                for (auto *child : doc->rootFrame()->childFrames()) if (child->frameFormat().hasProperty(SemanticHtml::tableFloatViewportProperty)) {
+                    QVERIFY(!table); table = qobject_cast<QTextTable *>(child);
+                }
+                QVERIFY(table); QCOMPARE(table->parentFrame(), doc->rootFrame()); QCOMPARE(table->rows(), 2); QCOMPARE(table->columns(), 7);
+                const auto selected = doc->find(QStringLiteral("First"), 0, QTextDocument::FindCaseSensitively); QVERIFY(!selected.isNull());
+                const auto raw = doc->toRawText(); const int count = doc->characterCount(), object = table->objectIndex();
+                const auto run = selected.charFormat(); const auto sourcePolicy = tableSource.value("float_viewport").toObject();
+                const auto nativePolicy = table->format().property(SemanticHtml::tableFloatViewportProperty).toMap();
+                const qreal body = window.readingPointSize_ * QFontMetricsF(QFont()).fontDpi() / 72.0;
+                QCOMPARE(nativePolicy.value("body_pixels").toDouble(), body);
+                QCOMPARE(table->format().leftMargin(), body * 1.5); QCOMPARE(table->format().rightMargin(), body * .5);
+                QCOMPARE(table->format().bottomMargin(), body * .5); QCOMPARE(table->format().topMargin(), 0.0);
+                const qreal scale = native->paintDevice()
+                    ? qreal(native->paintDevice()->logicalDpiY()) / QFontMetricsF(QFont()).fontDpi() : 1;
+                QVERIFY(std::isfinite(scale) && scale > 0);
+                const auto quantized = [&](qreal value) { return std::trunc(value * scale * 64) / 64; };
+                const auto rounded = [&](qreal value) { return std::floor(quantized(value) + .5); };
+                const auto geometry = [&](qreal css) {
+                    native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+                    QCOMPARE(table->format().position(), css <= 639 ? QTextFrameFormat::InFlow : QTextFrameFormat::FloatRight);
+                    QCOMPARE(table->format().layoutDirection(), sourcePolicy.value("grid_direction") == "rtl" ? Qt::RightToLeft : Qt::LeftToRight);
+                    QCOMPARE(table->format().stringProperty(SemanticHtml::tableSourceLanguageProperty), QStringLiteral("ru"));
+                    const auto rootFormat = doc->rootFrame()->frameFormat(); QCOMPARE(rootFormat.border(), 0.0); QCOMPARE(rootFormat.padding(), 0.0);
+                    const qreal left = rounded(rootFormat.leftMargin()), right = doc->pageSize().width() - rounded(rootFormat.rightMargin());
+                    const auto box = native->tableBoundingRect(table);
+                    const qreal leftMargin = quantized(table->format().leftMargin());
+                    const qreal rightMargin = quantized(table->format().rightMargin());
+                    const qreal borderWidth = box.width() - leftMargin - rightMargin;
+                    const qreal expected = css > 639 || direction == "rtl" ? right - rightMargin - borderWidth : left + leftMargin;
+                    QVERIFY2(qAbs(box.left() + leftMargin - expected) < .04,
+                        qPrintable(QStringLiteral("css=%1 containing=%2 available=%3 table=%4,%5 margins=%6,%7 borderLeft=%8 expected=%9")
+                            .arg(css).arg(direction).arg(right-left).arg(box.left()).arg(box.width()).arg(leftMargin).arg(rightMargin).arg(box.left()+leftMargin).arg(expected)));
+                    QCOMPARE(table->objectIndex(), object); QCOMPARE(table->parentFrame(), doc->rootFrame());
+                    QVERIFY(!table->format().hasProperty(SemanticHtml::tableViewportProperty)); QVERIFY(!table->format().hasProperty(SemanticHtml::tableAutoMarginsProperty));
+                    for (int column = 0; column < 4; ++column) {
+                        const auto cell = table->cellAt(0, column); const auto format = cell.format().toTableCellFormat();
+                        QVERIFY(!format.hasProperty(SemanticHtml::tableFloatViewportFillerProperty));
+                        QCOMPARE(format.topPadding(), 1.0); QCOMPARE(format.leftPadding(), 1.0); QCOMPARE(format.rightPadding(), 1.0); QCOMPARE(format.bottomPadding(), 1.0);
+                        QCOMPARE(format.topBorder(), 0.0); QCOMPARE(format.leftBorder(), 0.0); QCOMPARE(format.rightBorder(), 0.0); QCOMPARE(format.bottomBorder(), 0.0);
+                        QCOMPARE(format.verticalAlignment(), QTextCharFormat::AlignMiddle);
+                        QCOMPARE(format.stringProperty(SemanticHtml::tableSourceLanguageProperty), QStringLiteral("ru"));
+                        QVERIFY(cell.firstCursorPosition().block().layout()->lineCount() > 0);
+                    }
+                    for (int column = 4; column < 7; ++column) {
+                        const auto cell = table->cellAt(0, column); const auto format = cell.format().toTableCellFormat();
+                        QCOMPARE(format.property(SemanticHtml::tableFloatViewportFillerProperty).metaType().id(), QMetaType::Bool);
+                        QVERIFY(format.boolProperty(SemanticHtml::tableFloatViewportFillerProperty)); QCOMPARE(cell.firstPosition(), cell.lastPosition());
+                        QCOMPARE(cell.firstCursorPosition().block().layout()->lineCount(), 0); QCOMPARE(format.leftPadding(), 0.0); QCOMPARE(format.leftBorder(), 0.0);
+                    }
+                    QCOMPARE(table->cellAt(1, 0).columnSpan(), 7); QCOMPARE(table->cellAt(1, 0).format().background().color(), QColor("#c0ffc0"));
+                    QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(window.currentEntry_, entry);
+                    QCOMPARE(selected.charFormat(), run);
+                    QCOMPARE(LogicalFlow::inventory(doc), LogicalFlow::Status::Stock);
+                    QVERIFY(window.readingLogicalDocument_.isNull()); QVERIFY(window.readingLogicalOwners_.isEmpty());
+                    QCOMPARE(window.readingLogicalRevision_, -1);
+                };
+                // Fractional CSS viewport and containing width are independent;
+                // use the normal format-edit transaction to refresh owner stamps.
+                const qreal containingWidth = doc->textWidth();
+                for (qreal css : {639.25, 639.0, 638.75, 900.0}) {
+                    QVERIFY(window.editDocumentFormats(browser, [&] { SemanticHtml::reflowTableFloatViewports(doc, css); }));
+                    geometry(css); QCOMPARE(doc->textWidth(), containingWidth);
+                }
+                for (int width : {900, 639}) {
+                    window.resize(width, 700); window.readingPaneAction_->trigger();
+                    QTRY_VERIFY(!window.readingFloatLayoutScheduled_ && browser->isVisible());
+                    QTRY_COMPARE(table->format().property(SemanticHtml::tableFloatViewportProperty).toMap().value("viewport").toDouble(), qreal(window.contentsRect().width()));
+                    QCOMPARE(window.contentsRect().width(), width); QVERIFY(browser->viewport()->width() != width); geometry(width);
+                    const auto line = selected.block().layout()->lineAt(0); QVERIFY(line.isValid());
+                    const QPointF point = native->blockBoundingRect(selected.block()).topLeft()
+                        + QPointF((line.cursorToX(selected.selectionStart()-selected.block().position()) + line.cursorToX(selected.selectionStart()-selected.block().position()+1))/2,
+                            line.y()+line.height()/2);
+                    const int hit = native->hitTest(point, Qt::ExactHit); QVERIFY(hit >= selected.selectionStart() && hit < selected.selectionEnd());
+                    QCOMPARE(native->anchorAt(point), QStringLiteral("dict:MaiFirst"));
+                    QObject::disconnect(browser, nullptr, &window, nullptr); QSignalSpy actions(browser, &QTextBrowser::anchorClicked);
+                    browser->setTextCursor(QTextCursor(doc)); browser->setFocus(Qt::TabFocusReason); QTRY_VERIFY(browser->hasFocus());
+                    const auto observeKeyboard = [&](const char *phase) {
+                        const auto cursor = browser->textCursor(); const auto block = selected.block();
+                        QJsonArray fragments; auto it = block.begin();
+                        for (int n = 0; !it.atEnd() && n < 16; ++it, ++n) {
+                            const auto fragment = it.fragment(); if (!fragment.isValid()) continue;
+                            const auto format = fragment.charFormat(); const auto owner = format.property(MissingFigurePaint::ownerProperty);
+                            fragments.append(QJsonObject{{"position", fragment.position()}, {"length", fragment.length()},
+                                {"text", fragment.text().left(128)}, {"text_truncated", fragment.length() > 128},
+                                {"is_anchor", format.isAnchor()}, {"href", format.anchorHref()},
+                                {"anchor_names", QJsonArray::fromStringList(format.anchorNames())},
+                                {"policy", format.stringProperty(MissingFigurePaint::policyProperty)},
+                                {"owner_type", owner.metaType().id()}, {"owner", QJsonValue::fromVariant(owner)}});
+                        }
+                        const QJsonObject observation{{"phase", QString::fromLatin1(phase)}, {"font_pass", fontPass},
+                            {"direction", direction}, {"width", width}, {"revision", doc->revision()},
+                            {"block_position", block.position()}, {"block_length", block.length()},
+                            {"fragments", fragments}, {"fragments_truncated", !it.atEnd()},
+                            {"position", cursor.position()}, {"anchor", cursor.anchor()},
+                            {"selection_start", cursor.selectionStart()}, {"selection_end", cursor.selectionEnd()},
+                            {"selected_text", cursor.selectedText().left(128)},
+                            {"expected_start", selected.selectionStart()}, {"expected_end", selected.selectionEnd()}};
+                        qInfo().noquote() << "APP141_TABLE_ANCHOR" << QString::fromUtf8(QJsonDocument(observation).toJson(QJsonDocument::Compact));
+                    };
+                    QTest::keyClick(browser, Qt::Key_Home, Qt::ControlModifier); observeKeyboard("before-tab");
+                    QTest::keyClick(browser, Qt::Key_Tab); observeKeyboard("after-tab");
+                    QTRY_COMPARE(browser->textCursor().selectionStart(), selected.selectionStart());
+                    QCOMPARE(browser->textCursor().selectionEnd(), selected.selectionEnd());
+                    QTest::keyClick(browser, Qt::Key_Return); QTRY_COMPARE(actions.size(), 1); QCOMPARE(actions.first().first().toUrl(), QUrl("dict:MaiFirst"));
+                    QTRY_VERIFY(browser->viewport()->rect().intersects(browser->cursorRect(selected)));
+                    auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->textInterface() && accessible->state().focused);
+                    const auto accessibleText = accessible->textInterface()->text(0, accessible->textInterface()->characterCount());
+                    QVERIFY(accessibleText.contains("First") && accessibleText.contains("Last") && accessibleText.contains("Surname header"));
+                    QImage painted(1000, 500, QImage::Format_ARGB32_Premultiplied); painted.fill(Qt::white);
+                    { QPainter painter(&painted); QAbstractTextDocumentLayout::PaintContext context; native->draw(&painter, context); }
+                    const auto crop = native->blockBoundingRect(selected.block()).toAlignedRect().intersected(painted.rect()); int ink = 0;
+                    for (int y=crop.top(); y<=crop.bottom(); ++y) for (int x=crop.left(); x<=crop.right(); ++x) ink += painted.pixelColor(x,y) != QColor(Qt::white);
+                    QVERIFY(ink > 0); QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(window.currentEntry_, entry);
+                    if (fontPass == 0 && direction == "ltr") {
+                        const auto folder = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                        if (!folder.isEmpty()) { QVERIFY(QDir().mkpath(folder)); QVERIFY(window.grab().save(QDir(folder).filePath(QString("constructed-table-float-viewport-%1.png").arg(width)))); }
+                    }
+                }
+            }
+        }
+    }
+
+    void typedTableFloatViewportPreservesAuthoredEmptyCellsAndRefusesForeignContexts()
+    {
+        MainWindow window{QString()}; window.resize(639, 700); window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        auto source = tableFloatViewportFixture(); auto rows = source.value("rows").toArray(); auto firstRow = rows[0].toObject(); auto cells = firstRow.value("cells").toArray();
+        auto empty = cells[3].toObject(); empty.remove("style"); empty.insert("spans", QJsonArray{}); cells[3] = empty; firstRow.insert("cells", cells); rows[0] = firstRow; source.insert("rows", rows);
+        const auto block = [](const QJsonObject &table) { return QJsonObject{{"kind", "table"}, {"table", table}}; };
+        QVERIFY(composeReadingBlocks(window, QJsonArray{block(source)}));
+        auto *doc = window.reading_->document(); auto *native = qobject_cast<QTextDocumentLayout *>(doc->documentLayout()); QVERIFY(native);
+        const auto first = doc->find(QStringLiteral("First")); QVERIFY(!first.isNull()); auto *table = first.currentTable(); QVERIFY(table);
+        native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+        QCOMPARE(window.contentsRect().width(), 639);
+        QCOMPARE(table->format().position(), QTextFrameFormat::InFlow);
+        QVERIFY(table->format().property(SemanticHtml::tableFloatViewportProperty).toMap().value("active").toBool());
+        const auto authoredEmpty = table->cellAt(0, 3); const auto authoredFormat = authoredEmpty.format().toTableCellFormat();
+        QVERIFY(!authoredFormat.hasProperty(SemanticHtml::tableFloatViewportFillerProperty));
+        QVERIFY(!authoredFormat.hasProperty(QTextFormat::TableCellLeftPadding)); QCOMPARE(table->format().cellPadding(), 5.0);
+        QCOMPARE(authoredFormat.leftBorder(), 1.0); QCOMPARE(authoredFormat.leftBorderStyle(), QTextFrameFormat::BorderStyle_Solid);
+        QCOMPARE(authoredEmpty.firstPosition(), authoredEmpty.lastPosition()); QVERIFY(authoredEmpty.firstCursorPosition().block().layout()->lineCount() > 0);
+        for (int column=4; column<7; ++column) {
+            const auto filler = table->cellAt(0,column); QVERIFY(filler.format().boolProperty(SemanticHtml::tableFloatViewportFillerProperty));
+            QCOMPARE(filler.firstCursorPosition().block().layout()->lineCount(), 0);
+        }
+        auto legacy = source; legacy.remove("float_viewport"); QVERIFY(composeReadingBlocks(window, QJsonArray{block(legacy)}));
+        auto *legacyTable = window.reading_->document()->find(QStringLiteral("First")).currentTable(); QVERIFY(legacyTable);
+        const auto legacyEmpty = legacyTable->cellAt(0,3).format().toTableCellFormat();
+        QCOMPARE(legacyEmpty.leftBorder(), authoredFormat.leftBorder()); QCOMPARE(legacyEmpty.leftBorderStyle(), authoredFormat.leftBorderStyle());
+        QCOMPARE(legacyEmpty.hasProperty(QTextFormat::TableCellLeftPadding), authoredFormat.hasProperty(QTextFormat::TableCellLeftPadding));
+        QCOMPARE(legacyTable->format().cellPadding(), 5.0);
+        const auto refuse = [&](const QJsonObject &bad) {
+            QVERIFY(!composeReadingBlocks(window, QJsonArray{block(bad)}));
+            QCOMPARE(window.currentEntry_.value("sections").toArray()[0].toObject().value("blocks").toArray(), QJsonArray{block(bad)});
+            QVERIFY(composeReadingBlocks(window, QJsonArray{block(source)}));
+            auto *current = window.reading_->document(); current->documentLayout()->documentSize(); QCOMPARE(current->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            QVERIFY(!current->find(QStringLiteral("Surname header")).isNull());
+        };
+        for (const QJsonValue &threshold : {QJsonValue(0), QJsonValue(639.25), QJsonValue(QStringLiteral("639"))}) {
+            auto bad = source; auto policy = bad.value("float_viewport").toObject(); policy.insert("max_viewport_width_px", threshold); bad.insert("float_viewport", policy); refuse(bad);
+        }
+        { auto bad=source; bad.insert("caption", QJsonArray{QJsonObject{{"kind","text"},{"text","Caption"}}}); refuse(bad); }
+        { auto bad=source; bad.insert("rows", QJsonArray{}); refuse(bad); }
+        { auto bad=source; auto style=bad.value("style").toObject(); style.insert("float_side","left"); bad.insert("style",style); refuse(bad); }
+        { auto bad=source; auto style=bad.value("style").toObject(); style.insert("display","block"); bad.insert("style",style); refuse(bad); }
+        const QJsonObject nested{{"kind","container"},{"spans",QJsonArray{}},{"container",QJsonObject{{"blocks",QJsonArray{block(source)}}}}};
+        QVERIFY(!composeReadingBlocks(window,QJsonArray{nested}));
+        auto childSource=source; auto childRows=childSource.value("rows").toArray(); auto childRow=childRows[0].toObject(); auto childCells=childRow.value("cells").toArray();
+        auto child=childCells[0].toObject(); auto childStyle=child.value("style").toObject();
+        childStyle.remove("line_height"); child.insert("style",childStyle);
+        child.insert("spans",QJsonArray{}); child.insert("blocks",QJsonArray{QJsonObject{{"kind","container"},{"spans",QJsonArray{}},
+            {"container",QJsonObject{{"blocks",QJsonArray{QJsonObject{{"kind","paragraph"},{"spans",QJsonArray{QJsonObject{{"kind","text"},{"text","Nested owner"}}}}}}}}}}});
+        childCells[0]=child; childRow.insert("cells",childCells); childRows[0]=childRow; childSource.insert("rows",childRows); refuse(childSource);
+        QVERIFY(composeReadingBlocks(window,QJsonArray{block(source)}));
     }
 
     void typedTableBlockViewportReflowsOneSourceAcrossCssBoundaryAndRealResize()

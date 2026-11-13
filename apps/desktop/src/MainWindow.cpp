@@ -3366,10 +3366,12 @@ void MainWindow::reflowFigures() {
         if (!document) return;
         const bool figures = hasFigure(hasFigure, document->rootFrame());
         const bool tables = SemanticHtml::hasTableBlockViewports(document);
-        if (!figures && !tables) return;
+        const bool floatTables = SemanticHtml::hasTableFloatViewports(document);
+        if (!figures && !tables && !floatTables) return;
         if (!editDocumentFormats(reading_, [&] {
                 if (figures) SemanticFigure::reflow(document, contentsRect().width());
                 if (tables) SemanticHtml::reflowTableBlockViewports(document, qreal(contentsRect().width()));
+                if (floatTables) SemanticHtml::reflowTableFloatViewports(document, qreal(contentsRect().width()));
             })) throw DictApiError("unable to retain compiled flow during responsive layout");
         if (guard && document) document->setProperty("wikidict.figure.geometryError", QVariant());
         if (!guard || !document || document->property("wikidict.figure.validationPending").toBool()) return;
@@ -3707,6 +3709,10 @@ bool MainWindow::refreshReading() {
     beginEdit();
     if (SemanticHtml::hasTableBlockViewports(document)) {
         SemanticHtml::reflowTableBlockViewports(document, qreal(contentsRect().width()));
+        CompiledContent::require(current());
+    }
+    if (SemanticHtml::hasTableFloatViewports(document)) {
+        SemanticHtml::reflowTableFloatViewports(document, qreal(contentsRect().width()));
         CompiledContent::require(current());
     }
     if (needsOwners) {
@@ -4333,8 +4339,13 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
     if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
     SemanticHtml::validateInlineTableDomain(table, tableDepth, context.contentDepth, context.inReference, context.inlineTableAudioOwners, context.inlineTableImageOwners);
     const auto viewport = SemanticHtml::tableBlockViewport(table);
-    if (!viewport.isEmpty()) {
-        context.language = viewport.value(QStringLiteral("language")).toString();
+    const auto floatViewport = SemanticHtml::tableFloatViewport(table);
+    if (!floatViewport.isEmpty() && (depth != 0 || tableDepth != 1 || context.contentDepth != 0
+        || context.inReference || !listMarker.isEmpty()))
+        throw DictApiError("unsupported table float viewport containing context");
+    const auto ownerPolicy = floatViewport.isEmpty() ? viewport : floatViewport;
+    if (!ownerPolicy.isEmpty()) {
+        context.language = ownerPolicy.value(QStringLiteral("language")).toString();
         context.languageKnown = true;
     }
     const int indent = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
@@ -4374,9 +4385,9 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
     const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "margin_values", "containing_direction", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height"});
     if (!viewport.isEmpty() || SemanticHtml::present(tableStyle.value(QStringLiteral("margin_values"))))
         out.insert(out.indexOf(QChar('>')), QStringLiteral(" data-wikidict-table-auto-margins='1'"));
-    if (!viewport.isEmpty())
+    if (!ownerPolicy.isEmpty())
         out.insert(out.indexOf(QChar('>')), QStringLiteral(" dir='%1' data-wikidict-table-language='%2'")
-            .arg(viewport.value(QStringLiteral("grid_direction")).toString(), viewport.value(QStringLiteral("language")).toString().toHtmlEscaped()));
+            .arg(ownerPolicy.value(QStringLiteral("grid_direction")).toString(), ownerPolicy.value(QStringLiteral("language")).toString().toHtmlEscaped()));
     const QString tableBackground = SemanticHtml::present(tableStyle.value(QStringLiteral("background")))
         ? SemanticHtml::styleColor(tableStyle.value(QStringLiteral("background"))).name() : inheritedBackground;
     const QJsonArray caption = CompiledContent::array(table.value(QStringLiteral("caption")));

@@ -746,12 +746,164 @@ inline void reflowTableBlockViewports(QTextDocument *document, qreal viewportCss
     }
 }
 
+inline constexpr int tableFloatViewportProperty = QTextFormat::UserProperty + 0x57fb;
+inline constexpr int tableFloatViewportFillerProperty = QTextFormat::UserProperty + 0x57fc;
+inline const QString tableFloatViewportCapability = QStringLiteral("wikidict.table-float-viewport/1");
+
+inline QJsonObject tableFloatViewport(const QJsonObject &table) {
+    const auto value = table.value(QStringLiteral("float_viewport"));
+    if (!present(value)) return {};
+    const auto policy = value.toObject();
+    const QStringList fields{"max_viewport_width_px", "containing_direction", "grid_direction", "language"};
+    if (!value.isObject() || policy.size() != fields.size())
+        throw std::runtime_error("invalid table float viewport");
+    for (const auto &field : fields) if (!policy.contains(field))
+        throw std::runtime_error("incomplete table float viewport");
+    const auto threshold = policy.value(QStringLiteral("max_viewport_width_px"));
+    if (!threshold.isDouble() || !std::isfinite(threshold.toDouble()) || threshold.toDouble() <= 0
+        || threshold.toDouble() > 4294967295.0 || std::floor(threshold.toDouble()) != threshold.toDouble())
+        throw std::runtime_error("invalid table float viewport threshold");
+    for (const auto &key : {"containing_direction", "grid_direction"}) {
+        const auto direction = policy.value(QLatin1StringView(key));
+        if (!direction.isString() || (direction != QStringLiteral("ltr") && direction != QStringLiteral("rtl")))
+            throw std::runtime_error("invalid table float viewport direction");
+    }
+    const auto language = policy.value(QStringLiteral("language"));
+    if (!language.isString() || !sourceLanguageTag(language.toString()))
+        throw std::runtime_error("unsupported table float viewport source language");
+    const auto style = typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins",
+        "margin_values", "containing_direction", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height"});
+    if (present(table.value(QStringLiteral("geometry"))) || present(table.value(QStringLiteral("block_viewport")))
+        || !table.value(QStringLiteral("caption")).toArray().isEmpty() || present(table.value(QStringLiteral("caption_blocks")))
+        || style.value(QStringLiteral("float_side")) != QStringLiteral("right"))
+        throw std::runtime_error("unsupported table float viewport owner");
+    for (const auto &key : {"width", "padding", "margin_values", "containing_direction", "display", "vertical_align", "line_height"})
+        if (present(style.value(QLatin1StringView(key)))) throw std::runtime_error("unsupported table float viewport style");
+    const auto margins = style.value(QStringLiteral("margins"));
+    if (!margins.isObject() || margins.toObject().size() != 4)
+        throw std::runtime_error("missing fixed table float viewport margins");
+    for (const auto &side : {"top", "right", "bottom", "left"})
+        tableBoxLength(margins.toObject().value(QLatin1StringView(side)), 12, false);
+    bool hasCell = false;
+    for (const auto &row : table.value(QStringLiteral("rows")).toArray())
+        hasCell |= !row.toObject().value(QStringLiteral("cells")).toArray().isEmpty();
+    if (!hasCell) throw std::runtime_error("unsupported empty table float viewport");
+    return policy;
+}
+
+inline void materializeTableFloatViewport(QTextDocument *document, QTextTable *table,
+                                         const QJsonObject &metadata, qreal points) {
+    QPointer<QTextDocument> live(document);
+    QPointer<QAbstractTextDocumentLayout> native(document ? document->documentLayout() : nullptr);
+    QPointer<QTextTable> owner(table);
+    const auto capability = native ? native->property("_wikidictTableFloatViewportCapability") : QVariant();
+    if (!live || !native || !owner || owner->document() != live || live->documentLayout() != native
+        || capability.metaType().id() != QMetaType::QString || capability.toString() != tableFloatViewportCapability)
+        throw std::runtime_error("missing paired table float viewport layout");
+    const auto policy = metadata.value(QStringLiteral("float_viewport")).toObject();
+    const auto language = policy.value(QStringLiteral("language")).toString();
+    const auto style = metadata.value(QStringLiteral("style")).toObject();
+    const auto source = QJsonDocument(QJsonObject{{QStringLiteral("style"), style},
+        {QStringLiteral("float_viewport"), policy},
+        {QStringLiteral("rows"), metadata.value(QStringLiteral("rows"))}}).toJson(QJsonDocument::Compact);
+    auto format = owner->format();
+    if (format.hasProperty(tableAutoMarginsProperty) || format.hasProperty(tableViewportProperty)
+        || format.hasProperty(tableViewportGridProperty) || format.hasProperty(QTextFormat::UserProperty + 0x57f4)
+        || format.intProperty(tableDisplayProperty) != 0 || format.position() != QTextFrameFormat::FloatRight)
+        throw std::runtime_error("foreign table float viewport format");
+    QVariantList margins;
+    for (const auto &side : {"top", "right", "bottom", "left"})
+        margins.append(tableBoxLength(style.value(QStringLiteral("margins")).toObject().value(QLatin1StringView(side)),
+                                     points, false).value(QStringLiteral("value")));
+    format.setTopMargin(margins[0].toDouble()); format.setRightMargin(margins[1].toDouble());
+    format.setBottomMargin(margins[2].toDouble()); format.setLeftMargin(margins[3].toDouble());
+    format.clearProperty(QTextFormat::BlockAlignment);
+    format.setLayoutDirection(policy.value(QStringLiteral("grid_direction")) == QStringLiteral("rtl") ? Qt::RightToLeft : Qt::LeftToRight);
+    format.setProperty(tableSourceLanguageProperty, language);
+    auto base = format; base.clearProperty(QTextFormat::ObjectIndex);
+    const qreal bodyPixels = points * QFontMetricsF(QFont()).fontDpi() / 72.0;
+    if (!std::isfinite(bodyPixels) || bodyPixels <= 0)
+        throw std::runtime_error("invalid table float viewport body metric");
+    format.setProperty(tableFloatViewportProperty, QVariantMap{
+        {QStringLiteral("capability"), tableFloatViewportCapability}, {QStringLiteral("source"), source},
+        {QStringLiteral("threshold"), policy.value(QStringLiteral("max_viewport_width_px")).toDouble()},
+        {QStringLiteral("viewport"), policy.value(QStringLiteral("max_viewport_width_px")).toDouble() + 1.0},
+        {QStringLiteral("active"), false}, {QStringLiteral("body_pixels"), bodyPixels},
+        {QStringLiteral("direction"), int(policy.value(QStringLiteral("containing_direction")) == QStringLiteral("rtl") ? Qt::RightToLeft : Qt::LeftToRight)},
+        {QStringLiteral("grid_direction"), int(format.layoutDirection())}, {QStringLiteral("language"), language},
+        {QStringLiteral("margins"), margins}, {QStringLiteral("base_format"), QVariant::fromValue(QTextFormat(base))}});
+    owner->setFormat(format);
+    if (!live || !native || !owner || owner->document() != live || live->documentLayout() != native)
+        throw std::runtime_error("replaced table float viewport during construction");
+}
+
+inline bool hasTableFloatViewports(const QTextDocument *document) {
+    if (!document) return false;
+    const auto visit = [&](auto &&self, const QTextFrame *frame) -> bool {
+        if (frame->frameFormat().hasProperty(tableFloatViewportProperty)) return true;
+        for (auto *child : frame->childFrames()) if (self(self, child)) return true;
+        return false;
+    };
+    return visit(visit, document->rootFrame());
+}
+
+inline void reflowTableFloatViewports(QTextDocument *document, qreal viewportCssWidth) {
+    if (!document || !std::isfinite(viewportCssWidth) || viewportCssWidth < 0)
+        throw std::runtime_error("invalid table float CSS viewport");
+    QPointer<QTextDocument> live(document);
+    QPointer<QAbstractTextDocumentLayout> native(document->documentLayout());
+    const auto capability = native ? native->property("_wikidictTableFloatViewportCapability") : QVariant();
+    if (!live || !native || live->documentLayout() != native || capability.metaType().id() != QMetaType::QString
+        || capability.toString() != tableFloatViewportCapability)
+        throw std::runtime_error("missing paired table float viewport layout");
+    QVector<QPointer<QTextTable>> owners;
+    const auto collect = [&](auto &&self, QTextFrame *frame) -> void {
+        if (frame->frameFormat().hasProperty(tableFloatViewportProperty)) {
+            auto *table = qobject_cast<QTextTable *>(frame);
+            if (!table) throw std::runtime_error("foreign table float viewport owner");
+            owners.append(table);
+        }
+        for (auto *child : frame->childFrames()) self(self, child);
+    };
+    collect(collect, document->rootFrame());
+    for (const auto &owner : owners) {
+        if (!live || !native || !owner || owner->document() != live || live->documentLayout() != native)
+            throw std::runtime_error("replaced table float viewport");
+        auto format = owner->format();
+        const auto raw = format.property(tableFloatViewportProperty);
+        auto policy = raw.toMap();
+        if (raw.metaType().id() != QMetaType::QVariantMap || policy.size() != 11
+            || policy.value(QStringLiteral("capability")).metaType().id() != QMetaType::QString
+            || policy.value(QStringLiteral("capability")).toString() != tableFloatViewportCapability
+            || policy.value(QStringLiteral("threshold")).metaType().id() != QMetaType::Double
+            || policy.value(QStringLiteral("viewport")).metaType().id() != QMetaType::Double
+            || policy.value(QStringLiteral("active")).metaType().id() != QMetaType::Bool
+            || policy.value(QStringLiteral("base_format")).metaType().id() != QMetaType::QTextFormat)
+            throw std::runtime_error("invalid table float viewport state");
+        const bool active = viewportCssWidth <= policy.value(QStringLiteral("threshold")).toDouble();
+        auto expected = policy.value(QStringLiteral("base_format")).value<QTextFormat>().toTableFormat();
+        expected.setPosition(policy.value(QStringLiteral("active")).toBool() ? QTextFrameFormat::InFlow : QTextFrameFormat::FloatRight);
+        auto current = format; current.clearProperty(QTextFormat::ObjectIndex); current.clearProperty(tableFloatViewportProperty);
+        if (QTextFormat(current) != QTextFormat(expected)) throw std::runtime_error("changed table float viewport format");
+        if (policy.value(QStringLiteral("viewport")).toDouble() == viewportCssWidth) continue;
+        policy.insert(QStringLiteral("viewport"), viewportCssWidth); policy.insert(QStringLiteral("active"), active);
+        format.setPosition(active ? QTextFrameFormat::InFlow : QTextFrameFormat::FloatRight);
+        format.setProperty(tableFloatViewportProperty, policy);
+        owner->setFormat(format);
+        if (!live || !native || !owner || owner->document() != live || live->documentLayout() != native)
+            throw std::runtime_error("replaced table float viewport during reflow");
+    }
+}
+
 inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false,
                                 const QString &listMarker = {}, int tableDepth = 1, qreal tableOriginPoints = -1) {
     bool hasCell = false;
     for (const auto &row : table.value(QStringLiteral("rows")).toArray())
         hasCell |= !row.toObject().value(QStringLiteral("cells")).toArray().isEmpty();
     const auto viewport = tableBlockViewport(table);
+    const auto floatViewport = tableFloatViewport(table);
+    if (!floatViewport.isEmpty() && (indent != 0 || !listMarker.isEmpty() || tableDepth != 1))
+        throw std::runtime_error("unsupported table float viewport containing context");
     bool styled = !viewport.isEmpty() || !listMarker.isEmpty() || resetTextAlignment || present(table.value(QStringLiteral("style")))
         || (!hasCell && present(table.value(QStringLiteral("geometry"))));
     if (!styled) {
@@ -782,6 +934,7 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
     QJsonObject metadata{{"container_points", containerPoints}, {"indent", indent}, {"rows", rows}};
     metadata.insert(QStringLiteral("empty_nested"), tableDepth > 1);
     if (!viewport.isEmpty()) metadata.insert(QStringLiteral("block_viewport"), viewport);
+    if (!floatViewport.isEmpty()) metadata.insert(QStringLiteral("float_viewport"), floatViewport);
     if (hasTableFlowStyle(table.value(QStringLiteral("style")).toObject())) {
         metadata.insert(QStringLiteral("table_origin_points"), tableOriginPoints > 0 ? tableOriginPoints : containerPoints);
         const int display = tableDisplay(table.value(QStringLiteral("style")).toObject());
@@ -1325,7 +1478,11 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         if (!std::isfinite(points) || points <= 0 || indent < 0 || !record.value.value(QStringLiteral("rows")).isArray()) throw std::runtime_error("invalid table style context");
         const QJsonArray rows = record.value.value(QStringLiteral("rows")).toArray();
         if (table && rows.size() != table->rows()) throw std::runtime_error("table style row count mismatch");
-        const auto length = [&](const QJsonValue &value) { return styleLengthUnits(value, document, points); };
+        const bool floatViewport = present(record.value.value(QStringLiteral("float_viewport")));
+        const auto length = [&](const QJsonValue &value) {
+            return floatViewport ? tableBoxLength(value, points, false).value(QStringLiteral("value")).toDouble()
+                : styleLengthUnits(value, document, points);
+        };
         const auto edges = [&](const QJsonValue &value) {
             if (!value.isObject() || value.toObject().size() != 4) throw std::runtime_error("invalid style edges");
             const QJsonObject object = value.toObject();
@@ -1430,7 +1587,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         if (present(style.value(QStringLiteral("margins")))) {
             const auto e = edges(style.value(QStringLiteral("margins")));
             const qreal maximum = maximumFontPoints(document) * QFontMetricsF(QFont()).fontDpi() / 72;
-            format.setTopMargin(e[0]); format.setRightMargin(e[1]); format.setBottomMargin(e[2]); format.setLeftMargin(qMin(maximum, e[3] + indent));
+            format.setTopMargin(e[0]); format.setRightMargin(e[1]); format.setBottomMargin(e[2]); format.setLeftMargin(floatViewport ? e[3] : qMin(maximum, e[3] + indent));
         }
         if (present(style.value(QStringLiteral("margin_values")))) {
             const auto capability = document->documentLayout()->property("_wikidictTableAutoMarginsCapability");
@@ -1535,6 +1692,19 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                         cell.firstCursorPosition().position() != cell.lastCursorPosition().position() ||
                         !cell.firstCursorPosition().charFormat().anchorNames().isEmpty())
                         throw std::runtime_error("table style unexpected cell");
+                    if (floatViewport) {
+                        auto filler = cell.format().toTableCellFormat();
+                        filler.setPadding(0); filler.setBorder(0);
+                        filler.setBorderStyle(QTextFrameFormat::BorderStyle_None);
+                        filler.setBorderBrush(QColor(Qt::transparent));
+                        for (const int property : {cellWidthProperty, cellMinimumWidthProperty,
+                                cellLineHeightProperty, cellOwnerFontProperty, cellHiddenEdgesProperty})
+                            filler.clearProperty(property);
+                        filler.setProperty(tableFloatViewportFillerProperty, true);
+                        filler.setProperty(tableSourceLanguageProperty,
+                            record.value.value(QStringLiteral("float_viewport")).toObject().value(QStringLiteral("language")).toString());
+                        cell.setFormat(filler);
+                    }
                     // Collapsed Qt tables paint cell backgrounds, not the frame
                     // background. The missing source slot still exposes that
                     // table color; preserve every other filler format property.
@@ -1728,6 +1898,13 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             document->markContentsDirty(table->firstPosition(),
                 table->lastPosition() - table->firstPosition() + 1);
         }
+    }
+    for (const auto &record : records) if (present(record.value.value(QStringLiteral("float_viewport")))) {
+        QTextTable *table = record.ordinal >= 0 ? tables[record.ordinal] : nullptr;
+        if (!table || table->parentFrame() != document->rootFrame())
+            throw std::runtime_error("unmapped table float viewport");
+        materializeTableFloatViewport(document, table, record.value,
+            record.value.value(QStringLiteral("container_points")).toDouble());
     }
     // Complete all existing cell/table normalization before wrapping; public
     // frame insertion retains table objects but changes their positions.
