@@ -2861,15 +2861,35 @@ pub const Expander = struct {
         };
     }
 
-    fn scribuntoErrorMarkup(self: *Expander, module_name: []const u8, detail: []const u8) ![]const u8 {
+    fn scribuntoErrorMarkup(self: *Expander, module_name: ?[]const u8, detail: []const u8) ![]const u8 {
         const a = self.runtime.allocator;
         var out: std.ArrayList(u8) = .empty;
-        try out.appendSlice(a, "<strong class=\"error\"><span class=\"scribunto-error\">Lua error in ");
-        try appendHtmlTextEscaped(&out, a, module_name);
-        try out.appendSlice(a, ": ");
+        try out.appendSlice(a, "<strong class=\"error\"><span class=\"scribunto-error\">");
+        if (module_name) |name| {
+            try out.appendSlice(a, "Lua error in ");
+            try appendHtmlTextEscaped(&out, a, name);
+            try out.appendSlice(a, ": ");
+        }
         try appendHtmlTextEscaped(&out, a, detail);
         try out.appendSlice(a, "</span></strong>");
         return out.toOwnedSlice(a);
+    }
+
+    // Scribunto Hooks::invokeHook validates the outer module before expanding
+    // its function/arguments. This is not Lua require() recovery: dependencies
+    // and pcall keep their existing errors and package.loaded semantics.
+    fn missingInvokeModuleMarkup(self: *Expander, requested: []const u8) ![]const u8 {
+        const plain = try message_lib.interfaceMessagePlain(self.runtime, "scribunto-common-nosuchmodule", &.{
+            .{ .string = "(unknown code location)" }, .{ .string = requested },
+        });
+        return self.scribuntoErrorMarkup(null, plain);
+    }
+    fn preflightInvokeModule(self: *Expander, module_name: []const u8, requested: []const u8) !?[]const u8 {
+        _ = self.runtime.resolveModule(module_name) catch |failure| switch (failure) {
+            error.ModuleNotFound => return try self.missingInvokeModuleMarkup(requested),
+            else => return failure,
+        };
+        return null;
     }
 
     fn invokeExportErrorMarkup(self: *Expander, failure: anyerror, module_name: []const u8, function_name: []const u8) !?[]const u8 {
@@ -3134,6 +3154,8 @@ pub const Expander = struct {
             try self.expandWikitext(module_expr, params, host_title, depth + 1);
         const module_trimmed = std.mem.trim(u8, module_raw, " \t\r\n");
         const module_name = try self.runtime.namespace_catalog.?.normalizeTitle(self.runtime.allocator, module_trimmed, 828, .only_default);
+        if (args.len != 0 and (if (module_symbol) |symbol| symbol.module_id == null else true))
+            if (try self.preflightInvokeModule(module_name, module_trimmed)) |markup| return markup;
         const function_symbol = if (args.len != 0) try self.callSymbol(args[0], .function) else null;
         const function_name = if (function_symbol) |symbol|
             symbol.text
@@ -4234,6 +4256,8 @@ pub const Expander = struct {
         const module_raw = std.mem.trim(u8, try self.scalarText(module_value), " \t\r\n");
         if (module_raw.len == 0) return error.ModuleNameExpected;
         const module_name = try self.runtime.namespace_catalog.?.normalizeTitle(self.runtime.allocator, module_raw, 828, .only_default);
+        if (args.rawGet(.{ .number = 2 }) != null)
+            if (try self.preflightInvokeModule(module_name, module_raw)) |markup| return markup;
         const function_name = if (args.rawGet(.{ .number = 2 })) |value|
             std.mem.trim(u8, try self.scalarText(value), " \t\r\n")
         else
@@ -10349,4 +10373,93 @@ test "ordinary reused invokes restore strict before a later Pn shaped module roo
     const cached = expander.page_invoke_runtime orelse return error.TestUnexpectedResult;
     try std.testing.expect(cached.global_table.?.metatable == null);
     try std.testing.expect(!expander.page_invoke_active and runtime.global_table.?.metatable == null);
+}
+
+test "outer missing invoke uses selected message and preserves page while Lua require and pcall retain errors" {
+    const P = struct {
+        message: ?[]const u8 = "Erreur de script : le module « $2 » n’existe pas.",
+        fn get(_: ?*anyopaque, allocator: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            if (std.mem.endsWith(u8, title, ":Tsiahy:nb:NAOB")) return try allocator.dupe(u8, "{{#invoke:R:nb:NAOB|main}}");
+            if (std.mem.endsWith(u8, title, ":Explode")) return error.UnexpectedArgumentExpansion;
+            return null;
+        }
+        fn exists(_: ?*anyopaque, _: []const u8) !bool { return false; }
+        fn messages(raw: ?*anyopaque, _: std.mem.Allocator, language: []const u8, key: []const u8) !?Provider.InterfaceMessage {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            try std.testing.expectEqualStrings("mg", language);
+            try std.testing.expectEqualStrings("scribunto-common-nosuchmodule", key);
+            return if (self.message) |message| .{ .source = message } else error.InterfaceMessageSnapshotMissing;
+        }
+        fn result(value: Value) ![]const Value {
+            const out = try std.heap.smp_allocator.alloc(Value, 1); out[0] = value; return out;
+        }
+        fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const exports = try ctx.newTable();
+            try exports.rawSet(ctx.allocator, .{ .string = "main" }, try ctx.makeFunctionKnown(1, main, &.{}));
+            try exports.rawSet(ctx.allocator, .{ .string = "internal" }, try ctx.makeFunctionKnown(2, internal, &.{}));
+            try exports.rawSet(ctx.allocator, .{ .string = "protected" }, try ctx.makeFunctionKnown(3, protected, &.{}));
+            return result(.{ .table = exports });
+        }
+        fn main(_: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value { return result(.{ .string = "OK" }); }
+        fn internal(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            return ctx.callValue(ctx.getGlobal(22), &.{.{ .string = "Module:AbsentDependency" }});
+        }
+        fn protected(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const values = try ctx.callValue(ctx.getGlobal(16), &.{
+                ctx.getGlobal(22), .{ .string = "Module:AbsentDependency" },
+            });
+            defer rt.freeResults(values);
+            try std.testing.expect(values.len >= 2 and values[0] == .boolean and !values[0].boolean);
+            try std.testing.expectEqualStrings("ModuleNotFound", values[1].string);
+            return result(.{ .string = "CAUGHT" });
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const allocator = arena.allocator();
+    var catalog = try rt.namespace_registry.Registry.init(allocator,
+        "# wikidict-namespace-registry-v1\n# wiki\tmgwiktionary\n# dump-date\t20261001\n# content-language\tmg\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tentries\n" ++
+        "8\tMediaWiki\tMediaWiki\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\n" ++
+        "10\tEndrika\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tinput\n" ++
+        "14\tSokajy\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tinput\n" ++
+        "828\tModule\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tinput\n");
+    defer catalog.deinit();
+    var runtime = try rt.Context.initProgram(allocator, 24, 1); defer runtime.deinit(); runtime.namespace_catalog = &catalog;
+    const functions = [_]rt.FunctionFn{rt.stabilize(P.root)}; runtime.module_root_entries = &functions;
+    runtime.configureModules(null, TestModule.lookup, TestModule.name);
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime);
+    var source: P = .{};
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .ctx = &source, .get = P.get, .exists = P.exists, .interface_message = P.messages }, .install_scribunto = installTestInvoke };
+    const error_text = "<strong class=\"error\"><span class=\"scribunto-error\">Erreur de script : le module « R:nb:NAOB » n’existe pas.</span></strong>";
+    const actual = try expander.expandFragment("MG preserved page", "BEFORE{{Tsiahy:nb:NAOB}}AFTER\n# [[kept]]\n{{#invoke:Test|main}}", 1_794_174_780);
+    try std.testing.expectEqualStrings("BEFORE" ++ error_text ++ "AFTER\n# [[kept]]\nOK", actual);
+    // Omitted-function behavior is a separate existing project limitation:
+    // present modules retain default-main; missing modules keep their original
+    // typed failure instead of acquiring the wrong nosuchmodule precedence.
+    try std.testing.expectError(error.ModuleNotFound, expander.expandFragment("Page", "{{#invoke:R:nb:NAOB}}", 1_794_174_780));
+    try std.testing.expectEqualStrings("OK", try expander.expandFragment("Page", "{{#invoke:Test}}", 1_794_174_780));
+    // Missing module wins before expansion of function and value expressions.
+    try std.testing.expectEqualStrings(error_text, try expander.expandFragment("Page",
+        "{{#invoke: R:nb:NAOB |{{Explode}}|x={{Explode}}}}", 1_794_174_780));
+    try std.testing.expectEqualStrings("CAUGHT|OK", try expander.expandFragment("Page",
+        "{{#iferror:{{#invoke:R:nb:NAOB|main}}|CAUGHT|BAD}}|{{#invoke:Test|main}}", 1_794_174_780));
+    const arguments = try runtime.newTable();
+    try arguments.rawSet(allocator, .{ .number = 1 }, .{ .string = " R:nb:NAOB " });
+    try arguments.rawSet(allocator, .{ .number = 2 }, .{ .string = "main" });
+    expander.attach(); try std.testing.expectEqualStrings(error_text, try expander.frameParserInvoke(arguments));
+    try arguments.rawSet(allocator, .{ .number = 2 }, .nil);
+    try std.testing.expectError(error.ModuleNotFound, expander.frameParserInvoke(arguments));
+    try arguments.rawSet(allocator, .{ .number = 1 }, .{ .string = "Test" });
+    try std.testing.expectEqualStrings("OK", try expander.frameParserInvoke(arguments));
+    const internal = try expander.expandFragment("Page", "A{{#invoke:Test|internal}}B{{#invoke:Test|protected}}C{{#invoke:Test|main}}", 1_794_174_780);
+    try std.testing.expectEqualStrings("A<strong class=\"error\"><span class=\"scribunto-error\">Lua error in Module:Test: ModuleNotFound</span></strong>BCAUGHTCOK", internal);
+    try std.testing.expectError(error.ModuleNotFound, runtime.requireByName("Module:AbsentDependency"));
+    // Existing substitution is nonrecursive and the returned error is not
+    // re-expanded as wikitext; message and operand HTML are text-escaped once.
+    source.message = "$1|$2|{{Explode}}"; expander.attach();
+    try std.testing.expectEqualStrings("<strong class=\"error\"><span class=\"scribunto-error\">(unknown code location)|&lt;b&gt;&amp;$2|{{Explode}}</span></strong>",
+        try expander.missingInvokeModuleMarkup("<b>&$2"));
+    source.message = null;
+    try std.testing.expectError(error.InterfaceMessageSnapshotMissing, expander.expandFragment("Page", "{{#invoke:R:nb:NAOB|main}}", 1_794_174_780));
+    try std.testing.expect(runtime.current_frame == null and runtime.aotErrorName() == null and !runtime.last_error_present);
 }
