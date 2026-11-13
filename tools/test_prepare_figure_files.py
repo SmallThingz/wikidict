@@ -5788,6 +5788,7 @@ class MaterializedFigureConsumerTests(unittest.TestCase):
 
 class FixedSiteProfileTests(unittest.TestCase):
     setUp = FigureFileTests.setUp
+    write_projection = FigureFileTests.write_projection
     response = FigureFileTests.response
     project = FigureFileTests.project
     batch = FigureFileTests.batch
@@ -5796,13 +5797,17 @@ class FixedSiteProfileTests(unittest.TestCase):
         batches = [self.batch('ملف:Profile%d.svg' % i) for i in range(8)]
         fixed = figure.encoded(self.site_api)
         original = figure._figure_site_profile
-        with patch.object(figure, '_figure_site_profile', wraps=original) as checked:
+        registration = figure._figure_site_registration
+        with patch.object(figure, '_figure_site_profile', wraps=original) as checked, \
+                patch.object(figure, '_figure_site_registration', wraps=registration) as registrations:
             result = self.project(batches)
         self.assertEqual(len(result['records']), 8)
-        self.assertEqual(checked.call_count, 9)
-        self.assertEqual(sum(call.args[0] == fixed for call in checked.call_args_list), 1)
-        self.assertEqual([call.args[0] for call in checked.call_args_list[1:]],
-                         [batch['response'].encode() for batch in batches])
+        self.assertEqual(checked.call_count, 1)
+        self.assertEqual(checked.call_args.args[0], fixed)
+        self.assertEqual(registrations.call_count, 9)
+        self.assertEqual(registrations.call_args_list[0].args[0], self.site_api)
+        self.assertEqual([call.args[0] for call in registrations.call_args_list[1:]],
+                         [json.loads(batch['response']) for batch in batches])
 
     def test_invalid_fixed_site_is_rejected_before_any_response(self):
         site = copy.deepcopy(self.site_api)
@@ -8694,3 +8699,119 @@ class CompleteSelectionDocumentTests(unittest.TestCase):
                     self.assertNotIn(('complete-stream', str(parent / figure.MANIFEST)), cache)
                     self.assertEqual(bool(loaded), kind == 'changed-during')
                 self.assertEqual(inventory.call_count, 1)
+
+
+class FigureBatchSiteReuseTests(unittest.TestCase):
+    setUp = FigureFileTests.setUp
+    write_projection = FigureFileTests.write_projection
+    response = FigureFileTests.response
+    batch = FigureFileTests.batch
+    project = FigureFileTests.project
+
+    def raw_wrapper_reference(self):
+        registration = figure._figure_site_registration
+        def replay(site, general, wiki, approved):
+            raw = figure.encoded(site)
+            with patch.object(figure, '_figure_site_registration', new=registration):
+                return figure._figure_site_profile(raw, general, wiki,
+                    dict(approved, site_raw_sha256=figure.digest(raw)), approved)
+        return patch.object(figure, '_figure_site_registration', new=replay)
+
+    def test_batch_site_reuse_preserves_complete_facts_and_avoids_second_decode(self):
+        names = ['\u0645\u0644\u0641:First.svg', '\u0645\u0644\u0641:Second.svg']
+        batches = [self.batch(name) for name in names]
+        original = copy.deepcopy(batches)
+        targets = {batch['response'].encode(): index for index, batch in enumerate(batches)}
+        decode, digest = figure.decode, figure.digest
+        def run(reference):
+            counts = {'decodes': [0, 0], 'digests': [0, 0]}
+            def counted_decode(raw):
+                if raw in targets:
+                    counts['decodes'][targets[raw]] += 1
+                return decode(raw)
+            def counted_digest(raw):
+                if raw in targets:
+                    counts['digests'][targets[raw]] += 1
+                return digest(raw)
+            with patch.object(figure, 'decode', new=counted_decode), \
+                    patch.object(figure, 'digest', new=counted_digest):
+                if reference:
+                    with self.raw_wrapper_reference():
+                        result = self.project(batches)
+                else:
+                    result = self.project(batches)
+            return result, counts
+        expected, before = run(True)
+        actual, after = run(False)
+        self.assertEqual(actual, expected)
+        self.assertEqual(b''.join(figure.provider_chunks(actual)),
+                         b''.join(figure.provider_chunks(expected)))
+        self.assertEqual(batches, original)
+        self.assertEqual([row['requested_file'] for row in actual['records']], names)
+        self.assertEqual([(row['state'], row['original_width'], row['original_height'])
+                          for row in actual['records']], [('eligible', 800, 600)] * 2)
+        self.assertEqual(before, {'decodes': [2, 2], 'digests': [2, 2]})
+        self.assertEqual(after, {'decodes': [1, 1], 'digests': [0, 0]})
+        print(json.dumps({'figure_batch_response_operation_counts':
+            {'raw_wrapper_reference': before, 'decoded_caller': after},
+            'whole_tuple_timing_claimed': False}, sort_keys=True))
+
+    def test_batch_site_reuse_keeps_each_response_refusal_and_duplicate_json(self):
+        title = '\u0645\u0644\u0641:Second.svg'
+        for mode in ('server', 'language', 'core', 'extensions', 'duplicate-extension',
+                     'missing-extensions', 'timestamp', 'warning', 'error', 'duplicate-json'):
+            with self.subTest(mode=mode):
+                response = self.response(title)
+                general = response['query']['general']
+                if mode == 'server':
+                    general['server'] = 'https://foreign.invalid'
+                elif mode == 'language':
+                    general['lang'] = 'fr'
+                elif mode == 'core':
+                    general['git-hash'] = '0' * 40
+                elif mode == 'extensions':
+                    response['query']['extensions'] = []
+                elif mode == 'duplicate-extension':
+                    response['query']['extensions'].append(copy.deepcopy(response['query']['extensions'][0]))
+                elif mode == 'missing-extensions':
+                    del response['query']['extensions']
+                elif mode == 'timestamp':
+                    response['curtimestamp'] = '2026-13-05T23:00:00Z'
+                elif mode == 'warning':
+                    response['warnings'] = {}
+                elif mode == 'error':
+                    response['errors'] = []
+                batch = self.batch(title, response)
+                if mode == 'duplicate-json':
+                    batch['response'] = '{"curtimestamp":"2026-10-05T23:00:00Z",' + batch['response'][1:]
+                batches = [self.batch(), batch]
+                original = copy.deepcopy(batches)
+                with self.raw_wrapper_reference():
+                    with self.assertRaises(ValueError) as expected:
+                        self.project(batches)
+                with self.assertRaises(ValueError) as actual:
+                    self.project(batches)
+                self.assertEqual(str(actual.exception), str(expected.exception))
+                self.assertEqual(batches, original)
+
+    def test_raw_site_wrapper_error_order_and_first_invalid_batch_stay_exact(self):
+        raw = figure.encoded(self.site_api)
+        approved = figure.FIGURE_SOURCE_PROFILES[self.core]
+        general = self.site_api['query']['general']
+        profile = dict(approved, site_raw_sha256=figure.digest(raw))
+        with patch.object(figure, 'decode', side_effect=AssertionError('profile must fail before parsing')):
+            with self.assertRaisesRegex(ValueError, 'Unreviewed or changed figure sizing source profile'):
+                figure._figure_site_profile(b'{', general, self.wiki, profile, approved)
+        duplicate = '{"curtimestamp":"2026-10-05T23:00:00Z",' + raw.decode()[1:]
+        duplicated_profile = dict(approved, site_raw_sha256=figure.digest(duplicate.encode()))
+        with self.assertRaisesRegex(ValueError, 'Duplicate JSON key'):
+            figure._figure_site_profile(duplicate.encode(), general, self.wiki, duplicated_profile, approved)
+        response = self.response()
+        response['warnings'] = {}
+        batch = self.batch(response=response)
+        def source():
+            yield batch
+            raise AssertionError('an invalid registration must stop before the next batch')
+        with self.assertRaisesRegex(ValueError, 'Unknown figure site registration evidence'):
+            figure.file_records(source(), self.namespace.read_bytes(), self.wiki, self.date,
+                raw, has_batches=True, record_limit=50)

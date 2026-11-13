@@ -431,7 +431,11 @@ def _figure_site_profile(site_raw, general, wiki, source_profile, approved):
             or {key: value for key, value in source_profile.items() if key != 'site_raw_sha256'} != approved
             or source_profile['site_raw_sha256'] != digest(site_raw)):
         raise ValueError('Unreviewed or changed figure sizing source profile')
-    site = decode(site_raw)
+    _figure_site_registration(decode(site_raw), general, wiki, approved)
+
+
+def _figure_site_registration(site, general, wiki, approved):
+    """Validate registration from this caller's already decoded response."""
     require_edition(site, wiki)
     if any(key in site for key in ('error', 'errors', 'warnings')):
         raise ValueError('Unknown figure site registration evidence')
@@ -1162,8 +1166,9 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         if ({key: value for key, value in batch_profile.items() if key != 'media_extensions'} !=
                 {key: value for key, value in approved.items() if key != 'media_extensions'}):
             raise ValueError('Figure response changed its proved handler profile')
-        _figure_site_profile(response_raw, general, wiki,
-                            dict(batch_profile, site_raw_sha256=digest(response_raw)), batch_profile)
+        # This exact response was decoded above. Its constructed profile/hash
+        # compared the same bytes with themselves; keep every registration check.
+        _figure_site_registration(data, general, wiki, batch_profile)
         observed = data.get('curtimestamp')
         if not isinstance(observed, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', observed):
             raise ValueError('Missing same-response Figure observation time')
