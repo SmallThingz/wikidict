@@ -8880,23 +8880,44 @@ pub const Renderer = struct {
         return figureCaptionFiniteNodes(null, tracked, caption);
     }
 
-    // This route certifies only the absence of list nodes. Remote links may
-    // have generated classes; their ordinary parser remains the sole action
-    // and style authority. Namespace precedence and interlanguage metadata are
-    // checked before admitting the one selected external interwiki row.
-    fn figureCaptionRemoteTarget(self: *const Renderer, target: []const u8) bool {
+    // The selected outer interwiki row owns the generated anchor class. A
+    // chained title remains that row's URL argument; it is not a local language
+    // or namespace transition. Keep explicit-colon handling and namespace
+    // precedence aligned with the ordinary link path.
+    fn figureCaptionRemoteTarget(self: *const Renderer, original: []const u8) bool {
         const registry = self.context.namespace_catalog orelse return false;
+        const target = if (starts(original, ":")) original[1..] else original;
         if (registry.interwiki_magic == null or !safeInternalTarget(target) or
             self.namespaceOfTarget(target) != null) return false;
         const colon = std.mem.indexOfScalar(u8, target, ':') orelse return false;
         if (colon == 0 or colon + 1 == target.len or trim(target[colon + 1 ..]).len == 0) return false;
         const prefix = target[0..colon];
         for (prefix) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-') return false;
-        if (std.mem.indexOfAny(u8, target[colon + 1 ..], ":#[]|{}<>&/\\\r\n") != null) return false;
+        const body = target[colon + 1 ..];
+        if (std.mem.indexOfAny(u8, body, "#[]|{}<>&/\\\r\n") != null or
+            body[0] == ':' or body[body.len - 1] == ':' or std.mem.indexOf(u8, body, "::") != null) return false;
         for (target) |byte| if (byte < 0x20 or byte == 0x7f) return false;
         for (registry.interwiki_rows) |row| if (std.ascii.eqlIgnoreCase(row.prefix, prefix))
             return !row.is_current_wiki and !row.is_interlanguage;
         return false;
+    }
+
+    // Consume the ordinary parser's complete labelled HTTP(S) token. This is
+    // only a finite node/class inventory, never an action or URL rewrite. In
+    // particular, an unclosed bracket cannot become a labelled action here.
+    fn figureCaptionHttpLinkEnd(self: *const Renderer, source: []const u8) ?usize {
+        if (!starts(source, "[http://") and !starts(source, "[https://")) return null;
+        var iterator: ir.InlineIterator = .{ .input = source, .renderer_boundaries = true, .link_trail = self.context.link_trail };
+        const token = iterator.next() orelse return null;
+        if (token.kind != .external_link or iterator.cursor < 3 or iterator.cursor > source.len or
+            source[iterator.cursor - 1] != ']' or token.external_label_prefix.len != 0 or
+            token.text.ptr == token.target.ptr or trim(token.text).len == 0 or
+            !safeUrl(token.target) or unresolvedExternalActionTarget(token.target)) return null;
+        if (std.mem.indexOfAny(u8, token.target, "[]{}<>|&'\"\\\r\n\x00") != null) return null;
+        for (token.target) |byte| if (byte <= 0x20 or byte == 0x7f) return null;
+        if (std.mem.indexOfAny(u8, token.text, "[]:#|{}<>&/\\'\r\n\x00") != null and
+            !figureCaptionBoldLocalLabel(token.text) and !figureCaptionItalicLocalLabel(token.text)) return null;
+        return iterator.cursor;
     }
 
     fn figureCaptionNoLists(self: *const Renderer, tracked: MissingText, caption: []const u8) bool {
@@ -8913,6 +8934,7 @@ pub const Renderer = struct {
         attributed_spans: usize = 0,
         has_language: bool = false,
         remote_links: usize = 0,
+        http_links: usize = 0,
 
         fn remote(self: *FigureCaptionAuthoredInventory) bool {
             if (self.remote_links == 0) {
@@ -8924,6 +8946,21 @@ pub const Renderer = struct {
                 self.classes_len += value.len;
             }
             self.remote_links += 1;
+            return true;
+        }
+
+        fn http(self: *FigureCaptionAuthoredInventory) bool {
+            if (self.http_links == 0) {
+                // Both generated classes remain possible CSS subjects. They
+                // cannot lend classless or outer-ancestor authority.
+                const value = "external text";
+                const separator: usize = @intFromBool(self.classes_len != 0);
+                if (value.len + separator > self.classes.len - self.classes_len) return false;
+                if (separator != 0) { self.classes[self.classes_len] = ' '; self.classes_len += 1; }
+                @memcpy(self.classes[self.classes_len..][0..value.len], value);
+                self.classes_len += value.len;
+            }
+            self.http_links += 1;
             return true;
         }
 
@@ -8996,7 +9033,7 @@ pub const Renderer = struct {
         for (caption) |byte| if (byte < 0x20 or byte == 0x7f) return null;
         var inventory: FigureCaptionAuthoredInventory = .{};
         if (!figureCaptionFiniteNodesWithInventory(self, tracked, caption, &inventory) or
-            inventory.attributed_spans != 0 or inventory.remote_links == 0) return null;
+            inventory.attributed_spans != 0 or (inventory.remote_links == 0 and inventory.http_links == 0)) return null;
         return inventory;
     }
 
@@ -9095,7 +9132,14 @@ pub const Renderer = struct {
                     if (end == caption.len or caption[end] != ']') return false;
                     pos = end + 1; continue;
                 }
-                if (!starts(caption[pos..], "[[")) return false;
+                if (!starts(caption[pos..], "[[")) {
+                    const renderer = list_context orelse return false;
+                    const facts = inventory orelse return false;
+                    const consumed = renderer.figureCaptionHttpLinkEnd(caption[pos..]) orelse return false;
+                    if (!facts.http()) return false;
+                    pos += consumed;
+                    continue;
+                }
                 const end = std.mem.indexOfPos(u8, caption, pos + 2, "]]") orelse return false;
                 const inner_link = caption[pos + 2 .. end];
                 const separator = std.mem.indexOfScalar(u8, inner_link, '|');
@@ -73999,7 +74043,7 @@ test "borrowed Figure list certificate admits only normal remote links and bound
     try CenteredImageTest.equivalent(a, &entity_body_actual, entity_body, &entity_body_reference, numeric_body);
     for ([_][]const u8{
         "[[File:Map.svg|UNSD]]", "[[Category:Asia|UNSD]]", "[[Unknown:Asia|UNSD]]", "[[en:Asia|UNSD]]", "[[self:Asia|UNSD]]",
-        "[[:w:Asia|UNSD]]", "[[w:|UNSD]]", "[[w:   |UNSD]]", "[[w:Asia#part|UNSD]]", "[[w:Asia:part|UNSD]]", "[[w:Asia/part|UNSD]]",
+        "[[::w:Asia|UNSD]]", "[[w:|UNSD]]", "[[w:   |UNSD]]", "[[w:Asia#part|UNSD]]", "[[w:Asia::part|UNSD]]", "[[w:Asia/part|UNSD]]",
         "[[w:Asia|[[Other]]]]", "[[w:Asia|<span lang=vi>UNSD</span>]]", "[[w:Asia|UNSD|extra]]", "[[w:Asia|UNSD]",
         ": Asia", "; Asia", "# Asia", "* Asia", "<ol><li>Asia: North</li></ol>", "Asia\n: North", "Asia:\nNorth", "Asia:\tNorth", "Asia:North",
         "<span class=x>Asia: North</span>", "<span lang=vi>Asia: North</span>", "{{Asia}}: North", "Asia\x00: North", "Asia\xff: North",
@@ -83683,8 +83727,8 @@ test "Figure remote and local fragment inventory composes only closed borrowed n
     for ([_][]const u8{
         "[[門#ภาษาญี่ปุ่น|門]]", "[[w:Ryakuji|Ryakuji]] [[Tea#one#two|tea]]", "[[w:Ryakuji|Ryakuji]] [[#part|tea]]",
         "[[w:Ryakuji|Ryakuji]] [[Tea#|tea]]", "[[w:Ryakuji|Ryakuji]] [[File:X.png|x]]",
-        "[[Unknown:Tea|tea]]", "[[en:Tea|tea]]", "[[self:Tea|tea]]", "[[File:Tea|tea]]", "[[:w:Tea|tea]]",
-        "[[w:Tea#part|tea]]", "[[w:Tea:part|tea]]", "[[w:Tea/part|tea]]", "[[w:|tea]]",
+        "[[Unknown:Tea|tea]]", "[[en:Tea|tea]]", "[[self:Tea|tea]]", "[[File:Tea|tea]]", "[[::w:Tea|tea]]",
+        "[[w:Tea#part|tea]]", "[[w:Tea::part|tea]]", "[[w:Tea/part|tea]]", "[[w:|tea]]",
         "[[w:Tea|<span class='night'>tea</span>]]", "<span class='x'>[[w:Tea|tea]]</span>",
         "<span class='x' lang='ja'>[[w:Tea|tea]]</span>", "<span lang='ja'>[[w:Tea|tea]]</span>",
         "[[w:Tea|tea]]\n* list", "* [[w:Tea|tea]]", "[[w:Tea|{{template}}]]", "[[w:Tea|[[Other]]]]",
@@ -84490,4 +84534,186 @@ test "colon formatting source proof rejects real tags copied domains taint and a
     const real = try r.parseSpans("<i>real italic</i>", .{});
     try std.testing.expectEqualStrings("real italic", try flattened(a, real));
     for (real) |span| try std.testing.expect(span.flags.italic and span.provenance == .parsed);
+}
+
+// Exact caption bytes from the retained SR19 failures. The nine final
+// bracketed URLs use the third source ] that the ordinary InlineIterator
+// restores to the File label; the earlier diagnostic extraction omitted it.
+const SrFiniteCaptionTest = struct {
+    const Case = struct { title: []const u8, token: []const u8, caption: []const u8, visible: []const u8, actions: []const Action, restored: bool };
+    const Action = struct { target: []const u8, label: []const u8 };
+    const cases = [_]Case{
+        .{ .title = "Alexander", .token = "[[Слика:Napoli BW 2013-05-16 16-24-01.jpg|right|180px|thumb|[1] [[w:en:Alexander the Great|Alexander the Great]] ([[w:Александар Велики|Александар Велики]])]]",
+            .caption = "[1] [[w:en:Alexander the Great|Alexander the Great]] ([[w:Александар Велики|Александар Велики]])", .visible = "[1] Alexander the Great (Александар Велики)", .restored = false,
+            .actions = &.{ .{ .target = "https://sr.wikipedia.org/wiki/en:Alexander_the_Great", .label = "Alexander the Great" }, .{ .target = "https://sr.wikipedia.org/wiki/%D0%90%D0%BB%D0%B5%D0%BA%D1%81%D0%B0%D0%BD%D0%B4%D0%B0%D1%80_%D0%92%D0%B5%D0%BB%D0%B8%D0%BA%D0%B8", .label = "Александар Велики" } } },
+        .{ .title = "Berg", .token = "[[Image:Denali Mt McKinley.jpg|thumb|center|200п|[1] [[w:de:Mount McKinley|Mount McKinley]] (Аласка, САД)]]",
+            .caption = "[1] [[w:de:Mount McKinley|Mount McKinley]] (Аласка, САД)", .visible = "[1] Mount McKinley (Аласка, САД)", .restored = false,
+            .actions = &.{ .{ .target = "https://sr.wikipedia.org/wiki/de:Mount_McKinley", .label = "Mount McKinley" } } },
+        .{ .title = "hrdina", .token = "[[Слика:Juraj-Jánošík-Smetanovy-sady-Hořice2011a.jpg|десно|250п|мини|Словачки херој [http://sr.wikipedia.org/sr/%D0%88%D1%83%D1%80%D0%B0%D1%98_%D0%88%D0%B0%D0%BD%D0%BE%D1%88%D0%B8%D0%BA Јурај Јаношик]]]",
+            .caption = "Словачки херој [http://sr.wikipedia.org/sr/%D0%88%D1%83%D1%80%D0%B0%D1%98_%D0%88%D0%B0%D0%BD%D0%BE%D1%88%D0%B8%D0%BA Јурај Јаношик]", .visible = "Словачки херој Јурај Јаношик", .restored = true,
+            .actions = &.{ .{ .target = "http://sr.wikipedia.org/sr/%D0%88%D1%83%D1%80%D0%B0%D1%98_%D0%88%D0%B0%D0%BD%D0%BE%D1%88%D0%B8%D0%BA", .label = "Јурај Јаношик" } } },
+        .{ .title = "súčasný", .token = "[[Слика:Slovak Prime Minister Robert Fico during the press conference.jpg|десно|250п|мини|Актуелни словачки премијер [http://sr.wikipedia.org/sr/%D0%A0%D0%BE%D0%B1%D0%B5%D1%80%D1%82_%D0%A4%D0%B8%D1%86%D0%BE Роберт Фицо]]]",
+            .caption = "Актуелни словачки премијер [http://sr.wikipedia.org/sr/%D0%A0%D0%BE%D0%B1%D0%B5%D1%80%D1%82_%D0%A4%D0%B8%D1%86%D0%BE Роберт Фицо]", .visible = "Актуелни словачки премијер Роберт Фицо", .restored = true,
+            .actions = &.{ .{ .target = "http://sr.wikipedia.org/sr/%D0%A0%D0%BE%D0%B1%D0%B5%D1%80%D1%82_%D0%A4%D0%B8%D1%86%D0%BE", .label = "Роберт Фицо" } } },
+        .{ .title = "ulica", .token = "[[Слика:Street in city center of Trenčín, Slovakia.jpg|десно|250п|мини|Улица у граду [[:w:sr:Тренчин|Тренчин]]]]",
+            .caption = "Улица у граду [[:w:sr:Тренчин|Тренчин]]", .visible = "Улица у граду Тренчин", .restored = false,
+            .actions = &.{ .{ .target = "https://sr.wikipedia.org/wiki/sr:%D0%A2%D1%80%D0%B5%D0%BD%D1%87%D0%B8%D0%BD", .label = "Тренчин" } } },
+        .{ .title = "hrbatý", .token = "[[Слика:Dominik Hrbatý, Košice Open 2011 (QF) (2).JPG|десно|250п|мини|Словачки тенисер [http://en.wikipedia.org/wiki/Dominik_Hrbat%C3%BD Доминик Хрбати]]]",
+            .caption = "Словачки тенисер [http://en.wikipedia.org/wiki/Dominik_Hrbat%C3%BD Доминик Хрбати]", .visible = "Словачки тенисер Доминик Хрбати", .restored = true,
+            .actions = &.{ .{ .target = "http://en.wikipedia.org/wiki/Dominik_Hrbat%C3%BD", .label = "Доминик Хрбати" } } },
+        .{ .title = "šťastný", .token = "[[Слика:Peter Stastny1.jpg|десно|250п|мини|Легендарни словачки хокејаш [http://en.wikipedia.org/wiki/Peter_%C5%A0%C5%A5astn%C3%BD Петер Штјастни]]]",
+            .caption = "Легендарни словачки хокејаш [http://en.wikipedia.org/wiki/Peter_%C5%A0%C5%A5astn%C3%BD Петер Штјастни]", .visible = "Легендарни словачки хокејаш Петер Штјастни", .restored = true,
+            .actions = &.{ .{ .target = "http://en.wikipedia.org/wiki/Peter_%C5%A0%C5%A5astn%C3%BD", .label = "Петер Штјастни" } } },
+        .{ .title = "výborný", .token = "[[Слика:David Vyborny.jpg|десно|250п|мини|Чешки хокејаш [https://en.wikipedia.org/wiki/David_V%C3%BDborn%C3%BD David Výborný]]]",
+            .caption = "Чешки хокејаш [https://en.wikipedia.org/wiki/David_V%C3%BDborn%C3%BD David Výborný]", .visible = "Чешки хокејаш David Výborný", .restored = true,
+            .actions = &.{ .{ .target = "https://en.wikipedia.org/wiki/David_V%C3%BDborn%C3%BD", .label = "David Výborný" } } },
+        .{ .title = "slovenčina", .token = "[[Слика:Ludovit Stur adj.jpg|десно|250п|мини|[https://sr.wikipedia.org/wiki/%D0%89%D1%83%D0%B4%D0%BE%D0%B2%D0%B8%D1%82_%D0%A8%D1%82%D1%83%D1%80 Људовит Штур] - кодификатор словачког књижевног језика]]",
+            .caption = "[https://sr.wikipedia.org/wiki/%D0%89%D1%83%D0%B4%D0%BE%D0%B2%D0%B8%D1%82_%D0%A8%D1%82%D1%83%D1%80 Људовит Штур] - кодификатор словачког књижевног језика", .visible = "Људовит Штур - кодификатор словачког књижевног језика", .restored = false,
+            .actions = &.{ .{ .target = "https://sr.wikipedia.org/wiki/%D0%89%D1%83%D0%B4%D0%BE%D0%B2%D0%B8%D1%82_%D0%A8%D1%82%D1%83%D1%80", .label = "Људовит Штур" } } },
+        .{ .title = "polievka", .token = "[[Слика:Silvestrovska kapustnica.JPG|десно|250п|мини|[https://en.wikipedia.org/wiki/Cabbage_soup Kapustnica] - традиционална словачка чорба од купуса]]",
+            .caption = "[https://en.wikipedia.org/wiki/Cabbage_soup Kapustnica] - традиционална словачка чорба од купуса", .visible = "Kapustnica - традиционална словачка чорба од купуса", .restored = false,
+            .actions = &.{ .{ .target = "https://en.wikipedia.org/wiki/Cabbage_soup", .label = "Kapustnica" } } },
+        .{ .title = "slovenský", .token = "[[Слика:Rieka Vah - Piestany.jpg|десно|250п|мини|Најдужа словачка река - [https://sr.wikipedia.org/wiki/%D0%92%D0%B0%D1%85 Вах]]]",
+            .caption = "Најдужа словачка река - [https://sr.wikipedia.org/wiki/%D0%92%D0%B0%D1%85 Вах]", .visible = "Најдужа словачка река - Вах", .restored = true,
+            .actions = &.{ .{ .target = "https://sr.wikipedia.org/wiki/%D0%92%D0%B0%D1%85", .label = "Вах" } } },
+        .{ .title = "slovák", .token = "[[Слика:Gustáv Husák - oříznuto.JPG|десно|250п|мини|Познати Словак - [https://sr.wikipedia.org/wiki/%D0%93%D1%83%D1%81%D1%82%D0%B0%D0%B2_%D0%A5%D1%83%D1%81%D0%B0%D0%BA Густав Хусак]]]",
+            .caption = "Познати Словак - [https://sr.wikipedia.org/wiki/%D0%93%D1%83%D1%81%D1%82%D0%B0%D0%B2_%D0%A5%D1%83%D1%81%D0%B0%D0%BA Густав Хусак]", .visible = "Познати Словак - Густав Хусак", .restored = true,
+            .actions = &.{ .{ .target = "https://sr.wikipedia.org/wiki/%D0%93%D1%83%D1%81%D1%82%D0%B0%D0%B2_%D0%A5%D1%83%D1%81%D0%B0%D0%BA", .label = "Густав Хусак" } } },
+        .{ .title = "kríž", .token = "[[Слика:Coat of Arms of the First Slovak Republic.svg|десно|250п|мини|Двоструки крст који чини [https://sr.wikipedia.org/wiki/%D0%93%D1%80%D0%B1_%D0%A1%D0%BB%D0%BE%D0%B2%D0%B0%D1%87%D0%BA%D0%B5 грб Словачке Републике]]]",
+            .caption = "Двоструки крст који чини [https://sr.wikipedia.org/wiki/%D0%93%D1%80%D0%B1_%D0%A1%D0%BB%D0%BE%D0%B2%D0%B0%D1%87%D0%BA%D0%B5 грб Словачке Републике]", .visible = "Двоструки крст који чини грб Словачке Републике", .restored = true,
+            .actions = &.{ .{ .target = "https://sr.wikipedia.org/wiki/%D0%93%D1%80%D0%B1_%D0%A1%D0%BB%D0%BE%D0%B2%D0%B0%D1%87%D0%BA%D0%B5", .label = "грб Словачке Републике" } } },
+        .{ .title = "Slovenka", .token = "[[Слика:Daniela Hantuchova Roland Garros 2006 V.jpg|десно|250п|мини|Словакиња [https://sr.wikipedia.org/wiki/%D0%94%D0%B0%D0%BD%D0%B8%D1%98%D0%B5%D0%BB%D0%B0_%D0%A5%D0%B0%D0%BD%D1%82%D1%83%D1%85%D0%BE%D0%B2%D0%B0 Данијела Хантухова]]]",
+            .caption = "Словакиња [https://sr.wikipedia.org/wiki/%D0%94%D0%B0%D0%BD%D0%B8%D1%98%D0%B5%D0%BB%D0%B0_%D0%A5%D0%B0%D0%BD%D1%82%D1%83%D1%85%D0%BE%D0%B2%D0%B0 Данијела Хантухова]", .visible = "Словакиња Данијела Хантухова", .restored = true,
+            .actions = &.{ .{ .target = "https://sr.wikipedia.org/wiki/%D0%94%D0%B0%D0%BD%D0%B8%D1%98%D0%B5%D0%BB%D0%B0_%D0%A5%D0%B0%D0%BD%D1%82%D1%83%D1%85%D0%BE%D0%B2%D0%B0", .label = "Данијела Хантухова" } } },
+    };
+    const map = "# interwiki-magic\t1\nw\t1\t0\t0\t0\thttps://sr.wikipedia.org/wiki/$1\t0\nen\t1\t0\t0\t0\thttps://en.wiktionary.org/wiki/$1\t1\nself\t1\t1\t0\t0\thttps://unused.example/$1\t0\nFile\t1\t0\t0\t0\thttps://unused.example/$1\t0\n";
+};
+
+test "retained SR caption tokens keep complete external closes and chained interwiki labels" {
+    var restored: usize = 0;
+    for (SrFiniteCaptionTest.cases) |case| {
+        errdefer std.debug.print("SR retained caption boundary {s}\n", .{case.title});
+        var iterator: ir.InlineIterator = .{ .input = case.token, .renderer_boundaries = true };
+        const token = iterator.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(token.kind == .link and token.link_has_pipe and token.trail.len == 0);
+        try std.testing.expectEqual(case.token.len, iterator.cursor);
+        try std.testing.expect(iterator.next() == null);
+        try std.testing.expect(std.mem.endsWith(u8, token.text, case.caption));
+        try std.testing.expectEqual(case.restored, token.link_label_restored_close);
+        restored += @intFromBool(token.link_label_restored_close);
+    }
+    try std.testing.expectEqual(@as(usize, 9), restored);
+}
+
+test "retained SR finite captions preserve whole Figure bodies exact actions styles owners and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    try ns.attachInterwikiMap(SrFiniteCaptionTest.map);
+    var profile = try table_style_profile.parseAlloc(a, ".Avst:lang(pal){font-variant-ligatures:normal}"); defer profile.deinit();
+    var plain = try table_style_profile.parseAlloc(a, ""); defer plain.deinit();
+    // Sizing is the existing controlled producer fixture, not an assertion of
+    // dimensions or readiness for any retained real media occurrence.
+    for (SrFiniteCaptionTest.cases) |case| {
+        errdefer std.debug.print("SR retained caption body {s}\n", .{case.title});
+        const source = try std.fmt.allocPrint(a, "Before [[Prior]]\n\n[[File:Map.svg|thumb|400px|{s}]]\n\nAfter [[Later]]", .{case.caption});
+        for ([_]bool{ false, true }) |unknown| {
+            var actual: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+            var reference: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &plain, .figure_sizing = FigureProducerTest.sizing_source } };
+            const blocks = try actual.renderBodyWithMissing(.{ .bytes = source, .unknown = unknown });
+            try CenteredImageTest.equivalent(a, &actual, blocks, &reference, try reference.renderBodyWithMissing(.{ .bytes = source, .unknown = unknown }));
+            try std.testing.expectEqualDeep(reference.fallbacks, actual.fallbacks);
+            try std.testing.expect(!actual.fallbacks.unresolved_table_style and !actual.fallbacks.literal_markup);
+            try FigureProducerTest.roundtrip(a, &actual, blocks);
+            const figure = try FigureProducerTest.find(blocks);
+            const caption_spans = if (figure.caption_blocks) |children| try FigureProducerTest.bodySpans(a, children) else figure.caption;
+            try std.testing.expectEqualStrings(case.visible, try flattened(a, caption_spans));
+            var actions: usize = 0;
+            for (caption_spans) |span| {
+                try std.testing.expect(!span.flags.bold and !span.flags.italic and span.image == null);
+                if (span.kind == .external_link) {
+                    try std.testing.expect(actions < case.actions.len);
+                    try std.testing.expectEqualStrings(case.actions[actions].target, span.target);
+                    try std.testing.expectEqualStrings(case.actions[actions].label, span.text);
+                    actions += 1;
+                } else try std.testing.expect(span.kind == .text and span.target.len == 0);
+            }
+            try std.testing.expectEqual(case.actions.len, actions);
+            var prior: usize = 0; var later: usize = 0;
+            for (try FigureProducerTest.bodySpans(a, blocks)) |span| if (span.kind == .link) {
+                if (std.mem.eql(u8, span.target, "Prior")) prior += 1;
+                if (std.mem.eql(u8, span.target, "Later")) later += 1;
+            };
+            try std.testing.expectEqual(@as(usize, 1), prior);
+            try std.testing.expectEqual(@as(usize, 1), later);
+        }
+    }
+    const styled_source = "[[File:Map.svg|thumb|400px|'''Lead''' [https://example.test/path ''label'']]]";
+    var styled: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+    var styled_reference: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &plain, .figure_sizing = FigureProducerTest.sizing_source } };
+    const styled_blocks = try styled.renderBody(styled_source);
+    try CenteredImageTest.equivalent(a, &styled, styled_blocks, &styled_reference, try styled_reference.renderBody(styled_source));
+    try FigureProducerTest.roundtrip(a, &styled, styled_blocks);
+    var bold = false; var italic = false;
+    for ((try FigureProducerTest.find(styled_blocks)).caption) |span| {
+        if (std.mem.eql(u8, span.text, "Lead")) bold = span.flags.bold and !span.flags.italic;
+        if (std.mem.eql(u8, span.text, "label")) italic = span.flags.italic and !span.flags.bold and span.kind == .external_link and std.mem.eql(u8, span.target, "https://example.test/path");
+    }
+    try std.testing.expect(bold and italic);
+}
+
+test "finite caption HTTP and chained interwiki proofs retain source registry and CSS refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
+    try ns.attachInterwikiMap(SrFiniteCaptionTest.map);
+    var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns } };
+    for ([_][]const u8{ "[[:w:Tea|tea]]", "[[w:Tea:part|tea]]", "[http://example.test label]", "[https://example.test label]", "[[w:en:Tea|tea]] [https://example.test label]" }) |caption| {
+        const token = try std.mem.concat(a, u8, &.{ "thumb|", caption });
+        const borrowed = token[6..];
+        for ([_]bool{ false, true }) |unknown| {
+            const facts = renderer.figureCaptionRemoteInventory(.{ .bytes = token, .unknown = unknown }, borrowed) orelse return error.TestUnexpectedResult;
+            try std.testing.expect(!facts.has_language and facts.attributed_spans == 0);
+            try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = token, .unknown = unknown }, borrowed));
+            if (std.mem.indexOf(u8, caption, "http") != null) {
+                try std.testing.expect(facts.http_links != 0);
+                try std.testing.expect(std.mem.indexOf(u8, facts.classes[0..facts.classes_len], "external text") != null);
+            }
+        }
+        try std.testing.expect(renderer.figureCaptionRemoteInventory(.{ .bytes = token }, try a.dupe(u8, borrowed)) == null);
+        for (0..5) |mode| {
+            var tracked: MissingText = .{ .bytes = token };
+            switch (mode) {
+                0 => tracked.lost_missing_range = true,
+                1 => tracked.generated_source = token,
+                2 => tracked.ranges = &.{.{ .start = 6, .end = 7, .occurrence = 1 }},
+                3 => tracked.literal_curly_ranges = &.{.{ .start = 6, .end = 7 }},
+                4 => tracked.generated_links = &.{.{ .start = 6, .end = 7, .bound = &.{ .root = token, .start = 6, .end = 7, .value = .{ .token = "x", .argument = "x", .target = "x", .label = "x" } } }},
+                else => unreachable,
+            }
+            try std.testing.expect(renderer.figureCaptionRemoteInventory(tracked, borrowed) == null);
+        }
+    }
+    for ([_][]const u8{
+        "[https://example.test label", "[https:// label]", "[https://example.test]", "[//example.test label]", "[mailto:mail@example.test label]",
+        "[https://example.test [[Nested|label]]]", "[https://example.test <span class='Avst'>label</span>]", "[https://example.test <i lang=pal>label</i>]",
+        "[https://example.test {{label}}]", "[https://example.test __TOC__]", "[https://example.test label]\n* list", "[https://example.test label]\x00",
+        "[https://example.test/?a=1&amp;b=2 label]", "[https://example.test label|other]", "[[::w:en:Tea|tea]]", "[[w::Tea|tea]]", "[[w:en:|tea]]",
+        "[[:File:Map.svg|tea]]", "[[:Category:Tea|tea]]", "[[Unknown:en:Tea|tea]]", "[[en:Tea|tea]]", "[[self:en:Tea|tea]]",
+    }) |caption| {
+        errdefer std.debug.print("finite SR caption refusal {s}\n", .{caption});
+        try std.testing.expect(renderer.figureCaptionRemoteInventory(.{ .bytes = caption }, caption) == null);
+    }
+    const remote = "[[:w:en:Tea|tea]]";
+    ns.interwiki_magic = null;
+    try std.testing.expect(renderer.figureCaptionRemoteInventory(.{ .bytes = remote }, remote) == null);
+    ns.interwiki_magic = true;
+    ns.interwiki_rows = &.{};
+    try std.testing.expect(renderer.figureCaptionRemoteInventory(.{ .bytes = remote }, remote) == null);
+    for ([_][]const u8{ ".mw-content-rtl .external{font-size:200%}", ".mw-content-rtl .extiw{font-size:200%}" },
+        [_][]const u8{ "[https://example.test label]", "[[:w:en:Tea|tea]]" }) |css, caption| {
+        try ns.attachInterwikiMap(SrFiniteCaptionTest.map);
+        var profile = try table_style_profile.parseAlloc(a, css); defer profile.deinit();
+        var refused: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
+        const source = try std.fmt.allocPrint(a, "[[File:Map.svg|thumb|400px|{s}]]", .{caption});
+        try std.testing.expectError(error.UncompiledPresentation, refused.renderBody(source));
+    }
 }
