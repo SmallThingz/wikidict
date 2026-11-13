@@ -30,6 +30,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
+#include <QSlider>
 #include <QStandardPaths>
 #include <QSvgRenderer>
 #include <QStringList>
@@ -1491,9 +1492,54 @@ stream.properties = { adapter.auto-port-config = { mode = dsp monitor = false co
         QJsonObject word = entry();
         word[QStringLiteral("media")] = QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("audio")},
             {QStringLiteral("file"), QStringLiteral("File:owned.wav")}, {QStringLiteral("caption"), QStringLiteral("Owned recording")}}};
+        panel.resize(360, 700);
         panel.setEntry(word); panel.show();
         auto *player = panel.findChild<QMediaPlayer *>(); QVERIFY(player);
         auto *action = QAccessible::queryAccessibleInterface(loadButton(panel)); QVERIFY(action);
+        auto *button = loadButton(panel);
+        auto *position = button->parentWidget()->findChild<QSlider *>();
+        auto *scroll = panel.findChild<QScrollArea *>(QStringLiteral("mediaContentScroll"));
+        QVERIFY(position && scroll);
+        class PaintObserver final : public QObject {
+        public:
+            QPushButton *button = nullptr;
+            QString text;
+            int count = 0;
+            bool eventFilter(QObject *watched, QEvent *event) override {
+                if (watched == button && event->type() == QEvent::Paint) {
+                    text = button->text();
+                    ++count;
+                }
+                return false;
+            }
+        } painted;
+        painted.button = button;
+        button->installEventFilter(&painted);
+        const auto capturePlayback = [&](const QString &file, QMediaPlayer::PlaybackState state) {
+            if (player->playbackState() != state || panel.size() != QSize(360, 700)
+                || scroll->horizontalScrollBar()->maximum() != 0
+                || scroll->widget()->width() > scroll->viewport()->width()) return false;
+            QLabel *time = nullptr;
+            for (auto *label : button->parentWidget()->findChildren<QLabel *>())
+                if (label->text().endsWith(QStringLiteral(" / 0:03"))) time = label;
+            if (!time) return false;
+            for (QWidget *target : {static_cast<QWidget *>(button), static_cast<QWidget *>(position),
+                                   static_cast<QWidget *>(status(panel)), static_cast<QWidget *>(time)}) {
+                const QRect bounds(target->mapTo(scroll->viewport(), QPoint()), target->size());
+                if (!target->isVisible() || !scroll->viewport()->rect().contains(bounds)
+                    || !target->parentWidget()->rect().contains(target->geometry())) return false;
+                auto *accessible = QAccessible::queryAccessibleInterface(target);
+                if (!accessible || accessible->state().invisible
+                    || accessible->rect() != QRect(target->mapToGlobal(QPoint()), target->size())) return false;
+            }
+            auto *sliderAccess = QAccessible::queryAccessibleInterface(position);
+            if (sliderAccess->text(QAccessible::Name) != QStringLiteral("Recording position: Owned recording")
+                || !sliderAccess->valueInterface()
+                || sliderAccess->valueInterface()->currentValue().toInt() != position->value()) return false;
+            const QImage frame = panel.grab().toImage();
+            return !frame.isNull() && player->playbackState() == state
+                && frame.save(evidence + QChar('/') + file);
+        };
         QTest::mouseClick(panel.findChild<QCheckBox *>(QStringLiteral("mediaAllowAudio")), Qt::LeftButton);
         QTest::mouseClick(loadButton(panel), Qt::LeftButton);
         bool graphCaptured = false;
@@ -1609,15 +1655,25 @@ stream.properties = { adapter.auto-port-config = { mode = dsp monitor = false co
         QTRY_VERIFY_WITH_TIMEOUT(player->duration() > 0 && player->position() > 0, 5000);
         QCOMPARE(player->error(), QMediaPlayer::NoError);
         QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Pause: Owned recording"));
+        QTRY_COMPARE(painted.text, QStringLiteral("Pause"));
+        QVERIFY(capturePlayback(QStringLiteral("playback-playing.png"), QMediaPlayer::PlayingState));
+        const int playingPaint = painted.count;
         QTest::mouseClick(loadButton(panel), Qt::LeftButton);
         QTRY_COMPARE(player->playbackState(), QMediaPlayer::PausedState);
         QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Play: Owned recording"));
+        QTRY_VERIFY(painted.count > playingPaint && painted.text == QStringLiteral("Play"));
+        QVERIFY(capturePlayback(QStringLiteral("playback-paused.png"), QMediaPlayer::PausedState));
+        const int pausedPaint = painted.count;
         QTest::mouseClick(loadButton(panel), Qt::LeftButton);
         QTRY_COMPARE(player->playbackState(), QMediaPlayer::PlayingState);
         QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Pause: Owned recording"));
+        QTRY_VERIFY(painted.count > pausedPaint && painted.text == QStringLiteral("Pause"));
+        const int resumedPaint = painted.count;
         QTRY_COMPARE_WITH_TIMEOUT(player->mediaStatus(), QMediaPlayer::EndOfMedia, 5000);
         QCOMPARE(player->error(), QMediaPlayer::NoError);
         QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Play: Owned recording"));
+        QTRY_VERIFY(painted.count > resumedPaint && painted.text == QStringLiteral("Play"));
+        QVERIFY(capturePlayback(QStringLiteral("playback-ended.png"), QMediaPlayer::StoppedState));
         QCOMPARE(network.urls.size(), 2);
         panel.stopPlayback();
         captureOwnedGraph();
