@@ -10143,7 +10143,8 @@ class ReadonlyPreparedRetainedTests(unittest.TestCase):
             python=root/'tools/custody_fixture_helper.py';python.parent.mkdir();python.write_text('VALUE=1\n')
             import extraction_cache as native_cache
             def tool_identity(path):return dict(extractor_sha256=b.sha256_file(path),libraries=runtime['libraries'] if Path(path).name=='dict-bundle-expander' else [])
-            with patch.object(b,'PROJECT',root),patch.object(native_cache,'frozen_runtime_context',return_value=f.seal), \
+            with patch.object(native_cache,'__file__',deps['extraction_helper']['path']), \
+                    patch.object(b,'PROJECT',root),patch.object(native_cache,'frozen_runtime_context',return_value=f.seal), \
                     patch.object(native_cache,'completed_producer_identity',return_value=(f.seal['identity']['producer'],{})), \
                     patch.object(native_cache,'unicode_case_identity',return_value={'libraries':[]}), \
                     patch.object(native_cache,'tool_identity',side_effect=tool_identity), \
@@ -10273,7 +10274,7 @@ class ReadonlyPreparedRetainedTests(unittest.TestCase):
             original=copy.deepcopy(f.records)
             source=Path(f.records['dict-blob-build']['source_root'])
             for path in source.rglob('*.zig'):path.unlink()
-            Path(f.records['dict-bundle-build']['dependencies']['extraction_helper']['path']).unlink()
+            Path(f.records['dict-bundle-build']['dependencies']['runtime_source:tools/extraction_cache.py']['path']).unlink()
             fresh=b.RetainedNativeToolRoles(f.selection,zig_sha256=f.identity['zig_sha256'])
             fresh.authenticate_prepared_dispatch(f.record['retained_dispatch'])
             self.assertEqual(fresh.provenance(),original)
@@ -10287,7 +10288,7 @@ class ReadonlyPreparedRetainedTests(unittest.TestCase):
                 if field=='input':path=f.extra
                 elif field=='artifact':path=f.generation.tools['dict-blob-build'].path
                 elif field=='worker':path=f.expander/'dict-bundle-expander'
-                elif field=='runtime-python':path=Path(f.records['dict-bundle-build']['dependencies']['runtime_source:tools/extraction_cache.py']['path'])
+                elif field=='runtime-python':path=Path(f.records['dict-bundle-build']['dependencies']['extraction_helper']['path'])
                 elif field=='python':path=f.python
                 else:
                     path=f.root/'runtime-library';path.write_bytes(b'original library')
@@ -10301,7 +10302,7 @@ class ReadonlyPreparedRetainedTests(unittest.TestCase):
             with self.subTest(mode=mode),self.fixture() as f:
                 record=copy.deepcopy(f.record)
                 if mode=='dependency':
-                    target=f.records['dict-bundle-build']['dependencies']['runtime_source:tools/extraction_cache.py']['path']
+                    target=f.records['dict-bundle-build']['dependencies']['extraction_helper']['path']
                     record['retained_dispatch']['inputs']=[row for row in record['retained_dispatch']['inputs'] if row['identity']['path']!=target]
                 elif mode=='selection':record['retained_dispatch']['selection']['dict-blob-build']['artifact']['sha256']='0'*64
                 elif mode=='root':record['retained_dispatch']['initial_context'][0]=str(f.workspace/'other')
@@ -11643,3 +11644,66 @@ class PreparedMetadataPublicationTests(unittest.TestCase):
         with patch.object(ctypes,'CDLL',return_value=SimpleNamespace()):
             with self.assertRaises(OSError) as failure:b._publish_prepared_metadata_no_replace(Path('/tmp/source'),Path('/tmp/destination'))
         self.assertEqual(failure.exception.errno,errno.ENOSYS)
+
+
+class InitialSealedLiveHelperTests(unittest.TestCase):
+    def current(self,f):
+        path=f.root/'current-extraction-helper.py';path.write_text('# qualified current helper fixture\n');path.chmod(0o644)
+        selected=copy.deepcopy(f.selection)
+        selected['dict-bundle-build']['dependencies']['extraction_helper']=dict(_initial_sealed_reference(path),mode=0o644)
+        return selected,path
+
+    def test_live_helper_transition_preserves_closed_policy_and_installed_products(self):
+        with ReadonlyPreparedRetainedTests().fixture() as f:
+            selected,path=self.current(f)
+            before=f.expander.joinpath('.completed-expander.json').read_bytes()
+            installed={p.name:p.read_bytes() for p in (f.f.workspace/'native-blob-tools/bin').iterdir()}
+            old_policy=copy.deepcopy(f.records['dict-bundle-build']['dependencies']['runtime_source:tools/extraction_cache.py'])
+            with patch.object(f.native_cache,'__file__',str(path)), \
+                    patch.object(b,'run_checked',side_effect=AssertionError('must not compile')), \
+                    patch.object(b,'timed_run',side_effect=AssertionError('must not launch native')):
+                roles=b.RetainedNativeToolRoles(selected,zig_sha256=f.identity['zig_sha256'])
+                identity=copy.deepcopy(f.identity);identity['native_tool_roles']=roles.provenance()
+                fresh=copy.copy(f.f);fresh.identity=identity;fresh.destination=f.root/'new-output/viwiktionary/20261001.shards'
+                self.assertEqual(InitialSealedGenerationTests().adopt(fresh,native_roles=roles),123)
+                self.assertEqual(roles.records['dict-bundle-build']['dependencies']['runtime_source:tools/extraction_cache.py'],old_policy)
+                self.assertEqual(roles.closed_native_origin,f.seal)
+                tools=roles.prepare(None,'viwiktionary','20261001')
+                self.assertEqual(set(tools),set(b.BLOB_TOOL_NAMES))
+                self.assertIn(path,roles.inputs)
+                self.assertNotIn(Path(old_policy['path']),roles.inputs)
+                roles.require_unchanged()
+                path.write_text('# mutated live helper\n')
+                with self.assertRaises(ValueError):roles.require_unchanged()
+            self.assertEqual(before,(f.expander/'.completed-expander.json').read_bytes())
+            self.assertEqual(installed,{p.name:p.read_bytes() for p in (f.f.workspace/'native-blob-tools/bin').iterdir()})
+            self.assertEqual(f.f.result['role_map'],f.f.plan['roles'])
+
+    def test_live_helper_cannot_change_original_policy_abi_or_worker_asset(self):
+        for kind in ('policy','abi','worker','foreign-import','wrong-live-digest'):
+            with self.subTest(kind=kind),ReadonlyPreparedRetainedTests().fixture() as f:
+                selected,path=self.current(f)
+                if kind=='policy':f.seal['identity']['producer']['policy'][-1][1][1]='0'*64
+                elif kind=='abi':f.seal['identity']['producer']['abi'][0][1]='0'*64
+                elif kind=='worker':(f.expander/'dict-bundle-expander').write_bytes(b'mutated closed worker')
+                elif kind=='wrong-live-digest':selected['dict-bundle-build']['dependencies']['extraction_helper']['sha256']='0'*64
+                if kind in ('policy','abi'):
+                    InitialSealedGenerationTests().reseal_graph(f.f)
+                    selected['dict-bundle-build']['initial_sealed_generation']=f.f.selection
+                imported=path if kind!='foreign-import' else f.root/'foreign-helper.py'
+                with patch.object(f.native_cache,'__file__',str(imported)),self.assertRaises((ValueError,OSError)):
+                    b.RetainedNativeToolRoles(selected,zig_sha256=f.identity['zig_sha256'])
+
+    def test_live_helper_projection_never_drops_other_role_dependencies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f=InitialSealedRoleSuccessorTests().fixture(Path(tmp))
+            helper=f.root/'current-helper.py';helper.write_text('# current helper\n')
+            f.current['dict-bundle-build']['dependencies']['extraction_helper']=dict(_initial_sealed_reference(helper),mode=0o644)
+            with patch.object(b,'PROJECT',f.root):b.initial_sealed_generation(f.selection,f.roles)
+        for name in ('llvm','runtime_source:tools/extraction_cache.py','runtime_source:src/lua/runtime/llvm_abi.zig','unrelated'):
+            with self.subTest(dependency=name),tempfile.TemporaryDirectory() as tmp:
+                f=InitialSealedRoleSuccessorTests().fixture(Path(tmp))
+                helper=f.root/'current-helper.py';helper.write_text('# current helper\n')
+                f.current['dict-bundle-build']['dependencies']['extraction_helper']=dict(_initial_sealed_reference(helper),mode=0o644)
+                f.current['dict-bundle-build']['dependencies'][name]=dict(path='/foreign',bytes=1,sha256='0'*64,mode=0o644)
+                with patch.object(b,'PROJECT',f.root),self.assertRaises(ValueError):b.initial_sealed_generation(f.selection,f.roles)

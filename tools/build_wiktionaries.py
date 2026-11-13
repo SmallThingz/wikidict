@@ -3459,6 +3459,8 @@ def initial_sealed_role_successor(original, native_roles):
         before, after = original[name], current[name]
         if {k:v for k,v in before.items() if k not in allowed} != {k:v for k,v in after.items() if k not in allowed}:
             raise ValueError('Initial sealed successor changed role policy')
+        if 'previous_role_binding' not in after:
+            raise ValueError('Initial sealed successor lacks its original role binding')
         if prepared_metadata(after['previous_role_binding']) != original:
             raise ValueError('Initial sealed successor names another original role map')
         old_source, new_source = prepared_metadata(before['source']), prepared_metadata(after['source'])
@@ -3470,7 +3472,7 @@ def initial_sealed_role_successor(original, native_roles):
             raise ValueError('Initial sealed successor changed source ABI or driver policy')
     if writer['dependencies'] != original['dict-blob-build']['dependencies']:
         raise ValueError('Initial sealed successor changed Writer native dependencies')
-    omitted = {'blobs','pipeline_paths'}
+    omitted = {'blobs','pipeline_paths','extraction_helper'}
     if ({k:v for k,v in driver['dependencies'].items() if k not in omitted} !=
             {k:v for k,v in original['dict-bundle-build']['dependencies'].items() if k not in omitted}
             or driver.get('embedded_writer') != writer['artifact']
@@ -3538,7 +3540,13 @@ def initial_sealed_generation(reference, native_roles):
             or result.get('installed_tools') != closed.get('installed_tools')):
         raise ValueError('Initial sealed preparation is not independently closed')
     original_roles = prepared_metadata(plan['roles'])
-    if original_roles != native_roles.records:
+    # The dedicated imported helper is live Python, not compiled producer
+    # policy. Keep every original runtime_source/ABI/artifact field exact.
+    import copy
+    comparisons = [copy.deepcopy(value) for value in (original_roles,native_roles.records)]
+    for value in comparisons:
+        value['dict-bundle-build']['dependencies'].pop('extraction_helper',None)
+    if comparisons[0] != comparisons[1]:
         initial_sealed_role_successor(original_roles, native_roles)
     workspace = Path(plan['workspace'])
     if (not workspace.is_absolute() or workspace.resolve() != workspace
@@ -4250,6 +4258,10 @@ class RetainedNativeToolRoles:
                     if relative in RETAINED_EXPANDER_ABI_PATHS and descriptor['sha256']!=inventory[relative]['sha256']:
                         raise ValueError('Retained live runtime ABI differs from compiled authority')
                 if not self.execution_dependency(name):continue
+                if self.initial_sealed_generation is not None and name == 'extraction_helper':
+                    import extraction_cache as cache
+                    if Path(cache.__file__).absolute() != Path(descriptor['path']):
+                        raise ValueError('Initial sealed imported extraction helper differs')
                 actual = self.bind_input(Path(descriptor['path']))
                 if actual != descriptor:
                     raise ValueError('Retained native dependency differs: '+name)
@@ -4358,11 +4370,11 @@ class RetainedNativeToolRoles:
             raise ValueError('Closed execution runtime resolution or worker changed')
 
     def execution_dependency(self, name):
-        # Original dependency records stay byte-exact. A closed worker cannot
-        # compile: only Zig's existing build-identity read and imported Python
-        # remain live dependencies of this selected blob-stage execution.
+        # runtime_source retains the closed worker's original producer policy.
+        # The separate extraction_helper names the actually imported live Python.
+        # Ordinary compilation still authenticates every dependency.
         return (self.initial_sealed_generation is None or name in
-                ('zig','runtime_source:tools/extraction_cache.py'))
+                ('zig','extraction_helper'))
 
     def compilation_identity(self, row, relative):
         """Authenticate old payload custody, not a live source dependency.
