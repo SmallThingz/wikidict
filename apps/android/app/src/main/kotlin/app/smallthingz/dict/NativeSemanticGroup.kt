@@ -51,6 +51,11 @@ internal class NativeSemanticGroup(
             } }
         }
     }
+    override val ordinaryPaintBounds: List<NativeFloatBounds> by lazy {
+        listOf(NativeFloatBounds(0f, 0f, width.toFloat(), height.toFloat())) + children.flatMap { child ->
+            child.geometry.ordinaryPaintBounds.map { it.translated(child.x, child.y) }
+        }
+    }
     override val extents: NativeGeometryExtents by lazy {
         children.fold(NativeGeometryExtents(width, height.toFloat(),
             NativeFloatBounds(0f, 0f, width.toFloat(), height.toFloat()),

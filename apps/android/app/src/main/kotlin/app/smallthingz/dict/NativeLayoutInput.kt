@@ -25,6 +25,8 @@ internal class NativeLayoutInput<T>(initial: T, private val onDetached: () -> Un
         private set
     internal var node: NativeLayoutInputNode<T>? = null
     val modifier: Modifier = NativeLayoutInputElement(this)
+    /** Table owners must see the real grid extent before their own viewport clips it. */
+    val tableExtentModifier: Modifier = NativeLayoutInputElement(this, preserveMeasuredExtent = true)
 
     fun update(next: T) {
         if (next == value) return
@@ -39,7 +41,8 @@ internal class NativeLayoutInput<T>(initial: T, private val onDetached: () -> Un
     internal fun detached() = onDetached()
 }
 
-internal class NativeLayoutInputNode<T>(private var input: NativeLayoutInput<T>) : Modifier.Node(), LayoutModifierNode {
+internal class NativeLayoutInputNode<T>(private var input: NativeLayoutInput<T>,
+    private var preserveMeasuredExtent: Boolean = false) : Modifier.Node(), LayoutModifierNode {
     override fun onAttach() {
         check(input.node == null || input.node === this) { "A native measure input has more than one child" }
         input.node = this
@@ -47,7 +50,8 @@ internal class NativeLayoutInputNode<T>(private var input: NativeLayoutInput<T>)
     override fun onDetach() {
         if (input.node === this) { input.node = null; input.detached() }
     }
-    fun update(next: NativeLayoutInput<T>) {
+    fun update(next: NativeLayoutInput<T>, preserveExtent: Boolean) {
+        preserveMeasuredExtent = preserveExtent
         if (next === input) return
         if (isAttached) onDetach()
         input = next
@@ -55,13 +59,15 @@ internal class NativeLayoutInputNode<T>(private var input: NativeLayoutInput<T>)
     }
     override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
         val child = measurable.measure(constraints)
-        return layout(child.width, child.height) { child.place(0, 0) }
+        return if (preserveMeasuredExtent) layout(child.measuredWidth, child.measuredHeight) {
+            child.place(-(child.width - child.measuredWidth) / 2, -(child.height - child.measuredHeight) / 2)
+        } else layout(child.width, child.height) { child.place(0, 0) }
     }
 }
 
-private data class NativeLayoutInputElement<T>(val input: NativeLayoutInput<T>) : ModifierNodeElement<NativeLayoutInputNode<T>>() {
-    override fun create() = NativeLayoutInputNode(input)
-    override fun update(node: NativeLayoutInputNode<T>) = node.update(input)
+private data class NativeLayoutInputElement<T>(val input: NativeLayoutInput<T>, val preserveMeasuredExtent: Boolean = false) : ModifierNodeElement<NativeLayoutInputNode<T>>() {
+    override fun create() = NativeLayoutInputNode(input, preserveMeasuredExtent)
+    override fun update(node: NativeLayoutInputNode<T>) = node.update(input, preserveMeasuredExtent)
     override fun InspectorInfo.inspectableProperties() { name = "nativeLayoutInput" }
 }
 

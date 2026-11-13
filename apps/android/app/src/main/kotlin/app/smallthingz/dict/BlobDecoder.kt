@@ -165,7 +165,10 @@ object BlobDecoder {
             val background = if (spanBackgrounds && presence()) string().also {
                 require(canonicalColorArgb(it) != null) { "Invalid span background" }
             } else null
-            val rawScale = if (fontScales && presence()) {
+            val fontFields = if (!fontScales) 0 else if (containerFonts) byte().also {
+                require(it and 0xfc == 0) { "Unknown span font fields" }
+            } else if (presence()) 1 else 0
+            val rawScale = if (fontFields and 1 != 0) {
                 require(buffer.remaining() >= 4) { "Truncated span font scale" }
                 buffer.float.also { require(it.isFinite() && it >= 0f) { "Invalid span font scale" } }
             } else null
@@ -178,6 +181,8 @@ object BlobDecoder {
                 }
                 else -> error("Invalid span font scale basis")
             } else FontScaleBasis.Context
+            val fontFeatures = if (fontFields and 2 != 0)
+                FontFeaturePolicy.entries.getOrNull(byte()) ?: error("Unknown span font feature policy") else null
             val fontScale = rawScale?.takeUnless { it == 1f && basis == FontScaleBasis.Context }
             val imageTag = if (inlineImages) byte() else 0
             require(imageTag in 0..1 || containerFonts && imageTag == 2) { "Unsupported inline image tag" }
@@ -198,7 +203,7 @@ object BlobDecoder {
             val tooltip = if (tooltips && presence()) string() else null
             return Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures)
         }
         private fun imageMapAction(): ImageMapAction {
             val kind = ImageMapActionKind.entries.getOrNull(byte()) ?: error("Unknown image map action")
@@ -275,11 +280,13 @@ object BlobDecoder {
         private fun figureMediaLayout(): FigureMediaLayout {
             require(buffer.remaining() >= 15) { "Truncated Figure media layout" }
             val scale = buffer.float
-            val flags = byte().also { require(it and 0xf8 == 0) { "Unknown Figure media font flags" } }
+            val flags = byte().also { require(it and 0xf0 == 0) { "Unknown Figure media font flags" } }
             val language = string()
             val direction = BidiResolvedDirection.entries.getOrNull(byte()) ?: error("Unknown Figure media direction")
+            val fontFeatures = if (flags and 8 != 0)
+                FontFeaturePolicy.entries.getOrNull(byte()) ?: error("Unknown Figure font feature policy") else null
             val strut = FigureMediaStrut(scale, flags and 1 != 0, flags and 2 != 0, flags and 4 != 0,
-                language, direction)
+                language, direction, fontFeatures)
             val align = InlineBoxVerticalAlign.entries.getOrNull(byte()) ?: error("Unknown Figure media alignment")
             val maximum = if (presence()) {
                 require(buffer.remaining() >= 4) { "Truncated Figure media maximum" }
@@ -538,8 +545,10 @@ object BlobDecoder {
             if (!tableStyles || !presence()) return null
             val flags = byte()
             val extension = if (tableFlows) byte() else 0
-            require(extension in 0..7 && flags in 0..(if (imageMaps) 255 else if (blockLayouts) 31 else 15) &&
+            require(extension in 0..(if (containerFonts) 31 else 7) && flags in 0..(if (imageMaps) 255 else if (blockLayouts) 31 else 15) &&
                 (flags != 0 || extension != 0)) { "Invalid table style flags" }
+            val marginFlags = extension and 0x18
+            require(marginFlags == 0 || marginFlags == 0x18) { "Unpaired table margins and containing direction" }
             val background = if (flags and 1 != 0) styleRgb() else null
             val border = if (flags and 2 != 0) styleBorder() else null
             val collapse = if (flags and 4 != 0) when (byte()) {
@@ -569,7 +578,11 @@ object BlobDecoder {
                 }
                 ComputedLineHeight(value, basis)
             } else null
-            return TableStyle(background, border, collapse, margins, floatSide, width, padding, clear, display, align, lineHeight)
+            val marginValues = if (extension and 8 != 0) containerMargins() else null
+            val containingDirection = if (extension and 16 != 0)
+                TableContainingDirection.entries.getOrNull(byte()) ?: error("Unknown table containing direction") else null
+            return TableStyle(background, border, collapse, margins, floatSide, width, padding, clear, display, align,
+                lineHeight, marginValues, containingDirection)
         }
         private fun table(depth: Int): Table? {
             if (!presence()) return null

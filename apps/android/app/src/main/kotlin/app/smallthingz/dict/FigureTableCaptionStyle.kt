@@ -12,7 +12,8 @@ data class AvailableWidthLimit(val percent: Float, val subtract: StyleLength) {
     init { require(percent == 100f) { "Unsupported Figure media width expression" } }
 }
 data class FigureMediaStrut(val fontScale: Float, val bold: Boolean = false, val italic: Boolean = false,
-    val code: Boolean = false, val language: String = "", val direction: BidiResolvedDirection) {
+    val code: Boolean = false, val language: String = "", val direction: BidiResolvedDirection,
+    val fontFeatures: FontFeaturePolicy? = null) {
     init {
         require(fontScale.isFinite() && fontScale >= 0f) { "Invalid Figure media font scale" }
         require(validPresentationString(language)) { "Invalid Figure media language" }

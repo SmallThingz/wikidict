@@ -42,6 +42,14 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
             field = value
             delegatedAdmissionChanged()
         }
+    internal var delegatedStateOwner: NativeDelegatedTableOwner? = null
+        set(value) {
+            if (field === value) return
+            val previous = field
+            field = value
+            previous?.clearRootState(this)
+            invalidate()
+        }
     private fun originalOwnerAvailable(): Boolean = delegatedCellOwner?.permits(this) ?: true
     internal fun delegatedMeasurementPending() {
         invalidate()
@@ -193,6 +201,12 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
         setMeasuredDimension(resolveSize(desiredWidth, widthMeasureSpec), resolveSize(desiredHeight, heightMeasureSpec))
     }
 
+    override fun invalidate() {
+        super.invalidate()
+        delegatedCellOwner?.statePaintChanged()
+        delegatedStateOwner?.statePaintChanged()
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (!originalOwnerAvailable()) return
@@ -200,6 +214,26 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
         val save = canvas.save()
         canvas.translate(paddingLeft.toFloat(), paddingTop.toFloat())
         layout.paint(canvas)
+        if (delegatedCellOwner == null && delegatedStateOwner == null) {
+            paintSelectionState(canvas, layout)
+            paintFocusState(canvas, layout)
+        }
+        canvas.restoreToCount(save)
+    }
+
+    /** The containing native phase invokes this same owner's state after every cell's
+     * media. Keys, selection, actions and accessibility remain on this original View. */
+    internal fun paintDelegatedState(canvas: Canvas, focus: Boolean) {
+        if (!originalOwnerAvailable()) return
+        val layout = geometry ?: return
+        val save = canvas.save()
+        canvas.translate(paddingLeft.toFloat(), paddingTop.toFloat())
+        try {
+            if (focus) paintFocusState(canvas, layout) else paintSelectionState(canvas, layout)
+        } finally { canvas.restoreToCount(save) }
+    }
+
+    private fun paintSelectionState(canvas: Canvas, layout: FloatTextGeometry) {
         if (hasSelection) {
             layout.rectsForRange(selectionStart, selectionEnd).forEach { canvas.drawRect(it, highlight) }
             drawHandle(canvas, anchor)
@@ -208,6 +242,9 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
             val caret = layout.caretRect(extent)
             canvas.drawRect(caret.left, caret.top, caret.left + max(1f, density), caret.bottom, handlePaint)
         }
+    }
+
+    private fun paintFocusState(canvas: Canvas, layout: FloatTextGeometry) {
         layout.nodes.find { it.id == virtualKeyboardFocus }?.let { node ->
             val authored = node.focusPaint
             if (authored != null) {
@@ -238,7 +275,6 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
                     bounds.right - inset, bounds.bottom - inset, paint)
             }
         }
-        canvas.restoreToCount(save)
     }
 
     private fun drawHandle(canvas: Canvas, offset: Int) {
@@ -251,11 +287,7 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
     private fun handleRadius() = min(6 * density, min(geometry!!.width, geometry!!.height) / 2f)
 
     private fun handleCenter(offset: Int): Pair<Float, Float> {
-        val layout = geometry!!
-        val rect = layout.caretRect(offset)
-        val radius = handleRadius()
-        return rect.left.coerceIn(radius, max(radius, layout.width - radius)) to
-            (rect.bottom + 7 * density).coerceIn(radius, max(radius, layout.height - radius))
+        return nativeSelectionHandleCenter(geometry!!, offset, density)
     }
 
     private fun handleAt(x: Float, y: Float): Int {
@@ -692,6 +724,7 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
 
     override fun onDetachedFromWindow() {
         delegatedCellOwner?.clear(this)
+        delegatedStateOwner?.clearRootState(this)
         cancelCapturedOwnerSequence()
         pressedLinkNode = View.NO_ID
         clearPendingLinkKey("detached")

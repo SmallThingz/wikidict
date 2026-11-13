@@ -49,6 +49,7 @@ internal suspend fun prepareNativeEgyptianSpan(
         baselineShift = 0
     }
     return try {
+        requireEgyptianFeatureSupport(run.fontFeatures)
         if (Build.VERSION.SDK_INT < 31) throw UnsupportedOperationException("Egyptian glyph layout requires Android 12")
         val ink = prepareInk(context, run, capturedPaint, baselineShiftMultiplier, underline, strike)
         NativeEgyptianSpanPreparation(true, null) { width, linkPaint -> GlyphSpan(ink, capturedPaint, background, width, linkPaint) }

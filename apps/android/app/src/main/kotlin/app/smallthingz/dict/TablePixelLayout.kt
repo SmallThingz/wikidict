@@ -250,10 +250,11 @@ internal fun inlineTableColumnWidths(
     availableWidth: Int,
     authoredWidth: Int? = null,
     cellPreferences: List<TableCellWidthPreference>? = null,
+    captionMinimumWidth: Int = 0,
 ): List<Int>? {
     if (grid.columns !in 1..512 || grid.cells.isEmpty() ||
         minimumCells.size != grid.cells.size || maximumCells.size != grid.cells.size ||
-        cellSpacing < 0 || outerEdges < 0 || availableWidth < 0 ||
+        cellSpacing < 0 || outerEdges < 0 || availableWidth < 0 || captionMinimumWidth < 0 ||
         authoredWidth != null && authoredWidth < 0 ||
         cellPreferences != null && cellPreferences.size != grid.cells.size) return null
     val minimum = LongArray(grid.columns) { 0L }
@@ -286,9 +287,10 @@ internal fun inlineTableColumnWidths(
     val minimumWidth = minimum.sum() + outerEdges
     val maximumWidth = maximum.sum() + outerEdges
     if (minimumWidth > TablePixelLimit) return null
-    val target = if (authoredWidth == null)
+    // A caption floor enlarges the final border box without changing the percentage base.
+    val target = maxOf(captionMinimumWidth.toLong(), if (authoredWidth == null)
         maxOf(minimumWidth, minOf(availableWidth.toLong(), maximumWidth))
-    else maxOf(minimumWidth, authoredWidth.toLong())
+    else maxOf(minimumWidth, authoredWidth.toLong()))
     if (target !in minimumWidth..TablePixelLimit.toLong()) return null
     val contentTarget = target - outerEdges
     val result = minimum.copyOf()
@@ -334,12 +336,12 @@ internal fun inlineTableColumnWidths(
 
 internal fun inlineTableMetrics(natural: TableRenderMetrics, grid: TableGrid, minimumCells: IntArray,
     maximumCells: IntArray, availableWidth: Int, authoredWidth: Int? = null,
-    cellPreferences: List<TableCellWidthPreference>? = null): TableRenderMetrics? {
+    cellPreferences: List<TableCellWidthPreference>? = null, captionMinimumWidth: Int = 0): TableRenderMetrics? {
     val edges = natural.outerBorder.horizontal.toLong() + (grid.columns.toLong() + 1) * natural.cellSpacing +
         (natural.style?.tablePadding?.horizontal ?: 0)
     if (edges !in 0L..TablePixelLimit.toLong()) return null
     val columns = inlineTableColumnWidths(grid, minimumCells, maximumCells, natural.cellSpacing,
-        edges.toInt(), availableWidth, authoredWidth, cellPreferences) ?: return null
+        edges.toInt(), availableWidth, authoredWidth, cellPreferences, captionMinimumWidth) ?: return null
     return natural.copy(columnWidth = 1, extraColumns = 0, columnWidths = columns,
         width = columns.sum() + edges.toInt())
 }

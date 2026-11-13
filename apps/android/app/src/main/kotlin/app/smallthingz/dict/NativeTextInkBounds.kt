@@ -28,7 +28,8 @@ internal interface NativeParagraphPaintBounds {
 
 /**
  * A conservative allocation envelope, never an advance, intrinsic width or hit-test rectangle.
- * PrecomputedText bounds are in logical-piece coordinates, not final visual-line coordinates.
+ * On API29+, the native painter supplies the actual run context and draw origin for bounds.
+ * Older/unsupported paths retain conservative paragraph-range bounds.
  * Bound all piece prefixes by retained advances and all visual origins by native cursor positions.
  * Native shaping/bidi/tabs remain in the same compatible PrecomputedText/StaticLayout pair.
  */
@@ -37,6 +38,8 @@ internal fun nativeTextInkBounds(layout: Layout, placements: List<NativeLinePain
     var result: NativeFloatBounds? = null
     fun include(value: NativeFloatBounds?) { result = enclosingBounds(result, value) }
     val bounds = Rect()
+    val observed = NativeLinePainter(layout).observedPaintBounds(placements)
+    if (observed.textComplete) include(observed.text)
     for (position in placements) {
         val line = position.line
         val start = layout.getLineStart(line)
@@ -44,30 +47,34 @@ internal fun nativeTextInkBounds(layout: Layout, placements: List<NativeLinePain
         val baseline = position.baseline
         val top = layout.getLineTop(line) - layout.getLineBaseline(line).toFloat()
         val bottom = layout.getLineBottom(line) - layout.getLineBaseline(line).toFloat()
+        val replacements = source.getSpans(start, end, ReplacementSpan::class.java).filter {
+            source.getSpanStart(it) < end && source.getSpanEnd(it) > start
+        }
         var prefixBound = 0.0
         var left = Double.POSITIVE_INFINITY
         var right = Double.NEGATIVE_INFINITY
-        // Include every native offset, not just logical endpoints: tabs and bidi boundaries
-        // can put interior visual origins outside the endpoint interval.
-        for (offset in start..end) {
-            val primary = layout.getPrimaryHorizontal(offset).toDouble() + position.originX
-            val secondary = layout.getSecondaryHorizontal(offset).toDouble() + position.originX
-            left = min(left, min(primary, secondary))
-            right = max(right, max(primary, secondary))
-            if (offset < end) prefixBound += abs(source.getWidth(offset, offset + 1).toDouble())
+        if (!observed.textComplete || replacements.isNotEmpty()) {
+            // Only conservative text/replacement origins need this scan. Exact native run
+            // bounds already include their real origin, even across tabs and bidi boundaries.
+            for (offset in start..end) {
+                val primary = layout.getPrimaryHorizontal(offset).toDouble() + position.originX
+                val secondary = layout.getSecondaryHorizontal(offset).toDouble() + position.originX
+                left = min(left, min(primary, secondary))
+                right = max(right, max(primary, secondary))
+                if (!observed.textComplete && offset < end) prefixBound += abs(source.getWidth(offset, offset + 1).toDouble())
+            }
+            checkCoordinate(left); checkCoordinate(right); checkCoordinate(prefixBound)
         }
-        checkCoordinate(left); checkCoordinate(right); checkCoordinate(prefixBound)
-        val paints = drawPaints(source, start, end, layout.paint)
-        val minShift = paints.minOfOrNull { it.baselineShift } ?: 0
-        val maxShift = paints.maxOfOrNull { it.baselineShift } ?: 0
-        if (start < end) {
+        if (start < end && !observed.textComplete) {
+            val paints = drawPaints(source, start, end, layout.paint)
+            val minShift = paints.minOfOrNull { it.baselineShift } ?: 0
+            val maxShift = paints.maxOfOrNull { it.baselineShift } ?: 0
             source.getBounds(start, end, bounds)
             if (!bounds.isEmpty) include(checkedBounds(left + bounds.left - prefixBound,
                 baseline + bounds.top.toDouble() + minShift,
                 right + bounds.right + prefixBound, baseline + bounds.bottom.toDouble() + maxShift))
         }
-        for (span in source.getSpans(start, end, ReplacementSpan::class.java)) {
-            if (source.getSpanStart(span) >= end || source.getSpanEnd(span) <= start) continue
+        for (span in replacements) {
             val owned = span as? NativeReplacementPaintBounds
                 ?: throw UnsupportedFloatLayout("Native replacement requires its own paint bounds")
             owned.nativePaintBounds(top, bottom)?.let {
@@ -92,7 +99,7 @@ internal fun nativeTextInkBounds(layout: Layout, placements: List<NativeLinePain
     }
     // The owned native paints are FILL/no-shadow. Observe the exact platform decorations,
     // including dynamic Missing underline, without hidden API28 font-metric calls.
-    return enclosingBounds(result, NativeLinePainter(layout).decorationBounds(placements))
+    return enclosingBounds(result, observed.decorations)
 }
 
 private fun drawPaints(source: Spanned, start: Int, end: Int, base: TextPaint): List<TextPaint> {

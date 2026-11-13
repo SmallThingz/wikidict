@@ -7,7 +7,8 @@ import org.junit.Test
 /** Literal complete documents pin the unpublished M tail; there is no runtime source parser. */
 class FigureTableCaptionCodecTest {
     private class Wire(val imageKind: Int = 1, val imageTarget: String = "File:Image.svg", val imageMap: Boolean = false,
-        val missingPaint: Boolean = false, val captionPaint: Boolean = false, val legacyMissingPaint: Boolean = false) {
+        val missingPaint: Boolean = false, val captionPaint: Boolean = false, val legacyMissingPaint: Boolean = false,
+        val fontFeatures: Int? = null) {
         val out = ByteArrayOutputStream()
         val offsets = linkedMapOf<String, Int>()
         fun mark(name: String) { check(offsets.put(name, out.size()) == null) }
@@ -19,7 +20,8 @@ class FigureTableCaptionCodecTest {
         fun length(value: Float, unit: Int = 0) { byte(unit); float(value) }
         fun span(text: String, image: Boolean = false) {
             byte(if (image) imageKind else 1); byte(0); byte(0); string(text); string(if (image) imageTarget else "caption-target")
-            repeat(5) { string("") }; repeat(3) { byte(0) }
+            repeat(5) { string("") }; repeat(2) { byte(0) }
+            byte(if (fontFeatures == null) 0 else 2); fontFeatures?.let(::byte)
             byte(if (image) 1 else 0)
             if (image) {
                 string("Image.svg"); byte(if (imageMap) 0x27 else 7); u32(100); u32(50); string("")
@@ -37,8 +39,9 @@ class FigureTableCaptionCodecTest {
             byte(1); length(11f)
         }
         fun media(prefix: String, missing: Boolean, paint: Boolean = true) {
-            mark(prefix+"FontScale"); float(1.25f); mark(prefix+"FontFlags"); byte(3)
+            mark(prefix+"FontScale"); float(1.25f); mark(prefix+"FontFlags"); byte(3 or if (fontFeatures == null) 0 else 8)
             string("fi"); mark(prefix+"Direction"); byte(0)
+            if (fontFeatures != null) { mark(prefix+"FeaturePolicy"); byte(fontFeatures) }
             mark(prefix+"Align"); byte(if (missing) 0 else 1)
             mark(prefix+"CapPresence"); byte(if (missing) 0 else 1)
             if (!missing) { mark(prefix+"CapPercent"); float(100f); length(4f) }
@@ -159,7 +162,7 @@ class FigureTableCaptionCodecTest {
     @Test fun malformedTailPresenceEnumsLengthsOrderAndTruncationFailClosed() {
         val wire=Wire();val bytes=wire.document()
         for((name,value) in listOf("figureTag" to 3,"figureTag" to 4,"figureTag" to 7,"collapse" to 0,"collapse" to 2,"tableTop" to 4,
-            "baseCapPresence" to 2,"baseFontFlags" to 8,"baseDirection" to 2,"baseAlign" to 0,
+            "baseCapPresence" to 2,"baseFontFlags" to 16,"baseDirection" to 2,"baseAlign" to 0,
             "firstAlign" to 2,"basePosition" to 1,"baseAfterSide" to 2,"baseGraphic" to 2,"baseInvert" to 2,"beforePresence" to 2)) {
             val bad=bytes.copyOf();bad[wire.offsets.getValue(name)]=value.toByte()
             assertThrows(name,RuntimeException::class.java) { read(bad) }
@@ -279,5 +282,40 @@ class FigureTableCaptionCodecTest {
         }
         assertEquals(noAction,missing.copy(content=noAction,
             tableCaptionLayout=missing.tableCaptionLayout!!.copy(missingLinkPaint=null)).content)
+    }
+
+    @Test fun typedFeaturesSurviveImageMissingCaptionAndCompleteViewportStruts() {
+        for (tag in listOf(5, 6)) for (policy in FontFeaturePolicy.entries) {
+            val figure = read(Wire(fontFeatures = policy.ordinal).document(tag))
+            val layout = checkNotNull(figure.tableCaptionLayout)
+            assertEquals(policy, figure.content.span.fontFeatures)
+            assertEquals(policy, figure.caption.single().fontFeatures)
+            for (media in listOf(layout.media) + layout.viewportStates.map { it.media }) {
+                assertEquals(policy, media.strut.fontFeatures)
+                assertEquals(1.25f, media.strut.fontScale, 0f)
+                assertTrue(media.strut.bold && media.strut.italic)
+                assertEquals("fi", media.strut.language)
+            }
+            assertEquals("caption-target", figure.caption.single().target)
+            assertEquals(if (tag == 5) "File:Image.svg" else "caption-target", figure.content.span.target)
+            assertEquals(listOf(639L, 399L), layout.viewportStates.map { it.maxWidthPx })
+        }
+        assertNull(read(Wire().document()).tableCaptionLayout!!.media.strut.fontFeatures)
+    }
+
+    @Test fun typedStrutFeaturesRejectUnknownEnumsFlagsAndEveryTruncatedTail() {
+        val wire = Wire(fontFeatures = 1); val good = wire.document()
+        for (prefix in listOf("base", "first", "second")) {
+            for (badPolicy in listOf(2, 255)) {
+                val bad = good.copyOf(); bad[wire.offsets.getValue(prefix + "FeaturePolicy")] = badPolicy.toByte()
+                assertThrows(RuntimeException::class.java) { read(bad) }
+            }
+            val bad = good.copyOf(); bad[wire.offsets.getValue(prefix + "FontFlags")] = 16
+            assertThrows(RuntimeException::class.java) { read(bad) }
+        }
+        for (end in good.indices) assertThrows("prefix $end", RuntimeException::class.java) { read(good.copyOf(end)) }
+        assertThrows(RuntimeException::class.java) { read(good + byteArrayOf(0)) }
+        for (version in listOf('J', 'K', 'L'))
+            assertThrows(RuntimeException::class.java) { read(Wire(fontFeatures = 1).document(version = version)) }
     }
 }

@@ -327,7 +327,8 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
         bodyStyle.copy(fontSize = size.toFloat().sp,
             fontFamily = if (strut.code) FontFamily.Monospace else bodyStyle.fontFamily,
             fontWeight = if (strut.bold) FontWeight.Bold else FontWeight.Normal,
-            fontStyle = if (strut.italic) FontStyle.Italic else FontStyle.Normal)
+            fontStyle = if (strut.italic) FontStyle.Italic else FontStyle.Normal,
+            fontFeatureSettings = strut.fontFeatures?.nativeSettings ?: bodyStyle.fontFeatureSettings)
     } }
     val mediaContext = mediaLayout?.strut?.let { event.context.copy(direction = it.direction,
         language = it.language) } ?: event.context
@@ -353,7 +354,11 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
         (mediaStyleResult.getOrNull() ?: bodyStyle).copy(lineHeight = with(density) { height.toSp() })
     } ?: mediaStyleResult.getOrNull() ?: bodyStyle
     val contentContext = if (missing == null) mediaContext else mediaContext.copy(textAlign = CellTextAlign.Center)
-    val imageActionText = prepareAnonymousInline(AnonymousFlowEvent.Inline(listOf(figure.content.span), contentContext), contentStyle, reader,
+    val mediaSpan = figure.content.span.let { span ->
+        val inheritedFeatures = mediaLayout?.strut?.fontFeatures
+        if (span.fontFeatures == null && inheritedFeatures != null) span.copy(fontFeatures = inheritedFeatures) else span
+    }
+    val imageActionText = prepareAnonymousInline(AnonymousFlowEvent.Inline(listOf(mediaSpan), contentContext), contentStyle, reader,
         imageOwner, linkPaint, { linkTarget?.let(visits::record) }, figureImageActions = true)
     val missingLabel = missing?.let { value -> runCatching {
         checkNotNull(missingLineHeight).getOrThrow()

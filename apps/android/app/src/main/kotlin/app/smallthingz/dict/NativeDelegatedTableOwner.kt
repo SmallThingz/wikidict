@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.LayoutCoordinates
 
@@ -44,7 +45,7 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
     private var minimumTouchWidth = 0f
     private var minimumTouchHeight = 0f
     private data class Envelopes(val ink: List<NativeFloatBounds>, val deferred: List<NativeFloatBounds>,
-        val input: List<NativeFloatBounds>, val ordinary: List<NativeFloatBounds>)
+        val input: List<NativeFloatBounds>, val state: List<NativeFloatBounds>, val ordinary: List<NativeFloatBounds>)
     private var envelopeSurface: NativeSurfaceGeometry? = null
     private var envelopes: Envelopes? = null
     internal var envelopeBuildCount = 0
@@ -85,6 +86,19 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
 
     fun admissionChanged() { originalView?.delegatedAdmissionChanged() }
     fun measurementPending() { originalView?.delegatedMeasurementPending() }
+    fun statePaintChanged() { table.statePaintChanged() }
+
+    internal fun paintOriginalState(canvas: android.graphics.Canvas, focus: Boolean) {
+        val stamp = placement ?: return
+        val view = originalView ?: return
+        val origin = stamp.boxes.firstOrNull { it.first === stamp.view }?.second ?: return
+        val save = canvas.save()
+        try {
+            canvas.clipRect(stamp.clip.left, stamp.clip.top, stamp.clip.right, stamp.clip.bottom)
+            canvas.translate(origin.left, origin.top)
+            view.paintDelegatedState(canvas, focus)
+        } finally { canvas.restoreToCount(save) }
+    }
 
     /** No text traversal or envelope rebuilding occurs on the draw/input/AX hot path. */
     fun currentPlacement(root: LayoutCoordinates, generation: Any): Boolean {
@@ -96,7 +110,9 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
             view.width != stamp.surface.width || view.height != stamp.surface.height ||
             stamp.context.size.width != logicalWidth || stamp.context.size.height != logicalHeight) return false
         for ((coordinates, bounds) in stamp.boxes) if (measuredBox(root, coordinates) != bounds) return false
-        return actualInputClip(root, stamp.view) == stamp.clip && view.delegatedCellOwner === this
+        val grid = table.gridCoordinates?.takeIf { it.isAttached } ?: return false
+        return clippedBox(root, grid, stamp.view) == measuredBox(root, stamp.view) &&
+            actualInputClip(root, stamp.view) == stamp.clip && view.delegatedCellOwner === this
     }
 
     fun snapshot(root: LayoutCoordinates, generation: Any, unavailable: (String) -> Unit): NativeDelegatedMeasuredCell? {
@@ -115,6 +131,13 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
             ownerOrigin.x + surface.width, ownerOrigin.y + surface.height)
         if (measuredBox(root, nativeCoordinates) != physicalBox || view.delegatedCellOwner !== this) return missing("physical View box or owner differs")
         val cellBox = measuredBox(root, cell) ?: return missing("cell transform is not a translation")
+        val grid = table.gridCoordinates?.takeIf { it.isAttached } ?: return missing("table grid coordinates absent/detached")
+        // These direct Figure cells have source overflow:visible. A real inner clip must
+        // not become authority to discard glyphs, focus or handles. Only the normal table
+        // and outer Entry viewports above the grid can limit their visible/input domain.
+        val innerClip = clippedBox(root, grid, nativeCoordinates)
+        if (innerClip != physicalBox)
+            return missing("unexpected cell-to-grid clipping: ${clippingSegments(root, nativeCoordinates, grid)}")
         // Query the actual expanded AndroidView, not its smaller logical context box.
         // Compose intersects only real clipping layers on this existing ancestry.
         val clip = actualInputClip(root, nativeCoordinates) ?: return missing("actual input clip unavailable")
@@ -134,17 +157,22 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
         if (envelopeSurface !== surface) {
             val density = view.resources.displayMetrics.density
             val selection = nativeDelegatedSelectionInk(surface, density)
+            val handleInput = nativeDelegatedSelectionInput(surface, density)
             val hostFocus = nativeDelegatedHostFocusInk(surface, density)
-            val mediaNodes = surface.positionedGroups.flatMap { it.nodeIds }.toSet()
+            val logical = NativeFloatBounds(-surface.surface.left.toFloat(), -surface.surface.top.toFloat(),
+                surface.content.width - surface.surface.left.toFloat(), surface.content.height - surface.surface.top.toFloat())
             envelopes = Envelopes(listOfNotNull(surface.extents.ink) + nativeDelegatedFocusInk(surface.nodes, density) +
                 hostFocus + selection,
                 surface.positionedGroups.flatMap { group ->
-                    group.bounds.map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) } +
-                        nativeDelegatedFocusInk(surface.nodes.filter { it.id in group.nodeIds }, density)
+                    // Focus is painted once by the original View in the parent state phase.
+                    group.bounds.map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) }
                 },
                 (surface.nodes.flatMap { it.bounds } + surface.rectsForRange(0, surface.text.length))
-                    .map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) },
-                selection + hostFocus + nativeDelegatedFocusInk(surface.nodes.filterNot { it.id in mediaNodes }, density))
+                    .map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) } + handleInput +
+                    listOfNotNull(logical, surface.extents.interaction) + surface.positionedGroups.flatMap { group ->
+                        group.bounds.map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) }
+                    },
+                selection + hostFocus + nativeDelegatedFocusInk(surface.nodes, density), surface.ordinaryPaintBounds)
             envelopeSurface = surface
             envelopeBuildCount++
         }
@@ -153,7 +181,8 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
         placement = Placement(root, generation, surface, cell, coordinates, nativeCoordinates, boxes, clip)
         return NativeDelegatedMeasuredCell(view, generation, cellBox, physicalBox, ancestors,
             local.ink.map(::translated), local.deferred.map(::translated), local.input.map(::translated),
-            minimumTouchWidth, minimumTouchHeight, local.ordinary.map(::translated))
+            minimumTouchWidth, minimumTouchHeight, local.state.map(::translated), local.ordinary.map(::translated),
+            root, innerClip)
     }
 }
 
@@ -161,6 +190,83 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
  * interactive until the post-layout proof succeeds. A refusal recomposes the existing
  * complete unavailable-content branch; the provisional graph remains gated meanwhile. */
 internal class NativeDelegatedTableOwner(val table: Table, private val invalidateParent: () -> Unit) {
+    private var statePaintRevision by mutableStateOf(0)
+    fun statePaintChanged() {
+        // AndroidView.update observes reads. Notify the draw reader without subscribing
+        // the updating View to the revision it unconditionally changes during bind.
+        Snapshot.withoutReadObservation { statePaintRevision++ }
+    }
+    private var rootStateView: NativeFloatTextView? = null
+    private var rootStateCoordinates: LayoutCoordinates? = null
+    private var rootStateSurface: NativeSurfaceGeometry? = null
+    private var rootStateInput: List<NativeFloatBounds> = emptyList()
+    private data class RootStatePlacement(val view: NativeFloatTextView, val surface: NativeSurfaceGeometry,
+        val coordinates: LayoutCoordinates, val bounds: NativeFloatBounds, val clip: NativeFloatBounds)
+    private var rootStatePlacement: RootStatePlacement? = null
+
+    fun measuredRootState(view: NativeFloatTextView, surface: NativeSurfaceGeometry) {
+        val previousView = rootStateView
+        if (previousView !== view) {
+            rootStateView = null
+            if (previousView != null && previousView.delegatedStateOwner === this) previousView.delegatedStateOwner = null
+            rootStateCoordinates = null
+            rootStatePlacement = null
+        }
+        if (previousView !== view || rootStateSurface !== surface) {
+            rootStateInput = nativeDelegatedSelectionInput(surface, view.resources.displayMetrics.density)
+            rootStatePlacement = null
+        }
+        rootStateView = view
+        rootStateSurface = surface
+        view.delegatedStateOwner = this
+    }
+
+    fun positionedRootState(view: NativeFloatTextView, coordinates: LayoutCoordinates) {
+        if (rootStateView === view) {
+            rootStateCoordinates = coordinates
+            validateAfterPlacement()
+        }
+    }
+
+    fun clearRootState(view: NativeFloatTextView) {
+        if (rootStateView === view) {
+            rootStateView = null
+            rootStateCoordinates = null
+            rootStateSurface = null
+            rootStatePlacement = null
+            rootStateInput = emptyList()
+            statePaintChanged()
+        }
+        if (view.delegatedStateOwner === this) view.delegatedStateOwner = null
+    }
+
+    private fun paintRootState(canvas: android.graphics.Canvas, focus: Boolean) {
+        val root = rootCoordinates ?: return
+        val view = rootStateView ?: return
+        val coordinates = rootStateCoordinates ?: return
+        val surface = rootStateSurface ?: return
+        if (!view.isAttachedToWindow || view.currentMeasuredGeometry !== surface ||
+            view.width != surface.width || view.height != surface.height) return
+        val bounds = measuredBox(root, coordinates) ?: return
+        val clip = actualInputClip(root, coordinates) ?: return
+        val save = canvas.save()
+        try {
+            canvas.clipRect(clip.left, clip.top, clip.right, clip.bottom)
+            canvas.translate(bounds.left, bounds.top)
+            view.paintDelegatedState(canvas, focus)
+        } finally { canvas.restoreToCount(save) }
+    }
+
+    /** Reading the revision observes all original View invalidations in the existing
+     * parent draw. Admission and immutable placement are rechecked before either phase. */
+    fun paintOriginalState(canvas: android.graphics.Canvas, focus: Boolean) {
+        statePaintRevision
+        if (permitsOriginalOwners()) cells.forEach { it.paintOriginalState(canvas, focus) }
+        // This is the existing upper AndroidView's priority, including parent selection
+        // handles over a Child placeholder. Keep paint and real interop hit order aligned.
+        paintRootState(canvas, focus)
+    }
+
     val cells = tableGrid(table).cells.indices.map { NativeDelegatedCellOwner(it, this) }
     var fallbackReason by mutableStateOf<String?>(null)
         private set
@@ -233,8 +339,10 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
         cells.forEach { it.admissionChanged() }
     }
 
-    fun measured(allocation: NativeFloatBounds, otherInk: List<NativeFloatBounds>?, otherInput: List<NativeFloatBounds>?) {
-        measuredSurroundings = NativeDelegatedSurroundings(generation, allocation, otherInk, otherInput)
+    fun measured(allocation: NativeFloatBounds, otherInk: List<NativeFloatBounds>?, otherInput: List<NativeFloatBounds>?,
+        rootFallbackInput: List<NativeFloatBounds> = emptyList()) {
+        measuredSurroundings = NativeDelegatedSurroundings(generation, allocation, otherInk, otherInput,
+            rootFallbackInput = rootFallbackInput)
     }
 
     fun positioned(coordinates: LayoutCoordinates) {
@@ -268,7 +376,13 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
         if (fallbackReason != null || !accepted || fallbackComposed || acceptedGeneration !== generation) return false
         val root = rootCoordinates?.takeIf { it.isAttached } ?: return false
         val grid = gridCoordinates?.takeIf { it.isAttached } ?: return false
-        return measuredBox(root, grid) == acceptedGrid && cells.all { it.currentPlacement(root, generation) }
+        val state = rootStatePlacement ?: return false
+        return rootStateView === state.view && rootStateSurface === state.surface &&
+            rootStateCoordinates === state.coordinates && state.view.isAttachedToWindow &&
+            state.view.currentMeasuredGeometry === state.surface && state.view.delegatedStateOwner === this &&
+            state.view.width == state.surface.width && state.view.height == state.surface.height &&
+            measuredBox(root, state.coordinates) == state.bounds && actualInputClip(root, state.coordinates) == state.clip &&
+            measuredBox(root, grid) == acceptedGrid && cells.all { it.currentPlacement(root, generation) }
     }
 
     private data class Evaluation(val decision: NativeDelegatedPaintDecision, val evidence: String? = null)
@@ -278,6 +392,15 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
         val grid = gridCoordinates?.takeIf { it.isAttached } ?: return null
         val surroundings = measuredSurroundings ?: return null
         if (cells.any { !it.placementReported() }) return null
+        val stateView = rootStateView ?: return null
+        val stateCoordinates = rootStateCoordinates ?: return null
+        val stateSurface = rootStateSurface ?: return null
+        if (!stateView.isAttachedToWindow || stateView.currentMeasuredGeometry !== stateSurface ||
+            stateView.width != stateSurface.width || stateView.height != stateSurface.height ||
+            stateView.delegatedStateOwner !== this) return null
+        val stateBounds = measuredBox(root, stateCoordinates) ?: return null
+        val stateClip = actualInputClip(root, stateCoordinates) ?: return null
+        if (stateBounds.width != stateSurface.width.toFloat() || stateBounds.height != stateSurface.height.toFloat()) return null
         val measured = mutableListOf<NativeDelegatedMeasuredCell>()
         fun unavailable(reason: String, stage: String): Evaluation {
             // Render only on failure. No View or LayoutCoordinates are retained by this
@@ -301,7 +424,10 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
             measured += snapshot
         }
         val expected = cells.map { it.registeredOwner() ?: return unavailable("Original cell owner detached", "owner identity") }
-        val input = surroundings.copy(allocation = tableBounds, atomicAllocation = surroundings.allocation)
+        rootStatePlacement = RootStatePlacement(stateView, stateSurface, stateCoordinates, stateBounds, stateClip)
+        val input = surroundings.copy(allocation = tableBounds, rootOwner = root,
+            rootState = NativeDelegatedRootState(stateView, stateBounds, stateClip,
+                rootStateInput.map { it.translated(stateBounds.left, stateBounds.top) }, surroundings.rootFallbackInput))
         return when (val decision = nativeDelegatedPaintDecision(input, measured, expected)) {
             is NativeDelegatedPaintDecision.Permitted -> Evaluation(decision)
             is NativeDelegatedPaintDecision.Unavailable -> unavailable(decision.reason, "paint/input proof; actualAllocation=$tableBounds")
@@ -334,15 +460,28 @@ private fun actualInputClip(root: LayoutCoordinates, child: LayoutCoordinates): 
         clipped.right + origin.x, clipped.bottom + origin.y)
 }
 
-/** Include every focus state and every possible caret/handle position, not only the
- * currently selected text. The real View remains responsible for painting these states. */
-internal fun nativeDelegatedOwnerInk(geometry: FloatTextGeometry, density: Float,
-    selection: List<NativeFloatBounds> = nativeDelegatedSelectionInk(geometry, density)): List<NativeFloatBounds> = buildList {
-    geometry.extents.ink?.let(::add)
-    addAll(nativeDelegatedFocusInk(geometry.nodes, density))
-    addAll(nativeDelegatedHostFocusInk(geometry, density))
-    addAll(geometry.rectsForRange(0, geometry.text.length).map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) })
-    addAll(selection)
+private fun clippedBox(root: LayoutCoordinates, ancestor: LayoutCoordinates,
+    child: LayoutCoordinates): NativeFloatBounds? {
+    if (!ancestor.isAttached || !child.isAttached) return null
+    val origin = translationTo(root, ancestor) ?: return null
+    val clipped = ancestor.localBoundingBoxOf(child, clipBounds = true)
+    return NativeFloatBounds(clipped.left + origin.x, clipped.top + origin.y,
+        clipped.right + origin.x, clipped.bottom + origin.y)
+}
+
+/** Value-only first-refusal evidence; never an admission, mutation or second snapshot. */
+private fun clippingSegments(root: LayoutCoordinates, child: LayoutCoordinates,
+    grid: LayoutCoordinates): String = buildString {
+    var cursor: LayoutCoordinates? = child
+    var count = 0
+    while (cursor != null && count < 32) {
+        val current = cursor
+        append("[$count box=${measuredBox(root, current)} clipped=${clippedBox(root, current, child)}]")
+        if (current === grid) return@buildString
+        cursor = current.parentLayoutCoordinates
+        count++
+    }
+    append(" grid not reached within finite ancestry")
 }
 
 private fun nativeDelegatedFocusInk(nodes: List<FloatInteractionNode>, density: Float): List<NativeFloatBounds> = buildList {
@@ -381,4 +520,29 @@ internal fun nativeDelegatedSelectionInk(geometry: FloatTextGeometry, density: F
         add(NativeFloatBounds(cx - radius, cy - radius, cx + radius, cy + radius))
         add(NativeFloatBounds(caret.left, minOf(caret.bottom, cy), caret.left + density, maxOf(caret.bottom, cy)))
     }
+}
+
+/** Actual original-View dispatch reaches the full 24-density handle target inside its
+ * physical bounds. The 6-density painted knob is not an input envelope. */
+internal fun nativeDelegatedSelectionInput(geometry: FloatTextGeometry, density: Float,
+    x: Float = 0f, y: Float = 0f,
+    owner: NativeFloatBounds = NativeFloatBounds(0f, 0f, geometry.width.toFloat(), geometry.height.toFloat())
+): List<NativeFloatBounds> {
+    if (geometry.text.isEmpty()) return emptyList()
+    val radius = 24f * density
+    return (0..geometry.text.length).map { offset ->
+        val (cx, cy) = nativeSelectionHandleCenter(geometry, offset, density, x, y, owner)
+        NativeFloatBounds(maxOf(owner.left, cx - radius), maxOf(owner.top, cy - radius),
+            minOf(owner.right, cx + radius), minOf(owner.bottom, cy + radius))
+    }
+}
+
+internal fun nativeSelectionHandleCenter(geometry: FloatTextGeometry, offset: Int, density: Float,
+    x: Float = 0f, y: Float = 0f,
+    owner: NativeFloatBounds = NativeFloatBounds(0f, 0f, geometry.width.toFloat(), geometry.height.toFloat())
+): Pair<Float, Float> {
+    val caret = geometry.caretRect(offset).apply { offset(x, y) }
+    val radius = minOf(6f * density, minOf(owner.width, owner.height) / 2f)
+    return caret.left.coerceIn(owner.left + radius, maxOf(owner.left + radius, owner.right - radius)) to
+        (caret.bottom + 7f * density).coerceIn(owner.top + radius, maxOf(owner.top + radius, owner.bottom - radius))
 }

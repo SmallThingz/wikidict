@@ -122,6 +122,140 @@ class NativeDecorationBoundsDeviceTest {
         assertEquals(NativeFloatBounds(-10f, -17f, 2f, 2f), canvas.bounds)
     }
 
+    @Test fun actualNativeRunContextsKeepWrappedInkWithoutWholePrefixExpansion() {
+        org.junit.Assume.assumeTrue(android.os.Build.VERSION.SDK_INT >= 29)
+        val texts = listOf("\u00c5ffiaffiaffiaffi cafe\u0301 retained caption",
+            "caption \u0633\u0644\u0627\u0645\u0644\u0627\u0633\u0644\u0627\u0645\tlink retained",
+            "\u0915\u094d\u0937\u093f\u0924\u093f\u091c\u0915\u094d\u0937\u093f\u0924\u093f\u091c caption retained")
+        for ((sample, value) in texts.withIndex()) for (alignment in listOf(Layout.Alignment.ALIGN_NORMAL,
+            Layout.Alignment.ALIGN_CENTER, Layout.Alignment.ALIGN_OPPOSITE)) for (width in listOf(541, 181)) {
+            val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                textSize = 31f; color = Color.BLACK; textSkewX = -.18f
+                letterSpacing = listOf(.035f, -.02f, 0f)[sample]
+            }
+            val source = SpannableString(value).apply {
+                setSpan(object : MetricAffectingSpan() {
+                    override fun updateDrawState(p: TextPaint) = updateMeasureState(p)
+                    override fun updateMeasureState(p: TextPaint) { p.textSize = 24f; p.baselineShift = -7 }
+                }, 5, 10, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            val params = PrecomputedText.Params.Builder(paint).setTextDirection(TextDirectionHeuristics.LTR)
+                .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
+                .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE).build()
+            val text = PrecomputedText.create(source, params)
+            val layout = StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
+                .setTextDirection(TextDirectionHeuristics.LTR).setAlignment(alignment)
+                .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
+                .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
+                .setIndents(intArrayOf(11, 23), intArrayOf(7, 9)).build()
+            val positions = (0 until layout.lineCount).map { line -> NativeLinePaintPlacement(line,
+                layout.getLineBaseline(line) - 16f, if (line == 0) 11 else 23,
+                if (line == 0) 7 else 9, -13.5f) }
+            val painter = NativeLinePainter(layout)
+            assertTrue(painter.observedPaintBounds(positions).textComplete)
+            if (width == 181) assertTrue("The wrap oracle must actually wrap", layout.lineCount > 1)
+            val ink = checkNotNull(nativeTextInkBounds(layout, positions))
+            // The old whole-prefix envelope was about three advances wide. Actual native
+            // run context keeps wrapped ligatures/joining, skew, tabs and combining marks.
+            assertTrue("Native ink must not grow by its entire prefix on both sides",
+                ink.width < width + 48f)
+            val bitmap = Bitmap.createBitmap(1024, 512, Bitmap.Config.ARGB_8888)
+            try {
+                val canvas = Canvas(bitmap)
+                canvas.translate(128f, 80f)
+                painter.paint(canvas, positions)
+                val pixels = IntArray(bitmap.width * bitmap.height)
+                bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                var painted = 0
+                pixels.forEachIndexed { index, pixel -> if (Color.alpha(pixel) != 0) {
+                    painted++
+                    val x = index % bitmap.width + .5f - 128f
+                    val y = index / bitmap.width + .5f - 80f
+                    assertTrue("Native glyph pixel outside retained ink: $x,$y in $ink",
+                        x >= ink.left - 1f && x <= ink.right + 1f && y >= ink.top - 1f && y <= ink.bottom + 1f)
+                } }
+                assertTrue(painted > 0)
+            } finally { bitmap.recycle() }
+        }
+        val observer = NativeDecorationBoundsCanvas(true)
+        val paint = Paint().apply { textSize = 30f }
+        observer.drawText("unowned fast path", 0f, 0f, paint)
+        assertFalse("An unexpected dispatch retains conservative bounds", observer.textBoundsComplete)
+    }
+
+    @Test fun exactRunBoundsSkipCursorScanWhileReplacementAndUnsupportedRunsRetainIt() {
+        org.junit.Assume.assumeTrue(android.os.Build.VERSION.SDK_INT >= 29)
+        for (mode in 0..2) {
+            var replacementSizes = 0
+            var replacementDraws = 0
+            val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                textSize = 24f
+                if (mode == 2) style = Paint.Style.STROKE
+            }
+            val source = SpannableString("office retained caption ".repeat(40))
+            if (mode == 1) source.setSpan(object : ReplacementSpan(), NativeReplacementPaintBounds {
+                override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int,
+                    fm: Paint.FontMetricsInt?): Int { replacementSizes++; return 24 }
+                override fun draw(canvas: Canvas, text: CharSequence, start: Int, end: Int,
+                    x: Float, top: Int, y: Int, bottom: Int, paint: Paint) { replacementDraws++ }
+                override fun nativePaintBounds(lineTop: Float, lineBottom: Float) =
+                    NativeFloatBounds(-3f, -20f, 27f, 4f)
+            }, 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val params = PrecomputedText.Params.Builder(paint).setTextDirection(TextDirectionHeuristics.LTR)
+                .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
+                .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE).build()
+            val text = PrecomputedText.create(source, params)
+            val shaped = StaticLayout.Builder.obtain(text, 0, text.length, paint, 280)
+                .setTextDirection(TextDirectionHeuristics.LTR)
+                .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
+                .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE).build()
+            val layout = CursorCountingLayout(shaped)
+            val positions = (0 until layout.lineCount).map {
+                NativeLinePaintPlacement(it, layout.getLineBaseline(it).toFloat())
+            }
+            assertTrue(layout.lineCount > 1)
+            assertEquals(mode != 2, NativeLinePainter(layout).observedPaintBounds(positions).textComplete)
+            val sizesBefore = replacementSizes
+            layout.cursorCalls = 0
+            val ink = checkNotNull(nativeTextInkBounds(layout, positions))
+            assertEquals(sizesBefore, replacementSizes)
+            assertEquals(0, replacementDraws)
+            if (mode == 0) {
+                assertEquals("Exact text must not query every UTF-16 cursor", 0, layout.cursorCalls)
+            } else {
+                assertTrue("Retained replacement/fallback origins still need native cursors", layout.cursorCalls > 0)
+                if (mode == 1) {
+                    assertTrue(ink.left <= -3f)
+                    assertTrue(ink.bottom >= layout.getLineBaseline(0) + 4f)
+                }
+            }
+        }
+    }
+
+    private class CursorCountingLayout(private val shaped: Layout) : Layout(shaped.text,
+        TextPaint(shaped.paint), shaped.width, shaped.alignment, shaped.spacingMultiplier, shaped.spacingAdd) {
+        var cursorCalls = 0
+        override fun getPrimaryHorizontal(offset: Int): Float {
+            cursorCalls++
+            return shaped.getPrimaryHorizontal(offset)
+        }
+        override fun getSecondaryHorizontal(offset: Int): Float {
+            cursorCalls++
+            return shaped.getSecondaryHorizontal(offset)
+        }
+        override fun getLineCount() = shaped.lineCount
+        override fun getLineTop(line: Int) = shaped.getLineTop(line)
+        override fun getLineDescent(line: Int) = shaped.getLineDescent(line)
+        override fun getLineStart(line: Int) = shaped.getLineStart(line)
+        override fun getParagraphDirection(line: Int) = shaped.getParagraphDirection(line)
+        override fun getLineContainsTab(line: Int) = shaped.getLineContainsTab(line)
+        override fun getLineDirections(line: Int): Layout.Directions = shaped.getLineDirections(line)
+        override fun getTopPadding() = shaped.topPadding
+        override fun getBottomPadding() = shaped.bottomPadding
+        override fun getEllipsisStart(line: Int) = shaped.getEllipsisStart(line)
+        override fun getEllipsisCount(line: Int) = shaped.getEllipsisCount(line)
+    }
+
     private class RecordingCanvas(bitmap: Bitmap) : Canvas(bitmap) {
         var decorations: NativeFloatBounds? = null
         var rectangles = 0

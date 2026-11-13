@@ -22,6 +22,9 @@ internal data class NativeLinePaintPlacement(
     val originX: Float = 0f,
 )
 
+internal data class NativeObservedPaintBounds(val decorations: NativeFloatBounds?,
+    val text: NativeFloatBounds?, val textComplete: Boolean)
+
 /** Keeps native background-before-text ordering while placing the original shaped lines. */
 internal class NativeLinePainter private constructor(
     private val shaped: Layout,
@@ -35,9 +38,15 @@ internal class NativeLinePainter private constructor(
 
     /** Public native TextLine dispatch exposes exact decoration rectangles even on API28. */
     fun decorationBounds(positions: List<NativeLinePaintPlacement>): NativeFloatBounds? {
-        val observer = NativeDecorationBoundsCanvas()
+        return observedPaintBounds(positions, false).decorations
+    }
+
+    /** Called during geometry construction, never by draw/input. The original native
+     * dispatcher supplies each run's actual soft-wrap context, resolved paint and origin. */
+    fun observedPaintBounds(positions: List<NativeLinePaintPlacement>, text: Boolean = true): NativeObservedPaintBounds {
+        val observer = NativeDecorationBoundsCanvas(text)
         NativeLinePainter(shaped, NativeLinePaintSource(shaped, decorationProbe = true)).paint(observer, positions)
-        return observer.bounds
+        return NativeObservedPaintBounds(observer.bounds, observer.textBounds, observer.textBoundsComplete)
     }
 
     /** The complete native selectable advance, without cross-line selection filler. */

@@ -107,10 +107,12 @@ class NativeDelegatedTableDeviceTest {
     @Composable
     private fun Fixture(table: Table, width: Int, bitmap: Bitmap, holder: Holder,
         actions: MutableList<String>, opened: MutableList<String>, opaqueSibling: Boolean = false,
-        enabled: Boolean = true, recomposeToken: Int = 0, witness: AdmissionWitness? = null) {
+        enabled: Boolean = true, recomposeToken: Int = 0, witness: AdmissionWitness? = null,
+        ordinary: Boolean = false, secondDelegated: Boolean = false, interactionOwner: Boolean = true) {
         val settings = AppSettings(allowImages = false, allowAudio = false)
         val media = images.map { Media(it.file, "image", "") }
         MaterialTheme { CompositionLocalProvider(
+            LocalNativeContextInteractionOwner provides interactionOwner,
             LocalTablePhaseObserver provides (witness?.observer ?: LocalTablePhaseObserver.current),
             LocalUriHandler provides remember { object : UriHandler {
                 override fun openUri(uri: String) { opened += uri }
@@ -135,10 +137,14 @@ class NativeDelegatedTableDeviceTest {
                     }) {
                 Layout(modifier = Modifier.verticalScroll(rememberScrollState()), content = {
                     if (enabled) {
-                        val blocks = listOf(Block("paragraph", 0, emptyList(), table = table)) +
+                        val blocks = (if (ordinary) listOf(Block("paragraph", 0,
+                            listOf(Span("link", "Ordinary retained root", "ordinary-root"))))
+                            else listOf(Block("paragraph", 0, emptyList(), table = table))) +
+                            if (secondDelegated) listOf(Block("paragraph", 0, emptyList(), table = table)) else emptyList()
+                        val displayed = blocks +
                             if (opaqueSibling) listOf(Block("paragraph", 0, emptyList(), table = Table(emptyList(),
                                 listOf(listOf(Cell(listOf(Span("text", "Opaque sibling")), false, 1, 1)))))) else emptyList()
-                        NativeFloatBlockContext(blocks, { actions += it.target }, "delegated-fixture", Modifier,
+                        NativeFloatBlockContext(displayed, { actions += it.target }, "delegated-fixture", Modifier,
                             false, "delegated-grid", 0f, false)
                     }
                 }) { children, _ ->
@@ -251,7 +257,7 @@ class NativeDelegatedTableDeviceTest {
                 grid?.isAttached != true -> "grid absent/detached"
                 box(root, grid) != acceptedGrid -> "grid box changed"
                 table.cells.any { !it.currentPlacement(root, generation) } -> "cell currentPlacement=false"
-                else -> "all permitsOriginalOwners predicates currently true"
+                else -> "cell predicates current; root state placement retained below"
             }
             out.appendLine("current-permits-first-gate=$gate")
             val pending = when {
@@ -265,9 +271,18 @@ class NativeDelegatedTableDeviceTest {
             else if (snapshots.any { it == null }) out.appendLine("decision snapshot unavailable; exact cell stage above")
             else {
                 val tableBounds = box(checkNotNull(root), checkNotNull(grid))
+                val rootStamp = field(table, "rootStatePlacement")
+                val rootState = if (rootStamp == null) null else {
+                    val stateBox = field(rootStamp, "bounds") as NativeFloatBounds
+                    @Suppress("UNCHECKED_CAST") val targets = field(table, "rootStateInput") as List<NativeFloatBounds>
+                    NativeDelegatedRootState(checkNotNull(field(rootStamp, "view")), stateBox,
+                        field(rootStamp, "clip") as NativeFloatBounds,
+                        targets.map { it.translated(stateBox.left, stateBox.top) }, checkNotNull(surroundings).rootFallbackInput)
+                }
+                out.appendLine("rootState=$rootState")
                 val decision = if (tableBounds == null) "The delegated table transform is not a translation" else
                     nativeDelegatedPaintDecision(checkNotNull(surroundings).copy(allocation = tableBounds,
-                        atomicAllocation = surroundings.allocation), snapshots.filterNotNull(),
+                        rootOwner = root, rootState = rootState), snapshots.filterNotNull(),
                         table.cells.map { checkNotNull(it.registeredOwner()) }).toString()
                 out.appendLine("read-only cached-envelope decision=$decision")
             }
@@ -319,6 +334,12 @@ class NativeDelegatedTableDeviceTest {
             if (box(root, native) != physicalBox || original.delegatedCellOwner !== cell)
                 return unavailable("physical/native box or View backreference differs")
             val cellBox = box(root, cellCoords) ?: return unavailable("cell transform not translation")
+            val grid = cell.table.gridCoordinates ?: return unavailable("grid coordinates absent")
+            val gridBox = box(root, grid) ?: return unavailable("grid transform not translation")
+            val clipped = grid.localBoundingBoxOf(native, clipBounds = true)
+            val innerClip = NativeFloatBounds(clipped.left + gridBox.left, clipped.top + gridBox.top,
+                clipped.right + gridBox.left, clipped.bottom + gridBox.top)
+            out.appendLine("innerClip=$innerClip")
             val clip = geometry("actualInputClip", root, native) ?: return unavailable("actual input clip unavailable")
             out.appendLine("actualInputClip=$clip")
             val ancestors = mutableListOf(NativeDelegatedInputAncestor(clip, true))
@@ -337,13 +358,14 @@ class NativeDelegatedTableDeviceTest {
             fun rectangles(name: String) = (field(envelopes, name) as List<NativeFloatBounds>).map { it.translated(x, y) }
             val ink = rectangles("ink"); val deferred = rectangles("deferred")
             val input = rectangles("input"); val ordinary = rectangles("ordinary")
+            val stateInk = rectangles("state")
             if (deferred.isEmpty()) return unavailable("deferred envelope empty")
             val touchWidth = field(cell, "minimumTouchWidth") as Float
             val touchHeight = field(cell, "minimumTouchHeight") as Float
             out.appendLine("minimumTouch=${touchWidth}x$touchHeight ink=$ink deferred=$deferred input=$input ordinary=$ordinary")
             out.appendLine("cell[${cell.index}] snapshot-stage=complete currentPlacement=${cell.currentPlacement(root, generation)}")
             return NativeDelegatedMeasuredCell(original, generation, cellBox, physicalBox, ancestors,
-                ink, deferred, input, touchWidth, touchHeight, ordinary)
+                ink, deferred, input, touchWidth, touchHeight, stateInk, ordinary, root, innerClip)
         }
     }
 
@@ -634,6 +656,299 @@ class NativeDelegatedTableDeviceTest {
             }
             tap(current[0], FloatInteractionKind.IMAGE, holder, after = true)
             assertEquals(listOf(urls[0]), opened)
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle()
+            assertEquals(1, holder.disposed); bitmap.recycle()
+        }
+    }
+
+    @Test fun sameRootViewRestoresOrdinaryStatePaintAcrossDelegatedRemovalAndReturn() {
+        val ordinary = mutableStateOf(false)
+        val source = table(); val holder = Holder()
+        val actions = mutableListOf<String>(); val opened = mutableListOf<String>()
+        val bitmap = Bitmap.createBitmap(46, 60, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
+        try {
+            compose.activityRule.scenario.onActivity { decorView = it.window.decorView; it.setContent {
+                Fixture(source, 260, bitmap, holder, actions, opened, ordinary = ordinary.value)
+            } }
+            compose.waitForIdle()
+            val root = compose.runOnIdle {
+                assertEquals(2, admittedViews().size)
+                nativeViews().single { it.delegatedStateOwner != null }
+            }
+            val former = compose.runOnIdle { checkNotNull(root.delegatedStateOwner).also { ordinary.value = true } }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val current = nativeViews().single { it.logicalText.toString() == "Ordinary retained root" }
+                assertSame("The native-context slot must exercise the actual retained View transition", root, current)
+                assertNull(current.delegatedStateOwner)
+                assertFalse(former.permitsOriginalOwners())
+                val local = Bitmap.createBitmap(current.width, current.height, Bitmap.Config.ARGB_8888)
+                try {
+                    current.setSelection(0, 0)
+                    current.draw(android.graphics.Canvas(local))
+                    val before = IntArray(local.width * local.height)
+                    local.getPixels(before, 0, local.width, 0, 0, local.width, local.height)
+                    current.setSelection(0, current.logicalText.length)
+                    assertEquals("Ordinary retained root", current.selectedTextForCopy())
+                    local.eraseColor(android.graphics.Color.TRANSPARENT)
+                    current.draw(android.graphics.Canvas(local))
+                    val values = IntArray(local.width * local.height)
+                    local.getPixels(values, 0, local.width, 0, 0, local.width, local.height)
+                    assertTrue("Ordinary local selection painting must resume after owner removal",
+                        values.indices.any { values[it] != before[it] })
+                } finally { local.recycle() }
+                val node = checkNotNull(current.currentMeasuredGeometry).nodes.single { it.kind == FloatInteractionKind.LINK }
+                assertTrue(checkNotNull(current.accessibilityNodeProvider.createAccessibilityNodeInfo(node.id)).isClickable)
+                assertTrue(current.accessibilityNodeProvider.performAction(node.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                assertEquals(listOf("ordinary-root"), actions)
+                ordinary.value = false
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertEquals(2, admittedViews().size)
+                assertSame(root, nativeViews().single { it.delegatedStateOwner != null })
+                assertNotSame(former, root.delegatedStateOwner)
+                assertTrue(checkNotNull(root.delegatedStateOwner).permitsOriginalOwners())
+                former.clearRootState(root)
+                assertNotNull("Late disposal of an old owner must not clear the new owner", root.delegatedStateOwner)
+                val owner = checkNotNull(root.delegatedStateOwner)
+                assertTrue(owner.permitsOriginalOwners())
+                val coordinatesField = NativeDelegatedTableOwner::class.java.getDeclaredField("rootStateCoordinates")
+                    .apply { isAccessible = true }
+                val placementField = NativeDelegatedTableOwner::class.java.getDeclaredField("rootStatePlacement")
+                    .apply { isAccessible = true }
+                val coordinates = coordinatesField.get(owner) as LayoutCoordinates
+                val surface = root.currentMeasuredGeometry as NativeSurfaceGeometry
+                val replacement = NativeFloatTextView(root.context)
+                try {
+                    owner.measuredRootState(replacement, surface)
+                    assertNull(root.delegatedStateOwner)
+                    assertSame(owner, replacement.delegatedStateOwner)
+                    assertNull("A new View cannot inherit the previous View's coordinates", coordinatesField.get(owner))
+                    assertNull(placementField.get(owner))
+                    assertFalse(owner.permitsOriginalOwners())
+                } finally {
+                    owner.measuredRootState(root, surface)
+                    owner.positionedRootState(root, coordinates)
+                }
+                assertNull(replacement.delegatedStateOwner)
+                assertTrue(owner.permitsOriginalOwners())
+            }
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle()
+            assertEquals(1, holder.disposed); bitmap.recycle()
+        }
+    }
+
+    @Test fun finalizedUnsupportedRootScopesConvergeToVisibleBodyInsteadOfPendingOwners() {
+        val second = mutableStateOf(true); val interaction = mutableStateOf(true); val pulse = mutableStateOf(0)
+        val source = table(); val holder = Holder()
+        val actions = mutableListOf<String>(); val opened = mutableListOf<String>()
+        val bitmap = Bitmap.createBitmap(46, 60, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
+        try {
+            compose.activityRule.scenario.onActivity { decorView = it.window.decorView; it.setContent {
+                Fixture(source, 260, bitmap, holder, actions, opened, recomposeToken = pulse.value,
+                    secondDelegated = second.value, interactionOwner = interaction.value)
+            } }
+            compose.waitForIdle()
+            repeat(3) { iteration ->
+                compose.runOnIdle {
+                    assertTrue(admittedViews().isEmpty())
+                    pulse.value = iteration + 1
+                }
+                compose.waitForIdle()
+                assertTrue(compose.onAllNodesWithText("one complete original Entry owner", substring = true)
+                    .fetchSemanticsNodes().isNotEmpty())
+                captions.forEach { label -> assertTrue("Both table bodies must remain available",
+                    compose.onAllNodesWithText(label, substring = true).fetchSemanticsNodes().size >= 2) }
+            }
+            compose.runOnIdle { second.value = false; interaction.value = false }
+            compose.waitForIdle()
+            compose.runOnIdle { assertTrue(admittedViews().isEmpty()) }
+            assertTrue(compose.onAllNodesWithText("one complete original Entry owner", substring = true)
+                .fetchSemanticsNodes().isNotEmpty())
+            captions.forEach { label -> assertTrue(compose.onAllNodesWithText(label, substring = true)
+                .fetchSemanticsNodes().isNotEmpty()) }
+            compose.runOnIdle { interaction.value = true }
+            compose.waitForIdle()
+            compose.runOnIdle { assertEquals("A real return of the original root owner may retry", 2, admittedViews().size) }
+            assertTrue(actions.isEmpty()); assertTrue(opened.isEmpty())
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle()
+            assertEquals(1, holder.disposed); bitmap.recycle()
+        }
+    }
+
+    @Test fun originalHandleTargetsRespectTheOuterClipAndKeepParentHandlePriority() {
+        val source = table(); val holder = Holder()
+        val actions = mutableListOf<String>(); val opened = mutableListOf<String>()
+        val bitmap = Bitmap.createBitmap(46, 60, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
+        fun dragged(view: NativeFloatTextView) = NativeFloatTextView::class.java.getDeclaredField("draggedHandle")
+            .apply { isAccessible = true }.getInt(view)
+        try {
+            compose.activityRule.scenario.onActivity { decorView = it.window.decorView; it.setContent {
+                Fixture(source, 260, bitmap, holder, actions, opened)
+            } }
+            compose.waitForIdle()
+            val originals = compose.runOnIdle { admittedViews().also { assertEquals(2, it.size) } }
+            val root = compose.runOnIdle {
+                nativeViews().single { it.delegatedCellOwner == null && '\uFFFC' in it.logicalText }
+            }
+            fun childHandlePoint(outside: Boolean) = compose.runOnIdle {
+                val view = originals[0]
+                view.setSelection(0, view.logicalText.length)
+                val g = checkNotNull(view.currentMeasuredGeometry)
+                val xy = IntArray(2).also(view::getLocationInWindow)
+                val center = nativeSelectionHandleCenter(g, 0, holder.density)
+                val cellLeft = checkNotNull(view.delegatedCellOwner!!.cellCoordinates).positionInWindow().x
+                val windowX = cellLeft + if (outside) -1f else 1f
+                val x = windowX - xy[0]
+                assertTrue("The original physical owner must really extend outside its logical cell", x >= 0f)
+                assertTrue(kotlin.math.abs(x - center.first) < 24f * holder.density)
+                val native = checkNotNull(view.delegatedCellOwner!!.viewCoordinates)
+                var outer = native
+                while (outer.parentLayoutCoordinates != null) outer = checkNotNull(outer.parentLayoutCoordinates)
+                val clip = outer.localBoundingBoxOf(native, clipBounds = true)
+                val origin = outer.positionInWindow()
+                if (outside) assertTrue(windowX < origin.x + clip.left)
+                else assertTrue(windowX >= origin.x + clip.left && windowX < origin.x + clip.right)
+                Offset(windowX - holder.origin.x, xy[1] + center.second - holder.origin.y)
+            }
+            val outside = childHandlePoint(true)
+            compose.onNodeWithTag("delegated-host").performTouchInput { down(outside) }
+            compose.runOnIdle { assertEquals("The outer viewport must exclude the off-clip handle target", 0, dragged(originals[0])) }
+            compose.onNodeWithTag("delegated-host").performTouchInput { up() }
+            compose.waitForIdle()
+            val childPoint = childHandlePoint(false)
+            compose.onNodeWithTag("delegated-host").performTouchInput { down(childPoint) }
+            compose.runOnIdle {
+                assertEquals("The real cell View receives the visible handle DOWN through shared interop", 1, dragged(originals[0]))
+                assertEquals(0, dragged(root))
+            }
+            compose.onNodeWithTag("delegated-host").performTouchInput {
+                moveTo(childPoint + Offset(35f * holder.density, 0f)); up()
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertTrue(originals[0].selectionStart > 0)
+                assertTrue(checkNotNull(originals[0].selectedTextForCopy()).length < captions[0].length)
+                root.setSelection(0, root.logicalText.length)
+                assertTrue(root.revealLogicalOffset(root.logicalText.length))
+            }
+            compose.waitForIdle()
+            val parentPoint = compose.runOnIdle {
+                val last = originals[1]
+                val xy = IntArray(2).also(last::getLocationInWindow)
+                val g = checkNotNull(last.currentMeasuredGeometry)
+                val cell = checkNotNull(last.delegatedCellOwner!!.cellCoordinates)
+                val cellAt = cell.positionInWindow()
+                val window = Offset(cellAt.x + 1f, cellAt.y + cell.size.height - 1f)
+                val rootAt = IntArray(2).also(root::getLocationInWindow)
+                val center = nativeSelectionHandleCenter(checkNotNull(root.currentMeasuredGeometry), 0, holder.density)
+                val dx = window.x - rootAt[0] - center.first
+                val dy = window.y - rootAt[1] - center.second
+                assertTrue("The target must be in the actual parent 24-radius handle", dx * dx + dy * dy <
+                    24f * holder.density * 24f * holder.density)
+                val localX = window.x - xy[0]; val localY = window.y - xy[1]
+                assertTrue(localX >= 0f && localY >= 0f && localX < last.width && localY < last.height)
+                assertTrue(g.containsInput(localX, localY))
+                assertEquals(captions[1], g.text.toString())
+                window - holder.origin
+            }
+            compose.onNodeWithTag("delegated-host").performTouchInput { down(parentPoint) }
+            compose.runOnIdle {
+                assertEquals("The already upper parent View keeps its visible handle priority", 1, dragged(root))
+                assertEquals(0, dragged(originals[1]))
+            }
+            compose.onNodeWithTag("delegated-host").performTouchInput { up() }
+            assertTrue(actions.isEmpty()); assertTrue(opened.isEmpty())
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle()
+            assertEquals(1, holder.disposed); bitmap.recycle()
+        }
+    }
+
+    @Test fun originalStatePaintsOnceAfterAllMediaAndInvalidatesWithoutRecomposition() {
+        val source = table(); val holder = Holder()
+        val actions = mutableListOf<String>(); val opened = mutableListOf<String>()
+        val bitmap = Bitmap.createBitmap(46, 60, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
+        try {
+            compose.activityRule.scenario.onActivity { decorView = it.window.decorView; it.setContent {
+                Fixture(source, 260, bitmap, holder, actions, opened)
+            } }
+            compose.waitForIdle()
+            val originals = compose.runOnIdle { admittedViews().also { assertEquals(2, it.size) } }
+            val root = compose.runOnIdle {
+                nativeViews().single { it.delegatedCellOwner == null && '\uFFFC' in it.logicalText }
+            }
+            val before = compose.onNodeWithTag("delegated-host").captureToImage().toPixelMap()
+            val rects = compose.runOnIdle {
+                val view = originals[0]
+                val xy = IntArray(2).also(view::getLocationInWindow)
+                checkNotNull(view.currentMeasuredGeometry).rectsForRange(0, view.logicalText.length).map {
+                    android.graphics.RectF(it).apply { offset(xy[0] - holder.origin.x, xy[1] - holder.origin.y) }
+                }
+            }
+            val probe = (0 until before.height).asSequence().flatMap { y -> (0 until before.width).asSequence().map { x -> x to y } }
+                .first { (x, y) -> before[x, y] == Color.White && rects.any {
+                    x > it.left + 3 && x < it.right - 3 && y > it.top + 3 && y < it.bottom - 3
+                } }
+            val highlight = compose.runOnIdle {
+                originals[0].setSelection(0, originals[0].logicalText.length)
+                (NativeFloatTextView::class.java.getDeclaredField("highlight").apply { isAccessible = true }
+                    .get(originals[0]) as android.graphics.Paint).color
+            }
+            val selected = compose.onNodeWithTag("delegated-host").captureToImage().toPixelMap()[probe.first, probe.second]
+            val alpha = android.graphics.Color.alpha(highlight) / 255f
+            fun blended(channel: Int) = 1f - alpha + alpha * channel / 255f
+            assertEquals(blended(android.graphics.Color.red(highlight)), selected.red, .012f)
+            assertEquals(blended(android.graphics.Color.green(highlight)), selected.green, .012f)
+            assertEquals(blended(android.graphics.Color.blue(highlight)), selected.blue, .012f)
+            compose.runOnIdle { originals[0].setSelection(0, 0) }
+            val cleared = compose.onNodeWithTag("delegated-host").captureToImage().toPixelMap()[probe.first, probe.second]
+            assertEquals("Clearing only original View state must invalidate the parent phase", Color.White, cleared)
+            compose.runOnIdle {
+                originals[0].setSelection(0, originals[0].logicalText.length)
+                assertTrue(originals[1].requestFocus())
+                originals[1].dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_TAB))
+                originals[1].dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_TAB))
+                assertFalse(originals[0].hasFocus())
+                assertEquals(captions[0], originals[0].selectedTextForCopy())
+                // Every original View remains registered; its local draw must not duplicate
+                // the state which the containing root now paints once after all media.
+                (originals + root).forEach { view ->
+                    val local = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+                    try {
+                        view.draw(android.graphics.Canvas(local))
+                        val values = IntArray(local.width * local.height)
+                        local.getPixels(values, 0, local.width, 0, 0, local.width, local.height)
+                        assertTrue("Original interaction surface must not paint a second state copy", values.all { it == 0 })
+                    } finally { local.recycle() }
+                }
+            }
+            compose.waitForIdle()
+            val focus = compose.runOnIdle {
+                val view = originals[1]
+                val node = checkNotNull(view.currentMeasuredGeometry).nodes.single { it.kind == FloatInteractionKind.IMAGE }
+                val ink = checkNotNull(nativeFocusInk(listOf(node)))
+                val xy = IntArray(2).also(view::getLocationInWindow)
+                val cellTop = checkNotNull(view.delegatedCellOwner!!.cellCoordinates).positionInWindow().y - holder.origin.y
+                Triple(ink.translated(xy[0] - holder.origin.x, xy[1] - holder.origin.y), cellTop, view)
+            }
+            val focused = compose.onNodeWithTag("delegated-host").captureToImage().toPixelMap()
+            assertTrue("The authored outline extends above the un-clipped real cell", focus.first.top < focus.second)
+            val top = kotlin.math.floor(focus.first.top).toInt().coerceAtLeast(0)
+            val bottom = kotlin.math.ceil(focus.second).toInt().coerceAtMost(focused.height)
+            assertTrue("The cross-cell boundary must actually be visible", top < bottom)
+            var red = 0
+            for (y in top until bottom) for (x in kotlin.math.floor(focus.first.left).toInt().coerceAtLeast(0)
+                until kotlin.math.ceil(focus.first.right).toInt().coerceAtMost(focused.width)) {
+                val pixel = focused[x, y]
+                if (pixel.red > .9f && pixel.green < .1f && pixel.blue < .1f) red++
+            }
+            assertTrue("A different cell's retained selection cannot cover the final focus phase", red > 0)
+            assertTrue(actions.isEmpty()); assertTrue(opened.isEmpty())
         } finally {
             compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle()
             assertEquals(1, holder.disposed); bitmap.recycle()

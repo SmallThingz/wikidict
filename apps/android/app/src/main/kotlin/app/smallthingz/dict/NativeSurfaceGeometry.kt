@@ -19,6 +19,8 @@ internal class NativeSurfaceGeometry(val content: FloatTextGeometry,
     override val positionedGroups get() = content.positionedGroups.map { it.translated(dx, dy) }
     override val extents: NativeGeometryExtents get() = NativeGeometryExtents(width, height.toFloat(),
         content.extents.ink?.translated(dx, dy), content.extents.interaction?.translated(dx, dy))
+    override val ordinaryPaintBounds: List<NativeFloatBounds> get() =
+        content.ordinaryPaintBounds.map { it.translated(dx, dy) }
     override val focusBounds: RectF get() = RectF(content.focusBounds).apply { offset(dx, dy) }
     override fun containsInteraction(x: Float, y: Float) = content.containsInteraction(x - dx, y - dy)
     override fun containsInput(x: Float, y: Float) = content.containsInput(x - dx, y - dy)

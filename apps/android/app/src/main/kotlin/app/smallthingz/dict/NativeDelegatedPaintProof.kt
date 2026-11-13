@@ -1,8 +1,7 @@
 package app.smallthingz.dict
 
-/** All rectangles use the containing Entry's measured coordinates. This proof does not
- * transport input, create nodes, or change painting; it permits an existing cell owner
- * to keep its local relative-media phase only when that phase is observationally equal. */
+/** All rectangles use one measured Entry root. Original Views retain input and AX;
+ * the same root schedules their state after media without changing sibling-subtree order. */
 internal data class NativeDelegatedMeasuredCell(
     val owner: Any,
     val generation: Any,
@@ -15,10 +14,19 @@ internal data class NativeDelegatedMeasuredCell(
     val minimumTouchWidth: Float = 0f,
     val minimumTouchHeight: Float = 0f,
     val ordinaryStateInk: List<NativeFloatBounds> = emptyList(),
+    val ordinaryInk: List<NativeFloatBounds> = ink,
+    val rootOwner: Any? = null,
+    val innerClip: NativeFloatBounds? = null,
 )
 
 /** Innermost first; a real clipping ancestor limits reach without changing the owner. */
 internal data class NativeDelegatedInputAncestor(val bounds: NativeFloatBounds, val clips: Boolean)
+
+/** The existing root AndroidView is already above the Child slots. Its real selection
+ * handles keep that priority; this is measured coverage of that View, not another owner. */
+internal data class NativeDelegatedRootState(val view: Any, val surface: NativeFloatBounds,
+    val clip: NativeFloatBounds, val input: List<NativeFloatBounds>,
+    val fallbackInput: List<NativeFloatBounds> = emptyList())
 
 /** Ancestor backgrounds are deliberately absent: they already precede this same child.
  * Every other painter and input owner must have a measured envelope, including focus
@@ -28,7 +36,9 @@ internal data class NativeDelegatedSurroundings(
     val allocation: NativeFloatBounds,
     val otherInk: List<NativeFloatBounds>?,
     val otherInput: List<NativeFloatBounds>?,
-    val atomicAllocation: NativeFloatBounds = allocation,
+    val rootOwner: Any? = null,
+    val rootState: NativeDelegatedRootState? = null,
+    val rootFallbackInput: List<NativeFloatBounds> = emptyList(),
 )
 
 internal sealed interface NativeDelegatedPaintDecision {
@@ -48,15 +58,23 @@ internal fun nativeDelegatedPaintDecision(
         return refuse("The delegated table has a duplicated input owner")
     if (cells.any { it.generation !== surroundings.generation })
         return refuse("The delegated table's measured owner generation changed")
+    if (surroundings.rootOwner == null || cells.any { it.rootOwner !== surroundings.rootOwner })
+        return refuse("The original owners do not share the measured Entry root")
+    val rootState = surroundings.rootState
+        ?: return refuse("The original root state owner is unavailable")
+    if (cells.any { it.owner === rootState.view }) return refuse("The root state owner duplicates a cell owner")
     val otherInk = surroundings.otherInk
         ?: return refuse("A surrounding paint envelope is unavailable")
     val otherInput = surroundings.otherInput
         ?: return refuse("A surrounding input envelope is unavailable")
-    val all = listOf(surroundings.allocation, surroundings.atomicAllocation) + otherInk + otherInput + cells.flatMap {
+    val all = listOf(surroundings.allocation, rootState.surface, rootState.clip) + rootState.input +
+        rootState.fallbackInput + otherInk + otherInput + cells.flatMap {
         listOf(it.cell, it.physicalSurface) + it.realInputAncestors.map { ancestor -> ancestor.bounds } +
-            it.ink + it.deferredInk + it.input + it.ordinaryStateInk
+            it.ink + it.deferredInk + it.input + it.ordinaryStateInk + it.ordinaryInk + listOfNotNull(it.innerClip)
     }
     if (all.any { !it.finiteOrdered() }) return refuse("A delegated owner envelope is invalid")
+    if ((rootState.input + rootState.fallbackInput).any { !rootState.surface.encloses(it) })
+        return refuse("Root selection input exceeds its original physical View")
     for ((index, cell) in cells.withIndex()) {
         if (!cell.minimumTouchWidth.isFinite() || !cell.minimumTouchHeight.isFinite() ||
             cell.minimumTouchWidth < 0f || cell.minimumTouchHeight < 0f)
@@ -66,8 +84,10 @@ internal fun nativeDelegatedPaintDecision(
         if ((listOf(cell.physicalSurface) + cell.realInputAncestors.filterNot { it.clips }.map { it.bounds }).any {
                 it.width < cell.minimumTouchWidth || it.height < cell.minimumTouchHeight })
             return refuse("Minimum touch expansion needs a complete delegated arbitration join")
-        if (!surroundings.allocation.encloses(cell.cell) || !cell.cell.encloses(cell.physicalSurface))
-            return refuse("The original native surface extends beyond its real table cell")
+        if (!surroundings.allocation.encloses(cell.cell))
+            return refuse("The original cell extends beyond its measured table grid")
+        if (cell.innerClip != cell.physicalSurface)
+            return refuse("A cell-to-grid clip discards source-visible native overflow")
         // Ordinary Touch must reach the original AndroidView through its actual ancestors.
         // No stylus-only expansion or direct View event forwarding establishes this condition.
         if (cell.realInputAncestors.isEmpty()) return refuse("The original input ancestry is unavailable")
@@ -75,30 +95,57 @@ internal fun nativeDelegatedPaintDecision(
         for (ancestor in cell.realInputAncestors) {
             val current = reachable ?: break
             if (ancestor.clips) reachable = current.intersection(ancestor.bounds)
-            else if (!ancestor.bounds.encloses(current))
-                return refuse("The original native surface extends beyond its real input ancestry")
         }
-        if (reachable != null && !surroundings.atomicAllocation.encloses(reachable))
-            return refuse("The visible native owner extends beyond the delegated atomic child")
-        if ((cell.ink + cell.deferredInk + cell.input + cell.ordinaryStateInk).any { !cell.physicalSurface.encloses(it) })
+        if ((cell.ink + cell.deferredInk + cell.input + cell.ordinaryStateInk + cell.ordinaryInk).any { !cell.physicalSurface.encloses(it) })
             return refuse("The original native surface does not contain its complete ink and input")
         if (cells.take(index).any { it.cell.overlaps(cell.cell) })
             return refuse("Delegated table cells overlap")
         val visible = reachable
+        // Every original selection is painted after all media, then every focus outline.
+        // Ordinary paint remains in its original slot, so inter-cell phase overlap refuses.
         if (visible != null && cell.deferredInk.any { ink ->
-                ink.intersection(visible)?.let { clipped -> cell.ordinaryStateInk.any(clipped::overlaps) } == true })
-            return refuse("Deferred media overlaps another phase's focus or selection ink")
+                ink.intersection(visible)?.let { clipped -> cells.indices.any { other ->
+                    other != index && cells[other].ordinaryInk.any(clipped::overlaps)
+                } } == true })
+            return refuse("Deferred media overlaps another cell's ordinary paint")
         if (visible != null && cell.deferredInk.any { ink ->
                 ink.intersection(visible)?.let { clipped -> otherInk.any(clipped::overlaps) } == true
             })
             return refuse("Deferred Figure ink overlaps another Entry painter")
-        // The interop View participates in the real Compose hit path using its physical
-        // bounds. Reject even an empty transparent overlap; onTouch rejection is too late
-        // to repair an already selected sibling scroll ancestry.
-        if (visible != null && otherInput.any(visible::overlaps))
-            return refuse("The original native surface overlaps another Entry input owner")
+        // The same-grid interop siblings share hit testing and reject an unowned DOWN
+        // before invoking their detector. Full logical boxes and 24-density handle targets
+        // are included; physical focus-only overlap never creates a new hit region.
+        if (visible != null && cell.input.any { input -> input.intersection(visible)?.let { hit ->
+                otherInput.any(hit::overlaps) || rootState.fallbackInput.any(hit::overlaps) || cells.take(index).any { previous ->
+                    val previousVisible = previous.visibleSurface()
+                    previousVisible != null && previous.input.any { prior ->
+                        prior.intersection(previousVisible)?.overlaps(hit) == true
+                    }
+                }
+            } == true })
+            return refuse("Original native input domains overlap")
     }
     return NativeDelegatedPaintDecision.Permitted(surroundings.generation, cells.map { it.owner })
+}
+
+private fun NativeDelegatedMeasuredCell.visibleSurface(): NativeFloatBounds? =
+    realInputAncestors.filter { it.clips }.fold(physicalSurface as NativeFloatBounds?) { area, ancestor ->
+        area?.intersection(ancestor.bounds)
+    }
+
+/** The existing root accepts blank logical space except actual Child targets. Rectangle
+ * subtraction preserves that complete domain; glyph-only envelopes would miss it. */
+internal fun nativeInputOutsideChildren(bounds: NativeFloatBounds,
+    children: List<NativeFloatBounds>): List<NativeFloatBounds> = children.fold(listOf(bounds)) { regions, child ->
+    regions.flatMap { region ->
+        val cut = region.intersection(child)
+        if (cut == null) listOf(region) else listOf(
+            NativeFloatBounds(region.left, region.top, region.right, cut.top),
+            NativeFloatBounds(region.left, cut.bottom, region.right, region.bottom),
+            NativeFloatBounds(region.left, cut.top, cut.left, cut.bottom),
+            NativeFloatBounds(cut.right, cut.top, region.right, cut.bottom),
+        ).filter { it.width > 0f && it.height > 0f }
+    }
 }
 
 private fun NativeFloatBounds.finiteOrdered() =

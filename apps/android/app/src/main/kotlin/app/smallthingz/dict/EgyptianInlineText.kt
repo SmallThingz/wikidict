@@ -40,7 +40,8 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 
-internal data class EgyptianTextRun(val start: Int, val end: Int, val text: String, val reuseLtr: Boolean, val foreground: String? = null, val background: String? = null) {
+internal data class EgyptianTextRun(val start: Int, val end: Int, val text: String, val reuseLtr: Boolean, val foreground: String? = null, val background: String? = null,
+    val fontFeatures: FontFeaturePolicy? = null) {
     val id: String get() = "egyptian:$start:$end"
 }
 
@@ -62,7 +63,7 @@ internal fun egyptianTextRuns(spans: List<Span>): List<EgyptianTextRun> {
                 if (point !in 0x13000..0x13455) { at += Character.charCount(point); continue }
                 val begin = at
                 while (at < text.length && text.codePointAt(at) in 0x13000..0x13455) at += Character.charCount(text.codePointAt(at))
-                runs.add(EgyptianTextRun(offset + begin, offset + at, text.substring(begin, at), span.direction == "ltr", span.foreground, span.background))
+                runs.add(EgyptianTextRun(offset + begin, offset + at, text.substring(begin, at), span.direction == "ltr", span.foreground, span.background, span.fontFeatures))
             }
         }
         offset += text.length + span.trail.length
@@ -165,6 +166,7 @@ private fun EgyptianInlineTextApi31(original: AnnotatedString, runs: List<Egypti
         val completed = linkedMapOf<String, Result<EgyptianInk>>()
         for (run in runs) {
             completed[run.id] = try {
+                requireEgyptianFeatureSupport(run.fontFeatures)
                 val spanStyle = original.spanStyles.filter { it.start <= run.start && it.end >= run.end }
                     .fold(effectiveStyle.toSpanStyle()) { merged, range -> merged.merge(range.item) }
                 val size = when {

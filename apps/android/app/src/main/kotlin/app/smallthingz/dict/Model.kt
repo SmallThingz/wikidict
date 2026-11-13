@@ -26,6 +26,7 @@ data class Span(
     val image: InlineImage? = null,
     val targetFragment: String? = null,
     val tooltip: String? = null,
+    val fontFeatures: FontFeaturePolicy? = null,
 ) {
     init {
         require(tooltip == null || validPresentationString(tooltip)) { "Invalid span tooltip" }
@@ -331,6 +332,7 @@ enum class TableCollapse { Separate, Collapse }
 enum class CellTextAlign { Left, Center, Right }
 enum class TableFloatSide { Left, Right }
 enum class TableDisplay { Table, InlineBlock, InlineTable }
+enum class TableContainingDirection { Ltr, Rtl }
 enum class InlineBoxVerticalAlign { Baseline, Middle, Top }
 enum class CellVerticalAlign { Top }
 /** Computed once at the table origin; a cell font change does not rescale it. */
@@ -348,17 +350,34 @@ data class TableStyle(val background: String? = null, val border: StyleBorder? =
     val collapse: TableCollapse? = null, val margins: StyleEdges? = null, val floatSide: TableFloatSide? = null,
     val width: StyleWidth? = null, val padding: StyleEdges? = null, val clear: FigureClear? = null,
     val display: TableDisplay? = null, val verticalAlign: InlineBoxVerticalAlign? = null,
-    val lineHeight: ComputedLineHeight? = null) {
+    val lineHeight: ComputedLineHeight? = null, val marginValues: ContainerMargins? = null,
+    val containingDirection: TableContainingDirection? = null) {
     val isInline: Boolean get() = display == TableDisplay.InlineBlock || display == TableDisplay.InlineTable
     init {
         require(background != null || border != null || collapse != null || margins != null || floatSide != null ||
             width != null || padding != null || clear != null || display != null || verticalAlign != null ||
-            lineHeight != null) { "Empty table style" }
+            lineHeight != null || marginValues != null) { "Empty table style" }
+        require(margins == null || marginValues == null) { "Conflicting table margin representations" }
+        require((marginValues != null) == (containingDirection != null)) { "Table automatic margins require containing direction" }
+        marginValues?.let(::validateTableAutoMargins)
         require(!isInline || floatSide == null) { "Inline table cannot also float" }
         require(verticalAlign != InlineBoxVerticalAlign.Top || isInline) { "Top alignment requires an inline table" }
         require(background == null || Regex("#[0-9a-f]{6}").matches(background)) { "Invalid table background RGB" }
     }
 }
+/** Table's M extension is narrower than the reusable ContainerMargin wire domain. */
+internal fun validateTableAutoMargins(value: ContainerMargins) {
+    require(value.top is ContainerMargin.Length && value.bottom is ContainerMargin.Length) {
+        "Table vertical margins require lengths"
+    }
+    require(value.left == ContainerMargin.Auto || value.right == ContainerMargin.Auto) {
+        "Fixed table margins use the existing representation"
+    }
+    require(listOf(value.top, value.right, value.bottom, value.left).all {
+        it !is ContainerMargin.Length || it.value.value.isFinite() && it.value.value >= 0f
+    }) { "Table margins require finite nonnegative lengths" }
+}
+
 /** Cell metrics have an explicit origin and admit zero; the older Table domain stays closed. */
 data class CellTextStrut(val fontScale: Float, val fontScaleBasis: FontScaleBasis) {
     init { require(fontScale.isFinite() && fontScale >= 0f && fontScaleBasis != FontScaleBasis.Context) }

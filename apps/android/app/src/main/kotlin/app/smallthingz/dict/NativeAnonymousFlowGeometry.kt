@@ -89,6 +89,11 @@ internal class NativeAnonymousFlowGeometry private constructor(
         }
     } }
 
+    override val ordinaryPaintBounds: List<NativeFloatBounds> by lazy {
+        native.ordinaryPaintBounds + figures.flatMap { placed ->
+            placed.measured.geometry.ordinaryPaintBounds.map { it.translated(placed.bounds.left, placed.bounds.top) }
+        }
+    }
     override val extents: NativeGeometryExtents by lazy {
         figures.fold(native.extents.copy(usedWidth = width, usedHeight = height.toFloat(),
             interaction = enclosingBounds(native.extents.interaction, nativeBoundsOf(nodes.flatMap { it.bounds })))) { area, placed ->

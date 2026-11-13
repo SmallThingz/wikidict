@@ -41,6 +41,9 @@ internal interface FloatTextGeometry {
     val extents: NativeGeometryExtents get() = NativeGeometryExtents(width, height.toFloat(),
         NativeFloatBounds(0f, 0f, width.toFloat(), height.toFloat()),
         nativeBoundsOf(rectsForRange(0, text.length) + nodes.flatMap { it.bounds }))
+    /** Conservative ordinary-paint coverage, excluding separately scheduled media and
+     * View selection/focus where the concrete painter can distinguish those phases. */
+    val ordinaryPaintBounds: List<NativeFloatBounds> get() = listOfNotNull(extents.ink)
     /** Paint envelopes are never hit targets. Keep actual selectable advances and action bounds. */
     fun containsInteraction(x: Float, y: Float): Boolean = nodes.any { it.contains(x, y) } ||
         rectsForRange(0, text.length).any { it.contains(x, y) }

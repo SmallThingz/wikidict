@@ -104,9 +104,12 @@ internal class NativeFloatGeometry private constructor(
         bounds
     }
 
+    override val ordinaryPaintBounds: List<NativeFloatBounds> by lazy {
+        listOfNotNull(nativeTextInkBounds(layout, linePaintPositions),
+            nativeBoundsOf(floats.map { it.content }), decorationBounds(this))
+    }
     override val extents: NativeGeometryExtents by lazy {
-        val ink = enclosingBounds(enclosingBounds(nativeTextInkBounds(layout, linePaintPositions),
-            enclosingBounds(nativeBoundsOf(floats.map { it.content }), decorationBounds(this))), nativeFocusInk(nodes))
+        val ink = ordinaryPaintBounds.fold(nativeFocusInk(nodes), ::enclosingBounds)
         val interaction = nativeBoundsOf(selectableLineBounds.filterNotNull() +
             nodes.flatMap { it.bounds } + listOf(caretRect(0), caretRect(text.length)))
         NativeGeometryExtents(width, height.toFloat(), ink, interaction)

@@ -33,6 +33,11 @@ internal class NativeFigureGeometry(
     override val nodes = (resolvedImageNodes +
         caption.nodes.map { node -> node.translated(captionX, captionY) })
         .mapIndexed { index, node -> node.copy(id = index) }
+    override val ordinaryPaintBounds: List<NativeFloatBounds> by lazy {
+        listOf(NativeFloatBounds(0f, 0f, width.toFloat(), height.toFloat())) +
+            caption.ordinaryPaintBounds.map { it.translated(captionX, captionY) } +
+            if (deferredMedia) emptyList() else mediaBounds().map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) }
+    }
     override val extents: NativeGeometryExtents by lazy {
         val ink = NativeFloatBounds(minOf(0f, imageBounds.left - metrics.imageBorder),
             minOf(0f, imageBounds.top - metrics.imageBorder),

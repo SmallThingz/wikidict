@@ -52,6 +52,9 @@ internal sealed interface NativeFloatContextPart {
         val gapBefore: Float = 0f,
         val clear: FigureClear? = null,
         val logicalObject: Boolean = true,
+        val autoMarginBox: NativeTableMarginBox? = null,
+        val autoMargins: NativeTableAutoMargins? = null,
+        val containingDirection: TableContainingDirection? = null,
     ) : NativeFloatContextPart
 }
 
@@ -129,6 +132,12 @@ internal class NativeFloatContextGeometry private constructor(
         } }
     override val positionedGroups: List<NativePositionedGroup> by lazy {
         inputLeaves().map { it.sourceIndex }.distinct().flatMap(::positionedGroupsAtSource)
+    }
+    override val ordinaryPaintBounds: List<NativeFloatBounds> by lazy {
+        listOfNotNull(nativeBoundsOf(children.map { it.bounds } + ordinaryBounds.values)) +
+            paragraphs.flatMap { paragraph -> paragraph.geometry.ordinaryPaintBounds.map {
+                it.translated(paragraph.x, paragraph.y)
+            } }
     }
     override val extents: NativeGeometryExtents by lazy {
         paragraphs.fold(NativeGeometryExtents(width, usedHeight,
@@ -725,7 +734,34 @@ internal class NativeFloatContextGeometry private constructor(
                             throw UnsupportedFloatLayout("This text block needs native exclusion-band shaping")
                         val side = part.floatSide
                         val clearedY = tableClearanceY(y, part.clear, exclusions)
-                        if (adjoining && side == null) {
+                        if (part.autoMarginBox != null || part.autoMargins != null || part.containingDirection != null) {
+                            val box = part.autoMarginBox
+                                ?: throw UnsupportedFloatLayout("Table automatic margin measurement is unavailable")
+                            val margins = part.autoMargins
+                                ?: throw UnsupportedFloatLayout("Table automatic margins are unavailable")
+                            val direction = part.containingDirection
+                                ?: throw UnsupportedFloatLayout("Table containing direction is unavailable")
+                            if (side != null || part.margins != margins.fixed)
+                                throw UnsupportedFloatLayout("Table automatic margin flow owner is inconsistent")
+                            val actualMargins = if (adjoining)
+                                margins.copy(fixed = margins.fixed.copy(top = 0f, bottom = 0f)) else margins
+                            val placed = placeNativeAutoMarginTable(width.toFloat(), y, exclusions, actualMargins,
+                                direction, NativeBlockWidth.FixedPx(box.borderWidth.toFloat()),
+                                if (adjoining) FigureClear.None else part.clear, measure = part.measure)
+                            // A local scroll surface clips the real table border box. Its initial
+                            // physical viewport follows the independently authored containing direction.
+                            val left = placed.content.left + if (box.scrolling && direction == TableContainingDirection.Rtl)
+                                box.borderWidth - box.viewportWidth else 0
+                            children += PlacedFloatContextChild(part.id, text.length,
+                                RectF(left, placed.content.top, left + box.viewportWidth,
+                                    placed.content.top + box.viewportHeight), part.logicalObject)
+                            y = placed.nextY + if (adjoining) 0f else part.gapAfter
+                            if (adjoining) {
+                                borderTop = placed.content.top
+                                marginPlacement = checkNotNull(marginPlacement).copy(borderTop = borderTop)
+                                marginPlacements[partIndex] = checkNotNull(marginPlacement)
+                            }
+                        } else if (adjoining && side == null) {
                             val placed = placeNativeClearedTable(width.toFloat(), y, exclusions, FigureClear.None,
                                 part.margins.copy(top = 0f, bottom = 0f), part.widthRule,
                                 pixelAligned = false, measure = part.measure)

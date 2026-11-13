@@ -5,16 +5,22 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.text.MeasuredText
+import android.os.Build
 
 /**
- * Observe only native TextLine's decoration rectangles. There is no raster or replacement owner
- * on this Canvas. The same Layout facade supplies the original lines, bidi, tabs and indents.
- * All operations in that native path are public and overridable on API28.
+ * Observe native TextLine decoration rectangles and, on API29+, exact draw-run text bounds.
+ * There is no raster or replacement owner. The same Layout facade supplies the original
+ * lines, bidi, tabs and indents; API28 retains decoration observation and conservative text.
  */
-internal class NativeDecorationBoundsCanvas : Canvas() {
+internal class NativeDecorationBoundsCanvas(private val observeTextBounds: Boolean = false) : Canvas() {
     private data class Translation(val x: Float, val y: Float)
     private val saved = mutableListOf(Translation(0f, 0f))
     var bounds: NativeFloatBounds? = null
+        private set
+    var textBounds: NativeFloatBounds? = null
+        private set
+    var textBoundsComplete = observeTextBounds && Build.VERSION.SDK_INT >= 29
         private set
     override fun save(): Int = saved.size.also { saved += saved.last() }
     override fun getSaveCount(): Int = saved.size
@@ -48,13 +54,49 @@ internal class NativeDecorationBoundsCanvas : Canvas() {
     override fun drawRect(rect: RectF, paint: Paint) = drawRect(rect.left, rect.top, rect.right, rect.bottom, paint)
     override fun drawRect(rect: Rect, paint: Paint) = drawRect(rect.left.toFloat(), rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat(), paint)
     override fun drawTextRun(text: CharArray, index: Int, count: Int, contextIndex: Int,
-        contextCount: Int, x: Float, y: Float, isRtl: Boolean, paint: Paint) = Unit
+        contextCount: Int, x: Float, y: Float, isRtl: Boolean, paint: Paint) {
+        if (textBoundsComplete) observeRun(text.copyOfRange(contextIndex, contextIndex + contextCount),
+            index - contextIndex, index - contextIndex + count, x, y, isRtl, paint)
+    }
     override fun drawTextRun(text: CharSequence, start: Int, end: Int, contextStart: Int,
-        contextEnd: Int, x: Float, y: Float, isRtl: Boolean, paint: Paint) = Unit
-    override fun drawText(text: CharArray, index: Int, count: Int, x: Float, y: Float, paint: Paint) = Unit
-    override fun drawText(text: String, x: Float, y: Float, paint: Paint) = Unit
-    override fun drawText(text: String, start: Int, end: Int, x: Float, y: Float, paint: Paint) = Unit
-    override fun drawText(text: CharSequence, start: Int, end: Int, x: Float, y: Float, paint: Paint) = Unit
+        contextEnd: Int, x: Float, y: Float, isRtl: Boolean, paint: Paint) {
+        if (textBoundsComplete) observeRun(CharArray(contextEnd - contextStart) { text[contextStart + it] },
+            start - contextStart, end - contextStart, x, y, isRtl, paint)
+    }
+    // NativeLinePainter's Spanned facade dispatches through TextLine.drawTextRun. An
+    // unexpected fast path must retain the old conservative bounds, never lose its ink.
+    override fun drawText(text: CharArray, index: Int, count: Int, x: Float, y: Float, paint: Paint) { textBoundsComplete = false }
+    override fun drawText(text: String, x: Float, y: Float, paint: Paint) { textBoundsComplete = false }
+    override fun drawText(text: String, start: Int, end: Int, x: Float, y: Float, paint: Paint) { textBoundsComplete = false }
+    override fun drawText(text: CharSequence, start: Int, end: Int, x: Float, y: Float, paint: Paint) { textBoundsComplete = false }
+
+    private fun observeRun(context: CharArray, start: Int, end: Int, x: Float, y: Float,
+        isRtl: Boolean, paint: Paint) {
+        if (Build.VERSION.SDK_INT < 29) { textBoundsComplete = false; return }
+        if (start == end) return
+        if (paint.textAlign != Paint.Align.LEFT || paint.style != Paint.Style.FILL ||
+            paint.shadowLayerRadius != 0f || paint.startHyphenEdit != 0 || paint.endHyphenEdit != 0) {
+            textBoundsComplete = false; return
+        }
+        // Canvas and MeasuredText use the same native LayoutSplitter on this exact
+        // context/range/direction and resolved Paint. Never substitute paragraph context
+        // at a soft wrap, or derive the draw origin from rounded Layout advances.
+        val measured = MeasuredText.Builder(context).appendStyleRun(paint, context.size, isRtl).build()
+        val rect = Rect()
+        measured.getBounds(start, end, rect)
+        if (rect.isEmpty) return
+        // Native line-edge tracking edits move glyphs by at most two half-spacings.
+        // Keep that bounded envelope without depending on private Paint run flags.
+        val tracking = kotlin.math.abs(paint.letterSpacing.toDouble() * paint.textSize * paint.textScaleX)
+        val shift = saved.last()
+        val values = listOf(x.toDouble() + shift.x + rect.left - tracking,
+            y.toDouble() + shift.y + rect.top, x.toDouble() + shift.x + rect.right + tracking,
+            y.toDouble() + shift.y + rect.bottom)
+        if (values.any { !it.isFinite() || kotlin.math.abs(it) > Int.MAX_VALUE / 4.0 })
+            throw UnsupportedFloatLayout("Native text run exceeds the coordinate range")
+        textBounds = enclosingBounds(textBounds, NativeFloatBounds(values[0].toFloat(), values[1].toFloat(),
+            values[2].toFloat(), values[3].toFloat()))
+    }
 
     private fun unsupported(): Nothing = throw UnsupportedFloatLayout("Native decoration observation received an unowned transform")
     override fun scale(sx: Float, sy: Float) = unsupported()
