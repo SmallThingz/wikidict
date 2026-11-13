@@ -17,6 +17,7 @@ const max_records: u64 = 1_000_000;
 const Mapped = struct {
     bytes: []align(std.heap.page_size_min) const u8,
     fn open(io: Io, path: []const u8, max_size: ?u64) !Mapped {
+        if (comptime @import("builtin").is_test) TemplateSource.TestCounters.value.mapped_open_calls += 1;
         var file = try Io.Dir.cwd().openFile(io, path, .{});
         defer file.close(io);
         const size = (try file.stat(io)).size;
@@ -32,6 +33,10 @@ const Mapped = struct {
 };
 
 fn hash(bytes: []const u8) [32]u8 {
+    if (comptime @import("builtin").is_test) {
+        TemplateSource.TestCounters.value.hash_calls += 1;
+        TemplateSource.TestCounters.value.hashed_bytes += bytes.len;
+    }
     var digest: [32]u8 = undefined;
     Sha256.hash(bytes, &digest, .{});
     return digest;
@@ -43,6 +48,13 @@ fn recordAt(bytes: []const u8, index: usize) []const u8 {
 }
 
 pub const TemplateSource = struct {
+    // Test-only observation of the existing mmap and checksum operations.
+    pub const TestCounters = if (@import("builtin").is_test) struct {
+        pub const Counts = struct { mapped_open_calls: usize = 0, hash_calls: usize = 0, hashed_bytes: usize = 0 };
+        pub threadlocal var value: Counts = .{};
+        pub fn reset() void { value = .{}; }
+    } else struct {};
+
     index: Mapped,
     data: Mapped,
     record_count: usize,

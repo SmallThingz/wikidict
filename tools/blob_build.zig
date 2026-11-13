@@ -1522,12 +1522,127 @@ const LanguageTemplateRows = struct {
     reuses: u64 = 0,
     phase_wall_ns: [3]i128 = @splat(0),
     phase_cpu_ns: [3]i128 = @splat(0),
+    template_session: ?TemplateSession = null,
+    template_opens: u64 = 0,
+    template_reuses: u64 = 0,
 
     fn deinit(self: *LanguageTemplateRows) void {
+        self.clearTemplates();
         self.entries.deinit(self.a);
         if (self.index) |*index| index.deinit();
         if (self.file) |file| file.close(self.io);
         if (self.path) |path| self.a.free(path);
+    }
+
+    // Only a successful, fully validated sidecar is shared. Its mappings and
+    // held descriptors live with this row view; loaders borrow them per demand.
+    const TemplateSession = struct {
+        const Stamp = struct {
+            device_major: u32, device_minor: u32, inode: u64, mode: u16,
+            size: u64, mtime_ns: i128, ctime_ns: i128,
+        };
+        const Files = struct {
+            paths: [2]?[]u8 = .{ null, null },
+            handles: [2]?std.Io.File = .{ null, null },
+            stamps: [2]?Stamp = .{ null, null },
+
+            fn stamp(file: std.Io.File) !Stamp {
+                const linux = std.os.linux;
+                var value: linux.Statx = undefined;
+                if (linux.statx(file.handle, "", linux.AT.EMPTY_PATH, linux.STATX.BASIC_STATS, &value) != 0 or
+                    !value.mask.INO or !value.mask.SIZE or !value.mask.MTIME or !value.mask.CTIME or
+                    !value.mask.TYPE or !value.mask.MODE)
+                    return error.SourceStatFailed;
+                return .{ .device_major = value.dev_major, .device_minor = value.dev_minor,
+                    .inode = value.ino, .mode = value.mode, .size = value.size,
+                    .mtime_ns = @as(i128, value.mtime.sec) * std.time.ns_per_s + value.mtime.nsec,
+                    .ctime_ns = @as(i128, value.ctime.sec) * std.time.ns_per_s + value.ctime.nsec };
+            }
+
+            fn open(io: std.Io, a: std.mem.Allocator, root: []const u8) !Files {
+                var out: Files = .{};
+                errdefer out.deinit(io, a);
+                for ([_][]const u8{ "template-source.idx", "template-source.bin" }, 0..) |name, i| {
+                    out.paths[i] = try std.fs.path.join(a, &.{ root, name });
+                    out.handles[i] = std.Io.Dir.cwd().openFile(io, out.paths[i].?, .{}) catch |err| switch (err) {
+                        error.FileNotFound => null,
+                        else => return err,
+                    };
+                    if (out.handles[i]) |file| out.stamps[i] = try stamp(file);
+                }
+                return out;
+            }
+
+            fn unchanged(self: *const Files, io: std.Io) bool {
+                for (self.paths, self.handles, self.stamps) |path, handle, before| {
+                    if (handle) |held| {
+                        const expected = before orelse return false;
+                        if (!std.meta.eql(expected, stamp(held) catch return false)) return false;
+                        const named = std.Io.Dir.cwd().openFile(io, path.?, .{}) catch return false;
+                        defer named.close(io);
+                        if (!std.meta.eql(expected, stamp(named) catch return false)) return false;
+                    } else {
+                        const named = std.Io.Dir.cwd().openFile(io, path.?, .{}) catch |err| switch (err) {
+                            error.FileNotFound => continue,
+                            else => return false,
+                        };
+                        named.close(io);
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            fn deinit(self: *Files, io: std.Io, a: std.mem.Allocator) void {
+                for (self.handles) |handle| if (handle) |file| file.close(io);
+                for (self.paths) |path| if (path) |value| a.free(value);
+                self.* = .{};
+            }
+        };
+        source: dump_source.TemplateSource,
+        files: Files,
+        captured_context: ?*CapturedWriterInputs,
+
+        fn deinit(self: *TemplateSession, io: std.Io, a: std.mem.Allocator) void {
+            self.source.deinit();
+            self.files.deinit(io, a);
+        }
+    };
+
+    fn clearTemplates(self: *LanguageTemplateRows) void {
+        if (self.template_session) |*session| session.deinit(self.io, self.a);
+        self.template_session = null;
+    }
+
+    fn templates(self: *LanguageTemplateRows, root: []const u8, namespaces: *const namespace_registry.Registry) !?*const dump_source.TemplateSource {
+        try self.requireContext(root, namespaces);
+        errdefer self.clearTemplates();
+        try self.check();
+        const index = self.index orelse return error.MissingPageIndex;
+        if (self.template_session) |*session| {
+            if (session.captured_context == captured_writer_inputs and session.files.unchanged(self.io)) {
+                if (captured_writer_inputs) |inputs| {
+                    for (session.files.paths, session.files.handles) |path, file|
+                        try inputs.mapped(path.?, file.?);
+                }
+                self.template_reuses += 1;
+                return &session.source;
+            }
+            // A changed path re-enters the ordinary loader, retaining its exact
+            // incomplete/checksum errors and allowing a new valid sidecar.
+            self.clearTemplates();
+        }
+        var files = try TemplateSession.Files.open(self.io, self.a, root);
+        var adopted = false;
+        defer if (!adopted) files.deinit(self.io, self.a);
+        self.template_opens += 1;
+        var source = (try openLanguageTemplateSource(self.io, self.a, root, index.bytes)) orelse return null;
+        errdefer source.deinit();
+        if (!files.unchanged(self.io)) return error.LanguageTemplateSourceChanged;
+        try self.check();
+        self.template_session = .{ .source = source, .files = files, .captured_context = captured_writer_inputs };
+        adopted = true;
+        return &self.template_session.?.source;
     }
 
     fn requireContext(self: *const LanguageTemplateRows, root: []const u8, namespaces: *const namespace_registry.Registry) !void {
@@ -1578,10 +1693,11 @@ const LanguageTemplateRows = struct {
     }
 
     fn report(self: *const LanguageTemplateRows) void {
-        diagnostics.printLine("language_template_rows scans={d} completed={d} parsed_rows={d} parsed_bytes={d} retained_rows={d} reuses={d} banner_wall_ns={d} category_wall_ns={d} equivalent_wall_ns={d} banner_cpu_ns={d} category_cpu_ns={d} equivalent_cpu_ns={d}\n", .{
+        diagnostics.printLine("language_template_rows scans={d} completed={d} parsed_rows={d} parsed_bytes={d} retained_rows={d} reuses={d} banner_wall_ns={d} category_wall_ns={d} equivalent_wall_ns={d} banner_cpu_ns={d} category_cpu_ns={d} equivalent_cpu_ns={d} template_source_opens={d} template_source_reuses={d}\n", .{
             self.scans, self.completed_scans, self.parsed_rows, self.parsed_bytes, self.entries.items.len, self.reuses,
             self.phase_wall_ns[0], self.phase_wall_ns[1], self.phase_wall_ns[2],
             self.phase_cpu_ns[0], self.phase_cpu_ns[1], self.phase_cpu_ns[2],
+            self.template_opens, self.template_reuses,
         });
     }
 
@@ -1642,8 +1758,7 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
     defer view.phaseEnd(0, phase_wall, phase_cpu);
     try view.requireContext(root, namespaces);
     var candidates = (try view.begin()) orelse return;
-    var templates: ?dump_source.TemplateSource = null;
-    defer if (templates) |*value| value.deinit();
+    var templates: ?*const dump_source.TemplateSource = null;
     var behavior: ?namespace_registry.behavior_switches.Registry = null;
     defer if (behavior) |*value| value.deinit();
     var nom_template_seen = false;
@@ -1678,7 +1793,7 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
         };
         if (!nom_section and !linked_heading and !fixed_linked_tail and !parenthetical_heading and !name_table and !registry.codes.contains(code)) continue;
         if (templates == null) {
-            templates = (try openLanguageTemplateSource(io, a, root, view.index.?.bytes)) orelse return;
+            templates = (try view.templates(root, namespaces)) orelse return;
             const behavior_path = try std.fs.path.join(a, &.{ root, "behavior-switches.tsv" }); defer a.free(behavior_path);
             const bytes = std.Io.Dir.cwd().readFileAlloc(io, behavior_path, a, .limited(1024 * 1024)) catch |err| switch (err) { error.FileNotFound => null, else => return err };
             defer if (bytes) |value| a.free(value);
@@ -1761,8 +1876,7 @@ fn loadSourceCategoryH1BannersWithRows(io: std.Io, a: std.mem.Allocator, root: [
     const f = formatter orelse return;
     const n = names orelse return;
     if (wrappers.items.len == 0) return;
-    var templates = (try openLanguageTemplateSource(io, a, root, view.index.?.bytes)) orelse return;
-    defer templates.deinit();
+    const templates = (try view.templates(root, ns)) orelse return;
     const Read = struct {
         fn decoded(alloc: std.mem.Allocator, source: *const dump_source.TemplateSource, role: Role) !?[]u8 {
             const raw = (try source.lookup(role.ordinal, role.row.page_id, role.row.revision_id)) orelse return error.MissingLanguageTemplateSource;
@@ -1770,10 +1884,10 @@ fn loadSourceCategoryH1BannersWithRows(io: std.Io, a: std.mem.Allocator, root: [
             return if (role.row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(alloc, raw) else try alloc.dupe(u8, raw);
         }
     };
-    const formatter_source = (try Read.decoded(a, &templates, f)) orelse return; defer a.free(formatter_source);
-    const name_source = (try Read.decoded(a, &templates, n)) orelse return; defer a.free(name_source);
+    const formatter_source = (try Read.decoded(a, templates, f)) orelse return; defer a.free(formatter_source);
+    const name_source = (try Read.decoded(a, templates, n)) orelse return; defer a.free(name_source);
     for (wrappers.items) |role| {
-        const wrapper = (try Read.decoded(a, &templates, role)) orelse continue; defer a.free(wrapper);
+        const wrapper = (try Read.decoded(a, templates, role)) orelse continue; defer a.free(wrapper);
         const title = ns.ofTitle(role.row.title);
         const code = title.text[1 .. title.text.len - 1];
         if (try source_language_banner.categoryH1ProofAlloc(a, wrapper, formatter_source, name_source, ns, registry, code)) |proof| {
@@ -1850,8 +1964,7 @@ fn loadSourceEquivalentLanguageTemplatesWithRows(io: std.Io, a: std.mem.Allocato
     defer view.phaseEnd(2, phase_wall, phase_cpu);
     try view.requireContext(root, namespaces);
     var candidates = (try view.begin()) orelse return;
-    var templates: ?dump_source.TemplateSource = null;
-    defer if (templates) |*value| value.deinit();
+    var templates: ?*const dump_source.TemplateSource = null;
     var rows: std.ArrayList(SourceEquivalentTemplate) = .empty; defer rows.deinit(a);
     var names: std.StringHashMapUnmanaged(usize) = .empty; defer names.deinit(a);
     while (try candidates.next()) |entry_row| {
@@ -1878,7 +1991,7 @@ fn loadSourceEquivalentLanguageTemplatesWithRows(io: std.Io, a: std.mem.Allocato
             if (!std.mem.eql(u8, before, trusted.code)) owner.value_ptr.* = null;
         }
         const wrapper = rows.items[terminal];
-        if (templates == null) templates = (try openLanguageTemplateSource(io, a, root, view.index.?.bytes)) orelse return;
+        if (templates == null) templates = (try view.templates(root, namespaces)) orelse return;
         const raw = (try templates.?.lookup(wrapper.ordinal, wrapper.row.page_id, wrapper.row.revision_id)) orelse return error.MissingLanguageTemplateSource;
         if (raw.len > 4096) continue;
         const decoded = if (wrapper.row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw) else null; defer if (decoded) |value| a.free(value);
@@ -1905,7 +2018,7 @@ fn loadSourceEquivalentLanguageTemplatesWithRows(io: std.Io, a: std.mem.Allocato
     // establishes the code-bearing declaration role. No label alias is added.
     if (names.get("basa")) |candidate| if (sourceEquivalentTerminal(rows.items, &names, namespaces, candidate)) |terminal| {
         const entry = rows.items[terminal];
-        if (templates == null) templates = (try openLanguageTemplateSource(io, a, root, view.index.?.bytes)) orelse return;
+        if (templates == null) templates = (try view.templates(root, namespaces)) orelse return;
         const raw = (try templates.?.lookup(entry.ordinal, entry.row.page_id, entry.row.revision_id)) orelse return error.MissingLanguageTemplateSource;
         if (raw.len <= 4096) {
             const decoded = if (entry.row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw) else null;
@@ -63472,4 +63585,208 @@ test "retained MG citation colon text keeps complete Writer body actions phases 
     try std.testing.expect(entry.media.len != 0);
     for ([_][]const u8{ "[[Target|<xlit:Word <span>x</span>>]]", "[https://example.test <xlit:Word <span>x</span>>]" }) |negative|
         try std.testing.expectError(error.UncompiledPresentation, doc.compileAlloc(a, "guard", .language, "Unclassified", "", negative, null));
+}
+
+const SharedTemplateSessionTest = struct {
+    fn writeSidecars(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
+        var writer = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer writer.deinit();
+        try writer.append(0, 6033, 27385, SourceEquivalentLanguageTest.wrapper);
+        try writer.append(1, 6034, 14091, SourceEquivalentLanguageTest.leaf);
+        try writer.append(4, 9001, 9001, SourceEquivalentLanguageTest.wrapper);
+        const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        defer a.free(path);
+        try writer.finish(path);
+    }
+};
+
+test "shared template source validates once across real language loaders with identical aliases" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try SourceEquivalentLanguageTest.install(io, a, root, .ordinary);
+    var ns = try namespace_registry.Registry.init(a, SourceEquivalentLanguageTest.namespaces); defer ns.deinit();
+    var before = language_registry.Registry.empty(a); defer before.deinit();
+    var after = language_registry.Registry.empty(a); defer after.deinit();
+    try before.addTsv(SourceEquivalentLanguageTest.registry);
+    try after.addTsv(SourceEquivalentLanguageTest.registry);
+    const Counter = dump_source.TemplateSource.TestCounters;
+    Counter.reset();
+    try loadSourceLanguageBanners(io, a, root, &ns, &before);
+    try loadSourceCategoryH1Banners(io, a, root, &ns, &before);
+    try loadSourceEquivalentLanguageTemplates(io, a, root, &ns, &before);
+    const independent = Counter.value;
+    Counter.reset();
+    {
+        var view: LanguageTemplateRows = .{ .io = io, .a = a, .root = root, .namespaces = &ns };
+        defer view.deinit();
+        try loadSourceLanguageBannersWithRows(io, a, root, &ns, &after, &view);
+        try loadSourceCategoryH1BannersWithRows(io, a, root, &ns, &after, &view);
+        try loadSourceEquivalentLanguageTemplatesWithRows(io, a, root, &ns, &after, &view);
+        try view.check();
+        try std.testing.expectEqual(@as(u64, 1), view.template_opens);
+        try std.testing.expectEqual(@as(u64, 1), view.template_reuses);
+    }
+    const shared = Counter.value;
+    try std.testing.expectEqual(@as(usize, 4), independent.mapped_open_calls);
+    try std.testing.expectEqual(@as(usize, 6), independent.hash_calls);
+    try std.testing.expectEqual(@as(usize, 2), shared.mapped_open_calls);
+    try std.testing.expectEqual(@as(usize, 3), shared.hash_calls);
+    try std.testing.expectEqual(shared.hashed_bytes * 2, independent.hashed_bytes);
+    // Registry output remains owned after both the sidecar and row mappings die.
+    for ([_][]const u8{ "mad", "Madura", "madura", "Madhurâ", "Bhâsa Madhurâ", "French", "English", "Unrelated" }) |name| {
+        try std.testing.expectEqualDeep(if (before.resolve(name)) |v| v.code else null, if (after.resolve(name)) |v| v.code else null);
+        try std.testing.expectEqualDeep(if (before.resolveTrusted(name)) |v| v.code else null, if (after.resolveTrusted(name)) |v| v.code else null);
+    }
+    try std.testing.expectEqualStrings("mad", after.resolveTrusted("Madura").?.code);
+    diagnostics.printLine("template_source_sharing independent_payload_map_opens={d} independent_hashes={d} independent_bytes={d} shared_payload_map_opens={d} shared_hashes={d} shared_bytes={d}\n", .{
+        independent.mapped_open_calls, independent.hash_calls, independent.hashed_bytes,
+        shared.mapped_open_calls, shared.hash_calls, shared.hashed_bytes,
+    });
+}
+
+test "shared template source revalidates changed bytes inode mode and removed members" {
+    const Change = enum { content_restored_mtime, replacement, mode, remove_index, remove_data };
+    for (std.meta.tags(Change)) |change| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        try SourceEquivalentLanguageTest.install(io, a, root, .ordinary);
+        var ns = try namespace_registry.Registry.init(a, SourceEquivalentLanguageTest.namespaces); defer ns.deinit();
+        var view: LanguageTemplateRows = .{ .io = io, .a = a, .root = root, .namespaces = &ns }; defer view.deinit();
+        _ = try view.begin();
+        const source = (try view.templates(root, &ns)).?;
+        try std.testing.expectEqualStrings(SourceEquivalentLanguageTest.leaf, (try source.lookup(1, 6034, 14091)).?);
+        const saved = view.template_session.?.files.stamps[1].?;
+        const path = try std.fs.path.join(a, &.{ root, if (change == .remove_index) "template-source.idx" else "template-source.bin" });
+        const original = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(128 * 1024));
+        switch (change) {
+            .content_restored_mtime => {
+                const file = try std.Io.Dir.cwd().openFile(io, path, .{}); defer file.close(io);
+                const old_time = (try file.stat(io)).mtime;
+                const changed = try a.dupe(u8, original); changed[0] ^= 1;
+                try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = changed });
+                try file.setTimestamps(io, .{ .modify_timestamp = .{ .new = old_time } });
+                const current = try LanguageTemplateRows.TemplateSession.Files.stamp(file);
+                try std.testing.expectEqual(saved.size, current.size);
+                try std.testing.expectEqual(saved.mtime_ns, current.mtime_ns);
+                try std.testing.expect(saved.ctime_ns != current.ctime_ns);
+            },
+            .replacement => {
+                const replacement = try std.fs.path.join(a, &.{ root, "replacement.bin" });
+                try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = replacement, .data = original });
+                try std.Io.Dir.cwd().rename(replacement, std.Io.Dir.cwd(), path, io);
+            },
+            .mode => {
+                const file = try std.Io.Dir.cwd().openFile(io, path, .{}); defer file.close(io);
+                try file.setPermissions(io, .fromMode(if ((saved.mode & 0o777) == 0o600) 0o644 else 0o600));
+            },
+            .remove_index, .remove_data => try std.Io.Dir.cwd().deleteFile(io, path),
+        }
+        if (change == .content_restored_mtime) {
+            try std.testing.expectError(error.TemplateSourceChecksumMismatch, view.templates(root, &ns));
+            try std.testing.expect(view.template_session == null);
+        } else if (change == .remove_index or change == .remove_data) {
+            try std.testing.expectError(error.TemplateSourceIncomplete, view.templates(root, &ns));
+            try std.testing.expect(view.template_session == null);
+        } else {
+            const fresh = (try view.templates(root, &ns)).?;
+            try std.testing.expectEqualStrings(SourceEquivalentLanguageTest.leaf, (try fresh.lookup(1, 6034, 14091)).?);
+            try std.testing.expectEqual(@as(u64, 2), view.template_opens);
+            try std.testing.expectEqual(@as(u64, 0), view.template_reuses);
+        }
+    }
+}
+
+test "shared template source does not cache absence failures or a later creation" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try SourceEquivalentLanguageTest.install(io, a, root, .ordinary);
+    var ns = try namespace_registry.Registry.init(a, SourceEquivalentLanguageTest.namespaces); defer ns.deinit();
+    var view: LanguageTemplateRows = .{ .io = io, .a = a, .root = root, .namespaces = &ns }; defer view.deinit();
+    _ = try view.begin();
+    for ([_][]const u8{ "template-source.idx", "template-source.bin" }) |name|
+        try std.Io.Dir.cwd().deleteFile(io, try std.fs.path.join(a, &.{ root, name }));
+    for (0..2) |_| try std.testing.expect((try view.templates(root, &ns)) == null);
+    try std.testing.expectEqual(@as(u64, 2), view.template_opens);
+    try std.testing.expect(view.template_session == null);
+    try SharedTemplateSessionTest.writeSidecars(io, a, root);
+    const source = (try view.templates(root, &ns)).?;
+    try std.testing.expectEqualStrings(SourceEquivalentLanguageTest.leaf, (try source.lookup(1, 6034, 14091)).?);
+    const data_path = try std.fs.path.join(a, &.{ root, "template-source.bin" });
+    try std.Io.Dir.cwd().deleteFile(io, data_path);
+    try std.testing.expectError(error.TemplateSourceIncomplete, view.templates(root, &ns));
+    try std.testing.expect(view.template_session == null);
+    try SharedTemplateSessionTest.writeSidecars(io, a, root);
+    try std.testing.expect((try view.templates(root, &ns)) != null);
+    try std.testing.expectEqual(@as(u64, 5), view.template_opens);
+    try std.testing.expectEqual(@as(u64, 0), view.template_reuses);
+}
+
+test "shared template source is confined to live index namespace and captured input owner" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    try SourceEquivalentLanguageTest.install(io, a, root, .ordinary);
+    var ns = try namespace_registry.Registry.init(a, SourceEquivalentLanguageTest.namespaces); defer ns.deinit();
+    var foreign = try namespace_registry.Registry.init(a, SourceEquivalentLanguageTest.namespaces); defer foreign.deinit();
+    var view: LanguageTemplateRows = .{ .io = io, .a = a, .root = root, .namespaces = &ns }; defer view.deinit();
+    _ = try view.begin();
+    _ = (try view.templates(root, &ns)).?;
+    try std.testing.expectError(error.LanguageTemplateIndexContextMismatch, view.templates(root, &foreign));
+    try std.testing.expectError(error.LanguageTemplateIndexContextMismatch, view.templates("/foreign-root", &ns));
+    var inputs: CapturedWriterInputs = .{ .io = io, .a = a }; defer inputs.deinit();
+    const previous = captured_writer_inputs; captured_writer_inputs = &inputs; defer captured_writer_inputs = previous;
+    _ = (try view.templates(root, &ns)).?;
+    try std.testing.expectEqual(@as(u64, 2), view.template_opens);
+    const idx_path = try std.fs.path.join(a, &.{ root, "template-source.idx" });
+    const bin_path = try std.fs.path.join(a, &.{ root, "template-source.bin" });
+    try std.testing.expect(inputs.records.items[inputs.find(idx_path).?].sha256 != null);
+    try std.testing.expect(inputs.records.items[inputs.find(bin_path).?].sha256 != null);
+    _ = (try view.templates(root, &ns)).?;
+    try std.testing.expectEqual(@as(u64, 1), view.template_reuses);
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    const index_bytes = try std.Io.Dir.cwd().readFileAlloc(io, index_path, a, .limited(128 * 1024));
+    const replacement = try std.fs.path.join(a, &.{ root, "index-replacement.tsv" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = replacement, .data = index_bytes });
+    try std.Io.Dir.cwd().rename(replacement, std.Io.Dir.cwd(), index_path, io);
+    try std.testing.expectError(error.LanguageTemplateIndexChanged, view.templates(root, &ns));
+    try std.testing.expect(view.template_session == null);
+}
+
+test "shared template source releases every failed allocation and new invocation validates again" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try SourceEquivalentLanguageTest.install(io, a, root, .ordinary);
+    var ns = try namespace_registry.Registry.init(a, SourceEquivalentLanguageTest.namespaces); defer ns.deinit();
+    const Case = struct {
+        fn run(alloc: std.mem.Allocator, path: []const u8, namespaces: *const namespace_registry.Registry) !void {
+            var view: LanguageTemplateRows = .{ .io = std.testing.io, .a = alloc, .root = path, .namespaces = namespaces };
+            defer view.deinit();
+            _ = try view.begin();
+            const first = (try view.templates(path, namespaces)).?;
+            const again = (try view.templates(path, namespaces)).?;
+            try std.testing.expect(first == again);
+            try std.testing.expectEqualStrings(SourceEquivalentLanguageTest.leaf, (try again.lookup(1, 6034, 14091)).?);
+            try std.testing.expectEqual(@as(u64, 1), view.template_opens);
+            try std.testing.expectEqual(@as(u64, 1), view.template_reuses);
+        }
+    };
+    const Counter = dump_source.TemplateSource.TestCounters;
+    Counter.reset();
+    try Case.run(std.testing.allocator, root, &ns);
+    const one = Counter.value;
+    try Case.run(std.testing.allocator, root, &ns);
+    try std.testing.expectEqual(one.hash_calls * 2, Counter.value.hash_calls);
+    try std.testing.expectEqual(one.hashed_bytes * 2, Counter.value.hashed_bytes);
+    var backing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(backing.allocator(), Case.run, .{ root, &ns });
+    try std.testing.expectEqual(backing.allocated_bytes, backing.freed_bytes);
 }

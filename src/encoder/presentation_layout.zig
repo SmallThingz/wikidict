@@ -114,6 +114,10 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     // p172588/r1880894 emits this exact H3 and language-qualified noun category.
     // Lexical kind only: retain the independently established record owner.
     if (std.mem.eql(u8, title, "Sostantivo")) return "Noun";
+    // IT -nome- p1819/r1531988 selects nome proprio / nomi propri;
+    // Sezione voce p172588/r1880894 emits this exact linked POS heading.
+    // Lexical kind only: keep the independently supplied or unknown owner.
+    if (std.mem.eql(u8, title, "Nome proprio")) return "Proper noun";
     // Retained ουσιαστικό p254472/r3274141 invokes PartOfSpeech; its
     // selected pos table p804996/r7358611 names this exact noun heading.
     if (std.mem.eql(u8, title, "Ουσιαστικό")) return "Noun";
@@ -11150,4 +11154,103 @@ test "actual Fuhe Reader meaning organization preserves every body action style 
     var restored = decoded; restored.entry.organization = before.organization;
     try std.testing.expectEqualDeep(before, restored.entry);
     try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = before }), try encoder.presentation_codec.encodeAlloc(a, restored));
+}
+
+
+test "Italian proper noun label preserves exact spelling and independent ownership" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("Proper noun", partOfSpeech("Nome proprio").?);
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Sostantivo").?);
+    try std.testing.expectEqualStrings("Proper noun", partOfSpeech("Proper noun").?);
+    for ([_][]const u8{ "nome proprio", "Nome Proprio", "Nomi propri", "Nome proprio ", " Nome proprio", "Nome proprio 2", "Nome proprio?" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const definitions = [_]wiki.Block{.{ .kind = .definition, .list_path = "#" }};
+    const ambiguous = [_]Section{.{ .title = "Nome proprio", .level = 2, .blocks = &definitions }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &ambiguous)).lexemes.len);
+    const sections = [_]Section{
+        .{ .title = "First authored owner", .level = 2 },
+        .{ .title = "Nome proprio", .level = 3, .blocks = &definitions },
+        .{ .title = "Later authored owner", .level = 2 },
+        .{ .title = "Nome proprio", .level = 3, .blocks = &definitions },
+        .{ .title = "Nomi propri", .level = 3, .blocks = &definitions },
+    };
+    const layout = try build(a, &sections);
+    try std.testing.expectEqual(@as(usize, 2), layout.lexemes.len);
+    for (layout.lexemes, [_][]const u8{ "First authored owner", "Later authored owner" }, [_]usize{ 1, 3 }) |lexeme, owner, section| {
+        try std.testing.expectEqualStrings(owner, lexeme.language);
+        try std.testing.expectEqualStrings("Proper noun", lexeme.kind);
+        try std.testing.expectEqual(section, lexeme.section);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        try std.testing.expectEqual(@as(usize, 0), lexeme.definitions[0].block);
+    }
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2, 4 }, layout.other_sections);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const literal = try renderer.renderBody("<nowiki>===Nome proprio===\n# literal</nowiki>");
+    const protected = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = literal }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &protected)).lexemes.len);
+}
+
+test "actual Italian Pangea proper noun organization preserves complete Entry and Stored codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const codec = encoder.presentation_codec;
+    const source = @embedFile("testdata/it-pangea-organization/pangea-it.json");
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    try std.testing.expectEqualStrings("e0bd7c613e69677b4ed898bc0745682bd1371441828471363d2465b2861c605b", &std.fmt.bytesToHex(digest, .lower));
+    const parsed = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, source, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+    const before = parsed.value.entries[0];
+    try std.testing.expectEqualStrings("Pangea", before.title);
+    try std.testing.expectEqualStrings("italiano", before.language.?);
+    try std.testing.expectEqualStrings("it", before.language_code);
+    try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3, 4 }, before.organization.other_sections);
+    try std.testing.expectEqual(@as(usize, 5), before.sections.len);
+    const sections = try RetainedNounSemanticProjection.sections(a, before.sections);
+    try std.testing.expectEqualStrings("Nome proprio", sections[1].title);
+    try std.testing.expectEqual(@as(u8, 3), sections[1].level);
+    try std.testing.expectEqual(@as(usize, 3), sections[1].blocks.len);
+    try std.testing.expectEqual(wiki.Kind.definition, sections[1].blocks[2].kind);
+    try std.testing.expectEqualStrings("#", sections[1].blocks[2].list_path);
+    try std.testing.expectEqual(T.BlockKind.heading, before.sections[1].blocks[0].kind);
+    var proper_links: usize = 0;
+    for (before.sections[1].blocks[0].spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.text, "Nome proprio") and std.mem.eql(u8, span.target, "nome proprio") and span.italic) proper_links += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), proper_links);
+    try std.testing.expectEqual(@as(usize, 0), before.preamble_spans.len);
+    try std.testing.expect(before.redirect == null and before.alias == null);
+    const projected_bytes = try codec.encodeBuildAlloc(a, try RetainedNounSemanticProjection.spans(a, before.display_title), sections,
+        before.organization, before.references, before.media);
+    const projected = try codec.decodeAlloc(a, projected_bytes, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+    try std.testing.expectEqualDeep(T.Stored{ .entry = before }, projected);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = before }), projected_bytes);
+    const layout = try buildOwned(a, sections, before.language.?);
+    const typed = try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{});
+    const expected: T.Layout = .{ .lexemes = &.{.{ .language = "italiano", .kind = "Proper noun", .section = 1,
+        .definitions = &.{.{ .block = 2 }}, .introduction = &.{ 0, 1 }, .other_blocks = &.{} }}, .other_sections = &.{ 0, 2, 3, 4 } };
+    try std.testing.expectEqualDeep(expected, typed.value);
+    var after: T.Stored = .{ .entry = before };
+    after.entry.organization = typed.value;
+    const encoded = try codec.encodeAlloc(a, after);
+    const decoded = try codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+    try std.testing.expectEqualDeep(after, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    var restored = decoded;
+    restored.entry.organization = before.organization;
+    try std.testing.expectEqualDeep(before, restored.entry);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = before }), try codec.encodeAlloc(a, restored));
+    const independent = try buildOwned(a, sections, "Independent supplied owner");
+    try std.testing.expectEqual(@as(usize, 1), independent.lexemes.len);
+    try std.testing.expectEqualStrings("Independent supplied owner", independent.lexemes[0].language);
+    const unresolved = try buildUnclassified(a, sections);
+    try std.testing.expectEqual(@as(usize, 1), unresolved.lexemes.len);
+    try std.testing.expectEqualStrings("", unresolved.lexemes[0].language);
 }
