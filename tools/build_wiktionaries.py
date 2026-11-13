@@ -3782,6 +3782,9 @@ def phase_event(edition, date, name, event, **fields):
 @contextmanager
 def build_phase(edition, date, name, **fields):
     started=time.monotonic()
+    # Inclusive CPU of this process (all its threads), excluding child processes.
+    try: cpu_started=time.process_time()
+    except Exception: cpu_started=None
     phase_event(edition,date,name,'start',**fields)
     result=dict(fields)
     status='failure'
@@ -3789,7 +3792,11 @@ def build_phase(edition, date, name, **fields):
         yield result
         status='success'
     finally:
-        phase_event(edition,date,name,'end',status=status,seconds=round(time.monotonic()-started,3),**result)
+        cpu_fields={}
+        if cpu_started is not None:
+            try: cpu_fields['self_cpu_seconds']=round(time.process_time()-cpu_started,6)
+            except Exception: pass  # Optional timing cannot replace the stage result.
+        phase_event(edition,date,name,'end',status=status,seconds=round(time.monotonic()-started,3),**(result|cpu_fields))
 
 
 def timed_run(command, edition, date, phase, *, native_working_directory=None, **fields):

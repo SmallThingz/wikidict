@@ -890,7 +890,7 @@ class FailedShardPayloadCleanupTests(unittest.TestCase):
                 self.assertEqual((item/'shard-diagnostics/fallback-pages.jsonl').read_bytes(),b'exact fallback')
                 self.assertEqual(json.loads((item/'payload-cleanup.json').read_text())['removed'],[])
 
-    def test_nonpositive_final_failure_archives_only_and_preserves_error_and_retries(self):
+    def test_nonpositive_failure_preserves_error_without_unproven_retry(self):
         for returncode in (-15,0):
             with self.subTest(returncode=returncode),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp); shard=root/'00000000'; calls=[]; errors=[]
@@ -901,20 +901,26 @@ class FailedShardPayloadCleanupTests(unittest.TestCase):
                     (shard/'fallback-pages.jsonl').write_bytes(b'exact fallback')
                     error=subprocess.CalledProcessError(returncode,argv,output=b'original stdout',stderr=b'original stderr')
                     errors.append(error); raise error
-                with patch.object(b,'timed_run',side_effect=run):
+                with patch.object(b,'timed_run',side_effect=run),patch.object(b,'phase_event',wraps=b.phase_event) as phases:
                     with self.assertRaises(subprocess.CalledProcessError) as failed:
                         b.build_shard_with_retries(fixture_blob_tool(root),['dump',str(shard)],shard,
                             root/'failures','testwiktionary','20261001',0,2,lambda:None,
                             lambda:self.fail('no validation after command failure'))
-                self.assertIs(failed.exception,errors[-1]); self.assertEqual(len(calls),b.SHARD_RETRIES)
+                self.assertIs(failed.exception,errors[0]); self.assertEqual(len(calls),1); self.assertEqual(len(errors),1)
                 self.assertEqual(failed.exception.output,b'original stdout'); self.assertEqual(failed.exception.stderr,b'original stderr')
                 self.assertEqual((shard/'.spool/lang-00.tmp').read_bytes(),b'generated spool')
                 self.assertEqual((shard/'languages'/('a'*64+'.wikblb')).read_bytes(),b'generated language')
-                evidence=list((root/'failures').iterdir()); self.assertEqual(len(evidence),b.SHARD_RETRIES)
+                evidence=list((root/'failures').iterdir()); self.assertEqual(len(evidence),1)
                 for item in evidence:
                     self.assertEqual((item/'shard-diagnostics/fallback-pages.jsonl').read_bytes(),b'exact fallback')
                     receipt=json.loads((item/'payload-cleanup.json').read_text())
                     self.assertEqual(receipt['removed'],[]); self.assertEqual(receipt['status'],'diagnostics-retained')
+
+                suppressed=[call for call in phases.call_args_list if call.args[3]=='retry_suppressed']
+                self.assertEqual(len(suppressed),1)
+                self.assertEqual(suppressed[0].kwargs['reason'],'no-positive-transient-evidence')
+                self.assertEqual(suppressed[0].kwargs['attempt'],1)
+                self.assertEqual(suppressed[0].kwargs['returncode'],returncode)
 
     def test_matching_failure_keeps_primary_error_and_archives_before_payload_removal(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1177,7 +1183,7 @@ class AffinityAdmissionTests(unittest.TestCase):
                 watchdog.assert_not_called();cgroup.assert_not_called();main.assert_not_called()
 
     def test_affinity_cli_keeps_existing_watchdog_lock_deadline_and_disk_envelope(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             root=Path(tmp)
             def supervised(**kwargs):
                 self.assertEqual({'wall_seconds':123,'disk_paths':(root/'.tmp',root/'data/dictionaries')},kwargs)
@@ -1655,7 +1661,7 @@ class BuildTest(PreparedToolsFixture):
             })
 
     def test_watchdog_mode_is_explicit_locked_and_deadline_bounded(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             root=Path(tmp)
             def supervised(**kwargs):
                 self.assertEqual(kwargs,{'wall_seconds':7200,'disk_paths':(root/'.tmp',root/'data/dictionaries')})
@@ -1669,7 +1675,7 @@ class BuildTest(PreparedToolsFixture):
             strict.assert_not_called();main.assert_not_called()
 
     def test_eight_expansion_workers_request_eight_cpu_watchdog(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             with patch.object(b,'PROJECT',Path(tmp)),patch.object(sys,'argv',[
                 'build_wiktionaries.py','--resource-mode=watchdog','--expansion-workers=8']), \
                  patch.object(limits,'inside_watchdog',return_value=False), \
@@ -1952,7 +1958,7 @@ class BuildTest(PreparedToolsFixture):
             main.assert_not_called();watchdog.assert_not_called()
 
     def test_default_mode_never_falls_back_to_watchdog(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             with patch.object(b,'PROJECT',Path(tmp)),patch.object(sys,'argv',['build_wiktionaries.py']),patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'inside_envelope',return_value=False),patch.object(limits,'supervise',side_effect=limits.ContainmentUnavailable('cgroup required')),patch.object(limits,'supervise_watchdog') as watchdog,patch.object(b,'main') as main:
                 with self.assertRaisesRegex(SystemExit,'cgroup required'):b.cli()
                 watchdog.assert_not_called();main.assert_not_called()
@@ -2138,7 +2144,8 @@ class BuildTest(PreparedToolsFixture):
         command=['zig','build','build-blobs','--','dump','shard']
         output=io.StringIO()
         with patch.object(b,'run_checked') as run, patch('sys.stdout',output), \
-             patch.object(b.time,'monotonic',side_effect=[10.0,12.5]):
+             patch.object(b.time,'monotonic',side_effect=[10.0,12.5]), \
+             patch.object(b.time,'process_time',side_effect=[3.0,3.625]):
             b.timed_run(command,'enwiktionary','20260901','shard_build',
                         start_page=100000,pages=100000,attempt=2)
         run.assert_called_once_with(command)
@@ -2150,6 +2157,7 @@ class BuildTest(PreparedToolsFixture):
         self.assertEqual(events[0]['attempt'],2)
         self.assertEqual(events[1]['status'],'success')
         self.assertEqual(events[1]['seconds'],2.5)
+        self.assertEqual(events[1]['self_cpu_seconds'],.625)
 
     def test_timed_native_command_preserves_failure_even_if_logging_breaks(self):
         command=['zig','build','build-blobs','--','dump','shard']
@@ -2168,6 +2176,46 @@ class BuildTest(PreparedToolsFixture):
                 b.timed_run(command,'enwiktionary','20260901','shard_build',attempt=1)
         self.assertIs(raised.exception,failure)
         run.assert_called_once_with(command)
+
+    def test_phase_self_cpu_is_inclusive_and_preserved_by_controller(self):
+        import corpus_controller as controller
+        output=io.StringIO()
+        with patch('sys.stdout',output), \
+             patch.object(b.time,'monotonic',side_effect=[10,11,13,17]), \
+             patch.object(b.time,'process_time',side_effect=[1,2,3,5]):
+            with b.build_phase('testwiktionary','20261001','edition_build') as outer:
+                outer['pages']=7
+                with b.build_phase('testwiktionary','20261001','auxiliary_validation'):
+                    pass
+        events=[json.loads(line.removeprefix('BUILD_PHASE ')) for line in output.getvalue().splitlines()]
+        ends=[event for event in events if event['event']=='end']
+        self.assertEqual([(row['phase'],row['seconds'],row['self_cpu_seconds']) for row in ends],
+                         [('auxiliary_validation',2,1),('edition_build',7,4)])
+        self.assertEqual(outer,{'pages':7})
+        with tempfile.TemporaryDirectory() as tmp:
+            log=Path(tmp)/'build.log';log.write_text(output.getvalue())
+            self.assertEqual(controller.phase_evidence(log,'testwiktionary','20261001',strict=True)['end'],ends[-1])
+
+    def test_phase_self_cpu_clock_failure_preserves_success_and_original_failure(self):
+        for at_start in (False,True):
+            for fail in (False,True):
+                with self.subTest(at_start=at_start,fail=fail):
+                    output=io.StringIO();failure=ValueError('original stage failure')
+                    ticks=[OSError('CPU clock unavailable')] if at_start else [1,OSError('CPU clock unavailable')]
+                    with patch('sys.stdout',output),patch.object(b.time,'process_time',side_effect=ticks), \
+                         patch.object(b.time,'monotonic',side_effect=[10,12]):
+                        try:
+                            with b.build_phase('testwiktionary','20261001','auxiliary_validation'):
+                                if fail:raise failure
+                        except ValueError as caught:
+                            self.assertTrue(fail);self.assertIs(caught,failure)
+                        else:
+                            self.assertFalse(fail)
+                    events=[json.loads(line.removeprefix('BUILD_PHASE ')) for line in output.getvalue().splitlines()]
+                    self.assertEqual([row['event'] for row in events],['start','end'])
+                    self.assertEqual(events[-1]['status'],'failure' if fail else 'success')
+                    self.assertEqual(events[-1]['seconds'],2)
+                    self.assertNotIn('self_cpu_seconds',events[-1])
 
     def test_phase_logging_preserves_manifest_validation_errors(self):
         for build in (b.build,b.build_locked):
@@ -3079,7 +3127,7 @@ class BuildTest(PreparedToolsFixture):
             build.assert_called_once()
 
     def test_cli_reaches_supervisor_under_lock_without_host_memory_admission(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             root=Path(tmp)
             def supervised():
                 with self.assertRaises(limits.ContainmentUnavailable):
@@ -3201,7 +3249,7 @@ class BuildTest(PreparedToolsFixture):
             item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
             target=root/'output/testwiktionary/20260901';target.mkdir(parents=True)
             complete=target/'complete.json';complete.write_text(json.dumps({'edition':'testwiktionary','status':'built'})+'\n')
-            with patch.object(b,'run_checked') as run:
+            with patch.object(b,'PROJECT',root),patch.object(b,'run_checked') as run:
                 with self.assertRaisesRegex(ValueError,'rebuild in a new output directory'):
                     b.build([item],root,root/'output','zig',1)
             run.assert_not_called()
@@ -3215,7 +3263,7 @@ class BuildTest(PreparedToolsFixture):
             item=dict(wiki='testwiktionary',date='20260901',name=name,url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,size=len(data),sha1=hashlib.sha1(data).hexdigest())
             staging=root/'output/testwiktionary/20260901.building';staging.mkdir(parents=True)
             marker=staging/b.VERIFIED_MARKER;marker.write_text('verified\n')
-            with patch.object(b,'run_checked') as run:
+            with patch.object(b,'PROJECT',root),patch.object(b,'run_checked') as run:
                 with self.assertRaisesRegex(ValueError,'rebuild in a new output directory'):
                     b.build([item],root,root/'output','zig',1)
             run.assert_not_called()
@@ -4165,7 +4213,7 @@ class ExternalRawShardTests(PreparedToolsFixture):
                     self.assertTrue((root/'output/testwiktionary/20260901/complete.json').is_file())
 
     def test_cli_routes_optional_root_to_build_and_disk_watchdog(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             root=Path(tmp);raw=root/'other';output=root/'output'
             argv=['build_wiktionaries.py','--resource-mode=watchdog','--output',str(output),'--raw-shard-root',str(raw),'--compress-shards']
             with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv), \
@@ -4201,7 +4249,7 @@ class WatchdogMemoryLimitCliTests(unittest.TestCase):
 
     def test_outer_watchdog_forwards_exact_selected_bytes_and_keeps_unlimited_lock(self):
         for mib in [4096, 8192]:
-            with self.subTest(mib=mib), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(mib=mib), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
                 root=Path(tmp); output=root/'output'
                 def supervised(**kwargs):
                     self.assertEqual(dict(wall_seconds=7200,
@@ -4270,7 +4318,7 @@ class WatchdogMemoryLimitCliTests(unittest.TestCase):
 
 class WatchdogAddressSpaceCliTests(unittest.TestCase):
     def test_unlimited_parent_route_preserves_lock_and_resident_envelope(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             root=Path(tmp);output=root/'output';raw=root/'raw'
             def supervised(**kwargs):
                 self.assertEqual(kwargs,dict(wall_seconds=123,disk_paths=(root/'.tmp',output,raw),address_space_limit_bytes='unlimited'))
@@ -4289,7 +4337,7 @@ class WatchdogAddressSpaceCliTests(unittest.TestCase):
             watchdog.assert_called_once();cgroup.assert_not_called();main.assert_not_called()
 
     def test_omitted_and_explicit_default_preserve_existing_watchdog_call(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             root=Path(tmp)
             for option in ([],['--watchdog-address-space=default']):
                 with self.subTest(option=option),patch.object(b,'PROJECT',root), \
@@ -4596,7 +4644,7 @@ class LongBuildDeadlineTest(unittest.TestCase):
                 self.assertEqual(groups.call_args.kwargs['admission_wait_seconds'],seconds or limits.WATCHDOG_WALL_SECONDS)
 
     def test_explicit_long_deadline_keeps_watchdog_and_default_memory_envelope(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             with patch.object(b,'PROJECT',Path(tmp)),patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog','--build-timeout-seconds','14400']),patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
                 with self.assertRaises(SystemExit) as result:b.cli()
                 self.assertEqual(result.exception.code,0)
@@ -5432,7 +5480,7 @@ class ExplicitExtractionCacheTests(PreparedToolsFixture):
                 b.extraction_cache_args(link,staged)
 
     def test_cli_and_scheduler_forward_cache_without_adopting_output(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             root=Path(tmp);cache=root/'old-cache';cache.mkdir();output=root/'fresh-output'
             argv=['build_wiktionaries.py','--resource-mode=watchdog','--output',str(output),
                   '--extraction-cache-root',str(cache),'--downloads',str(root),'--threads','1','--jobs','1']
@@ -5496,7 +5544,7 @@ class ExplicitLlvmWorkerTests(PreparedToolsFixture):
             with self.assertRaises(ValueError):b.validate_affinity_workers(1,1,1,2)
 
     def test_llvm_override_cli_and_scheduler_forwarding(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             root=Path(tmp);argv=['build_wiktionaries.py','--resource-mode=watchdog','--cpu-admission=affinity','--downloads',str(root),'--output',str(root/'out'),'--threads','1','--jobs','1','--llvm-workers','2']
             write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
             with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=2),patch.object(b,'affinity_worker_budget',return_value=2),patch.object(b,'build_groups',return_value=[]) as groups:b.main()
@@ -5823,7 +5871,7 @@ class RetainedWorkspaceTests(unittest.TestCase):
             for name,data in (('build.zig','bound graph'),('build.zig.zon','bound package'),
                               ('tools/build_wiktionaries.py','bound builder')):
                 (source/name).write_text(data)
-            with patch.object(b,'PROJECT',source),patch.object(b,'__file__',str(source/'tools/build_wiktionaries.py')):
+            with contextlib.chdir(source), patch.object(b,'PROJECT',source),patch.object(b,'__file__',str(source/'tools/build_wiktionaries.py')):
                 yield workspace,source,self.identity(workspace)
 
     def test_workspace_binding_rejects_replacement_alias_and_wrong_source(self):
@@ -6156,7 +6204,17 @@ class BorrowedStagedInputTests(PreparedToolsFixture):
             with patch.object(b,'_build_locked',side_effect=fail):
                 with self.assertRaisesRegex(ValueError,'changed during build') as failed:
                     b.build_locked([item],root,root/'output','never-executed',staged_input_root=borrowed)
-            self.assertIs(failed.exception.__context__,original)
+            chain=[];seen=set();error=failed.exception
+            while error is not None:
+                self.assertNotIn(id(error),seen)
+                seen.add(id(error));chain.append(error)
+                self.assertFalse(error.__suppress_context__)
+                error=error.__context__
+            self.assertGreaterEqual(len(chain),2)
+            self.assertIs(chain[-1],original)
+            for postcheck in chain[:-1]:
+                self.assertIsInstance(postcheck,ValueError)
+                self.assertIn('changed during build',str(postcheck))
 
 
 class PresentationContinuationTests(PreparedToolsFixture):
@@ -9043,7 +9101,7 @@ class ContainedObservationGuardFallbackTests(unittest.TestCase):
                     outside=self.fixture.root/'outside-response.raw.json';outside.write_bytes(original)
                     response.unlink();response.symlink_to(outside)
                 try:
-                    with self.assertRaisesRegex(ValueError,'changed|symlink|regular'):
+                    with self.assertRaisesRegex(ValueError,'changed|symlink|regular|Unsafe Figure replay path'):
                         b.validated_figure_tuple(self.paths)
                 finally:
                     if response.is_symlink():response.unlink()
