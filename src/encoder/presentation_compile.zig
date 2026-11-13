@@ -4340,6 +4340,8 @@ const WikiTableTailProof = struct { source: MissingText, completed_close: ?usize
 const InlineSourceDomain = struct {
     source: []const u8,
     parent: ?*const InlineSourceDomain,
+    // Exact metadata retained by the ordinary inline source owner.
+    tracked: ?MissingText = null,
 };
 
 // Selected by the ordinary whole-page producer, never inferred by a fragment.
@@ -14554,11 +14556,65 @@ pub const Renderer = struct {
         return formattingAngleBodyPositionWithAbbreviation(input, at, false);
     }
     fn formattingAngleBodyPositionWithAbbreviation(input: []const u8, at: usize, preceding_abbreviation: bool) bool {
+        return formattingAngleBodyPositionWithTrackedSiblings(input, at, preceding_abbreviation, null);
+    }
+
+    // Position proof only: a preceding complete local-link conversion cannot
+    // open a formatting scope. Its original tracked bytes must prove that the
+    // prior_label child was neither missing, protected literal nor generated content.
+    // No flags, choices, HTML, nested targets or generalized brace skipping.
+    fn precedingPlainNestedLinkEnd(input: []const u8, start: usize, limit: usize, tracked: MissingText) ?usize {
+        if (start > limit or limit > input.len or limit - start < 9 or
+            !starts(input[start..limit], "-{[[") or tracked.unknown or tracked.lost_missing_range) return null;
+        const input_ptr = @intFromPtr(input.ptr);
+        const parent_ptr = @intFromPtr(tracked.bytes.ptr);
+        if (input_ptr < parent_ptr) return null;
+        const offset = input_ptr - parent_ptr;
+        if (offset > tracked.bytes.len or input.len > tracked.bytes.len - offset) return null;
+        var links: ir.InlineIterator = .{ .input = input[0..limit], .cursor = start + 2, .renderer_boundaries = true };
+        const prior_link = links.next() orelse return null;
+        if (prior_link.kind != .link or !prior_link.link_has_pipe or prior_link.link_empty_label or prior_link.link_label_restored_close or
+            links.cursor <= start + 2 or links.cursor > limit or limit - links.cursor < 2 or
+            !starts(input[links.cursor..limit], "}-") or !safeInternalTarget(prior_link.target) or
+            !manualConversionInternalTarget(prior_link.target)) return null;
+        const target = if (starts(prior_link.target, ":")) prior_link.target[1..] else prior_link.target;
+        const page = target[0 .. (std.mem.indexOfScalar(u8, target, '#') orelse target.len)];
+        if (page.len == 0 or std.mem.indexOfScalar(u8, page, ':') != null or
+            prior_link.text.len < 5 or !starts(prior_link.text, "-{") or !std.mem.endsWith(u8, prior_link.text, "}-")) return null;
+        var title_buffer: [4096]u8 = undefined;
+        var title_writer = std.Io.Writer.fixed(&title_buffer);
+        @import("namespace_registry").normalizeSpacing(&title_writer, page) catch return null;
+        if (title_writer.buffered().len == 0) return null;
+        const label_ptr = @intFromPtr(prior_link.text.ptr);
+        if (label_ptr < input_ptr) return null;
+        const label_at = label_ptr - input_ptr;
+        if (label_at < start + 4 or label_at > links.cursor or prior_link.text.len > links.cursor - label_at or
+            links.cursor - label_at - prior_link.text.len != 2 or !starts(input[label_at + prior_link.text.len .. links.cursor], "]]")) return null;
+        const prior_label = prior_link.text[2 .. prior_link.text.len - 2];
+        if (trim(prior_label).len == 0 or !std.unicode.utf8ValidateSlice(input[start..links.cursor]) or
+            std.mem.indexOfAny(u8, prior_label, ":;|{}[]<>&\r\n") != null or std.mem.indexOf(u8, prior_label, "''") != null) return null;
+        for (input[start..links.cursor]) |byte| if (std.ascii.isControl(byte)) return null;
+        const end = links.cursor + 2;
+        const parent_start = offset + start;
+        const parent_end = offset + end;
+        for (tracked.ranges) |range| if (range.start < parent_end and range.end > parent_start) return null;
+        for (tracked.literal_curly_ranges) |range| if (range.start < parent_end and range.end > parent_start) return null;
+        for (tracked.generated_links) |range| if (range.start < parent_end and range.end > parent_start) return null;
+        return end;
+    }
+
+    fn formattingAngleBodyPositionWithTrackedSiblings(input: []const u8, at: usize, preceding_abbreviation: bool, tracked: ?MissingText) bool {
         if (at > input.len or at > 4096) return false;
         var stack: [max_depth + 1][]const u8 = undefined;
         var depth: usize = 0;
         var cursor: usize = 0;
         while (cursor < at) {
+            if (tracked) |source| if (starts(input[cursor..], "-{[[")) {
+                if (precedingPlainNestedLinkEnd(input, cursor, at, source)) |end| {
+                    cursor = end;
+                    continue;
+                }
+            };
             if (starts(input[cursor..], "{{")) return false;
             if (starts(input[cursor..], "[[")) {
                 const pair = syntax.balanced(input[0..at], cursor) orelse return false;
@@ -18503,13 +18559,13 @@ pub const Renderer = struct {
             self.explicit_wiki_label != null or self.navigation_target_probe != null or self.inline_image_attribute) return null;
         const parent = self.inline_missing orelse return null;
         if (at > input.len or input.len - at < 4 or !starts(input[at..], "-{")) return null;
-        if (!formattingAngleBodyPositionWithAbbreviation(input, at, true)) return null;
+        if (!formattingAngleBodyPositionWithTrackedSiblings(input, at, true, parent)) return null;
         const parent_base = @intFromPtr(parent.bytes.ptr);
         const input_base = @intFromPtr(input.ptr);
         if (input_base < parent_base) return null;
         const parent_offset = input_base - parent_base;
         if (parent_offset > parent.bytes.len or input.len > parent.bytes.len - parent_offset or
-            !formattingAngleBodyPositionWithAbbreviation(parent.bytes, parent_offset + at, true)) return null;
+            !formattingAngleBodyPositionWithTrackedSiblings(parent.bytes, parent_offset + at, true, parent)) return null;
         var domain = self.inline_source_domain;
         var remaining: usize = max_depth + 1;
         while (domain) |current| {
@@ -18518,8 +18574,11 @@ pub const Renderer = struct {
             const base = @intFromPtr(current.source.ptr);
             if (input_base < base) return null;
             const relative = input_base - base;
+            const tracked: ?MissingText = if (current.tracked) |value|
+                if (value.bytes.ptr == current.source.ptr and value.bytes.len == current.source.len) value else null
+            else null;
             if (relative > current.source.len or input.len > current.source.len - relative or
-                !formattingAngleBodyPositionWithAbbreviation(current.source, relative + at, true)) return null;
+                !formattingAngleBodyPositionWithTrackedSiblings(current.source, relative + at, true, tracked)) return null;
             domain = current.parent;
         }
         var reduced: std.ArrayList(u8) = .empty;
@@ -19189,7 +19248,7 @@ pub const Renderer = struct {
         // Matched formatting bodies borrow slices of this normalized source.
         // Keep its lookahead available while nested bodies are parsed, and
         // restore it before this stack frame or its source can be released.
-        const source_domain: InlineSourceDomain = .{ .source = input, .parent = self.inline_source_domain };
+        const source_domain: InlineSourceDomain = .{ .source = input, .parent = self.inline_source_domain, .tracked = prepared_missing };
         self.inline_source_domain = &source_domain;
         defer self.inline_source_domain = source_domain.parent;
         const previous_missing = self.inline_missing;
@@ -84057,4 +84116,126 @@ test "retained current EL declension tables preserve hash borders complete cells
             try std.testing.expect(found);
         }
     }
+}
+
+test "nested local link siblings retain exact tracked ancestors full actions styles and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    const context: Context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior };
+    const first = "-{[[:देख्नु|-{देख्नु}-]]}-";
+    const second = "-{[[:देखना|-{देखना}-]]}-";
+    const prefix = "參見：<b class=\"Deva\">" ++ first ++ "</b>、<b class=\"Deva\">";
+    const source = prefix ++ second ++ "</b>";
+    const at = prefix.len;
+    try std.testing.expect(!Renderer.formattingAngleBodyPositionWithAbbreviation(source, at, true));
+    try std.testing.expect(Renderer.formattingAngleBodyPositionWithTrackedSiblings(source, at, true, MissingText.untracked(source)));
+    var proof: Renderer = .{ .a = a, .context = context, .inline_missing = MissingText.untracked(source) };
+    const recognized = (try proof.nestedRuleFreeLinkLabels(source, at, .{})) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(recognized.body.ptr == source.ptr + at + 2 and recognized.end == at + second.len);
+    try std.testing.expectEqualStrings(second[2 .. second.len - 2], recognized.body);
+    // An actual narrowed child needs the preserved ancestor's own metadata,
+    // not merely the child's clean missing scope.
+    const outer: InlineSourceDomain = .{ .source = source, .parent = null, .tracked = MissingText.untracked(source) };
+    proof.inline_source_domain = &outer;
+    proof.inline_missing = MissingText.untracked(source[at .. at + second.len]);
+    try std.testing.expect((try proof.nestedRuleFreeLinkLabels(source[at .. at + second.len], 0, .{})) != null);
+    const reference = "參見：<b class=\"Deva\">-{[[:देख्नु|देख्नु]]}-</b>、<b class=\"Deva\">-{[[:देखना|देखना]]}-</b>";
+    var actual_renderer: Renderer = .{ .a = a, .context = context };
+    var expected_renderer: Renderer = .{ .a = a, .context = context };
+    const after = "\n\n# [[Definition|definition]]";
+    const actual = try FormattingScopeTest.encode(a, &actual_renderer, try actual_renderer.renderBody(source ++ after));
+    const expected = try FormattingScopeTest.encode(a, &expected_renderer, try expected_renderer.renderBody(reference ++ after));
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualDeep(expected_renderer.fallbacks, actual_renderer.fallbacks);
+    var first_seen: usize = 0; var second_seen: usize = 0; var definition: usize = 0;
+    for (actual.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (std.mem.eql(u8, span.target, "देख्नु") or std.mem.eql(u8, span.target, "देखना")) {
+            if (std.mem.eql(u8, span.target, "देख्नु")) first_seen += 1 else second_seen += 1;
+            try std.testing.expectEqualStrings(span.target, span.text);
+            try std.testing.expect(span.bold and std.mem.indexOf(u8, span.classes, "Deva") != null);
+        }
+        if (std.mem.eql(u8, span.target, "Definition")) { definition += 1; try std.testing.expectEqualStrings("definition", span.text); }
+    };
+    try std.testing.expectEqual(@as(usize, 1), first_seen); try std.testing.expectEqual(@as(usize, 1), second_seen);
+    try std.testing.expectEqual(@as(usize, 1), definition);
+    const codec = @import("blob_encoder").presentation_codec; const bytes = try codec.encodeAlloc(a, actual);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+    try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" }));
+    const Case = struct {
+        fn run(allocator: A, ctx: Context) !void {
+            const preceding = "-{[[First|-{first}-]]}- ";
+            const value = preceding ++ "-{[[Second|-{second}-]]}-";
+            var renderer: Renderer = .{ .a = allocator, .context = ctx, .inline_missing = MissingText.untracked(value) };
+            const result = try renderer.manualConversion(value, preceding.len, .{});
+            try std.testing.expect(result.body.ptr == value.ptr + preceding.len + 2 and result.end == value.len);
+            try std.testing.expectEqualStrings("[[Second|-{second}-]]", result.body);
+        }
+    };
+    try Case.run(std.testing.allocator, context);
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Case.run, .{context});
+}
+
+test "preceding nested sibling position proof refuses unknown copied scoped active and incomplete sources" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" };
+    const context: Context = .{ .namespace_catalog = &ns };
+    const previous = "-{[[First|-{first}-]]}-";
+    const current = "-{[[Second|-{second}-]]}-";
+    const source = previous ++ " " ++ current;
+    const at = previous.len + 1;
+    for ([_]MissingText{
+        .{ .bytes = source, .unknown = true }, .{ .bytes = source, .lost_missing_range = true },
+        .{ .bytes = source, .ranges = &.{.{ .start = 4, .end = 5, .occurrence = 1 }} },
+        .{ .bytes = source, .literal_curly_ranges = &.{.{ .start = 1, .end = 2 }} },
+        .{ .bytes = source[at..] }, .{ .bytes = source[0 .. source.len - 1] },
+        .{ .bytes = try a.dupe(u8, source) },
+    }) |tracked| {
+        try std.testing.expect(!Renderer.formattingAngleBodyPositionWithTrackedSiblings(source, at, true, tracked));
+        const domain: InlineSourceDomain = .{ .source = source, .parent = null, .tracked = tracked };
+        var renderer: Renderer = .{ .a = a, .context = context, .inline_missing = MissingText.untracked(source[at..]), .inline_source_domain = &domain };
+        try std.testing.expect((try renderer.nestedRuleFreeLinkLabels(source[at..], 0, .{})) == null);
+    }
+    const untracked: InlineSourceDomain = .{ .source = source, .parent = null };
+    var renderer: Renderer = .{ .a = a, .context = context, .inline_missing = MissingText.untracked(source[at..]), .inline_source_domain = &untracked };
+    try std.testing.expect((try renderer.nestedRuleFreeLinkLabels(source[at..], 0, .{})) == null);
+    const copied = try a.dupe(u8, source);
+    const foreign: InlineSourceDomain = .{ .source = copied, .parent = null, .tracked = MissingText.untracked(copied) };
+    renderer.inline_source_domain = &foreign;
+    try std.testing.expect((try renderer.nestedRuleFreeLinkLabels(source[at..], 0, .{})) == null);
+    for ([_][]const u8{
+        "-{[[First|-{first}-]] ", "-{R|[[First|-{first}-]]}- ", "-{zh-hans:[[First|-{first}-]]}- ",
+        "-{[[First|-{zh-hans:first}-]]}- ", "-{[[First|-{R|first}-]]}- ",
+        "-{[[First|-{<b>first</b>}-]]}- ", "-{[[First|-{''first''}-]]}- ",
+        "-{[[First|-{first;second}-]]}- ", "-{[[File:First|-{first}-]]}- ",
+        "-{[[:Category:First|-{first}-]]}- ", "-{[[#fragment|-{first}-]]}- ",
+        "-{[[___|-{first}-]]}- ", "-{[[\u{200e}_\u{00a0}|-{first}-]]}- ",
+        "-{[[First|-{first}-]]trailer}- ", "-{[[First|-{first}-]]}-<b></i> ",
+        "<nowiki>" ++ previous ++ " ", "<pre>" ++ previous ++ " ",
+        "<span title='" ++ previous ++ " ", "[[Outer|" ++ previous ++ " ",
+        "[https://example.test " ++ previous ++ " ", "{{template|" ++ previous ++ " ",
+    }) |prefix| {
+        errdefer std.debug.print("preceding sibling refusal prefix={s}\n", .{prefix});
+        const value = try std.mem.concat(a, u8, &.{ prefix, current });
+        try std.testing.expect(!Renderer.formattingAngleBodyPositionWithTrackedSiblings(value, prefix.len, true, MissingText.untracked(value)));
+        var proof: Renderer = .{ .a = a, .context = context, .inline_missing = MissingText.untracked(value) };
+        try std.testing.expect((try proof.nestedRuleFreeLinkLabels(value, prefix.len, .{})) == null);
+    }
+    // Metadata outside the complete predecessor remains outside its proof.
+    const outside = source ++ " missing";
+    const tracked: MissingText = .{ .bytes = outside, .ranges = &.{.{ .start = source.len + 1, .end = outside.len, .occurrence = 1 }} };
+    try std.testing.expect(Renderer.formattingAngleBodyPositionWithTrackedSiblings(outside, at, true, tracked));
+    const long = try a.alloc(u8, 4097 + source.len); @memset(long[0..4097], ' '); @memcpy(long[4097..], source);
+    try std.testing.expect(!Renderer.formattingAngleBodyPositionWithTrackedSiblings(long, 4097 + at, true, MissingText.untracked(long)));
+    const token = try generated_link.tokenAlloc(a, 0, "1234567890", "Special:Booksources/1234567890", "ISBN 1234567890");
+    const generated_prefix = try std.mem.concat(a, u8, &.{ "-{[[First|-{", token, "}-]]}- " });
+    const generated = try std.mem.concat(a, u8, &.{ generated_prefix, current });
+    const token_at = std.mem.indexOf(u8, generated, token) orelse return error.TestUnexpectedResult;
+    const wire = [_]generated_link.WireRange{.{ .start = @intCast(token_at), .end = @intCast(token_at + token.len), .value = .{ .token = token, .argument = "1234567890", .target = "Special:Booksources/1234567890", .label = "ISBN 1234567890" } }};
+    const bound = try generated_link.bindAlloc(a, generated, &wire); try generated_link.validateRanges(generated, generated, bound);
+    try std.testing.expect(!Renderer.formattingAngleBodyPositionWithTrackedSiblings(generated, generated_prefix.len, true, .{ .bytes = generated, .generated_source = generated, .generated_links = bound }));
+    // Authentic generated metadata also changes plain-label grammar; no claim
+    // that this is an isolated range-only negative.
 }

@@ -106,6 +106,7 @@ const Occurrence = struct {
     anchor: ?Inventory,
     centered_width: ?u32 = null,
     centered_default_size: bool = false,
+    right_default_size: bool = false,
     missing_content: ?ObservedMissing = null,
     static_poster: ?encoder.presentation_types.StaticPoster = null,
 };
@@ -415,6 +416,7 @@ pub const Book = struct {
                     };
                     break :proof .{ .width = image.width, .height = image.height };
                 } else null;
+                if (image.right_default_size and image.width > occurrence.original_width and svg_upright_fit == null) return invalid;
                 const svg_language: ?SvgLanguageEvidence = if (occurrence.svg_language orelse occurrence.resolved_svg_language) |language| proof: {
                     // Actual raster and language-key evidence was checked in the
                     // complete HTML observer. File models alone never grant it.
@@ -431,7 +433,7 @@ pub const Book = struct {
                         .original_width = occurrence.original_width, .observed_width = image.width } else null,
                     .anchor = if (occurrence.anchor_attributes or occurrence.missing_content or occurrence.static_poster) image.anchor else null,
                     .centered_width = if (image.centered) image.width else null,
-                    .centered_default_size = image.centered_default_size,
+                    .centered_default_size = image.centered_default_size, .right_default_size = image.right_default_size,
                     .missing_content = image.missing_content, .static_poster = poster };
             }
             out.* = .{ .namespace_id = page.namespace_id, .page_id = page.page_id, .revision_id = page.revision_id, .title = page.title,
@@ -577,9 +579,13 @@ pub const Book = struct {
             const selected = try a.alloc(SelectedOccurrence, page.occurrences.len);
             for (page.occurrences, selected) |*occurrence, *slot| {
                 slot.* = .{ .source = occurrence, .stage_options = try compiler.figureObservationStageOptionsAlloc(a, occurrence.original_options, context) };
+                const right_default_source = occurrence.right_default_size and
+                    rightUprightDefaultOptions(context.image_options.?, occurrence.original_options) and
+                    rightUprightDefaultOptions(context.image_options.?, slot.stage_options);
+                if (occurrence.right_default_size and !right_default_source) return null;
                 slot.svg_upright_fit = occurrence.svg_upright_fit != null and
-                    bareUprightThumbnailOptions(context.image_options.?, occurrence.original_options) and
-                    bareUprightThumbnailOptions(context.image_options.?, slot.stage_options);
+                    ((bareUprightThumbnailOptions(context.image_options.?, occurrence.original_options) and
+                    bareUprightThumbnailOptions(context.image_options.?, slot.stage_options)) or right_default_source);
                 if (occurrence.svg_language) |proof| {
                     if (!svgLanguageThumbnailOptionsWithWidth(context.image_options.?, occurrence.original_options,
                             if (proof.authored) proof.language else null, proof.authored_width) or
@@ -642,6 +648,32 @@ fn bareUprightThumbnailOptions(registry: *const namespaces.image_options.Registr
     const upright = registry.match(parts[1], .svg) orelse return false;
     return equal(format.id, "img_thumbnail") and format.value == null and
         equal(upright.id, "img_upright") and upright.value == null;
+}
+// Stage only the exact observed right/default/upright shape at intake. The
+// actual captured option registry proves both original and prepared source;
+// no CSS factor, default width calculation or right-class authority is used.
+fn rightUprightDefaultOptions(registry: *const namespaces.image_options.Registry, options: []const u8) bool {
+    var parts: [4][]const u8 = undefined;
+    var count: usize = 0;
+    var at: usize = 0;
+    while (at <= options.len) {
+        if (count == parts.len) return false;
+        const end = syntax.delimiter(options, "|", at) orelse options.len;
+        parts[count] = std.mem.trim(u8, options[at..end], " \t\r\n"); count += 1;
+        if (end == options.len) break;
+        at = end + 1;
+    }
+    if (count != 4 or parts[3].len == 0 or registry.match(parts[3], .image) != null) return false;
+    var thumbnail = false; var right = false; var upright = false;
+    for (parts[0..3]) |part| {
+        const option = registry.match(part, .image) orelse return false;
+        if (option.value != null) return false;
+        if (equal(option.id, "img_thumbnail")) { if (thumbnail) return false; thumbnail = true; }
+        else if (equal(option.id, "img_right")) { if (right) return false; right = true; }
+        else if (equal(option.id, "img_upright")) { if (upright) return false; upright = true; }
+        else return false;
+    }
+    return thumbnail and right and upright;
 }
 // The actual selected raster supplies the width. Verify its positive logical
 // height with the same half-up aspect fit, without granting any other width.
@@ -1955,7 +1987,7 @@ const ObservedMissing = struct {
     default_size: bool = true,
     right: bool = false,
 };
-const ObservedImage = struct { width: u32, height: u32 = 0, svg_language: ?[]const u8 = null, element: ?Inventory = null, anchor: Inventory, centered: bool = false, centered_default_size: bool = false, missing_content: ?ObservedMissing = null, poster_label: ?[]const u8 = null };
+const ObservedImage = struct { width: u32, height: u32 = 0, svg_language: ?[]const u8 = null, element: ?Inventory = null, anchor: Inventory, centered: bool = false, centered_default_size: bool = false, right_default_size: bool = false, missing_content: ?ObservedMissing = null, poster_label: ?[]const u8 = null };
 // Returned markup supplies occurrence facts, not computed CSS or image pixels.
 fn missingAnchorFile(a: A, ns: *const namespaces.Registry, anchor: Inventory) !?[]const u8 {
     if (!equal(anchor.get("class") orelse return null, "new")) return null;
@@ -2332,10 +2364,13 @@ fn observedImagesWithServedPaintFailure(a: A, ns: *const namespaces.Registry, ht
                 const explicit_centered = equal(figure_classes, "mw-halign-center");
                 const centered = explicit_centered or centered_default_size;
                 const height_right = occurrence.height and equal(figure_classes, "mw-halign-right");
+                const right_default_size = occurrence.width and !occurrence.height and !occurrence.anchor_attributes and
+                    occurrence.svg_language == null and occurrence.resolved_svg_language == null and
+                    equal(figure_classes, "mw-default-size mw-halign-right");
                 if (!equal(stack[depth - 2].attributes.get("typeof") orelse return invalid, "mw:File/Thumb") or
                     (!equal(figure_classes, "mw-default-size") and
                         !(explicit_centered and occurrence.anchor_attributes and !occurrence.width) and
-                        !(centered_default_size and occurrence.width) and !height_right and
+                        !(centered_default_size and occurrence.width) and !height_right and !right_default_size and
                         !(explicit_svg_width and class_value == null)) or
                     !equal(anchor.get("class") orelse return invalid, "mw-file-description") or
                     try positiveAttribute(inv, "data-file-width") != occurrence.original_width or try positiveAttribute(inv, "data-file-height") != occurrence.original_height) return invalid;
@@ -2351,7 +2386,7 @@ fn observedImagesWithServedPaintFailure(a: A, ns: *const namespaces.Registry, ht
                 }
                 const image_classes = inv.get("class") orelse return invalid;
                 if (!equal(image_classes, "mw-file-element") and !equal(image_classes, "mw-file-element mw-file-upright")) return invalid;
-                if (centered_default_size and (!equal(image_classes, "mw-file-element mw-file-upright") or inv.get("style") == null)) return invalid;
+                if ((centered_default_size or right_default_size) and (!equal(image_classes, "mw-file-element mw-file-upright") or inv.get("style") == null)) return invalid;
                 for (inv.attributes) |attr| {
                     var known = false;
                     for ([_][]const u8{ "src", "decoding", "loading", "width", "height", "style", "class", "srcset", "data-file-width", "data-file-height", "alt", "title" }) |name|
@@ -2372,7 +2407,7 @@ fn observedImagesWithServedPaintFailure(a: A, ns: *const namespaces.Registry, ht
                 if (centered and width > occurrence.original_width) return invalid;
                 const height = try positiveAttribute(inv, "height");
                 if (occurrence.height and !observedHeightFit(width, height, occurrence.original_width, occurrence.original_height)) return invalid;
-                selected[index] = .{ .width = width, .height = height, .svg_language = occurrence.svg_language orelse occurrence.resolved_svg_language, .element = inv, .anchor = anchor, .centered = centered, .centered_default_size = centered_default_size };
+                selected[index] = .{ .width = width, .height = height, .svg_language = occurrence.svg_language orelse occurrence.resolved_svg_language, .element = inv, .anchor = anchor, .centered = centered, .centered_default_size = centered_default_size, .right_default_size = right_default_size };
             };
         }
         if (!is_void) {
@@ -7930,4 +7965,72 @@ test "v9 independently validates existing served Missing page styles and withhol
     changed = doc; const altered_pages = try a.dupe(RawPage, doc.pages); changed.pages = altered_pages;
     altered_pages[0].page_styles = wrong;
     try std.testing.expectError(invalid, Book.init(a, try F.bytes(a, changed), &ns, &files, defaults, 250));
+}
+
+const RightDefaultCapturedTesting = if (@import("builtin").is_test) struct {
+    const prefix = "testdata/it-cediglia-right-default/";
+    fn page(a: A) !RawPage {
+        return std.json.parseFromSliceLeaky(RawPage, a, @embedFile(prefix ++ "page.json"), .{ .allocate = .alloc_always });
+    }
+    fn document(a: A, raw_page: RawPage) !Document {
+        // One unchanged captured page projected into the existing v4 width
+        // contract; complete actual v9/normal Registry intake is separate.
+        return .{ .schema = "wikidict.figure-page-observations.v4", .wiki = "itwiktionary", .date = "20261001",
+            .namespace_sha256 = "8fc73407a5f932ba725c3339034fc0aa9894078272b08a5ae62566a834496996",
+            .defaults_sha256 = "58177d7029c25bdbb248f6b457c5872f304f2a4012cf054f68c35786f14e77db", .pages = try a.dupe(RawPage, &.{raw_page}) };
+    }
+};
+
+test "captured cediglia right default upright stages exact raster and requires original and prepared source options" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = RightDefaultCapturedTesting;
+    var ns = try namespaces.Registry.init(a, @embedFile(F.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const behavior_bytes = @embedFile(F.prefix ++ "behavior-switches.tsv");
+    var behavior = try namespaces.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var options = try namespaces.image_options.Registry.init(a, @embedFile(F.prefix ++ "image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, Testing.hash(behavior_bytes)); defer options.deinit();
+    const page = try F.page(a); const doc = try F.document(a, page);
+    // Controlled validator rows isolate source/markup boundaries. They do not
+    // replace the independent full selected normal Registry integration check.
+    var files = try Testing.registry(a, &ns, doc); defer files.deinit();
+    files.height_bound_records = &.{.svg_redundant_height};
+    const defaults = Testing.hash(@embedFile(F.prefix ++ "figure-siteinfo.raw.json"));
+    var book = try Book.init(a, try PosterSvgConjunctionTesting.bytes(a, doc), &ns, &files, defaults, 250); defer book.deinit();
+    const source = @embedFile(F.prefix ++ "expanded.wikitext"); const raw = @embedFile(F.prefix ++ "raw.wikitext");
+    try std.testing.expectEqualStrings(source, book.pages[0].source);
+    const occurrence = book.pages[0].occurrences[0];
+    try std.testing.expect(occurrence.right_default_size and !occurrence.centered_default_size and occurrence.centered_width == null);
+    try std.testing.expectEqual(@as(?u32, 190), occurrence.width);
+    try std.testing.expect(occurrence.svg_upright_fit != null);
+    try std.testing.expectEqualStrings("upright|right|thumb|La cediglia", occurrence.original_options);
+    const context: compiler.Context = .{ .title = "cediglia", .namespace_catalog = &ns, .behavior_switches = &behavior, .image_options = &options };
+    const selected = (try book.select(a, &ns, 0, 143745, 3991833, "cediglia", raw, source, defaults, 250, context)) orelse return error.TestUnexpectedResult;
+    for ([_][]const u8{ occurrence.original_options, selected.occurrences[0].stage_options }) |source_options| {
+        try std.testing.expect(rightUprightDefaultOptions(&options, source_options));
+        try std.testing.expectEqual(@as(?u32, 190), try SelectedPage.width(selected, a, occurrence.canonical_file, .thumbnail, source_options, 250));
+        try std.testing.expectEqual(@as(?encoder.presentation_types.FigureSizingPolicy, .requested_fit),
+            try SelectedPage.svgUprightFit(selected, a, occurrence.canonical_file, .thumbnail, source_options, 190, null));
+        try std.testing.expect((try SelectedPage.svgUprightFit(selected, a, occurrence.canonical_file, .thumbnail, source_options, 191, null)) == null);
+    }
+    for ([_][]const u8{ "upright|left|thumb|Caption", "upright|thumb|Caption", "upright=1|right|thumb|Caption",
+        "190px|right|thumb|Caption", "upright|right|right|Caption", "upright|right|thumb|left",
+        "upright|right|thumb|Caption|left", "upright|right|unknown|Caption" }) |false_source|
+        try std.testing.expect(!rightUprightDefaultOptions(&options, false_source));
+    var changed = try PosterSvgConjunctionTesting.changedSource(a, page, "|right|", "|left |" );
+    const changed_doc = try F.document(a, changed);
+    var false_book = try Book.init(a, try PosterSvgConjunctionTesting.bytes(a, changed_doc), &ns, &files, defaults, 250); defer false_book.deinit();
+    const false_source = (try responseSource(a, &ns, changed)).source;
+    try std.testing.expect((try false_book.select(a, &ns, 0, 143745, 3991833, "cediglia", raw, false_source, defaults, 250, context)) == null);
+    // The staged HTML flag alone grants no width for a foreign source/options.
+    try std.testing.expect((try SelectedPage.width(selected, a, occurrence.canonical_file, .thumbnail, "upright|left|thumb|La cediglia", 250)) == null);
+    try std.testing.expect((try book.select(a, &ns, 0, 143745, 3991834, "cediglia", raw, source, defaults, 250, context)) == null);
+    changed = page; const wrong_occurrences = try a.dupe(RawOccurrence, page.occurrences); wrong_occurrences[0].start += 1; changed.occurrences = wrong_occurrences;
+    try std.testing.expectError(invalid, Book.init(a, try PosterSvgConjunctionTesting.bytes(a, try F.document(a, changed)), &ns, &files, defaults, 250));
+    wrong_occurrences[0] = page.occurrences[0]; wrong_occurrences[0].canonical_file = "File:Other.svg";
+    try std.testing.expectError(invalid, Book.init(a, try PosterSvgConjunctionTesting.bytes(a, try F.document(a, changed)), &ns, &files, defaults, 250));
+    for ([_][]const u8{ "mw-default-size mw-halign-right unknown", "mw-halign-right", "mw-default-size mw-halign-left" }) |classes| {
+        changed = try ViPageServedTesting.changedResponse(a, page, "text", "mw-default-size mw-halign-right", classes);
+        try std.testing.expectError(invalid, Book.init(a, try PosterSvgConjunctionTesting.bytes(a, try F.document(a, changed)), &ns, &files, defaults, 250));
+    }
+    changed = try ViPageServedTesting.changedResponse(a, page, "text", "mw-file-element mw-file-upright", "mw-file-element");
+    try std.testing.expectError(invalid, Book.init(a, try PosterSvgConjunctionTesting.bytes(a, try F.document(a, changed)), &ns, &files, defaults, 250));
 }

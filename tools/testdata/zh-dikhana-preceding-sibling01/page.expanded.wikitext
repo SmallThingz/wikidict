@@ -1,0 +1,11 @@
+<div class="disambig-see-also">參見：<b class="Deva">-{[[:देख्नु|-{देख्नु}-]]}-</b>、<b class="Deva">-{[[:देखना|-{देखना}-]]}-</b>、<b class="Deva">-{[[:देखने|-{देखने}-]]}-</b>、<b class="Deva">-{[[:दुख्नु|-{दुख्नु}-]]}-</b><span class='serial-and'> 和</span> <b class="Deva">-{[[:दिखना|-{दिखना}-]]}-</b></div>
+==印地語==
+<table class="wikitable" style="float: right; clear: right; text-align: center;"><tr><th>[[w:印地語-烏爾都語語法#動詞|印地語動詞集]]</th></tr><tr><td><span class="Deva" lang="hi">-{[[:देखना#印地語|-{देखना}-]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">-{dekhnā}-</span><span class="mention-gloss-paren annotation-paren">)</span></td></tr><tr><td><span class="Deva" lang="hi">-{[[:दिखना#印地語|-{दिखना}-]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">-{dikhnā}-</span><span class="mention-gloss-paren annotation-paren">)</span></td></tr><tr><td><span class="Deva" lang="hi">-{[[:दिखवाना#印地語|-{दिखवाना}-]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">-{dikhvānā}-</span><span class="mention-gloss-paren annotation-paren">)</span></td></tr></table>
+
+===發音===
+* <span class="usage-label-accent"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">標準印地語</span><span class="ib-brac label-brac">)</span></span> [[Wiktionary:國際音標|國際音標]]<sup>([[Appendix:印地語發音|幫助]])</sup>:&#32;<span class="IPA nowrap">/d̪ɪ.kʰɑː.nɑː/</span>, <span class="IPA nowrap">[d̪ɪ.kʰäː.näː]</span>[[Category:有國際音標的印地語詞|दिखाना]]
+
+===動詞===
+<span class="headword-line"><strong class="Deva headword" lang="hi">-{दिखाना}-</strong> (<span lang="hi-Latn" class="tr Latn" dir="ltr">-{dikhānā}-</span>) ([[Appendix:Glossary#及物|及物]]-{}-，烏爾都文拼寫-{ <b class="Aran" lang="ur">[[:دکھانا#烏爾都語|-{دکھانا}-]]</b>}-)</span>[[Category:印地語詞元|दिखाना]][[Category:印地語動詞|दिखाना]][[Category:印地語及物動詞|दिखाना]][[Category:有詞條的頁面|दिखाना]][[Category:有1個詞條的頁面|दिखाना]]
+
+# [[展示]]，[[表示]]，[[顯示]]，[[讓]]……[[看看]]

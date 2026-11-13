@@ -73,6 +73,8 @@ pub const Registry = struct {
     codes: std.StringHashMapUnmanaged(void) = .empty,
     trusted_names: std.StringHashMapUnmanaged(void) = .empty,
     autonym_headings: std.StringHashMapUnmanaged(?[]const u8) = .empty,
+    // Names first installed by a translated profile never supply heading trust.
+    english_added_aliases: std.StringHashMapUnmanaged(void) = .empty,
     preferred_capitalizations: std.StringHashMapUnmanaged([]const u8) = .empty,
     captured_preferred_capitalizations: std.StringHashMapUnmanaged(?CapturedPreferredCapitalization) = .empty,
     strong_names: std.StringHashMapUnmanaged(void) = .empty,
@@ -121,6 +123,7 @@ pub const Registry = struct {
         self.codes.deinit(self.arena.allocator());
         self.trusted_names.deinit(self.arena.allocator());
         self.autonym_headings.deinit(self.arena.allocator());
+        self.english_added_aliases.deinit(self.arena.allocator());
         self.preferred_capitalizations.deinit(self.arena.allocator());
         self.captured_preferred_capitalizations.deinit(self.arena.allocator());
         self.strong_names.deinit(self.arena.allocator());
@@ -150,7 +153,10 @@ pub const Registry = struct {
     }
 
     pub fn code(self: *const Registry, heading: []const u8) ?[]const u8 {
-        if (self.names.get(heading)) |value| return value;
+        if (self.names.get(heading)) |value| {
+            if (self.english_added_aliases.contains(heading) and !self.sourceBannerNameAllowed(value, heading, false)) return null;
+            return value;
+        }
         return self.fallbackCode(heading);
     }
 
@@ -183,6 +189,7 @@ pub const Registry = struct {
     }
 
     pub fn resolveTrusted(self: *const Registry, value: []const u8) ?Resolved {
+        if (self.english_added_aliases.contains(value)) return null;
         if (self.hasCodeNameCollision(value)) return null;
         // The pinned generator includes first-letter capitalizations of its
         // preferred labels. Admit that exact existing alias for the same owner;
@@ -212,6 +219,7 @@ pub const Registry = struct {
     }
 
     pub fn resolveStrong(self: *const Registry, value: []const u8) ?Resolved {
+        if (self.english_added_aliases.contains(value)) return null;
         if (self.hasCodeNameCollision(value)) return null;
         if (!self.strong_names.contains(value) or !self.names.contains(value)) return null;
         return self.resolve(value);
@@ -1498,6 +1506,11 @@ pub const Registry = struct {
         }
         var expected_count: ?usize = null;
         var count: usize = 0;
+        var english_expected: ?usize = null;
+        var english_count: usize = 0;
+        var english_codes: std.StringHashMapUnmanaged(void) = .empty;
+        var english_names: std.StringHashMapUnmanaged(?[]const u8) = .empty;
+        var english_pending: std.ArrayList(struct { code: []const u8, name: []const u8 }) = .empty;
         var codes: std.StringHashMapUnmanaged(void) = .empty;
         var support_codes: std.StringHashMapUnmanaged(void) = .empty;
         var names: std.StringHashMapUnmanaged(?[]const u8) = .empty;
@@ -1521,6 +1534,7 @@ pub const Registry = struct {
                     (!std.mem.eql(u8, scope, "ltr") and !std.mem.eql(u8, scope, "rtl"))) return error.InvalidLanguageNameSnapshot;
                 continue;
             }
+            const english = std.mem.eql(u8, display, "en") and std.mem.eql(u8, scope, "all");
             const autonym = std.mem.eql(u8, display, "-") and std.mem.eql(u8, scope, "single");
             const direction = std.mem.eql(u8, display, "-") and std.mem.eql(u8, scope, "dir") and std.mem.eql(u8, tag, "C");
             if (!autonym and !direction and (!autonymCodeValid(display) or
@@ -1530,6 +1544,10 @@ pub const Registry = struct {
                 if (fields.next() != null) return error.InvalidLanguageNameSnapshot;
                 const n = std.fmt.parseInt(usize, value, 10) catch return error.InvalidLanguageNameSnapshot;
                 if (n > 20031) return error.InvalidLanguageNameSnapshot;
+                if (english) {
+                    if (english_expected != null) return error.DuplicateLanguageNameProfile;
+                    english_expected = n;
+                }
                 if (autonym) {
                     if (expected_count != null) return error.DuplicateLanguageNameProfile;
                     expected_count = n;
@@ -1538,6 +1556,21 @@ pub const Registry = struct {
                 const code_value = fields.next() orelse return error.InvalidLanguageNameSnapshot;
                 const raw_name = fields.next() orelse return error.InvalidLanguageNameSnapshot;
                 if (fields.next() != null or !autonymCodeValid(code_value)) return error.InvalidLanguageNameSnapshot;
+                if (english) {
+                    const n = english_expected orelse return error.IncompleteLanguageNameProfile;
+                    if (english_count >= n) return error.IncompleteLanguageNameProfile;
+                    english_count += 1;
+                    const seen = try english_codes.getOrPut(a, code_value);
+                    if (seen.found_existing) return error.DuplicateLanguageName;
+                    const name = try decodeAutonymName(a, raw_name);
+                    if (name.len != 0) {
+                        const known = try english_names.getOrPut(a, name);
+                        if (known.found_existing) {
+                            if (known.value_ptr.*) |owner| if (!std.mem.eql(u8, owner, code_value)) { known.value_ptr.* = null; };
+                        } else known.value_ptr.* = code_value;
+                        try english_pending.append(a, .{ .code = code_value, .name = name });
+                    }
+                }
                 if (!autonym) continue;
                 const n = expected_count orelse return error.IncompleteLanguageNameProfile;
                 if (count >= n) return error.IncompleteLanguageNameProfile;
@@ -1557,11 +1590,13 @@ pub const Registry = struct {
         }
         if (expected_count) |n| {
             if (count != n) return error.IncompleteLanguageNameProfile;
-        } else return; // Older captures have no null-display profile.
+        }
+        if (english_expected) |n| if (english_count != n) return error.IncompleteLanguageNameProfile;
         // Validate the complete selected profile before changing any trust.
         // A code alias, missing label, ambiguous name or later local conflict
         // cannot acquire authority from this independent spelling evidence.
         for (pending.items) |row| {
+            if (self.english_added_aliases.contains(row.name)) continue;
             if (!validLocalHeading(row.name) or !self.codes.contains(row.code) or self.ambiguous.contains(row.name)) continue;
             const profile_owner = names.get(row.name).? orelse continue;
             if (!std.mem.eql(u8, profile_owner, row.code)) continue;
@@ -1581,6 +1616,7 @@ pub const Registry = struct {
                 break :first_capital value;
             } else row.name;
             for ([_][]const u8{ row.name, capitalized }) |label| {
+                if (self.english_added_aliases.contains(label)) continue;
                 // An explicit competing profile spelling remains a veto, including
                 // a duplicate spelling whose owner was marked ambiguous above.
                 if (names.get(label)) |captured| {
@@ -1599,6 +1635,22 @@ pub const Registry = struct {
                     const code_value = try owned.dupe(u8, row.code);
                     errdefer owned.free(code_value);
                     try self.autonym_headings.put(owned, key, code_value);
+                }
+            }
+        }
+        // Complete captured English names supply ordinary aliases only. They
+        // do not become Strong/Trusted headings or replace local canonical names.
+        for (english_pending.items) |row| {
+            const unique = english_names.get(row.name).? orelse continue;
+            if (!std.mem.eql(u8, unique, row.code) or !self.codes.contains(row.code) or
+                !validLocalHeading(row.name) or !self.sourceBannerNameAllowed(row.code, row.name, false)) continue;
+            const existed = self.names.contains(row.name);
+            try self.addAlias(row.name, row.code);
+            if (!existed) {
+                if (self.names.get(row.name)) |installed| {
+                    if (std.mem.eql(u8, installed, row.code)) {
+                        try self.english_added_aliases.put(self.arena.allocator(), self.names.getKey(row.name).?, {});
+                    }
                 }
             }
         }
@@ -5649,5 +5701,128 @@ test "named source code admission preserves alias snapshots special group collis
         try std.testing.expect(!try declined.addNamedSectionDataLua(bad, proof));
         try std.testing.expectEqual(@as(usize, 0), declined.codes.count());
         try std.testing.expectEqual(@as(usize, 0), declined.source_nom_names.count());
+    }
+}
+
+test "complete English name profile adds only weak aliases and preserves canonical owners" {
+    var registry = Registry.empty(std.testing.allocator);
+    defer registry.deinit();
+    try registry.addTsv("# content-language\tsr\n# mediawiki\nsr\tсрпски\ncs\tчешки\tCzech\nenm\tMiddle English (1100-1500)\n");
+    try registry.addLua("return { [\"Чешки\"] = \"cs\", [\"Средњи Енглески\"] = \"enm\" }");
+    const profile = "# wikidict-language-names-v1\n# wiki\tsrwiktionary\n# dump-date\t20261001\n# content-language\tsr\n" ++
+        "C\ten\tall\t2\nN\ten\tall\tcs\tCzech\nN\ten\tall\tenm\tMiddle English\n";
+    try std.testing.expect(registry.resolve("Middle English") == null);
+    try registry.trustAutonymSnapshot(profile, "srwiktionary", "20261001", "sr");
+    const owner = registry.resolve("Middle English") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("enm", owner.code);
+    try std.testing.expectEqualStrings("Средњи Енглески", owner.heading);
+    try std.testing.expect(registry.resolveStrong("Middle English") == null);
+    try std.testing.expect(registry.resolveTrusted("Middle English") == null);
+    try std.testing.expectEqualStrings("cs", registry.resolve("Czech").?.code);
+    try std.testing.expect(registry.resolveStrong("Czech") == null);
+    try std.testing.expect(registry.resolveTrusted("Czech") == null);
+    try std.testing.expectError(error.InvalidLanguageNameSnapshot, registry.trustAutonymSnapshot(profile, "enwiktionary", "20261001", "sr"));
+    try std.testing.expectError(error.InvalidLanguageNameSnapshot, registry.trustAutonymSnapshot(profile, "srwiktionary", "20261002", "sr"));
+}
+
+test "English name aliases refuse incomplete duplicate and competing source profiles" {
+    const header = "# wikidict-language-names-v1\n# wiki\tsrwiktionary\n# dump-date\t20261001\n# content-language\tsr\n";
+    const rows = "# content-language\tsr\n# mediawiki\nsr\tсрпски\nenm\tСредњи Енглески\ncs\tЧешки\nen\tЕнглески\n";
+    for ([_][]const u8{
+        header ++ "C\ten\tall\t2\nN\ten\tall\tenm\tMiddle English\n",
+        header ++ "C\ten\tall\t1\nN\ten\tall\tenm\tMiddle English\nN\ten\tall\tcs\tCzech\n",
+        header ++ "C\ten\tall\t2\nN\ten\tall\tenm\tMiddle English\nN\ten\tall\tenm\tOther\n",
+        header ++ "C\ten\tall\t0\nC\ten\tall\t0\n",
+    }) |bad| {
+        var registry = Registry.empty(std.testing.allocator);
+        defer registry.deinit();
+        try registry.addTsv(rows);
+        if (registry.trustAutonymSnapshot(bad, "srwiktionary", "20261001", "sr")) |_| return error.TestUnexpectedResult else |_| {}
+        try std.testing.expect(registry.resolve("Middle English") == null);
+    }
+    var ambiguous = Registry.empty(std.testing.allocator);
+    defer ambiguous.deinit();
+    try ambiguous.addTsv(rows);
+    try ambiguous.trustAutonymSnapshot(header ++ "C\ten\tall\t2\nN\ten\tall\tenm\tShared\nN\ten\tall\tcs\tShared\n", "srwiktionary", "20261001", "sr");
+    try std.testing.expect(ambiguous.resolve("Shared") == null);
+    var conflict = Registry.empty(std.testing.allocator);
+    defer conflict.deinit();
+    try conflict.addTsv(rows);
+    try conflict.addLocalAlias("Middle English", "en");
+    try conflict.trustAutonymSnapshot(header ++ "C\ten\tall\t1\nN\ten\tall\tenm\tMiddle English\n", "srwiktionary", "20261001", "sr");
+    try std.testing.expectEqualStrings("en", conflict.resolve("Middle English").?.code);
+    try std.testing.expect(!conflict.names.contains("Middle English"));
+}
+
+test "English weak aliases cannot seed heading trust across repeated loads" {
+    var registry = Registry.empty(std.testing.allocator);
+    defer registry.deinit();
+    try registry.addTsv("# content-language\tsr\n# mediawiki\nsr\tсрпски\nenm\tСредњи Енглески\n");
+    const profile = "# wikidict-language-names-v1\n# wiki\tsrwiktionary\n# dump-date\t20261001\n# content-language\tsr\n" ++
+        "C\ten\tall\t1\nN\ten\tall\tenm\tMiddle English\nC\t-\tsingle\t1\nN\t-\tsingle\tenm\tMiddle English\n";
+    try registry.trustAutonymSnapshot(profile, "srwiktionary", "20261001", "sr");
+    try registry.trustAutonymSnapshot(profile, "srwiktionary", "20261001", "sr");
+    try std.testing.expectEqualStrings("enm", registry.resolve("Middle English").?.code);
+    try std.testing.expect(registry.english_added_aliases.contains("Middle English"));
+    try std.testing.expect(!registry.autonym_headings.contains("Middle English"));
+    try std.testing.expect(registry.resolveStrong("Middle English") == null);
+    try std.testing.expect(registry.resolveTrusted("Middle English") == null);
+    try registry.addLocalAlias("Middle English", "sr");
+    try registry.trustAutonymSnapshot(profile, "srwiktionary", "20261001", "sr");
+    try std.testing.expect(registry.resolve("Middle English") == null);
+    try std.testing.expect(registry.resolveTrusted("Middle English") == null);
+    try std.testing.expect(registry.resolveStrong("Middle English") == null);
+
+    // An alias independently installed before the English profile retains the
+    // existing captured-autonym trust behavior, including repeated loads.
+    var prior = Registry.empty(std.testing.allocator);
+    defer prior.deinit();
+    try prior.addTsv("# content-language\tsr\n# mediawiki\nsr\tсрпски\nenm\tСредњи Енглески\tMiddle English\n");
+    try prior.trustAutonymSnapshot(profile, "srwiktionary", "20261001", "sr");
+    try prior.trustAutonymSnapshot(profile, "srwiktionary", "20261001", "sr");
+    try std.testing.expect(!prior.english_added_aliases.contains("Middle English"));
+    try std.testing.expectEqualStrings("enm", prior.resolveTrusted("Middle English").?.code);
+}
+
+
+test "English-only capitalization cannot inherit preferred heading trust" {
+    var registry = Registry.empty(std.testing.allocator);
+    defer registry.deinit();
+    try registry.addTsv("# content-language\tsr\n# mediawiki\nsr\tсрпски\nenm\tmiddle english\n");
+    // Isolate the existing preferred-capitalization fallback from a label that
+    // the TSV generator independently installed. The source profile now creates it.
+    _ = registry.names.remove("Middle english");
+    _ = registry.trusted_names.remove("Middle english");
+    const profile = "# wikidict-language-names-v1\n# wiki\tsrwiktionary\n# dump-date\t20261001\n# content-language\tsr\n" ++
+        "C\ten\tall\t1\nN\ten\tall\tenm\tMiddle english\n";
+    try registry.trustAutonymSnapshot(profile, "srwiktionary", "20261001", "sr");
+    try registry.trustAutonymSnapshot(profile, "srwiktionary", "20261001", "sr");
+    try std.testing.expectEqualStrings("enm", registry.resolve("Middle english").?.code);
+    try std.testing.expect(registry.isPreferredCapitalization("middle english", "Middle english"));
+    try std.testing.expect(registry.trusted_names.contains("middle english"));
+    try std.testing.expect(registry.resolveTrusted("Middle english") == null);
+    try std.testing.expect(registry.resolveStrong("Middle english") == null);
+}
+
+
+test "English-only autonym bases cannot promote pre-existing capitalized aliases on repeat" {
+    var registry = Registry.empty(std.testing.allocator);
+    defer registry.deinit();
+    try registry.addTsv("# content-language\tsr\n# mediawiki\nsr\tсрпски\nenm\tСредњи Енглески\n");
+    try registry.addAlias("Middle english", "enm");
+    try std.testing.expect(registry.resolveTrusted("Middle english") == null);
+    try std.testing.expect(registry.resolve("middle english") == null);
+    const profile = "# wikidict-language-names-v1\n# wiki\tsrwiktionary\n# dump-date\t20261001\n# content-language\tsr\n" ++
+        "C\ten\tall\t1\nN\ten\tall\tenm\tmiddle english\nC\t-\tsingle\t1\nN\t-\tsingle\tenm\tmiddle english\n";
+    for (0..2) |_| {
+        try registry.trustAutonymSnapshot(profile, "srwiktionary", "20261001", "sr");
+        try std.testing.expectEqualStrings("enm", registry.resolve("middle english").?.code);
+        try std.testing.expectEqualStrings("enm", registry.resolve("Middle english").?.code);
+        try std.testing.expect(registry.english_added_aliases.contains("middle english"));
+        try std.testing.expect(!registry.english_added_aliases.contains("Middle english"));
+        try std.testing.expect(!registry.autonym_headings.contains("Middle english"));
+        try std.testing.expect(registry.resolveTrusted("middle english") == null);
+        try std.testing.expect(registry.resolveTrusted("Middle english") == null);
+        try std.testing.expect(registry.resolveStrong("Middle english") == null);
     }
 }

@@ -1,0 +1,23 @@
+== {{-it-}} ==
+[[File:Unicode 0x0327.svg|upright|right|thumb|La cediglia]]
+{{-sost-|it}}
+{{Pn|w}} ''f'' {{Linkp|cediglie}}
+# [[segno]] [[ortografico]] consistente [[originariamente]] in una piccola [[zeta]] posta sotto la lettera ''c'' davanti alle vocali ''a'', ''o'', ''u''. Indica un suono ''cz'' oppure ''s'' [[sorda]]. È usata in varie lingue, tra cui il francese
+
+{{-sill-}}
+; ce | dì | glia
+
+{{-pron-}}
+{{IPA|/t͡ʃeˈdiʎʎa/}}
+
+{{-etim-}}
+dallo [[spagnolo]] ''[[cedilla]]''
+
+{{-trad-}}
+{{Trad1|}}
+:* {{eo}}: [[cedilo]]
+:* {{en}}: [[cedilla]]
+{{Trad2}}
+
+{{-ref-}}
+* {{Fonte|trec}}

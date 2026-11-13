@@ -690,6 +690,100 @@ fn ukrainianMorphologyMeaningPart(sections: anytype, index: usize, owner: ?[]con
     return null;
 }
 
+const SerbianMeaningParagraph = struct {
+    first: usize,
+    end: usize,
+    example_label: ?usize = null,
+    examples_first: usize = 0,
+    examples_end: usize = 0,
+};
+fn serbianMeaningFlat(block: wiki.Block) bool {
+    return block.container == null and block.table == null and block.figure == null and
+        block.flow == null and block.feature == null;
+}
+fn serbianMeaningLabel(block: wiki.Block, label: []const u8) bool {
+    if (block.kind != .paragraph or block.depth != 0 or block.list_path.len != 0 or
+        !serbianMeaningFlat(block) or block.spans.len != 1) return false;
+    const span = block.spans[0];
+    return span.provenance == .parsed and !span.generated_diagnostic and !span.self_link and
+        span.kind == .text and span.target.len == 0 and span.image == null and span.role == .normal and
+        span.flags.bold and !span.flags.italic and !span.flags.code and !span.flags.small and
+        !span.flags.superscript and !span.flags.subscript and !span.flags.strike and !span.flags.underline and
+        std.mem.eql(u8, span.text, label);
+}
+fn serbianMeaningItem(block: wiki.Block) bool {
+    if (block.kind != .list_item or block.depth != 2 or !std.mem.eql(u8, block.list_path, ":#") or
+        !serbianMeaningFlat(block) or block.spans.len == 0) return false;
+    var visible = false;
+    for (block.spans) |span| {
+        if (span.provenance != .parsed or span.generated_diagnostic or span.image != null or
+            span.flags.code or span.role != .normal or
+            (span.kind != .text and span.kind != .link and span.kind != .external_link)) return false;
+        visible = visible or std.mem.trim(u8, span.text, " \t\r\n").len != 0;
+    }
+    return visible;
+}
+// Retained SR {{Значење}} and {{Примери}} emit these separate bold labels.
+// They identify a meaning region, not a grammatical kind or language owner.
+fn serbianMeaningParagraph(blocks: []const wiki.Block, owner: ?[]const u8, level: u8) ?SerbianMeaningParagraph {
+    const language = owner orelse return null;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified") or level != 2) return null;
+    var label: ?usize = null;
+    var example_labels: usize = 0;
+    for (blocks, 0..) |block, index| {
+        if (serbianMeaningLabel(block, "Значења:")) {
+            if (label != null) return null;
+            label = index;
+        }
+        if (serbianMeaningLabel(block, "Примери:")) example_labels += 1;
+    }
+    var first = (label orelse return null) + 1;
+    while (first < blocks.len and blocks[first].kind == .blank) : (first += 1) {}
+    if (first == blocks.len or !serbianMeaningItem(blocks[first])) return null;
+    var end = first + 1;
+    while (end < blocks.len and serbianMeaningItem(blocks[end])) : (end += 1) {}
+    // A changed path or malformed continuation cannot become a partial sense
+    // group merely because the first direct item was recognizable.
+    if (end < blocks.len and blocks[end].list_path.len != 0) return null;
+    var result: SerbianMeaningParagraph = .{ .first = first, .end = end };
+    if (end - first != 1 or example_labels != 1) return result;
+    var example_label = end;
+    while (example_label < blocks.len and blocks[example_label].kind == .blank) : (example_label += 1) {}
+    if (example_label == blocks.len or !serbianMeaningLabel(blocks[example_label], "Примери:")) return result;
+    var examples_first = example_label + 1;
+    while (examples_first < blocks.len and blocks[examples_first].kind == .blank) : (examples_first += 1) {}
+    if (examples_first == blocks.len or !serbianMeaningItem(blocks[examples_first])) return result;
+    var examples_end = examples_first + 1;
+    while (examples_end < blocks.len and serbianMeaningItem(blocks[examples_end])) : (examples_end += 1) {}
+    if (examples_end < blocks.len and blocks[examples_end].list_path.len != 0) return result;
+    result.example_label = example_label;
+    result.examples_first = examples_first;
+    result.examples_end = examples_end;
+    return result;
+}
+fn analyzeSerbianMeaningParagraph(a: A, marker: SerbianMeaningParagraph, index: usize, blocks: []const wiki.Block) !Lexeme {
+    const senses = try a.alloc(Sense, marker.end - marker.first);
+    for (senses, marker.first..) |*sense, block| sense.* = .{ .block = block };
+    var tail = marker.end;
+    if (marker.example_label != null) {
+        // Keep the source label and intervening blanks before the example in
+        // the existing ordered detail streams; no body block is rewritten.
+        const notes = try a.alloc(usize, marker.examples_first - marker.end);
+        for (notes, marker.end..) |*note, block| note.* = block;
+        const examples = try a.alloc(usize, marker.examples_end - marker.examples_first);
+        for (examples, marker.examples_first..) |*example, block| example.* = block;
+        senses[0].notes = notes;
+        senses[0].examples = examples;
+        tail = marker.examples_end;
+    }
+    const introduction = try a.alloc(usize, marker.first);
+    for (introduction, 0..) |*item, block| item.* = block;
+    const other = try a.alloc(usize, blocks.len - tail);
+    for (other, tail..) |*item, block| item.* = block;
+    return .{ .kind = "Значења", .section = index, .definitions = senses,
+        .introduction = introduction, .other_blocks = other };
+}
+
 const MarkedParagraphPart = struct { kind: []const u8, first: usize, end: usize, croatian: bool = false, bracket_numbered: bool = false, id_term: bool = false };
 fn slovenePosLink(span: wiki.Span) ?[]const u8 {
     if (span.provenance != .parsed or span.generated_diagnostic or span.self_link or
@@ -1756,7 +1850,10 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
             ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedNavderNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
             (if (active == null) ukrainianMorphologyMeaningPart(sections, i, owner) else null);
         const paragraph_part = if (named_kind == null and !unclassified) germanNounMeanings(section, owner) orelse markedParagraphPart(section.blocks, owner, section.level) else null;
-        const own_kind: ?[]const u8 = named_kind orelse if (paragraph_part) |marker| marker.kind else null;
+        const meaning_paragraph = if (named_kind == null and paragraph_part == null and !unclassified)
+            serbianMeaningParagraph(section.blocks, owner, section.level) else null;
+        const own_kind: ?[]const u8 = named_kind orelse if (paragraph_part) |marker| marker.kind
+            else if (meaning_paragraph != null) "Значења" else null;
         const lemma = std.mem.eql(u8, section.title, "Lemma") or std.mem.eql(u8, section.title, "Neet-lemma");
         const czech_parent = if (own_kind == null) czechMeaningParent(sections, i, owner) else null;
         const meaning_parent = if (own_kind == null) slovakMeaningParent(sections, i) orelse kyrgyzMeaningParent(sections, i) else null;
@@ -1785,7 +1882,7 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
         // POS belongs to the preceding etymology, but a new region cannot inherit it.
         if (owner != null and section.level == 1) origin = null;
         if (section.level == 2) {
-            if (owner == null or kind == null or paragraph_part != null) origin = null;
+            if (owner == null or kind == null or paragraph_part != null or meaning_paragraph != null) origin = null;
             if (owner == null and !unclassified and kind == null and !etymology) current_language = section.title;
         }
         if (active) |previous| {
@@ -1821,6 +1918,8 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
             active_level = if (nested_kind != null) section.level - 1 else section.level;
             var lexical = if (paragraph_part) |marker|
                 try analyzeMarkedParagraph(a, marker, i, origin, section.blocks)
+            else if (meaning_paragraph) |marker|
+                try analyzeSerbianMeaningParagraph(a, marker, i, section.blocks)
             else if (grammar_kind != null)
                 try analyzeBulgarianVerb(a, name, i, origin, section.blocks)
             else if (greekSynonymSection(section, owner))
@@ -10888,4 +10987,167 @@ test "actual current Icelandic aktin body preserves every field through proved n
     restored.entry.organization = before.organization;
     try std.testing.expectEqualDeep(types.Stored{ .entry = before }, restored);
     try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
+}
+
+const SerbianMeaningTest = struct {
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    const valid_source = "Lead\n\n'''Значења:'''\n:#''[[Meaning|sense]]''\n'''Примери:'''\n:#[[Example|example]]\n'''Синоними:'''\n:*[[Other]]";
+    fn body(a: A, input: []const u8) ![]const wiki.Block {
+        var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "Independent" } };
+        return renderer.renderBody(input);
+    }
+    fn layout(a: A, blocks: []const wiki.Block) !Layout {
+        return buildOwned(a, &[_]Section{.{ .title = "Independent", .level = 2, .blocks = blocks }}, "Independent owner");
+    }
+    fn projected(a: A, entry: @import("blob_encoder").presentation_types.Entry) ![]const Section {
+        const result = try a.alloc(Section, entry.sections.len);
+        for (entry.sections, result) |original, *section| {
+            const blocks = try a.alloc(wiki.Block, original.blocks.len);
+            for (original.blocks, blocks) |old, *block| {
+                const spans = try a.alloc(wiki.Span, old.spans.len);
+                for (old.spans, spans) |old_span, *span| {
+                    const bytes = try std.json.Stringify.valueAlloc(a, old_span, .{});
+                    span.* = (try std.json.parseFromSlice(wiki.Span, a, bytes, .{ .ignore_unknown_fields = true })).value;
+                    span.flags = .{ .bold = old_span.bold, .italic = old_span.italic, .code = old_span.code,
+                        .small = old_span.small, .superscript = old_span.superscript, .subscript = old_span.subscript,
+                        .strike = old_span.strike, .underline = old_span.underline };
+                }
+                block.* = .{ .kind = std.meta.stringToEnum(wiki.Kind, @tagName(old.kind)).?, .depth = old.depth,
+                    .list_path = old.list_path, .number = old.number, .level = old.level, .spans = spans };
+                // This analyzer reads only flat root blocks. Preserve nested
+                // content presence as an opaque barrier in this test view;
+                // the complete typed original is the codec/body oracle below.
+                if (old.table != null or old.figure != null or old.container != null or old.flow != null or old.feature != null)
+                    block.flow = &.{};
+            }
+            section.* = .{ .title = original.title, .level = original.level, .blocks = blocks };
+        }
+        return result;
+    }
+};
+
+test "Serbian meaning paragraphs preserve semantic label and distinguish examples without guessing POS" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const blocks = try SerbianMeaningTest.body(a, SerbianMeaningTest.valid_source);
+    try std.testing.expectEqual(@as(usize, 7), blocks.len);
+    const before = try std.json.Stringify.valueAlloc(a, blocks, .{});
+    const actual = try SerbianMeaningTest.layout(a, blocks);
+    try std.testing.expectEqual(@as(usize, 1), actual.lexemes.len);
+    const group = actual.lexemes[0];
+    try std.testing.expectEqualStrings("Значења", group.kind);
+    try std.testing.expect(partOfSpeech(group.kind) == null);
+    try std.testing.expectEqualStrings("Independent owner", group.language);
+    try std.testing.expectEqual(@as(usize, 1), group.definitions.len);
+    try std.testing.expectEqual(@as(usize, 2), group.definitions[0].block);
+    try std.testing.expectEqualSlices(usize, &.{3}, group.definitions[0].notes);
+    try std.testing.expectEqualSlices(usize, &.{4}, group.definitions[0].examples);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, group.introduction);
+    try std.testing.expectEqualSlices(usize, &.{ 5, 6 }, group.other_blocks);
+    try std.testing.expect(group.definitions[0].parent == null and group.definitions[0].form == null);
+    try std.testing.expectEqual(wiki.Kind.list_item, blocks[2].kind);
+    try std.testing.expectEqualStrings(":#", blocks[2].list_path);
+    try std.testing.expectEqualStrings("Meaning", blocks[2].spans[0].target);
+    try std.testing.expect(blocks[2].spans[0].flags.italic);
+    try std.testing.expectEqualStrings("Example", blocks[4].spans[0].target);
+    try std.testing.expectEqualStrings(before, try std.json.Stringify.valueAlloc(a, blocks, .{}));
+    const sections = [_]SerbianMeaningTest.Section{.{ .title = "Independent", .level = 2, .blocks = blocks }};
+    try std.testing.expectEqual(@as(usize, 0), (try build(a, &sections)).lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &sections)).lexemes.len);
+}
+
+test "Serbian paragraph meaning authority rejects malformed labels list regrouping and ambiguous examples" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const original = try SerbianMeaningTest.body(a, SerbianMeaningTest.valid_source);
+    for ([_]?[]const u8{ null, "", "Unclassified" }) |owner|
+        try std.testing.expect(serbianMeaningParagraph(original, owner, 2) == null);
+    try std.testing.expect(serbianMeaningParagraph(original, "Independent owner", 3) == null);
+    for ([_][]const u8{
+        "Значења:\n:#sense", "''Значења:''\n:#sense", "'''Значење:'''\n:#sense",
+        "<nowiki>'''Значења:'''</nowiki>\n:#sense", "'''[[Значења:]]'''\n:#sense",
+        "'''Значења:'''\n#sense", "'''Значења:'''\n:*sense", "'''Значења:'''\n:##sense",
+        "'''Значења:'''\n:#sense\n:##nested", "'''Значења:'''\n:#sense\n:#<nowiki>protected</nowiki>",
+        "'''Значења:'''\n:#sense\n'''Значења:'''\n:#second",
+        "'''Примери:'''\n:#example", ":'''Значења:'''\n:#sense",
+    }) |source| {
+        const blocks = try SerbianMeaningTest.body(a, source);
+        try std.testing.expectEqual(@as(usize, 0), (try SerbianMeaningTest.layout(a, blocks)).lexemes.len);
+    }
+    for (0..8) |mode| {
+        const blocks = try a.dupe(wiki.Block, original);
+        const spans = try a.dupe(wiki.Span, blocks[1].spans); blocks[1].spans = spans;
+        switch (mode) {
+            0 => spans[0].provenance = .protected_literal,
+            1 => spans[0].generated_diagnostic = true,
+            2 => spans[0].flags.bold = false,
+            3 => spans[0].role = .example,
+            4 => blocks[1].depth = 1,
+            5 => blocks[1].flow = &.{},
+            6 => blocks[2].depth = 1,
+            7 => blocks[2].list_path = "#",
+            else => unreachable,
+        }
+        try std.testing.expectEqual(@as(usize, 0), (try SerbianMeaningTest.layout(a, blocks)).lexemes.len);
+    }
+    // Separate example labels do not identify one of several senses. Keep all
+    // example/support blocks as body without assigning an invented relation.
+    const multiple = try SerbianMeaningTest.body(a, "'''Значења:'''\n:#first\n:#second\n'''Примери:'''\n:#example");
+    const plural = try SerbianMeaningTest.layout(a, multiple);
+    try std.testing.expectEqual(@as(usize, 2), plural.lexemes[0].definitions.len);
+    for (plural.lexemes[0].definitions) |sense| try std.testing.expectEqual(@as(usize, 0), sense.examples.len);
+    try std.testing.expectEqualSlices(usize, &.{ 3, 4 }, plural.lexemes[0].other_blocks);
+    for ([_][]const u8{
+        "'''Значења:'''\n:#sense\nOther\n'''Примери:'''\n:#example",
+        "'''Значења:'''\n:#sense\n'''Примери:'''\n:#example\n'''Примери:'''\n:#second",
+        "'''Значења:'''\n:#sense\n'''Примери:'''\n:##nested",
+    }) |source| {
+        const scoped = try SerbianMeaningTest.layout(a, try SerbianMeaningTest.body(a, source));
+        try std.testing.expectEqual(@as(usize, 1), scoped.lexemes[0].definitions.len);
+        try std.testing.expectEqual(@as(usize, 0), scoped.lexemes[0].definitions[0].examples.len);
+    }
+}
+
+test "actual Fuhe Reader meaning organization preserves every body action style media and codec field" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const source = @embedFile("testdata/sr-fuhe-senses/reader.json");
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    try std.testing.expectEqualStrings("4379aa83d54f857cdd571419dd38d698296476921b584c91c3779882b43697e6", &std.fmt.bytesToHex(digest, .lower));
+    const parsed = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, source, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+    const before = parsed.value.entries[0];
+    try std.testing.expectEqualStrings("符合", before.title);
+    try std.testing.expectEqualStrings("Кинески", before.language.?);
+    try std.testing.expectEqualStrings("zh", before.language_code);
+    try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 3), before.sections.len);
+    try std.testing.expectEqual(@as(usize, 25), before.sections[0].blocks.len);
+    const sections = try SerbianMeaningTest.projected(a, before);
+    try std.testing.expectEqual(@as(usize, 0), (try build(a, sections)).lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, sections)).lexemes.len);
+    const layout = try buildOwned(a, sections, "Кинески");
+    const typed = try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{});
+    const expected: T.Layout = .{ .lexemes = &.{.{ .language = "Кинески", .kind = "Значења", .section = 0,
+        .definitions = &.{.{ .block = 8, .notes = &.{9}, .examples = &.{10} }},
+        .introduction = &.{ 0, 1, 2, 3, 4, 5, 6, 7 }, .other_blocks = &.{ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 },
+        .related_sections = &.{1} }}, .other_sections = &.{2} };
+    try std.testing.expectEqualDeep(expected, typed.value);
+    try std.testing.expect(partOfSpeech(typed.value.lexemes[0].kind) == null);
+    try std.testing.expectEqualStrings("Значења:", before.sections[0].blocks[7].spans[0].text);
+    try std.testing.expect(before.sections[0].blocks[7].spans[0].bold);
+    try std.testing.expectEqualStrings("odgovarati, biti usklađen sa", before.sections[0].blocks[8].spans[0].text);
+    try std.testing.expectEqualStrings("Примери:", before.sections[0].blocks[9].spans[0].text);
+    try std.testing.expectEqual(T.BlockKind.list_item, before.sections[0].blocks[8].kind);
+    try std.testing.expectEqual(T.BlockKind.list_item, before.sections[0].blocks[10].kind);
+    var after: T.Stored = .{ .entry = before }; after.entry.organization = typed.value;
+    const bytes = try encoder.presentation_codec.encodeAlloc(a, after);
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+    try std.testing.expectEqualDeep(after, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    var restored = decoded; restored.entry.organization = before.organization;
+    try std.testing.expectEqualDeep(before, restored.entry);
+    try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = before }), try encoder.presentation_codec.encodeAlloc(a, restored));
 }
