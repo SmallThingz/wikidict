@@ -10835,3 +10835,57 @@ test "complete retained Ancient Greek lekani organization preserves every body a
     try std.testing.expect(sense.spans[0].italic and sense.spans[2].bold);
     try std.testing.expectEqualStrings("#002000", decoded.entry.sections[2].blocks[3].spans[0].foreground.?);
 }
+
+test "actual current Icelandic aktin body preserves every field through proved noun organization" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const types = encoder.presentation_types;
+    const source = @embedFile("is-aktin-current-reader.json");
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    try std.testing.expectEqualStrings("e410af55770ddc1de7f1f6650a5fa523da263c859d8884e0213ef6897d73ca7c", &std.fmt.bytesToHex(digest, .lower));
+    const parsed = try std.json.parseFromSlice(struct { entries: []const types.Entry }, a, source, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+    const before = parsed.value.entries[0];
+    try std.testing.expectEqualStrings("aktín", before.title);
+    try std.testing.expectEqualStrings("íslenska", before.language.?);
+    try std.testing.expectEqualStrings("is", before.language_code);
+    try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+    const sections = try IsKyOrganizationTest.projected(a, source, before);
+    try std.testing.expectEqual(@as(usize, 1), sections.len);
+    try std.testing.expectEqual(@as(usize, 10), sections[0].blocks.len);
+    // This conditional full-body check complements the normal Writer proof
+    // transport test. Stored language strings alone never issue owner authority.
+    try std.testing.expectEqual(@as(usize, 0), (try build(a, sections)).lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, sections)).lexemes.len);
+    const layout = try buildOwned(a, sections, "íslenska");
+    try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+    const noun = layout.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("íslenska", noun.language);
+    try std.testing.expectEqual(@as(usize, 0), noun.section);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 3), noun.definitions[0].block);
+    try std.testing.expect(noun.definitions[0].parent == null and noun.definitions[0].form == null);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, noun.introduction);
+    try std.testing.expectEqualSlices(usize, &.{ 4, 5, 6, 7, 8, 9 }, noun.other_blocks);
+    const sense = before.sections[0].blocks[3];
+    try std.testing.expect(sense.kind == .indent);
+    try std.testing.expectEqualStrings(":", sense.list_path);
+    try std.testing.expectEqualStrings("[1] ", sense.spans[0].text);
+    try std.testing.expectEqualStrings("frumefni", sense.spans[1].target);
+    try std.testing.expect(sense.spans[1].italic);
+    const organization_json = try std.json.Stringify.valueAlloc(a, layout, .{});
+    const organization = try std.json.parseFromSlice(types.Layout, a, organization_json, .{});
+    var expected: types.Stored = .{ .entry = before };
+    expected.entry.organization = organization.value;
+    const encoded = try encoder.presentation_codec.encodeAlloc(a, expected);
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .code = before.language_code, .heading = before.language.? });
+    try std.testing.expectEqualDeep(expected, decoded);
+    var restored = decoded;
+    restored.entry.organization = before.organization;
+    try std.testing.expectEqualDeep(types.Stored{ .entry = before }, restored);
+    try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
+}

@@ -1,0 +1,28 @@
+{{-is-}}
+
+{{Fallbeyging hk sb 01 et|aktín}}
+
+{{-is-nafnorð-}} 
+'''aktín''' {{hk.}}; {{no.s.b.}}
+:[1] ''[[frumefni]]''
+
+{{Lotukerfið}}
+
+{{-þýðingar-}}
+{{þýðingar
+|an= {{þýðing|an|actinio}}
+|da= {{þýðing|da|actinium}}
+|en= {{þýðing|en|actinium}}
+|fr= {{þýðing|fr|actinium}}
+|it= {{þýðing|it|attinio}}
+|ca= {{þýðing|es|actini}}
+|la= {{þýðing|la|actinium}}
+|li= {{þýðing|li|actinium}}
+|sc= {{þýðing|sc|atìniu}}
+|es= {{þýðing|es|actinio}}
+|sv= {{þýðing|sv|aktinium}}
+|de= {{þýðing|de|Actinium}}
+}}
+
+{{-tilvísun-}}
+{{Wikipedia|aktín}}

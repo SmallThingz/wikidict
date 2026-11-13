@@ -94,7 +94,7 @@ const Inventory = struct {
     }
 };
 const HeightEvidence = struct { requested_height: u32, original_width: u32, observed_width: u32 };
-const SvgLanguageEvidence = struct { authored: bool = true, language: []const u8, width: u32, height: u32, policy: encoder.presentation_types.FigureSizingPolicy };
+const SvgLanguageEvidence = struct { authored: bool = true, authored_width: ?u32 = null, language: []const u8, width: u32, height: u32, policy: encoder.presentation_types.FigureSizingPolicy };
 const SvgUprightFitEvidence = struct { width: u32, height: u32 };
 const Occurrence = struct {
     canonical_file: []const u8,
@@ -159,14 +159,15 @@ pub const SelectedPage = struct {
         const self: *const SelectedPage = @ptrCast(@alignCast(raw orelse return null));
         const occurrence = (try self.find(a, file, format_value, options)) orelse return null;
         const proof = occurrence.svg_language orelse return null;
-        if (!proof.authored or !equal(language, proof.language) or width_px != proof.width or height_px != null or proof.width != self.default_width) return null;
+        if (!proof.authored or !equal(language, proof.language) or width_px != proof.width or height_px != null or
+            (if (proof.authored_width) |authored| authored != proof.width else proof.width != self.default_width)) return null;
         return proof.policy;
     }
     pub fn observedSvgLanguage(raw: ?*const anyopaque, a: A, file: []const u8, format_value: encoder.presentation_types.FigureFormat, options: []const u8, width_px: ?u32, height_px: ?u32) A.Error!?compiler.ObservedSvgLanguage {
         const self: *const SelectedPage = @ptrCast(@alignCast(raw orelse return null));
         const occurrence = (try self.find(a, file, format_value, options)) orelse return null;
         const proof = occurrence.svg_language orelse return null;
-        if (proof.authored or width_px != proof.width or height_px != null or proof.width != self.default_width) return null;
+        if (proof.authored or proof.authored_width != null or width_px != proof.width or height_px != null or proof.width != self.default_width) return null;
         return .{ .language = proof.language, .policy = proof.policy };
     }
     pub fn width(raw: ?*const anyopaque, a: A, file: []const u8, format_value: encoder.presentation_types.FigureFormat, options: []const u8, base_width: u32) A.Error!?u32 {
@@ -247,11 +248,14 @@ pub const Book = struct {
         const doc = try std.json.parseFromValueLeaky(Document, a, shape, .{});
         // v7 composes independent Missing and SVG-language proofs. It does not
         // manufacture a page context or authorize general stylesheets.
+        // V9 composes existing independent proofs; it grants no v8-only source
+        // operation or image-map authority and cannot merely relabel a v5 Book.
+        const poster_svg_contract = equal(doc.schema, "wikidict.figure-page-observations.v9");
         const image_map_contract = equal(doc.schema, "wikidict.figure-page-observations.v8");
-        const combined_contract = image_map_contract or equal(doc.schema, "wikidict.figure-page-observations.v7");
+        const combined_contract = image_map_contract or poster_svg_contract or equal(doc.schema, "wikidict.figure-page-observations.v7");
         const svg_language_contract = combined_contract or equal(doc.schema, "wikidict.figure-page-observations.v6");
         const paint_contract = equal(doc.schema, "wikidict.figure-page-observations.v3");
-        const poster_contract = equal(doc.schema, "wikidict.figure-page-observations.v5");
+        const poster_contract = poster_svg_contract or equal(doc.schema, "wikidict.figure-page-observations.v5");
         const page_style_contract = combined_contract;
         const class_contract = combined_contract or poster_contract or equal(doc.schema, "wikidict.figure-page-observations.v4");
         const class_scope_contract = class_contract or svg_language_contract;
@@ -300,7 +304,7 @@ pub const Book = struct {
             const source_and_html = try responseSource(a, ns, page);
             const image_map_error = if (page.image_map_no_link) |value|
                 try observedImageMapNoLink(a, ns, registry, source_and_html.source, source_and_html.html, value) else null;
-            if (page_style_contract) for (page.occurrences) |occurrence| {
+            if (page_style_contract and !poster_svg_contract) for (page.occurrences) |occurrence| {
                 if (occurrence.static_poster) return invalid;
             };
             var has_poster = false;
@@ -348,7 +352,8 @@ pub const Book = struct {
                 if (occurrence.start >= occurrence.end or occurrence.end > source_and_html.source.len) return invalid;
                 if (occurrence.svg_language != null and occurrence.resolved_svg_language != null) return invalid;
                 if (occurrence.svg_language orelse occurrence.resolved_svg_language) |language| {
-                    if (!svg_language_contract or !compiler.validSvgRasterLanguage(language) or occurrence.width or occurrence.height or
+                    if (!svg_language_contract or !compiler.validSvgRasterLanguage(language) or
+                        (occurrence.width and (!poster_svg_contract or occurrence.svg_language == null)) or occurrence.height or
                         occurrence.anchor_attributes or occurrence.missing_content or occurrence.static_poster) return invalid;
                 }
                 if (occurrence.missing_content) {
@@ -413,13 +418,15 @@ pub const Book = struct {
                 const svg_language: ?SvgLanguageEvidence = if (occurrence.svg_language orelse occurrence.resolved_svg_language) |language| proof: {
                     // Actual raster and language-key evidence was checked in the
                     // complete HTML observer. File models alone never grant it.
-                    if (!equal(image.svg_language orelse return invalid, language) or image.width != default_width or
+                    const authored_width: ?u32 = if (occurrence.width) svgLanguageAuthoredWidth(options) orelse return invalid else null;
+                    if (!equal(image.svg_language orelse return invalid, language) or image.width != (authored_width orelse default_width) or
                         !svgObservedWidthFit(image.width, image.height, occurrence.original_width, occurrence.original_height)) return invalid;
                     const policy = (try sizing.Registry.resolveSvgLanguageModel(registry, a, canonical, language, .thumbnail, image.width, null)) orelse return invalid;
-                    break :proof .{ .authored = occurrence.svg_language != null, .language = try a.dupe(u8, language), .width = image.width, .height = image.height, .policy = policy };
+                    break :proof .{ .authored = occurrence.svg_language != null, .authored_width = authored_width,
+                        .language = try a.dupe(u8, language), .width = image.width, .height = image.height, .policy = policy };
                 } else null;
                 selected.* = .{ .canonical_file = canonical, .original_options = options, .svg_language = svg_language, .svg_upright_fit = svg_upright_fit,
-                    .width = if (occurrence.width) image.width else null,
+                    .width = if (occurrence.width and svg_language == null) image.width else null,
                     .height = if (occurrence.height) .{ .requested_height = image.height,
                         .original_width = occurrence.original_width, .observed_width = image.width } else null,
                     .anchor = if (occurrence.anchor_attributes or occurrence.missing_content or occurrence.static_poster) image.anchor else null,
@@ -430,6 +437,14 @@ pub const Book = struct {
             out.* = .{ .namespace_id = page.namespace_id, .page_id = page.page_id, .revision_id = page.revision_id, .title = page.title,
                 .raw_sha256 = page.raw_sha256, .source = source_and_html.source, .image_map_no_link = image_map_error, .occurrences = occurrences, .text_class_scope = text_scope, .source_siblings = source_siblings, .source_root_tables = source_root_tables, .page_styles = page_styles, .source_root_children = source_root_children, .source_root_parent_groups = source_root_parent_groups,
                 .root_attributes = if (has_page_styles and observed_nodes.items.len != 0) observed_nodes.items[0].attributes else null };
+        }
+        if (poster_svg_contract) {
+            var proved_poster = false; var proved_svg_language = false;
+            for (pages) |page| for (page.occurrences) |occurrence| {
+                proved_poster = proved_poster or occurrence.static_poster != null;
+                proved_svg_language = proved_svg_language or occurrence.svg_language != null;
+            };
+            if (!proved_poster or !proved_svg_language) return invalid;
         }
         std.mem.sort(Page, pages, {}, struct {
             fn less(_: void, left: Page, right: Page) bool { return left.page_id < right.page_id; }
@@ -566,8 +581,10 @@ pub const Book = struct {
                     bareUprightThumbnailOptions(context.image_options.?, occurrence.original_options) and
                     bareUprightThumbnailOptions(context.image_options.?, slot.stage_options);
                 if (occurrence.svg_language) |proof| {
-                    if (!svgLanguageThumbnailOptionsForOrigin(context.image_options.?, occurrence.original_options, if (proof.authored) proof.language else null) or
-                        !svgLanguageThumbnailOptionsForOrigin(context.image_options.?, slot.stage_options, if (proof.authored) proof.language else null)) return null;
+                    if (!svgLanguageThumbnailOptionsWithWidth(context.image_options.?, occurrence.original_options,
+                            if (proof.authored) proof.language else null, proof.authored_width) or
+                        !svgLanguageThumbnailOptionsWithWidth(context.image_options.?, slot.stage_options,
+                            if (proof.authored) proof.language else null, proof.authored_width)) return null;
                 }
                 if (occurrence.height) |proof| {
                     if (!heightThumbnailOptions(context.image_options.?, occurrence.original_options, proof.requested_height) or
@@ -633,8 +650,37 @@ fn svgUprightObservedFit(width: u32, height: u32, original_width: u32, original_
     const product = @as(u64, original_height) * width;
     return product / original_width + @intFromBool(product % original_width >= (@as(u64, original_width) + 1) / 2) == height;
 }
+fn svgLanguageWidthValue(value: []const u8) ?u32 {
+    if (value.len == 0 or value.len > 10) return null;
+    for (value) |byte| if (!std.ascii.isDigit(byte)) return null;
+    const width = std.fmt.parseInt(u32, value, 10) catch return null;
+    return if (width > 0) width else null;
+}
+// Intake proves the literal numeric width; selection independently resolves the
+// same complete options through the actual captured image-option registry.
+fn svgLanguageAuthoredWidth(options: []const u8) ?u32 {
+    var width: ?u32 = null; var at: usize = 0;
+    while (at <= options.len) {
+        const end = syntax.delimiter(options, "|", at) orelse options.len;
+        const part = std.mem.trim(u8, options[at..end], " \t\r\n");
+        if (part.len >= 2 and std.ascii.eqlIgnoreCase(part[part.len - 2 ..], "px")) {
+            if (svgLanguageWidthValue(part[0 .. part.len - 2])) |parsed| {
+                if (width != null) return null;
+                width = parsed;
+            }
+        }
+        if (end == options.len) break;
+        at = end + 1;
+    }
+    return width;
+}
 fn svgLanguageThumbnailOptionsForOrigin(registry: *const namespaces.image_options.Registry, options: []const u8, language: ?[]const u8) bool {
-    var thumbnail = false; var language_seen = false; var caption = false;
+    return svgLanguageThumbnailOptionsWithWidth(registry, options, language, null);
+}
+fn svgLanguageThumbnailOptionsWithWidth(registry: *const namespaces.image_options.Registry, options: []const u8,
+    language: ?[]const u8, authored_width: ?u32) bool {
+    if (authored_width != null and language == null) return false;
+    var thumbnail = false; var language_seen = false; var caption = false; var width_seen = false;
     var at: usize = 0;
     while (at <= options.len) {
         const end = syntax.delimiter(options, "|", at) orelse options.len;
@@ -646,6 +692,9 @@ fn svgLanguageThumbnailOptionsForOrigin(registry: *const namespaces.image_option
             } else if (equal(option.id, "img_lang")) {
                 if (language_seen or !std.ascii.eqlIgnoreCase(option.value orelse return false, language orelse return false)) return false;
                 language_seen = true;
+            } else if (equal(option.id, "img_width")) {
+                if (width_seen or svgLanguageWidthValue(option.value orelse return false) != (authored_width orelse return false)) return false;
+                width_seen = true;
             } else return false;
         } else {
             if (caption) return false;
@@ -654,7 +703,7 @@ fn svgLanguageThumbnailOptionsForOrigin(registry: *const namespaces.image_option
         if (end == options.len) break;
         at = end + 1;
     }
-    return thumbnail and language_seen == (language != null);
+    return thumbnail and language_seen == (language != null) and width_seen == (authored_width != null);
 }
 fn svgObservedWidthFit(width: u32, height: u32, original_width: u32, original_height: u32) bool {
     if (width == 0 or height == 0 or original_width == 0 or original_height == 0 or width > original_width) return false;
@@ -1068,7 +1117,7 @@ fn validateObservedStyleSet(a: A, served: MissingServedSet, wiki: []const u8) !V
 fn pageMissingServedSet(a: A, doc: Document, page: RawPage, shape: Value, defaults_sha256: [32]u8, inherited: ?ValidatedMissingSet) !?ValidatedMissingSet {
     if (shape != .object) return invalid;
     const value = shape.object.get("missing_served_set") orelse return inherited;
-    if ((!equal(doc.schema, "wikidict.figure-page-observations.v4") and !equal(doc.schema, "wikidict.figure-page-observations.v7") and !equal(doc.schema, "wikidict.figure-page-observations.v8")) or inherited != null or
+    if ((!equal(doc.schema, "wikidict.figure-page-observations.v4") and !equal(doc.schema, "wikidict.figure-page-observations.v7") and !equal(doc.schema, "wikidict.figure-page-observations.v8") and !equal(doc.schema, "wikidict.figure-page-observations.v9")) or inherited != null or
         value != .object or value.object.count() != 2 or
         value.object.get("responses") == null or value.object.get("receipt") == null or
         !page.text_class_scope or page.outer_context == null) return invalid;
@@ -1143,7 +1192,7 @@ fn observedPageStyleProfile(a: A, ns: *const namespaces.Registry, schema: []cons
 {
     if (shape != .object) return invalid;
     const field_value = shape.object.get("page_styles") orelse return null;
-    if ((!equal(schema, "wikidict.figure-page-observations.v7") and !equal(schema, "wikidict.figure-page-observations.v8")) or field_value != .object or field_value.object.count() != 2 or
+    if ((!equal(schema, "wikidict.figure-page-observations.v7") and !equal(schema, "wikidict.figure-page-observations.v8") and !equal(schema, "wikidict.figure-page-observations.v9")) or field_value != .object or field_value.object.count() != 2 or
         field_value.object.get("responses") == null or field_value.object.get("receipt") == null or
         !page.text_class_scope or text_scope == null or outer == null) return invalid;
     const served = try validateObservedStyleSet(a, page.page_styles orelse return invalid, ns.wiki);
@@ -1961,13 +2010,15 @@ fn missingThumbnailOptionsForObservation(registry: *const namespaces.image_optio
         at = end + 1;
     }
     if (count < 3 or parts[count - 1].len == 0 or registry.match(parts[count - 1], .image) != null) return false;
-    const format = registry.match(parts[0], .image) orelse return false;
-    if (!equal(format.id, "img_thumbnail") or format.value != null) return false;
+    var thumbnail_seen = false;
     var width_seen = false;
     var right_seen = false;
-    for (parts[1 .. count - 1]) |part| {
+    for (parts[0 .. count - 1]) |part| {
         const option = registry.match(part, .image) orelse return false;
-        if (equal(option.id, "img_right")) {
+        if (equal(option.id, "img_thumbnail")) {
+            if (thumbnail_seen or option.value != null) return false;
+            thumbnail_seen = true;
+        } else if (equal(option.id, "img_right")) {
             if (right_seen or option.value != null) return false;
             right_seen = true;
         } else if (equal(option.id, "img_width")) {
@@ -1979,7 +2030,7 @@ fn missingThumbnailOptionsForObservation(registry: *const namespaces.image_optio
             width_seen = true;
         } else return false;
     }
-    return width_seen and right_seen == observed.right;
+    return thumbnail_seen and width_seen and right_seen == observed.right;
 }
 
 fn missingThumbnailOptions(registry: *const namespaces.image_options.Registry, options: []const u8) bool {
@@ -2274,7 +2325,9 @@ fn observedImagesWithServedPaintFailure(a: A, ns: *const namespaces.Registry, ht
                 const file = (try svgLanguageFileHref(a, ns, href, occurrence.svg_language)) orelse continue;
                 if (!equal(file, occurrence.canonical_file)) continue;
                 if (occurrence.missing_content) return invalid;
-                const figure_classes = stack[depth - 2].attributes.get("class") orelse return invalid;
+                const explicit_svg_width = occurrence.width and occurrence.svg_language != null and occurrence.resolved_svg_language == null;
+                const class_value = stack[depth - 2].attributes.get("class");
+                const figure_classes = class_value orelse if (explicit_svg_width) "" else return invalid;
                 const centered_default_size = equal(figure_classes, "mw-default-size mw-halign-center");
                 const explicit_centered = equal(figure_classes, "mw-halign-center");
                 const centered = explicit_centered or centered_default_size;
@@ -2282,7 +2335,8 @@ fn observedImagesWithServedPaintFailure(a: A, ns: *const namespaces.Registry, ht
                 if (!equal(stack[depth - 2].attributes.get("typeof") orelse return invalid, "mw:File/Thumb") or
                     (!equal(figure_classes, "mw-default-size") and
                         !(explicit_centered and occurrence.anchor_attributes and !occurrence.width) and
-                        !(centered_default_size and occurrence.width) and !height_right) or
+                        !(centered_default_size and occurrence.width) and !height_right and
+                        !(explicit_svg_width and class_value == null)) or
                     !equal(anchor.get("class") orelse return invalid, "mw-file-description") or
                     try positiveAttribute(inv, "data-file-width") != occurrence.original_width or try positiveAttribute(inv, "data-file-height") != occurrence.original_height) return invalid;
                 if (occurrence.height and (!height_right or !equal(inv.get("class") orelse "", "mw-file-element") or inv.get("style") != null)) return invalid;
@@ -2290,7 +2344,8 @@ fn observedImagesWithServedPaintFailure(a: A, ns: *const namespaces.Registry, ht
                 for (stack[depth - 2].attributes.attributes) |attr| if (!equal(attr.name, "class") and !equal(attr.name, "typeof")) return invalid;
                 try imageSource(a, ns, inv.get("src") orelse return invalid, occurrence.canonical_file);
                 if (occurrence.svg_language orelse occurrence.resolved_svg_language) |language| {
-                    if (!equal(figure_classes, "mw-default-size") or !equal(inv.get("class") orelse "", "mw-file-element") or inv.get("style") != null) return invalid;
+                    if ((if (explicit_svg_width) class_value != null else !equal(figure_classes, "mw-default-size")) or
+                        !equal(inv.get("class") orelse "", "mw-file-element") or inv.get("style") != null) return invalid;
                     try svgLanguageRasterSource(a, ns, inv.get("src") orelse return invalid, occurrence.canonical_file, language);
                     if (inv.get("srcset")) |srcset| try svgLanguageRasterSourceSet(a, ns, srcset, occurrence.canonical_file, language);
                 }
@@ -7510,4 +7565,369 @@ test "adjacent quoted class census retains malformed dynamic and boundary refusa
     for (0..65) |_| try too_many.appendSlice(a, "data-x=\"v\"");
     var classes: std.ArrayList(u8) = .empty;
     try std.testing.expectError(invalid, appendAuthoredSourceClasses(a, &classes, too_many.items));
+}
+
+const SrFuheMissingTesting = struct {
+    const prefix = "testdata/figure-page-observations/sr-fuhe-served-set/";
+    const bytes = @embedFile(prefix ++ "figure-page-observations.json");
+    const raw = @embedFile(prefix ++ "page.raw.wikitext");
+    const source = @embedFile(prefix ++ "page.expanded.wikitext");
+    fn document(a: A) !Document { return std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always }); }
+    // This controlled Missing row exercises Book intake, not the independent
+    // full normal Registry. Unselected ordinary images receive no callback.
+    fn registry(a: A, ns: *const namespaces.Registry) !sizing.Registry {
+        var missing: std.StringHashMapUnmanaged(void) = .empty;
+        try missing.put(a, "Датотека:符-bw.png", {});
+        return .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = ns, .records = &.{}, .missing_files = missing, .file_authority = true };
+    }
+};
+
+test "explicit Missing thumbnail options admit unique supported permutations without changing default grammar" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = SrFuheMissingTesting;
+    var ns = try namespaces.Registry.init(a, @embedFile(F.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const behavior = @embedFile(F.prefix ++ "behavior-switches.tsv");
+    var options = try namespaces.image_options.Registry.init(a, @embedFile(F.prefix ++ "image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, Testing.hash(behavior)); defer options.deinit();
+    const observed: ObservedMissing = .{ .label = "Датотека:符-bw.png", .href = "//commons.wikimedia.org/wiki/Special:UploadWizard?wpDestFile=x", .data_width = 200, .element = .{ .attributes = &.{} }, .default_size = false, .right = true };
+    for ([_][]const u8{
+        "200px|мини|десно|Caption", "200px|десно|мини|Caption", "мини|200px|десно|Caption",
+        "мини|десно|200px|Caption", "десно|мини|200px|Caption", "десно|200px|мини|Caption",
+    }) |input| try std.testing.expect(missingThumbnailOptionsForObservation(&options, input, observed));
+    var no_right = observed; no_right.right = false;
+    for ([_][]const u8{ "200px|мини|Caption", "мини|200px|Caption" }) |input|
+        try std.testing.expect(missingThumbnailOptionsForObservation(&options, input, no_right));
+    for ([_][]const u8{
+        "200px|мини|мини|Caption", "200px|200px|мини|Caption", "десно|десно|200px|Caption",
+        "200px|десно|Caption", "мини|десно|Caption", "200px|мини|Caption",
+        "201px|мини|десно|Caption", "0px|мини|десно|Caption", "200x100px|мини|десно|Caption",
+        "200px|мини|лево|Caption", "200px|мини|upright|Caption", "200px|мини|alt=Other|Caption",
+        "200px|мини|десно|", "200px|мини|десно|200px", "200px|мини|десно|Caption|extra",
+        "200px|мини|десно|мини|Caption", "200px|мини|десно|десно|Caption",
+    }) |input| try std.testing.expect(!missingThumbnailOptionsForObservation(&options, input, observed));
+    try std.testing.expect(!missingThumbnailOptionsForObservation(&options, "200px|мини|десно|Caption", no_right));
+    var default_size = observed; default_size.default_size = true;
+    try std.testing.expect(missingThumbnailOptionsForObservation(&options, "мини|десно|Caption", default_size));
+    try std.testing.expect(!missingThumbnailOptionsForObservation(&options, "десно|мини|Caption", default_size));
+    try std.testing.expect(!missingThumbnailOptionsForObservation(&options, "200px|мини|десно|Caption", default_size));
+}
+
+test "current complete SR Missing source binds its own served paint and preserves unselected ordinary images" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = SrFuheMissingTesting; const doc = try F.document(a);
+    var ns = try namespaces.Registry.init(a, @embedFile(F.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const defaults = Testing.hash(@embedFile(F.prefix ++ "figure-siteinfo.raw.json"));
+    try std.testing.expectEqual(@as(usize, 1), doc.pages.len);
+    const candidate = doc.pages[0];
+    try std.testing.expectEqual(@as(u64, 31899), candidate.page_id);
+    try std.testing.expectEqual(@as(u64, 147909), candidate.revision_id);
+    try std.testing.expectEqual(@as(usize, 1), candidate.occurrences.len);
+    const accepted = try responseSource(a, &ns, candidate);
+    try std.testing.expectEqualStrings(F.source, accepted.source);
+    try std.testing.expectEqual(@as(usize, 4337), accepted.source.len);
+    try std.testing.expect(digestMatches(accepted.source, "c95da2e5482423b889add540c39c253f5e51c277e3ce5da3f50e90fe13eb1c89"));
+    try std.testing.expect(digestMatches(accepted.html, "4bd2b9c9188c81c3a42e694249e467b71e3cc5c953dc3b44480f1472f429b822"));
+    try std.testing.expectEqualStrings("[[Датотека:符-bw.png|200px|мини|десно|Редослед писања карактера 符.]]", accepted.source[218..329]);
+    try std.testing.expect(std.mem.indexOf(u8, accepted.source, "[[Датотека:合-bw.png|200px|мини|десно|Редослед писања карактера 合.]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, accepted.html, "data-file-width=\"863\" data-file-height=\"130\"") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, accepted.html, "<style "));
+    const styles = doc.missing_link_styles.?;
+    try missingStyleShape(try json(a, F.bytes), true);
+    const served = try missingObservedSet(a, styles, ns.wiki, defaults);
+    try std.testing.expectEqual(@as(usize, 4), served.responses.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, try missingHeadSources(a, &ns, candidate, served));
+    const outer = try MissingServedTesting.context(a, &ns, candidate);
+    try std.testing.expectEqual(@as(usize, 8), outer.ancestors.len);
+    var css = (try missingServedProfile(a, &ns, candidate, served)) orelse return error.TestUnexpectedResult; defer css.deinit();
+    const image = try MissingServedTesting.missing(a, &ns, candidate, outer, &css);
+    const observed = image.missing_content orelse return error.TestUnexpectedResult;
+    if (!observed.paint_root_proven) MissingServedTesting.diagnosePaint(a, &ns, candidate, outer, served);
+    try std.testing.expect(observed.paint_root_proven and observed.right and !observed.default_size);
+    try std.testing.expectEqual(@as(u32, 200), observed.data_width);
+    try std.testing.expectEqual(@as(u32, 0), image.width);
+    try std.testing.expectEqualStrings("Датотека:符-bw.png", observed.label);
+    try std.testing.expectEqualStrings("//commons.wikimedia.org/wiki/Special:UploadWizard?uselang=sr&wpDestFile=%E7%AC%A6-bw.png", observed.href);
+    try std.testing.expect(observed.element.get("src") == null and observed.element.get("width") == null and observed.element.get("height") == null);
+    var files = try F.registry(a, &ns); defer files.deinit();
+    var book = try Book.init(a, F.bytes, &ns, &files, defaults, 250); defer book.deinit();
+    const behavior_bytes = @embedFile(F.prefix ++ "behavior-switches.tsv");
+    var behavior = try namespaces.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var options = try namespaces.image_options.Registry.init(a, @embedFile(F.prefix ++ "image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, Testing.hash(behavior_bytes)); defer options.deinit();
+    const context: compiler.Context = .{ .title = candidate.title, .namespace_catalog = &ns, .behavior_switches = &behavior, .image_options = &options };
+    const selected = (try book.select(a, &ns, 0, 31899, 147909, candidate.title, F.raw, F.source, defaults, 250, context)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), selected.occurrences.len);
+    const occurrence = selected.occurrences[0];
+    for ([_][]const u8{ occurrence.source.original_options, occurrence.stage_options }) |input| {
+        try std.testing.expect(missingThumbnailOptionsForObservation(&options, input, observed));
+        const proof = (try SelectedPage.missing(selected, a, "Датотека:符-bw.png", .thumbnail, input)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(?encoder.presentation_types.MissingLinkPaint, .vector_new_link_v1), proof.link_paint);
+        try std.testing.expectEqualStrings(observed.label, proof.label);
+        try std.testing.expectEqualStrings(observed.href, proof.href);
+        try std.testing.expectEqual(@as(u32, 200), proof.data_width);
+    }
+    try std.testing.expect((try SelectedPage.missing(selected, a, "Датотека:合-bw.png", .thumbnail, occurrence.stage_options)) == null);
+    try std.testing.expect((try SelectedPage.width(selected, a, "Датотека:合-bw.png", .thumbnail, occurrence.stage_options, 250)) == null);
+    var parent_profile = try profile.parseAlloc(a, ""); defer parent_profile.deinit();
+    try std.testing.expect((try book.selectPageStyles(a, &ns, 0, 31899, 147909, candidate.title, F.raw, F.source, defaults, &parent_profile)) == null);
+    for ([_]struct { raw: []const u8 = F.raw, source: []const u8 = F.source, revision: u64 = 147909 }{
+        .{ .raw = "changed" }, .{ .source = F.source[1..] }, .{ .revision = 147910 },
+    }) |changed| try std.testing.expect((try book.select(a, &ns, 0, 31899, changed.revision, candidate.title, changed.raw, changed.source, defaults, 250, context)) == null);
+}
+
+test "SR Missing observed set retains independent source outer stylesheet and occurrence refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = SrFuheMissingTesting; const doc = try F.document(a); const candidate = doc.pages[0];
+    var ns = try namespaces.Registry.init(a, @embedFile(F.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const defaults = Testing.hash(@embedFile(F.prefix ++ "figure-siteinfo.raw.json"));
+    const served = try missingObservedSet(a, doc.missing_link_styles.?, ns.wiki, defaults);
+    _ = try MissingServedTesting.context(a, &ns, candidate);
+    var css = (try missingServedProfile(a, &ns, candidate, served)) orelse return error.TestUnexpectedResult; defer css.deinit();
+    const unproved = try MissingServedTesting.missing(a, &ns, candidate, null, &css);
+    try std.testing.expect(!unproved.missing_content.?.paint_root_proven);
+    var changed_page = candidate; changed_page.revision_id += 1;
+    try std.testing.expectError(invalid, responseSource(a, &ns, changed_page));
+    changed_page = candidate; changed_page.form_body = candidate.form_body[0 .. candidate.form_body.len - 1];
+    try std.testing.expectError(invalid, responseSource(a, &ns, changed_page));
+    const scope = try observedTextClassScope(a, &ns, (try responseSource(a, &ns, candidate)).html);
+    var changed_outer = candidate.outer_context.?; changed_outer.response = changed_outer.response[0 .. changed_outer.response.len - 1];
+    try std.testing.expectError(invalid, observedOuterContext(a, &ns, candidate, changed_outer, scope));
+    var files = try F.registry(a, &ns); defer files.deinit();
+    for (0..4) |mutation| {
+        const shape = try json(a, F.bytes);
+        const pages = shape.object.getPtr("pages").?;
+        const current = &pages.array.items[0];
+        if (mutation == 0) {
+            const occurrences = current.object.getPtr("occurrences").?;
+            try occurrences.array.items[0].object.put(a, "start", .{ .integer = 219 });
+        } else if (mutation == 1) {
+            try current.object.put(a, "text_class_scope", .{ .bool = false });
+        } else if (mutation == 2) {
+            const policy = shape.object.getPtr("missing_link_styles").?;
+            const set = policy.object.getPtr("served_set").?;
+            const responses = set.object.getPtr("responses").?;
+            responses.array.items[0] = .{ .string = "changed" };
+        } else {
+            const policy = shape.object.getPtr("missing_link_styles").?;
+            const set = policy.object.getPtr("served_set").?;
+            const responses = set.object.getPtr("responses").?;
+            responses.array.items = responses.array.items[0..3];
+        }
+        try std.testing.expectError(invalid, Book.init(a, try std.json.Stringify.valueAlloc(a, shape, .{}), &ns, &files, defaults, 250));
+    }
+    var no_paint = try json(a, F.bytes);
+    try std.testing.expect(no_paint.object.swapRemove("missing_link_styles"));
+    var unstyled = try Book.init(a, try std.json.Stringify.valueAlloc(a, no_paint, .{}), &ns, &files, defaults, 250); defer unstyled.deinit();
+    try std.testing.expect(unstyled.missing_link_paint == null and !unstyled.pages[0].occurrences[0].missing_content.?.paint_root_proven);
+    // The real STYLE and both complete image bodies remain present without
+    // granting the missing-link palette from source custody alone.
+    try std.testing.expectEqualStrings(F.source, unstyled.pages[0].source);
+}
+
+
+
+const PosterSvgConjunctionTesting = if (@import("builtin").is_test) struct {
+    const prefix = StaticPosterContextTesting.prefix;
+    const actual = "testdata/it-book-conjunction/";
+    fn pangea(a: A) !RawPage {
+        return std.json.parseFromSliceLeaky(RawPage, a, @embedFile(actual ++ "Pangea.page.json"), .{ .allocate = .alloc_always });
+    }
+    fn document(a: A) !Document {
+        var doc = try StaticPosterContextTesting.document(a);
+        const pages = try a.alloc(RawPage, doc.pages.len + 1);
+        @memcpy(pages[0..doc.pages.len], doc.pages); pages[doc.pages.len] = try pangea(a);
+        doc.pages = pages; doc.schema = "wikidict.figure-page-observations.v9";
+        return doc;
+    }
+    fn bytes(a: A, doc: Document) ![]const u8 {
+        const encoded = try std.json.Stringify.valueAlloc(a, doc, .{ .emit_null_optional_fields = false });
+        if (doc.missing_link_styles) |styles| if (equal(styles.profile, missing_observed_set_profile)) {
+            const shape = try json(a, encoded); const value = shape.object.getPtr("missing_link_styles").?;
+            try std.testing.expect(value.object.swapRemove("response"));
+            try std.testing.expect(value.object.swapRemove("receipt"));
+            return std.json.Stringify.valueAlloc(a, shape, .{});
+        };
+        return encoded;
+    }
+    fn registry(a: A, ns: *const namespaces.Registry) !sizing.Registry {
+        const projected = @embedFile(prefix ++ "figure-sizing.json");
+        const captured = @embedFile(prefix ++ "figure-sizing.raw.json");
+        var projection: CombinedObservationTesting.Slice = .{ .bytes = projected };
+        var raw: CombinedObservationTesting.Slice = .{ .bytes = captured };
+        var projection_input: sizing.StreamInput = .{ .context = &projection, .read_at = CombinedObservationTesting.Slice.readAt, .size = projected.len };
+        var raw_input: sizing.StreamInput = .{ .context = &raw, .read_at = CombinedObservationTesting.Slice.readAt, .size = captured.len };
+        var result = try sizing.Registry.initStream(a, &projection_input, &raw_input,
+            @embedFile(prefix ++ "figure-sizing.site.json"), ns, "f45897451256aa3799aecc5d7ee320ade22beaec");
+        errdefer result.deinit();
+        try result.bindStaticPosterMessages(a, @embedFile(prefix ++ "interface-messages.tsv"), @embedFile(prefix ++ "language-fallbacks.tsv"));
+        try std.testing.expectEqualDeep(Testing.hash(projected), projection_input.digest.?);
+        try std.testing.expectEqualDeep(Testing.hash(captured), raw_input.digest.?);
+        // Explicit validator-only SVG model row from the actual selected fact.
+        // The normal complete Registry replay remains an independent obligation.
+        const occurrence = (try pangea(a)).occurrences[0];
+        result.records = try a.dupe(sizing.Record, &.{.{ .canonical_file = occurrence.canonical_file,
+            .file_sha1 = occurrence.file_sha1, .file_timestamp = occurrence.file_timestamp,
+            .original_width = occurrence.original_width, .original_height = occurrence.original_height,
+            .format = .thumbnail, .width_px = occurrence.original_width, .height_px = null,
+            .sizing = .requested_fit, .proof_kind = "controlled-validator-file-row" }});
+        result.svg_language_file_models = &.{true};
+        return result;
+    }
+    fn changedSource(a: A, page: RawPage, before: []const u8, after: []const u8) !RawPage {
+        var changed = page; var response = try json(a, page.response); const parsed = response.object.getPtr("parse").?;
+        const previous = try string(parsed.*, "wikitext");
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, previous, before));
+        const source = try std.mem.replaceOwned(u8, a, previous, before, after);
+        try parsed.object.put(a, "wikitext", .{ .string = source });
+        changed.response = try std.json.Stringify.valueAlloc(a, response, .{});
+        var request = try json(a, page.request); const parameters = try field(request, "parameters_except_text");
+        var form: std.ArrayList(u8) = .empty; var iterator = parameters.object.iterator();
+        while (iterator.next()) |entry| try TextClassTesting.formField(a, &form, entry.key_ptr.*, entry.value_ptr.string);
+        try TextClassTesting.formField(a, &form, "text", source); changed.form_body = try form.toOwnedSlice(a);
+        try request.object.put(a, "text_source", try FormIntakeTest.descriptorValue(a, source));
+        changed.request = try std.json.Stringify.valueAlloc(a, request, .{}); try FormIntakeTest.bindForm(a, &changed);
+        return changed;
+    }
+};
+
+test "v9 genuine poster and Pangea pages retain independent proofs exact options and explicit SVG width selection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const F = PosterSvgConjunctionTesting;
+    var ns = try namespaces.Registry.init(a, @embedFile(F.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const defaults = Testing.hash(@embedFile(F.prefix ++ "figure-siteinfo.raw.json"));
+    var files = try F.registry(a, &ns); defer files.deinit();
+    const original = try StaticPosterContextTesting.document(a); const doc = try F.document(a);
+    try std.testing.expectEqualDeep(original.pages, doc.pages[0..original.pages.len]);
+    try std.testing.expectEqualDeep(original.static_poster_styles, doc.static_poster_styles);
+    try std.testing.expectEqualDeep(try F.pangea(a), doc.pages[original.pages.len]);
+    var old = try Book.init(a, try F.bytes(a, original), &ns, &files, defaults, 250); defer old.deinit();
+    var book = try Book.init(a, try F.bytes(a, doc), &ns, &files, defaults, 250); defer book.deinit();
+    for (old.pages) |before| {
+        const after = try CombinedObservationTesting.parsedPage(&book, before.page_id);
+        try std.testing.expectEqualStrings(before.source, after.source);
+        try std.testing.expectEqualDeep(before.occurrences, after.occurrences);
+    }
+    const page = try CombinedObservationTesting.parsedPage(&book, 178433);
+    try std.testing.expectEqualStrings(@embedFile(F.actual ++ "Pangea.expanded.wikitext"), page.source);
+    try std.testing.expectEqual(@as(usize, 1), page.occurrences.len);
+    const occurrence = page.occurrences[0];
+    try std.testing.expectEqualStrings("File:Pangaea continents.svg", occurrence.canonical_file);
+    try std.testing.expectEqualStrings("lang=it|thumb|250px|ricostruzione di '''Pangea'''<small></small>", occurrence.original_options);
+    try std.testing.expect(occurrence.static_poster == null and occurrence.width == null and occurrence.anchor == null);
+    const proof = occurrence.svg_language.?;
+    try std.testing.expect(proof.authored); try std.testing.expectEqual(@as(?u32, 250), proof.authored_width);
+    try std.testing.expectEqualStrings("it", proof.language);
+    try std.testing.expectEqual(@as(u32, 250), proof.width); try std.testing.expectEqual(@as(u32, 294), proof.height);
+    const behavior_source = @embedFile("testdata/it-per/behavior-switches.tsv");
+    var behavior = try namespaces.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var options = try namespaces.image_options.Registry.init(a, @embedFile("testdata/it-per/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, Testing.hash(behavior_source)); defer options.deinit();
+    const context: compiler.Context = .{ .title = "Pangea", .namespace_catalog = &ns, .behavior_switches = &behavior, .image_options = &options };
+    const raw = @embedFile(F.actual ++ "Pangea.raw.wikitext");
+    const selected = (try book.select(a, &ns, 0, 178433, 3770735, "Pangea", raw, page.source, defaults, 250, context)) orelse return error.TestUnexpectedResult;
+    for ([_][]const u8{selected.occurrences[0].source.original_options, selected.occurrences[0].stage_options}) |source_options| {
+        try std.testing.expectEqual(@as(?encoder.presentation_types.FigureSizingPolicy, .requested_fit),
+            try SelectedPage.svgLanguage(selected, a, occurrence.canonical_file, .thumbnail, source_options, "it", 250, null));
+        try std.testing.expect((try SelectedPage.width(selected, a, occurrence.canonical_file, .thumbnail, source_options, 250)) == null);
+        try std.testing.expect((try SelectedPage.svgLanguage(selected, a, occurrence.canonical_file, .thumbnail, source_options, "it", 251, null)) == null);
+        try std.testing.expect((try SelectedPage.svgLanguage(selected, a, occurrence.canonical_file, .thumbnail, source_options, "en", 250, null)) == null);
+        try std.testing.expect((try SelectedPage.observedSvgLanguage(selected, a, occurrence.canonical_file, .thumbnail, source_options, 250, null)) == null);
+    }
+    try std.testing.expect((try SelectedPage.svgLanguage(selected, a, occurrence.canonical_file, .thumbnail,
+        "lang=it|thumb|250px|different caption", "it", 250, null)) == null);
+    try std.testing.expect((try book.select(a, &ns, 0, 178433, 3770735, "Pangea", raw, page.source, defaults, 251, context)) == null);
+}
+
+test "v9 preserves old schemas requires both kinds and refuses crossed Pangea source class language width and model proofs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const F = PosterSvgConjunctionTesting;
+    var ns = try namespaces.Registry.init(a, @embedFile(F.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const defaults = Testing.hash(@embedFile(F.prefix ++ "figure-siteinfo.raw.json"));
+    var files = try F.registry(a, &ns); defer files.deinit(); const original = try F.document(a);
+    for ([_][]const u8{ "wikidict.figure-page-observations.v5", "wikidict.figure-page-observations.v7", "wikidict.figure-page-observations.v8" }) |schema| {
+        var changed = original; changed.schema = schema;
+        try std.testing.expectError(invalid, Book.init(a, try F.bytes(a, changed), &ns, &files, defaults, 250));
+    }
+    var no_svg = try StaticPosterContextTesting.document(a); no_svg.schema = "wikidict.figure-page-observations.v9";
+    try std.testing.expectError(invalid, Book.init(a, try F.bytes(a, no_svg), &ns, &files, defaults, 250));
+    var no_poster = original; no_poster.pages = original.pages[original.pages.len - 1 ..];
+    try std.testing.expectError(invalid, Book.init(a, try F.bytes(a, no_poster), &ns, &files, defaults, 250));
+    for (0..10) |mode| {
+        var changed = original; const pages = try a.dupe(RawPage, original.pages); changed.pages = pages;
+        const last = pages.len - 1; const occurrences = try a.dupe(RawOccurrence, pages[last].occurrences); pages[last].occurrences = occurrences;
+        switch (mode) {
+            0 => occurrences[0].width = false,
+            1 => occurrences[0].svg_language = "en",
+            2 => occurrences[0].resolved_svg_language = "it",
+            3 => occurrences[0].height = true,
+            4 => occurrences[0].file_sha1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            5 => {
+                pages[last] = try ViPageServedTesting.changedResponse(a, pages[last], "text", "width=\"250\"", "width=\"251\"");
+                pages[last] = try ViPageServedTesting.changedResponse(a, pages[last], "text", "height=\"294\"", "height=\"296\"");
+            },
+            6 => pages[last] = try ViPageServedTesting.changedResponse(a, pages[last], "text", "<figure typeof=\"mw:File/Thumb\">", "<figure class=\"mw-default-size\" typeof=\"mw:File/Thumb\">"),
+            7 => pages[last] = try ViPageServedTesting.changedResponse(a, pages[last], "text", "langit-500px", "langen-500px"),
+            8 => pages[last] = try F.changedSource(a, pages[last], "|250px|", "|251px|"),
+            9 => changed.static_poster_styles = null,
+            else => unreachable,
+        }
+        try std.testing.expectError(invalid, Book.init(a, try F.bytes(a, changed), &ns, &files, defaults, 250));
+    }
+    files.svg_language_file_models = &.{false};
+    try std.testing.expectError(invalid, Book.init(a, try F.bytes(a, original), &ns, &files, defaults, 250));
+}
+
+test "explicit SVG width option proof keeps default path and rejects missing duplicate foreign dimension or caption associations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/it-static-poster/namespace-registry.tsv")); defer ns.deinit();
+    const behavior = @embedFile("testdata/it-per/behavior-switches.tsv");
+    var options = try namespaces.image_options.Registry.init(a, @embedFile("testdata/it-per/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, Testing.hash(behavior)); defer options.deinit();
+    try std.testing.expect(svgLanguageThumbnailOptionsForOrigin(&options, "lang=it|thumb|caption [[Kept|child]]", "it"));
+    try std.testing.expect(!svgLanguageThumbnailOptionsForOrigin(&options, "lang=it|thumb|250px|caption", "it"));
+    const source = "lang=it|thumb|250px|caption [[Kept|child]]";
+    try std.testing.expectEqual(@as(?u32, 250), svgLanguageAuthoredWidth(source));
+    try std.testing.expect(svgLanguageThumbnailOptionsWithWidth(&options, source, "it", 250));
+    for ([_][]const u8{ "lang=it|thumb|caption", "lang=it|thumb|251px|caption", "lang=it|thumb|0px|caption",
+        "lang=it|thumb|250px|250px|caption", "lang=it|frame|250px|caption", "lang=en|thumb|250px|caption",
+        "lang=it|thumb|250px|lang=en|caption", "lang=it|thumb|250x300px|caption", "lang=it|thumb|250px|caption|tail" }) |bad|
+        try std.testing.expect(!svgLanguageThumbnailOptionsWithWidth(&options, bad, "it", 250));
+    try std.testing.expect(!svgLanguageThumbnailOptionsWithWidth(&options, "thumb|250px|caption", null, 250));
+    for ([_][]const u8{ "lang=it|thumb|0px|caption", "lang=it|thumb|4294967296px|caption", "lang=it|thumb|250px|250px|caption" }) |bad|
+        try std.testing.expect(svgLanguageAuthoredWidth(bad) == null);
+}
+
+
+test "v9 independently validates existing served Missing page styles and withholds v8 operation privileges" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const F = PosterSvgConjunctionTesting;
+    var ns = try namespaces.Registry.init(a, @embedFile(F.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const defaults = Testing.hash(@embedFile(F.prefix ++ "figure-siteinfo.raw.json"));
+    var files = try F.registry(a, &ns); defer files.deinit();
+    var doc = try F.document(a);
+    const poster_styles = doc.static_poster_styles.?;
+    const served: MissingServedSet = .{ .responses = &poster_styles.responses, .receipt = poster_styles.receipt };
+    doc.missing_link_styles = .{ .profile = missing_observed_set_profile, .defaults = poster_styles.defaults, .served_set = served };
+    const pages = try a.dupe(RawPage, doc.pages); doc.pages = pages; pages[0].page_styles = served;
+    const encoded = try F.bytes(a, doc);
+    var book = try Book.init(a, encoded, &ns, &files, defaults, 250); defer book.deinit();
+    try std.testing.expectEqual(@as(?encoder.presentation_types.MissingLinkPaint, .vector_new_link_v1), book.missing_link_paint);
+    const page = try CombinedObservationTesting.parsedPage(&book, pages[0].page_id);
+    try std.testing.expect(page.page_styles != null);
+    try std.testing.expect(page.occurrences[0].static_poster != null);
+    const svg_page = try CombinedObservationTesting.parsedPage(&book, 178433);
+    try std.testing.expect(svg_page.occurrences[0].svg_language != null);
+    for ([_][]const u8{ "image_map_no_link", "figure_style_operations", "authored_style_operations", "figure_style_assets" }) |key| {
+        const shape = try json(a, encoded);
+        const candidate = &shape.object.getPtr("pages").?.array.items[0];
+        const value = if (equal(key, "image_map_no_link"))
+            try json(a, "{\"start\":0,\"end\":1}")
+        else if (equal(key, "figure_style_assets"))
+            try json(a, "{\"responses\":[],\"receipt\":\"{}\"}")
+        else try json(a, "[]");
+        try candidate.object.put(a, key, value);
+        // The known image-map field reaches semantic refusal; the three
+        // unavailable operation fields are refused by the strict JSON shape.
+        const expected_error = if (equal(key, "image_map_no_link")) invalid else error.UnknownField;
+        try std.testing.expectError(expected_error, Book.init(a, try std.json.Stringify.valueAlloc(a, shape, .{}), &ns, &files, defaults, 250));
+    }
+    var changed = doc; var styles = doc.missing_link_styles.?; var wrong = served; wrong.receipt = "{}";
+    styles.served_set = wrong; changed.missing_link_styles = styles;
+    try std.testing.expectError(invalid, Book.init(a, try F.bytes(a, changed), &ns, &files, defaults, 250));
+    changed = doc; const altered_pages = try a.dupe(RawPage, doc.pages); changed.pages = altered_pages;
+    altered_pages[0].page_styles = wrong;
+    try std.testing.expectError(invalid, Book.init(a, try F.bytes(a, changed), &ns, &files, defaults, 250));
 }

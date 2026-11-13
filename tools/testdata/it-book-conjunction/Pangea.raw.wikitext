@@ -1,0 +1,14 @@
+=={{-it-}}==
+{{-nome-|it}}
+[[File:Pangaea continents.svg|lang=it|thumb|250px|ricostruzione di {{Pn}}]]
+{{Pn|w}} ''f''
+# {{Term|storia|it}} {{Term|geografia|it}} {{Term|geologia|it}} antico [[continente]] esistito nella remota [[preistoria]] [[terrestre]] e formato dall'[[unione]] di tutte le [[terre]] [[emerse]] esistenti sul [[pianeta]]; da esso sono in seguito derivati (attraverso numerosi processi di [[frammentazione]] e [[riunificazione]]) i [[continenti]] attuali
+
+{{-etim-}}
+composto del prefisso "[[pan-]]", derivato dal [[greco]] ''[[πᾶς]]'' e significante "tutto", e di "[[Gaia]]", dal [[greco]] ''[[Γαῖα]]'' nel senso di "[[pianeta]] [[Terra]]". Il termine è stato coniato dallo scienziato tedesco [[:w:Alfred Wegener|Alfred Wegener]] nel 1915 
+
+{{-ref-}}
+* {{Fonte|trec}}
+
+==Altri progetti==
+{{Interprogetto|w|commons=Category:Pangea}}

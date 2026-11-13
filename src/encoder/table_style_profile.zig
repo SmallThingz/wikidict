@@ -2357,6 +2357,9 @@ pub const Profile = struct {
                 if (std.ascii.eqlIgnoreCase(name, "tab-size") or
                     std.ascii.eqlIgnoreCase(name, "-moz-tab-size") or
                     std.ascii.eqlIgnoreCase(name, "-o-tab-size")) continue;
+                // The frame floor belongs to Figure geometry, not link paint.
+                // Its separate cascade must still represent or refuse it.
+                if (std.ascii.eqlIgnoreCase(name, "min-width")) continue;
                 return witness;
             }
         }
@@ -3094,7 +3097,17 @@ const Builder = struct {
     fn uncertainContainerSelector(self: *Builder, raw: []const u8) !ContainerSelector {
         var fallback = try self.uncertainTextSelector(raw);
         if (try self.containerRequiredOwnAttribute(raw)) |name| fallback.required_own_attribute = name;
-        var result: ContainerSelector = .{ .fallback = fallback, .necessary_chain = try self.containerNecessaryChain(raw), .specificity = std.math.maxInt(u64), .uncertain = true };
+        var necessary = try self.containerNecessaryChain(raw);
+        // Reuse the bounded single-compound lang() grammar. Its positive own
+        // class/type/ID facts can refute an unrelated element, never resolve the
+        // language predicate or admit a font/paint declaration. Other functions
+        // and descendant compounds keep their existing uncertain fallback.
+        if (necessary.len == 0) if (try self.languageClassCompound(trim(raw))) |compound| {
+            const one = try self.a.alloc(ContainerCompound, 1);
+            one[0] = .{ .compound = .{ .tag = compound.tag, .classes = compound.classes, .ids = compound.ids } };
+            necessary = one;
+        };
+        var result: ContainerSelector = .{ .fallback = fallback, .necessary_chain = necessary, .specificity = std.math.maxInt(u64), .uncertain = true };
         // Parsing this extra factual shape does not alter any global caller.
         const text = trim(raw);
         if (std.mem.indexOfScalar(u8, text, '+')) |plus| {
@@ -3121,10 +3134,20 @@ const Builder = struct {
         var plain: std.ArrayList(u8) = .empty;
         defer plain.deinit(self.a);
         var at: usize = 0;
+        var simple_pseudo = false;
         while (at < text.len) {
             if (text[at] == ':') {
-                if (!terminal or (!std.ascii.eqlIgnoreCase(text[at..], "::before") and !std.ascii.eqlIgnoreCase(text[at..], "::after"))) return null;
-                break;
+                if (terminal and (std.ascii.eqlIgnoreCase(text[at..], "::before") or std.ascii.eqlIgnoreCase(text[at..], "::after"))) break;
+                // A nonfunctional pseudo is another conjunct, not a replacement
+                // for the compound's positive type/class/ID facts. Removing it
+                // can only disprove a candidate; a surviving match stays unknown.
+                // Never borrow facts from functions, escapes or pseudo-elements.
+                if (!paintIdentifierStart(text, at + 1)) return null;
+                const end = paintIdentifierEnd(text, at + 1);
+                if (end < text.len and std.mem.indexOfScalar(u8, ".#[:", text[end]) == null) return null;
+                simple_pseudo = true;
+                at = end;
+                continue;
             }
             if (text[at] != '[') {
                 try plain.append(self.a, text[at]);
@@ -3159,6 +3182,9 @@ const Builder = struct {
             at += 1;
             if (at < text.len and std.mem.indexOfScalar(u8, ".#[:", text[at]) == null) return null;
         }
+        // A pseudo-only compound still requires its own node in the ancestor
+        // chain. Retain that universal necessary node instead of collapsing it.
+        if (plain.items.len == 0 and simple_pseudo) return .{};
         const compound = (try self.paintCompound(plain.items, true)) orelse return null;
         if (compound.tag == null and compound.classes.len == 0 and compound.ids.len == 0) return null;
         return .{ .tag = compound.tag, .classes = compound.classes, .ids = compound.ids };
@@ -11629,4 +11655,146 @@ test "border atom hash split preserves balanced function and escape boundaries" 
     try std.testing.expectEqualStrings("solid", tokens[2]);
     for ([_][]const u8{ "1px solid rgb(1,2,3", "1px solid rgb(1,2,3))", "1px solid#ff\\0000", "1px solid 'unterminated" }) |value|
         try std.testing.expect(borderTokens(value, &tokens) == null);
+}
+
+
+test "Missing paint refutes absent positive compounds around simple pseudo states without admitting them" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const html: TextElement = .{ .tag = "html", .classes = "client-nojs", .ancestry_complete = true, .physical_ancestry_complete = true };
+    const personal: TextElement = .{ .tag = "div", .id = "p-personal", .classes = "partlynew", .parent = &html, .ancestry_complete = true, .physical_ancestry_complete = true };
+    const inside: TextElement = .{ .tag = "a", .id = "leaf", .classes = "partlynew", .parent = &personal, .ancestry_complete = true, .physical_ancestry_complete = true };
+    const no_class: TextElement = .{ .tag = "a", .id = "leaf", .parent = &personal, .ancestry_complete = true, .physical_ancestry_complete = true };
+    const outside: TextElement = .{ .tag = "a", .id = "leaf", .classes = "partlynew", .parent = &html, .ancestry_complete = true, .physical_ancestry_complete = true };
+    const incomplete: TextElement = .{ .tag = "a", .id = "leaf", .classes = "partlynew" };
+    for ([_][]const u8{
+        "#p-personal :link.partlynew", "#p-personal :visited.partlynew",
+        "#p-personal a:hover.partlynew", "#p-personal :link#leaf.partlynew",
+        "#p-personal a.partlynew:hover#leaf",
+    }) |selector| {
+        errdefer std.debug.print("Missing paint necessary selector={s}\n", .{selector});
+        var styles = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{color:#B88D00}}", .{selector}));
+        defer styles.deinit();
+        for ([_]*const TextElement{ &html, &no_class, &outside }) |element|
+            try std.testing.expect((try styles.missingLinkAdditionalPaintBlockerIn(a, element)) == null);
+        for ([_]*const TextElement{ &inside, &incomplete }) |element| {
+            const blocked = (try styles.missingLinkAdditionalPaintBlockerIn(a, element)) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(ContainerSelectorMatch.unknown, blocked.rule.?.match);
+            try std.testing.expectEqualStrings("color:#B88D00", blocked.declaration);
+        }
+    }
+    // An owner cannot satisfy its own required ancestor. The universal pseudo
+    // node must not disappear from a descendant chain during refutation.
+    var universal = try parseAlloc(a, "#p-personal :link{color:red}");
+    defer universal.deinit();
+    try std.testing.expect((try universal.missingLinkAdditionalPaintBlockerIn(a, &html)) == null);
+    try std.testing.expect((try universal.missingLinkAdditionalPaintBlockerIn(a, &personal)) == null);
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, (try universal.missingLinkAdditionalPaintBlockerIn(a, &inside)).?.rule.?.match);
+}
+
+test "Missing paint necessary pseudo refutation preserves unsupported selector uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const html: TextElement = .{ .tag = "html", .ancestry_complete = true, .physical_ancestry_complete = true };
+    for ([_][]const u8{ ":not(.absent)", ":is(.absent,:link)", ".absent + :link", ".absent\\:escaped :link", ":link\\31.absent", "::before", ":" }) |selector| {
+        errdefer std.debug.print("Missing paint unsupported selector={s}\n", .{selector});
+        var styles = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{color:red}}", .{selector}));
+        defer styles.deinit();
+        const blocked = (try styles.missingLinkAdditionalPaintBlockerIn(a, &html)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(ContainerSelectorMatch.unknown, blocked.rule.?.match);
+    }
+}
+
+
+test "Missing paint refutes unrelated single lang class compounds without resolving language or font" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const html: TextElement = .{ .tag = "html", .classes = "client-nojs", .language = "sr", .ancestry_complete = true, .physical_ancestry_complete = true };
+    const ancestor: TextElement = .{ .tag = "div", .classes = "Hani", .parent = &html };
+    const no_class: TextElement = .{ .tag = "span", .id = "han", .parent = &ancestor };
+    const matching: TextElement = .{ .tag = "span", .id = "han", .classes = "Hani", .language = "vi", .parent = &ancestor };
+    const unknown_language: TextElement = .{ .tag = "span", .id = "han", .classes = "Hani" };
+    for ([_][]const u8{ ":lang(vi).Hani", ".Hani:lang(vi)", "span:lang(vi).Hani#han", ".Hani#han:lang(vi-VN)" }) |selector| {
+        errdefer std.debug.print("Missing paint lang compound={s}\n", .{selector});
+        var styles = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{font-family:'Nom Na Tong',sans-serif}}", .{selector}));
+        defer styles.deinit();
+        for ([_]*const TextElement{ &html, &no_class }) |element|
+            try std.testing.expect((try styles.missingLinkAdditionalPaintBlockerIn(a, element)) == null);
+        for ([_]*const TextElement{ &matching, &unknown_language }) |element| {
+            const blocked = (try styles.missingLinkAdditionalPaintBlockerIn(a, element)) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(ContainerSelectorMatch.unknown, blocked.rule.?.match);
+            try std.testing.expectEqualStrings("font-family:'Nom Na Tong',sans-serif", blocked.declaration);
+        }
+    }
+}
+
+test "Missing paint lang class refutation does not inspect function arguments or borrow descendant classes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const html: TextElement = .{ .tag = "html", .classes = "Hani", .ancestry_complete = true, .physical_ancestry_complete = true };
+    for ([_][]const u8{
+        ":not(.Hani)", ":is(:lang(vi),.Hani)", ":lang(vi.Hani)",
+        ":lang(vi) .Hani", ":lang(vi)>.Hani", ".Hani\\:lang(vi)",
+    }) |selector| {
+        errdefer std.debug.print("Missing paint unsupported language compound={s}\n", .{selector});
+        var styles = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{font-family:serif}}", .{selector}));
+        defer styles.deinit();
+        const blocked = (try styles.missingLinkAdditionalPaintBlockerIn(a, &html)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(ContainerSelectorMatch.unknown, blocked.rule.?.match);
+    }
+}
+
+
+test "Missing paint keeps the Figure minimum width as an independent geometry obligation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .ancestry_complete = true };
+    const frame: TextElement = .{ .tag = "figure", .typeof_tokens = "mw:Error mw:File/Thumb", .classes = "mw-halign-right", .parent = &root };
+    const css = "figure[typeof~='mw:File/Thumb'],figure[typeof~='mw:File/Frame'],.thumbinner{min-width:100px}";
+    var styles = try parseAlloc(a, css); defer styles.deinit();
+    try std.testing.expect(try styles.missingLinkAdditionalPaintUnchangedIn(a, &frame));
+    const geometry = try styles.resolveFigure(a, &frame, 1, false);
+    try std.testing.expect(!geometry.unresolved);
+    try std.testing.expectEqualDeep(@as(?types.StyleLength, .{ .unit = .px, .value = 100 }), geometry.min_width);
+    // A paint proof is not permission to discard conditional or unknown sizing.
+    for ([_][]const u8{
+        "figure:hover{min-width:100px}", "figure{min-width:var(--minimum)}",
+        "figure{min-width:10em}", "figure{min-width:50%}",
+    }) |unresolved_css| {
+        var unresolved = try parseAlloc(a, unresolved_css); defer unresolved.deinit();
+        try std.testing.expect(try unresolved.missingLinkAdditionalPaintUnchangedIn(a, &frame));
+        try std.testing.expect((try unresolved.resolveFigure(a, &frame, 1, false)).unresolved);
+    }
+}
+
+test "Missing paint minimum width exclusion preserves paint reset escape priority and global blockers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const frame: TextElement = .{ .tag = "figure", .typeof_tokens = "mw:Error mw:File/Thumb" };
+    for ([_]struct { declaration: []const u8, reason: MissingLinkPaintBlocker.Reason }{
+        .{ .declaration = "color:red", .reason = .declaration },
+        .{ .declaration = "background:blue", .reason = .declaration },
+        .{ .declaration = "outline:none", .reason = .declaration },
+        .{ .declaration = "text-decoration:none", .reason = .declaration },
+        .{ .declaration = "all:initial", .reason = .declaration },
+        .{ .declaration = "opacity:.5", .reason = .declaration },
+        .{ .declaration = "--color-destructive:red", .reason = .declaration },
+        .{ .declaration = "min\\2d width:100px", .reason = .declaration },
+        .{ .declaration = "min-width:100px!unproved", .reason = .unknown_priority },
+    }) |case| {
+        var styles = try parseAlloc(a, try std.fmt.allocPrint(a, "figure[typeof~='mw:File/Thumb']{{min-width:100px;{s}}}", .{case.declaration}));
+        defer styles.deinit();
+        const blocked = (try styles.missingLinkAdditionalPaintBlockerIn(a, &frame)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(case.reason, blocked.reason);
+        try std.testing.expectEqualStrings(case.declaration, blocked.declaration);
+        try std.testing.expect(!try styles.missingLinkAdditionalPaintUnchangedIn(a, &frame));
+    }
+    var unknown = try parseAlloc(a, "@import url('/unobserved.css');figure{min-width:100px}"); defer unknown.deinit();
+    try std.testing.expect(!try unknown.missingLinkAdditionalPaintUnchangedIn(a, &frame));
 }

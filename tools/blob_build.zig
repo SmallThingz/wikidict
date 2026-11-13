@@ -62956,3 +62956,98 @@ test "captured shared alternate Figure guards outlive page arenas and distinguis
     try std.testing.expectError(error.CapturedWriterInputsChanged, shared.figureInputs(io, paths.worker, paths.figures));
     try std.testing.expect(shared.failed_loader);
 }
+
+test "Writer retained Icelandic paragraph proof lends only its selected owner to noun organization" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    // Genuine p2830/r393221 declaration and p4087/r311236 raw entry.
+    const template_source = @embedFile("testdata/is-paragraph-owner/language-template.wikitext");
+    const raw = @embedFile("testdata/is-paragraph-owner/aktin.raw.wikitext");
+    const registry_source = "# content-language\tis\n# mediawiki\nis\tíslenska\tÍslenska\tis\tIcelandic\tisl\tice\nde\tþýska\tÞýska\nen\tEnglish\n";
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = registry_source });
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = "0\t0\tSnið:-is-\t\t2830\t393221\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n" });
+    {
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root);
+        defer templates.deinit();
+        try templates.append(0, 2830, 393221, template_source);
+        try templates.finish(index_path);
+    }
+    var namespaces = try namespace_registry.Registry.init(a, IsParagraphTest.namespaces);
+    defer namespaces.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &namespaces);
+    defer registry.deinit();
+    const emission = "Íslenska[[Flokkur:Íslenska]]";
+    try std.testing.expect(registry.matchesSourceLanguageParagraph("is", emission));
+    try std.testing.expect(!registry.matchesSourceLanguageParagraph("de", emission));
+    // Representative compiler input, not a claimed complete native expansion.
+    // The exact actual complete Reader body has its separate restoration control.
+    const body = "\n{|\n| '''table''' || [[cell|cell label]]\n|}\n\n" ++
+        "Nafnorð[[Flokkur:Íslensk nafnorð]] [[Flokkur:Nafnorð]] \n'''aktín''' (hvorugkyn); sterk beyging\n:[1] ''[[frumefni]]''\n\n" ++
+        "Þýðingar\n[[actinium]] [https://example.test reference]\n";
+    const cases = [_]struct { raw: []const u8, expanded: []const u8, owned: bool = false }{
+        .{ .raw = raw, .expanded = emission ++ body, .owned = true },
+        .{ .raw = "{{-de-}}\n", .expanded = emission ++ body },
+        // Public Writer requires raw bytes: empty raw has no declaration proof,
+        // rather than exercising its private optional-raw null branch.
+        .{ .raw = "", .expanded = emission ++ body },
+        .{ .raw = "{{unknown}}\n", .expanded = emission ++ body },
+        .{ .raw = raw, .expanded = "Íslenska" ++ body },
+        .{ .raw = raw, .expanded = emission ++ body ++ "[[Flokkur:English]]\n" },
+    };
+    const codes = languageCodes(&registry, &namespaces);
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    for (cases, 0..) |case, i| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, try std.fmt.allocPrint(a, "aktín-control-{d}", .{i}), case.expanded, case.raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, cases.len), stats.language_records);
+    for (cases, 0..) |case, i| {
+        const owner = if (case.owned) "íslenska" else "Unclassified";
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(owner, &filename) }));
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const title = try std.fmt.allocPrint(a, "aktín-control-{d}", .{i});
+        const record = (try index.find(title)) orelse return error.TestUnexpectedResult;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, title, .language, metadata);
+        try std.testing.expectEqualStrings(if (case.owned) "is" else "", decoded.entry.language_code);
+        var report: encoder.presentation_document.Fallbacks = .{};
+        const payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, title, .language, owner, metadata.code, case.expanded, null, .{}, &namespaces, &report);
+        const independent = try encoder.presentation_codec.decodeAlloc(a, payload, title, .language, metadata);
+        // Independent whole-body parse has no semantic owner token. Restore
+        // only organization, then compare every Entry field including actions.
+        var restored = decoded;
+        restored.entry.organization = independent.entry.organization;
+        try std.testing.expectEqualDeep(independent, restored);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        if (case.owned) {
+            try std.testing.expectEqual(@as(usize, 1), decoded.entry.organization.lexemes.len);
+            const noun = decoded.entry.organization.lexemes[0];
+            try std.testing.expectEqualStrings("Noun", noun.kind);
+            try std.testing.expectEqualStrings("íslenska", noun.language);
+            try std.testing.expectEqual(@as(usize, 0), noun.section);
+            try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+            try std.testing.expectEqual(@as(usize, 3), noun.definitions[0].block);
+            try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, noun.introduction);
+            try std.testing.expectEqualSlices(usize, &.{4}, noun.other_blocks);
+            try std.testing.expectEqual(@as(usize, 0), independent.entry.organization.lexemes.len);
+            const sense = decoded.entry.sections[0].blocks[3];
+            try std.testing.expect(sense.kind == .indent);
+            try std.testing.expectEqualStrings(":", sense.list_path);
+            try std.testing.expectEqualStrings("[1] ", sense.spans[0].text);
+            try std.testing.expectEqualStrings("frumefni", sense.spans[1].target);
+            try std.testing.expect(sense.spans[1].italic);
+        } else try std.testing.expectEqual(@as(usize, 0), decoded.entry.organization.lexemes.len);
+    }
+}

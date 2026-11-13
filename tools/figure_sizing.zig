@@ -874,7 +874,10 @@ fn staticWebPAxes(a: A, image: Value, width: u32, height: u32) !void {
     defer version.deinit(a);
     const number = version.get("_MW_WEBP_VERSION") orelse return invalid;
     if (version.count() != 1 or number != .integer or (number.integer != 2 and number.integer != 3)) return invalid;
-    var media = try metadataFields(a, metadata.get("media-metadata") orelse return invalid);
+    // The selected handler omits this field when both EXIF and XMP are absent.
+    // Required static/version/axes evidence above remains mandatory.
+    const media_value = metadata.get("media-metadata") orelse return;
+    var media = try metadataFields(a, media_value);
     defer media.deinit(a);
     for ([_][]const u8{ "_error", "error", "errors", "warnings" }) |name| if (media.contains(name)) return invalid;
     if (media.contains("Orientation")) try metadataInteger(media, "Orientation", 1);
@@ -6900,4 +6903,82 @@ test "explicit SVG client box lookup preserves caller allocation failure ownersh
     var registry = try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256); defer registry.deinit();
     try Check.run(a, &registry);
     try std.testing.checkAllAllocationFailures(a, Check.run, .{&registry});
+}
+
+
+test "static WebP optional media metadata preserves absent empty and strict present authority" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var source = std.heap.ArenaAllocator.init(a); defer source.deinit(); const temp = source.allocator();
+    const Fields = struct {
+        fn remove(value: *Value, name: []const u8) !void {
+            for (value.array.items, 0..) |item, index| if (equal(try string(item, "name"), name)) {
+                _ = value.array.orderedRemove(index);
+                return;
+            };
+            return error.InvalidFixtureMetadata;
+        }
+    };
+    // Both forms have exactly the same selected-handler meaning. Earlier
+    // profiles still refuse eligible WebP even with complete static evidence.
+    for ([_]bool{ false, true }) |omitted| {
+        var fields = try std.json.parseFromSliceLeaky(Value, temp, StaticWebPTestSource.metadata, .{ .allocate = .alloc_always });
+        if (omitted) try Fields.remove(&fields, "media-metadata") else
+            (try StaticWebPTestSource.member(&fields, "media-metadata")).* = .{ .array = std.json.Array.init(temp) };
+        const bytes = try std.json.Stringify.valueAlloc(temp, fields, .{});
+        for ([_]u8{ 3, 4, 5 }) |version| {
+            const options: StaticWebPTestSource.Options = .{ .profile_version = version,
+                .state = if (version == 5) .eligible else .unsupported, .metadata_bytes = bytes };
+            const plain = try StaticWebPTestSource.make(temp, &ns, options, false);
+            const stream = try StaticWebPTestSource.make(temp, &ns, options, true);
+            try ResponseEpochTestSource.compatibility(a, stream, &ns);
+            var left = try ResponseEpochTestSource.init(a, plain, &ns, false, false); defer left.deinit();
+            var right = try ResponseEpochTestSource.init(a, stream, &ns, true, false); defer right.deinit();
+            try std.testing.expectEqualDeep(left.records, right.records);
+            try std.testing.expectEqual(@as(usize, if (version == 5) 1 else 0), left.records.len);
+            for ([_]*const Registry{ &left, &right }) |registry| {
+                try std.testing.expectEqual(@as(?u32, if (version == 5) 350 else null), try Registry.resolveWidthLimit(registry, a, TestSource.file, .thumbnail));
+                try std.testing.expectEqual(@as(?types.FigureSizingPolicy, if (version == 5) .requested_fit else null), try Registry.resolve(registry, a, TestSource.file, .thumbnail, 250, null));
+            }
+            if (version != 5) {
+                const forged = try StaticWebPTestSource.make(temp, &ns, .{ .profile_version = version, .metadata_bytes = bytes }, false);
+                try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, forged, &ns, false, false));
+            }
+        }
+        var image: Value = .{ .object = .empty };
+        try image.object.put(temp, "metadata", fields);
+        const Check = struct { fn run(allocator: A, value: Value) !void { try staticWebPAxes(allocator, value, 350, 350); } };
+        try std.testing.checkAllAllocationFailures(a, Check.run, .{image});
+    }
+    for (0..12) |mode| {
+        var fields = try std.json.parseFromSliceLeaky(Value, temp, StaticWebPTestSource.metadata, .{ .allocate = .alloc_always });
+        switch (mode) {
+            0 => (try StaticWebPTestSource.member(&fields, "media-metadata")).* = .{ .null = {} },
+            1 => (try StaticWebPTestSource.member(&fields, "media-metadata")).* = .{ .object = .empty },
+            2 => try fields.array.append(fields.array.items[5]),
+            3, 4, 5 => {
+                const nested = try StaticWebPTestSource.member(&fields, "media-metadata");
+                if (mode == 5) try nested.array.append(nested.array.items[0]) else {
+                    var entry: Value = .{ .object = .empty };
+                    try entry.object.put(temp, "name", .{ .string = if (mode == 3) "errors" else "warnings" });
+                    try entry.object.put(temp, "value", .{ .array = std.json.Array.init(temp) });
+                    try nested.array.append(entry);
+                }
+            },
+            6, 7 => (try StaticWebPTestSource.member(try StaticWebPTestSource.member(&fields, "media-metadata"), "Orientation")).* = if (mode == 6) .{ .integer = 6 } else .{ .string = "1" },
+            8...11 => {
+                try Fields.remove(&fields, "media-metadata");
+                try Fields.remove(&fields, switch (mode) { 8 => "animated", 9 => "metadata", 10 => "width", else => "height" });
+            },
+            else => unreachable,
+        }
+        const bytes = try std.json.Stringify.valueAlloc(temp, fields, .{});
+        for ([_]bool{ false, true }) |streamed| {
+            const honest = try StaticWebPTestSource.make(temp, &ns, .{ .state = .unsupported, .metadata_bytes = bytes }, streamed);
+            var registry = try ResponseEpochTestSource.init(a, honest, &ns, streamed, false); defer registry.deinit();
+            try std.testing.expectEqual(@as(usize, 0), registry.records.len);
+            const forged = try StaticWebPTestSource.make(temp, &ns, .{ .metadata_bytes = bytes }, streamed);
+            try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, forged, &ns, streamed, false));
+        }
+    }
 }

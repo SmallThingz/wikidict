@@ -1,0 +1,105 @@
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ 符合 }- <span style="font-size:80%;">([[Викиречник:Кинески|кинески]])</span> ==
+[[Категорија:Кинеска реч]]
+
+[[Датотека:符-bw.png|200px|мини|десно|Редослед писања карактера 符.]]
+
+[[Датотека:合-bw.png|200px|мини|десно|Редослед писања карактера 合.]]
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (pinyin) и примери изговора речи">'''Изговор:'''</p>
+:[[pinyin|пинјин]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">fúhé </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:Zh-fúhé.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:zh-fúhé.ogg|датотека]])</td></tr></table>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Важи за први карактер, ако је реч вишесложна.">'''Радикал:''' 
+:竹  
+
+</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:#odgovarati, biti usklađen sa  
+</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+:#科学家们认真检查以后，都认为烤鸭完全符合新的卫生法。Nakon marljivog istraživanja naučnika, svi su smatrali da pekinška patka u potpunosti odgovara novim sanitarnim propisima.
+
+<div class="toccolours mw-collapsible mw-collapsed">
+<p style="margin-bottom: -0.5em; cursor: help;" title="Речи које се у одређеном контексту равноправно користе или могу користити.">'''Синоними:''' 
+:* [[吻合]]
+</p>
+<div class="mw-collapsible-content">
+
+
+</div>
+</div>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се пишу различито, а изговарају исто као дата реч.">'''Хомофони:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Речи које се изговарају различито, а пишу исто као дата реч.">'''Хомографи:''' 
+:...
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Међународни тест кинеског језика, за који постоје листе речи по језичким нивоима.">'''ХСК ниво:''' 
+:*4
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Асоцијације главне речи">'''Асоцијације:''' 
+:...
+</p>
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Изведенице и сложенице"></p>'''Изведене речи:''' 
+:...
+
+
+
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+:[[:w:zh:符合|符合]]
+</p>
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Енглески: 
+
+*Француски: 
+
+*Немачки: 
+
+*Италијански: 
+
+*Шпански: 
+
+*Португалски: 
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Арапски: 
+
+*Руски: 
+
+*Српски: 
+
+*Грчки: 
+
+*Бугарски: 
+
+*Шведски: 
+
+|} 
+|}
+
+==Референце==
+<templatestyles src="Шаблон:reflist/style.css" /><div class="reflist   " ><references group="" responsive="1"></references></div>
+[[Категорија:Речи направљене аутоматизмом|Аутоматизам]]
+
+[[en:符合]]
+[[hu:符合]]
+[[ja:符合]]
+[[ko:符合]]
+[[uk:符合]]
+[[zh:符合]]
+[[zh-min-nan:符合]]

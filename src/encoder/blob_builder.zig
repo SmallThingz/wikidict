@@ -5447,9 +5447,14 @@ fn processMain(
                 telugu_support = try teluguSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items);
                 break :telugu telugu_support;
             } orelse simple_support;
+        var paragraph_support: ?ResolvedLanguage = null;
         const explicit = if (page_sections.items.len == 0)
             (try slovenianSupportCategoryLanguage(codes, title, source, raw_source, raw_sections.items, page_sections.items)) orelse
-                rawPrefixParagraphLanguage(codes, raw_source, source, raw_sections.items, page_sections.items) orelse
+                paragraph: {
+                    // Keep the exact successful lookup in its original short-circuit arm.
+                    paragraph_support = rawPrefixParagraphLanguage(codes, raw_source, source, raw_sections.items, page_sections.items);
+                    break :paragraph paragraph_support;
+                } orelse
                 unsectionedPlainBoldPrefixLanguage(codes, raw_source, source) orelse
                 unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source) orelse unsectionedAfrikaansExpandedLanguage(codes, source)
         else
@@ -5515,10 +5520,10 @@ fn processMain(
             &.{},
             null,
             &.{},
-            // Only independently proved SIMPLE or Telugu source support lends
-            // layout authority, and only for the exact selected owner. Other
-            // support rules and native defaults do not acquire this authority.
-            if (simple_support orelse telugu_support) |proved| if (std.mem.eql(u8, proved.code, language.code) and
+            // A successful paragraph arm selected the heading-free owner, so
+            // earlier unrelated support cannot shadow its proof. Otherwise keep
+            // existing SIMPLE/Telugu authority. Other rules/defaults grant none.
+            if (paragraph_support orelse simple_support orelse telugu_support) |proved| if (std.mem.eql(u8, proved.code, language.code) and
                 std.mem.eql(u8, proved.heading, language.heading))
                 .{ .heading = proved.heading, .code = proved.code } else null else null,
             codes.table_styles,
