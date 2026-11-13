@@ -206,9 +206,15 @@ visual failure. Earlier empty-caption, middle and language checks retain their
 original execution and readset scopes, without claiming a new full-suite pass.
 
 All 25 maintained Qt patch targets were reconstructed forward and backward against
-the pinned upstream revision. Normal current-source Reader and main-flow checks
-remain separate, as does genuine Russian Writer-to-Reader interoperability. These
-constructed views do not establish whole-frontend or release acceptance.
+the pinned upstream revision. The normal incremental dependency check and all
+seven CTest suites passed on this source. Reader reported 318 passing incidents
+and 2 optional skips; media reported 58 passing incidents and 1 private-backend
+opt-in skip. The two library test executables were relinked against the current
+product archive; unchanged compilation and the native library were reused.
+
+Genuine Russian Writer-to-Reader interoperability and remaining ordinary-page
+rendered checks retain their separate scope. These constructed views and host
+checks do not establish whole-frontend, hardware-audio or release acceptance.
 
 ## Source and build layout
 

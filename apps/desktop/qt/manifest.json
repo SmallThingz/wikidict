@@ -322,13 +322,85 @@
       "genuine_ru_writer_reader_pair": false
     },
     "normal_app_ctest": {
-      "status": "pending_current_source_checks",
+      "status": "passed_current_source_full_seven",
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest136/independent-closure01.json",
+        "bytes": 8529,
+        "sha256": "5921d6a816f91241032a4ce5d7e4dc4f0e6fd4ccd9ba775db81397c637fed512"
+      },
+      "release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest136/release01.json",
+        "bytes": 422,
+        "sha256": "94ce33e82f3ac221d7f69faa426218566229ead37f489c041426e259314739f1"
+      },
+      "tests": [
+        {
+          "name": "native-install-core-selection",
+          "seconds": 1.53695,
+          "passed": true
+        },
+        {
+          "name": "native-unified-entry",
+          "seconds": 80.37,
+          "passed": true
+        },
+        {
+          "name": "native-reader-ux",
+          "seconds": 247.39,
+          "passed": true
+        },
+        {
+          "name": "native-media-ux",
+          "seconds": 17.6915,
+          "passed": true
+        },
+        {
+          "name": "native-library-storage",
+          "seconds": 13.853,
+          "passed": true
+        },
+        {
+          "name": "native-library-ux",
+          "seconds": 8.43568,
+          "passed": true
+        },
+        {
+          "name": "native-library-catalogue-ux",
+          "seconds": 1.90447,
+          "passed": true
+        }
+      ],
+      "counts": {
+        "reader": {
+          "passed_incidents": 318,
+          "failed": 0,
+          "skipped": 2
+        },
+        "media": {
+          "passed_incidents": 58,
+          "failed": 0,
+          "skipped": 1
+        }
+      },
+      "optional_skips": [
+        "SKIP   : MainWindowTest::plainContainerCompilerDiagnosticKeepsFitContentRefusal() The retained compiler diagnostic is a selected external fixture, not a full-page acceptance fixture.",
+        "SKIP   : MainWindowTest::plainContainerCompilerSubtreeKeepsHierarchyAndActions() The retained compiler diagnostic is a selected external component fixture.",
+        "SKIP   : MediaPanelTest::privateNullOutputDecodesAndUpdatesPlaybackAccessibleNames() Opt-in private null-output backend check; never use a user's audio session."
+      ],
+      "incremental_target_preflight": true,
+      "build_result": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest136/build-result.json",
+        "bytes": 3144,
+        "sha256": "99f7f40e08094c852203af4be730da90b1081c4cc0b866ec5788195bee29a67b"
+      },
+      "all_seven_passed": true,
       "prior_delivery": {
         "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-delivery126.json",
         "bytes": 18927,
         "sha256": "67bb6f70190f48608afae8a43fc6c8c6c7dbc0dd8bed547384e3c156cc52664f"
       },
-      "repeated_for_this_component": false
+      "prior_failed_full_run_preserved": true,
+      "full_frontend_acceptance": false
     },
     "historical_app_scopes": {
       "language133": {
