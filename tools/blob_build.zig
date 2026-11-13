@@ -62889,6 +62889,40 @@ test "normal named section loader binds complete programs template and independe
         try std.testing.expectEqualDeep(expected, actual);
         try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, actual));
     }
+    // Final blob metadata must keep the source-proved project code even
+    // though its display name is deliberately not a routing alias. Exercise
+    // both direct compilation and the actual prepared-page commit path.
+    try std.testing.expect(registry.code("Conventions internationales") == null);
+    for ([_]bool{ false, true }) |prepared_path| {
+        const output = try std.fs.path.join(a, &.{root, if (prepared_path) "prepared-blobs" else "direct-blobs"});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+        writer.language_codes = codes; writer.stats.pages_seen = 1;
+        if (prepared_path) {
+            try writer.commitPreparedPrefix(a, &page);
+            try writer.finishPrepared(a, &page);
+        } else try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "♃", prefix ++ owned, raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 2), stats.language_blobs);
+        for (page.records.items, 0..) |record, i| {
+            const expected_code: []const u8 = if (i == 0) "" else "conv";
+            try std.testing.expectEqualStrings(expected_code, record.language_code);
+            var mapped = try mmapPath(io, try encoder.blob_builder.languageBlobPathAlloc(a, output, record.key)); defer mapped.deinit();
+            const blob = try encoder.blob_format.inspect(mapped.bytes);
+            const metadata = try blob.languageMetadata();
+            try std.testing.expectEqualStrings(record.key, metadata.heading);
+            try std.testing.expectEqualStrings(expected_code, metadata.code);
+            var records = blob.iterator(); const emitted = (try records.next()).?;
+            try std.testing.expect((try records.next()) == null);
+            try std.testing.expectEqualStrings("♃", emitted.title);
+            try std.testing.expectEqualSlices(u8, record.payload, emitted.payload);
+            const actual = try encoder.presentation_codec.decodeAlloc(a, emitted.payload, emitted.title, .language, metadata);
+            try std.testing.expectEqualStrings(expected_code, actual.entry.language_code);
+            try std.testing.expectEqualSlices(u8, emitted.payload, try encoder.presentation_codec.encodeAlloc(a, actual));
+        }
+        try std.testing.expect(registry.code("Conventions internationales") == null);
+        try std.testing.expect(registry.resolveTrusted("Conventions internationales") == null);
+        try std.testing.expect(registry.sourceNomLabel("wikispecies") == null);
+    }
     var no_format = codes; no_format.source_nom_name_format = false;
     var unproved: encoder.blob_builder.PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "♃" };
     try unproved.compileWithPhases(a, no_format, prefix ++ owned, raw, null, null, null, null);

@@ -214,6 +214,7 @@ const Spools = struct {
     sign_gloss: SpoolFile,
     supplemental: SpoolFile,
     aliases: SpoolFile,
+    language_owners: std.StringHashMapUnmanaged([]const u8) = .empty,
 
     fn init(io: std.Io, allocator: std.mem.Allocator, output_root: []const u8) !Spools {
         const spool_root = try std.fmt.allocPrint(allocator, "{s}/.spool", .{output_root});
@@ -284,6 +285,12 @@ const Spools = struct {
     }
 
     fn cleanup(self: *Spools) void {
+        var owners = self.language_owners.iterator();
+        while (owners.next()) |owner| {
+            self.allocator.free(owner.key_ptr.*);
+            self.allocator.free(owner.value_ptr.*);
+        }
+        self.language_owners.deinit(self.allocator);
         for (&self.language) |*spool| {
             std.Io.Dir.cwd().deleteFile(self.io, spool.path) catch {};
             spool.deinitPath(self.allocator);
@@ -297,9 +304,28 @@ const Spools = struct {
         self.root = "";
     }
 
-    fn appendLanguage(self: *Spools, allocator: std.mem.Allocator, heading: []const u8, title: []const u8, payload: []const u8) !void {
-        const bucket: usize = @intCast(std.hash.Wyhash.hash(0, heading) % language_bucket_count);
-        try self.language[bucket].append(self.io, allocator, heading, title, payload);
+    fn appendLanguage(self: *Spools, allocator: std.mem.Allocator, owner: ResolvedLanguage, title: []const u8, payload: []const u8) !void {
+        // Source-proved names need not be ordinary heading aliases. Retain the
+        // resolved identity across page arenas and finalization, never resolve
+        // its display name again or merge disagreeing owners under one heading.
+        var inserted = false;
+        errdefer if (inserted) {
+            const removed = self.language_owners.fetchRemove(owner.heading).?;
+            self.allocator.free(removed.key);
+            self.allocator.free(removed.value);
+        };
+        if (self.language_owners.get(owner.heading)) |code_value| {
+            if (!std.mem.eql(u8, code_value, owner.code)) return error.ConflictingLanguageOwner;
+        } else {
+            const heading = try self.allocator.dupe(u8, owner.heading);
+            errdefer self.allocator.free(heading);
+            const code_value = try self.allocator.dupe(u8, owner.code);
+            errdefer self.allocator.free(code_value);
+            try self.language_owners.put(self.allocator, heading, code_value);
+            inserted = true;
+        }
+        const bucket: usize = @intCast(std.hash.Wyhash.hash(0, owner.heading) % language_bucket_count);
+        try self.language[bucket].append(self.io, allocator, owner.heading, title, payload);
     }
 };
 
@@ -400,7 +426,7 @@ fn finalizeLanguageBucket(
     spool: *const SpoolFile,
     output_root: []const u8,
     manifest: *std.ArrayList([]const u8),
-    codes: LanguageCodes,
+    owners: *const std.StringHashMapUnmanaged([]const u8),
 ) !usize {
     var mapped = try mmapPath(io, spool.path);
     defer mapped.deinit();
@@ -433,7 +459,8 @@ fn finalizeLanguageBucket(
 
     var count: usize = 0;
     for (ordered.items) |group| {
-        const metadata = try blob_format.buildLanguageMetadataAlloc(allocator, codes.code(group.heading) orelse "", group.heading);
+        const code_value = owners.get(group.heading) orelse return error.InvalidSpool;
+        const metadata = try blob_format.buildLanguageMetadataAlloc(allocator, code_value, group.heading);
         defer allocator.free(metadata);
         const path = try languageBlobPathAlloc(allocator, output_root, group.heading);
         defer allocator.free(path);
@@ -4877,6 +4904,7 @@ pub const PreparedPage = struct {
         title: []const u8,
         payload: []const u8,
         stats_before: BuildStats,
+        language_code: []const u8 = "",
     };
     records: std.ArrayList(Record) = .empty,
     stats: BuildStats = .{},
@@ -4922,10 +4950,13 @@ const PageOutput = union(enum) {
     direct: *Spools,
     prepared: *PreparedPage,
 
-    fn appendLanguage(self: PageOutput, a: std.mem.Allocator, heading: []const u8, title: []const u8, payload: []const u8) !void {
-        return self.append(a, .language, heading, title, payload);
+    fn appendLanguage(self: PageOutput, a: std.mem.Allocator, owner: ResolvedLanguage, title: []const u8, payload: []const u8) !void {
+        return self.appendWithCode(a, .language, owner.heading, title, payload, owner.code);
     }
     fn append(self: PageOutput, a: std.mem.Allocator, kind: blob_format.BlobKind, key: []const u8, title: []const u8, payload: []const u8) !void {
+        return self.appendWithCode(a, kind, key, title, payload, "");
+    }
+    fn appendWithCode(self: PageOutput, a: std.mem.Allocator, kind: blob_format.BlobKind, key: []const u8, title: []const u8, payload: []const u8, language_code: []const u8) !void {
         switch (self) {
             .prepared => |page| {
                 // Owner headings may belong to a nested proof arena which is
@@ -4934,10 +4965,12 @@ const PageOutput = union(enum) {
                 errdefer a.free(owned_key);
                 const owned_title = try a.dupe(u8, title);
                 errdefer a.free(owned_title);
-                try page.records.append(a, .{ .kind = kind, .key = owned_key, .title = owned_title, .payload = payload, .stats_before = page.stats });
+                const owned_code = try a.dupe(u8, language_code);
+                errdefer a.free(owned_code);
+                try page.records.append(a, .{ .kind = kind, .key = owned_key, .title = owned_title, .payload = payload, .stats_before = page.stats, .language_code = owned_code });
             },
             .direct => |spools| switch (kind) {
-                .language => try spools.appendLanguage(a, key, title, payload),
+                .language => try spools.appendLanguage(a, .{ .heading = key, .code = language_code }, title, payload),
                 .thesaurus => try spools.thesaurus.append(spools.io, a, key, title, payload),
                 .citations => try spools.citations.append(spools.io, a, key, title, payload),
                 .reconstruction => try spools.reconstruction.append(spools.io, a, key, title, payload),
@@ -5018,7 +5051,7 @@ fn processMain(
             poem_phase,
             codes.table_styles,
         );
-        try spools.appendLanguage(page_allocator, language.heading, title, payload);
+        try spools.appendLanguage(page_allocator, language, title, payload);
         stats.language_records += 1;
         return;
     }
@@ -5171,7 +5204,7 @@ fn processMain(
             codes.table_styles,
             codes.figure_sizing,
         );
-        try spools.appendLanguage(page_allocator, "Unclassified", title, payload);
+        try spools.appendLanguage(page_allocator, .{ .heading = "Unclassified", .code = "" }, title, payload);
         stats.language_records += 1;
         return;
     };
@@ -5597,7 +5630,7 @@ fn processMain(
             codes.figure_sizing,
             .parser_output,
         );
-        try spools.appendLanguage(page_allocator, language.heading, title, payload);
+        try spools.appendLanguage(page_allocator, language, title, payload);
         stats.language_records += 1;
         return;
     }
@@ -5736,7 +5769,7 @@ fn processMain(
             if (completeContentRanges(source, group.fragments.items, if (preserve_prefix) page_prefix else "") or
                 (codes.figure_sizing != null and observedOwnerContentRanges(source, heading_observation, group.fragments.items, if (preserve_prefix) page_prefix else ""))) .parser_output else .unknown,
         );
-        try spools.appendLanguage(page_allocator, group.language.heading, title, payload);
+        try spools.appendLanguage(page_allocator, group.language, title, payload);
         stats.language_records += 1;
     }
 }
@@ -5970,7 +6003,7 @@ pub const Writer = struct {
         for (page.records.items) |record| {
             addPreparedStats(&self.stats, applied, record.stats_before);
             applied = record.stats_before;
-            try output.append(a, record.kind, record.key, record.title, record.payload);
+            try output.appendWithCode(a, record.kind, record.key, record.title, record.payload, record.language_code);
         }
         addPreparedStats(&self.stats, applied, page.stats);
     }
@@ -6112,7 +6145,7 @@ pub const Writer = struct {
             headings.deinit(self.allocator);
         }
         for (&self.spools.language) |*spool|
-            self.stats.language_blobs += try finalizeLanguageBucket(self.io, self.allocator, spool, self.output_root, &headings, codes);
+            self.stats.language_blobs += try finalizeLanguageBucket(self.io, self.allocator, spool, self.output_root, &headings, &self.spools.language_owners);
         std.mem.sort([]const u8, headings.items, {}, struct {
             fn less(_: void, a: []const u8, b: []const u8) bool {
                 return std.mem.order(u8, a, b) == .lt;
@@ -20620,4 +20653,54 @@ test "unaligned literal language regions require unique rooted matching raw corr
     try std.testing.expect(pairedLiteralAliasOwner(codes, raw, lost, &raw_sections, &sections, sections[0], &.{0}, &.{ 0, split }) == null);
     const unknown = [_]language_source.Section{.{ .heading = "Unowned", .source = "==Unowned==\n{{enm-noun}}\n" }};
     try std.testing.expect(!literalAliasPairCandidate(codes, &unknown));
+}
+
+
+test "Writer preserves resolved owner lifetime and rejects conflicting final headings" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/owners", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, std.testing.allocator, root); defer writer.deinit();
+    var page_arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer page_arena.deinit();
+    const pa = page_arena.allocator();
+    const payload = try presentation_document.compileAlloc(a, "first", .language, "Source name", "project-code", "# [[target|sense]]", null);
+    var page: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "first" };
+    const prepared: PageOutput = .{ .prepared = &page };
+    var heading = [_]u8{'S','o','u','r','c','e',' ','n','a','m','e'};
+    var code_value = [_]u8{'p','r','o','j','e','c','t','-','c','o','d','e'};
+    try prepared.appendLanguage(pa, .{ .heading = &heading, .code = &code_value }, "first", payload);
+    @memset(&heading, 'x'); @memset(&code_value, 'x');
+    try std.testing.expectEqualStrings("project-code", page.records.items[0].language_code);
+    try writer.commitPreparedPrefix(pa, &page);
+    _ = page_arena.reset(.free_all);
+    const direct: PageOutput = .{ .direct = &writer.spools };
+    try direct.appendLanguage(a, .{ .heading = "Source name", .code = "project-code" }, "second", payload);
+    try std.testing.expectError(error.ConflictingLanguageOwner,
+        direct.appendLanguage(a, .{ .heading = "Source name", .code = "other" }, "collision", payload));
+    try std.testing.expectError(error.ConflictingLanguageOwner,
+        direct.appendLanguage(a, .{ .heading = "Source name", .code = "" }, "unknown-collision", payload));
+    try direct.appendLanguage(a, .{ .heading = "Unclassified", .code = "" }, "unknown", payload);
+    try std.testing.expectError(error.ConflictingLanguageOwner,
+        direct.appendLanguage(a, .{ .heading = "Unclassified", .code = "project-code" }, "borrowed", payload));
+    var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    const bucket: usize = @intCast(std.hash.Wyhash.hash(0, "Retry name") % language_bucket_count);
+    const prior_offset = writer.spools.language[bucket].offset;
+    try std.testing.expectError(error.OutOfMemory,
+        direct.appendLanguage(failing.allocator(), .{ .heading = "Retry name", .code = "failed-code" }, "failed", payload));
+    try std.testing.expect(!writer.spools.language_owners.contains("Retry name"));
+    try std.testing.expectEqual(prior_offset, writer.spools.language[bucket].offset);
+    try direct.appendLanguage(a, .{ .heading = "Retry name", .code = "retry-code" }, "retry", payload);
+    const stats = try writer.finish(.{});
+    try std.testing.expectEqual(@as(usize, 3), stats.language_blobs);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Source name")); defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    try std.testing.expectEqualStrings("project-code", (try blob.languageMetadata()).code);
+    var records = blob.iterator();
+    const first = (try records.next()).?; const second = (try records.next()).?;
+    try std.testing.expectEqualStrings("first", first.title); try std.testing.expectEqualStrings("second", second.title);
+    try std.testing.expectEqualSlices(u8, payload, first.payload); try std.testing.expectEqualSlices(u8, payload, second.payload);
+    try std.testing.expect((try records.next()) == null);
+    var unknown = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Unclassified")); defer unknown.deinit();
+    try std.testing.expectEqualStrings("", (try (try blob_format.inspect(unknown.bytes)).languageMetadata()).code);
 }
