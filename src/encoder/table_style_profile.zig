@@ -9227,13 +9227,23 @@ test "container necessary chains preserve functional sibling escaped and attribu
         "span:is(.one,.two) > a::before{content:'x'}",
         "sp\\61 n[rel=\"mw:referencedBy\"] > a::before{content:'x'}",
         "a:is([href],.new).external{color:red}",
-        "a[href$=\".pdf\"].external:future-pseudo{color:red}",
     }) |css| {
         var sheet = try parseAlloc(a, css); defer sheet.deinit();
         const result = try sheet.containerRuleMatchesIn(a, &link); defer a.free(result.rules);
         try std.testing.expect(!result.unresolved and result.rules.len != 0);
         for (result.rules) |rule| try std.testing.expectEqual(ContainerSelectorMatch.unknown, rule.match);
     }
+    // A nonfunctional pseudo cannot erase the necessary terminal class.
+    // Preserve the original absent-class query, then satisfy every necessary
+    // own fact without pretending the attribute value or pseudo is supported.
+    var suffix = try parseAlloc(a, "a[href$=\".pdf\"].external:future-pseudo{color:red}"); defer suffix.deinit();
+    const excluded = try suffix.containerRuleMatchesIn(a, &link); defer a.free(excluded.rules);
+    try std.testing.expect(!excluded.unresolved and excluded.rules.len == 0);
+    const present: ContainerAttributeTesting.Inventory = .{ .names = &.{"href"} };
+    const possible: TextElement = .{ .tag = "a", .classes = "new external", .parent = &figure, .attribute_presence = present.source() };
+    const retained = try suffix.containerRuleMatchesIn(a, &possible); defer a.free(retained.rules);
+    try std.testing.expect(!retained.unresolved and retained.rules.len == 1);
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, retained.rules[0].match);
 }
 
 test "cell minimum width projects independent content floor and preserves table refusal" {
