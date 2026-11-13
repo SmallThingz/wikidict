@@ -3412,6 +3412,79 @@ def writer_figure_adopt_workspace(workspace, expected, now_unix, build_identity,
     return desired['now_unix']
 
 
+def initial_sealed_role_successor(original, native_roles):
+    """Keep the closed worker's origin while authenticating a later blob-stage emission."""
+    current = native_roles.records
+    if (set(original) != set(RETAINED_NATIVE_ROLE_NAMES) or set(current) != set(original)
+            or any(current[name] != original[name] for name in ('dict-blob-merge','dict-blob-verify'))):
+        raise ValueError('Initial sealed successor changed a retained role')
+    allowed = {'artifact','source','producer_source','compiled_source_authority','source_payload_files',
+               'compilation_recipe','actual_emission_result','qualification_closure','qualified_source_handoff',
+               'qualification_scope','previous_role_binding','dependencies','embedded_writer'}
+    writer, driver = current['dict-blob-build'], current['dict-bundle-build']
+    for name in ('dict-blob-build','dict-bundle-build'):
+        before, after = original[name], current[name]
+        if {k:v for k,v in before.items() if k not in allowed} != {k:v for k,v in after.items() if k not in allowed}:
+            raise ValueError('Initial sealed successor changed role policy')
+        if prepared_metadata(after['previous_role_binding']) != original:
+            raise ValueError('Initial sealed successor names another original role map')
+        old_source, new_source = prepared_metadata(before['source']), prepared_metadata(after['source'])
+        old_inventory, new_inventory = old_source.get('files',old_source), new_source.get('files',new_source)
+        required = set(after['source_paths']) if name == 'dict-bundle-build' else {
+            path for _,members,paths in RETAINED_NATIVE_ROLE_ABI_INTERFACES if name in members for path in paths}
+        if any(old_inventory[path] != new_inventory[path]
+               or old_source.get('modes',{}).get(path) != new_source.get('modes',{}).get(path) for path in required):
+            raise ValueError('Initial sealed successor changed source ABI or driver policy')
+    if writer['dependencies'] != original['dict-blob-build']['dependencies']:
+        raise ValueError('Initial sealed successor changed Writer native dependencies')
+    omitted = {'blobs','pipeline_paths'}
+    if ({k:v for k,v in driver['dependencies'].items() if k not in omitted} !=
+            {k:v for k,v in original['dict-bundle-build']['dependencies'].items() if k not in omitted}
+            or driver.get('embedded_writer') != writer['artifact']
+            or driver['dependencies'].get('blobs') != writer['artifact']):
+        raise ValueError('Initial sealed successor changed retained native dependencies')
+    references = [writer[key] for key in ('compilation_recipe','actual_emission_result','qualification_closure','source')]
+    if any(driver[key] != writer[key] for key in ('compilation_recipe','actual_emission_result','qualification_closure','source')):
+        raise ValueError('Initial sealed successor has split emission authority')
+    recipe, emitted, closed, source = [prepared_metadata(row) for row in references]
+    if (closed.get('outcome') != 'PASSED-PHYSICALLY-SOURCE-CLOSED'
+            or not all(closed.get(k) is True for k in ('passed','source_after','whole_source_guard_after','source_lease_released','allocation_released','writer_retained_driver_emission_passed'))
+            or closed.get('result') != writer['actual_emission_result'] or not emitted.get('passed')
+            or emitted.get('source_authority') != writer['compilation_recipe']
+            or recipe.get('source_manifest') != writer['source'] or closed.get('source_manifest') != writer['source']
+            or recipe.get('source_head') != source.get('head')
+            or closed.get('commands') != emitted.get('commands')
+            or len(emitted.get('commands',[])) != 2):
+        raise ValueError('Initial sealed successor emission is not independently closed')
+    for index,(name,target) in enumerate((('dict-blob-build','prepare-captured-writer'),('dict-bundle-build','prepare-bundle-driver'))):
+        row=emitted['commands'][index]; command=recipe['commands'][index]; artifact=emitted['artifacts'][name]
+        if (row.get('returncode') != 0 or row['argv'] != command['argv'] or row['cwd'] != command['cwd']
+                or row['argv'][1:3] != ['build',target] or row['argv'][0] != writer['dependencies']['zig']['path']
+                or dict(artifact['reference'],mode=artifact['mode']) != current[name]['artifact']):
+            raise ValueError('Initial sealed successor emitted another artifact or graph')
+    argv=emitted['commands'][1]['argv']
+    for option,key in (('worker-object','worker_object'),('value-leaf-bc','value_leaf_bc'),('worker-main-c','worker_main_c'),('modules','modules'),('llvm','llvm'),('blobs','blobs')):
+        prefix='-Dbundle-driver-'+option+'='
+        if [arg for arg in argv if arg.startswith(prefix)] != [prefix+driver['dependencies'][key]['path']]:
+            raise ValueError('Initial sealed successor lacks exact retained driver arguments')
+    pipeline=driver['dependencies']['pipeline_paths']
+    observed=native_roles.bind_input(Path(pipeline['path']))
+    if observed != pipeline:
+        raise ValueError('Initial sealed successor pipeline metadata changed')
+    pattern=r'^pub const ([a-z_]+): \[\]const u8 = ("[^"\n]*");$'
+    text=Path(pipeline['path']).read_text()
+    options=re.findall(pattern,text,re.MULTILINE)
+    expected={key:driver['dependencies'][key]['path'] for key in ('worker_object','value_leaf_bc','worker_main_c','modules','llvm','blobs','zig')}
+    expected.update(clang='clang',project_root='.')
+    if (re.sub(pattern,'',text,flags=re.MULTILINE).strip() or len(options)!=len(expected)
+            or {key:json.loads(value) for key,value in options}!=expected):
+        raise ValueError('Initial sealed successor pipeline paths differ')
+    for reference in references:
+        observed=native_roles.bind_input(Path(reference['path']))
+        if any(observed[k] != reference[k] for k in ('path','bytes','sha256')):
+            raise ValueError('Initial sealed successor authority changed')
+
+
 def initial_sealed_generation(reference, native_roles):
     """Read a selected closed direct preparation, without inventing old shard state."""
     selected = prepared_metadata(reference)
@@ -3433,7 +3506,7 @@ def initial_sealed_generation(reference, native_roles):
         raise ValueError('Initial sealed preparation is not independently closed')
     original_roles = prepared_metadata(plan['roles'])
     if original_roles != native_roles.records:
-        raise ValueError('Initial sealed preparation selected different native roles')
+        initial_sealed_role_successor(original_roles, native_roles)
     workspace = Path(plan['workspace'])
     if (not workspace.is_absolute() or workspace.resolve() != workspace
             or any(p.is_symlink() for p in (workspace, *workspace.parents))
@@ -3601,8 +3674,10 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     before = inventory()
     if set(result['installed_tools']) != set(BLOB_TOOL_NAMES):
         raise ValueError('Initial sealed installed role inventory differs')
+    # These installed files belong to the original closed preparation.
+    original_roles = prepared_metadata(plan['roles'])
     for name in RETAINED_NATIVE_ROLE_NAMES:
-        expected_artifact = native_roles.records[name]['artifact']
+        expected_artifact = original_roles[name]['artifact']
         descriptor = result['installed_tools'].get(name, dict(expected_artifact, path=str(selected_workspace / 'native-blob-tools' / 'bin' / name)))
         if (descriptor['path'] != str(selected_workspace / 'native-blob-tools' / 'bin' / name)
                 or any(descriptor[k] != expected_artifact[k] for k in ('bytes', 'sha256'))):

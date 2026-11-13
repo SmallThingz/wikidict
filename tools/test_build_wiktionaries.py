@@ -11357,3 +11357,135 @@ class PreparedFigureVerdictTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class InitialSealedRoleSuccessorTests(unittest.TestCase):
+    def fixture(self,root):
+        f=InitialSealedGenerationTests().fixture(root)
+        paths=sorted({path for _,_,members in b.RETAINED_NATIVE_ROLE_ABI_INTERFACES for path in members}|{'tools/bundle_build.zig'})
+        inventory={}
+        for relative in paths:
+            p=root/'compiled-source'/relative;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(relative);p.chmod(0o444)
+            inventory[relative]=_initial_sealed_reference(p)
+        old_source=_initial_sealed_write(root/'old-source.json',dict(head='old',files=inventory,modes={n:0o444 for n in paths}))
+        source=_initial_sealed_write(root/'current-source.json',dict(head='current',files=inventory,modes={n:0o444 for n in paths}))
+        original={name:copy.deepcopy(row) for name,row in f.records.items()}
+        for name in ('dict-blob-build','dict-bundle-build'):
+            original[name].update(source=old_source,source_paths=paths,source_payload_files=inventory,producer_source=old_source['sha256'])
+        original['dict-bundle-build']['dependencies']['blobs']=original['dict-blob-build']['artifact']
+        original['dict-bundle-build']['dependencies']['pipeline_paths']=_initial_sealed_write(root/'old-pipeline',{})
+        current=copy.deepcopy(original)
+        for name in ('dict-blob-build','dict-bundle-build'):
+            p=root/'new-tools'/name;p.parent.mkdir(exist_ok=True);p.write_bytes(('new '+name).encode());p.chmod(0o555)
+            current[name].update(artifact=dict(_initial_sealed_reference(p),mode=0o555),source=source,producer_source=source['sha256'])
+        writer,driver=current['dict-blob-build'],current['dict-bundle-build']
+        driver['embedded_writer']=driver['dependencies']['blobs']=writer['artifact']
+        options={name:driver['dependencies'][name]['path'] for name in ('worker_object','value_leaf_bc','worker_main_c','modules','llvm','blobs','zig')};options.update(clang='clang',project_root='.')
+        pipeline=root/'new-pipeline.zig';pipeline.write_text(''.join('pub const '+key+': []const u8 = '+json.dumps(value)+';\n' for key,value in options.items()))
+        driver['dependencies']['pipeline_paths']=dict(_initial_sealed_reference(pipeline),mode=stat.S_IMODE(pipeline.stat().st_mode))
+        commands=[dict(argv=[writer['dependencies']['zig']['path'],'build',target],cwd=str(root),returncode=0) for target in ('prepare-captured-writer','prepare-bundle-driver')]
+        for option,key in (('worker-object','worker_object'),('value-leaf-bc','value_leaf_bc'),('worker-main-c','worker_main_c'),('modules','modules'),('llvm','llvm'),('blobs','blobs')):
+            commands[1]['argv'].append('-Dbundle-driver-'+option+'='+driver['dependencies'][key]['path'])
+        recipe=_initial_sealed_write(root/'emission-recipe.json',dict(source_manifest=source,source_head='current',commands=[{k:v for k,v in row.items() if k!='returncode'} for row in commands]))
+        result=dict(passed=True,source_authority=recipe,commands=commands,artifacts={name:dict(reference={k:v for k,v in current[name]['artifact'].items() if k!='mode'},mode=0o555) for name in ('dict-blob-build','dict-bundle-build')})
+        emitted=_initial_sealed_write(root/'emission-result.json',result)
+        closed=dict(outcome='PASSED-PHYSICALLY-SOURCE-CLOSED',result=emitted,source_manifest=source,commands=commands,**{k:True for k in ('passed','source_after','whole_source_guard_after','source_lease_released','allocation_released','writer_retained_driver_emission_passed')})
+        closure=_initial_sealed_write(root/'emission-closure.json',closed)
+        for name in ('dict-blob-build','dict-bundle-build'):
+            current[name].update(compilation_recipe=recipe,actual_emission_result=emitted,qualification_closure=closure)
+        original_ref=_initial_sealed_write(root/'roles.json',original)
+        for name in ('dict-blob-build','dict-bundle-build'):current[name]['previous_role_binding']=original_ref
+        f.plan['roles']=original_ref;f.result.update(role_map=original_ref,input_authority=_initial_sealed_write(root/'preparation-data.json',f.plan))
+        f.result_ref=_initial_sealed_write(root/'preparation-result.json',f.result);f.closed['preparation_result']=f.result_ref
+        f.selection=_initial_sealed_write(root/'selection.json',dict(preparation_result=f.result_ref,preparation_closure=_initial_sealed_write(root/'closure.json',f.closed)))
+        f.roles.records=current;f.original=original;f.current=current;f.emission_result=result;f.emission_closed=closed;f.pipeline=pipeline
+        return f
+
+    def test_closed_writer_driver_successor_keeps_original_preparation_origin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f=self.fixture(Path(tmp))
+            with patch.object(b,'PROJECT',f.root):
+                selected,result,plan,workspace=b.initial_sealed_generation(f.selection,f.roles)
+            self.assertEqual(f.plan['roles'],plan['roles']);self.assertEqual(f.result['completed_expander_seal'],result['completed_expander_seal']);self.assertEqual(f.workspace,workspace)
+            self.assertNotEqual(b.prepared_metadata(plan['roles']),f.roles.records)
+            f.roles.provenance=lambda:copy.deepcopy(f.current)
+            f.identity['native_tool_roles']=copy.deepcopy(f.current)
+            installed_before={p.name:p.read_bytes() for p in f.tools.iterdir()}
+            owner=InitialSealedGenerationTests()
+            with owner.contexts(f)[0],owner.contexts(f)[1],owner.contexts(f)[2]:
+                self.assertEqual(owner.adopt(f),123)
+            self.assertEqual(f.result['completed_expander_seal'],result['completed_expander_seal'])
+            self.assertEqual(installed_before,{p.name:p.read_bytes() for p in f.tools.iterdir()})
+            f.roles.tools={name:SimpleNamespace(path=Path(f.current[name]['artifact']['path']),sha256=f.current[name]['artifact']['sha256']) for name in b.RETAINED_NATIVE_ROLE_NAMES}
+            prepared=f.roles.prepare(None,'viwiktionary','20261001')
+            self.assertEqual(set(b.BLOB_TOOL_NAMES),set(prepared))
+            self.assertEqual(Path(f.current['dict-blob-build']['artifact']['path']),prepared['dict-blob-build'].path)
+            self.assertNotEqual(Path(f.original['dict-blob-build']['artifact']['path']),prepared['dict-blob-build'].path)
+            self.assertEqual(installed_before,{p.name:p.read_bytes() for p in f.tools.iterdir()})
+
+    def test_native_role_policy_abi_and_pipeline_mutations_are_refused(self):
+        mutations=[
+            lambda f:f.current['dict-blob-merge'].update(unbound=True),
+            lambda f:f.current['dict-blob-verify'].update(unbound=True),
+            lambda f:f.current['dict-blob-build'].update(source_paths=[]),
+            lambda f:f.current['dict-bundle-build'].update(source_root='/foreign'),
+            lambda f:f.current['dict-blob-build']['dependencies'].update(worker_object=dict(path='/foreign',bytes=1,sha256='0'*64)),
+            lambda f:f.current['dict-bundle-build']['dependencies'].update(llvm=dict(path='/foreign',bytes=1,sha256='0'*64)),
+            lambda f:f.current['dict-bundle-build'].update(embedded_writer=f.original['dict-blob-build']['artifact']),
+            lambda f:f.current['dict-bundle-build']['dependencies'].update(blobs=f.original['dict-blob-build']['artifact']),
+            lambda f:f.current['dict-bundle-build']['dependencies'].update(native_policy='foreign'),
+            lambda f:f.current['dict-bundle-build'].update(qualification_closure=f.current['dict-bundle-build']['compilation_recipe']),
+        ]
+        for index,mutate in enumerate(mutations):
+            with self.subTest(index=index),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp));mutate(f)
+                with patch.object(b,'PROJECT',f.root),self.assertRaises(ValueError):b.initial_sealed_generation(f.selection,f.roles)
+        with tempfile.TemporaryDirectory() as tmp:
+            f=self.fixture(Path(tmp));f.pipeline.write_text(f.pipeline.read_text().replace('project_root: []const u8 = "."','project_root: []const u8 = "/foreign"'))
+            f.current['dict-bundle-build']['dependencies']['pipeline_paths']=dict(_initial_sealed_reference(f.pipeline),mode=stat.S_IMODE(f.pipeline.stat().st_mode))
+            with patch.object(b,'PROJECT',f.root),self.assertRaises(ValueError):b.initial_sealed_generation(f.selection,f.roles)
+
+        for mode in ('descriptor-mode','trailing-extra','malformed'):
+            with self.subTest(pipeline=mode),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp))
+                if mode=='descriptor-mode':f.current['dict-bundle-build']['dependencies']['pipeline_paths']['mode']^=0o111
+                else:
+                    f.pipeline.write_text(f.pipeline.read_text()+('pub const extra = 1;\n' if mode=='trailing-extra' else 'unbound Zig text\n'))
+                    f.current['dict-bundle-build']['dependencies']['pipeline_paths']=dict(_initial_sealed_reference(f.pipeline),mode=stat.S_IMODE(f.pipeline.stat().st_mode))
+                with patch.object(b,'PROJECT',f.root),self.assertRaises(ValueError):b.initial_sealed_generation(f.selection,f.roles)
+
+    def test_closed_emission_and_original_preparation_mutations_are_refused(self):
+        mutations=[
+            lambda f:f.emission_closed.update(source_after=False),
+            lambda f:f.emission_closed.update(allocation_released=False),
+            lambda f:f.emission_closed.update(commands=[]),
+            lambda f:f.emission_result.update(passed=False),
+            lambda f:f.emission_result['commands'][1]['argv'].append('-Dbundle-driver-worker-object=/foreign'),
+            lambda f:f.emission_result['artifacts']['dict-blob-build']['reference'].update(sha256='0'*64),
+        ]
+        for index,mutate in enumerate(mutations):
+            with self.subTest(index=index),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp));mutate(f)
+                emitted=_initial_sealed_write(f.root/'emission-result.json',f.emission_result);f.emission_closed['result']=emitted
+                closure=_initial_sealed_write(f.root/'emission-closure.json',f.emission_closed)
+                for name in ('dict-blob-build','dict-bundle-build'):f.current[name].update(actual_emission_result=emitted,qualification_closure=closure)
+                with patch.object(b,'PROJECT',f.root),self.assertRaises(ValueError):b.initial_sealed_generation(f.selection,f.roles)
+        for key in ('source_after','inputs_after'):
+            with self.subTest(original=key),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp));f.result[key]=False;r=_initial_sealed_write(f.root/'preparation-result.json',f.result);f.closed['preparation_result']=r
+                selection=_initial_sealed_write(f.root/'selection.json',dict(preparation_result=r,preparation_closure=_initial_sealed_write(f.root/'closure.json',f.closed)))
+                with patch.object(b,'PROJECT',f.root),self.assertRaises(ValueError):b.initial_sealed_generation(selection,f.roles)
+
+
+        for mode in ('provider','asset','old-writer','old-driver'):
+            with self.subTest(adoption=mode),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp));owner=InitialSealedGenerationTests()
+                f.roles.provenance=lambda:copy.deepcopy(f.current);f.identity['native_tool_roles']=copy.deepcopy(f.current)
+                if mode=='provider':f.seal['identity']['providers']['foreign.tsv']=[1,'0'*64]
+                elif mode=='asset':f.seal['identity']['assets'][0][1]+=1
+                else:
+                    installed=f.tools/('dict-blob-build' if mode=='old-writer' else 'dict-bundle-build')
+                    installed.chmod(0o755);installed.write_bytes(b'changed old installed artifact');installed.chmod(0o555)
+                owner.reseal_graph(f)
+                with owner.contexts(f)[0],owner.contexts(f)[1],owner.contexts(f)[2],self.assertRaises(ValueError):owner.adopt(f)
+                self.assertFalse((f.destination/'state.json').exists())
