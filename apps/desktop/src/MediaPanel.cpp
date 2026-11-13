@@ -1375,6 +1375,7 @@ struct MediaPanel::Impl {
             if (original.isValid()) { metadata.insert(QStringLiteral("intrinsic_width"), original.width()); metadata.insert(QStringLiteral("intrinsic_height"), original.height()); }
             else if (card->inlineRequested) { fail(card, QStringLiteral("Original image dimensions are unavailable.")); return; }
             card->status->setText(QStringLiteral("Downloading media..."));
+            card->progress->setRange(0, 0);
             request(card, mediaUrl, MaxMediaBytes, [this, card, metadata](const QByteArray &payload) {
                 if (payload.isEmpty()) { fail(card, QStringLiteral("The media file was empty.")); return; }
                 if (card->svgLanguage) {

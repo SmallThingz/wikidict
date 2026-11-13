@@ -25,6 +25,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QProgressBar>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -44,6 +45,7 @@ struct Response {
     QByteArray body;
     qint64 declared = -1;
     int delay = 0;
+    bool held = false;
 };
 
 class Reply final : public QNetworkReply {
@@ -55,16 +57,17 @@ public:
         setOperation(QNetworkAccessManager::GetOperation);
         setHeader(QNetworkRequest::ContentLengthHeader, response.declared < 0 ? bytes_.size() : response.declared);
         open(QIODevice::ReadOnly);
-        QTimer::singleShot(response.delay, this, [this] {
-            if (isFinished()) return;
-            emit metaDataChanged();
-            if (isFinished()) return;
-            emit readyRead();
-            if (isFinished()) return;
-            emit downloadProgress(bytes_.size(), bytes_.size());
-            setFinished(true);
-            emit finished();
-        });
+        if (!response.held) QTimer::singleShot(response.delay, this, [this] { complete(); });
+    }
+    void complete() {
+        if (isFinished()) return;
+        emit metaDataChanged();
+        if (isFinished()) return;
+        emit readyRead();
+        if (isFinished()) return;
+        emit downloadProgress(bytes_.size(), bytes_.size());
+        setFinished(true);
+        emit finished();
     }
     void abort() override {
         if (isFinished()) return;
@@ -94,11 +97,22 @@ public:
     QList<QNetworkRequest> requests;
     QList<Response> responses;
     int cancelled = 0;
+    QPointer<Reply> heldReply;
+    bool releaseHeld() {
+        if (!heldReply || heldReply->isFinished()) return false;
+        auto *reply = heldReply.data();
+        heldReply.clear();
+        QTimer::singleShot(0, reply, [reply] { reply->complete(); });
+        return true;
+    }
 protected:
     QNetworkReply *createRequest(Operation, const QNetworkRequest &request, QIODevice *) override {
         urls.append(request.url());
         requests.append(request);
-        return new Reply(request, responses.isEmpty() ? Response{"{}"} : responses.takeFirst(), &cancelled, this);
+        const Response response = responses.isEmpty() ? Response{"{}"} : responses.takeFirst();
+        auto *reply = new Reply(request, response, &cancelled, this);
+        if (response.held) heldReply = reply;
+        return reply;
     }
 };
 
@@ -1029,19 +1043,118 @@ private slots:
 
     void rejectsOversizedDownloadAndRetryRecovers() {
         Network network;
-        network.responses = {{metadata()}, {QByteArrayLiteral("x"), 50 * 1024 * 1024 + 1},
+        network.responses = {{metadata()}, {QByteArrayLiteral("x"), 50 * 1024 * 1024 + 1, 0, true},
                              {metadata()}, {picture()}};
         MediaPanel panel(nullptr, &network);
+        panel.resize(360, 700);
         panel.setEntry(entry());
+        auto *button = loadButton(panel);
+        auto *message = status(panel);
+        auto *progress = panel.findChild<QProgressBar *>();
+        auto *scroll = panel.findChild<QScrollArea *>(QStringLiteral("mediaContentScroll"));
+        QWidget *preview = nullptr;
+        for (auto *widget : panel.findChildren<QWidget *>())
+            if (widget->accessibleName() == QStringLiteral("A cat")) preview = widget;
+        QVERIFY(button && message && progress && scroll && preview);
+        class PaintObserver final : public QObject {
+        public:
+            QLabel *message = nullptr;
+            QWidget *preview = nullptr;
+            QString paintedStatus;
+            int previewPaints = 0;
+            bool eventFilter(QObject *watched, QEvent *event) override {
+                if (event->type() == QEvent::Paint) {
+                    if (watched == message) paintedStatus = message->text();
+                    if (watched == preview) ++previewPaints;
+                }
+                return false;
+            }
+        } painted;
+        painted.message = message;
+        painted.preview = preview;
+        message->installEventFilter(&painted);
+        preview->installEventFilter(&painted);
+        auto *action = QAccessible::queryAccessibleInterface(button);
+        auto *statusAccess = QAccessible::queryAccessibleInterface(message);
+        QVERIFY(action && statusAccess);
+        QString frames = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+        if (frames.isEmpty()) frames = QStringLiteral(".tmp");
+        QVERIFY(QDir().mkpath(frames));
+        const auto capture = [&](const QString &name, bool ready) {
+            if (panel.size() != QSize(360, 700) || scroll->horizontalScrollBar()->maximum() != 0
+                || scroll->widget()->width() > scroll->viewport()->width()) return false;
+            for (QWidget *target : {static_cast<QWidget *>(button), static_cast<QWidget *>(message)}) {
+                const QRect bounds(target->mapTo(scroll->viewport(), QPoint()), target->size());
+                if (!target->isVisible() || !scroll->viewport()->rect().contains(bounds)
+                    || !target->parentWidget()->rect().contains(target->geometry())) return false;
+                auto *accessible = QAccessible::queryAccessibleInterface(target);
+                if (!accessible || accessible->rect() != QRect(target->mapToGlobal(QPoint()), target->size())
+                    || accessible->state().invisible) return false;
+            }
+            const QImage frame = panel.grab().toImage();
+            if (frame.isNull()) return false;
+            if (ready) {
+                if (!preview->isVisible()) return false;
+                const QPoint center = preview->mapTo(&panel, preview->rect().center());
+                const QPoint pixel(qRound(center.x() * frame.devicePixelRatio()),
+                                   qRound(center.y() * frame.devicePixelRatio()));
+                if (!frame.rect().contains(pixel) || frame.pixelColor(pixel) != QColor(65, 139, 115)) return false;
+            } else if (preview->isVisible()) return false;
+            return frame.save(QDir(frames).filePath(name));
+        };
         panel.show();
         enableImages(panel);
-        QTest::mouseClick(loadButton(panel), Qt::LeftButton);
+        QTest::mouseClick(button, Qt::LeftButton);
+        QTRY_COMPARE(network.urls.size(), 2);
+        QVERIFY(network.heldReply && !network.heldReply->isFinished());
+        QTRY_COMPARE(message->text(), QStringLiteral("Downloading media..."));
+        scroll->ensureWidgetVisible(message, 0, 0);
+        QTRY_COMPARE(painted.paintedStatus, message->text());
+        QCOMPARE(button->text(), QStringLiteral("Loading..."));
+        QVERIFY(!button->isEnabled());
+        QVERIFY(progress->isVisible());
+        QCOMPARE(progress->minimum(), 0);
+        QCOMPARE(progress->maximum(), 0);
+        QCOMPARE(progress->value(), -1);
+        QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Loading...: A cat"));
+        QCOMPARE(statusAccess->text(QAccessible::Name), message->text());
+        QVERIFY(capture(QStringLiteral("media-retry-loading.png"), false));
+        QCOMPARE(network.urls.size(), 2);
+        QCOMPARE(QDir(cacheRoot()).entryList(QDir::Files).size(), 0);
+        QVERIFY(network.releaseHeld());
         QTRY_VERIFY(status(panel)->text().contains(QStringLiteral("too large")));
         QCOMPARE(loadButton(panel)->text(), QStringLiteral("Retry"));
         QCOMPARE(QDir(cacheRoot()).entryList(QDir::Files).size(), 0);
+        scroll->ensureWidgetVisible(message, 0, 0);
+        QTRY_COMPARE(painted.paintedStatus, message->text());
+        QVERIFY(button->isEnabled());
+        QVERIFY(progress->isHidden());
+        QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Retry: A cat"));
+        QCOMPARE(statusAccess->text(QAccessible::Name), message->text());
+        QCOMPARE(network.urls.size(), 2);
+        QCOMPARE(network.cancelled, 1);
+        QVERIFY(capture(QStringLiteral("media-retry-error.png"), false));
         QTest::mouseClick(loadButton(panel), Qt::LeftButton);
         QTRY_COMPARE(status(panel)->text(), QStringLiteral("Ready."));
         QCOMPARE(network.urls.size(), 4);
+        scroll->ensureWidgetVisible(message, 0, 0);
+        QTRY_COMPARE(painted.paintedStatus, message->text());
+        QTRY_VERIFY(painted.previewPaints > 0);
+        QCOMPARE(button->text(), QStringLiteral("Reload image"));
+        QVERIFY(button->isEnabled());
+        QVERIFY(progress->isHidden());
+        QCOMPARE(progress->minimum(), 0);
+        QCOMPARE(progress->maximum(), 100);
+        QCOMPARE(progress->value(), 100);
+        QCOMPARE(action->text(QAccessible::Name), QStringLiteral("Reload image: A cat"));
+        QCOMPARE(statusAccess->text(QAccessible::Name), QStringLiteral("Ready."));
+        auto *imageAccess = QAccessible::queryAccessibleInterface(preview);
+        QVERIFY(imageAccess);
+        QCOMPARE(imageAccess->text(QAccessible::Name), QStringLiteral("A cat"));
+        QCOMPARE(QDir(cacheRoot()).entryList(QDir::Files).size(), 2);
+        QVERIFY(network.responses.isEmpty());
+        QVERIFY(!network.heldReply);
+        QVERIFY(capture(QStringLiteral("media-retry-ready.png"), true));
     }
 
     void boundsDownloadsWithoutContentLength() {
