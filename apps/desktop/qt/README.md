@@ -182,6 +182,34 @@ unchanged. The six passed suites and unchanged Reader checks therefore retain
 their exact dependency scope; this is not a restamped successful full-suite run.
 Earlier CTest, media and GUI evidence keeps its original identities.
 
+## Responsive Table block viewports
+
+A typed Table block viewport keeps one source grid and caption while choosing its
+source-proven wide or narrow box policy at the document CSS viewport boundary.
+Containing direction and grid direction remain distinct. Source-owned language
+reaches shaping, and typed cell alignment retains the actual line metrics.
+Caption-only empty grids keep their intrinsic word floor and authenticated owner.
+
+Copying a viewport through a Container preserves its hidden storage state only
+after the destination frame hierarchy has been scanned. The edit checkpoint keeps
+layout disabled, verifies the revision transition and retains one undo operation.
+Keyboard focus reveals both ends of a selected link, then prioritizes the active
+endpoint; cursor anchor identity is checked explicitly. Scrollbar geometry and
+visible caption glyphs share the native local clipping and scroll coordinates.
+
+Three affected native controls passed on the current library. Two current app
+controls passed for responsive tables and ordinary Container scrollports. Root
+reviewed the constructed 900- and 639-pixel frames: caption and rows are visible,
+bars sit below the text, and the long word retains intended horizontal clipping.
+The earlier numerical pass with incomplete visible content remains a recorded
+visual failure. Earlier empty-caption, middle and language checks retain their
+original execution and readset scopes, without claiming a new full-suite pass.
+
+All 25 maintained Qt patch targets were reconstructed forward and backward against
+the pinned upstream revision. Normal current-source Reader and main-flow checks
+remain separate, as does genuine Russian Writer-to-Reader interoperability. These
+constructed views do not establish whole-frontend or release acceptance.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,

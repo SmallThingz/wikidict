@@ -515,10 +515,13 @@
  
      if (node.isTextFrame) {
          if (node.isRootFrame) {
-@@ -1076,6 +1121,21 @@
+@@ -1076,6 +1121,24 @@
              QTextTableCell cell = t.currentCell.cell();
              if (cell.isValid()) {
                  QTextTableCellFormat fmt = cell.format().toTableCellFormat();
++                constexpr int sourceLanguage = QTextFormat::UserProperty + 0x57fa;
++                if (currentNode->charFormat.hasProperty(sourceLanguage))
++                    fmt.setProperty(sourceLanguage, currentNode->charFormat.property(sourceLanguage));
 +                int cellMetricAttributes = 0;
 +                QString cellMetricValue;
 +                for (int i = 0; i + 1 < currentNode->attributes.size(); i += 2) {
@@ -563,7 +566,7 @@
  #include <qmath.h>
  #include <qrect.h>
  #include <qpalette.h>
-@@ -28,17 +33,248 @@
+@@ -28,17 +33,277 @@
  #include <QtCore/qpointer.h>
  
  #include <algorithm>
@@ -654,6 +657,35 @@
 +static constexpr int WikidictContainerMargins = QTextFormat::UserProperty + 0x57e9;
 +static constexpr int WikidictContainerAutoMargins = QTextFormat::UserProperty + 0x57ea;
 +static constexpr int WikidictContainerScrollport = QTextFormat::UserProperty + 0x57eb;
++static constexpr int WikidictTableViewport = QTextFormat::UserProperty + 0x57f5;
++static constexpr int WikidictTableViewportGrid = QTextFormat::UserProperty + 0x57f6;
++static bool wikidictSourceLanguageTag(const QString &tag) {
++    const auto parts = tag.split(QChar('-'));
++    if (tag.isEmpty() || tag.toUtf8().size() > 32 * 1024 * 1024 || parts.first().size() > 8) return false;
++    const auto letter = [](QChar c) { return (c >= QChar('a') && c <= QChar('z')) || (c >= QChar('A') && c <= QChar('Z')); };
++    for (const auto c : parts.first()) if (!letter(c)) return false;
++    if (parts.first().size() == 1 && (parts.size() < 2 || (parts.first().toLower() != "x" && parts.first().toLower() != "i"))) return false;
++    for (const auto &part : parts) {
++        if (part.isEmpty() || part.size() > 8) return false;
++        for (const auto c : part) if (!letter(c) && !(c >= QChar('0') && c <= QChar('9'))) return false;
++    }
++    return true;
++}
++
++static bool wikidictTableViewport(const QTextFrame *frame)
++{
++    return frame && frame->frameFormat().hasProperty(WikidictTableViewport);
++}
++static bool wikidictTableViewportActive(const QTextFrame *frame)
++{
++    return wikidictTableViewport(frame)
++        && frame->frameFormat().property(WikidictTableViewport).toMap().value(QStringLiteral("active")).toBool();
++}
++static bool wikidictTableViewportGrid(const QTextFrame *frame)
++{
++    return frame && frame->frameFormat().hasProperty(WikidictTableViewportGrid)
++        && wikidictTableViewport(frame->parentFrame());
++}
 +static constexpr int WikidictContainerFixedFloat = QTextFormat::UserProperty + 0x57ec;
 +static constexpr int WikidictTablePhysicalEdges = QTextFormat::UserProperty + 0x57de;
 +static constexpr int WikidictCellHiddenEdges = QTextFormat::UserProperty + 0x57df;
@@ -812,7 +844,7 @@
  
  class QTextFrameData : public QTextFrameLayoutData
  {
-@@ -56,10 +292,23 @@
+@@ -56,10 +321,23 @@
      QFixed rightMargin;
      QFixed border;
      QFixed padding;
@@ -836,7 +868,7 @@
  
      // accumulated margins
      QFixed effectiveTopMargin;
-@@ -74,6 +323,20 @@
+@@ -74,6 +352,20 @@
      bool layoutDirty;
  
      QList<QPointer<QTextFrame>> floats;
@@ -857,7 +889,7 @@
  };
  
  QTextFrameData::QTextFrameData()
-@@ -81,6 +344,164 @@
+@@ -81,6 +373,164 @@
        currentLayoutStruct(nullptr), sizeDirty(true), layoutDirty(true)
  {
  }
@@ -1022,7 +1054,7 @@
  
  struct QTextLayoutStruct {
      QTextLayoutStruct() : maximumWidth(QFIXED_MAX), fullLayout(false)
-@@ -94,7 +515,16 @@
+@@ -94,7 +544,16 @@
      QFixed minimumWidth;
      QFixed maximumWidth;
      bool fullLayout;
@@ -1039,7 +1071,7 @@
      QFixed pageHeight;
      QFixed pageBottom;
      QFixed pageTopMargin;
-@@ -109,6 +539,13 @@
+@@ -109,6 +568,13 @@
              updateRectForFloats = rect;
      }
  
@@ -1053,7 +1085,7 @@
      inline QFixed absoluteY() const
      { return frameY + y; }
  
-@@ -121,6 +558,73 @@
+@@ -121,6 +587,73 @@
      inline void newPage()
      { if (pageHeight == QFIXED_MAX) return; pageBottom += pageHeight; y = qMax(y, pageBottom - pageHeight + pageBottomMargin + pageTopMargin - frameY); }
  };
@@ -1127,7 +1159,7 @@
  
  #ifndef QT_NO_CSSPARSER
  // helper struct to collect edge data and priorize edges for border-collapse mode
-@@ -142,8 +646,16 @@
+@@ -142,8 +675,16 @@
  
      // used for priorization with qMax
      bool operator< (const EdgeData &other) const {
@@ -1144,7 +1176,7 @@
          if (edgeClass < other.edgeClass) return true;
          if (edgeClass > other.edgeClass) return false;
          if (edge == QCss::TopEdge && other.edge == QCss::BottomEdge) return true;
-@@ -159,6 +671,11 @@
+@@ -159,6 +700,11 @@
      QTextTableCell cell;
      QCss::Edge edge;
      EdgeClass edgeClass;
@@ -1156,7 +1188,7 @@
  };
  
  // axisEdgeData is referenced by QTextTableData's inline methods, so predeclare
-@@ -166,10 +683,70 @@
+@@ -166,10 +712,70 @@
  static inline EdgeData axisEdgeData(QTextTable *table, const QTextTableData *td, const QTextTableCell &cell, QCss::Edge edge);
  #endif
  
@@ -1227,7 +1259,7 @@
      qreal deviceScale;
      QList<QFixed> minWidths;
      QList<QFixed> maxWidths;
-@@ -309,6 +886,42 @@
+@@ -309,6 +915,42 @@
      return data;
  }
  
@@ -1270,7 +1302,7 @@
  static bool isFrameFromInlineObject(QTextFrame *f)
  {
      return f->firstPosition() > f->lastPosition();
-@@ -316,12 +929,12 @@
+@@ -316,12 +958,12 @@
  
  void QTextTableData::updateTableSize()
  {
@@ -1288,7 +1320,7 @@
                     : effectiveTopMargin + contentsHeight + effectiveBottomMargin;
      size.width = effectiveLeftMargin + contentsWidth + effectiveRightMargin;
  }
-@@ -369,6 +982,48 @@
+@@ -369,6 +1011,48 @@
             ;
  }
  
@@ -1337,7 +1369,7 @@
  static inline bool isLineSeparatorBlockAfterTable(const QTextBlock &block, const QTextFrame *previousFrame)
  {
      return qobject_cast<const QTextTable *>(previousFrame)
-@@ -473,6 +1128,37 @@
+@@ -473,6 +1157,37 @@
      p->restore();
  }
  
@@ -1375,7 +1407,7 @@
  class QTextDocumentLayoutPrivate : public QAbstractTextDocumentLayoutPrivate
  {
      Q_DECLARE_PUBLIC(QTextDocumentLayout)
-@@ -501,13 +1187,51 @@
+@@ -501,13 +1216,51 @@
      int lastPageCount;
      qreal idealWidth;
      bool contentHasAlignment;
@@ -1429,7 +1461,7 @@
      void drawBlock(const QPointF &offset, QPainter *painter, const QAbstractTextDocumentLayout::PaintContext &context,
                     const QTextBlock &bl, bool inRootFrame) const;
      void drawListItem(const QPointF &offset, QPainter *painter, const QAbstractTextDocumentLayout::PaintContext &context,
-@@ -515,7 +1239,8 @@
+@@ -515,7 +1268,8 @@
      void drawTableCellBorder(const QRectF &cellRect, QPainter *painter, QTextTable *table, QTextTableData *td, const QTextTableCell &cell) const;
      void drawTableCell(const QRectF &cellRect, QPainter *painter, const QAbstractTextDocumentLayout::PaintContext &cell_context,
                         QTextTable *table, QTextTableData *td, int r, int c,
@@ -1439,11 +1471,12 @@
      void drawBorder(QPainter *painter, const QRectF &rect, qreal topMargin, qreal bottomMargin, qreal border,
                      const QBrush &brush, QTextFrameFormat::BorderStyle style) const;
      void drawFrameDecoration(QPainter *painter, QTextFrame *frame, QTextFrameData *fd, const QRectF &clip, const QRectF &rect) const;
-@@ -540,16 +1265,31 @@
+@@ -540,16 +1294,32 @@
  
      void positionFloat(QTextFrame *frame, QTextLine *currentLine = nullptr);
  
 +    bool validatePlainContainer(QTextFrame *frame);
++    bool validateTableViewport(QTextFrame *frame);
 +    QList<WikidictFloatExclusion> floatExclusions(const QTextLayoutStruct *flow,
 +                                                int before = INT_MAX, bool inherited = true) const;
 +    bool clearFloats(QTextLayoutStruct *flow, int clear, int before, QFixed margin = QFixed());
@@ -1474,7 +1507,7 @@
  
      QList<QCheckPoint> checkPoints;
  
-@@ -563,10 +1303,989 @@
+@@ -563,10 +1333,1000 @@
      void layoutStep() const;
  
      QRectF frameBoundingRectInternal(QTextFrame *frame) const;
@@ -1608,6 +1641,17 @@
 +            {QStringLiteral("bar_clip"), clipped ? bar.intersected(ancestorClip) : bar},
 +            {QStringLiteral("minimum"), fd->wikidictScrollMinimum}, {QStringLiteral("maximum"), fd->wikidictScrollMaximum},
 +            {QStringLiteral("offset"), fd->wikidictScrollOffset}});
++        if (wikidictTableViewportActive(frame)) {
++            auto value = result.last().toMap();
++            value.insert(QStringLiteral("table_viewport"), true);
++            value.insert(QStringLiteral("border_box"), d->frameBoundingRectInternal(frame));
++            value.insert(QStringLiteral("content_viewport"), QRectF(origin + QPointF(
++                (fd->leftMargin + fd->edgeInset(3)).toReal(), (fd->topMargin + fd->edgeInset(0)).toReal()),
++                QSizeF(fd->contentsWidth.toReal(), qMax(qreal(0), viewport.height()
++                    - fd->wikidictPadding[0].toReal() - fd->wikidictPadding[2].toReal()))));
++            value.insert(QStringLiteral("grid_extent"), d->frameBoundingRectInternal(frame->childFrames().first()));
++            result.last() = value;
++        }
 +    }
 +    return result;
 +}
@@ -2464,7 +2508,7 @@
  
  QTextDocumentLayoutPrivate::QTextDocumentLayoutPrivate()
      : fixedColumnWidth(-1),
-@@ -636,22 +2355,79 @@
+@@ -636,22 +2396,79 @@
          return PointAfter;
      Q_ASSERT(!fd->layoutDirty);
      Q_ASSERT(!fd->sizeDirty);
@@ -2547,7 +2591,7 @@
      }
  
      if (isFrameFromInlineObject(frame)) {
-@@ -677,7 +2453,7 @@
+@@ -677,7 +2494,7 @@
  
                      const QList<QTextFrame *> childFrames = td->childFrameMap.values(r + c * rows);
                      for (int i = 0; i < childFrames.size(); ++i) {
@@ -2556,7 +2600,7 @@
                          if (isFrameFromInlineObject(child)
                              && child->frameFormat().position() != QTextFrameFormat::InFlow
                              && hitTest(child, pointInCell, position, l, accuracy) == PointExact)
-@@ -694,8 +2470,8 @@
+@@ -694,8 +2511,8 @@
  
      const QList<QTextFrame *> childFrames = frame->childFrames();
      for (int i = 0; i < childFrames.size(); ++i) {
@@ -2567,7 +2611,7 @@
              && child->frameFormat().position() != QTextFrameFormat::InFlow
              && hitTest(child, relativePoint, position, l, accuracy) == PointExact)
          {
-@@ -705,7 +2481,7 @@
+@@ -705,7 +2522,7 @@
  
      QTextFrame::Iterator it = frame->begin();
  
@@ -2576,7 +2620,7 @@
          it = frameIteratorForYPosition(relativePoint.y);
  
          Q_ASSERT(it.parentFrame() == frame);
-@@ -723,6 +2499,41 @@
+@@ -723,6 +2540,41 @@
  QTextDocumentLayoutPrivate::hitTest(QTextFrame::Iterator it, HitPoint hit, const QFixedPoint &p,
                                      int *position, QTextLayout **l, Qt::HitTestAccuracy accuracy) const
  {
@@ -2618,7 +2662,7 @@
      for (; !it.atEnd(); ++it) {
          QTextFrame *c = it.currentFrame();
          HitPoint hp;
-@@ -757,6 +2568,16 @@
+@@ -757,6 +2609,16 @@
                                      int *position, QTextLayout **l, Qt::HitTestAccuracy accuracy) const
  {
      QTextTableData *td = static_cast<QTextTableData *>(data(table));
@@ -2635,7 +2679,7 @@
  
      auto rowIt = std::lower_bound(td->rowPositions.constBegin(), td->rowPositions.constEnd(), point.y);
      if (rowIt == td->rowPositions.constEnd()) {
-@@ -783,6 +2604,38 @@
+@@ -783,6 +2645,38 @@
  
      if (hp == PointExact)
          return hp;
@@ -2674,7 +2718,7 @@
      if (hp == PointAfter)
          *position = cell.lastPosition();
      return PointInside;
-@@ -792,8 +2645,47 @@
+@@ -792,8 +2686,47 @@
  QTextDocumentLayoutPrivate::hitTest(const QTextBlock &bl, const QFixedPoint &point, int *position, QTextLayout **l,
                                      Qt::HitTestAccuracy accuracy) const
  {
@@ -2723,7 +2767,7 @@
      textrect.translate(tl->position());
      qCDebug(lcHit) << "    checking block" << bl.position() << "point=" << point.toPointF() << "    tlrect" << textrect;
      *position = bl.position();
-@@ -823,12 +2715,16 @@
+@@ -823,12 +2756,16 @@
          } else {
              if (lr.left() <= pos.x() && lr.right() >= pos.x())
                  hit = PointExact;
@@ -2745,7 +2789,7 @@
              break;
          }
      }
-@@ -935,13 +2831,16 @@
+@@ -935,13 +2872,16 @@
  void QTextDocumentLayoutPrivate::drawFrameDecoration(QPainter *painter, QTextFrame *frame, QTextFrameData *fd, const QRectF &clip, const QRectF &rect) const
  {
  
@@ -2766,7 +2810,7 @@
  
          QRectF gradientRect; // invalid makes it default to bgRect
          QPointF origin = bgRect.topLeft();
-@@ -952,7 +2851,28 @@
+@@ -952,7 +2892,28 @@
          }
          fillBackground(painter, bgRect, bg, origin, gradientRect);
      }
@@ -2796,7 +2840,7 @@
          painter->save();
          painter->setBrush(Qt::lightGray);
          painter->setPen(Qt::NoPen);
-@@ -1042,8 +2962,9 @@
+@@ -1042,8 +3003,9 @@
  
  void QTextDocumentLayoutPrivate::drawFrame(const QPointF &offset, QPainter *painter,
                                             const QAbstractTextDocumentLayout::PaintContext &context,
@@ -2808,7 +2852,7 @@
      QTextFrameData *fd = data(frame);
      // #######
      if (fd->layoutDirty)
-@@ -1051,13 +2972,29 @@
+@@ -1051,13 +3013,29 @@
      Q_ASSERT(!fd->sizeDirty);
      Q_ASSERT(!fd->layoutDirty);
  
@@ -2842,7 +2886,7 @@
          return;
  
       qCDebug(lcDraw) << "drawFrame" << frame->firstPosition() << "--" << frame->lastPosition() << "at" << offset;
-@@ -1074,6 +3011,7 @@
+@@ -1074,6 +3052,7 @@
          const int rows = table->rows();
          const int columns = table->columns();
          QTextTableData *td = static_cast<QTextTableData *>(data(table));
@@ -2850,7 +2894,7 @@
  
          QVarLengthArray<int> selectedTableCells(context.selections.size() * 4);
          for (int i = 0; i < context.selections.size(); ++i) {
-@@ -1121,11 +3059,11 @@
+@@ -1121,11 +3100,11 @@
                      QRectF cellRect = td->cellRect(cell);
  
                      cellRect.translate(off.x(), headerOffset);
@@ -2864,7 +2908,7 @@
                  }
              }
              ++page;
-@@ -1134,7 +3072,7 @@
+@@ -1134,7 +3113,7 @@
          int firstRow = 0;
          int lastRow = rows;
  
@@ -2873,7 +2917,7 @@
              auto rowIt = std::lower_bound(td->rowPositions.constBegin(), td->rowPositions.constEnd(), QFixed::fromReal(context.clip.top() - off.y()));
              if (rowIt != td->rowPositions.constEnd() && rowIt != td->rowPositions.constBegin()) {
                  --rowIt;
-@@ -1161,11 +3099,11 @@
+@@ -1161,11 +3140,11 @@
                  QRectF cellRect = td->cellRect(cell);
  
                  cellRect.translate(off);
@@ -2887,7 +2931,7 @@
              }
          }
  
-@@ -1174,7 +3112,7 @@
+@@ -1174,7 +3153,7 @@
  
          QTextFrame::Iterator it = frame->begin();
  
@@ -2896,7 +2940,7 @@
              it = frameIteratorForYPosition(QFixed::fromReal(context.clip.top()));
  
          QList<QTextFrame *> floats;
-@@ -1183,9 +3121,52 @@
+@@ -1183,9 +3162,52 @@
          for (int i = 0; i < numFloats; ++i)
              floats.append(fd->floats.at(i));
  
@@ -2952,7 +2996,7 @@
      if (cursorBlockNeedingRepaint.isValid()) {
          const QPen oldPen = painter->pen();
          painter->setPen(context.palette.color(QPalette::Text));
-@@ -1338,13 +3319,55 @@
+@@ -1338,13 +3360,55 @@
          return EdgeData();
      }
  
@@ -3009,7 +3053,7 @@
      } else if (td->drawGrid) {
          const bool outermost =
                  (edge == QCss::LeftEdge && cell.column() == 0) ||
-@@ -1356,14 +3379,14 @@
+@@ -1356,14 +3420,14 @@
              qreal border = table->format().border();
              if (border > 1.0) {
                  // table border
@@ -3027,7 +3071,7 @@
      }
  }
  
-@@ -1577,7 +3600,14 @@
+@@ -1577,7 +3641,14 @@
      QTextFrameFormat::BorderStyle borderStyle = QTextFrameFormat::BorderStyle_None;
      QBrush brush;
  
@@ -3043,7 +3087,7 @@
          borderStyle = table->format().borderStyle();
          brush = table->format().borderBrush();
      }
-@@ -1792,7 +3822,8 @@
+@@ -1792,7 +3863,8 @@
  
  void QTextDocumentLayoutPrivate::drawTableCell(const QRectF &cellRect, QPainter *painter, const QAbstractTextDocumentLayout::PaintContext &cell_context,
                                                 QTextTable *table, QTextTableData *td, int r, int c,
@@ -3053,7 +3097,7 @@
  {
      QTextTableCell cell = table->cellAt(r, c);
      int rspan = cell.rowSpan();
-@@ -1905,7 +3936,7 @@
+@@ -1905,7 +3977,7 @@
      QTextBlock repaintBlock;
      drawFlow(cellPos, painter, cell_context, cell.begin(),
               td->childFrameMap.values(r + c * table->rows()),
@@ -3062,7 +3106,7 @@
      if (repaintBlock.isValid()) {
          *cursorBlockNeedingRepaint = repaintBlock;
          *cursorBlockOffset = cellPos;
-@@ -1916,13 +3947,14 @@
+@@ -1916,13 +3988,14 @@
  }
  
  void QTextDocumentLayoutPrivate::drawFlow(const QPointF &offset, QPainter *painter, const QAbstractTextDocumentLayout::PaintContext &context,
@@ -3079,7 +3123,7 @@
          lastVisibleCheckPoint = std::lower_bound(checkPoints.begin(), checkPoints.end(), QFixed::fromReal(context.clip.bottom()));
      }
  
-@@ -1932,7 +3964,7 @@
+@@ -1932,7 +4005,7 @@
      for (; !it.atEnd(); ++it) {
          QTextFrame *c = it.currentFrame();
  
@@ -3088,7 +3132,7 @@
              int currentPosInDoc;
              if (c)
                  currentPosInDoc = c->firstPosition();
-@@ -1952,7 +3984,7 @@
+@@ -1952,7 +4025,7 @@
          }
  
          if (c)
@@ -3097,7 +3141,7 @@
          else {
              QAbstractTextDocumentLayout::PaintContext pc = context;
              if (isEmptyBlockAfterTable(it.currentBlock(), previousFrame))
-@@ -1996,10 +4028,24 @@
+@@ -1996,10 +4069,24 @@
                                             const QAbstractTextDocumentLayout::PaintContext &context,
                                             const QTextBlock &bl, bool inRootFrame) const
  {
@@ -3123,7 +3167,7 @@
          return;
      qCDebug(lcDraw) << "drawBlock" << bl.position() << "at" << offset << "br" << tl->boundingRect();
  
-@@ -2061,7 +4107,14 @@
+@@ -2061,7 +4148,14 @@
      QPen oldPen = painter->pen();
      painter->setPen(context.palette.color(QPalette::Text));
  
@@ -3139,7 +3183,7 @@
  
      // if the block is empty and it precedes a table, do not draw the cursor.
      // the cursor is drawn later after the table has been drawn so no need
-@@ -2116,7 +4169,8 @@
+@@ -2116,7 +4210,8 @@
      if (blockFormat.hasProperty(QTextFormat::ListStyle))
          style = QTextListFormat::Style(blockFormat.intProperty(QTextFormat::ListStyle));
  
@@ -3149,7 +3193,7 @@
      if (layout->lineCount() == 0)
          return;
      QTextLine firstLine = layout->lineAt(0);
-@@ -2270,12 +4324,77 @@
+@@ -2270,12 +4365,77 @@
      return flowPosition(f->begin());
  }
  
@@ -3227,7 +3271,7 @@
      layoutStruct.frame = t;
      layoutStruct.minimumWidth = 0;
      layoutStruct.maximumWidth = QFIXED_MAX;
-@@ -2283,6 +4402,9 @@
+@@ -2283,6 +4443,9 @@
  
      const QFixed topPadding = td->topPadding(t, cell);
      if (withPageBreaks) {
@@ -3237,7 +3281,7 @@
          layoutStruct.frameY = absoluteTableY + td->rowPositions.at(cell.row()) + topPadding;
      }
      layoutStruct.x_left = 0;
-@@ -2319,16 +4441,48 @@
+@@ -2319,16 +4482,48 @@
  
      layoutStruct.fullLayout = true;
  
@@ -3290,7 +3334,7 @@
      layoutFlow(cell.begin(), &layoutStruct, layoutFrom, layoutTo, width);
  
      QFixed floatMinWidth;
-@@ -2341,10 +4495,37 @@
+@@ -2341,10 +4536,37 @@
          QTextFrame *frame = childFrames.at(i);
          QTextFrameData *cd = data(frame);
  
@@ -3330,7 +3374,7 @@
      }
  
      // constraint the maximum/minimumWidth by the minimum width of the fixed size floats,
-@@ -2392,6 +4573,9 @@
+@@ -2392,6 +4614,9 @@
          }
      }
  
@@ -3340,7 +3384,7 @@
      QList<QTextLength> columnWidthConstraints = fmt.columnWidthConstraints();
      if (columnWidthConstraints.size() != columns)
          columnWidthConstraints.resize(columns);
-@@ -2408,6 +4592,16 @@
+@@ -2408,6 +4633,16 @@
      td->drawGrid = (td->borderCollapse && fmt.border() >= 1);
  
      td->effectiveTopBorder = td->effectiveBottomBorder = td->effectiveLeftBorder = td->effectiveRightBorder = td->border;
@@ -3357,7 +3401,7 @@
  
  #ifndef QT_NO_CSSPARSER
      if (td->borderCollapse) {
-@@ -2437,16 +4631,68 @@
+@@ -2437,16 +4672,68 @@
  
      td->deviceScale = scaleToDevice(qreal(1));
      td->cellPadding = QFixed::fromReal(scaleToDevice(fmt.cellPadding()));
@@ -3431,7 +3475,7 @@
      QFixed remainingWidth = td->contentsWidth;
      // two (vertical) borders per cell per column
      remainingWidth -= columns * 2 * td->borderCell;
-@@ -2470,7 +4716,7 @@
+@@ -2470,7 +4757,7 @@
      // start with a minimum width of 0. totally empty
      // cells of default created tables are invisible otherwise
      // and therefore hardly editable
@@ -3440,7 +3484,7 @@
  
      td->maxWidths.resize(columns);
      td->maxWidths.fill(QFIXED_MAX);
-@@ -2494,9 +4740,69 @@
+@@ -2494,9 +4781,69 @@
              QTextLayoutStruct layoutStruct = layoutCell(table, cell, QFIXED_MAX, layoutFrom,
                                                          layoutTo, td, absoluteTableY,
                                                          /*withPageBreaks =*/false);
@@ -3513,7 +3557,7 @@
              for (int n = 0; n < cspan; ++n) {
                  const int col = i + n;
                  QFixed w = widthToDistribute / (cspan - n);
-@@ -2509,10 +4815,11 @@
+@@ -2509,10 +4856,11 @@
  
              QFixed maxW = td->maxWidths.at(i);
              if (layoutStruct.maximumWidth != QFIXED_MAX) {
@@ -3527,7 +3571,7 @@
              }
              if (maxW == QFIXED_MAX)
                  continue;
-@@ -2535,6 +4842,49 @@
+@@ -2535,6 +4883,49 @@
                      break;
              }
          }
@@ -3577,7 +3621,7 @@
      }
  
      // set fixed values, figure out total percentages used and number of
-@@ -2549,7 +4899,8 @@
+@@ -2549,7 +4940,8 @@
              remainingWidth -= td->widths.at(i);
              qCDebug(lcTable) << "column" << i << "has width constraint" << td->minWidths.at(i) << "px, remaining width now" << remainingWidth;
          } else if (length.type() == QTextLength::PercentageLength) {
@@ -3587,7 +3631,7 @@
          } else if (length.type() == QTextLength::VariableLength) {
              variableCols++;
  
-@@ -2557,19 +4908,23 @@
+@@ -2557,19 +4949,23 @@
              remainingWidth -= td->minWidths.at(i);
              qCDebug(lcTable) << "column" << i << "has variable width, min" << td->minWidths.at(i) << "remaining width now" << remainingWidth;
          }
@@ -3615,7 +3659,7 @@
                  QFixed maxWidth = remainingWidth - remainingMinWidths;
                  if (percentWidth >= td->minWidths.at(i) && maxWidth > td->minWidths.at(i)) {
                      td->widths[i] = qBound(td->minWidths.at(i), percentWidth, maxWidth);
-@@ -2607,12 +4962,43 @@
+@@ -2607,12 +5003,43 @@
  
          if (remainingWidth > 0
              // don't unnecessarily grow variable length sized tables
@@ -3660,7 +3704,7 @@
          }
      }
  
-@@ -2628,14 +5014,35 @@
+@@ -2628,14 +5055,35 @@
          error = td->widths[i] - orig;
      }
  
@@ -3698,7 +3742,7 @@
  
      // if the table is too big and causes an overflow re-do the layout with WrapAnywhere as wrap
      // mode
-@@ -2648,7 +5055,7 @@
+@@ -2648,7 +5096,7 @@
  
      td->contentsWidth = contentsWidth;
  
@@ -3707,7 +3751,7 @@
  
      td->heights.resize(rows);
      td->heights.fill(0);
-@@ -2679,7 +5086,12 @@
+@@ -2679,7 +5127,12 @@
      //
      // ### this could be made faster by iterating over the cells array of QTextTable
      for (int r = 0; r < rows; ++r) {
@@ -3720,7 +3764,7 @@
  
          const int tableStartPage = (absoluteTableY / pageHeight).truncate();
          const int currentPage = ((td->rowPositions.at(r) + absoluteTableY) / pageHeight).truncate();
-@@ -2687,10 +5099,17 @@
+@@ -2687,10 +5140,17 @@
          const QFixed pageTop = currentPage * pageHeight + td->effectiveTopMargin - absoluteTableY + cellSpacing + td->border;
          const QFixed nextPageTop = pageTop + pageHeight;
  
@@ -3742,7 +3786,7 @@
  
          bool dropRowToNextPage = true;
          int cellCountBeforeRow = cellHeights.size();
-@@ -2746,6 +5165,16 @@
+@@ -2746,6 +5206,16 @@
                                                         layoutFrom, layoutTo,
                                                         td, absoluteTableY,
                                                         /*withPageBreaks =*/true);
@@ -3759,7 +3803,7 @@
  
              const QFixed height = (layoutStruct.y + bottomPadding + topPadding).round();
  
-@@ -2756,7 +5185,14 @@
+@@ -2756,7 +5226,14 @@
  
              cellHeights.append(layoutStruct.y);
  
@@ -3775,7 +3819,7 @@
              if (childPos < pageBottom)
                  dropRowToNextPage = false;
          }
-@@ -2773,6 +5209,9 @@
+@@ -2773,6 +5250,9 @@
          }
  
          if (haveRowSpannedCells) {
@@ -3785,7 +3829,7 @@
              const QFixed effectiveHeight = td->heights.at(r) + td->borderCell + cellSpacing + td->borderCell;
              for (int c = 0; c < columns; ++c)
                  heightToDistribute[c] = qMax(heightToDistribute.at(c) - effectiveHeight - dropDistance, QFixed(0));
-@@ -2835,20 +5274,72 @@
+@@ -2835,20 +5315,72 @@
  
      td->minimumWidth = td->columnPositions.at(0);
      for (int i = 0; i < columns; ++i) {
@@ -3860,7 +3904,7 @@
      td->sizeDirty = false;
      return QRectF(); // invalid rect -> update everything
  }
-@@ -2863,6 +5354,9 @@
+@@ -2863,6 +5395,9 @@
      Q_ASSERT(pd && pd->currentLayoutStruct);
  
      QTextLayoutStruct *layoutStruct = pd->currentLayoutStruct;
@@ -3870,7 +3914,7 @@
  
      if (!pd->floats.contains(frame))
          pd->floats.append(frame);
-@@ -2873,7 +5367,7 @@
+@@ -2873,7 +5408,7 @@
      QFixed y = layoutStruct->y;
      if (currentLine) {
          QFixed left, right;
@@ -3879,7 +3923,7 @@
  //         qDebug() << "have line: right=" << right << "left=" << left << "textWidth=" << currentLine->width();
          if (right - left < QFixed::fromReal(currentLine->naturalTextWidth()) + fd->size.width) {
              layoutStruct->pendingFloats.append(frame);
-@@ -2882,6 +5376,9 @@
+@@ -2882,6 +5417,9 @@
          }
      }
  
@@ -3889,7 +3933,7 @@
      bool frameSpansIntoNextPage = (y + layoutStruct->frameY + fd->size.height > layoutStruct->pageBottom);
      if (frameSpansIntoNextPage && fd->size.height <= layoutStruct->pageHeight) {
          layoutStruct->newPage();
-@@ -2890,10 +5387,12 @@
+@@ -2890,10 +5428,12 @@
          frameSpansIntoNextPage = false;
      }
  
@@ -3904,7 +3948,7 @@
  
      if (frame->frameFormat().position() == QTextFrameFormat::FloatLeft) {
          fd->position.x = left;
-@@ -2915,6 +5414,781 @@
+@@ -2915,6 +5455,794 @@
          fd->sizeDirty = frameSpansIntoNextPage;
  }
  
@@ -4105,6 +4149,14 @@
 +bool QTextDocumentLayoutPrivate::tableAutoMarginPosition(QTextFrame *frame, QFixed left, QFixed right, QFixed *position)
 +{
 +    const auto format = frame->frameFormat();
++    if (wikidictTableViewportGrid(frame) && wikidictTableViewportActive(frame->parentFrame())) {
++        if (!validateTableViewport(frame->parentFrame())) return false;
++        const auto policy = frame->parentFrame()->frameFormat().property(WikidictTableViewport).toMap();
++        const qint64 solved = policy.value(QStringLiteral("grid_direction")).toInt() == Qt::RightToLeft
++            && right - left != QFixed(QFIXED_MAX) ? qint64(right.value()) - data(frame)->size.width.value() : left.value();
++        if (!checkParagraphBoxExtent(qAbs(solved), frame->firstPosition())) return false;
++        *position = QFixed::fromFixed(int(solved)); return true;
++    }
 +    if (!format.hasProperty(WikidictTableAutoMargins) || format.position() != QTextFrameFormat::InFlow
 +        || QTextLogicalFlowProjection::inlineTable(frame)) return true;
 +    if (!wikidictTableAutoMargins(format)) { refuseParagraphBox(1, frame->firstPosition()); return false; }
@@ -4128,6 +4180,10 @@
 +bool QTextDocumentLayoutPrivate::validateTableBox(QTextFrame *frame, qreal availableWidth)
 +{
 +    const QTextFrameFormat format = frame->frameFormat();
++    if (format.hasProperty(WikidictTableViewportGrid)
++        && (!wikidictTableViewportGrid(frame) || !validateTableViewport(frame->parentFrame()))) {
++        refuseParagraphBox(1, frame->firstPosition()); return false;
++    }
 +    if (!wikidictTableAutoMargins(format)) { refuseParagraphBox(1, frame->firstPosition()); return false; }
 +    if (isWikidictEmptyTable(format)) {
 +        if (format.hasProperty(WikidictTablePhysicalEdges)) { refuseParagraphBox(1, frame->firstPosition()); return false; }
@@ -4184,7 +4240,8 @@
 +    if (format.hasProperty(WikidictTableHasCaption)) {
 +        const auto marker = format.property(WikidictTableHasCaption);
 +        if (marker.metaType().id() != QMetaType::Bool || !marker.toBool()
-+            || !format.hasProperty(WikidictTableAutoMargins) || wikidictTableCaptionBlocks(table).isEmpty()) return fail(1);
++            || (!format.hasProperty(WikidictTableAutoMargins) && !wikidictTableViewportGrid(frame))
++            || wikidictTableCaptionBlocks(table).isEmpty()) return fail(1);
 +    } else td->wikidictCaptionMinimum = QFixed();
 +    if (td->wikidictContainingWidth >= 0) availableWidth = td->wikidictContainingWidth;
 +    if (!std::isfinite(availableWidth) || availableWidth < 0 || availableWidth > qreal(QFIXED_MAX)) return fail(2);
@@ -4686,7 +4743,7 @@
  QRectF QTextDocumentLayoutPrivate::layoutFrame(QTextFrame *f, int layoutFrom, int layoutTo, QFixed parentY)
  {
      qCDebug(lcLayout, "layoutFrame (%d--%d), parent=%p", f->firstPosition(), f->lastPosition(), f->parentFrame());
-@@ -2922,29 +6196,108 @@
+@@ -2922,29 +6250,108 @@
  
      QTextFrameFormat fformat = f->frameFormat();
  
@@ -4776,7 +4833,7 @@
 +        frameWidth = QFixed::fromReal(outer);
 +    }
 +    fd->wikidictUsedLineMetrics.clear();
-+    fd->wikidictScrollport = f->frameFormat().hasProperty(WikidictContainerScrollport);
++    fd->wikidictScrollport = f->frameFormat().hasProperty(WikidictContainerScrollport) || wikidictTableViewportActive(f);
 +    if (!fd->wikidictScrollport) {
 +        fd->wikidictScrollOffset = fd->wikidictScrollMinimum = fd->wikidictScrollMaximum = 0;
 +        fd->wikidictScrollViewport = fd->wikidictScrollContents = QRectF();
@@ -4800,11 +4857,12 @@
  
      bool fullLayout = false;
      {
-@@ -2973,13 +6326,41 @@
+@@ -2973,13 +6380,42 @@
              fullLayout = true;
          }
  
-+        fd->wikidictPhysical = wikidictPlainContainer(f) && fformat.hasProperty(WikidictContainerPhysicalEdges);
++        fd->wikidictPhysical = (wikidictPlainContainer(f) || wikidictTableViewportActive(f))
++            && fformat.hasProperty(WikidictContainerPhysicalEdges);
 +        if (fd->wikidictPhysical) {
 +            WikidictPhysicalEdges edges;
 +            if (!wikidictPhysicalEdges(fformat.property(WikidictContainerPhysicalEdges), &edges)) {
@@ -4844,7 +4902,7 @@
  
              if (qobject_cast<QTextTable *>(parent)) {
                  const QTextTableData *td = static_cast<const QTextTableData *>(pd);
-@@ -2987,16 +6368,99 @@
+@@ -2987,16 +6423,99 @@
                  fd->effectiveBottomMargin += td->cellSpacing + td->border + td->cellPadding;
              }
          } else {
@@ -4951,14 +5009,14 @@
          } else {
              fd->contentsHeight = frameHeight;
          }
-@@ -3018,15 +6482,72 @@
+@@ -3018,15 +6537,72 @@
      fd->contentsWidth = newContentsWidth;
  
      QTextLayoutStruct layoutStruct;
 +    layoutStruct.wikidictParagraphBoxes = paragraphBoxesPresent;
      layoutStruct.frame = f;
 -    layoutStruct.x_left = fd->leftMargin + fd->border + fd->padding;
-+    if (wikidictPlainContainer(f) && !fd->wikidictScrollport && !wikidictFixedContainerFloat(f)
++    if ((wikidictPlainContainer(f) || wikidictTableViewport(f)) && !fd->wikidictScrollport && !wikidictFixedContainerFloat(f)
 +        && !f->frameFormat().hasProperty(QTextFormat::UserProperty + 0x57e5)) {
 +        const auto *parent = data(f->parentFrame())->currentLayoutStruct;
 +        if (!parent) { refuseParagraphBox(1, f->firstPosition()); return QRectF(); }
@@ -5027,7 +5085,7 @@
      layoutStruct.updateRect = QRectF(QPointF(0, 0), QSizeF(qreal(INT_MAX), qreal(INT_MAX)));
      qCDebug(lcLayout) << "layoutStruct: x_left" << layoutStruct.x_left << "x_right" << layoutStruct.x_right
                        << "fullLayout" << layoutStruct.fullLayout;
-@@ -3046,35 +6567,305 @@
+@@ -3046,35 +6622,335 @@
  
      QTextFrame::Iterator it = f->begin();
      layoutFlow(it, &layoutStruct, layoutFrom, layoutTo);
@@ -5095,7 +5153,7 @@
  
 -    QFixed actualWidth = qMax(newContentsWidth, qMax(maxChildFrameWidth, layoutStruct.contentsWidth));
 +    // Inline overflow is ink, not permission to widen an ordinary flow owner.
-+    QFixed actualWidth = (wikidictPlainContainer(f) || tableCaptionRole == QStringLiteral("image")) ? qMax(QFixed(), newContentsWidth)
++    QFixed actualWidth = (wikidictPlainContainer(f) || wikidictTableViewportActive(f) || tableCaptionRole == QStringLiteral("image")) ? qMax(QFixed(), newContentsWidth)
 +        : qMax(newContentsWidth, qMax(maxChildFrameWidth, layoutStruct.contentsWidth));
      fd->contentsWidth = actualWidth;
      if (newContentsWidth <= 0) { // nowrap layout?
@@ -5132,8 +5190,36 @@
 +    }
 +    if (fd->wikidictScrollport) {
 +        const QFixed external = adjoiningMargin(f, 1) + adjoiningMargin(f, 3);
-+        fd->minimumWidth = qMax(QFixed(), marginWidth + external);
-+        fd->maximumWidth = QFIXED_MAX;
++        if (wikidictTableViewportActive(f)) {
++            // A non-replaced cyclic percentage behaves as its initial value
++            // only for intrinsic contribution. Keep the anonymous grid's real
++            // MIN/MAX here; final allocation still resolves the percentage.
++            const auto policy = f->frameFormat().property(WikidictTableViewport).toMap();
++            const bool borderBox = policy.value(QStringLiteral("border_box")).toBool();
++            const auto contribution = [&](QFixed intrinsic) {
++                qreal used = intrinsic == QFixed(QFIXED_MAX) ? qreal(QFIXED_MAX)
++                    : intrinsic.toReal() + marginWidth.toReal();
++                const auto width = policy.value(QStringLiteral("width")).toMap();
++                const auto maximum = policy.value(QStringLiteral("max_width")).toMap();
++                const auto fixed = [&](const QVariantMap &request) {
++                    return qMax(marginWidth.toReal(), scaleToDevice(request.value(QStringLiteral("value")).toDouble())
++                        + (borderBox ? 0 : marginWidth.toReal()));
++                };
++                if (width.value(QStringLiteral("unit")) == QStringLiteral("fixed")) used = fixed(width);
++                if (maximum.value(QStringLiteral("unit")) == QStringLiteral("fixed")) used = qMin(used, fixed(maximum));
++                if (used == qreal(QFIXED_MAX)) return QFixed(QFIXED_MAX);
++                used += external.toReal();
++                if (!qIsFinite(used) || used < 0 || used >= QFIXED_MAX) {
++                    refuseParagraphBox(2, f->firstPosition()); return QFixed();
++                }
++                return QFixed::fromReal(used);
++            };
++            fd->minimumWidth = contribution(layoutStruct.minimumWidth);
++            fd->maximumWidth = qMax(fd->minimumWidth, contribution(layoutStruct.maximumWidth));
++        } else {
++            fd->minimumWidth = qMax(QFixed(), marginWidth + external);
++            fd->maximumWidth = QFIXED_MAX;
++        }
 +    }
 +    if (ownedFigureFrame) {
 +        // Only the image plane can shrink independently of its authored source
@@ -5319,7 +5405,9 @@
 +        fd->wikidictScrollContents = viewport.united(contents);
 +        fd->wikidictScrollMinimum = hasContents ? qMin(qreal(0), contents.left() - left) : 0;
 +        fd->wikidictScrollMaximum = hasContents ? qMax(qreal(0), contents.right() - right) : 0;
-+        Qt::LayoutDirection direction = f->frameFormat().layoutDirection();
++        Qt::LayoutDirection direction = wikidictTableViewportActive(f)
++            ? Qt::LayoutDirection(f->frameFormat().property(WikidictTableViewport).toMap().value(QStringLiteral("grid_direction")).toInt())
++            : f->frameFormat().layoutDirection();
 +        if (direction == Qt::LayoutDirectionAuto) direction = document->defaultTextOption().textDirection();
 +        if (!fd->wikidictScrollInitialized)
 +            fd->wikidictScrollOffset = direction == Qt::RightToLeft ? fd->wikidictScrollMaximum : fd->wikidictScrollMinimum;
@@ -5339,7 +5427,7 @@
      if (layoutStruct.updateRectForFloats.isValid())
          layoutStruct.updateRect |= layoutStruct.updateRectForFloats;
      return layoutStruct.updateRect;
-@@ -3086,7 +6877,9 @@
+@@ -3086,7 +6962,9 @@
      qCDebug(lcLayout) << "layoutFlow from=" << layoutFrom << "to=" << layoutTo;
      QTextFrameData *fd = data(layoutStruct->frame);
  
@@ -5349,13 +5437,14 @@
  
      QTextFrame::Iterator previousIt;
  
-@@ -3137,9 +6930,28 @@
+@@ -3137,9 +7015,29 @@
      }
  
      QTextBlockFormat previousBlockFormat = previousIt.currentBlock().blockFormat();
 -
 +    const bool adjoining = adjoiningContainersPresent && (layoutStruct->frame == document->rootFrame()
-+        || wikidictPlainContainer(layoutStruct->frame) || qobject_cast<QTextTable *>(layoutStruct->frame));
++        || wikidictPlainContainer(layoutStruct->frame) || wikidictTableViewport(layoutStruct->frame)
++        || qobject_cast<QTextTable *>(layoutStruct->frame));
 +    WikidictMarginCursor marginCursor; marginCursor.bottom = layoutStruct->y;
 +    if (adjoining && wikidictPlainContainer(layoutStruct->frame)) {
 +        const auto profile = adjoiningProfile(layoutStruct->frame);
@@ -5380,7 +5469,7 @@
          QTextFrame *c = it.currentFrame();
  
          int docPos;
-@@ -3148,7 +6960,7 @@
+@@ -3148,7 +7046,7 @@
          else
              docPos = it.currentBlock().position();
  
@@ -5389,7 +5478,7 @@
              if (qAbs(layoutStruct->y - checkPoints.constLast().y) > 2000) {
                  QFixed left, right;
                  floatMargins(layoutStruct->y, layoutStruct, &left, &right);
-@@ -3171,26 +6983,230 @@
+@@ -3171,26 +7069,235 @@
          }
  
          if (c) {
@@ -5489,17 +5578,18 @@
 +                && !fformat.hasProperty(QTextFormat::UserProperty + 0x57e5);
 +            const bool adjoiningAtomic = adjoining && fformat.position() == QTextFrameFormat::InFlow && !adjoiningChild
 +                && (fformat.hasProperty(WikidictTableBoxOwner)
++                    || wikidictTableViewport(c)
 +                    || fformat.stringProperty(QTextFormat::UserProperty + 0x57a0) == QStringLiteral("wikidict.figure-layout/1"));
 +            if (adjoiningAtomic) { adjoiningProfile(c); if (paragraphBoxError) break; }
-+            const QFixed atomicTop = adjoiningAtomic ? QFixed::fromReal(scaleToDevice(fformat.topMargin())).round() : QFixed();
-+            const QFixed atomicBottom = adjoiningAtomic ? QFixed::fromReal(scaleToDevice(fformat.bottomMargin())).round() : QFixed();
++            const QFixed atomicTop = adjoiningAtomic && !wikidictTableViewportActive(c) ? QFixed::fromReal(scaleToDevice(fformat.topMargin())).round() : QFixed();
++            const QFixed atomicBottom = adjoiningAtomic && !wikidictTableViewportActive(c) ? QFixed::fromReal(scaleToDevice(fformat.bottomMargin())).round() : QFixed();
 +            WikidictAdjoining marginProfile; WikidictMarginPlacement marginPlacement;
 +            if (adjoiningChild) {
 +                if (!prepareAdjoining(c, layoutStruct, marginCursor, layoutFrom, layoutTo, &marginProfile, &marginPlacement)) break;
 +                if (!checkParagraphBoxPosition(layoutStruct, marginPlacement.top.value(), c->firstPosition(), true)) break;
 +            } else if (adjoiningAtomic) {
 +                marginProfile = adjoiningProfile(c);
-+                const int clear = fformat.hasProperty(WikidictTableBoxOwner) ? fformat.intProperty(WikidictTableBoxClear)
++                const int clear = (fformat.hasProperty(WikidictTableBoxOwner) || wikidictTableViewport(c)) ? fformat.intProperty(WikidictTableBoxClear)
 +                    : fformat.intProperty(QTextFormat::UserProperty + 0x57a1);
 +                QFixed bottom; bool hasClear = false;
 +                for (const auto &exclusion : floatExclusions(layoutStruct, c->firstPosition()))
@@ -5552,12 +5642,14 @@
 +                layoutStruct->fullLayout = true;
 +            }
 +
-+            const bool ordinaryContainer = wikidictPlainContainer(c)
++            const bool ordinaryContainer = (wikidictPlainContainer(c) || wikidictTableViewport(c))
 +                && !fformat.hasProperty(QTextFormat::UserProperty + 0x57e5);
-+            const bool localScrollport = ordinaryContainer && fformat.hasProperty(WikidictContainerScrollport);
++            const bool localScrollport = ordinaryContainer
++                && (fformat.hasProperty(WikidictContainerScrollport) || wikidictTableViewportActive(c));
 +            if (!validatePlainContainer(c)) break;
 +            if (ordinaryContainer) {
-+                if (!adjoiningChild && !clearFloats(layoutStruct, fformat.intProperty(WikidictPlainContainerClear), c->firstPosition())) break;
++                if (!adjoiningChild && !(adjoiningAtomic && wikidictTableViewport(c)) && !clearFloats(layoutStruct,
++                        fformat.intProperty(wikidictTableViewport(c) ? WikidictTableBoxClear : WikidictPlainContainerClear), c->firstPosition())) break;
 +                cd->sizeDirty = true;
 +            }
              if (fformat.position() == QTextFrameFormat::InFlow) {
@@ -5586,7 +5678,8 @@
 +                    // The BFC occupies an available parent band; those outside
 +                    // floats never become exclusions in its own text flow.
 +                    const qint64 minimum = qint64(adjoiningInset(c, 1).value()) + adjoiningInset(c, 3).value()
-+                        + adjoiningMargin(c, 1).value() + adjoiningMargin(c, 3).value() + QFixed(1).value();
++                        + adjoiningMargin(c, 1).value() + adjoiningMargin(c, 3).value()
++                        + (wikidictTableViewport(c) ? 0 : QFixed(1).value());
 +                    if (!checkParagraphBoxExtent(minimum, c->firstPosition())) break;
 +                    if (right - left < QFixed::fromFixed(int(minimum))) {
 +                        const auto next = findY(layoutStruct->y, layoutStruct, QFixed::fromFixed(int(minimum)), c->firstPosition());
@@ -5609,8 +5702,9 @@
 +                    if (paragraphBoxError) break;
 +                    pos.x = fformat.layoutDirection() == Qt::RightToLeft
 +                        ? right - adjoiningMargin(c, 1) - adjoiningChildWidth : left + adjoiningMargin(c, 3);
-+                    if (fformat.hasProperty(WikidictContainerAutoMargins)) {
-+                        const auto autos = fformat.property(WikidictContainerAutoMargins).toMap().value(QStringLiteral("autos")).toList();
++                    if (fformat.hasProperty(WikidictContainerAutoMargins) || wikidictTableViewportActive(c)) {
++                        const auto autos = fformat.property(wikidictTableViewportActive(c) ? WikidictTableViewport : WikidictContainerAutoMargins)
++                            .toMap().value(QStringLiteral("autos")).toList();
 +                        const qint64 leftMargin = adjoiningMargin(c, 3).value(), rightMargin = adjoiningMargin(c, 1).value();
 +                        qint64 offset = leftMargin;
 +                        if (right - left != QFixed(QFIXED_MAX)) {
@@ -5628,7 +5722,7 @@
  
                  Qt::Alignment align = Qt::AlignLeft;
  
-@@ -3198,6 +7214,10 @@
+@@ -3198,6 +7305,10 @@
  
                  if (table)
                      align = table->format().alignment() & Qt::AlignHorizontal_Mask;
@@ -5639,7 +5733,7 @@
  
                  // detect whether we have any alignment in the document that disallows optimizations,
                  // such as not laying out the document again in a textedit with wrapping disabled.
-@@ -3210,44 +7230,113 @@
+@@ -3210,44 +7321,113 @@
                      cd->sizeDirty = true;
  
                  if (cd->sizeDirty) {
@@ -5735,7 +5829,7 @@
 +                    if (!checkParagraphBoxExtent(qAbs(qint64(left.value()) + offset), c->firstPosition())) break;
 +                    pos.x = QFixed::fromFixed(int(qint64(left.value()) + offset));
 +                }
-+                if (fformat.hasProperty(WikidictTableAutoMargins)
++                if ((fformat.hasProperty(WikidictTableAutoMargins) || wikidictTableViewportGrid(c))
 +                    && !tableAutoMarginPosition(c, left, right, &pos.x)) break;
                  cd->position = pos;
 -
@@ -5772,7 +5866,7 @@
  
                  if (c->frameFormat().pageBreakPolicy() & QTextFormat::PageBreak_AlwaysAfter)
                      layoutStruct->newPage();
-@@ -3257,12 +7346,18 @@
+@@ -3257,12 +7437,18 @@
  
                  if (cd->sizeDirty)
                      updateRect = layoutFrame(c, layoutFrom, layoutTo);
@@ -5791,7 +5885,7 @@
  
                  QRectF frameRect(cd->position.toPointF(), cd->size.toSizeF());
  
-@@ -3290,6 +7385,10 @@
+@@ -3290,6 +7476,10 @@
              ++it;
  
              const QTextBlockFormat blockFormat = block.blockFormat();
@@ -5802,7 +5896,7 @@
  
              if (blockFormat.pageBreakPolicy() & QTextFormat::PageBreak_AlwaysBefore)
                  layoutStruct->newPage();
-@@ -3303,8 +7402,62 @@
+@@ -3303,8 +7493,85 @@
              if (lastIt.currentBlock().isValid())
                  previousBlockFormatPtr = &previousBlockFormat;
  
@@ -5810,18 +5904,41 @@
 +                if (!wikidictTableCaptionTextOnly(block)) { refuseParagraphBox(1, docPos); break; }
 +                auto next = previousIt;
 +                while (!next.atEnd() && !next.currentFrame()) ++next;
-+                auto *table = next.atEnd() ? nullptr : qobject_cast<QTextTable *>(next.currentFrame());
-+                const auto blocks = wikidictTableCaptionBlocks(table);
-+                if (!table || !table->format().boolProperty(WikidictTableHasCaption)
-+                    || !table->format().hasProperty(WikidictTableAutoMargins) || !blocks.contains(block)) {
-+                    refuseParagraphBox(1, docPos); break;
-+                }
-+                if (!captions.contains(table)) {
-+                    if (blocks.first() != block) { refuseParagraphBox(1, docPos); break; }
-+                    CaptionLayout state; state.blocks = blocks; state.before = *layoutStruct;
-+                    state.hasPrevious = previousBlockFormatPtr != nullptr;
-+                    if (state.hasPrevious) state.previous = *previousBlockFormatPtr;
-+                    captions.insert(table, state);
++                auto *owner = layoutStruct->frame;
++                const auto ownerFormat = owner->frameFormat();
++                const bool emptyCaption = isWikidictEmptyTable(ownerFormat)
++                    && ownerFormat.stringProperty(WikidictEmptyTableRole) == QStringLiteral("wrapper");
++                if (emptyCaption) {
++                    // The authenticated zero-cell wrapper measures and reflows
++                    // its own caption before its real empty grid. It has no
++                    // QTextTable to enter into the ordinary table caption map.
++                    auto *grid = next.atEnd() ? nullptr : next.currentFrame();
++                    const auto children = owner->childFrames();
++                    if (!data(owner)->wikidictEmptyTableMeasuring || qobject_cast<QTextTable *>(owner)
++                        || owner->document() != document || document->object(owner->objectIndex()) != owner
++                        || document->frameAt(block.position()) != owner
++                        || children.size() != 1 || grid != children.first()
++                        || !grid || grid->parentFrame() != owner || grid->document() != document
++                        || document->object(grid->objectIndex()) != grid
++                        || !isWikidictEmptyGrid(grid->frameFormat())
++                        || !grid->childFrames().isEmpty() || grid->firstPosition() != grid->lastPosition()
++                        || block.position() >= grid->firstPosition()) {
++                        refuseParagraphBox(1, docPos); break;
++                    }
++                } else {
++                    auto *table = next.atEnd() ? nullptr : qobject_cast<QTextTable *>(next.currentFrame());
++                    const auto blocks = wikidictTableCaptionBlocks(table);
++                    if (!table || !table->format().boolProperty(WikidictTableHasCaption)
++                        || (!table->format().hasProperty(WikidictTableAutoMargins) && !wikidictTableViewportGrid(table)) || !blocks.contains(block)) {
++                        refuseParagraphBox(1, docPos); break;
++                    }
++                    if (!captions.contains(table)) {
++                        if (blocks.first() != block) { refuseParagraphBox(1, docPos); break; }
++                        CaptionLayout state; state.blocks = blocks; state.before = *layoutStruct;
++                        state.hasPrevious = previousBlockFormatPtr != nullptr;
++                        if (state.hasPrevious) state.previous = *previousBlockFormatPtr;
++                        captions.insert(table, state);
++                    }
 +                }
 +            }
 +            // Emergency wrapping is a used-width fallback, not a caption's
@@ -5865,7 +5982,7 @@
  
              // detect whether we have any alignment in the document that disallows optimizations,
              // such as not laying out the document again in a textedit with wrapping disabled.
-@@ -3313,14 +7466,14 @@
+@@ -3313,14 +7580,14 @@
  
              // if the block right before a table is empty 'hide' it by
              // positioning it into the table border
@@ -5882,7 +5999,7 @@
                      QTextTableData *td = static_cast<QTextTableData *>(data(lastIt.currentFrame()));
                      QTextLayout *layout = block.layout();
  
-@@ -3333,7 +7486,7 @@
+@@ -3333,7 +7600,7 @@
                  }
  
                  // if the block right after a table starts with a line separator, shift it up by one line
@@ -5891,7 +6008,7 @@
                      QTextTableData *td = static_cast<QTextTableData *>(data(lastIt.currentFrame()));
                      QTextLayout *layout = block.layout();
  
-@@ -3364,7 +7517,12 @@
+@@ -3364,7 +7631,12 @@
              maximumBlockWidth = qMax(maximumBlockWidth, layoutStruct->maximumWidth);
              layoutStruct->maximumWidth = origMaximumWidth;
              previousBlockFormat = blockFormat;
@@ -5905,7 +6022,7 @@
      }
      if (layoutStruct->maximumWidth == QFIXED_MAX && maximumBlockWidth > 0)
          layoutStruct->maximumWidth = maximumBlockWidth;
-@@ -3374,12 +7532,37 @@
+@@ -3374,12 +7646,37 @@
      // a float at the bottom of a frame may make it taller, hence the qMax() for layoutStruct->y.
      // we don't need to do it for tables though because floats in tables are per table
      // and not per cell and layoutCell already takes care of doing the same as we do here
@@ -5949,7 +6066,7 @@
          }
      }
  
-@@ -3389,7 +7572,7 @@
+@@ -3389,7 +7686,7 @@
          if (!fd->floats.isEmpty())
              contentHasAlignment = true;
  
@@ -5958,7 +6075,7 @@
              //qDebug("layout done!");
              currentLazyLayoutPosition = -1;
              QCheckPoint cp;
-@@ -3411,10 +7594,258 @@
+@@ -3411,10 +7708,258 @@
      fd->currentLayoutStruct = nullptr;
  }
  
@@ -6218,7 +6335,7 @@
      const int lineHeightType = blockFormat.lineHeightType();
      qreal rawHeight = qCeil(line.ascent() + line.descent() + line.leading());
      *lineHeight = QFixed::fromReal(blockFormat.lineHeight(rawHeight, scaling));
-@@ -3431,32 +7862,217 @@
+@@ -3431,32 +7976,217 @@
          *lineBreakHeight = QFixed::fromReal(height);
          *lineAdjustment = 0;
      }
@@ -6443,7 +6560,7 @@
  
      QFixed extraMargin;
      if (docPrivate->defaultTextOption.flags() & QTextOption::AddSpaceForLineAndParagraphSeparators) {
-@@ -3465,9 +8081,24 @@
+@@ -3465,9 +8195,24 @@
      }
  
      const QFixed indent = this->blockIndent(blockFormat);
@@ -6468,7 +6585,7 @@
      const QPointF oldPosition = tl->position();
      tl->setPosition(QPointF(layoutStruct->x_left.toReal(), layoutStruct->y.toReal()));
  
-@@ -3486,7 +8117,9 @@
+@@ -3486,7 +8231,9 @@
              align = blockFormat.alignment();
          option.setAlignment(QGuiApplicationPrivate::visualAlignment(dir, align)); // for paragraph that are RTL, alignment is auto-reversed;
  
@@ -6479,7 +6596,7 @@
              option.setWrapMode(QTextOption::ManualWrap);
          }
  
-@@ -3498,9 +8131,12 @@
+@@ -3498,9 +8245,12 @@
          const QFixed cy = layoutStruct->y;
          const QFixed l = layoutStruct->x_left  + totalLeftMargin;
          const QFixed r = layoutStruct->x_right - totalRightMargin;
@@ -6492,7 +6609,7 @@
          bool firstLine = true;
          while (1) {
              QTextLine line = tl->createLine();
-@@ -3528,6 +8164,61 @@
+@@ -3528,6 +8278,61 @@
              else
                  line.setLineWidth((right - left).toReal());
  
@@ -6554,7 +6671,7 @@
  //        qDebug() << "layoutBlock; layouting line with width" << right - left << "->textWidth" << line.textWidth();
              floatMargins(layoutStruct->y, layoutStruct, &left, &right);
              left = qMax(left, l);
-@@ -3542,7 +8233,9 @@
+@@ -3542,7 +8347,9 @@
                  layoutStruct->pendingFloats.clear();
  
                  line.setLineWidth((right-left).toReal());
@@ -6565,7 +6682,7 @@
                      if (haveWordOrAnyWrapMode) {
                          option.setWrapMode(QTextOption::WrapAnywhere);
                          tl->setTextOption(option);
-@@ -3550,7 +8243,18 @@
+@@ -3550,7 +8357,18 @@
  
                      layoutStruct->pendingFloats.clear();
                      // lines min width more than what we have
@@ -6584,7 +6701,7 @@
                      floatMargins(layoutStruct->y, layoutStruct, &left, &right);
                      left = qMax(left, l);
                      right = qMin(right, r);
-@@ -3566,12 +8270,51 @@
+@@ -3566,12 +8384,51 @@
                      }
                  }
  
@@ -6637,7 +6754,7 @@
  
              while (layoutStruct->pageHeight > 0 && layoutStruct->absoluteY() + lineBreakHeight > layoutStruct->pageBottom &&
                  layoutStruct->contentHeight() >= lineBreakHeight) {
-@@ -3591,16 +8334,140 @@
+@@ -3591,16 +8448,140 @@
                      right -= text_indent;
              }
  
@@ -6778,7 +6895,7 @@
              }
              layoutStruct->pendingFloats.clear();
          }
-@@ -3618,12 +8485,33 @@
+@@ -3618,12 +8599,33 @@
              QFixed lineBreakHeight, lineHeight, lineAdjustment, lineBottom;
              qreal scaling = (q->paintDevice() && q->paintDevice()->logicalDpiY() != qt_defaultDpi()) ?
                              qreal(q->paintDevice()->logicalDpiY()) / qreal(qt_defaultDpi()) : 1;
@@ -6813,7 +6930,7 @@
              }
              bottom = layoutStruct->y + lineBottom;
              layoutStruct->y += lineHeight;
-@@ -3649,7 +8537,30 @@
+@@ -3649,7 +8651,30 @@
          }
      }
  
@@ -6844,12 +6961,227 @@
      const QFixed margins = totalLeftMargin + totalRightMargin;
      layoutStruct->minimumWidth = qMax(layoutStruct->minimumWidth, QFixed::fromReal(tl->minimumWidth()) + margins);
  
-@@ -3663,49 +8574,630 @@
+@@ -3663,49 +8688,853 @@
      }
  }
  
++bool QTextDocumentLayoutPrivate::validateTableViewport(QTextFrame *frame)
++{
++    const auto format = frame->frameFormat();
++    if (!format.hasProperty(WikidictTableViewport)) return true;
++    const auto fail = [&] { refuseParagraphBox(1, frame->firstPosition()); return false; };
++#if !QT_CONFIG(harfbuzz)
++    return fail();
++#endif
++    const auto raw = format.property(WikidictTableViewport); const auto spec = raw.toMap();
++    const auto active = spec.value(QStringLiteral("active"));
++    const auto source = spec.value(QStringLiteral("source"));
++    const auto threshold = spec.value(QStringLiteral("threshold"));
++    const auto numeric = [](const QVariant &value) {
++        return value.metaType().id() == QMetaType::Double && qIsFinite(value.toDouble())
++            && value.toDouble() >= 0 && value.toDouble() < QFIXED_MAX / 8;
++    };
++    if (raw.metaType().id() != QMetaType::QVariantMap || spec.size() != 13
++        || spec.value(QStringLiteral("language")).metaType().id() != QMetaType::QString
++        || !wikidictSourceLanguageTag(spec.value(QStringLiteral("language")).toString())
++        || !numeric(spec.value(QStringLiteral("em"))) || spec.value(QStringLiteral("em")).toDouble() == 0
++        || spec.value(QStringLiteral("capability")).metaType().id() != QMetaType::QString
++        || spec.value(QStringLiteral("capability")).toString() != QStringLiteral("wikidict.table-block-viewport/1")
++        || source.metaType().id() != QMetaType::QByteArray
++        || active.metaType().id() != QMetaType::Bool || threshold.metaType().id() != QMetaType::Double
++        || !qIsFinite(threshold.toDouble()) || threshold.toDouble() < 0 || threshold.toDouble() > 4294967295.0
++        || std::floor(threshold.toDouble()) != threshold.toDouble()
++        || spec.value(QStringLiteral("border_box")).metaType().id() != QMetaType::Bool
++        || !frame->parentFrame() || qobject_cast<QTextTable *>(frame)
++        || frame->document() != document || document->object(frame->objectIndex()) != frame
++        || frame->childFrames().size() != 1 || format.position() != QTextFrameFormat::InFlow
++        || format.height().type() != QTextLength::VariableLength || format.height().rawValue() != 0
++        || format.width().type() != QTextLength::PercentageLength || format.width().rawValue() != 100
++        || format.hasProperty(WikidictPlainContainerPolicy) || format.hasProperty(WikidictTableBoxOwner)
++        || format.hasProperty(WikidictContainerScrollport) || format.hasProperty(WikidictContainerAutoMargins)
++        || format.hasProperty(WikidictFigureOwner) || document->pageSize().height() > 0) return fail();
++    const auto clear = format.property(WikidictTableBoxClear);
++    if (clear.metaType().id() != QMetaType::Int || clear.toInt() < 0 || clear.toInt() > 3) return fail();
++    for (const auto &key : {QStringLiteral("direction"), QStringLiteral("grid_direction")}) {
++        const auto direction = spec.value(key);
++        if (direction.metaType().id() != QMetaType::Int
++            || (direction.toInt() != Qt::LeftToRight && direction.toInt() != Qt::RightToLeft)) return fail();
++    }
++    const auto autosValue = spec.value(QStringLiteral("autos")), marginsValue = spec.value(QStringLiteral("margins"));
++    const auto autos = autosValue.toList(), margins = marginsValue.toList();
++    if (autosValue.metaType().id() != QMetaType::QVariantList || autos.size() != 4
++        || marginsValue.metaType().id() != QMetaType::QVariantList || margins.size() != 4) return fail();
++    for (int side = 0; side < 4; ++side)
++        if (autos[side].metaType().id() != QMetaType::Bool || !numeric(margins[side])
++            || (autos[side].toBool() && margins[side].toDouble() != 0)) return fail();
++    if (autos[0].toBool() || autos[2].toBool() || (!autos[1].toBool() && !autos[3].toBool())) return fail();
++    for (const auto &key : {QStringLiteral("width"), QStringLiteral("max_width")}) {
++        const auto value = spec.value(key); const auto length = value.toMap();
++        if (value.metaType().id() != QMetaType::QVariantMap || length.size() != 2
++            || length.value(QStringLiteral("unit")).metaType().id() != QMetaType::QString
++            || (length.value(QStringLiteral("unit")) != QStringLiteral("fixed")
++                && length.value(QStringLiteral("unit")) != QStringLiteral("percent"))
++            || !numeric(length.value(QStringLiteral("value")))
++            || (key == QStringLiteral("width") && length.value(QStringLiteral("value")).toDouble() == 0)) return fail();
++    }
++    QJsonParseError error; const auto decoded = QJsonDocument::fromJson(source.toByteArray(), &error);
++    const auto sourcePolicy = decoded.object().value(QStringLiteral("block_viewport")).toObject();
++    if (error.error != QJsonParseError::NoError || !decoded.isObject() || decoded.object().size() != 2 || !decoded.object().contains(QStringLiteral("style"))
++        || sourcePolicy.size() != 7 || sourcePolicy.value(QStringLiteral("language")) != spec.value(QStringLiteral("language")).toString()
++        || sourcePolicy.value(QStringLiteral("max_viewport_width_px")) != threshold.toDouble()
++        || sourcePolicy.value(QStringLiteral("grid_direction")) != (spec.value(QStringLiteral("grid_direction")).toInt() == Qt::RightToLeft ? QStringLiteral("rtl") : QStringLiteral("ltr"))
++        || sourcePolicy.value(QStringLiteral("box_sizing")) != (spec.value(QStringLiteral("border_box")).toBool() ? QStringLiteral("border_box") : QStringLiteral("content_box"))) return fail();
++    const auto box = sourcePolicy.value(QStringLiteral("box_style")).toObject();
++    const auto anonymous = sourcePolicy.value(QStringLiteral("grid_style")).toObject();
++    const auto absent = [](const QJsonValue &value) { return value.isUndefined() || value.isNull(); };
++    const QStringList styleFields{QStringLiteral("background"), QStringLiteral("border"), QStringLiteral("collapse"),
++        QStringLiteral("margins"), QStringLiteral("margin_values"), QStringLiteral("containing_direction"), QStringLiteral("float_side"),
++        QStringLiteral("width"), QStringLiteral("padding"), QStringLiteral("clear"), QStringLiteral("display"),
++        QStringLiteral("vertical_align"), QStringLiteral("line_height")};
++    const auto wide = decoded.object().value(QStringLiteral("style"));
++    if (!wide.isNull() && !wide.isObject()) return fail();
++    for (const auto &style : {wide.toObject(), box, anonymous})
++        for (auto it = style.begin(); it != style.end(); ++it) if (!styleFields.contains(it.key())) return fail();
++    if (!absent(wide.toObject().value(QStringLiteral("float_side")))
++        || (!absent(wide.toObject().value(QStringLiteral("display"))) && wide.toObject().value(QStringLiteral("display")) != QStringLiteral("table"))) return fail();
++    if (!sourcePolicy.value(QStringLiteral("box_style")).isObject()
++        || !sourcePolicy.value(QStringLiteral("grid_style")).isObject()
++        || anonymous.value(QStringLiteral("collapse")) != QStringLiteral("collapse")
++        || box.value(QStringLiteral("containing_direction")) != (spec.value(QStringLiteral("direction")).toInt() == Qt::RightToLeft ? QStringLiteral("rtl") : QStringLiteral("ltr"))) return fail();
++    for (const auto &key : {"margins", "float_side", "display", "vertical_align", "collapse", "line_height"})
++        if (!absent(box.value(QLatin1StringView(key)))) return fail();
++    for (const auto &key : {"background", "border", "padding", "width", "margins", "margin_values", "containing_direction", "float_side", "clear", "display", "vertical_align"})
++        if (!absent(anonymous.value(QLatin1StringView(key)))) return fail();
++    const auto lengthMatches = [&](const QJsonValue &value, const QVariantMap &resolved, bool percent) {
++        const auto length = value.toObject(); const auto unit = length.value(QStringLiteral("unit"));
++        const auto amount = length.value(QStringLiteral("value"));
++        if (!value.isObject() || length.size() != 2 || !amount.isDouble() || !qIsFinite(amount.toDouble()) || amount.toDouble() < 0
++            || (unit != QStringLiteral("px") && unit != QStringLiteral("em") && (!percent || unit != QStringLiteral("percent")))) return false;
++        const double expected = amount.toDouble() * (unit == QStringLiteral("em") ? spec.value(QStringLiteral("em")).toDouble() : 1);
++        return qIsFinite(expected) && resolved.value(QStringLiteral("unit")) == (unit == QStringLiteral("percent") ? QStringLiteral("percent") : QStringLiteral("fixed"))
++            && resolved.value(QStringLiteral("value")).toDouble() == expected;
++    };
++    if (!lengthMatches(box.value(QStringLiteral("width")), spec.value(QStringLiteral("width")).toMap(), true)
++        || !lengthMatches(sourcePolicy.value(QStringLiteral("max_width")), spec.value(QStringLiteral("max_width")).toMap(), true)) return fail();
++    const auto authoredMargins = box.value(QStringLiteral("margin_values")).toObject();
++    if (authoredMargins.size() != 4) return fail();
++    int side = 0;
++    for (const auto &name : {"top", "right", "bottom", "left"}) {
++        const auto edge = authoredMargins.value(QLatin1StringView(name)); const auto tagged = edge.toObject();
++        if (!edge.isObject() || tagged.size() != 1) return fail();
++        if (autos[side].toBool()) {
++            if (!tagged.value(QStringLiteral("auto")).isObject() || !tagged.value(QStringLiteral("auto")).toObject().isEmpty()) return fail();
++        } else if (!lengthMatches(tagged.value(QStringLiteral("length")),
++            QVariantMap{{QStringLiteral("unit"), QStringLiteral("fixed")}, {QStringLiteral("value"), margins[side]}}, false)) return fail();
++        ++side;
++    }
++    auto *grid = frame->childFrames().first();
++    const auto gridFormat = grid->frameFormat();
++    const bool empty = isWikidictEmptyTable(gridFormat)
++        && gridFormat.stringProperty(WikidictEmptyTableRole) == QStringLiteral("wrapper");
++    if ((!qobject_cast<QTextTable *>(grid) && !empty) || grid->parentFrame() != frame
++        || grid->document() != document || document->object(grid->objectIndex()) != grid
++        || gridFormat.property(WikidictTableViewportGrid).metaType().id() != QMetaType::QByteArray
++        || gridFormat.property(WikidictTableViewportGrid) != source
++        || gridFormat.property(QTextFormat::UserProperty + 0x57fa).metaType().id() != QMetaType::QString
++        || gridFormat.stringProperty(QTextFormat::UserProperty + 0x57fa) != spec.value(QStringLiteral("language")).toString()) return fail();
++    if (auto *table = qobject_cast<QTextTable *>(grid)) {
++        for (int row = 0; row < table->rows(); ++row) for (int column = 0; column < table->columns(); ++column) {
++            const auto cell = table->cellAt(row, column);
++            if (cell.row() != row || cell.column() != column) continue;
++            const auto language = cell.format().property(QTextFormat::UserProperty + 0x57fa);
++            if (language.metaType().id() != QMetaType::QString || language.toString() != spec.value(QStringLiteral("language")).toString()) return fail();
++        }
++    }
++    for (auto block = document->findBlock(frame->firstPosition()); block.isValid() && block.position() < frame->lastPosition(); block = block.next()) {
++        if (!block.isVisible()) continue;
++        for (auto it = block.begin(); !it.atEnd(); ++it) {
++            const auto fragment = it.fragment();
++            if (!fragment.isValid()) continue;
++            const auto language = fragment.charFormat().property(QTextFormat::UserProperty + 0x57fa);
++            if (language.metaType().id() != QMetaType::QString || !wikidictSourceLanguageTag(language.toString())) return fail();
++        }
++    }
++    if (empty && !validateEmptyTableBox(grid, 0)) return false;
++    for (auto it = frame->begin(); !it.atEnd(); ++it) {
++        if (it.currentFrame()) { if (it.currentFrame() != grid) return fail(); continue; }
++        const auto block = it.currentBlock();
++        if (!block.isValid()) continue;
++        if (block.blockFormat().stringProperty(WikidictTableCaptionBlock) == QStringLiteral("wikidict.table-caption/1")) {
++            if (!wikidictTableCaptionTextOnly(block)) return fail();
++        } else if (block.length() != 1 || block.isVisible()) return fail();
++    }
++    if (active.toBool()) {
++        WikidictPhysicalEdges edges;
++        if (!wikidictPhysicalEdges(format.property(WikidictContainerPhysicalEdges), &edges)
++            || format.border() != 0 || format.padding() != 0
++            || format.leftMargin() != 0 || format.rightMargin() != 0 || format.topMargin() != 0 || format.bottomMargin() != 0
++            || !gridFormat.boolProperty(QTextFormat::TableBorderCollapse)
++            || gridFormat.doubleProperty(QTextFormat::TableCellPadding) != 0 || gridFormat.doubleProperty(QTextFormat::TableCellSpacing) != 0
++            || gridFormat.border() != 0 || gridFormat.padding() != 0
++            || gridFormat.background().style() != Qt::NoBrush || gridFormat.width().type() != QTextLength::VariableLength
++            || gridFormat.hasProperty(WikidictTableAutoMargins) || gridFormat.hasProperty(WikidictTableBoxWidth)
++            || gridFormat.layoutDirection() != Qt::LayoutDirection(spec.value(QStringLiteral("grid_direction")).toInt())) return fail();
++        const auto colorMatches = [](const QJsonValue &value, const QColor &color) {
++            const auto text = value.toString();
++            if (!value.isString() || text.size() != 7 || text[0] != QChar('#')) return false;
++            for (const auto c : text.mid(1))
++                if (!((c >= QChar('0') && c <= QChar('9')) || (c >= QChar('a') && c <= QChar('f')))) return false;
++            return color == QColor(text);
++        };
++        const auto background = box.value(QStringLiteral("background"));
++        if (absent(background) ? format.background().style() != Qt::NoBrush
++            : format.background().style() != Qt::SolidPattern || !colorMatches(background, format.background().color())) return fail();
++        const auto authoredPadding = box.value(QStringLiteral("padding"));
++        const auto authoredBorder = box.value(QStringLiteral("border"));
++        const auto borderEdges = authoredBorder.toObject().value(QStringLiteral("edges"));
++        if ((!absent(authoredPadding) && (!authoredPadding.isObject() || authoredPadding.toObject().size() != 4))
++            || (!absent(borderEdges) && (!borderEdges.isObject() || borderEdges.toObject().size() != 4 || authoredBorder.toObject().size() != 1))) return fail();
++        int side = 0;
++        for (const auto &name : {"top", "right", "bottom", "left"}) {
++            if (!qIsFinite(scaleToDevice(edges.width[side] + edges.padding[side]))
++                || scaleToDevice(edges.width[side] + edges.padding[side]) >= QFIXED_MAX / 8) return fail();
++            if (absent(authoredPadding) ? edges.padding[side] != 0
++                : !lengthMatches(authoredPadding.toObject().value(QLatin1StringView(name)),
++                    QVariantMap{{QStringLiteral("unit"), QStringLiteral("fixed")}, {QStringLiteral("value"), edges.padding[side]}}, false)) return fail();
++            const auto edge = absent(borderEdges) ? authoredBorder : borderEdges.toObject().value(QLatin1StringView(name));
++            if (absent(edge)) { if (edges.style[side] != 0 || edges.width[side] != 0) return fail(); }
++            else {
++                const QStringList names{QStringLiteral("none"), QStringLiteral("hidden"), QStringLiteral("solid"), QStringLiteral("dotted")};
++                const auto tagged = edge.toObject(); const auto payload = tagged.value(names[edges.style[side]]);
++                if (!edge.isObject() || tagged.size() != 1 || !payload.isObject()
++                    || payload.toObject().size() != (edges.style[side] < 2 ? 0 : 2)) return fail();
++                if (edges.style[side] >= 2
++                    && (!lengthMatches(payload.toObject().value(QStringLiteral("width")),
++                            QVariantMap{{QStringLiteral("unit"), QStringLiteral("fixed")}, {QStringLiteral("value"), edges.width[side]}}, false)
++                        || !colorMatches(payload.toObject().value(QStringLiteral("color")), edges.color[side]))) return fail();
++            }
++            ++side;
++        }
++        const auto sourceClear = box.value(QStringLiteral("clear"));
++        if (clear.toInt() != (absent(sourceClear) ? 0 : QStringList{QStringLiteral("none"), QStringLiteral("left"), QStringLiteral("right"), QStringLiteral("both")}.indexOf(sourceClear.toString()))) return fail();
++    } else {
++        if (format.hasProperty(WikidictContainerPhysicalEdges) || format.border() != 0 || format.padding() != 0
++            || format.background().style() != Qt::NoBrush || format.leftMargin() != 0 || format.rightMargin() != 0) return fail();
++        // Wide mode delegates to the same ordinary Table format captured before
++        // wrapping. The transparent helper must not acquire narrow allocation.
++        const auto rawFormats = format.property(QTextFormat::UserProperty + 0x57f7);
++        const auto saved = rawFormats.toMap();
++        if (rawFormats.metaType().id() != QMetaType::QVariantMap
++            || saved.value(QStringLiteral("wide_grid")).metaType().id() != QMetaType::QTextFormat
++            || saved.value(QStringLiteral("wide_owner")).metaType().id() != QMetaType::QTextFormat) return fail();
++        auto currentGrid = QTextFormat(gridFormat), currentOwner = QTextFormat(format);
++        currentGrid.clearProperty(QTextFormat::ObjectIndex); currentOwner.clearProperty(QTextFormat::ObjectIndex);
++        currentOwner.clearProperty(WikidictTableViewport); currentOwner.clearProperty(QTextFormat::UserProperty + 0x57f7);
++        if (currentGrid != saved.value(QStringLiteral("wide_grid")).value<QTextFormat>()
++            || currentOwner != saved.value(QStringLiteral("wide_owner")).value<QTextFormat>()) return fail();
++    }
++    return true;
++}
++
 +bool QTextDocumentLayoutPrivate::validatePlainContainer(QTextFrame *frame)
 +{
++    if (wikidictTableViewport(frame)) return validateTableViewport(frame);
 +    const auto format = frame->frameFormat();
 +    if (!format.hasProperty(WikidictPlainContainerPolicy)
 +        && !format.hasProperty(WikidictPlainContainerClear)
@@ -7108,7 +7440,8 @@
 +                parent = figure;
 +                continue;
 +            }
-+            valid = valid && (wikidictPlainContainer(parent) || qobject_cast<QTextTable *>(parent))
++            valid = valid && (wikidictPlainContainer(parent) || qobject_cast<QTextTable *>(parent)
++                    || (wikidictTableViewport(parent) && validateTableViewport(parent)))
 +                && (parent->frameFormat().position() == QTextFrameFormat::InFlow || wikidictFixedContainerFloat(parent));
 +        }
 +    }
@@ -7130,7 +7463,8 @@
 +                && !parentFormat.hasProperty(QTextFormat::UserProperty + 0x57e5)
 +                && !parentFormat.hasProperty(QTextFormat::UserProperty + 0x57a0)
 +                && parentFormat.position() == QTextFrameFormat::InFlow
-+                && (wikidictPlainContainer(parent) || qobject_cast<QTextTable *>(parent));
++                && (wikidictPlainContainer(parent) || qobject_cast<QTextTable *>(parent)
++                    || (wikidictTableViewport(parent) && validateTableViewport(parent)));
 +        }
 +        for (auto it = frame->begin(); !it.atEnd(); ++it) {
 +            const auto block = it.currentBlock(); if (!block.isValid() || !block.isVisible()) continue;
@@ -7147,7 +7481,10 @@
 +
 +QFixed QTextDocumentLayoutPrivate::adjoiningMargin(QTextFrame *frame, int side) const
 +{
-+    const auto values = frame->frameFormat().property(WikidictContainerMargins).toMap().value(QStringLiteral("edges")).toList();
++    const auto format = frame->frameFormat();
++    const auto values = wikidictTableViewportActive(frame)
++        ? format.property(WikidictTableViewport).toMap().value(QStringLiteral("margins")).toList()
++        : format.property(WikidictContainerMargins).toMap().value(QStringLiteral("edges")).toList();
 +    return values.size() == 4 ? QFixed::fromReal(scaleToDevice(values[side].toDouble())) : QFixed();
 +}
 +
@@ -7167,8 +7504,9 @@
 +{
 +    const auto format = frame->frameFormat();
 +    const auto margins = format.property(WikidictContainerMargins).toMap();
-+    if (format.hasProperty(WikidictContainerAutoMargins)) {
-+        const auto spec = format.property(WikidictContainerAutoMargins).toMap();
++    if (wikidictTableViewport(frame) && !wikidictTableViewportActive(frame)) return available;
++    if (format.hasProperty(WikidictContainerAutoMargins) || wikidictTableViewportActive(frame)) {
++        const auto spec = format.property(wikidictTableViewportActive(frame) ? WikidictTableViewport : WikidictContainerAutoMargins).toMap();
 +        const auto width = spec.value(QStringLiteral("width")).toMap();
 +        const auto maximum = spec.value(QStringLiteral("max_width")).toMap();
 +        const qreal edges = (adjoiningInset(frame, 1) + adjoiningInset(frame, 3)).toReal();
@@ -7214,8 +7552,10 @@
 +        const auto format = frame->frameFormat();
 +        if (format.position() == QTextFrameFormat::InFlow
 +            && (format.hasProperty(WikidictTableBoxOwner)
++                || wikidictTableViewport(frame)
 +                || format.stringProperty(QTextFormat::UserProperty + 0x57a0) == QStringLiteral("wikidict.figure-layout/1"))) {
-+            const qreal top = scaleToDevice(format.topMargin()), bottom = scaleToDevice(format.bottomMargin());
++            const qreal top = wikidictTableViewportActive(frame) ? adjoiningMargin(frame, 0).toReal() : scaleToDevice(format.topMargin());
++            const qreal bottom = wikidictTableViewportActive(frame) ? adjoiningMargin(frame, 2).toReal() : scaleToDevice(format.bottomMargin());
 +            if (!qIsFinite(top) || !qIsFinite(bottom) || top < 0 || bottom < 0 || top >= QFIXED_MAX / 8 || bottom >= QFIXED_MAX / 8) {
 +                refuseParagraphBox(2, frame->firstPosition()); return out;
 +            }
@@ -7503,7 +7843,7 @@
          }
          if (newY == QFIXED_MAX)
              break;
-@@ -3718,8 +9210,65 @@
+@@ -3718,8 +9547,69 @@
      : QAbstractTextDocumentLayout(*new QTextDocumentLayoutPrivate, doc)
  {
      registerHandler(QTextFormat::ImageObject, new QTextImageHandler(this));
@@ -7514,6 +7854,10 @@
 +    setProperty("_wikidictContainerMinimumHeightCapability", QStringLiteral("wikidict.container-minimum-height/1"));
 +    setProperty("_wikidictContainerAdjoiningCapability", QStringLiteral("wikidict.container-adjoining/1"));
 +    setProperty("_wikidictContainerAutoMarginsCapability", QStringLiteral("wikidict.container-auto-margins/1"));
++    setProperty("_wikidictTableBlockViewportCapability", QStringLiteral("wikidict.table-block-viewport/1"));
++#if QT_CONFIG(harfbuzz)
++    setProperty("_wikidictSourceTextLanguageCapability", QStringLiteral("wikidict.source-text-language/1"));
++#endif
 +    setProperty("_wikidictContainerScrollportCapability", QStringLiteral("wikidict.container-scrollport/1"));
 +    setProperty("_wikidictContainerFixedFloatCapability", QStringLiteral("wikidict.container-fixed-float/1"));
 +#ifndef QT_NO_CSSPARSER
@@ -7571,7 +7915,7 @@
  
  void QTextDocumentLayout::draw(QPainter *painter, const PaintContext &context)
  {
-@@ -3745,7 +9294,35 @@
+@@ -3745,7 +9635,35 @@
  
      // Make sure we conform to the root frames bounds when drawing.
      d->clipRect = QRectF(fd->position.toPointF(), fd->size.toSizeF()).adjusted(fd->leftMargin.toReal(), 0, -fd->rightMargin.toReal(), 0);
@@ -7608,7 +7952,7 @@
      fd->size.width = width;
  }
  
-@@ -3796,6 +9373,40 @@
+@@ -3796,6 +9714,40 @@
      d->insideDocumentChange = true;
  
      const int documentLength = d->docPrivate->length();
@@ -7649,7 +7993,7 @@
      const bool fullLayout = (oldLength == 0 && length == documentLength);
      const bool smallChange = documentLength > 0
                               && (qMax(length, oldLength) * 100 / documentLength) < 5;
-@@ -3847,6 +9458,66 @@
+@@ -3847,6 +9799,66 @@
  
  //     qDebug("documentChange: from=%d, oldLength=%d, length=%d", from, oldLength, length);
  
@@ -7660,12 +8004,12 @@
 +            || frame->frameFormat().hasProperty(QTextFormat::UserProperty + 0x57e6)
 +            || frame->frameFormat().hasProperty(WikidictContainerMinimumHeight)
 +            || frame->frameFormat().hasProperty(WikidictContainerPhysicalEdges)
-+            || frame->frameFormat().hasProperty(WikidictContainerMargins)) return true;
++            || frame->frameFormat().hasProperty(WikidictContainerMargins) || wikidictTableViewport(frame)) return true;
 +        for (QTextFrame *child : frame->childFrames()) if (visit(visit, child)) return true;
 +        return false;
 +    };
 +    const auto containsAdjoining = [&](auto &&visit, QTextFrame *frame) -> bool {
-+        if (frame->frameFormat().hasProperty(WikidictContainerMargins)) return true;
++        if (frame->frameFormat().hasProperty(WikidictContainerMargins) || wikidictTableViewport(frame)) return true;
 +        for (auto *child : frame->childFrames()) if (visit(visit, child)) return true;
 +        return false;
 +    };
@@ -7716,7 +8060,7 @@
      // mark all frames between f_start and f_end as dirty
      markFrames(d->docPrivate->rootFrame(), from, oldLength, length);
  
-@@ -3862,6 +9533,9 @@
+@@ -3862,6 +9874,9 @@
      else if (d->showLayoutProgress)
          d->sizeChangedTimer.start(0, this);
  
@@ -7726,7 +8070,7 @@
      return updateRect;
  }
  
-@@ -3875,7 +9549,46 @@
+@@ -3875,7 +9890,46 @@
      QFixedPoint pointf;
      pointf.x = QFixed::fromReal(point.x());
      pointf.y = QFixed::fromReal(point.y());
@@ -7774,7 +8118,7 @@
      if (accuracy == Qt::ExactHit && p < QTextDocumentLayoutPrivate::PointExact)
          return -1;
  
-@@ -3957,7 +9670,10 @@
+@@ -3957,7 +10011,10 @@
  
      QTextBlock b = d->document->findBlock(frame->firstPosition());
      QTextLine line;
@@ -7786,7 +8130,7 @@
          line = b.layout()->lineAt(b.layout()->lineCount()-1);
  //     qDebug() << "layoutObject: line.isValid" << line.isValid() << b.position() << b.length() <<
  //         frame->firstPosition() << frame->lastPosition();
-@@ -3990,7 +9706,14 @@
+@@ -3990,7 +10047,14 @@
  QSizeF QTextDocumentLayout::dynamicDocumentSize() const
  {
      Q_D(const QTextDocumentLayout);
@@ -7802,7 +8146,7 @@
  }
  
  int QTextDocumentLayout::pageCount() const
-@@ -4078,13 +9801,18 @@
+@@ -4078,13 +10142,18 @@
      if (!d->docPrivate->canLayout())
          return QRectF();
      d->ensureLayoutFinished();
@@ -7822,7 +8166,7 @@
  
          if (f != table) {
              if (QTextTable *table = qobject_cast<QTextTable *>(f)) {
-@@ -4116,6 +9844,7 @@
+@@ -4116,6 +10185,7 @@
      while (f) {
          QTextFrameData *fd = data(f);
          pos += fd->position.toPointF();
@@ -7830,7 +8174,7 @@
  
          if (QTextTable *table = qobject_cast<QTextTable *>(f)) {
              QTextTableCell cell = table->cellAt(framePos);
-@@ -4140,7 +9869,7 @@
+@@ -4140,7 +10210,7 @@
  
      while (frame) {
          QTextFrameData *fd = data(frame);
@@ -7839,7 +8183,7 @@
  
          if (QTextTable *table = qobject_cast<QTextTable *>(frame)) {
              QTextTableCell cell = table->cellAt(blockPos);
-@@ -4151,7 +9880,8 @@
+@@ -4151,7 +10221,8 @@
          frame = frame->parentFrame();
      }
  
@@ -7913,7 +8257,36 @@
  #include "qabstracttextdocumentlayout.h"
  #include "qabstracttextdocumentlayout_p.h"
  #include "qtextlayout.h"
-@@ -1875,9 +1876,9 @@
+@@ -1448,6 +1449,14 @@
+             letterSpacing *= font.d->dpi / qt_defaultDpiY();
+     }
+ 
++#if QT_CONFIG(harfbuzz)
++    // An explicit source language requires the language-sensitive shaper even
++    // when a document's otherwise independent font strategy skips shaping.
++    const auto sourceLanguage = format(&si).property(QTextFormat::UserProperty + 0x57fa);
++    if (sourceLanguage.metaType().id() == QMetaType::QString && !sourceLanguage.toString().isEmpty())
++        shapingEnabled = true;
++#endif
++
+     // split up the item into parts that come from different font engines
+     // k * 3 entries, array[k] == index in string, array[k + 1] == index in glyphs, array[k + 2] == engine index
+     QVarLengthArray<uint, 24> itemBoundaries;
+@@ -1634,8 +1643,11 @@
+                                : QChar::Script_Common;
+     props.script = hb_qt_script_to_script(script);
+ 
+-    // set harfbuzz language from QLocale
+-    const QByteArray localeBcp47 = QLocale().bcp47Name().toUtf8();
++    // Source-owned runs keep their language independently of the UI locale.
++    // Unmarked legacy runs retain Qt's existing locale selection.
++    const auto sourceLanguage = format(&si).property(QTextFormat::UserProperty + 0x57fa);
++    const QByteArray localeBcp47 = sourceLanguage.metaType().id() == QMetaType::QString && !sourceLanguage.toString().isEmpty()
++        ? sourceLanguage.toString().toUtf8() : QLocale().bcp47Name().toUtf8();
+     const hb_language_t hb_language = hb_language_from_string(localeBcp47.constData(), localeBcp47.size());
+     if (hb_language == HB_LANGUAGE_INVALID)
+         props.language = hb_language_get_default();
+@@ -1875,9 +1887,9 @@
      auto &li = layoutData->items[item];
      if (li.analysis.flags == QScriptAnalysis::Object) {
          ensureSpace(1);
@@ -7925,7 +8298,7 @@
                                              format(&li));
          } else {
              // Standalone QTextLayout (no QTextDocument): read the
-@@ -1893,7 +1894,11 @@
+@@ -1893,7 +1905,11 @@
                      // Mirror QTextDocumentLayout::resizeInlineObject()
                      // vertical alignment logic.
                      const QFontMetricsF fm(fnt);
@@ -7938,7 +8311,7 @@
                      case QTextCharFormat::AlignMiddle: {
                          const qreal halfX = fm.xHeight() / 2.0;
                          obj.setAscent((h + halfX) / 2.0);
-@@ -2219,7 +2224,9 @@
+@@ -2219,7 +2235,9 @@
          int position = prevPosition;
          while (1) {
              const QTextFragmentData * const frag = it.value();
@@ -8020,13 +8393,25 @@
  
  #include <qbytearray.h>
  #include <qstack.h>
-@@ -1681,12 +1682,25 @@
+@@ -1681,12 +1682,37 @@
          return;
  
      QTextHtmlParserNode *node = nodes.last();
 +    int sourceRunAttributes = 0;
 +    for (int i = 0; i < attributes.size(); i += 2)
 +        sourceRunAttributes += attributes.at(i) == "data-wikidict-source-run"_L1;
++
++    // Only an authenticated generated Table opts into source language. Its
++    // descendants inherit the char-format value; ordinary HTML remains legacy.
++    constexpr int sourceLanguage = QTextFormat::UserProperty + 0x57fa;
++    int tableLanguages = 0;
++    QString tableLanguage;
++    for (int i = 0; i < attributes.size(); i += 2)
++        if (attributes.at(i) == "data-wikidict-table-language"_L1) {
++            ++tableLanguages; tableLanguage = attributes.at(i + 1);
++        }
++    if ((node->id == Html_table || node->id == Html_body) && tableLanguages == 1 && !tableLanguage.isEmpty())
++        node->charFormat.setProperty(sourceLanguage, tableLanguage);
  
      for (int i = 0; i < attributes.size(); i += 2) {
          QString key = attributes.at(i);
@@ -8046,6 +8431,16 @@
              case Html_font:
                  // the infamous font tag
                  if (key == "size"_L1 && value.size()) {
+@@ -1849,6 +1875,9 @@
+                 break;
+         }
+ 
++        if (key == "lang"_L1 && node->charFormat.hasProperty(sourceLanguage) && !value.isEmpty())
++            node->charFormat.setProperty(sourceLanguage, value);
++
+         if (key == "style"_L1) {
+ #ifndef QT_NO_CSSPARSER
+             node->parseStyleAttribute(value, resourceProvider);
 --- a/src/gui/text/qtextlayout.cpp
 +++ b/src/gui/text/qtextlayout.cpp
 @@ -12,8 +12,10 @@
@@ -9658,7 +10053,7 @@
  struct Property
  {
      inline Property(qint32 k, const QVariant &v) : key(k), value(v) {}
-@@ -139,7 +165,15 @@
+@@ -139,7 +165,18 @@
      QVariant value;
  
      inline bool operator==(const Property &other) const
@@ -9666,16 +10061,19 @@
 +    {
 +        if (key != other.key)
 +            return false;
-+        // This owned policy validates nested metatypes. QVariant's numeric
++        // Owned table policies validate nested metatypes. QVariant's numeric
 +        // equality must not intern malformed integer autos as valid booleans.
-+        if (key == QTextFormat::UserProperty + 0x57f1)
++        if (key == QTextFormat::UserProperty + 0x57f1
++            || key == QTextFormat::UserProperty + 0x57f5 || key == QTextFormat::UserProperty + 0x57f6
++            || key == QTextFormat::UserProperty + 0x57f7 || key == QTextFormat::UserProperty + 0x57f9
++            || key == QTextFormat::UserProperty + 0x57fa)
 +            return wikidictTablePolicyValuesEqual(value, other.value);
 +        return value == other.value;
 +    }
  };
  }
  Q_DECLARE_TYPEINFO(Property, Q_RELOCATABLE_TYPE);
-@@ -392,6 +426,9 @@
+@@ -392,6 +429,9 @@
              case QTextFormat::FontFeatures:
              {
                  const auto fontFeatures = props.at(i).value.value<QMap<QFont::Tag, quint32>>();

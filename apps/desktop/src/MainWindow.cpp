@@ -524,7 +524,18 @@ public:
             if (!self) return;
             self->localScrollRevealQueued = false;
             if (!doc || self->document() != doc) return;
-            self->revealLocalPosition(self->textCursor().position());
+            const QPointer<QAbstractTextDocumentLayout> layout(doc->documentLayout());
+            const int revision = doc->revision();
+            const QTextCursor cursor = self->textCursor();
+            const auto current = [&] { return self && doc && layout && self->document() == doc
+                && doc->documentLayout() == layout && doc->revision() == revision
+                && self->textCursor() == cursor && self->textCursor().anchor() == cursor.anchor(); };
+            // Reveal the selected range in order, retaining the active end's
+            // priority when the selection is wider than its local viewport.
+            if (cursor.hasSelection()) {
+                if (!self->revealLocalPosition(cursor.anchor()) || !current()) return;
+            }
+            if (current()) self->revealLocalPosition(cursor.position());
         });
     }
     QRectF clipLocalCharacter(int position, const QRectF &rect) const {
@@ -3342,9 +3353,14 @@ void MainWindow::reflowFigures() {
                 if (child->frameFormat().hasProperty(SemanticFigure::ownerProperty) || visit(visit, child)) return true;
             return false;
         };
-        if (!document || !hasFigure(hasFigure, document->rootFrame())) return;
-        if (!editDocumentFormats(reading_, [&] { SemanticFigure::reflow(document, contentsRect().width()); }))
-            throw DictApiError("unable to retain compiled flow during figure reflow");
+        if (!document) return;
+        const bool figures = hasFigure(hasFigure, document->rootFrame());
+        const bool tables = SemanticHtml::hasTableBlockViewports(document);
+        if (!figures && !tables) return;
+        if (!editDocumentFormats(reading_, [&] {
+                if (figures) SemanticFigure::reflow(document, contentsRect().width());
+                if (tables) SemanticHtml::reflowTableBlockViewports(document, qreal(contentsRect().width()));
+            })) throw DictApiError("unable to retain compiled flow during responsive layout");
         if (guard && document) document->setProperty("wikidict.figure.geometryError", QVariant());
         if (!guard || !document || document->property("wikidict.figure.validationPending").toBool()) return;
         document->setProperty("wikidict.figure.validationPending", true);
@@ -3662,7 +3678,12 @@ bool MainWindow::refreshReading() {
         for (int depth = 0; ; ++depth) {
             beginEdit();
             const auto priorContainers = containers.size();
-            auto added = FlowConstruction::expand(document, &containers, document->property(SemanticHtml::imageDarkThemeProperty).toBool());
+            auto added = FlowConstruction::expand(document, &containers, document->property(SemanticHtml::imageDarkThemeProperty).toBool(), [&] {
+                // Complete our outer edit so copied table frames acquire their
+                // actual ancestry; Flow retains layout and source guards.
+                CompiledContent::require(endEdit());
+                beginEdit();
+            });
             CompiledContent::require(endEdit());
             if (added.isEmpty() && containers.size() == priorContainers) break;
             CompiledContent::require(depth <= 16);
@@ -3674,6 +3695,10 @@ bool MainWindow::refreshReading() {
         }
     }
     beginEdit();
+    if (SemanticHtml::hasTableBlockViewports(document)) {
+        SemanticHtml::reflowTableBlockViewports(document, qreal(contentsRect().width()));
+        CompiledContent::require(current());
+    }
     if (needsOwners) {
         // Any remaining marker lacks its authenticated parent owner; do not
         // present its encoded metadata or fabricate an unassociated figure.
@@ -4297,6 +4322,11 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
 QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground, const QString &location, const QString &inheritedAlignment, const QString &listMarker, FlowConstruction::RenderContext context) const {
     if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
     SemanticHtml::validateInlineTableDomain(table, tableDepth, context.contentDepth, context.inReference, context.inlineTableAudioOwners, context.inlineTableImageOwners);
+    const auto viewport = SemanticHtml::tableBlockViewport(table);
+    if (!viewport.isEmpty()) {
+        context.language = viewport.value(QStringLiteral("language")).toString();
+        context.languageKnown = true;
+    }
     const int indent = depth > 0 ? 30 + std::clamp(depth - 1, 0, 20) * 16 : 0;
     QString out = QStringLiteral("<table cellspacing='0' cellpadding='5' style='border-collapse:collapse;margin:8px 0;margin-left:%1px'>").arg(indent);
     const QJsonValue geometryValue = table.value(QStringLiteral("geometry"));
@@ -4310,10 +4340,10 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             throw DictApiError("invalid table geometry");
         return value.toInt();
     };
-    const int border = dimension(QStringLiteral("border"), 1);
+    const int border = dimension(QStringLiteral("border"), viewport.isEmpty() ? 1 : 0);
     const int spacing = dimension(QStringLiteral("cell_spacing"), 0);
-    const int padding = dimension(QStringLiteral("cell_padding"), 5);
-    if (!geometry.isEmpty() || tableDepth > 1) {
+    const int padding = dimension(QStringLiteral("cell_padding"), viewport.isEmpty() ? 5 : 0);
+    if (!geometry.isEmpty() || tableDepth > 1 || !viewport.isEmpty()) {
         QString width;
         const QJsonValue widthValue = geometry.value(QStringLiteral("width"));
         if (!widthValue.isUndefined() && !widthValue.isNull()) {
@@ -4332,8 +4362,11 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             .arg(tableDepth > 1 ? 0 : 8).arg(indent);
     }
     const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "margin_values", "containing_direction", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height"});
-    if (SemanticHtml::present(tableStyle.value(QStringLiteral("margin_values"))))
+    if (!viewport.isEmpty() || SemanticHtml::present(tableStyle.value(QStringLiteral("margin_values"))))
         out.insert(out.indexOf(QChar('>')), QStringLiteral(" data-wikidict-table-auto-margins='1'"));
+    if (!viewport.isEmpty())
+        out.insert(out.indexOf(QChar('>')), QStringLiteral(" dir='%1' data-wikidict-table-language='%2'")
+            .arg(viewport.value(QStringLiteral("grid_direction")).toString(), viewport.value(QStringLiteral("language")).toString().toHtmlEscaped()));
     const QString tableBackground = SemanticHtml::present(tableStyle.value(QStringLiteral("background")))
         ? SemanticHtml::styleColor(tableStyle.value(QStringLiteral("background"))).name() : inheritedBackground;
     const QJsonArray caption = CompiledContent::array(table.value(QStringLiteral("caption")));
@@ -4396,7 +4429,7 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
                     if (cellLine.strutPoints > 0) style += QStringLiteral(";font-size:%1pt").arg(cellLine.strutPoints, 0, 'g', 17);
                 }
             }
-            SemanticHtml::cellTopAlignment(cellStyle.value(QStringLiteral("vertical_align")));
+            SemanticHtml::cellVerticalAlignment(cellStyle.value(QStringLiteral("vertical_align")));
             const QString ownAlignment = SemanticHtml::textAlignment(cellStyle.value(QStringLiteral("text_align")));
             const QString alignment = ownAlignment.isEmpty() ? inheritedAlignment : ownAlignment;
             // HTML align retains physical left/right under RTL. Qt imports cell

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CompiledImageMap.hpp"
+#include "CompiledContent.hpp"
 #include "MissingFigurePaint.hpp"
 #include "LogicalFlow.hpp"
 #include <QByteArray>
@@ -118,11 +119,11 @@ inline QString textAlignment(const QJsonValue &value) {
         throw std::runtime_error("invalid typed text alignment");
     return alignment;
 }
-inline bool cellTopAlignment(const QJsonValue &value) {
-    if (!present(value)) return false;
-    if (!value.isString() || value.toString() != QStringLiteral("top"))
-        throw std::runtime_error("invalid typed cell vertical alignment");
-    return true;
+inline int cellVerticalAlignment(const QJsonValue &value) {
+    if (!present(value)) return -1;
+    if (value.isString() && value.toString() == QStringLiteral("top")) return QTextCharFormat::AlignTop;
+    if (value.isString() && value.toString() == QStringLiteral("middle")) return QTextCharFormat::AlignMiddle;
+    throw std::runtime_error("invalid typed cell vertical alignment");
 }
 inline QJsonObject typedStyle(const QJsonValue &value, const QStringList &keys) {
     if (!present(value)) return {};
@@ -504,12 +505,254 @@ inline bool hasTableBoxes(const QTextDocument *document) {
     };
     return document && visit(visit, document->rootFrame());
 }
+inline constexpr int tableViewportProperty = QTextFormat::UserProperty + 0x57f5;
+inline constexpr int tableViewportGridProperty = QTextFormat::UserProperty + 0x57f6;
+inline constexpr int tableViewportFormatsProperty = QTextFormat::UserProperty + 0x57f7;
+inline constexpr int tableViewportInheritedLineProperty = QTextFormat::UserProperty + 0x57f9;
+inline constexpr int tableSourceLanguageProperty = QTextFormat::UserProperty + 0x57fa;
+inline const QString tableViewportCapability = QStringLiteral("wikidict.table-block-viewport/1");
+
+inline bool sourceLanguageTag(const QString &tag) {
+    const auto parts = tag.split(QChar('-'));
+    if (tag.isEmpty() || tag.toUtf8().size() > 32 * 1024 * 1024 || parts.first().size() > 8) return false;
+    const auto letter = [](QChar c) { return (c >= QChar('a') && c <= QChar('z')) || (c >= QChar('A') && c <= QChar('Z')); };
+    for (const auto c : parts.first()) if (!letter(c)) return false;
+    if (parts.first().size() == 1 && (parts.size() < 2 || (parts.first().toLower() != "x" && parts.first().toLower() != "i"))) return false;
+    for (const auto &part : parts) {
+        if (part.isEmpty() || part.size() > 8) return false;
+        for (const auto c : part) if (!letter(c) && !(c >= QChar('0') && c <= QChar('9'))) return false;
+    }
+    return true;
+}
+
+inline QJsonObject flowPlaceholderMetadata(const QString &name) {
+    const QUrl url(name);
+    CompiledContent::require(url.scheme() == QStringLiteral("wikidict-flow"));
+    const auto encoded = url.path().toLatin1();
+    const auto bytes = QByteArray::fromBase64(encoded, QByteArray::Base64UrlEncoding | QByteArray::AbortOnBase64DecodingErrors);
+    QJsonParseError error;
+    const auto document = QJsonDocument::fromJson(bytes, &error);
+    CompiledContent::require(error.error == QJsonParseError::NoError && document.isObject()
+        && bytes.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals) == encoded);
+    const auto metadata = document.object();
+    CompiledContent::require(metadata.value(QStringLiteral("block")).isObject()
+        && metadata.value(QStringLiteral("html")).isString() && metadata.value(QStringLiteral("parts")).isArray()
+        && metadata.value(QStringLiteral("language")).isString() && metadata.value(QStringLiteral("alignment")).isString());
+    return metadata;
+}
+
+// Inline image frames have firstPosition == lastPosition + 1. Only the exact
+// generated Flow object in an actual caption block may accompany the grid
+// during construction; expansion must remove it before final native layout.
+inline void validateStagedTableCaption(QTextFrame *frame, QTextFrame *parent, QTextFrame *grid) {
+    if (!frame || !parent || !grid || frame == grid || frame->parentFrame() != parent
+        || frame->document() != parent->document() || grid->document() != parent->document()
+        || qobject_cast<QTextTable *>(frame) || !frame->childFrames().isEmpty()
+        || frame->firstPosition() != frame->lastPosition() + 1
+        || frame->lastPosition() >= grid->firstPosition())
+        throw std::runtime_error("invalid staged table caption frame");
+    auto *document = parent->document();
+    const int position = frame->lastPosition();
+    const auto block = document->findBlock(position);
+    if (!block.isValid() || document->frameAt(position) != parent
+        || block.blockFormat().stringProperty(tableCaptionBlockProperty) != QStringLiteral("wikidict.table-caption/1")
+        || document->characterAt(position) != QChar::ObjectReplacementCharacter)
+        throw std::runtime_error("invalid staged table caption position");
+    int matches = 0;
+    for (auto it = block.begin(); !it.atEnd(); ++it) {
+        const auto fragment = it.fragment();
+        if (!fragment.isValid() || fragment.position() != position) continue;
+        const auto format = fragment.charFormat();
+        if (fragment.length() != 1 || !format.isImageFormat() || format.objectIndex() != frame->objectIndex())
+            throw std::runtime_error("invalid staged table caption object");
+        const auto metadata = flowPlaceholderMetadata(format.toImageFormat().name());
+        if (!CompiledContent::contentRole(metadata.value(QStringLiteral("block")).toObject()))
+            throw std::runtime_error("invalid staged table caption role");
+        ++matches;
+    }
+    if (matches != 1) throw std::runtime_error("missing staged table caption object");
+}
+
+inline QTextFrame *tableViewportConstructionGrid(QTextFrame *owner) {
+    if (!owner) throw std::runtime_error("missing table viewport construction owner");
+    const auto policy = owner->frameFormat().property(tableViewportProperty).toMap();
+    if (policy.value(QStringLiteral("capability")).toString() != tableViewportCapability)
+        throw std::runtime_error("invalid table viewport construction capability");
+    QTextFrame *grid = nullptr;
+    for (auto *child : owner->childFrames()) {
+        if (child->frameFormat().property(tableViewportGridProperty) != policy.value(QStringLiteral("source"))) continue;
+        if (grid || (!qobject_cast<QTextTable *>(child)
+            && child->frameFormat().stringProperty(emptyTableRoleProperty) != QStringLiteral("wrapper")))
+            throw std::runtime_error("invalid table viewport construction grid");
+        grid = child;
+    }
+    if (!grid) throw std::runtime_error("missing table viewport construction grid");
+    for (auto *child : owner->childFrames()) if (child != grid) validateStagedTableCaption(child, owner, grid);
+    return grid;
+}
+
+inline QByteArray tableViewportSource(const QJsonObject &metadata) {
+    return QJsonDocument(QJsonObject{{QStringLiteral("style"), metadata.value(QStringLiteral("style")).isUndefined()
+            ? QJsonValue(QJsonValue::Null) : metadata.value(QStringLiteral("style"))},
+        {QStringLiteral("block_viewport"), metadata.value(QStringLiteral("block_viewport"))}}).toJson(QJsonDocument::Compact);
+}
+
+inline QJsonObject tableBlockViewport(const QJsonObject &table) {
+    const auto value = table.value(QStringLiteral("block_viewport"));
+    if (!present(value)) return {};
+    const auto policy = value.toObject();
+    const QStringList fields{"max_viewport_width_px", "box_style", "box_sizing", "max_width", "grid_style", "grid_direction", "language"};
+    if (!value.isObject() || policy.size() != fields.size())
+        throw std::runtime_error("invalid table block viewport");
+    for (const auto &field : fields) if (!policy.contains(field))
+        throw std::runtime_error("incomplete table block viewport");
+    const auto language = policy.value(QStringLiteral("language"));
+    if (!language.isString() || !sourceLanguageTag(language.toString()))
+        throw std::runtime_error("invalid table source language");
+    const auto threshold = policy.value(QStringLiteral("max_viewport_width_px"));
+    if (!threshold.isDouble() || !std::isfinite(threshold.toDouble()) || threshold.toDouble() < 0
+        || threshold.toDouble() > 4294967295.0 || std::floor(threshold.toDouble()) != threshold.toDouble())
+        throw std::runtime_error("invalid table viewport threshold");
+    const auto sizing = policy.value(QStringLiteral("box_sizing"));
+    const auto direction = policy.value(QStringLiteral("grid_direction"));
+    if (!sizing.isString() || (sizing != QStringLiteral("content_box") && sizing != QStringLiteral("border_box"))
+        || !direction.isString() || (direction != QStringLiteral("ltr") && direction != QStringLiteral("rtl")))
+        throw std::runtime_error("invalid table viewport box or grid direction");
+    const QStringList styleFields{"background", "border", "collapse", "margins", "margin_values", "containing_direction",
+        "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height"};
+    const auto wide = typedStyle(table.value(QStringLiteral("style")), styleFields);
+    const auto box = typedStyle(policy.value(QStringLiteral("box_style")), styleFields);
+    const auto grid = typedStyle(policy.value(QStringLiteral("grid_style")), styleFields);
+    if (present(table.value(QStringLiteral("geometry"))) || present(wide.value(QStringLiteral("float_side")))
+        || tableDisplay(wide) != 0 || !policy.value(QStringLiteral("box_style")).isObject()
+        || !policy.value(QStringLiteral("grid_style")).isObject())
+        throw std::runtime_error("unsupported table viewport header");
+    for (const auto &key : {"margins", "float_side", "display", "vertical_align", "collapse", "line_height"})
+        if (present(box.value(QLatin1StringView(key)))) throw std::runtime_error("invalid table viewport box field");
+    for (const auto &key : {"background", "border", "padding", "width", "margins", "margin_values", "containing_direction",
+                            "float_side", "clear", "display", "vertical_align"})
+        if (present(grid.value(QLatin1StringView(key)))) throw std::runtime_error("invalid anonymous table grid field");
+    if (grid.value(QStringLiteral("collapse")) != QStringLiteral("collapse"))
+        throw std::runtime_error("anonymous table grid requires proved collapse");
+    // These calls validate the typed lengths without using a reader/font guess.
+    // Em resolution is performed later with the same authenticated owner points.
+    const auto width = tableBoxLength(box.value(QStringLiteral("width")), 12, true);
+    tableBoxLength(policy.value(QStringLiteral("max_width")), 12, true);
+    if (width.value(QStringLiteral("value")).toDouble() <= 0)
+        throw std::runtime_error("table viewport width must be positive");
+    QTextTableFormat margins;
+    applyTableAutoMargins(margins, box, 12, 0);
+    if (!margins.hasProperty(tableAutoMarginsProperty))
+        throw std::runtime_error("table viewport requires source automatic margins");
+    return policy;
+}
+
+inline bool hasTableBlockViewports(const QTextDocument *document) {
+    if (!document) return false;
+    QVector<QTextFrame *> pending{document->rootFrame()};
+    while (!pending.isEmpty()) {
+        const auto *frame = pending.takeLast();
+        if (frame->frameFormat().hasProperty(tableViewportProperty)) return true;
+        for (auto *child : frame->childFrames()) pending.append(child);
+    }
+    return false;
+}
+
+inline void reflowTableBlockViewports(QTextDocument *document, qreal viewportCssWidth) {
+    if (!document || !std::isfinite(viewportCssWidth) || viewportCssWidth < 0)
+        throw std::runtime_error("invalid table CSS viewport");
+    QPointer<QTextDocument> live(document);
+    QPointer<QAbstractTextDocumentLayout> native(document->documentLayout());
+    const auto capability = native ? native->property("_wikidictTableBlockViewportCapability") : QVariant();
+    if (!live || !native || live->documentLayout() != native || capability.metaType().id() != QMetaType::QString
+        || capability.toString() != tableViewportCapability)
+        throw std::runtime_error("missing paired table viewport layout");
+    QVector<QPointer<QTextFrame>> owners;
+    const auto collect = [&](auto &&self, QTextFrame *frame) -> void {
+        if (frame->frameFormat().hasProperty(tableViewportProperty)) owners.append(frame);
+        for (auto *child : frame->childFrames()) self(self, child);
+    };
+    collect(collect, document->rootFrame());
+    for (const auto &owner : owners) {
+        if (!live || !native || !owner || owner->document() != live || live->documentLayout() != native)
+            throw std::runtime_error("replaced table viewport owner");
+        const auto state = owner->frameFormat().property(tableViewportFormatsProperty).toMap();
+        auto policy = owner->frameFormat().property(tableViewportProperty).toMap();
+        const bool active = viewportCssWidth <= policy.value(QStringLiteral("threshold")).toDouble();
+        if (policy.value(QStringLiteral("active")).metaType().id() != QMetaType::Bool)
+            throw std::runtime_error("invalid table viewport state");
+        const auto children = owner->childFrames();
+        if (children.size() != 1)
+            throw std::runtime_error("invalid table viewport grid identity");
+        const QPointer<QTextFrame> grid(children.first());
+        const auto current = [&] {
+            return live && native && owner && grid && live->documentLayout() == native
+                && grid->document() == live && grid->parentFrame() == owner;
+        };
+        if (grid->frameFormat().property(tableViewportGridProperty) != policy.value(QStringLiteral("source")))
+            throw std::runtime_error("foreign table viewport grid");
+        if (active == policy.value(QStringLiteral("active")).toBool()) continue;
+        const QString ownerKey = active ? QStringLiteral("box") : QStringLiteral("wide_owner");
+        const QString gridKey = active ? QStringLiteral("grid") : QStringLiteral("wide_grid");
+        if (state.value(ownerKey).metaType().id() != QMetaType::QTextFormat
+            || state.value(gridKey).metaType().id() != QMetaType::QTextFormat)
+            throw std::runtime_error("invalid table viewport format state");
+        auto format = state.value(ownerKey).value<QTextFormat>().toFrameFormat();
+        policy.insert(QStringLiteral("active"), active);
+        format.setProperty(tableViewportProperty, policy);
+        format.setProperty(tableViewportFormatsProperty, state);
+        owner->setFrameFormat(format);
+        if (!current()) throw std::runtime_error("replaced table viewport during reflow");
+        const auto gridFormat = state.value(gridKey).value<QTextFormat>();
+        if (auto *real = qobject_cast<QTextTable *>(grid.data())) real->setFormat(gridFormat.toTableFormat());
+        else {
+            if (grid->frameFormat().stringProperty(emptyTableRoleProperty) != QStringLiteral("wrapper")
+                || grid->childFrames().size() != 1
+                || grid->childFrames().first()->frameFormat().stringProperty(emptyTableRoleProperty) != QStringLiteral("grid"))
+                throw std::runtime_error("invalid empty viewport grid during reflow");
+            grid->setFrameFormat(gridFormat.toFrameFormat());
+            if (!current()) throw std::runtime_error("replaced empty table viewport during reflow");
+            const auto emptyFormat = state.value(active ? QStringLiteral("empty_grid") : QStringLiteral("empty_wide"));
+            if (emptyFormat.metaType().id() != QMetaType::QTextFormat)
+                throw std::runtime_error("invalid empty viewport grid state");
+            grid->childFrames().first()->setFrameFormat(emptyFormat.value<QTextFormat>().toFrameFormat());
+        }
+        if (!current()) throw std::runtime_error("replaced table viewport grid during reflow");
+        if (auto *real = qobject_cast<QTextTable *>(grid.data())) {
+            const auto backgrounds = state.value(QStringLiteral("cell_backgrounds")).toList();
+            for (const auto &item : backgrounds) {
+                const auto saved = item.toMap();
+                auto cell = real->cellAt(saved.value(QStringLiteral("row")).toInt(), saved.value(QStringLiteral("column")).toInt());
+                if (!cell.isValid() || cell.row() != saved.value(QStringLiteral("row")).toInt()
+                    || cell.column() != saved.value(QStringLiteral("column")).toInt()
+                    || saved.value(QStringLiteral("brush")).metaType().id() != QMetaType::QBrush)
+                    throw std::runtime_error("changed table viewport cell owner");
+                auto cellFormat = cell.format().toTableCellFormat();
+                cellFormat.setBackground(active && !saved.value(QStringLiteral("authored")).toBool()
+                    ? QBrush(Qt::NoBrush) : saved.value(QStringLiteral("brush")).value<QBrush>());
+                cell.setFormat(cellFormat);
+                if (!current()) throw std::runtime_error("replaced table viewport cell during reflow");
+            }
+        }
+        for (auto block = document->findBlock(grid->firstPosition()); block.isValid() && block.position() < grid->lastPosition(); block = block.next()) {
+            auto blockFormat = block.blockFormat();
+            if (blockFormat.property(tableViewportInheritedLineProperty) != policy.value(QStringLiteral("source"))) continue;
+            if (gridFormat.hasProperty(tableLineHeightProperty))
+                blockFormat.setProperty(tableLineHeightProperty, gridFormat.property(tableLineHeightProperty));
+            else blockFormat.clearProperty(tableLineHeightProperty);
+            QTextCursor cursor(block); cursor.setBlockFormat(blockFormat);
+            if (!current()) throw std::runtime_error("replaced table viewport text during reflow");
+        }
+    }
+}
+
 inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false,
                                 const QString &listMarker = {}, int tableDepth = 1, qreal tableOriginPoints = -1) {
     bool hasCell = false;
     for (const auto &row : table.value(QStringLiteral("rows")).toArray())
         hasCell |= !row.toObject().value(QStringLiteral("cells")).toArray().isEmpty();
-    bool styled = !listMarker.isEmpty() || resetTextAlignment || present(table.value(QStringLiteral("style")))
+    const auto viewport = tableBlockViewport(table);
+    bool styled = !viewport.isEmpty() || !listMarker.isEmpty() || resetTextAlignment || present(table.value(QStringLiteral("style")))
         || (!hasCell && present(table.value(QStringLiteral("geometry"))));
     if (!styled) {
         for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray())
@@ -525,6 +768,8 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
             QJsonObject shape{{"rowspan", qMax(1, cell.value(QStringLiteral("rowspan")).toInt(1))},
                 {"colspan", qMax(1, cell.value(QStringLiteral("colspan")).toInt(1))}};
             if (present(cell.value(QStringLiteral("style")))) { shape.insert(QStringLiteral("style"), cell.value(QStringLiteral("style"))); styled = true; }
+            if (!viewport.isEmpty()) shape.insert(QStringLiteral("background"), cell.value(QStringLiteral("background")).isUndefined()
+                ? QJsonValue(QJsonValue::Null) : cell.value(QStringLiteral("background")));
             if (present(cell.value(QStringLiteral("style")).toObject().value(QStringLiteral("line_height")))) {
                 shape.insert(QStringLiteral("header"), cell.value(QStringLiteral("header")).toBool());
                 shape.insert(QStringLiteral("empty_content"), emptyCompiledCell(cell));
@@ -536,6 +781,7 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
     if (!styled && !hasCell) return {};
     QJsonObject metadata{{"container_points", containerPoints}, {"indent", indent}, {"rows", rows}};
     metadata.insert(QStringLiteral("empty_nested"), tableDepth > 1);
+    if (!viewport.isEmpty()) metadata.insert(QStringLiteral("block_viewport"), viewport);
     if (hasTableFlowStyle(table.value(QStringLiteral("style")).toObject())) {
         metadata.insert(QStringLiteral("table_origin_points"), tableOriginPoints > 0 ? tableOriginPoints : containerPoints);
         const int display = tableDisplay(table.value(QStringLiteral("style")).toObject());
@@ -590,7 +836,8 @@ inline QString prepareTables(const QString &html, QVector<TableInfo> &tables, in
     for (TableInfo &table : tables) {
         if (table.ordinal >= ordinals.size()) throw std::runtime_error("unmatched table style metadata");
         if (!materialized[table.ordinal] && (present(table.value.value(QStringLiteral("style")))
-                || present(table.value.value(QStringLiteral("empty_geometry"))))) {
+                || present(table.value.value(QStringLiteral("empty_geometry")))
+                || present(table.value.value(QStringLiteral("block_viewport"))))) {
             table.empty = table.ordinal;
             const auto marker = [&](const QString &edge) {
                 return QStringLiteral("<p style='margin:0'><img src='%1:%2:%3'></p>")
@@ -646,7 +893,7 @@ inline QTextTableFormat emptyTableDefaults(const TableInfo &record, int indent) 
     return format;
 }
 
-inline void materializeEmptyTable(QTextDocument *document, const TableInfo &record, const QTextTableFormat &format) {
+inline QTextFrame *materializeEmptyTable(QTextDocument *document, const TableInfo &record, const QTextTableFormat &format) {
     QPointer<QTextDocument> live(document);
     QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
     const auto current = [&] { return live && layout && live->documentLayout() == layout; };
@@ -756,6 +1003,268 @@ inline void materializeEmptyTable(QTextDocument *document, const TableInfo &reco
     document->setLayoutEnabled(enabled); restored = true;
     require(current());
     require(document->revision() == finalRevision && document->characterCount() == finalCount && document->toRawText() == source);
+    return frame;
+}
+
+inline void materializeTableBlockViewport(QTextDocument *document, QTextFrame *table,
+                                          const QJsonObject &metadata, qreal points) {
+    const auto policyValue = metadata.value(QStringLiteral("block_viewport"));
+    if (!present(policyValue)) return;
+    if (!table) throw std::runtime_error("unmapped table viewport grid");
+    QPointer<QTextDocument> live(document);
+    QPointer<QTextFrame> grid(table);
+    QPointer<QAbstractTextDocumentLayout> native(document->documentLayout());
+    const auto capability = native ? native->property("_wikidictTableBlockViewportCapability") : QVariant();
+    if (!live || !grid || !native || capability.metaType().id() != QMetaType::QString
+        || capability.toString() != tableViewportCapability)
+        throw std::runtime_error("missing paired table viewport materializer");
+    const bool enabled = document->isLayoutEnabled();
+    document->setLayoutEnabled(false);
+    if (!live || !grid || !native || live->documentLayout() != native)
+        throw std::runtime_error("replaced table viewport document");
+    const auto restoreLayout = qScopeGuard([&] { if (live) live->setLayoutEnabled(enabled); });
+    QTextCursor transaction(document); transaction.beginEditBlock();
+    const auto finish = qScopeGuard([&] { if (live) transaction.endEditBlock(); });
+    const auto source = tableViewportSource(metadata);
+    const auto policy = tableBlockViewport(QJsonDocument::fromJson(source).object());
+    const auto boxStyle = policy.value(QStringLiteral("box_style")).toObject();
+    const auto gridStyle = policy.value(QStringLiteral("grid_style")).toObject();
+    const auto language = policy.value(QStringLiteral("language")).toString();
+    if (native->property("_wikidictSourceTextLanguageCapability").toString() != QStringLiteral("wikidict.source-text-language/1"))
+        throw std::runtime_error("missing paired source-language shaping");
+    QTextTableFormat boxMargins;
+    applyTableAutoMargins(boxMargins, boxStyle, points, 0);
+    const auto autoMargins = boxMargins.property(tableAutoMarginsProperty).toMap();
+    QVariantList margins{boxMargins.topMargin(), boxMargins.rightMargin(), boxMargins.bottomMargin(), boxMargins.leftMargin()};
+    QVariantMap allocation{{QStringLiteral("capability"), tableViewportCapability}, {QStringLiteral("source"), source},
+        {QStringLiteral("language"), language},
+        {QStringLiteral("em"), points * QFontMetricsF(QFont()).fontDpi() / 72.0},
+        {QStringLiteral("threshold"), policy.value(QStringLiteral("max_viewport_width_px")).toDouble()},
+        {QStringLiteral("active"), false}, {QStringLiteral("width"), tableBoxLength(boxStyle.value(QStringLiteral("width")), points, true)},
+        {QStringLiteral("max_width"), tableBoxLength(policy.value(QStringLiteral("max_width")), points, true)},
+        {QStringLiteral("border_box"), policy.value(QStringLiteral("box_sizing")) == QStringLiteral("border_box")},
+        {QStringLiteral("autos"), autoMargins.value(QStringLiteral("autos"))}, {QStringLiteral("margins"), margins},
+        {QStringLiteral("direction"), autoMargins.value(QStringLiteral("direction"))},
+        {QStringLiteral("grid_direction"), int(policy.value(QStringLiteral("grid_direction")) == QStringLiteral("rtl") ? Qt::RightToLeft : Qt::LeftToRight)}};
+    QTextFrameFormat box;
+    box.setMargin(0); box.setBorder(0); box.setPadding(0);
+    box.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+    box.setLayoutDirection(Qt::LayoutDirection(allocation.value(QStringLiteral("direction")).toInt()));
+    box.setProperty(tableBoxClearProperty, 0);
+    if (present(boxStyle.value(QStringLiteral("clear")))) {
+        const int clear = QStringList{"none", "left", "right", "both"}.indexOf(boxStyle.value(QStringLiteral("clear")).toString());
+        if (clear < 0) throw std::runtime_error("invalid viewport clear");
+        box.setProperty(tableBoxClearProperty, clear);
+    }
+    if (present(boxStyle.value(QStringLiteral("background")))) box.setBackground(styleColor(boxStyle.value(QStringLiteral("background"))));
+    QVariantList physicalPadding{0.0, 0.0, 0.0, 0.0};
+    if (present(boxStyle.value(QStringLiteral("padding")))) {
+        const auto edges = boxStyle.value(QStringLiteral("padding")).toObject();
+        if (edges.size() != 4) throw std::runtime_error("invalid viewport padding");
+        int side = 0;
+        for (const auto &name : {"top", "right", "bottom", "left"})
+            physicalPadding[side++] = tableBoxLength(edges.value(QLatin1StringView(name)), points, false).value(QStringLiteral("value"));
+    }
+    const auto border = boxStyle.value(QStringLiteral("border"));
+    QVariantList physicalBorders;
+    const auto edge = [&](const QJsonValue &value) {
+        if (!present(value)) return QVariantMap{{"style", 0}, {"width", 0.0}, {"color", QColor(Qt::transparent)}};
+        const auto spec = value.toObject();
+        if (!value.isObject() || spec.size() != 1) throw std::runtime_error("invalid viewport border");
+        const QString kind = spec.keys().first();
+        const int style = QStringList{"none", "hidden", "solid", "dotted"}.indexOf(kind);
+        const auto payload = spec.value(kind);
+        if (style < 0 || !payload.isObject() || payload.toObject().size() != (style < 2 ? 0 : 2))
+            throw std::runtime_error("invalid viewport border style");
+        return QVariantMap{{"style", style}, {"width", style < 2 ? 0.0
+            : tableBoxLength(payload.toObject().value(QStringLiteral("width")), points, false).value(QStringLiteral("value")).toDouble()},
+            {"color", style < 2 ? QColor(Qt::transparent) : styleColor(payload.toObject().value(QStringLiteral("color")))}};
+    };
+    if (border.toObject().contains(QStringLiteral("edges"))) {
+        const auto edges = border.toObject().value(QStringLiteral("edges")).toObject();
+        if (border.toObject().size() != 1 || edges.size() != 4) throw std::runtime_error("invalid viewport physical border");
+        for (const auto &name : {"top", "right", "bottom", "left"}) physicalBorders.append(edge(edges.value(QLatin1StringView(name))));
+    } else for (int side = 0; side < 4; ++side) physicalBorders.append(edge(border));
+    box.setProperty(QTextFormat::UserProperty + 0x57e8,
+        QVariantMap{{QStringLiteral("padding"), physicalPadding}, {QStringLiteral("borders"), physicalBorders}});
+    QTextFrameFormat narrow = table->frameFormat();
+    for (int property : {int(QTextFormat::BackgroundBrush), int(QTextFormat::BlockAlignment), tableAutoMarginsProperty,
+                         tablePhysicalEdgesProperty, tableBoxWidthProperty, tableBoxPaddingProperty,
+                         tableDisplayProperty, tableVerticalAlignProperty, tableLineHeightProperty}) narrow.clearProperty(property);
+    narrow.setMargin(0); narrow.setPadding(0); narrow.setBorder(0); narrow.setBorderStyle(QTextFrameFormat::BorderStyle_None);
+    narrow.setProperty(QTextFormat::TableCellPadding, 0.0); narrow.setProperty(QTextFormat::TableCellSpacing, 0.0);
+    narrow.setProperty(QTextFormat::TableBorderCollapse, true);
+    narrow.setWidth(QTextLength()); narrow.setLayoutDirection(Qt::LayoutDirection(allocation.value(QStringLiteral("grid_direction")).toInt()));
+    narrow.setProperty(tableBoxClearProperty, 0);
+    narrow.setProperty(tableViewportGridProperty, source);
+    narrow.setProperty(tableSourceLanguageProperty, language);
+    if (present(gridStyle.value(QStringLiteral("line_height"))))
+        narrow.setProperty(tableLineHeightProperty, tableComputedLineHeight(gridStyle.value(QStringLiteral("line_height")), points, points));
+    QTextFrameFormat wide = table->frameFormat(); wide.setProperty(tableViewportGridProperty, source);
+    wide.setProperty(tableSourceLanguageProperty, language);
+    wide.clearProperty(QTextFormat::ObjectIndex); narrow.clearProperty(QTextFormat::ObjectIndex);
+    QTextFrameFormat wideOwner;
+    wideOwner.setMargin(0); wideOwner.setBorder(0); wideOwner.setPadding(0);
+    wideOwner.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+    wideOwner.setProperty(tableBoxClearProperty, wide.intProperty(tableBoxClearProperty));
+    // The transparent wide owner carries the source table's external vertical
+    // margins; the same real grid keeps its horizontal allocation and direction.
+    wideOwner.setTopMargin(wide.topMargin()); wideOwner.setBottomMargin(wide.bottomMargin());
+    wide.setTopMargin(0); wide.setBottomMargin(0);
+    QVariantMap formats{{QStringLiteral("box"), QVariant::fromValue(QTextFormat(box))},
+        {QStringLiteral("wide_owner"), QVariant::fromValue(QTextFormat(wideOwner))},
+        {QStringLiteral("grid"), QVariant::fromValue(QTextFormat(narrow))},
+        {QStringLiteral("wide_grid"), QVariant::fromValue(QTextFormat(wide))}};
+    if (auto *real = qobject_cast<QTextTable *>(table)) {
+        QVariantList backgrounds;
+        const auto sourceRows = metadata.value(QStringLiteral("rows")).toArray();
+        for (int row = 0; row < real->rows(); ++row) {
+            const auto sourceCells = sourceRows.at(row).toArray(); int index = 0;
+            for (int column = 0; column < real->columns(); ++column) {
+                auto cell = real->cellAt(row, column);
+                if (cell.row() != row || cell.column() != column) continue;
+                const bool sourceCell = index < sourceCells.size();
+                if (sourceCell) {
+                    if (cell.format().property(tableSourceLanguageProperty).metaType().id() != QMetaType::QString
+                        || cell.format().stringProperty(tableSourceLanguageProperty) != language)
+                        throw std::runtime_error("unmatched imported table source language");
+                } else {
+                    if (cell.firstCursorPosition().position() != cell.lastCursorPosition().position())
+                        throw std::runtime_error("nonempty unowned table filler");
+                    auto filler = cell.format(); filler.setProperty(tableSourceLanguageProperty, language); cell.setFormat(filler);
+                    if (!live || !native || !grid || live->documentLayout() != native)
+                        throw std::runtime_error("replaced table source language owner");
+                }
+                const auto authored = sourceCell
+                    ? sourceCells.at(index++).toObject().value(QStringLiteral("background")) : QJsonValue();
+                if (present(authored)) styleColor(authored);
+                backgrounds.append(QVariantMap{{QStringLiteral("row"), row}, {QStringLiteral("column"), column},
+                    {QStringLiteral("authored"), present(authored)}, {QStringLiteral("brush"), cell.format().background()}});
+            }
+        }
+        formats.insert(QStringLiteral("cell_backgrounds"), backgrounds);
+    }
+    if (!qobject_cast<QTextTable *>(table)) {
+        if (table->frameFormat().stringProperty(emptyTableRoleProperty) != QStringLiteral("wrapper")
+            || table->childFrames().size() != 1
+            || table->childFrames().first()->frameFormat().stringProperty(emptyTableRoleProperty) != QStringLiteral("grid"))
+            throw std::runtime_error("invalid empty viewport grid");
+        auto *empty = table->childFrames().first();
+        const auto emptyWide = empty->frameFormat(); auto emptyNarrow = emptyWide;
+        emptyNarrow.setBackground(Qt::NoBrush); emptyNarrow.setBorder(0);
+        emptyNarrow.setBorderStyle(QTextFrameFormat::BorderStyle_None);
+        emptyNarrow.clearProperty(tableBoxPaddingProperty);
+        emptyNarrow.setProperty(QTextFormat::TableBorderCollapse, true);
+        emptyNarrow.setProperty(QTextFormat::TableCellPadding, 0.0);
+        emptyNarrow.setProperty(QTextFormat::TableCellSpacing, 0.0);
+        formats.insert(QStringLiteral("empty_wide"), QVariant::fromValue(QTextFormat(emptyWide)));
+        formats.insert(QStringLiteral("empty_grid"), QVariant::fromValue(QTextFormat(emptyNarrow)));
+    }
+    wideOwner.setProperty(tableViewportProperty, allocation);
+    wideOwner.setProperty(tableViewportFormatsProperty, formats);
+    QPointer<QTextFrame> parent(table->parentFrame());
+    int start = table->firstPosition() - 1;
+    QList<QTextBlock> captions;
+    for (auto it = parent->begin(); !it.atEnd(); ++it) {
+        if (it.currentFrame() == table) break;
+        if (it.currentFrame()) { captions.clear(); continue; }
+        const auto block = it.currentBlock();
+        if (block.blockFormat().stringProperty(tableCaptionBlockProperty) == QStringLiteral("wikidict.table-caption/1")) captions.append(block);
+        else if (block.length() != 1) captions.clear();
+    }
+    QTextCursor captionStart(document);
+    QTextBlockFormat captionBlockFormat;
+    QTextCharFormat captionCharacterFormat;
+    QString captionText;
+    const bool wrapsCaption = qobject_cast<QTextTable *>(table) && !captions.isEmpty();
+    if (wrapsCaption) {
+        const auto first = captions.first();
+        start = first.position();
+        captionStart.setPosition(start);
+        captionStart.setKeepPositionOnInsert(false);
+        captionBlockFormat = first.blockFormat();
+        captionCharacterFormat = first.charFormat();
+        captionText = first.text();
+    }
+    QVector<QPointer<QTextFrame>> stagedCaptions;
+    for (auto *child : parent->childFrames()) {
+        if (child == grid || child->lastPosition() < start || child->firstPosition() > table->lastPosition() + 1) continue;
+        validateStagedTableCaption(child, parent, grid);
+        stagedCaptions.append(child);
+    }
+    QTextCursor selection(document); selection.setPosition(start);
+    selection.setPosition(table->lastPosition() + 1, QTextCursor::KeepAnchor);
+    const QPointer<QTextFrame> owner(selection.insertFrame(wideOwner));
+    if (!live || !native || !grid || !owner || !parent || live->documentLayout() != native
+        || owner->parentFrame() != parent || grid->parentFrame() != owner
+        || owner->childFrames().size() != stagedCaptions.size() + 1)
+        throw std::runtime_error("invalid native table viewport association");
+    if (wrapsCaption) {
+        // insertFrame gives the new interior block a default format and leaves
+        // the original format on its empty exterior prefix. Move that exact
+        // authenticated caption format with its source payload, not its prefix.
+        const auto current = [&] {
+            return live && native && grid && owner && parent && live->documentLayout() == native
+                && owner->parentFrame() == parent && grid->parentFrame() == owner;
+        };
+        const auto interior = captionStart.block();
+        const auto exterior = document->findBlock(owner->firstPosition() - 1);
+        if (!interior.isValid() || captionStart.position() != owner->firstPosition()
+            || interior.position() != captionStart.position() || captionStart.currentFrame() != owner
+            || interior.text() != captionText || !exterior.isValid()
+            || exterior.position() != owner->firstPosition() - 1 || exterior.length() != 1
+            || document->characterAt(exterior.position()) != QChar(0xfdd0)
+            || document->frameAt(exterior.position()) != parent || exterior.blockFormat() != captionBlockFormat)
+            throw std::runtime_error("changed caption during viewport wrapping");
+        captionStart.setBlockFormat(captionBlockFormat);
+        if (!current()) throw std::runtime_error("replaced caption block during viewport wrapping");
+        // This public setter preserves the new frame separator's ObjectIndex.
+        captionStart.setBlockCharFormat(captionCharacterFormat);
+        if (!current()) throw std::runtime_error("replaced caption strut during viewport wrapping");
+        QTextCursor boundary(exterior); boundary.setBlockFormat(QTextBlockFormat());
+        if (!current()) throw std::runtime_error("replaced exterior caption storage");
+        auto storage = boundary.block(); storage.setVisible(false); storage.setLineCount(0);
+    }
+    for (const auto &caption : stagedCaptions) validateStagedTableCaption(caption, owner, grid);
+    if (auto *real = qobject_cast<QTextTable *>(grid.data())) real->setFormat(wide.toTableFormat());
+    else grid->setFrameFormat(wide);
+    if (tableViewportConstructionGrid(owner) != grid)
+        throw std::runtime_error("changed table viewport construction grid");
+    // The old empty-table exterior storage becomes exterior viewport storage.
+    // Its empty-table-only marker no longer describes its immediate owner.
+    // Clear only the exact generated one-property boundary at the new edges;
+    // all inner empty wrapper/grid boundaries retain their existing identity.
+    if (grid->frameFormat().stringProperty(emptyTableRoleProperty) == QStringLiteral("wrapper")) {
+        for (int position : {owner->firstPosition() - 1, owner->lastPosition() + 1}) {
+            const auto block = document->findBlock(position);
+            auto format = block.blockFormat();
+            if (!format.hasProperty(emptyTableBoundaryProperty)) continue;
+            const auto marker = format.property(emptyTableBoundaryProperty);
+            const bool before = position == owner->firstPosition() - 1;
+            if (!block.isValid() || block.position() != position || block.length() != 1
+                || document->frameAt(position) != parent || marker.metaType().id() != QMetaType::Bool || !marker.toBool()
+                || format.properties().size() != 1 || block.isVisible()
+                || (before ? document->characterAt(position) != QChar(0xfdd0)
+                           : document->characterAt(position - 1) != QChar(0xfdd1)))
+                throw std::runtime_error("invalid exterior empty viewport storage");
+            format.clearProperty(emptyTableBoundaryProperty);
+            QTextCursor boundary(block); boundary.setBlockFormat(format);
+            if (!live || !native || !grid || !owner || !parent || live->documentLayout() != native
+                || owner->parentFrame() != parent || grid->parentFrame() != owner)
+                throw std::runtime_error("replaced exterior empty viewport storage");
+        }
+    }
+    if (!live || !native || !grid || !owner || live->documentLayout() != native || grid->parentFrame() != owner)
+        throw std::runtime_error("replaced materialized table viewport");
+    // Public frame insertion creates only storage boundary blocks. Do not hide
+    // authored caption paragraphs or any existing source paragraph outside it.
+    for (auto it = owner->begin(); !it.atEnd(); ++it) {
+        auto block = it.currentBlock();
+        if (block.isValid() && block.length() == 1
+            && !block.blockFormat().hasProperty(tableCaptionBlockProperty)) {
+            block.setVisible(false); block.setLineCount(0);
+        }
+    }
 }
 
 inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &records, int expectedTables) {
@@ -795,6 +1304,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         needsTableBoxLayout |= record.ordinal >= 0;
     if (needsTableBoxLayout) requireTableBoxLayout(document);
     for (const TableInfo &record : records) if (record.empty >= 0) { requireTableBoxLayout(document, true); break; }
+    QHash<int, QPointer<QTextFrame>> emptyTables;
     QVector<QTextTable *> tables;
     const auto collect = [&](auto &&visit, QTextFrame *frame) -> void {
         for (QTextFrame *child : frame->childFrames()) {
@@ -866,6 +1376,10 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             return result;
         };
         QTextTableFormat format = table ? table->format() : record.empty >= 0 ? emptyTableDefaults(record, indent) : QTextTableFormat();
+        if (present(record.value.value(QStringLiteral("block_viewport")))) {
+            format.setCellPadding(0); format.setCellSpacing(0);
+            if (!table) { format.setBorder(0); format.setBorderStyle(QTextFrameFormat::BorderStyle_None); }
+        }
         if (table) {
             // Ownership follows the decoded table association, even when its
             // style uses only ordinary Qt fields. Keep legacy width/padding.
@@ -963,7 +1477,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         if (!table) {
             for (const QJsonValue &row : rows)
                 if (!row.isArray() || !row.toArray().isEmpty()) throw std::runtime_error("unexpected nonempty elided table");
-            if (record.empty >= 0) materializeEmptyTable(document, record, format);
+            if (record.empty >= 0) emptyTables.insert(record.empty, materializeEmptyTable(document, record, format));
             else if (hasTableBoxStyle(style)) throw std::runtime_error("unmapped empty table box");
             continue;
         }
@@ -974,13 +1488,17 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             }
         }
         table->setFormat(format);
-        if (format.hasProperty(tableLineHeightProperty)) {
+        if (format.hasProperty(tableLineHeightProperty) || present(record.value.value(QStringLiteral("block_viewport")))) {
             for (QTextBlock block = document->findBlock(table->firstPosition()); block.isValid() && block.position() < table->lastPosition(); block = block.next()) {
                 auto inherited = block.blockFormat();
                 // Existing explicit paragraph policies override inherited table line height.
                 if (inherited.lineHeightType() != QTextBlockFormat::SingleHeight
                     && !inherited.boolProperty(generatedParentStrutProperty) && !inherited.hasProperty(tableLineHeightProperty)) continue;
-                inherited.setProperty(tableLineHeightProperty, format.property(tableLineHeightProperty));
+                if (format.hasProperty(tableLineHeightProperty))
+                    inherited.setProperty(tableLineHeightProperty, format.property(tableLineHeightProperty));
+                if (present(record.value.value(QStringLiteral("block_viewport"))))
+                    inherited.setProperty(tableViewportInheritedLineProperty, tableViewportSource(record.value));
+                else inherited.clearProperty(tableViewportInheritedLineProperty);
                 QTextCursor cursor(block); cursor.setBlockFormat(inherited);
             }
         }
@@ -1063,8 +1581,8 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                         {QStringLiteral("value"), line.value},
                         {QStringLiteral("empty"), expected.value(QStringLiteral("empty_content")).toBool()}});
                 }
-                if (cellTopAlignment(cellStyle.value(QStringLiteral("vertical_align"))))
-                    cellFormat.setVerticalAlignment(QTextCharFormat::AlignTop);
+                const int vertical = cellVerticalAlignment(cellStyle.value(QStringLiteral("vertical_align")));
+                if (vertical >= 0) cellFormat.setVerticalAlignment(QTextCharFormat::VerticalAlignment(vertical));
                 if (present(cellStyle.value(QStringLiteral("border")))) {
                     const auto spec = cellStyle.value(QStringLiteral("border")).toObject();
                     if (spec.contains(QStringLiteral("edges"))) {
@@ -1210,6 +1728,14 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             document->markContentsDirty(table->firstPosition(),
                 table->lastPosition() - table->firstPosition() + 1);
         }
+    }
+    // Complete all existing cell/table normalization before wrapping; public
+    // frame insertion retains table objects but changes their positions.
+    for (const auto &record : records) if (present(record.value.value(QStringLiteral("block_viewport")))) {
+        QTextFrame *grid = record.ordinal >= 0 ? tables[record.ordinal] : emptyTables.value(record.empty).data();
+        if (!grid) throw std::runtime_error("unmapped table viewport");
+        materializeTableBlockViewport(document, grid, record.value,
+            record.value.value(QStringLiteral("container_points")).toDouble());
     }
 }
 

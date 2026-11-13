@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "4c6b7b3cf2d60a8847d2c44e25bcd47187d661ad4dfe34172c098539e936c404",
-      "bytes": 552382,
+      "sha256": "cacda6c3e9c46288b78a0d253406b0b8006aa95e1dd8ad09c6c6ab0260a869c6",
+      "bytes": 582712,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -47,15 +47,15 @@
           "path": "src/gui/text/qtextdocumentfragment.cpp",
           "new_file": false,
           "upstream_sha256": "71b970a50e0a14f509ed6982680d22665a267dd70f6824d3ddc5c0666dfe159c",
-          "qualified_sha256": "4b755f6a42bdfd6b43cf62533a4f5be9a342b748e2b19fc4b00d4b316682429f",
-          "bytes": 51067
+          "qualified_sha256": "6e637347b32a4b6c38c566bb9703e7798fc6f15088d97d5860dfeb52ea92830c",
+          "bytes": 51326
         },
         {
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "b0dc115f449659bd1ef673d81fe09ec259976ae40231d36fcc0d502766e6aa2c",
-          "bytes": 528918
+          "qualified_sha256": "c793e059b46166058010a9cd918aaa14e7029e67365cddf949c8f317634e20e0",
+          "bytes": 555704
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -68,8 +68,8 @@
           "path": "src/gui/text/qtextengine.cpp",
           "new_file": false,
           "upstream_sha256": "e072b6ce45339b39d1f352f12d49294877bd10cc597d87d1163e0b49dc363e56",
-          "qualified_sha256": "2864474a3ec9cd7c4777dd047e2bca2cd7e39efc9bd2ed7a2cad6888cf63513b",
-          "bytes": 155980
+          "qualified_sha256": "95165eb8ddc225063c41f8c4fb04e0b5f9086d4ce9aed9680573c3ff89c62656",
+          "bytes": 156722
         },
         {
           "path": "src/gui/text/qtextengine_p.h",
@@ -82,8 +82,8 @@
           "path": "src/gui/text/qtexthtmlparser.cpp",
           "new_file": false,
           "upstream_sha256": "4d310d48aa220668c83cbec4910245e5540a0793b63c4434b743eb9db7710997",
-          "qualified_sha256": "71a8518769d2a2e85dd21d8f60eb400db6479644c184d4e5f8e8cb61e88327ca",
-          "bytes": 83903
+          "qualified_sha256": "d292b4e2c55cc1409760a5762f647ff0098a589af56873e54804b73e1e5c70cb",
+          "bytes": 84727
         },
         {
           "path": "src/gui/text/qtextlayout.cpp",
@@ -152,15 +152,15 @@
           "path": "src/gui/text/qtextformat.cpp",
           "new_file": false,
           "upstream_sha256": "cca39e4448f7585e9868f0adc7b655ca88e521077e14d9353611ea4898ef842b",
-          "qualified_sha256": "ebbf35af4295a202ca7ce115d8d2ef4bb2e822abc5edd497aa47139f6ff85a82",
-          "bytes": 116134
+          "qualified_sha256": "2adb0ff6b5bfe455881f24954ffb0667741b7de3d39091ccf75c2cc0d162df01",
+          "bytes": 116397
         }
       ]
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "a6806b13183fae0282bce58457e808b4665a996b52c113b80f324b5f743d2878",
-      "bytes": 774715,
+      "sha256": "af9c93c5e34a851fab1677686840737e542159005f00a983a87d39a6ec682af4",
+      "bytes": 809750,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -173,8 +173,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "60d9a8549f6a05e9391ed4311b49fce954c6972f4a4e751c034ba86bbfe8f64e",
-          "bytes": 785615
+          "qualified_sha256": "3c10703276781c9c388ed8be67603b5f8bcb26adb32c1bb7524d461882c1d83d",
+          "bytes": 820257
         }
       ]
     },
@@ -202,112 +202,104 @@
   ],
   "qualification": {
     "date": "2026-11-13",
-    "scope": "Typed table auto margins use final native table width and containing direction, retain caption intrinsic word floors and signed projected caption origins. Bounded ordinary-cell fixed floats retain source-order exclusions and physical sides. Typed table-policy cache identity preserves recursive QVariant metatypes.",
+    "scope": "Responsive typed Table block viewports retain one source grid, caption ownership, source language and cell alignment. Copied viewport storage retains its authenticated hierarchy after a balanced edit checkpoint. Keyboard selection reveals its complete range before the active endpoint, with native and widget scrollbars synchronized.",
     "source_components": [
       {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/preparation01.json",
-        "bytes": 47406,
-        "sha256": "cf094464b1640c8795c3739abdb509232cb531ca2764e84cd409fed7eed64f04"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-viewport01/preparation01.json",
+        "bytes": 61584,
+        "sha256": "c592789d6ab78822c70bc31a0f7461a8aaf889a1d03b84558bd753a679494e5d"
       },
       {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/correction01/preparation01.json",
-        "bytes": 43998,
-        "sha256": "e19ffc39562c546f242455e8924225de0055fde976cd660b19e8fb6e8c4de199"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-viewport01/compile01/preparation01.json",
+        "bytes": 26202,
+        "sha256": "7b1637d81e5e8d87bf1b345c0743d24c08568e5fb50f8b978dc55bedc1fa515b"
       },
       {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/caption-test01/preparation01.json",
-        "bytes": 36804,
-        "sha256": "c1317f329112323e980a16f6f085754570a3815f1c0f4c115bcc190f58e6d1e3"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-viewport01/composition01/preparation01.json",
+        "bytes": 46046,
+        "sha256": "bad093077dd7be9cbcced882a08744424b492c5cae65e3a9e222fa4d21e33619"
       },
       {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/caption-origin01/preparation01.json",
-        "bytes": 67456,
-        "sha256": "ccafa217e3fa83ddc407e70db3e3ccc1a0d2fc497c271dbe581d981399649083"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-viewport01/composition01/preparation02.json",
+        "bytes": 36143,
+        "sha256": "718b3bf96970547e39be8cf49b012f2e68aaf88d2d584125b673ccdf0cb3d651"
       },
       {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/caption-origin01/app125-test-premises01/preparation01.json",
-        "bytes": 34545,
-        "sha256": "0e57970d311c079410c6609a0a562e1345367c78caa1a7c2da10e264279adb23"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-viewport01/composition01/caption-format01/preparation01.json",
+        "bytes": 39670,
+        "sha256": "fc2c45a4589760a11a6ec452fbf7637b4c82ab2fac8423146446fdf057340116"
       },
       {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/legacy-cell-control01/preparation01.json",
-        "bytes": 14547,
-        "sha256": "bc385391bf583799c74cacb586b1fad7b131be04d84a14e079419638dbb221e0"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-viewport01/composition01/caption-format01/empty-caption01/preparation01.json",
+        "bytes": 52516,
+        "sha256": "a67869434577d8edc3a930702a3532f655a3862df8591d72c534c072b7ec9e4f"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-viewport01/composition01/caption-format01/empty-caption01/copy-checkpoint01/preparation01.json",
+        "bytes": 47570,
+        "sha256": "ee837cd0c98852b72faac52239e414bde023a192c1df29b6d3163cd38f0e75f7"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-viewport01/composition01/caption-format01/empty-caption01/copy-checkpoint01/widget-fixture01/preparation01.json",
+        "bytes": 38008,
+        "sha256": "b89cd4ae2a772f34931b285ec045df4d80ad9fb5b617dbf3ad556b3665b347f5"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-viewport01/composition01/caption-format01/empty-caption01/copy-checkpoint01/widget-fixture01/overflow-fixture01/preparation01.json",
+        "bytes": 39334,
+        "sha256": "5699aec7a4fe2c00b32d3a0a976086209757628aeaa541a208ffed1bfb5f5dcf"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-viewport01/composition01/caption-format01/empty-caption01/copy-checkpoint01/widget-fixture01/overflow-fixture01/settled-reveal01/preparation01.json",
+        "bytes": 39202,
+        "sha256": "b6746fb14053a52c72a714ab8a83445e2f18da0876dbe1146934cfd54737e75c"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-viewport01/composition01/caption-format01/empty-caption01/copy-checkpoint01/widget-fixture01/overflow-fixture01/settled-reveal01/range-reveal01/preparation01.json",
+        "bytes": 45525,
+        "sha256": "e9218c6ed2740d06bb31545c98179f3de7e97c6176030fb2d709cc99208571bb"
       }
     ],
-    "source_inventory_sha256": "ef3a1257c066a06a4cefc910d3705861fdcd7cf7bf94dfa721f4fb5de4f2beef",
+    "source_inventory_sha256": "9ea4ea4b32d6bb8f54ead54df922dc0a944890d795c75cb8e59107c9d6f68109",
     "native_product_build": {
       "closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold102/independent-closure01.json",
-        "bytes": 97326,
-        "sha256": "66875b72e3cf516dae481e2b84a59c77bf3c40f490af1d8bfda29754f819e755"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold104/independent-closure01.json",
+        "bytes": 104384,
+        "sha256": "ea0273db7c00ef934c4d082212ddf230947c81785824f3ccfb195d92e627c5c7"
       },
       "release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold102/release01.json",
-        "bytes": 548,
-        "sha256": "c69c8c874722494b27d35e884a49d6e608f04f015eb0428937bf7ecb72ea0504"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold104/release01.json",
+        "bytes": 549,
+        "sha256": "fad2804fcc88306a6bb66b1a868a67c46e8da7188f1f51a80d0545b35b4e0782"
       },
       "methods": [
-        "tableAutoMarginsKeepProjectedCaptionSignedOriginAndLocalBounds",
+        "tableBlockViewportEmptyCaptionKeepsIntrinsicFloorAndOwner",
         "tableAutoMarginsMeasureActualCaptionBeforeSolvingOrigin",
-        "tableAutoMarginsUseFinalNativeWidthAndContainingDirection",
-        "tableAutoMarginsShareNestedCellAndScrollportGeometry",
-        "logicalRootNoWrapKeepsStockNaturalWidth"
+        "tableAutoMarginsKeepProjectedCaptionSignedOriginAndLocalBounds"
       ],
       "all_selected_passed": true,
       "full_native_suite_passed": false
     },
     "app_pairing": {
       "closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/independent-closure01.json",
-        "bytes": 59309,
-        "sha256": "779adc5377101a5aeaf4bbc3353f0b9ef5c91e4917f239e082ae8f94553a8d58"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile136/independent-closure01.json",
+        "bytes": 77667,
+        "sha256": "4d97b94b0f9ee87c1fa2d2bc68e0b2e4001ab6dda050028378751c01a1ba6060"
       },
       "release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/release01.json",
-        "bytes": 482,
-        "sha256": "9781c84da819fbcfcc251791722e7226c643f8e368ffdb7cbf0a879fbfac3be6"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile136/release01.json",
+        "bytes": 483,
+        "sha256": "bfd4a23c5b9a4ace609700f72cd4fa6bfb78e5c9e9e116a14134445280817443"
       },
       "methods": [
-        "ordinaryCellFixedFloatsKeepTypedOwnersAndPhysicalSides",
-        "typedTableAutoMarginsKeepRealCaptionGridAndSource"
+        "typedTableBlockViewportReflowsOneSourceAcrossCssBoundaryAndRealResize",
+        "plainContainerScrollportUsesOneViewportKeyboardAndAccessibleSource"
       ],
-      "retained_methods": [
-        "ordinaryCellFixedFloatAdmissionKeepsEmptyAndUnsupportedDistinct",
-        "typedTableAutoMarginsRefuseMalformedAndPreserveLegacyMargins"
-      ],
-      "retained_method_source_equality": [
-        {
-          "method": "ordinaryCellFixedFloatAdmissionKeepsEmptyAndUnsupportedDistinct",
-          "before": {
-            "bytes": 4997,
-            "sha256": "4221f0c704acccc5e243dff52c8ae2d18783535adc00a22c0a25e77d4ba66fbf"
-          },
-          "after": {
-            "bytes": 4997,
-            "sha256": "4221f0c704acccc5e243dff52c8ae2d18783535adc00a22c0a25e77d4ba66fbf"
-          },
-          "equal": true
-        },
-        {
-          "method": "typedTableAutoMarginsRefuseMalformedAndPreserveLegacyMargins",
-          "before": {
-            "bytes": 4465,
-            "sha256": "2bed23e7abb6b0c4d630602a5bd1a6fea3ea28d13e526ba0feb5480b33ca1d18"
-          },
-          "after": {
-            "bytes": 4465,
-            "sha256": "2bed23e7abb6b0c4d630602a5bd1a6fea3ea28d13e526ba0feb5480b33ca1d18"
-          },
-          "equal": true
-        }
-      ],
-      "retained_product_bytes_unchanged": true,
       "test_xml": [
         {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/commands/reader-ru-table-cell.xml",
-          "bytes": 1484,
-          "sha256": "09f2983320a8440adc575315fb9810707d406e4187834a6dd5fe241cb28287d7"
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile136/commands/reader-ru-table-cell.xml",
+          "bytes": 6534,
+          "sha256": "bf9b2be55f3b6060d16698c8091cb4c553d5b714b79d4fc0c9d5753af5fb6e9a"
         }
       ],
       "all_selected_passed": true,
@@ -316,140 +308,58 @@
     "constructed_rendering": {
       "frames": [
         {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/commands/.tmp/ui-screenshots/constructed-ru-caption-900.png",
-          "bytes": 46065,
-          "sha256": "743142d9326d82d66f65e1b16f9f716a8c054fde4271c618efae4dd8c7e598da"
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile136/commands/.tmp/ui-screenshots/constructed-table-viewport-900.png",
+          "bytes": 48275,
+          "sha256": "2810e65db8d32ab449865b410a6d79c1f90b5259bf079de16ed27ff83982fb1e"
         },
         {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/commands/.tmp/ui-screenshots/constructed-ru-caption-640.png",
-          "bytes": 33505,
-          "sha256": "b7d89a07edefb777ac1ed00a361bfbedca024f08d4b135e319f9f1ebdb88e7b0"
-        },
-        {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/commands/.tmp/ui-screenshots/constructed-ru-floats-900.png",
-          "bytes": 65113,
-          "sha256": "a1de5d081de5ae9a577a4bd104d483239d9b4297033d1539d48c01eadbb8b5cd"
-        },
-        {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/commands/.tmp/ui-screenshots/constructed-ru-floats-640.png",
-          "bytes": 31888,
-          "sha256": "7d06a130f42fd2b49874e6b6eaf770664a2d56a10fdce7c1cfed7c3bdfea3a2e"
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile136/commands/.tmp/ui-screenshots/constructed-table-viewport-639.png",
+          "bytes": 35165,
+          "sha256": "e45d5e6993f4e41b7486042e20054b82c017664fe3352b1f5f6993d0ea5b451b"
         }
       ],
-      "review": "Root personally viewed narrow caption, narrow/wide floats and identical wide-caption frame: readable separated links, fitting cells/A0-A4, no overlap or perimeter clipping. Tests assert actual Tab/Return, geometry, source and accessibility invariants.",
+      "review": "Root independently viewed both App136 images: caption, First and Last legible; wide outer and narrow inner scrollbars below rows without overlap or caption cropping. Intended long-word horizontal clipping remains. Actual geometry tuples establish native/widget parity and complete caption visibility.",
       "genuine_ru_writer_reader_pair": false
     },
     "normal_app_ctest": {
-      "status": "six_suites_passed_and_reader_failure_corrected_by_targeted_test",
-      "full_run_closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest126/independent-closure01.json",
-        "bytes": 8537,
-        "sha256": "c89ea38b147470250cf9786110d5d3ee43376ec48644cbf9990f560fa39197ff"
+      "status": "pending_current_source_checks",
+      "prior_delivery": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-delivery126.json",
+        "bytes": 18927,
+        "sha256": "67bb6f70190f48608afae8a43fc6c8c6c7dbc0dd8bed547384e3c156cc52664f"
       },
-      "full_run_release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest126/release01.json",
-        "bytes": 422,
-        "sha256": "aaddea0ded9ee943c566a55bdcd62b43a7de43c22b51986d689fbfbd1dc42247"
-      },
-      "full_run_passed": false,
-      "tests": [
-        {
-          "name": "native-install-core-selection",
-          "seconds": 0.109041,
-          "passed": true
-        },
-        {
-          "name": "native-unified-entry",
-          "seconds": 11.983,
-          "passed": true
-        },
-        {
-          "name": "native-reader-ux",
-          "seconds": 72.549,
-          "passed": false
-        },
-        {
-          "name": "native-media-ux",
-          "seconds": 5.8502,
-          "passed": true
-        },
-        {
-          "name": "native-library-storage",
-          "seconds": 2.66889,
-          "passed": true
-        },
-        {
-          "name": "native-library-ux",
-          "seconds": 4.95468,
-          "passed": true
-        },
-        {
-          "name": "native-library-catalogue-ux",
-          "seconds": 0.942018,
-          "passed": true
-        }
-      ],
-      "reader_full_run_counts": {
-        "passed_incidents": 313,
-        "failed": 1,
-        "skipped": 2
-      },
-      "media_full_run_counts": {
-        "passed_incidents": 58,
-        "failed": 0,
-        "skipped": 1
-      },
-      "optional_skips": [
-        "SKIP   : MainWindowTest::plainContainerCompilerDiagnosticKeepsFitContentRefusal() The retained compiler diagnostic is a selected external fixture, not a full-page acceptance fixture.",
-        "SKIP   : MainWindowTest::plainContainerCompilerSubtreeKeepsHierarchyAndActions() The retained compiler diagnostic is a selected external component fixture.",
-        "SKIP   : MediaPanelTest::privateNullOutputDecodesAndUpdatesPlaybackAccessibleNames() Opt-in private null-output backend check; never use a user's audio session."
-      ],
-      "targeted_reader_correction": {
-        "source": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/legacy-cell-control01/preparation01.json",
-          "bytes": 14547,
-          "sha256": "bc385391bf583799c74cacb586b1fad7b131be04d84a14e079419638dbb221e0"
-        },
-        "source_peer": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/legacy-cell-control01/source-peer01.json",
-          "bytes": 1995,
-          "sha256": "73e283d4965dc506dea5b61589fe1084e098e2aab3541a9ee72f1b27e94616fd"
-        },
-        "source_application": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-reader-cell126-source-application.json",
-          "bytes": 8380,
-          "sha256": "72a55c514b87880e4f95b73c0bbc96a6616cf32b1039881daf8c3885cf9174f8"
-        },
+      "repeated_for_this_component": false
+    },
+    "historical_app_scopes": {
+      "language133": {
         "closure": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-reader-cell126/independent-closure01.json",
-          "bytes": 8421,
-          "sha256": "dbe2cab7f11f211b8157856a5856aa0234590ede2aa92fec7a33da15463a6e3c"
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile133/independent-closure01.json",
+          "bytes": 75283,
+          "sha256": "ec7b3517a454bad4baa428e6f3f385333b3f1db625475d8b294d4b1f6f27633c"
         },
-        "release": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-reader-cell126/release01.json",
-          "bytes": 428,
-          "sha256": "db259276e87d33962642f10ad85a095e56060480a1c63ea438ec7548e2be94e6"
-        },
-        "method": "typedCellLineHeightKeepsNestedOwnersContainersAndRealEmptyCells",
-        "passed": true,
-        "other_methods_and_helpers_exact": true,
-        "prior_typed_loops_exact": true,
-        "native_and_product_bytes_unchanged": true
+        "xml": [
+          {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile133/commands/reader-ru-table-cell.xml",
+            "bytes": 1811,
+            "sha256": "43d3588a8f794ac57eb385859db322860ab978f94510ef0b0645796cb6b10cce"
+          }
+        ]
       },
-      "incremental_targets_checked_before_each_run": true,
-      "full_suite_replayed": false,
-      "aggregate_affected_validation_passed": true
+      "scope": "Original App133 language PASS and exact method-body/readset history remain documentary. This MainWindow product change removes any same-product carry claim; only the two selected methods are current execution targets.",
+      "empty_caption_and_middle131": [
+        "typedTableBlockViewportInitialEmptyCaptionAndStrictPolicyStates",
+        "typedCellMiddleUsesActualRowspanHeightAndRetainsUsedBaselineAndActions"
+      ]
     },
     "preserved_failures": [
-      "Cold99 caption/float/typed-policy failures and bounded refusal diagnostics",
-      "Cold100 caption minimum-width oracle mismatch; five passes retained in their original scope",
-      "App124 width oracle and native error2; exact mode unobserved in diagnostics",
-      "App125 default cell-border and retained-link selection premise failures",
-      "Normal full CTest Reader313P1F2 optional skips: obsolete legacy Cell rejection corrected with measured geometry/typography/action/paint positive checks and a real floating-table refusal; original full-run verdict remains failed."
+      "App127 compiler initializer-list failure and later composition/ownership failures remain in their original receipts.",
+      "App131 copy transaction failure, App132/133 fixture premises, and App134 reveal observation failure remain recorded.",
+      "App135 numerical PASS with visually missing caption/row content is not visual acceptance; its raw frames are preserved.",
+      "Range-reveal draft01 was unexecuted; explicit cursor anchor equality was added after review because cursor operator== ignores anchor."
     ],
     "limitations": [
-      "Constructed typed JSON/native API qualification is not genuine RU Writer-to-Reader interoperability.",
-      "Producer containing-direction tuple remains separately pending qualification.",
+      "Constructed JSON/native API and frames do not establish genuine RU Writer/Reader interoperability or ordinary-entry acceptance.",
+      "Earlier language, empty-caption, middle, full-suite and media results retain their original source/readset identities; they are not new App136 executions.",
       "Full native suite, hardware audio, whole frontend and release acceptance are not inferred."
     ]
   },
@@ -1419,6 +1329,259 @@
       "Component qualification is not genuine TH encoded page acceptance; qualified producer and paired Reader remain required.",
       "Prior full seven-test CTest and optional skips retain their original source and binary identities.",
       "Full native suite, online image paint, hardware audio, full accessibility, whole frontend and release remain unqualified."
+    ]
+  },
+  "historical_qualification_pre_responsive_table_viewport": {
+    "date": "2026-11-13",
+    "scope": "Typed table auto margins use final native table width and containing direction, retain caption intrinsic word floors and signed projected caption origins. Bounded ordinary-cell fixed floats retain source-order exclusions and physical sides. Typed table-policy cache identity preserves recursive QVariant metatypes.",
+    "source_components": [
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/preparation01.json",
+        "bytes": 47406,
+        "sha256": "cf094464b1640c8795c3739abdb509232cb531ca2764e84cd409fed7eed64f04"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/correction01/preparation01.json",
+        "bytes": 43998,
+        "sha256": "e19ffc39562c546f242455e8924225de0055fde976cd660b19e8fb6e8c4de199"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/caption-test01/preparation01.json",
+        "bytes": 36804,
+        "sha256": "c1317f329112323e980a16f6f085754570a3815f1c0f4c115bcc190f58e6d1e3"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/caption-origin01/preparation01.json",
+        "bytes": 67456,
+        "sha256": "ccafa217e3fa83ddc407e70db3e3ccc1a0d2fc497c271dbe581d981399649083"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/caption-origin01/app125-test-premises01/preparation01.json",
+        "bytes": 34545,
+        "sha256": "0e57970d311c079410c6609a0a562e1345367c78caa1a7c2da10e264279adb23"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/legacy-cell-control01/preparation01.json",
+        "bytes": 14547,
+        "sha256": "bc385391bf583799c74cacb586b1fad7b131be04d84a14e079419638dbb221e0"
+      }
+    ],
+    "source_inventory_sha256": "ef3a1257c066a06a4cefc910d3705861fdcd7cf7bf94dfa721f4fb5de4f2beef",
+    "native_product_build": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold102/independent-closure01.json",
+        "bytes": 97326,
+        "sha256": "66875b72e3cf516dae481e2b84a59c77bf3c40f490af1d8bfda29754f819e755"
+      },
+      "release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold102/release01.json",
+        "bytes": 548,
+        "sha256": "c69c8c874722494b27d35e884a49d6e608f04f015eb0428937bf7ecb72ea0504"
+      },
+      "methods": [
+        "tableAutoMarginsKeepProjectedCaptionSignedOriginAndLocalBounds",
+        "tableAutoMarginsMeasureActualCaptionBeforeSolvingOrigin",
+        "tableAutoMarginsUseFinalNativeWidthAndContainingDirection",
+        "tableAutoMarginsShareNestedCellAndScrollportGeometry",
+        "logicalRootNoWrapKeepsStockNaturalWidth"
+      ],
+      "all_selected_passed": true,
+      "full_native_suite_passed": false
+    },
+    "app_pairing": {
+      "closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/independent-closure01.json",
+        "bytes": 59309,
+        "sha256": "779adc5377101a5aeaf4bbc3353f0b9ef5c91e4917f239e082ae8f94553a8d58"
+      },
+      "release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/release01.json",
+        "bytes": 482,
+        "sha256": "9781c84da819fbcfcc251791722e7226c643f8e368ffdb7cbf0a879fbfac3be6"
+      },
+      "methods": [
+        "ordinaryCellFixedFloatsKeepTypedOwnersAndPhysicalSides",
+        "typedTableAutoMarginsKeepRealCaptionGridAndSource"
+      ],
+      "retained_methods": [
+        "ordinaryCellFixedFloatAdmissionKeepsEmptyAndUnsupportedDistinct",
+        "typedTableAutoMarginsRefuseMalformedAndPreserveLegacyMargins"
+      ],
+      "retained_method_source_equality": [
+        {
+          "method": "ordinaryCellFixedFloatAdmissionKeepsEmptyAndUnsupportedDistinct",
+          "before": {
+            "bytes": 4997,
+            "sha256": "4221f0c704acccc5e243dff52c8ae2d18783535adc00a22c0a25e77d4ba66fbf"
+          },
+          "after": {
+            "bytes": 4997,
+            "sha256": "4221f0c704acccc5e243dff52c8ae2d18783535adc00a22c0a25e77d4ba66fbf"
+          },
+          "equal": true
+        },
+        {
+          "method": "typedTableAutoMarginsRefuseMalformedAndPreserveLegacyMargins",
+          "before": {
+            "bytes": 4465,
+            "sha256": "2bed23e7abb6b0c4d630602a5bd1a6fea3ea28d13e526ba0feb5480b33ca1d18"
+          },
+          "after": {
+            "bytes": 4465,
+            "sha256": "2bed23e7abb6b0c4d630602a5bd1a6fea3ea28d13e526ba0feb5480b33ca1d18"
+          },
+          "equal": true
+        }
+      ],
+      "retained_product_bytes_unchanged": true,
+      "test_xml": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/commands/reader-ru-table-cell.xml",
+          "bytes": 1484,
+          "sha256": "09f2983320a8440adc575315fb9810707d406e4187834a6dd5fe241cb28287d7"
+        }
+      ],
+      "all_selected_passed": true,
+      "full_frontend_acceptance": false
+    },
+    "constructed_rendering": {
+      "frames": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/commands/.tmp/ui-screenshots/constructed-ru-caption-900.png",
+          "bytes": 46065,
+          "sha256": "743142d9326d82d66f65e1b16f9f716a8c054fde4271c618efae4dd8c7e598da"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/commands/.tmp/ui-screenshots/constructed-ru-caption-640.png",
+          "bytes": 33505,
+          "sha256": "b7d89a07edefb777ac1ed00a361bfbedca024f08d4b135e319f9f1ebdb88e7b0"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/commands/.tmp/ui-screenshots/constructed-ru-floats-900.png",
+          "bytes": 65113,
+          "sha256": "a1de5d081de5ae9a577a4bd104d483239d9b4297033d1539d48c01eadbb8b5cd"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile126/commands/.tmp/ui-screenshots/constructed-ru-floats-640.png",
+          "bytes": 31888,
+          "sha256": "7d06a130f42fd2b49874e6b6eaf770664a2d56a10fdce7c1cfed7c3bdfea3a2e"
+        }
+      ],
+      "review": "Root personally viewed narrow caption, narrow/wide floats and identical wide-caption frame: readable separated links, fitting cells/A0-A4, no overlap or perimeter clipping. Tests assert actual Tab/Return, geometry, source and accessibility invariants.",
+      "genuine_ru_writer_reader_pair": false
+    },
+    "normal_app_ctest": {
+      "status": "six_suites_passed_and_reader_failure_corrected_by_targeted_test",
+      "full_run_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest126/independent-closure01.json",
+        "bytes": 8537,
+        "sha256": "c89ea38b147470250cf9786110d5d3ee43376ec48644cbf9990f560fa39197ff"
+      },
+      "full_run_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-ctest126/release01.json",
+        "bytes": 422,
+        "sha256": "aaddea0ded9ee943c566a55bdcd62b43a7de43c22b51986d689fbfbd1dc42247"
+      },
+      "full_run_passed": false,
+      "tests": [
+        {
+          "name": "native-install-core-selection",
+          "seconds": 0.109041,
+          "passed": true
+        },
+        {
+          "name": "native-unified-entry",
+          "seconds": 11.983,
+          "passed": true
+        },
+        {
+          "name": "native-reader-ux",
+          "seconds": 72.549,
+          "passed": false
+        },
+        {
+          "name": "native-media-ux",
+          "seconds": 5.8502,
+          "passed": true
+        },
+        {
+          "name": "native-library-storage",
+          "seconds": 2.66889,
+          "passed": true
+        },
+        {
+          "name": "native-library-ux",
+          "seconds": 4.95468,
+          "passed": true
+        },
+        {
+          "name": "native-library-catalogue-ux",
+          "seconds": 0.942018,
+          "passed": true
+        }
+      ],
+      "reader_full_run_counts": {
+        "passed_incidents": 313,
+        "failed": 1,
+        "skipped": 2
+      },
+      "media_full_run_counts": {
+        "passed_incidents": 58,
+        "failed": 0,
+        "skipped": 1
+      },
+      "optional_skips": [
+        "SKIP   : MainWindowTest::plainContainerCompilerDiagnosticKeepsFitContentRefusal() The retained compiler diagnostic is a selected external fixture, not a full-page acceptance fixture.",
+        "SKIP   : MainWindowTest::plainContainerCompilerSubtreeKeepsHierarchyAndActions() The retained compiler diagnostic is a selected external component fixture.",
+        "SKIP   : MediaPanelTest::privateNullOutputDecodesAndUpdatesPlaybackAccessibleNames() Opt-in private null-output backend check; never use a user's audio session."
+      ],
+      "targeted_reader_correction": {
+        "source": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/legacy-cell-control01/preparation01.json",
+          "bytes": 14547,
+          "sha256": "bc385391bf583799c74cacb586b1fad7b131be04d84a14e079419638dbb221e0"
+        },
+        "source_peer": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/legacy-cell-control01/source-peer01.json",
+          "bytes": 1995,
+          "sha256": "73e283d4965dc506dea5b61589fe1084e098e2aab3541a9ee72f1b27e94616fd"
+        },
+        "source_application": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-reader-cell126-source-application.json",
+          "bytes": 8380,
+          "sha256": "72a55c514b87880e4f95b73c0bbc96a6616cf32b1039881daf8c3885cf9174f8"
+        },
+        "closure": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-reader-cell126/independent-closure01.json",
+          "bytes": 8421,
+          "sha256": "dbe2cab7f11f211b8157856a5856aa0234590ede2aa92fec7a33da15463a6e3c"
+        },
+        "release": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-reader-cell126/release01.json",
+          "bytes": 428,
+          "sha256": "db259276e87d33962642f10ad85a095e56060480a1c63ea438ec7548e2be94e6"
+        },
+        "method": "typedCellLineHeightKeepsNestedOwnersContainersAndRealEmptyCells",
+        "passed": true,
+        "other_methods_and_helpers_exact": true,
+        "prior_typed_loops_exact": true,
+        "native_and_product_bytes_unchanged": true
+      },
+      "incremental_targets_checked_before_each_run": true,
+      "full_suite_replayed": false,
+      "aggregate_affected_validation_passed": true
+    },
+    "preserved_failures": [
+      "Cold99 caption/float/typed-policy failures and bounded refusal diagnostics",
+      "Cold100 caption minimum-width oracle mismatch; five passes retained in their original scope",
+      "App124 width oracle and native error2; exact mode unobserved in diagnostics",
+      "App125 default cell-border and retained-link selection premise failures",
+      "Normal full CTest Reader313P1F2 optional skips: obsolete legacy Cell rejection corrected with measured geometry/typography/action/paint positive checks and a real floating-table refusal; original full-run verdict remains failed."
+    ],
+    "limitations": [
+      "Constructed typed JSON/native API qualification is not genuine RU Writer-to-Reader interoperability.",
+      "Producer containing-direction tuple remains separately pending qualification.",
+      "Full native suite, hardware audio, whole frontend and release acceptance are not inferred."
     ]
   }
 }

@@ -12,6 +12,7 @@
 #include <QScopeGuard>
 #include <limits>
 #include <algorithm>
+#include <functional>
 
 namespace FlowConstruction {
 inline const QString scheme = QStringLiteral("wikidict-flow");
@@ -519,22 +520,11 @@ struct Owner {
 };
 
 inline QJsonObject decode(const QString &name) {
-    const QUrl url(name);
-    CompiledContent::require(url.scheme() == scheme);
-    const auto encoded = url.path().toLatin1();
-    const auto bytes = QByteArray::fromBase64(encoded, QByteArray::Base64UrlEncoding | QByteArray::AbortOnBase64DecodingErrors);
-    QJsonParseError error;
-    const auto document = QJsonDocument::fromJson(bytes, &error);
-    CompiledContent::require(error.error == QJsonParseError::NoError && document.isObject()
-        && bytes.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals) == encoded);
-    const auto metadata = document.object();
-    CompiledContent::require(metadata.value(QStringLiteral("block")).isObject()
-        && metadata.value(QStringLiteral("html")).isString() && metadata.value(QStringLiteral("parts")).isArray()
-        && metadata.value(QStringLiteral("language")).isString() && metadata.value(QStringLiteral("alignment")).isString());
-    return metadata;
+    return SemanticHtml::flowPlaceholderMetadata(name);
 }
 
-inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFrame>> *containers = nullptr, bool effectiveDark = false) {
+inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFrame>> *containers = nullptr, bool effectiveDark = false,
+                             const std::function<void()> &afterCopiedFrames = {}) {
     const QPointer<QTextDocument> guard(document);
     CompiledContent::require(guard);
     struct Pending { QTextCursor character; QJsonObject metadata; };
@@ -598,7 +588,19 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
         temporary.setDefaultFont(contextFont);
         temporary.setDefaultTextOption(document->defaultTextOption());
         temporary.setDocumentMargin(0);
-        SemanticHtml::setHtml(&temporary, item.metadata.value(QStringLiteral("html")).toString());
+        QString importedHtml = item.metadata.value(QStringLiteral("html")).toString();
+        const auto sourceLanguage = insertion.charFormat().property(SemanticHtml::tableSourceLanguageProperty);
+        if (sourceLanguage.isValid()) {
+            const auto sourceDirection = insertion.blockFormat().layoutDirection();
+            CompiledContent::require(sourceLanguage.metaType().id() == QMetaType::QString
+                && SemanticHtml::sourceLanguageTag(sourceLanguage.toString())
+                && (sourceDirection == Qt::LeftToRight || sourceDirection == Qt::RightToLeft)
+                && layout->property("_wikidictSourceTextLanguageCapability").toString() == QStringLiteral("wikidict.source-text-language/1"));
+            importedHtml = QStringLiteral("<body dir='%1' data-wikidict-table-language='%2'>%3</body>")
+                .arg(sourceDirection == Qt::RightToLeft ? QStringLiteral("rtl") : QStringLiteral("ltr"),
+                    sourceLanguage.toString().toHtmlEscaped(), importedHtml);
+        }
+        SemanticHtml::setHtml(&temporary, importedHtml);
         CompiledContent::require(guard);
         if (typedFont) {
             const auto object = typography.toObject();
@@ -870,6 +872,7 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                     || !child.value(QStringLiteral("path")).toString().isEmpty()) return false;
                 const auto table = tableValue.toObject();
                 if (SemanticHtml::present(table.value(QStringLiteral("style")))
+                    || SemanticHtml::present(table.value(QStringLiteral("block_viewport")))
                     || SemanticHtml::present(table.value(QStringLiteral("geometry")))
                     || SemanticHtml::present(table.value(QStringLiteral("caption_blocks")))
                     || !table.value(QStringLiteral("caption")).toArray().isEmpty()) return false;
@@ -885,7 +888,14 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 // Only table owners authorize this storage journal. Qt also
                 // creates child frames for inline images (including Flow ORCs);
                 // their existing image/Flow validators retain that ownership.
-                if (!qobject_cast<QTextTable *>(candidate)
+                const bool viewport = candidate->frameFormat().hasProperty(SemanticHtml::tableViewportProperty);
+                if (viewport) {
+                    // A source caption may still contain its authenticated Flow
+                    // image frame in this temporary document. Final reflow and
+                    // native validation require the expanded one-grid shape.
+                    SemanticHtml::tableViewportConstructionGrid(candidate);
+                }
+                if (!viewport && !qobject_cast<QTextTable *>(candidate)
                     && !candidate->frameFormat().hasProperty(SemanticHtml::tableBoxOwnerProperty)) continue;
                 CompiledContent::require(candidate->parentFrame() == temporaryRoot);
                 directTables.append(candidate);
@@ -910,10 +920,92 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 storageFormat.setLineHeight(0, QTextBlockFormat::FixedHeight);
                 storage.setBlockFormat(storageFormat);
             }
+            // QTextDocumentFragment copies formats, not QTextBlock visibility.
+            // Preserve only storage already authenticated and hidden inside a
+            // source Table viewport; ordinary authored blank blocks stay visible.
+            struct ViewportStorage {
+                int position, parentFirst, parentLast, viewportFirst, viewportLast;
+                QTextBlockFormat block;
+                QTextCharFormat character;
+                QTextFrameFormat parent, viewport;
+            };
+            QVector<ViewportStorage> viewportStorage;
+            const auto withoutObjectIndex = [](QTextFormat value) {
+                value.clearProperty(QTextFormat::ObjectIndex); return value;
+            };
+            for (auto block = temporary.begin(); block.isValid(); block = block.next()) {
+                if (block.isVisible() || block.length() != 1) continue;
+                auto *blockParent = QTextCursor(block).currentFrame();
+                auto *viewport = blockParent;
+                while (viewport && !viewport->frameFormat().hasProperty(SemanticHtml::tableViewportProperty))
+                    viewport = viewport->parentFrame();
+                if (!viewport) continue;
+                SemanticHtml::tableViewportConstructionGrid(viewport);
+                CompiledContent::require(block.lineCount() == 0 && block.text().isEmpty()
+                    && blockParent && blockParent->document() == &temporary
+                    && temporary.object(blockParent->objectIndex()) == blockParent
+                    && temporary.object(viewport->objectIndex()) == viewport);
+                viewportStorage.append({block.position(), blockParent->firstPosition(), blockParent->lastPosition(),
+                    viewport->firstPosition(), viewport->lastPosition(), block.blockFormat(), block.charFormat(),
+                    blockParent->frameFormat(), viewport->frameFormat()});
+            }
+            const int copiedAt = marker.selectionStart();
             const QTextDocumentFragment fragment(&temporary);
             if (fragment.isEmpty()) marker.removeSelectedText(); else marker.insertFragment(fragment);
             CompiledContent::require(guard && layout && document->documentLayout() == layout && parent && frame
                 && frame->parentFrame() == parent);
+            const auto copiedSource = document->toRawText();
+            const int copiedCount = document->characterCount();
+            int copiedRevision = document->revision();
+            if (!viewportStorage.isEmpty()) {
+                // Qt attaches copied frame markers only at the outer edit end.
+                // Keep layout disabled while our caller commits its own edit;
+                // authenticate the now-current hierarchy before restoring flags.
+                CompiledContent::require(copiedRevision < std::numeric_limits<int>::max());
+                const auto sameCopy = [&](int expectedRevision) {
+                    return guard && layout && document->documentLayout() == layout
+                        && parent && frame && frame->parentFrame() == parent
+                        && !document->isLayoutEnabled() && document->toRawText() == copiedSource
+                        && document->characterCount() == copiedCount && document->revision() == expectedRevision;
+                };
+                finished = true;
+                transaction.endEditBlock();
+                CompiledContent::require(sameCopy(copiedRevision));
+                if (afterCopiedFrames) {
+                    afterCopiedFrames();
+                    CompiledContent::require(sameCopy(copiedRevision + 1));
+                }
+                // Reopening the outer edit advances Qt's revision once. With a
+                // caller it has already happened; our local join is then nested.
+                transaction.joinPreviousEditBlock();
+                finished = false;
+                ++copiedRevision;
+                CompiledContent::require(sameCopy(copiedRevision));
+            }
+            for (const auto &storage : viewportStorage) {
+                auto block = document->findBlock(copiedAt + storage.position);
+                CompiledContent::require(block.isValid() && block.position() == copiedAt + storage.position
+                    && block.length() == 1 && block.text().isEmpty());
+                auto *blockParent = QTextCursor(block).currentFrame();
+                auto *viewport = blockParent;
+                while (viewport && !viewport->frameFormat().hasProperty(SemanticHtml::tableViewportProperty))
+                    viewport = viewport->parentFrame();
+                CompiledContent::require(blockParent && viewport && blockParent->document() == document
+                    && document->object(blockParent->objectIndex()) == blockParent
+                    && document->object(viewport->objectIndex()) == viewport
+                    && blockParent->firstPosition() == copiedAt + storage.parentFirst
+                    && blockParent->lastPosition() == copiedAt + storage.parentLast
+                    && viewport->firstPosition() == copiedAt + storage.viewportFirst
+                    && viewport->lastPosition() == copiedAt + storage.viewportLast
+                    && withoutObjectIndex(block.blockFormat()) == withoutObjectIndex(storage.block)
+                    && withoutObjectIndex(block.charFormat()) == withoutObjectIndex(storage.character)
+                    && withoutObjectIndex(blockParent->frameFormat()) == withoutObjectIndex(storage.parent)
+                    && withoutObjectIndex(viewport->frameFormat()) == withoutObjectIndex(storage.viewport));
+                SemanticHtml::tableViewportConstructionGrid(viewport);
+                block.setVisible(false); block.setLineCount(0);
+            }
+            CompiledContent::require(document->toRawText() == copiedSource && document->characterCount() == copiedCount
+                && document->revision() == copiedRevision);
             QTextCursor first = frame->firstCursorPosition();
             first.setBlockFormat(temporary.begin().blockFormat()); first.setBlockCharFormat(firstCharacter);
             CompiledContent::require(guard && frame && parent && frame->parentFrame() == parent);
