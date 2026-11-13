@@ -688,7 +688,8 @@ private fun InlineTableLine(block: Block, onLink: (EntryLink) -> Unit, path: Str
 
 internal val LocalTableContentWidths = staticCompositionLocalOf { false }
 internal val LocalTableDocumentViewportCssWidth = staticCompositionLocalOf<Double?> { null }
-private val LocalCompiledTableDirectionOwner = staticCompositionLocalOf<Table?> { null }
+// Recursive owner guards use reference identity, including equal reconstructed Tables.
+private val LocalCompiledTableDirectionOwner = compositionLocalOf(referentialEqualityPolicy<Table?>()) { null }
 internal val LocalCompiledTableTextDirection = staticCompositionLocalOf<TableContainingDirection?> { null }
 private val LocalCompiledTableSourceLanguage = staticCompositionLocalOf<String?> { null }
 

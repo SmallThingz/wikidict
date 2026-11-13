@@ -1,5 +1,7 @@
 package app.smallthingz.dict
 
+import android.graphics.RectF
+
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -131,9 +133,11 @@ internal fun SelectionAutoMarginTable(margins: NativeTableAutoMargins?,
                     children += PositionedSemanticChild(NoPaintGeometry(checkNotNull(published[1])),
                         contentLeft, gridTop, gridDirection, if (hasCaption && published[0]?.text?.isNotEmpty() == true) "\n" else "")
                     message.update(null)
-                    measurables.last().measure(Constraints.fixed(0, 0))
+                    val warning = measurables.last().measure(Constraints.fixed(0, 0))
                     sink(NativeSemanticGroup(width, height, children))
                     layout(width, height) {
+                        // Placement disposes the warning SubcomposeLayout's unused slot.
+                        warning.place(0, 0)
                         captionChild?.let { child -> child.placeWithLayer(
                             -(child.width - child.measuredWidth) / 2, -(child.height - child.measuredHeight) / 2) {
                             translationX = contentLeft; translationY = used.top
@@ -177,6 +181,15 @@ internal fun SelectionAutoMarginTable(margins: NativeTableAutoMargins?,
                         fallbackGeometry += PositionedSemanticChild(NoPaintGeometry(checkNotNull(table)),
                             0f, fallbackGridTop.toFloat(), gridDirection, if (hasCaption && text?.text?.isNotEmpty() == true &&
                                 (!retainFailureIntrinsics || table?.text?.isNotEmpty() == true)) "\n" else "")
+                    }
+                    if (complete && retainFailureIntrinsics && preparationFailure != null) {
+                        // Status is accessible on the native owner, outside the copied body.
+                        // Append an empty child so original caption/grid ranges and IDs stay intact.
+                        val status = NativeSemanticGroup(warning.measuredWidth, warning.measuredHeight,
+                            emptyList(), extraNodes = listOf(FloatInteractionNode(0, FloatInteractionKind.MARKER,
+                                0, 0, listOf(RectF(0f, 0f, warning.measuredWidth.toFloat(),
+                                    warning.measuredHeight.toFloat())), preparationFailure, null, null)))
+                        fallbackGeometry += PositionedSemanticChild(status, 0f, 0f, gridDirection)
                     }
                     // An unavailable child cannot acquire fabricated copy/action geometry.
                     sink(if (complete) NativeSemanticGroup(width, fallbackHeight, fallbackGeometry) else null)

@@ -153,6 +153,27 @@ class InlineTableAtomicPlacementTest {
 }
 
 class NativeFallbackBoundsTest {
+    @Test fun captionStackPreservesUnboundedHeightAndSubtractsOnlyFiniteBudget() {
+        val unbounded = androidx.compose.ui.unit.Constraints(minWidth = 100, maxWidth = 100, minHeight = 12)
+        for (top in listOf(0L, 26L, Int.MAX_VALUE.toLong(), Long.MAX_VALUE)) {
+            val child = tableContentChildConstraints(unbounded, top)
+            assertEquals(0, child.minWidth)
+            assertEquals(100, child.maxWidth)
+            assertEquals(0, child.minHeight)
+            assertEquals(androidx.compose.ui.unit.Constraints.Infinity, child.maxHeight)
+            assertFalse(child.hasBoundedHeight)
+        }
+        val bounded = unbounded.copy(maxHeight = 100)
+        for ((top, expected) in listOf(0L to 100, 26L to 74, 100L to 0, 126L to 0, Long.MAX_VALUE to 0)) {
+            val child = tableContentChildConstraints(bounded, top)
+            assertEquals(0, child.minWidth)
+            assertEquals(100, child.maxWidth)
+            assertEquals(0, child.minHeight)
+            assertEquals(expected, child.maxHeight)
+            assertTrue(child.hasBoundedHeight)
+        }
+    }
+
     @Test fun finiteParentBoundsAndMinimumAreRespected() {
         val bounds = androidx.compose.ui.unit.Constraints(minWidth = 300, maxWidth = 300, minHeight = 12, maxHeight = 100)
         assertEquals(12, nativeFallbackHeight(bounds, 5L))

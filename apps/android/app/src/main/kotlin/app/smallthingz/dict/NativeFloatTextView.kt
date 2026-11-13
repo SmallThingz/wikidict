@@ -221,7 +221,8 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
             resources.displayMetrics.widthPixels else MeasureSpec.getSize(widthMeasureSpec)
         val width = max(0, desiredWidth - paddingLeft - paddingRight)
         if (needsGeometry || lastMeasuredWidth != width) {
-            val previous = geometry?.text?.toString()
+            val previousGeometry = geometry
+            val previous = previousGeometry?.text?.toString()
             val attemptedFactory = geometryFactory
             lastMeasuredWidth = width
             geometry = try { attemptedFactory?.invoke(width) } catch (failure: UnsupportedFloatLayout) {
@@ -242,6 +243,18 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
                 hoveredNode = View.NO_ID
                 pressedLinkNode = View.NO_ID
                 clearPendingLinkKey("text-changed")
+            } else {
+                // A status node can change IDs without changing copied text. A held ID
+                // must still identify the same owner before it can receive focus or a key.
+                fun retainedNode(id: Int): Boolean = id == View.NO_ID ||
+                    previousGeometry?.nodes?.find { it.id == id }?.let { before ->
+                        sameInputNode(before, geometry?.nodes?.find { it.id == id })
+                    } == true
+                if (!retainedNode(virtualKeyboardFocus)) virtualKeyboardFocus = View.NO_ID
+                if (!retainedNode(virtualAccessibilityFocus)) virtualAccessibilityFocus = View.NO_ID
+                if (!retainedNode(hoveredNode)) hoveredNode = View.NO_ID
+                if (!retainedNode(pressedLinkNode)) pressedLinkNode = View.NO_ID
+                if (focusRegion?.let { !retainedNode(it.nodeId) } == true) focusRegion = null
             }
             require(geometry?.nodes.orEmpty().all { it.id >= 0 && it.start in 0..logicalText.length && it.end in it.start..logicalText.length })
             require(geometry?.nodes.orEmpty().map { it.id }.distinct().size == geometry?.nodes.orEmpty().size)

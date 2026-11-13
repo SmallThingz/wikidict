@@ -16,6 +16,12 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.offset
+
+/** Child minima stay loose; offset preserves Compose's unbounded-height sentinel. */
+internal fun tableContentChildConstraints(parent: Constraints, top: Long): Constraints =
+    parent.copy(minWidth = 0, minHeight = 0).offset(
+        vertical = -top.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt())
 
 /** This unweighted stack's width depends only on its real caption/grid widths.
  * Column's generic width query first probes child heights, which would run the
@@ -34,8 +40,7 @@ internal fun TableContentColumn(modifier: Modifier, spacing: Dp, content: @Compo
             val positions = ArrayList<Int>(measurables.size)
             val children = measurables.mapIndexed { index, measurable ->
                 positions += top.toInt()
-                val remaining = (constraints.maxHeight.toLong() - top).coerceAtLeast(0L).toInt()
-                val child = measurable.measure(Constraints(maxWidth = constraints.maxWidth, maxHeight = remaining))
+                val child = measurable.measure(tableContentChildConstraints(constraints, top))
                 top += child.height
                 if (index != measurables.lastIndex) top += minOf(gap.toLong(), (constraints.maxHeight.toLong() - top).coerceAtLeast(0L))
                 child

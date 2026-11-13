@@ -12,8 +12,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.WindowInfo
@@ -26,6 +29,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.toSize
+import androidx.compose.ui.viewinterop.AndroidView
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -326,18 +331,127 @@ class TableBlockViewportCaptionDeviceTest {
         val clicked = mutableListOf<String>()
         var observedFlow: NativeAnonymousFlowGeometry? = null
         val original = table()
+        var diagnosticPhase = "before_composition"
+        var diagnosticSequence = 0
+        var firstFailure: Throwable? = null
+        fun recordDiagnostic(kind: String, failure: Throwable? = null) {
+            // Preserve a first cause before Compose/Activity cleanup can obscure it.
+            try {
+                val errorClass = failure?.javaClass?.name.orEmpty()
+                val message = failure?.message.orEmpty()
+                val stack = failure?.stackTraceToString().orEmpty()
+                val record = org.json.JSONObject()
+                    .put("version", 1)
+                    .put("method", "app.smallthingz.dict.TableBlockViewportCaptionDeviceTest#unsupportedOwnerLanguageRetainsNativeCaptionActionsInBothStatesAndRecoversToRu")
+                    .put("sequence", ++diagnosticSequence)
+                    .put("kind", kind).put("phase", diagnosticPhase)
+                if (failure != null) record
+                    .put("exception_class", errorClass.take(256))
+                    .put("message", message.take(512)).put("stack", stack.take(4096))
+                    .put("truncated", errorClass.length > 256 || message.length > 512 || stack.length > 4096)
+                val line = "OWNED_METHOD_DIAGNOSTIC " + record.toString()
+                check(diagnosticSequence <= 32 && line.toByteArray(Charsets.UTF_8).size <= 32768)
+                androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendStatus(
+                    0, Bundle().apply { putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT, "\n$line\n") })
+            } catch (observationFailure: Throwable) {
+                // Diagnostic transport cannot replace the tested outcome.
+                if (failure != null && observationFailure !== failure) failure.addSuppressed(observationFailure)
+            }
+        }
+        fun phase(value: String) { diagnosticPhase = value; recordDiagnostic("phase") }
+        fun assertNativeWarning(expected: Int) {
+            // The child paints once below the semantics barrier; the native owner publishes AX.
+            val painted = compose.onAllNodesWithText(NativeTableLanguageUnavailable,
+                substring = true, useUnmergedTree = true).fetchSemanticsNodes()
+            assertEquals(expected, painted.size)
+            val paintedWarning = painted.singleOrNull()
+            // Full measured geometry and root-clipped semantics are distinct coordinate domains.
+            val paintBounds = paintedWarning?.let { Rect(it.positionInWindow, it.size.toSize()) }
+            val rootBounds = paintedWarning?.layoutInfo?.coordinates?.findRootCoordinates()?.let {
+                Rect(it.positionInWindow(), it.size.toSize())
+            }
+            val clippedPaintBounds = paintedWarning?.boundsInWindow
+            val owner = nativeView()
+            compose.runOnIdle {
+                val geometry = checkNotNull(owner.currentMeasuredGeometry)
+                assertFalse(geometry.text.contains(NativeTableLanguageUnavailable))
+                val warnings = geometry.nodes.filter { it.label?.toString() == NativeTableLanguageUnavailable }
+                assertEquals(expected, warnings.size)
+                val infos = checkNotNull(owner.accessibilityNodeProvider.findAccessibilityNodeInfosByText(
+                    NativeTableLanguageUnavailable, View.NO_ID))
+                assertEquals(expected, infos.size)
+                if (expected == 1) {
+                    val warning = warnings.single()
+                    assertEquals(warning.start, warning.end)
+                    assertNull(warning.onClick)
+                    assertNull(warning.onLongClick)
+                    val bounds = warning.bounds.single()
+                    assertFalse(bounds.isEmpty)
+                    val location = IntArray(2); owner.getLocationInWindow(location)
+                    val paintedBounds = checkNotNull(paintBounds)
+                    assertEquals(paintedBounds.left, bounds.left + location[0] + owner.paddingLeft, .01f)
+                    assertEquals(paintedBounds.top, bounds.top + location[1] + owner.paddingTop, .01f)
+                    assertEquals(paintedBounds.right, bounds.right + location[0] + owner.paddingLeft, .01f)
+                    assertEquals(paintedBounds.bottom, bounds.bottom + location[1] + owner.paddingTop, .01f)
+                    // Match the public semantics projection; this does not infer a pixel clip.
+                    val projectedBounds = Rect(bounds.left + location[0] + owner.paddingLeft,
+                        bounds.top + location[1] + owner.paddingTop,
+                        bounds.right + location[0] + owner.paddingLeft,
+                        bounds.bottom + location[1] + owner.paddingTop).intersect(checkNotNull(rootBounds))
+                    val clippedBounds = checkNotNull(clippedPaintBounds)
+                    assertFalse(projectedBounds.isEmpty)
+                    assertFalse(clippedBounds.isEmpty)
+                    assertEquals(clippedBounds.left, projectedBounds.left, .01f)
+                    assertEquals(clippedBounds.top, projectedBounds.top, .01f)
+                    assertEquals(clippedBounds.right, projectedBounds.right, .01f)
+                    assertEquals(clippedBounds.bottom, projectedBounds.bottom, .01f)
+                    val info = infos.single()
+                    assertEquals(NativeTableLanguageUnavailable, info.text.toString())
+                    assertTrue(info.isVisibleToUser)
+                    assertFalse(info.isClickable)
+                    assertFalse(info.isLongClickable)
+                    assertTrue(info.actionList.none { it.id == AccessibilityNodeInfo.ACTION_CLICK ||
+                        it.id == AccessibilityNodeInfo.ACTION_LONG_CLICK })
+                    val expectedBounds = android.graphics.Rect()
+                    bounds.roundOut(expectedBounds); expectedBounds.offset(owner.paddingLeft, owner.paddingTop)
+                    val actualBounds = android.graphics.Rect(); info.getBoundsInParent(actualBounds)
+                    assertEquals(expectedBounds, actualBounds)
+                }
+            }
+        }
+        fun retainStateFrame(name: String, phase: String) {
+            val viewportNode = compose.onNodeWithTag("responsive-native-language-owner")
+            val semantics = viewportNode.printToString(maxDepth = 8).take(12000)
+            var native = ""
+            val view = nativeView()
+            compose.runOnIdle {
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                native = "body=${geometry.text}; nodes=" + geometry.nodes.joinToString { target ->
+                    val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(target.id))
+                    "id=${target.id}, text=${info.text}, clickable=${info.isClickable}, bounds=${target.bounds}"
+                }
+            }
+            val report = renderedLayoutFailureEvidence("responsive-native-language-$phase", null,
+                viewportNode.fetchSemanticsNode(), viewportNode, name) +
+                "\nphase=$phase; documentViewportCss=${viewport.value}; clicked=$clicked\n$native\n$semantics"
+            check(report.toByteArray(Charsets.UTF_8).size <= 128 * 1024)
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendStatus(
+                0, Bundle().apply { putString(android.app.Instrumentation.REPORT_KEY_STREAMRESULT, "\n$report\n") })
+            check("OWNED_PNG_BEGIN $name " in report)
+        }
         val none = FigureBorderEdges(FigureBorderEdge.None, FigureBorderEdge.None,
             FigureBorderEdge.None, FigureBorderEdge.None)
         val captionLayout = TableCaptionLayout(TableCollapse.Collapse, ContainerStyle(), none, none,
             FigureMediaLayout(FigureMediaStrut(0f, direction = BidiResolvedDirection.Ltr), InlineBoxVerticalAlign.Baseline))
         try {
+            phase("before_composition")
             compose.activityRule.scenario.onActivity { activity -> activity.setContent {
                 val actual = LocalWindowInfo.current
                 val window = object : WindowInfo by actual { override val containerSize = IntSize(viewport.value, 1000) }
                 val source = original.copy(rows = if (captionOnly.value) emptyList() else original.rows,
                     blockViewport = original.blockViewport!!.copy(language = language.value))
                 MaterialTheme { CompositionLocalProvider(LocalDensity provides Density(1f, 1f), LocalWindowInfo provides window) {
-                    Layout(content = {
+                    Layout(modifier = Modifier.testTag("responsive-native-language-owner"), content = {
                         // This existing Figure shape queries its real caption minimum before measure.
                         AnonymousBlockView(Block("paragraph", 0, emptyList(),
                             figure = figure(source, 200).copy(tableCaptionLayout = captionLayout)),
@@ -351,10 +465,13 @@ class TableBlockViewportCaptionDeviceTest {
                 } }
             } }
             for (width in listOf(639, 640)) {
+                phase("unsupported_${width}_update")
                 compose.runOnIdle { viewport.value = width }
                 compose.waitForIdle()
-                compose.onAllNodesWithText(NativeTableLanguageUnavailable, substring = true).assertCountEquals(1)
+                phase("unsupported_${width}_warning")
+                assertNativeWarning(1)
                 compose.onAllNodesWithTag("compiled-table-block-content", useUnmergedTree = true).assertCountEquals(0)
+                phase("unsupported_${width}_body_actions")
                 val view = nativeView()
                 compose.runOnIdle {
                     val geometry = checkNotNull(view.currentMeasuredGeometry)
@@ -387,13 +504,20 @@ class TableBlockViewportCaptionDeviceTest {
                     assertTrue(view.performAccessibilityAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selection))
                 }
             }
+            phase("warning_frame")
+            retainStateFrame("responsive-native-language-warning.png", "warning")
+            phase("ru_recovery")
             compose.runOnIdle { assertEquals(listOf("first", "first"), clicked); language.value = "ru" }
             for (width in listOf(639, 640)) {
+                phase("supported_${width}_update")
                 compose.runOnIdle { viewport.value = width }
-                compose.waitForIdle(); noWarning()
-                compose.onAllNodesWithText(NativeTableLanguageUnavailable, substring = true).assertCountEquals(0)
+                compose.waitForIdle()
+                phase("supported_${width}_warning")
+                noWarning()
+                assertNativeWarning(0)
                 compose.onAllNodesWithTag("compiled-table-block-content", useUnmergedTree = true)
                     .assertCountEquals(if (width == 639) 1 else 0)
+                phase("supported_${width}_body_actions")
                 val view = nativeView()
                 compose.runOnIdle {
                     val geometry = checkNotNull(view.currentMeasuredGeometry)
@@ -404,6 +528,9 @@ class TableBlockViewportCaptionDeviceTest {
                     assertTrue(view.accessibilityNodeProvider.performAction(first.id, AccessibilityNodeInfo.ACTION_CLICK, null))
                 }
             }
+            phase("recovered_frame")
+            retainStateFrame("responsive-native-language-recovered.png", "recovered")
+            phase("caption_only_update")
             compose.runOnIdle {
                 assertEquals(List(4) { "first" }, clicked)
                 language.value = "not a native locale"
@@ -411,14 +538,16 @@ class TableBlockViewportCaptionDeviceTest {
                 viewport.value = 639
             }
             compose.waitForIdle()
-            compose.onAllNodesWithText(NativeTableLanguageUnavailable, substring = true).assertCountEquals(1)
+            phase("caption_only_warning")
+            assertNativeWarning(1)
             compose.onAllNodesWithTag("compiled-table-block-content", useUnmergedTree = true).assertCountEquals(0)
             compose.onNodeWithTag("compiled-table-grid-figure-caption", useUnmergedTree = true)
                 .assertWidthIsEqualTo(0.dp).assertHeightIsEqualTo(0.dp)
+            phase("caption_only_body_actions")
             val retainedView = nativeView()
             compose.runOnIdle {
                 val exactFigure = checkNotNull(observedFlow).figures.single().measured.geometry
-                assertEquals(captionText, exactFigure.text.toString())
+                assertEquals("media\n" + captionText, exactFigure.text.toString())
                 val geometry = checkNotNull(retainedView.currentMeasuredGeometry)
                 val caption = node(geometry, captionText)
                 assertEquals(1, geometry.nodes.count { it.onClick != null })
@@ -428,6 +557,103 @@ class TableBlockViewportCaptionDeviceTest {
                 assertTrue(retainedView.accessibilityNodeProvider.performAction(caption.id, AccessibilityNodeInfo.ACTION_CLICK, null))
                 assertEquals(List(4) { "first" } + "caption", clicked)
             }
+            phase("method_complete")
+        } catch (failure: Throwable) {
+            firstFailure = failure
+            recordDiagnostic("failure", failure)
+            throw failure
+        } finally {
+            phase("cleanup_start")
+            try {
+                compose.activityRule.scenario.onActivity { it.setContent {} }
+                phase("cleanup_complete")
+            } catch (cleanupFailure: Throwable) {
+                recordDiagnostic("cleanup_failure", cleanupFailure)
+                val originalFailure = firstFailure
+                if (originalFailure == null) throw cleanupFailure
+                if (cleanupFailure !== originalFailure) originalFailure.addSuppressed(cleanupFailure)
+            }
+        }
+    }
+
+    @Test fun warningReindexClearsChangedFocusButGeometryOnlyReflowKeepsTheSameOwner() {
+        val warning = mutableStateOf(true)
+        val shift = mutableStateOf(20f)
+        val clicked = mutableListOf<String>()
+        val actions = listOf<() -> Unit>({ clicked += "A" }, { clicked += "B" }, { clicked += "C" })
+        var actualView: NativeFloatTextView? = null
+        fun letter(index: Int): FloatTextGeometry {
+            val text = ('A' + index).toString()
+            return NativeSemanticGroup(30, 20, listOf(PositionedSemanticChild(
+                EmptyCaptionGeometry(30, text), 0f, 0f, BidiResolvedDirection.Ltr)),
+                extraNodes = listOf(FloatInteractionNode(0, FloatInteractionKind.LINK, 0, 1,
+                    listOf(RectF(0f, 0f, 30f, 20f)), text, null, actions[index])))
+        }
+        fun graph(showWarning: Boolean, y: Float): FloatTextGeometry {
+            val first = mutableListOf(PositionedSemanticChild(letter(0), 0f, y, BidiResolvedDirection.Ltr))
+            if (showWarning) first += PositionedSemanticChild(NativeSemanticGroup(30, 10, emptyList(),
+                extraNodes = listOf(FloatInteractionNode(0, FloatInteractionKind.MARKER, 0, 0,
+                    listOf(RectF(0f, 0f, 30f, 10f)), NativeTableLanguageUnavailable, null, null))),
+                0f, 0f, BidiResolvedDirection.Ltr)
+            return NativeSemanticGroup(90, 60, listOf(
+                PositionedSemanticChild(NativeSemanticGroup(30, 60, first), 0f, 0f, BidiResolvedDirection.Ltr),
+                PositionedSemanticChild(letter(1), 30f, y, BidiResolvedDirection.Ltr),
+                PositionedSemanticChild(letter(2), 60f, y, BidiResolvedDirection.Ltr)))
+        }
+        fun focusB(): Int {
+            var id = -1
+            compose.runOnIdle {
+                val view = checkNotNull(actualView)
+                val current = checkNotNull(view.currentMeasuredGeometry)
+                assertEquals("ABC", current.text.toString())
+                id = node(current, "B").id
+                assertTrue(view.accessibilityNodeProvider.performAction(id, AccessibilityNodeInfo.ACTION_FOCUS, null))
+                assertTrue(view.accessibilityNodeProvider.performAction(id, AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null))
+            }
+            return id
+        }
+        fun assertCleared(oldId: Int, replacement: String) = compose.runOnIdle {
+            val view = checkNotNull(actualView)
+            val current = checkNotNull(view.currentMeasuredGeometry)
+            assertEquals("ABC", current.text.toString())
+            assertEquals(replacement, current.nodes.single { it.id == oldId }.label.toString())
+            assertNull(view.accessibilityNodeProvider.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY))
+            assertEquals("ABC", view.accessibilityNodeProvider.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.text.toString())
+            for (target in current.nodes) {
+                val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(target.id))
+                assertFalse(info.isFocused)
+                assertFalse(info.isAccessibilityFocused)
+            }
+            view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+            view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+            assertTrue(clicked.isEmpty())
+        }
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                val geometry = graph(warning.value, shift.value)
+                Layout(content = {
+                    AndroidView(factory = { NativeFloatTextView(it).also { actualView = it } },
+                        update = { it.bind({ geometry }, 0, 0) })
+                }) { children, _ ->
+                    val child = children.single().measure(Constraints.fixed(90, 60))
+                    layout(90, 60) { child.place(0, 0) }
+                }
+            } }
+            compose.waitForIdle()
+            val originalId = focusB()
+            compose.runOnIdle { shift.value = 25f }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val view = checkNotNull(actualView)
+                assertEquals(originalId, node(checkNotNull(view.currentMeasuredGeometry), "B").id)
+                assertEquals("B", view.accessibilityNodeProvider.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.text.toString())
+                assertEquals("B", view.accessibilityNodeProvider.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)?.text.toString())
+            }
+            compose.runOnIdle { warning.value = false }
+            compose.waitForIdle(); assertCleared(originalId, "C")
+            val shiftedId = focusB()
+            compose.runOnIdle { warning.value = true }
+            compose.waitForIdle(); assertCleared(shiftedId, NativeTableLanguageUnavailable)
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
     }
 
