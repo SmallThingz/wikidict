@@ -396,7 +396,7 @@ pub const Book = struct {
                     break;
                 };
                 if (fact_found == occurrence.missing_content) return invalid;
-                const options = try originalOptions(a, ns, source_and_html.source, occurrence);
+                const options = try originalOptions(a, ns, registry, source_and_html.source, occurrence);
                 const image = observed_images[occurrence_index];
                 const svg_upright_fit: ?SvgUprightFitEvidence = if (eligible_svg and occurrence.width and
                     !occurrence.anchor_attributes and image.width > occurrence.original_width) proof: {
@@ -1672,13 +1672,20 @@ fn responseSource(a: A, ns: *const namespaces.Registry, page: RawPage) !Response
     return .{ .source = text, .html = html };
 }
 
-fn originalOptions(a: A, ns: *const namespaces.Registry, source: []const u8, occurrence: RawOccurrence) ![]const u8 {
+fn observedCanonicalFile(a: A, ns: *const namespaces.Registry, registry: ?*const sizing.Registry, target: []const u8) ![]const u8 {
+    const lexical = try canonicalFile(a, ns, target);
+    if (registry) |files| if (try sizing.Registry.resolveCanonicalFile(files, a, lexical)) |resolved| {
+        return canonicalFile(a, ns, resolved);
+    };
+    return lexical;
+}
+fn originalOptions(a: A, ns: *const namespaces.Registry, registry: ?*const sizing.Registry, source: []const u8, occurrence: RawOccurrence) ![]const u8 {
     const raw = source[occurrence.start..occurrence.end];
     var iterator: encoder.document_ir.InlineIterator = .{ .input = raw, .renderer_boundaries = true };
     const node = iterator.next() orelse return invalid;
     const selected_target = (try compiler.figureObservationFileTargetAlloc(a, node.target, .{ .namespace_catalog = ns })) orelse return invalid;
     if (node.kind != .link or !node.link_has_pipe or node.link_empty_label or node.link_label_restored_close or node.trail.len != 0 or iterator.cursor != raw.len or
-        !equal(try canonicalFile(a, ns, selected_target), occurrence.canonical_file)) return invalid;
+        !equal(try observedCanonicalFile(a, ns, registry, selected_target), occurrence.canonical_file)) return invalid;
     var count: usize = 0;
     var selected_range = false;
     var at: usize = 0;
@@ -1694,7 +1701,7 @@ fn originalOptions(a: A, ns: *const namespaces.Registry, source: []const u8, occ
                 if (token.kind == .link or token.kind == .external_link or token.kind == .template) {
                     if (token.kind == .link) {
                         if (try compiler.figureObservationFileTargetAlloc(a, token.target, .{ .namespace_catalog = ns })) |target| {
-                            const file = try canonicalFile(a, ns, target);
+                            const file = try observedCanonicalFile(a, ns, registry, target);
                             if (equal(file, occurrence.canonical_file)) {
                                 count += 1;
                                 selected_range = at == occurrence.start and scan.cursor - token.trail.len == occurrence.end;
@@ -2544,7 +2551,7 @@ test "supplied Figure Book source occurrence cannot borrow a protected attribute
     const doc = try Testing.document(a, "it"); var occurrence = doc.pages[0].occurrences[0];
     const token = try std.fmt.allocPrint(a, "[[{s}|thumb|upright|caption]]", .{occurrence.canonical_file});
     occurrence.start = 0; occurrence.end = token.len;
-    try std.testing.expectEqualStrings("thumb|upright|caption", try originalOptions(a, &ns, token, occurrence));
+    try std.testing.expectEqualStrings("thumb|upright|caption", try originalOptions(a, &ns, null, token, occurrence));
     for ([_][2][]const u8{
         .{ "<nowiki>", "</nowiki>" }, .{ "<!--", "-->" }, .{ "<span title=\"", "\"></span>" },
         .{ "[[Article|", "]]" }, .{ "[https://example.test/ ", "]" }, .{ "{{Template|", "}}" },
@@ -2552,14 +2559,14 @@ test "supplied Figure Book source occurrence cannot borrow a protected attribute
         const source = try std.fmt.allocPrint(a, "{s}{s}{s}\n{s}", .{ wrapper[0], token, wrapper[1], token });
         occurrence.start = wrapper[0].len; occurrence.end = occurrence.start + token.len;
         errdefer std.debug.print("Book selected hidden source prefix={s}\n", .{wrapper[0]});
-        try std.testing.expectError(error.InvalidFigurePageObservations, originalOptions(a, &ns, source, occurrence));
+        try std.testing.expectError(error.InvalidFigurePageObservations, originalOptions(a, &ns, null, source, occurrence));
     }
     occurrence.start = 0; occurrence.end = token.len;
     const duplicate = try std.fmt.allocPrint(a, "{s}\n{s}", .{ token, token });
-    try std.testing.expectError(error.InvalidFigurePageObservations, originalOptions(a, &ns, duplicate, occurrence));
+    try std.testing.expectError(error.InvalidFigurePageObservations, originalOptions(a, &ns, null, duplicate, occurrence));
     const article = "[[Article|thumb|upright|caption]]";
     occurrence.end = article.len;
-    try std.testing.expectError(error.InvalidFigurePageObservations, originalOptions(a, &ns, article, occurrence));
+    try std.testing.expectError(error.InvalidFigurePageObservations, originalOptions(a, &ns, null, article, occurrence));
 }
 
 test "supplied Figure Book complete anchor inventory distinguishes absent empty present and duplicates" {
@@ -2949,7 +2956,7 @@ test "VI missing observations bind their own served module root and exact right 
         try std.testing.expectEqualStrings(page.occurrences[0].canonical_file, missing.label);
         try std.testing.expect(std.mem.indexOf(u8, missing.href, "uselang=vi") != null);
         try std.testing.expectEqual(@as(u32, 180), missing.data_width);
-        const original = try originalOptions(a, &ns, source.source, page.occurrences[0]);
+        const original = try originalOptions(a, &ns, null, source.source, page.occurrences[0]);
         try std.testing.expect(missingThumbnailOptions(&options, original));
         const with_style = equal(page.title, "g") or equal(page.title, "univers");
         try std.testing.expectEqual(!with_style, missing.paint_root_proven);
@@ -4132,7 +4139,7 @@ test "retained complete TH missing width observation preserves source action and
     const behavior_bytes = @embedFile("testdata/figure-page-observations/th-missing-width/behavior-switches.tsv");
     var behavior = try namespaces.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
     var options = try namespaces.image_options.Registry.init(a, @embedFile("testdata/figure-page-observations/th-missing-width/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, Testing.hash(behavior_bytes)); defer options.deinit();
-    const original = try originalOptions(a, &ns, accepted.source, page.occurrences[0]);
+    const original = try originalOptions(a, &ns, null, accepted.source, page.occurrences[0]);
     try std.testing.expect(std.mem.startsWith(u8, original, "thumb|right|100px|"));
     try std.testing.expect(missingThumbnailOptionsForObservation(&options, original, missing));
     const stage = try compiler.figureObservationStageOptionsAlloc(a, original, .{ .title = page.title, .namespace_catalog = &ns, .behavior_switches = &behavior, .image_options = &options });
@@ -8033,4 +8040,61 @@ test "captured cediglia right default upright stages exact raster and requires o
     }
     changed = try ViPageServedTesting.changedResponse(a, page, "text", "mw-file-element mw-file-upright", "mw-file-element");
     try std.testing.expectError(invalid, Book.init(a, try PosterSvgConjunctionTesting.bytes(a, try F.document(a, changed)), &ns, &files, defaults, 250));
+}
+
+
+test "captured FR cauannos alias preserves complete Book intake and rejects unproved or duplicate identity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const bytes = @embedFile("testdata/figure-page-observations/fr-cauannos-alias/figure-page-observations.json");
+    const doc = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/figure-page-observations/fr-cauannos-alias/namespace-registry.tsv"));
+    defer ns.deinit();
+    var files = try Testing.registry(a, &ns, doc);
+    defer files.deinit();
+    const requested = "Fichier:'Florence' (5609040971).jpg";
+    const canonical = "Fichier:'Florence' - geograph.org.uk - 2364107.jpg";
+    const original = files.records[0];
+    try std.testing.expectEqualStrings(canonical, original.canonical_file);
+    // Controlled closed Registry rows model the exact separately replayed
+    // imageinfo identity. The captured Book, source and HTML stay byte-exact.
+    var rows = [_]sizing.Record{ original, original };
+    rows[0].canonical_file = requested;
+    files.records = &rows;
+    files.resolved_files = &.{ canonical, canonical };
+    var defaults: [32]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&defaults, doc.defaults_sha256);
+    var book = try Book.init(std.testing.allocator, bytes, &ns, &files, defaults, 250);
+    defer book.deinit();
+    const behavior_bytes = @embedFile("testdata/figure-page-observations/fr-cauannos-alias/behavior-switches.tsv");
+    var behavior = try namespaces.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256);
+    defer behavior.deinit();
+    var images = try namespaces.image_options.Registry.init(a, @embedFile("testdata/figure-page-observations/fr-cauannos-alias/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, Testing.hash(behavior_bytes));
+    defer images.deinit();
+    const jupiter = "\xe2\x99\x83";
+    const context: compiler.Context = .{ .title = jupiter, .namespace_catalog = &ns, .behavior_switches = &behavior, .image_options = &images };
+    // The supplied Book has no Jupiter page. Successful eager intake must not
+    // make it borrow another page's observation or alter normal page selection.
+    try std.testing.expect((try book.select(a, &ns, 0, 1517441, 34477915, jupiter,
+        @embedFile("testdata/figure-page-observations/fr-cauannos-alias/jupiter-raw.wikitext"),
+        @embedFile("testdata/figure-page-observations/fr-cauannos-alias/jupiter-expanded.wikitext"), defaults, 250, context)) == null);
+    const source = try Testing.source(a, doc);
+    const occurrence = doc.pages[0].occurrences[0];
+    try std.testing.expectEqualStrings("vignette|redresse|Un chat-huant.", try originalOptions(a, &ns, &files, source, occurrence));
+    try std.testing.expectError(invalid, originalOptions(a, &ns, null, source, occurrence));
+    files.file_authority = false;
+    try std.testing.expectError(invalid, originalOptions(a, &ns, &files, source, occurrence));
+    files.file_authority = true;
+    files.resolved_files = &.{ "Fichier:Invented.jpg", canonical };
+    try std.testing.expectError(invalid, originalOptions(a, &ns, &files, source, occurrence));
+    files.resolved_files = &.{ canonical, canonical };
+    const direct = try std.fmt.allocPrint(a, "[[{s}|vignette|redresse|Un chat-huant.]]", .{canonical});
+    const duplicate = try std.fmt.allocPrint(a, "{s}\n{s}", .{ source, direct });
+    try std.testing.expectError(invalid, originalOptions(a, &ns, &files, duplicate, occurrence));
+    const invented = try std.mem.replaceOwned(u8, a, source, requested, "Fichier:Invented.jpg");
+    var unbound = occurrence;
+    unbound.end += "Fichier:Invented.jpg".len;
+    unbound.end -= requested.len;
+    try std.testing.expectError(invalid, originalOptions(a, &ns, &files, invented, unbound));
 }

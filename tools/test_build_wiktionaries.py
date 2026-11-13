@@ -11489,3 +11489,55 @@ class InitialSealedRoleSuccessorTests(unittest.TestCase):
                 owner.reseal_graph(f)
                 with owner.contexts(f)[0],owner.contexts(f)[1],owner.contexts(f)[2],self.assertRaises(ValueError):owner.adopt(f)
                 self.assertFalse((f.destination/'state.json').exists())
+
+
+class FigureCaptureHelperInterfaceTests(unittest.TestCase):
+    def fixture(self):
+        case=ContainedObservationGuardFallbackTests();case.setUp();self.addCleanup(case.doCleanups)
+        return case
+
+    def test_missing_enumerator_refuses_before_replay_copy_or_borrow(self):
+        case=self.fixture()
+        for borrow in (False,True):
+            with self.subTest(borrow=borrow):
+                roles=ImmutableCaptureBorrowTests.selection(self,case.fixture.root/('native-'+str(borrow))) if borrow else None
+                destination=case.fixture.root/('destination-'+str(borrow))
+                with patch.object(case.figure,'capture_member_paths',None), \
+                     patch.object(case.figure,'verify_tuple',wraps=case.figure.verify_tuple) as replay, \
+                     patch.object(b,'copy_verified_snapshot',side_effect=AssertionError('Copy before helper API check')):
+                    with self.assertRaisesRegex(ValueError,'Figure helper lacks capture_member_paths'):
+                        b.pinned_auxiliary_snapshots(case.paths,{n:b.sha256_file(p) for n,p in case.paths.items()},destination,borrower=roles)
+                    self.assertEqual(0,replay.call_count)
+                self.assertFalse(destination.exists())
+
+    def test_maintained_enumerator_handles_contained_copy_and_borrow_exactly(self):
+        case=self.fixture();root=next(iter(case.paths.values())).parent
+        expected,_=case.figure.capture_member_paths(root,include_markers=True)
+        with patch.object(case.figure,'capture_member_paths',wraps=case.figure.capture_member_paths) as enumerate_members:
+            copied=b.pinned_auxiliary_snapshots(case.paths,{n:b.sha256_file(p) for n,p in case.paths.items()},case.fixture.root/'copied')
+            self.assertGreater(enumerate_members.call_count,0)
+        self.assertNotEqual(copied,case.paths)
+        copied_root=next(iter(copied.values())).parent;actual,_=case.figure.capture_member_paths(copied_root,include_markers=True)
+        self.assertEqual(set(expected),set(actual))
+        for name in expected:self.assertEqual(expected[name].read_bytes(),actual[name].read_bytes())
+        roles=ImmutableCaptureBorrowTests.selection(self,case.fixture.root/'native')
+        with patch.object(case.figure,'capture_member_paths',wraps=case.figure.capture_member_paths) as enumerate_members, \
+             patch.object(b,'copy_verified_snapshot',side_effect=AssertionError('Borrowed capture copied')):
+            borrowed=b.pinned_auxiliary_snapshots(case.paths,{n:b.sha256_file(p) for n,p in case.paths.items()},case.fixture.root/'borrowed',borrower=roles)
+            self.assertGreater(enumerate_members.call_count,0)
+        self.assertEqual(case.paths,borrowed);self.assertEqual(sorted(case.paths),roles.last_capture_borrow['borrowed_roles'])
+        self.assertFalse((case.fixture.root/'borrowed').exists());roles.require_unchanged()
+
+    def test_maintained_verifier_preserves_recorded_generator_identity(self):
+        case=self.fixture();root=next(iter(case.paths.values())).parent
+        manifest_path=root/case.figure.MANIFEST;manifest=json.loads(manifest_path.read_text())
+        original_generator='df7327b80aafb9dff40d38dc7b794ecf9c218543297e37106635a9ea9df99cbf'
+        self.assertNotEqual(original_generator,case.figure.producer()['generator_sha256'])
+        manifest['generator_sha256']=original_generator
+        manifest_path.write_bytes(case.figure.encoded(manifest))
+        (root/case.figure.COMPLETE).write_bytes(case.figure.encoded(dict(schema=case.figure.SCHEMA,manifest_sha256=b.sha256_file(manifest_path))))
+        before=manifest_path.read_bytes()
+        observed=case.figure.verify(root)
+        self.assertEqual(original_generator,observed['generator_sha256'])
+        self.assertEqual(before,manifest_path.read_bytes())
+        self.assertTrue(callable(case.figure.capture_member_paths))

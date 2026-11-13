@@ -1765,6 +1765,14 @@ def capture_figure_files(args, transport=None, sleep=time.sleep, *, target_contr
 
 
 
+def require_figure_capture_helper():
+    """Require the selected maintained API without granting capture validity."""
+    import prepare_figure_metadata as figure
+    if not callable(getattr(figure,'capture_member_paths',None)):
+        raise ValueError('Selected Figure helper lacks capture_member_paths')
+    return figure
+
+
 def validated_figure_tuple(snapshots, edition=None, date=None, *, parent_snapshots=None):
     paths={name:Path(path) for name,path in (snapshots or {}).items() if name in FIGURE_SNAPSHOT_FILES}
     if not paths:return {}
@@ -1774,7 +1782,7 @@ def validated_figure_tuple(snapshots, edition=None, date=None, *, parent_snapsho
     provider=(snapshots or {}).get('file-metadata')
     if provider is not None and Path(provider).parent in {path.parent for path in paths.values()}:
         paths['file-metadata']=Path(provider)
-    import prepare_figure_metadata
+    prepare_figure_metadata=require_figure_capture_helper()
     parent_paths = None if parent_snapshots is None else {
         name: Path(parent_snapshots[name]) for name in paths if name in parent_snapshots}
     return verified_figure_tuple(prepare_figure_metadata,paths,edition,date,parent_paths=parent_paths)
@@ -1784,6 +1792,7 @@ def preflight_selected_auxiliary_inputs(snapshots, *, captured_selection=None):
     """Reject absent selected inputs before replay; confer no validation proof."""
     figure_roots={Path(path).parent for name,path in (snapshots or {}).items()
                   if name in FIGURE_SNAPSHOT_FILES}
+    if figure_roots:require_figure_capture_helper()
     for name,source in sorted((snapshots or {}).items()):
         if name not in AUXILIARY_SNAPSHOT_NAMES:
             raise ValueError(f'Unknown auxiliary snapshot: {name}')

@@ -1,0 +1,32 @@
+=={{=la=}}==
+
+{{-fanafohezana-|la}}
+'''cozeulodorieso''' 
+# : "Hivoaka [[miaraka]] amin'ny cuckoo ianao"
+
+{{-famakiana fanampiny-}}
+* Marcus Terentius Varro, ''de lingua latina''
+* ** ''M. Terenti Varronis de lingua latina libri qui supersunt &nbsp; ex codicum vetustissimarumque editionum auctoritate integra lectione adiecta &nbsp; recensuit Leonhardus Spengel<!-- &nbsp; accedit index [...] --> &nbsp; Berolini, sumtibus Dunckeri et Humboltii – MDCCCXXVI [1826]'', p. 312 ([https://books.google.de/books?id=0fraeVAboRkC&pg=PA312 google]):
+* **: [...]<br /> Cosauli, Dolosi, Eso; omnia vero adpatula coemisse. Iamcusianes duonus ceruses dun Ianus venet . pos Melios eum recum . . . . <br /> [...]
+* ** ''M. Terenti Varronis de lingua latina librorum quae supersunt &nbsp; emendata et annotata a Carolo Odofredo Muellero &nbsp; anno MDCCCXXXIII [1833]'', p. 129 ([https://books.google.de/books?id=oS0TAAAAQAAJ&pg=PA129 google]):
+* **: [...]<br /> Cozeulodoizeso; omnia vero adpatula coemisse iamcusianes duo misceruses dun ianusve vet pos melios eumrecum . . . .<br /> [...]
+* ** ''M. Terenti Varronis de lingua Latina libri &nbsp; emendavit apparatu critico instruxit praefatus est Leonardus Spengel. &nbsp; Leonardo patre mortuo edidit et recognovit filius Andreas Spengel. &nbsp; Berolini apud Weidmannos &nbsp; MDCCCLXXXV [1885]'', p. 127 ([https://books.google.com/books?id=T8kpdW9cUIMC&pg=PA127 google-US], [https://books.google.com/books?id=buONxSkoS6gC&pg=PA127 google-US]):
+* **: [...]<br /> Cozeulodorieso omnia vero adpatula coemisse ian cusianes duonus ceruses dunus ianus ue uet pom elios eum recum . . .<br /> [...]
+* ** ''Varro on the Latin language &nbsp; with an English translation by Roland G. Kent &nbsp; In two volumes &nbsp; I &nbsp; Books V.–VII.'', 1938, pp. 292–295:
+* **: [...]<br /> Cozev''i'' o''b''orieso. Omnia vero ad Patul''c''<ium> co''m''misse<<nowiki/>i<nowiki/>>.<br /> Ian''e''us ia''m'' es, duonus Cerus es, du<o>nus Ianus.<br /> Ve''n''<<nowiki/>i<nowiki/>>e''s'' po<tissimu>m melios eum recum . . .<!-- <sup>5</sup> --><br /> [...]
+* ''III.—''The Origin of the Latin Letters ''G'' and ''Z''.'' By Prof. George Hempl'', in: ''Transactions and Proceedings of the American Philological Association. 1899. Volume XXX'', pp. 26 & 39f. ([https://www.jstor.org/stable/282560 JSTOR]):
+* *: In three of the medieval texts of Varro's quotation from the ''Carmen Saliare'' a ''z'' is found in the group ''cozeulodorieso'' (indeed, we were formerly told there were two: ''cozevlodoizeso'', Seelmann, p. 319), but, as I shall show later (see page 39), the rarer reading ''coceulodorieso'' is the correct one, and the more frequent ''z'' is only a medieval spelling for ''c'', both sounded ''ts''.
+* *: IV. Appendix.<br /> The ''coceulod orieso'' of the Salian Hymn.<br /> [...] I decided for ''c'' and concluded that we should read with the Basel manuscript ''coceulod orieso.''<br /> It then appeared that the whole difficulty was solved; for ''coceulōd oriēso'' is perfect early Latin and corresponds exactly to classical ''cucūlō oriēre''. [...]
+* ''XII.—''The Salian Hymn to Janus.''<!-- <sup>1</sup> --> By Prof. George Hempl'', in: ''Transactions and Proceedings of the American Philological Association. 1900. Volume XXXI'', pp. 182ff. ([https://www.jstor.org/stable/282646 JSTOR], [https://archive.org/details/jstor-282646 IA], [https://books.google.com/books?id=MRbiAAAAMAAJ&pg=PA182 google-US]):
+* *: [...]<br /> The text, as might be expected is best preserved in the three best manuscripts, namely ''F'', ''V'' and ''p'' (cf. Spengel, p. 127 f.) and may be given as:—
+* *:: coceulodorieso • om<sup>~</sup>ia u<sup>~</sup>o adpatula coemisse •<br /> ian cusianes duonus ceruses •<br /> dunus ianus ueniet po<sup>~</sup> melios eum recum •
+* *: [...]<br /> we obtain the original text, which would perhaps be most naturally stressed:—
+* *:: [...]
+* *: or quantitatively scanned, with ''*potimos'' for ''potissimos'' and with the ''uo'' of ''duonos'' counting as two vowels:<br />
+* *:: co|ceulōd | oriē|so • omnia | uērōd | patula | coemis •<br /> es | iānos | cūsi|ātios | • duonos | ceros es •<br /> du|onos iā|nos ueni|et • poti|mos meli|ōsom | rēcom •
+* *: [...] The whole may be rendered into English:—
+* *:: Come forth with the cuckoo!  Truly all things dost thou make open.<br /> Thou art Janus Curiatius, the good creator art thou.<br /> Good Janus is coming, the chief of the superior rulers.
+* *: [...]
+
+{{-tsiahy-}}
+{{wikibolana|en|cozeulodorieso}}

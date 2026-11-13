@@ -1,0 +1,30 @@
+== {{langue|gaulois}} ==
+{{forme reconstruite|gaulois}}
+
+=== {{S|étymologie}} ===
+: Attesté en latin sous la forme ''[[cavannum#la|cavannum]]'' (« ''ululae aues … quam auem Galli cauannum uocant'' », Scholies de Bernes aux Bucol.) et présent dans des noms propres tels que ''[[Cauannus]]'', ''[[Cauanos]]''.
+: Remonte à l’{{étyl|indo-européen commun|gaulois}} {{recons|gewH-|indo-européen commun}} « crier, hurler ».
+: Comparable avec ''[[kaouenn]]'' en breton, ''[[couann]]'' en vieux breton, ''[[cowan]]'' en cornique, ''[[cuan]]'' en gallois (sens identique).
+: Continué dans le français ''[[chouan]]'' et ''[[chat-huant]]''.
+
+=== {{S|nom|gaulois}} ===
+[[Fichier:'Florence' (5609040971).jpg|vignette|redresse|Un chat-huant.]]
+'''cauannos''' {{pron-recons||gaulois}} {{m}}
+# {{animaux|gaulois}} [[chouette|Chouette]], [[chat-huant]].
+
+==== {{S|dérivés}} ====
+{{(}}
+* {{lien|Cauannus|gaulois}}
+* {{lien|Cauanos|gaulois}}
+* {{recons|Cauanoialon|gaulois}}
+{{)}}
+
+==== {{S|dérivés autres langues}} ====
+* {{L|fr}} : {{lien|chat-huant|fr}}
+* {{L|la}} : {{lien|cavannus|la}}
+
+=== {{S|références}} ===
+* {{R:Delamarre2003|p=111}}
+* {{R:Savignac2004|p=103}}
+[[Catégorie:Mots en gaulois issus d’un mot en indo-européen commun]]
+{{clé de tri|cauannos}}

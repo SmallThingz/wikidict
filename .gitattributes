@@ -553,3 +553,16 @@ src/encoder/testdata/sr-fuhe-senses/* -text -whitespace
 tools/testdata/zh-dikhana-preceding-sibling01/* -text -whitespace
 
 tools/testdata/it-cediglia-right-default/* -text -whitespace
+tools/testdata/mg-cozeulodorieso/raw.wikitext -text -whitespace
+tools/testdata/mg-cozeulodorieso/expanded.wikitext -text -whitespace
+tools/testdata/mg-cozeulodorieso/missing-dependency.json -text -whitespace
+tools/testdata/mg-aiaia-colon/raw.wikitext -text -whitespace
+tools/testdata/mg-aiaia-colon/expanded.wikitext -text -whitespace
+tools/testdata/mg-aiaia-colon/missing-dependency.json -text -whitespace
+tools/testdata/figure-page-observations/fr-cauannos-alias/behavior-switches.tsv -text -whitespace
+tools/testdata/figure-page-observations/fr-cauannos-alias/figure-page-observations.json -text -whitespace
+tools/testdata/figure-page-observations/fr-cauannos-alias/image-options.tsv -text -whitespace
+tools/testdata/figure-page-observations/fr-cauannos-alias/jupiter-expanded.wikitext -text -whitespace
+tools/testdata/figure-page-observations/fr-cauannos-alias/jupiter-raw.wikitext -text -whitespace
+tools/testdata/figure-page-observations/fr-cauannos-alias/namespace-registry.tsv -text -whitespace
+tools/testdata/figure-page-observations/fr-cauannos-alias/page.raw.wikitext -text -whitespace

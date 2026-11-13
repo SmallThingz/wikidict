@@ -63280,3 +63280,196 @@ test "normal Writer retained ZH dikhana keeps preceding siblings complete Hindi 
     try std.testing.expect(urdu.bold and !urdu.italic and !urdu.code);
     try std.testing.expectEqualStrings("ur", urdu.language); try std.testing.expect(std.mem.indexOf(u8, urdu.classes, "Aran") != null);
 }
+
+
+test "retained MG cozeulodorieso keeps the complete normal Writer body actions and codec across empty nowiki angles" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const doc = encoder.presentation_document; const codec = encoder.presentation_codec;
+    const F = struct {
+        const title = "cozeulodorieso";
+        const raw = @embedFile("testdata/mg-cozeulodorieso/raw.wikitext");
+        const source = @embedFile("testdata/mg-cozeulodorieso/expanded.wikitext");
+        const phase = @embedFile("testdata/mg-cozeulodorieso/missing-dependency.json");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    try F.hash(F.raw, "d8919c9f98b8e46c1f9c892ddd2017b4fe47a5815e128d7a176e547aad6764df");
+    try F.hash(F.source, "52c8f545d8d36267a677272e24d4cb05cae3f1b5c8c96fcb837e1c2fd63e381d");
+    try F.hash(F.phase, "44e39ee39ea8ed9959c30c37c550a02ca1213ce10fdde5ce184d95f5c33d9a46");
+    const namespace_bytes = @embedFile("testdata/figure-sizing/mg-namespace-registry.tsv");
+    try F.hash(namespace_bytes, "a84ebd65831d67daa99c9f5d8a28e0ec93f37fe14f66c0bdab9fc1d3c0c0430b");
+    const Coordinates = @TypeOf((doc.MissingText{ .bytes = "" }).coordinates());
+    const Phase = struct {
+        schema: []const u8, output_sha256: []const u8, display_title_sha256: []const u8,
+        occurrences: []const struct { id: u32, title: []const u8 }, output: Coordinates, display_title: Coordinates,
+    };
+    const phase = try std.json.parseFromSlice(Phase, a, F.phase, .{}); defer phase.deinit();
+    try std.testing.expectEqualStrings("wikidict.missing-dependency-phase.v1", phase.value.schema);
+    try std.testing.expectEqual(@as(usize, 1), phase.value.output.ranges.len);
+    try std.testing.expectEqual(@as(u32, 12), phase.value.output.ranges[0].start);
+    try std.testing.expectEqual(@as(u32, 39), phase.value.output.ranges[0].end);
+    try std.testing.expectEqual(@as(u32, 1), phase.value.output.ranges[0].occurrence);
+    try std.testing.expect(!phase.value.output.unknown and phase.value.display_title.ranges.len == 0);
+    try std.testing.expectEqual(@as(usize, 1), phase.value.occurrences.len);
+    try std.testing.expectEqualStrings("Endrika:-fanafohezana-", phase.value.occurrences[0].title);
+    try std.testing.expectEqualStrings("[[:Endrika:-fanafohezana-]]", F.source[12..39]);
+    const token = "<<nowiki/>i<nowiki/>>";
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, F.raw, token));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, F.source, token));
+    const first = std.mem.indexOf(u8, F.source, token).?;
+    try std.testing.expect(first >= phase.value.output.ranges[0].end);
+    const reference = try std.mem.replaceOwned(u8, a, F.source, token, "<nowiki><</nowiki>i<nowiki/>>");
+    var ns = try namespace_registry.Registry.init(a, namespace_bytes); defer ns.deinit();
+    // Only the real namespace authority is supplied. This body regression does
+    // not invent a Latin language registry or repair the absent POS template.
+    const codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns };
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/mg-nowiki-angles", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, F.source, F.raw, null, &.{}, null, F.phase);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+    const entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, "Unclassified", F.title);
+    const actual = try codec.encodeAlloc(a, .{ .entry = entry });
+    const decoded = try codec.decodeAlloc(a, actual, F.title, .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqualDeep(entry, decoded.entry);
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, decoded));
+    var tracked: doc.MissingText = .{ .bytes = F.source, .ranges = phase.value.output.ranges, .unknown = phase.value.output.unknown };
+    var report: doc.Fallbacks = .{}; var reference_report: doc.Fallbacks = .{};
+    const direct = try doc.compileClassifiedWithHeadingAnchorsAlloc(a, F.title, .language, "Unclassified", "", tracked, null, .{}, &ns, null, null, .{}, &report, null, &.{}, null, &.{}, null);
+    tracked.bytes = reference; // Both substitutions follow the unchanged authenticated missing range.
+    const expected = try doc.compileClassifiedWithHeadingAnchorsAlloc(a, F.title, .language, "Unclassified", "", tracked, null, .{}, &ns, null, null, .{}, &reference_report, null, &.{}, null, &.{}, null);
+    try std.testing.expectEqualSlices(u8, direct, actual);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    try std.testing.expectEqualDeep(try codec.decodeAlloc(a, expected, F.title, .language, .{ .heading = "Unclassified", .code = "" }), decoded);
+    try std.testing.expectEqualDeep(reference_report, report);
+    try std.testing.expect(!report.render_limit);
+    var visible: std.ArrayList(u8) = .empty;
+    var real_links: usize = 0;
+    for (entry.sections) |section| for (section.blocks) |block| {
+        for (block.spans) |span| {
+            try visible.appendSlice(a, span.text); try visible.appendSlice(a, span.trail);
+            if (span.kind == .external_link and std.mem.startsWith(u8, span.target, "https://www.jstor.org/")) real_links += 1;
+        }
+        try visible.append(a, '\n');
+    };
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, visible.items, "<i>"));
+    for ([_][]const u8{ "Patulc<ium> commisse<i>.", "du<o>nus Ianus.", "Ven<i>es po<tissimu>m" }) |part|
+        try std.testing.expect(std.mem.indexOf(u8, visible.items, part) != null);
+    try std.testing.expectEqual(@as(usize, 2), real_links);
+    try std.testing.expect(entry.media.len != 0);
+    for ([_][]const u8{ "[[Target|<<nowiki/>i<nowiki/>>]]", "[https://example.test <<nowiki/>i<nowiki/>>]" }) |negative|
+        try std.testing.expectError(error.UncompiledPresentation, doc.compileAlloc(a, "guard", .language, "Unclassified", "", negative, null));
+}
+
+
+test "retained MG citation colon text keeps complete Writer body actions phases and codec" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const doc = encoder.presentation_document; const codec = encoder.presentation_codec;
+    const F = struct {
+        const title = "aîaîá";
+        const raw = @embedFile("testdata/mg-aiaia-colon/raw.wikitext");
+        const source = @embedFile("testdata/mg-aiaia-colon/expanded.wikitext");
+        const phase = @embedFile("testdata/mg-aiaia-colon/missing-dependency.json");
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+    };
+    try F.hash(F.raw, "1b24df3eec3398ea3ca9c39788defd5c79787b0cb33b21e08a9995282afd6f15");
+    try F.hash(F.source, "fc1a6a3ca4bee4f33ee18c912496c7ebe88aa9012f08830c6b6f240af0b4afac");
+    try F.hash(F.phase, "e7bcd751aa2af164d36b539a7e880d468e8ad6aacd67069957e76fc002dd7648");
+    const namespace_bytes = @embedFile("testdata/figure-sizing/mg-namespace-registry.tsv");
+    try F.hash(namespace_bytes, "a84ebd65831d67daa99c9f5d8a28e0ec93f37fe14f66c0bdab9fc1d3c0c0430b");
+    const Coordinates = @TypeOf((doc.MissingText{ .bytes = "" }).coordinates());
+    const Phase = struct {
+        schema: []const u8, output_sha256: []const u8, display_title_sha256: []const u8,
+        occurrences: []const struct { id: u32, title: []const u8 }, output: Coordinates, display_title: Coordinates,
+    };
+    const phase = try std.json.parseFromSlice(Phase, a, F.phase, .{}); defer phase.deinit();
+    try std.testing.expectEqualStrings("wikidict.missing-dependency-phase.v1", phase.value.schema);
+    try std.testing.expectEqual(@as(usize, 3), phase.value.output.ranges.len);
+    try std.testing.expect(phase.value.output.unknown and !phase.value.display_title.unknown);
+    try std.testing.expectEqual(@as(usize, 0), phase.value.display_title.ranges.len);
+    try std.testing.expectEqual(@as(usize, 3), phase.value.occurrences.len);
+    const starts = [_]u32{ 1830, 2065, 2082 }; const ends = [_]u32{ 1848, 2079, 2096 };
+    const names = [_][]const u8{ "Endrika:rhyme", "Endrika:R", "Endrika:R" };
+    for (phase.value.output.ranges, 0..) |range, n| {
+        try std.testing.expectEqual(starts[n], range.start);
+        try std.testing.expectEqual(ends[n], range.end);
+        try std.testing.expectEqual(@as(u32, @intCast(n + 1)), range.occurrence);
+        try std.testing.expectEqualStrings(names[n], phase.value.occurrences[n].title);
+    }
+    try std.testing.expectEqualStrings("[[:Endrika:rhyme]]", F.source[1830..1848]);
+    try std.testing.expectEqualStrings("[[:Endrika:R]]", F.source[2065..2079]);
+    try std.testing.expectEqualStrings("[[:Endrika:R]]", F.source[2082..2096]);
+    const token = "<t:Owl";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.raw, token));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, token));
+    const first = std.mem.indexOf(u8, F.source, token).?;
+    try std.testing.expect(first >= phase.value.output.ranges[2].end);
+    const reference = try std.mem.replaceOwned(u8, a, F.source, token, "<nowiki><</nowiki>t:Owl");
+    var ns = try namespace_registry.Registry.init(a, namespace_bytes); defer ns.deinit();
+    // Only the real namespace authority is supplied. This body regression does
+    // not invent a language registry or repair the missing source templates.
+    const codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns };
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/mg-colon-angle", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, F.source, F.raw, null, &.{}, null, F.phase);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+    const entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, "Unclassified", F.title);
+    const actual = try codec.encodeAlloc(a, .{ .entry = entry });
+    const decoded = try codec.decodeAlloc(a, actual, F.title, .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqualDeep(entry, decoded.entry);
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, decoded));
+    var tracked: doc.MissingText = .{ .bytes = F.source, .ranges = phase.value.output.ranges, .unknown = phase.value.output.unknown };
+    var report: doc.Fallbacks = .{}; var reference_report: doc.Fallbacks = .{};
+    const direct = try doc.compileClassifiedWithHeadingAnchorsAlloc(a, F.title, .language, "Unclassified", "", tracked, null, .{}, &ns, null, null, .{}, &report, null, &.{}, null, &.{}, null);
+    tracked.bytes = reference; // The sole substitution follows all three authenticated missing ranges.
+    const expected = try doc.compileClassifiedWithHeadingAnchorsAlloc(a, F.title, .language, "Unclassified", "", tracked, null, .{}, &ns, null, null, .{}, &reference_report, null, &.{}, null, &.{}, null);
+    try std.testing.expectEqualSlices(u8, direct, actual);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    try std.testing.expectEqualDeep(try codec.decodeAlloc(a, expected, F.title, .language, .{ .heading = "Unclassified", .code = "" }), decoded);
+    try std.testing.expect(report.literal_markup);
+    reference_report.literal_markup = true; // Explicit nowiki has no unregistered-opener warning.
+    try std.testing.expectEqualDeep(reference_report, report);
+    try std.testing.expect(!report.render_limit);
+    var visible: std.ArrayList(u8) = .empty;
+    var real_links: usize = 0;
+    var archive_label: std.ArrayList(u8) = .empty;
+    for (entry.sections) |section| for (section.blocks) |block| {
+        var in_archive_action = false;
+        for (block.spans) |span| {
+            try visible.appendSlice(a, span.text); try visible.appendSlice(a, span.trail);
+            if (span.kind == .external_link and std.mem.startsWith(u8, span.target, "https://archive.org/details/vlb-drumond/page/n88/mode/1up?view=theater")) {
+                try std.testing.expectEqualStrings("https://archive.org/details/vlb-drumond/page/n88/mode/1up?view=theater", span.target);
+                if (!in_archive_action) real_links += 1;
+                in_archive_action = true;
+                try archive_label.appendSlice(a, span.text);
+                try archive_label.appendSlice(a, span.trail);
+            } else in_archive_action = false;
+        }
+        try visible.append(a, '\n');
+    };
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible.items, "Curuja<t:Owl [???]>"));
+    // Preserve exactly one contiguous activation, including its entity span.
+    try std.testing.expectEqualStrings("page\u{a0}88", archive_label.items);
+    try std.testing.expectEqual(@as(usize, 1), real_links);
+    try std.testing.expect(entry.media.len != 0);
+    for ([_][]const u8{ "[[Target|<xlit:Word <span>x</span>>]]", "[https://example.test <xlit:Word <span>x</span>>]" }) |negative|
+        try std.testing.expectError(error.UncompiledPresentation, doc.compileAlloc(a, "guard", .language, "Unclassified", "", negative, null));
+}

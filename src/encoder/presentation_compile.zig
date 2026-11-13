@@ -14838,6 +14838,66 @@ pub const Renderer = struct {
         return true;
     }
 
+    // A colon cannot terminate an HTML name. Prove the authored non-HTML
+    // opener and complete formatting children before protecting its one angle;
+    // the children, payload and actions still pass through ordinary parsing.
+    fn colonNameFormattingOpening(self: *const Renderer, tracked: MissingText, input: []const u8, at: usize, style: Style) bool {
+        if (input.ptr != tracked.bytes.ptr or input.len != tracked.bytes.len or
+            tracked.generated_source != null or tracked.lost_missing_range or
+            at >= input.len or input[at] != '<' or
+            style.provenance != .parsed or style.kind != .text or style.target.len != 0 or
+            style.self_link_target != null or style.missing_nonaction or style.image != null or
+            style.code or style.preserve_whitespace or self.body_link_target.len != 0 or
+            self.explicit_wiki_label != null or self.navigation_target_probe != null or self.inline_image_attribute or
+            self.in_reference or self.pre_block or self.parsed_pre or self.block_formatting.code) return false;
+        var preceding = at;
+        while (preceding != 0) {
+            preceding -= 1;
+            if (input[preceding] == '<') return false;
+            if (input[preceding] == '>') break;
+        }
+        var cursor = at + 1;
+        const name_start = cursor;
+        if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return false;
+        while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {
+            if (cursor - name_start >= 64) return false;
+        }
+        const name = input[name_start..cursor];
+        if (recognizedInlineHtmlName(name) or syntax.isOpaqueTag(name) or oneOf(name, &.{ "a", "img" }) or ir.hasExternalProtocolScheme(name)) return false;
+        if (cursor >= input.len or input[cursor] != ':') return false;
+        cursor += 1;
+        const word_start = cursor;
+        if (cursor >= input.len or !std.ascii.isAlphabetic(input[cursor])) return false;
+        while (cursor < input.len and (std.ascii.isAlphanumeric(input[cursor]) or input[cursor] == '-')) : (cursor += 1) {
+            if (cursor - word_start >= 64) return false;
+        }
+        const space_start = cursor;
+        while (cursor < input.len and (input[cursor] == ' ' or input[cursor] == '\t')) : (cursor += 1) {}
+        if (cursor == space_start) return false;
+        const bounded = input[0 .. at + @min(input.len - at, 4097)];
+        var children: usize = 0;
+        while (cursor < input.len and cursor - at <= 4096) {
+            const child = syntax.tagAt(bounded, cursor) orelse return false;
+            if (child.closing or child.self_closing or !oneOf(child.name, &.{ "span", "i", "b", "em", "strong" })) return false;
+            const pair = syntax.matchingTag(bounded, child) orelse return false;
+            if (pair.end - at > 4096) return false;
+            children += 1;
+            cursor = pair.end;
+            while (cursor < input.len and input[cursor] != '<' and input[cursor] != '>') : (cursor += 1) {
+                if (cursor - at > 4096 or std.mem.indexOfScalar(u8, "\r\n\"'={}[]", input[cursor]) != null) return false;
+            }
+            if (cursor == input.len) return false;
+            if (input[cursor] == '>') {
+                const end = cursor + 1;
+                for (tracked.ranges) |range| if (range.start < end and range.end > at) return false;
+                for (tracked.literal_curly_ranges) |range| if (range.start < end and range.end > at) return false;
+                for (tracked.generated_links) |range| if (range.start < end and range.end > at) return false;
+                return children != 0;
+            }
+        }
+        return false;
+    }
+
     // An unregistered plain name followed only by spacing and one complete
     // formatting child has no attribute authority. Preserve the outer angle;
     // the child and all following source retain ordinary inline processing.
@@ -15285,6 +15345,16 @@ pub const Renderer = struct {
             try self.spans.append(self.a, bracket);
         }
     }
+    // The borrowed angle may be protected only across an authored, unaffected
+    // empty marker. Unknown/generated or clipped source cannot supply proof.
+    fn emptyNowikiAngleSource(tracked: MissingText, at: usize, end: usize) bool {
+        if (tracked.unknown or tracked.lost_missing_range or tracked.generated_source != null or
+            at == 0 or at >= end or end > tracked.bytes.len) return false;
+        for (tracked.ranges) |range| if (range.start < end and range.end > at - 1) return false;
+        for (tracked.literal_curly_ranges) |range| if (range.start < end and range.end > at - 1) return false;
+        for (tracked.generated_links) |range| if (range.start < end and range.end > at - 1) return false;
+        return true;
+    }
     // An explicit empty nowiki remains a strip marker through template and
     // link parsing upstream. Preserve only the borrowed brace or closing
     // bracket before that source boundary; generated/copy/style facts cannot.
@@ -15295,9 +15365,11 @@ pub const Renderer = struct {
         const tag = syntax.tagAt(input, at) orelse return;
         if (!tag.is("nowiki") or tag.closing or !tag.self_closing or trim(tag.attrs).len != 0 or tag.end >= input.len) return;
         const brace = input[at - 1];
-        if ((brace != '{' and brace != '}' and brace != ']') or input[tag.end] != brace or
+        const name_at = tag.end + @as(usize, @intFromBool(input[tag.end] == '/'));
+        const angle = brace == '<' and name_at < input.len and std.ascii.isAlphabetic(input[name_at]);
+        if ((!angle and ((brace != '{' and brace != '}' and brace != ']') or input[tag.end] != brace)) or
             (at > 1 and input[at - 2] == brace) or
-            (tag.end + 1 < input.len and input[tag.end + 1] == brace)) return;
+            (!angle and tag.end + 1 < input.len and input[tag.end + 1] == brace)) return;
         const last = self.spans.items[self.spans.items.len - 1];
         if (last.provenance != .parsed or last.kind != .text or last.target.len != 0 or last.self_link or
             last.generated_diagnostic or last.image != null or
@@ -15611,6 +15683,7 @@ pub const Renderer = struct {
         const literal_tag = tag.is("nowiki");
         if (literal_tag and !tag.closing) {
             if (tag.self_closing) {
+                if (at != 0 and input[at - 1] == '<' and !emptyNowikiAngleSource(tracked, at, tag.end)) return tag.end;
                 try self.preserveEmptyNowikiBraceBoundary(input, at, style);
                 return tag.end;
             }
@@ -19365,6 +19438,12 @@ pub const Renderer = struct {
                     continue;
                 }
                 if (opaque_scan.tagAt(input, it.cursor, &no_more_nowiki_close) == null) {
+                    if (self.colonNameFormattingOpening(prepared_missing, input, it.cursor, s)) {
+                        self.fallbacks.literal_markup = true;
+                        try self.protectedLiteral(input[it.cursor .. it.cursor + 1], s);
+                        it.cursor += 1;
+                        continue;
+                    }
                     if (s.provenance == .parsed and !s.missing_nonaction and
                         ((s.kind == .text and s.target.len == 0 and s.self_link_target == null) or
                             self.hasExplicitWikiLabel(s)) and
@@ -84238,4 +84317,177 @@ test "preceding nested sibling position proof refuses unknown copied scoped acti
     try std.testing.expect(!Renderer.formattingAngleBodyPositionWithTrackedSiblings(generated, generated_prefix.len, true, .{ .bytes = generated, .generated_source = generated, .generated_links = bound }));
     // Authentic generated metadata also changes plain-label grammar; no claim
     // that this is an isolated range-only negative.
+}
+
+
+test "source empty nowiki angle boundaries retain literal Latin supplements and exact formatting" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "Cozev''i'' o''b''orieso. Omnia vero ad Patul''c''<ium> co''m''misse<<nowiki/>i<nowiki/>>.<br /> Ian''e''us ia''m'' es, duonus Cerus es, du<o>nus Ianus.<br /> Ve''n''<<nowiki/>i<nowiki/>>e''s'' po<tissimu>m melios eum recum . . .";
+    const reference = try std.mem.replaceOwned(u8, a, source, "<<nowiki/>i<nowiki/>>", "<nowiki><</nowiki>i<nowiki/>>");
+    var actual: Renderer = .{ .a = a, .context = .{} };
+    var expected: Renderer = .{ .a = a, .context = .{} };
+    const spans = try actual.parseSpans(source, .{});
+    const reference_spans = try expected.parseSpans(reference, .{});
+    try std.testing.expectEqualDeep(reference_spans, spans);
+    try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+    const visible = try flattened(a, spans);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, visible, "<i>"));
+    for ([_][]const u8{ "Patulc<ium> commisse<i>.", "du<o>nus Ianus.", "Ven<i>es po<tissimu>m" }) |part|
+        try std.testing.expect(std.mem.indexOf(u8, visible, part) != null);
+    var italic_m: usize = 0; var italic_n: usize = 0; var italic_s: usize = 0;
+    for (spans) |span| {
+        try std.testing.expect(!span.generated_diagnostic);
+        if (span.flags.italic and std.mem.eql(u8, span.text, "m")) italic_m += 1;
+        if (span.flags.italic and std.mem.eql(u8, span.text, "n")) italic_n += 1;
+        if (span.flags.italic and std.mem.eql(u8, span.text, "s")) italic_s += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), italic_m);
+    try std.testing.expectEqual(@as(usize, 1), italic_n);
+    try std.testing.expectEqual(@as(usize, 1), italic_s);
+    const actual_blocks = [_]Block{.{ .kind = .paragraph, .spans = spans }};
+    const reference_blocks = [_]Block{.{ .kind = .paragraph, .spans = reference_spans }};
+    const stored = try FormattingScopeTest.encode(a, &actual, &actual_blocks);
+    const control = try FormattingScopeTest.encode(a, &expected, &reference_blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    try std.testing.expectEqualDeep(control, stored);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, control), try codec.encodeAlloc(a, stored));
+    var real: Renderer = .{ .a = a, .context = .{} };
+    const real_spans = try real.parseSpans("<i>real italic</i>", .{});
+    try std.testing.expectEqualStrings("real italic", try flattened(a, real_spans));
+    for (real_spans) |span| try std.testing.expect(span.flags.italic and span.provenance == .parsed);
+}
+
+
+test "empty nowiki angle proof refuses copied generated tainted and action source without a raw waiver" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<<nowiki/>i<nowiki/>>";
+    const marker = syntax.tagAt(source, 1).?;
+    try std.testing.expect(Renderer.emptyNowikiAngleSource(MissingText.untracked(source), 1, marker.end));
+    for ([_]MissingText{
+        .{ .bytes = source, .unknown = true },
+        .{ .bytes = source, .lost_missing_range = true },
+        .{ .bytes = source, .generated_source = source },
+        .{ .bytes = source, .ranges = &.{.{ .start = 0, .end = 2, .occurrence = 1 }} },
+        .{ .bytes = source, .literal_curly_ranges = &.{.{ .start = 0, .end = 2 }} },
+    }) |tracked| try std.testing.expect(!Renderer.emptyNowikiAngleSource(tracked, 1, marker.end));
+    for ([_][]const u8{ "<<<nowiki/>i>", "<<nowiki title=x/>i>", "<<nowiki/ >i>", "<<nowiki></nowiki>i>", "<<br/>i>", "<<nowiki/>1>" }) |value| {
+        const at = std.mem.indexOf(u8, value, "<nowiki") orelse std.mem.indexOf(u8, value, "<br").?;
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try renderer.text(value[0..at], .{});
+        const prior = renderer.spans.items[0];
+        try renderer.preserveEmptyNowikiBraceBoundary(value, at, .{});
+        try std.testing.expectEqual(@as(usize, 1), renderer.spans.items.len);
+        try std.testing.expectEqualDeep(prior, renderer.spans.items[0]);
+    }
+    const copy = try a.dupe(u8, source);
+    var copied: Renderer = .{ .a = a, .context = .{} };
+    try copied.text(source[0..1], .{});
+    try copied.preserveEmptyNowikiBraceBoundary(copy, 1, .{});
+    try std.testing.expectEqual(Provenance.parsed, copied.spans.items[0].provenance);
+    var generated: Renderer = .{ .a = a, .context = .{} };
+    try generated.generatedDiagnostic(source[0..1], .{});
+    try generated.preserveEmptyNowikiBraceBoundary(source, 1, .{});
+    try std.testing.expectEqual(Provenance.parsed, generated.spans.items[0].provenance);
+    var image: Renderer = .{ .a = a, .context = .{} };
+    try image.text(source[0..1], .{}); image.spans.items[0].image = .{ .file = "A.png" };
+    try image.preserveEmptyNowikiBraceBoundary(source, 1, .{});
+    try std.testing.expectEqual(Provenance.parsed, image.spans.items[0].provenance);
+    for ([_]Style{ .{ .kind = .link, .target = "Target" }, .{ .kind = .external_link, .target = "https://example.test" }, .{ .self_link_target = "Target" }, .{ .missing_nonaction = true } }) |style| {
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        try renderer.text(source[0..1], style);
+        try renderer.preserveEmptyNowikiBraceBoundary(source, 1, style);
+        try std.testing.expectEqual(Provenance.parsed, renderer.spans.items[0].provenance);
+    }
+    const forged = [_]Span{ .{ .text = "<" }, .{ .text = "i", .flags = .{ .italic = true } }, .{ .text = ">" } };
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(try flattened(a, &forged)));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("<script>raw</script>"));
+    try std.testing.expect(unresolvedActionTarget("{{missing}}"));
+    try std.testing.expect(unresolvedExternalActionTarget("https://example.test/{{missing}}"));
+}
+
+
+test "observed colon citation source preserves escaped text bracket styles archive action and Stored bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "* “Curuja<t:Owl <span style=\"font-style: normal;\">[</span>???<span style=\"font-style: normal;\">]</span>>”, in&#32;<cite>Vocabulario na lingoa Braſilica</cite>&#32;(in Portuguese), Piratininga, 1622&#59; &#32;Carlos Drummond, editor,&#32;<cite>Vocabulário na Língua Brasílica</cite>, volume 1,&#32;2nd edition,&#32;São Paulo&#58; USP, 1953, [https://archive.org/details/vlb-drumond/page/n88/mode/1up?view=theater page&nbsp;88]\n";
+    const reference = try std.mem.replaceOwned(u8, a, source, "<t:Owl", "<nowiki><</nowiki>t:Owl");
+    var actual: Renderer = .{ .a = a, .context = .{} };
+    var expected: Renderer = .{ .a = a, .context = .{} };
+    const spans = try actual.parseSpans(source, .{});
+    const reference_spans = try expected.parseSpans(reference, .{});
+    try std.testing.expectEqualDeep(reference_spans, spans);
+    try std.testing.expect(actual.fallbacks.literal_markup);
+    expected.fallbacks.literal_markup = true; // The unregistered source opener is reported, unlike explicit nowiki.
+    try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+    const visible = try flattened(a, spans);
+    try std.testing.expect(std.mem.indexOf(u8, visible, "Curuja<t:Owl [???]>") != null);
+    var brackets: usize = 0; var archive_actions: usize = 0;
+    var archive_label: std.ArrayList(u8) = .empty;
+    var in_archive_action = false;
+    for (spans) |span| {
+        if (std.mem.eql(u8, span.text, "[") or std.mem.eql(u8, span.text, "]")) {
+            try std.testing.expect(!span.flags.italic and span.kind == .text);
+            brackets += 1;
+        }
+        if (span.kind == .external_link) {
+            try std.testing.expectEqualStrings("https://archive.org/details/vlb-drumond/page/n88/mode/1up?view=theater", span.target);
+            if (!in_archive_action) archive_actions += 1;
+            in_archive_action = true;
+            try archive_label.appendSlice(a, span.text);
+        } else in_archive_action = false;
+    }
+    // One source link may have distinct parsed/entity spans; separated runs
+    // still count as distinct actions and the complete label remains exact.
+    try std.testing.expectEqualStrings("page\u{a0}88", archive_label.items);
+    try std.testing.expectEqual(@as(usize, 2), brackets);
+    try std.testing.expectEqual(@as(usize, 1), archive_actions);
+    const actual_blocks = [_]Block{.{ .kind = .paragraph, .spans = spans }};
+    const reference_blocks = [_]Block{.{ .kind = .paragraph, .spans = reference_spans }};
+    const stored = try FormattingScopeTest.encode(a, &actual, &actual_blocks);
+    const control = try FormattingScopeTest.encode(a, &expected, &reference_blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    try std.testing.expectEqualDeep(control, stored);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, control), try codec.encodeAlloc(a, stored));
+}
+
+
+test "colon formatting source proof rejects real tags copied domains taint and action lookalikes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<xlit:Word <span style=\"font-style: normal;\">[</span>???<span style=\"font-style: normal;\">]</span>>";
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const tracked = MissingText.untracked(source);
+    try std.testing.expect(r.colonNameFormattingOpening(tracked, source, 0, .{}));
+    // Unlocalized missing-template evidence is preserved, not used as proof:
+    // the local physical non-HTML spelling is independently established.
+    var uncertain = tracked; uncertain.unknown = true;
+    try std.testing.expect(r.colonNameFormattingOpening(uncertain, source, 0, .{}));
+    const copy = try a.dupe(u8, source);
+    try std.testing.expect(!r.colonNameFormattingOpening(tracked, copy, 0, .{}));
+    for ([_]MissingText{
+        .{ .bytes = source, .lost_missing_range = true },
+        .{ .bytes = source, .generated_source = source },
+        .{ .bytes = source, .ranges = &.{.{ .start = 0, .end = 2, .occurrence = 1 }} },
+        .{ .bytes = source, .literal_curly_ranges = &.{.{ .start = 0, .end = 2 }} },
+    }) |tainted| try std.testing.expect(!r.colonNameFormattingOpening(tainted, source, 0, .{}));
+    for ([_]Style{ .{ .kind = .link, .target = "Target" }, .{ .kind = .external_link, .target = "https://example.test" }, .{ .self_link_target = "Target" }, .{ .missing_nonaction = true }, .{ .provenance = .protected_literal }, .{ .code = true }, .{ .image = .{ .file = "A.png" } } }) |style|
+        try std.testing.expect(!r.colonNameFormattingOpening(tracked, source, 0, style));
+    for ([_][]const u8{
+        "<xlit:Word>", "<xlit:Word [???]>", "<xlit:Word <span>[</span>???<span>]</span>",
+        "<q:Word <span>x</span>>",
+        "<span:Word <span>x</span>>", "<script:Word <span>x</span>>", "<http:Word <span>x</span>>",
+        "<xlit:Word href=x <span>x</span>>", "<xlit:Word <a href=\"https://example.test\">x</a>>",
+        "<xlit:Word <span>x</span>{{missing}}>", "<xlit:Word <span>x</span>[[Target]]>",
+        "<<xlit:Word <span>x</span>>", "</xlit:Word <span>x</span>>", "<i>real</i>",
+    }) |value| try std.testing.expect(!r.colonNameFormattingOpening(MissingText.untracked(value), value, 0, .{}));
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText("Curuja<t:Owl [???]>"));
+    const forged = [_]Span{ .{ .text = "Curuja<t:Owl " }, .{ .text = "[", .flags = .{ .italic = true } }, .{ .text = "???]>" } };
+    try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(try flattened(a, &forged)));
+    try std.testing.expect(unresolvedActionTarget("{{missing}}"));
+    try std.testing.expect(unresolvedExternalActionTarget("https://example.test/{{missing}}"));
+    const real = try r.parseSpans("<i>real italic</i>", .{});
+    try std.testing.expectEqualStrings("real italic", try flattened(a, real));
+    for (real) |span| try std.testing.expect(span.flags.italic and span.provenance == .parsed);
 }

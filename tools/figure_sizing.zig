@@ -6982,3 +6982,45 @@ test "static WebP optional media metadata preserves absent empty and strict pres
         }
     }
 }
+
+
+test "canonical file identity rejects cyclic invented and mismatched raw alias authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try TestSource.namespace(a);
+    defer ns.deinit();
+    for ([_][]const u8{ "cycle", "invented", "mismatched" }) |mode| {
+        const input = try FileTestSource.make(a, &ns, false);
+        var doc = try std.json.parseFromSliceLeaky(FilesDocument, a, input.projection, .{ .allocate = .alloc_always });
+        var batches = try std.json.parseFromSliceLeaky(RawFileBatches, a, input.raw, .{ .allocate = .alloc_always });
+        var response = try std.json.parseFromSliceLeaky(Value, a, batches.batches[0].response, .{ .allocate = .alloc_always });
+        const alias = "Sary:Captured requested alias.svg";
+        const records = try a.dupe(FileFact, doc.records);
+        records[0].requested_file = alias;
+        doc.records = records;
+        const items = try a.dupe(RawFileBatch, batches.batches);
+        items[0].requests = &.{alias};
+        const query = response.object.getPtr("query").?;
+        if (equal(mode, "mismatched")) {
+            const pages = query.object.getPtr("pages").?;
+            try pages.array.items[0].object.put(a, "title", .{ .string = alias });
+            try pages.array.items[0].object.getPtr("imageinfo").?.array.items[0].object.put(a, "canonicaltitle", .{ .string = "Sary:Invented canonical.svg" });
+        } else {
+            const mapping = if (equal(mode, "cycle"))
+                "[{\"from\":\"Sary:Captured requested alias.svg\",\"to\":\"Sary:Other alias.svg\"},{\"from\":\"Sary:Other alias.svg\",\"to\":\"Sary:Captured requested alias.svg\"}]"
+            else "[{\"from\":\"Sary:Captured requested alias.svg\",\"to\":\"Sary:Absent raw page.svg\"}]";
+            const redirects = try std.json.parseFromSliceLeaky(Value, a, mapping, .{});
+            try query.object.put(a, "redirects", redirects);
+        }
+        items[0].response = try std.json.Stringify.valueAlloc(a, response, .{});
+        batches.batches = items;
+        const raw = try std.json.Stringify.valueAlloc(a, batches, .{});
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(raw, &digest, .{});
+        const hex = std.fmt.bytesToHex(digest, .lower);
+        doc.raw_sha256 = &hex;
+        const projection = try std.json.Stringify.valueAlloc(a, doc, .{});
+        try std.testing.expectError(invalid, Registry.init(a, projection, raw, TestSource.site, &ns, accepted_core, generator_sha256));
+    }
+}
