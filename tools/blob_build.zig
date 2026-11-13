@@ -2984,6 +2984,10 @@ fn loadManualAutomaticIdentity(io: std.Io, a: std.mem.Allocator, root: []const u
     profile.effective_override = null;
     profile.cite_framing = null;
     namespaces.manual_conversion_context = profile;
+    // This loader proves automatic identity only for the previously qualified
+    // KU/UZ/SR base tables. A manual-choice profile alone is not that grant.
+    if (!std.mem.eql(u8, profile.base, "ku") and !std.mem.eql(u8, profile.base, "uz") and
+        !std.mem.eql(u8, profile.base, "sr")) return;
     const message_key = try std.fmt.allocPrint(a, "conversiontable/{s}", .{profile.base});
     defer a.free(message_key);
     const title_key = try std.fmt.allocPrint(a, "Conversiontable/{s}", .{profile.base});
@@ -49652,7 +49656,9 @@ test "normal Writer retained ZH dan preserves nested formatted link Hindi owner 
     try std.testing.expectEqualStrings("zhwiktionary", ns.wiki);
     try std.testing.expectEqualStrings("20261001", ns.dump_date);
     try std.testing.expectEqualStrings("zh", ns.content_language);
-    try std.testing.expect(ns.manual_conversion_context == null);
+    const manual = ns.manual_conversion_context orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("zh", manual.base);
+    try std.testing.expect(!manual.automatic_identity and manual.effective_override == null);
     const variants = ns.language_conversion orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), variants.len);
     for (variants, [_][]const u8{ "zh", "zh-hans", "zh-hant" }) |actual, expected| try std.testing.expectEqualStrings(expected, actual);
@@ -63311,9 +63317,11 @@ test "normal Writer retained ZH dikhana keeps preceding siblings complete Hindi 
     const site = (try loadSiteMainPage(io, a, root, &ns)) orelse return error.TestUnexpectedResult; defer a.free(site.title);
     try std.testing.expectEqualStrings("zhwiktionary", ns.wiki); try std.testing.expectEqualStrings("20261001", ns.dump_date);
     try std.testing.expectEqualStrings("zh", ns.content_language);
-    // This installed source profile enables the captured variants, but issues
-    // manual-choice context only for ku/uz/sr. Rule-free labels need no such grant.
-    try std.testing.expect(ns.manual_conversion_context == null);
+    // The exact captured ZH profile now admits manual choices only. Rule-free
+    // labels retain their independent proof; no automatic identity is granted.
+    const manual_choice_context = ns.manual_conversion_context orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("zh", manual_choice_context.base);
+    try std.testing.expect(!manual_choice_context.automatic_identity and manual_choice_context.effective_override == null);
     const variants = ns.language_conversion orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), variants.len);
     for (variants, [_][]const u8{ "zh", "zh-hans", "zh-hant" }) |actual, expected| try std.testing.expectEqualStrings(expected, actual);
@@ -63789,4 +63797,198 @@ test "shared template source releases every failed allocation and new invocation
     var backing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
     try std.testing.checkAllAllocationFailures(backing.allocator(), Case.run, .{ root, &ns });
     try std.testing.expectEqual(backing.allocated_bytes, backing.freed_bytes);
+}
+
+test "normal Writer retained ZH vienmer keeps complete Latvian request image table actions and codec" {
+    const T = encoder.presentation_types;
+    const F = struct {
+        const title = "vienmēr";
+        const raw = @embedFile("testdata/zh-vienmer-manual-choice01/page.raw.wikitext");
+        const source = @embedFile("testdata/zh-vienmer-manual-choice01/page.expanded.wikitext");
+        const display = @embedFile("testdata/zh-vienmer-manual-choice01/display-title.wikitext");
+        const File = struct { path: []const u8, data: []const u8, sha256: []const u8 };
+        const Metadata = struct { files: []const File };
+        fn hash(bytes: []const u8, expected: []const u8) !void {
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+            try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+        }
+        const Scan = struct {
+            visible: std.ArrayList(u8) = .empty,
+            actions: std.ArrayList(T.Span) = .empty,
+            definitions: usize = 0, tables: usize = 0, images: usize = 0,
+            headword: bool = false,
+            fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+                for (values) |span| {
+                    try self.visible.appendSlice(a, span.text); try self.visible.appendSlice(a, span.trail);
+                    if (span.kind == .link or span.kind == .external_link) try self.actions.append(a, span);
+                    if (span.image) |image| {
+                        self.images += 1;
+                        try std.testing.expectEqualStrings("Yaru-Theme-Icon (Ubuntu) – audio-input-microphone-symbolic.svg", image.file);
+                        try std.testing.expectEqual(@as(?u32, 45), image.width_px);
+                        try std.testing.expect(image.height_px == null and image.map == null and !image.border);
+                        try std.testing.expectEqualStrings("", span.target);
+                    }
+                    if (std.mem.eql(u8, span.text, title) and span.bold and std.mem.eql(u8, span.language, "lv") and
+                        std.mem.indexOf(u8, span.classes, "Latn") != null and std.mem.indexOf(u8, span.classes, "headword") != null) self.headword = true;
+                    for ([_][]const u8{ "-{", "}-", "[[", "]]", "Category:" }) |literal|
+                        try std.testing.expect(std.mem.indexOf(u8, span.text, literal) == null);
+                }
+            }
+            fn blocks(self: *@This(), a: std.mem.Allocator, values: []const T.Block) anyerror!void {
+                for (values) |block| {
+                    if (block.kind == .definition) self.definitions += 1;
+                    try std.testing.expect(block.figure == null and block.feature == null);
+                    if (block.container) |container| try self.blocks(a, container.blocks)
+                    else if (block.flow) |parts| try self.flow(a, parts)
+                    else try self.spans(a, block.spans);
+                    if (block.table) |table| {
+                        self.tables += 1;
+                        try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+                        if (table.caption_blocks) |children| try self.blocks(a, children) else try self.spans(a, table.caption);
+                        for (table.rows) |row| {
+                            try std.testing.expectEqual(@as(usize, 2), row.cells.len);
+                            for (row.cells) |cell| {
+                                try std.testing.expect(cell.nested_table == null);
+                                if (cell.blocks) |children| try self.blocks(a, children) else try self.spans(a, cell.spans);
+                            }
+                        }
+                    }
+                    try self.visible.append(a, '\n');
+                }
+            }
+            fn flow(self: *@This(), a: std.mem.Allocator, values: []const T.FlowPart) anyerror!void {
+                for (values) |part| switch (part.kind) {
+                    .@"inline" => try self.spans(a, part.spans),
+                    .scope => try self.flow(a, (part.scope orelse return error.TestUnexpectedResult).parts),
+                    .figure => return error.TestUnexpectedResult,
+                };
+            }
+        };
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    try F.hash(F.raw, "9c75251c5dba66d15aed47c93eebe03fba5b9215e909d0b856d2163f49d364b4");
+    try F.hash(F.source, "0d6e6040e5dc67e1fcf3d712b7c6b3091bf8d3ea0e85ef7ce8eb587135629796");
+    try F.hash(F.display, "5348702226750fbc8b2ab1d37beba7e863355fe3727434a5c03f06fe69b09a36");
+    try F.hash(@embedFile("testdata/zh-vienmer-manual-choice01/index-row.tsv"), "df89757122465b103aa852550ba4169904b8a6a6a8b1f3f15a3816546855f2bf");
+    try std.testing.expectEqual(@as(usize, 814), F.source.len);
+    const needle = "-{zh-hans:音频文件; zh-hant:音訊檔案;}-";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, needle));
+    const reference = try std.mem.replaceOwned(u8, a, F.source, needle, "音频文件");
+    try std.testing.expectEqual(F.source.len - needle.len + "音频文件".len, reference.len);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/zh-magal/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/zh-magal/interwiki-map.tsv"));
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = @embedFile("testdata/zh-magal/namespace-siteinfo.raw.json") });
+    const site = (try loadSiteMainPage(io, a, root, &ns)) orelse return error.TestUnexpectedResult; defer a.free(site.title);
+    try std.testing.expectEqualStrings("zhwiktionary", ns.wiki); try std.testing.expectEqualStrings("20261001", ns.dump_date);
+    try std.testing.expectEqualStrings("zh", ns.content_language); try std.testing.expect(ns.manual_conversion_context != null);
+    try std.testing.expect(!ns.manual_conversion_context.?.automatic_identity and ns.manual_conversion_context.?.effective_override == null);
+    const variants = ns.language_conversion orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), variants.len);
+    for (variants, [_][]const u8{ "zh", "zh-hans", "zh-hant" }) |actual, expected| try std.testing.expectEqualStrings(expected, actual);
+    const behavior_source = @embedFile("testdata/zh-magal/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_source, &digest, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/zh-magal/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
+    try ZhCapturedLanguageModuleRoles.install(io, a, root);
+    const manifest = @embedFile("testdata/zh-dan-nextnormal3/module-roles-manifest.jsonl");
+    try F.hash(manifest, "5be3fed6dce680f89124ee74b1662a6c5e193422ef4184563434b4b410fd9a63");
+    try tmp.dir.writeFile(io, .{ .sub_path = "manifest.jsonl", .data = manifest });
+    const metadata_bytes = @embedFile("testdata/zh-dan-nextnormal3/normal-module-files.json");
+    try F.hash(metadata_bytes, "75f501cab73170de6e443b1149bef56b80830508f9c2b8b49872de45b0e16266");
+    const metadata = try std.json.parseFromSlice(F.Metadata, a, metadata_bytes, .{ .ignore_unknown_fields = true }); defer metadata.deinit();
+    try std.testing.expectEqual(@as(usize, 28), metadata.value.files.len);
+    for (metadata.value.files) |file| { try F.hash(file.data, file.sha256); try tmp.dir.writeFile(io, .{ .sub_path = file.path, .data = file.data }); }
+    var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit();
+    const owner = registry.resolveStrong("拉脫維亞語") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("lv", owner.code);
+    const css = @embedFile("testdata/zh-ciriciring132/common.css");
+    try F.hash(css, "e8aa6f6b10a038eb58848d807902edf53e9664f9cde941b779883b1a86d2bec6");
+    var styles = try encoder.table_style_profile.parseAlloc(a, css); defer styles.deinit();
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    var roots: [2][]const u8 = undefined; var manifests: [2][]const u8 = undefined;
+    var reports: [2][]const u8 = undefined; var stats: [2]encoder.blob_builder.BuildStats = undefined;
+    for ([_][]const u8{ F.source, reference }, 0..) |body, arm| {
+        roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/zh-vienmer-{d}", .{tmp.sub_path, arm});
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[arm]); defer writer.deinit();
+        writer.language_codes = codes; writer.stats.pages_seen += 1;
+        try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, F.title, body, F.raw, F.display, &.{}, null, null);
+        stats[arm] = try writer.finish(codes);
+        manifests[arm] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[arm], encoder.blob_catalog.manifest_filename }), a, .limited(64 * 1024));
+        reports[arm] = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ roots[arm], "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+        try std.testing.expectEqual(@as(usize, 1), stats[arm].pages_seen);
+        try std.testing.expectEqual(@as(usize, 1), stats[arm].language_records);
+        try std.testing.expectEqual(@as(usize, 0), stats[arm].supplemental_records);
+    }
+    try std.testing.expectEqualDeep(stats[1], stats[0]); try std.testing.expectEqualStrings(reports[1], reports[0]);
+    var actual_it = try encoder.blob_catalog.Iterator.init(manifests[0]); var expected_it = try encoder.blob_catalog.Iterator.init(manifests[1]);
+    const row = (try actual_it.next()) orelse return error.TestUnexpectedResult;
+    const other = (try expected_it.next()) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(try actual_it.next() == null and try expected_it.next() == null);
+    try std.testing.expectEqualStrings(owner.heading, row.heading); try std.testing.expectEqualStrings(row.heading, other.heading);
+    const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], row.heading, F.title);
+    const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], other.heading, F.title);
+    try std.testing.expectEqualStrings("lv", actual.language_code); try std.testing.expectEqualStrings(F.title, actual.title);
+    try std.testing.expectEqualStrings(owner.heading, actual.language orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualDeep(expected, actual);
+    const codec = encoder.presentation_codec; const stored: T.Stored = .{ .entry = actual };
+    const encoded = try codec.encodeAlloc(a, stored);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = expected }), encoded);
+    const decoded = try codec.decodeAlloc(a, encoded, F.title, .language, .{ .heading = row.heading, .code = "lv" });
+    try std.testing.expectEqualDeep(stored, decoded); try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    try std.testing.expect(actual.alias == null and actual.redirect == null and actual.references.len == 0);
+    var display_text: std.ArrayList(u8) = .empty;
+    for (actual.display_title) |span| { try display_text.appendSlice(a, span.text); try std.testing.expect(span.target.len == 0); }
+    try std.testing.expectEqualStrings(F.title, display_text.items);
+    var scan: F.Scan = .{}; try scan.spans(a, actual.preamble_spans);
+    var pronunciation = false; var adverb = false;
+    for (actual.sections) |section| {
+        pronunciation = pronunciation or std.mem.eql(u8, section.title, "發音");
+        adverb = adverb or std.mem.eql(u8, section.title, "副詞");
+        try scan.blocks(a, section.blocks);
+    }
+    try std.testing.expect(pronunciation and adverb and scan.headword);
+    try std.testing.expectEqual(@as(usize, 1), scan.definitions); try std.testing.expectEqual(@as(usize, 1), scan.tables); try std.testing.expectEqual(@as(usize, 1), scan.images);
+    for ([_][]const u8{ "本词条需要", "如果您有麥克風", "請錄製並", "音频文件", "上傳", "總是" }) |text|
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, text) != null);
+    const labels = [_][]const u8{ "音频文件", "上傳", "總是" };
+    try std.testing.expectEqual(labels.len, scan.actions.items.len);
+    for (scan.actions.items, labels) |action, label| { try std.testing.expectEqualStrings(label, action.text); try std.testing.expect(action.target.len != 0); }
+    try std.testing.expectEqualStrings("Category:拉脫維亞語詞條發音音訊檔案請求", scan.actions.items[0].target);
+    try std.testing.expectEqualStrings("總是", scan.actions.items[2].target);
+    try std.testing.expectEqual(@as(usize, 1), actual.organization.lexemes.len);
+    const lexeme = actual.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Adverb", lexeme.kind); try std.testing.expectEqualStrings(owner.heading, lexeme.language);
+    try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+}
+
+test "normal ZH manual choice profile does not enter automatic override or Cite admission" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    const title_path = try std.fs.path.join(a, &.{ root, dump_source.page_title_index_filename });
+    const index = "0\t0\tControl\t\t1\t2\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0\n";
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = index });
+    try dump_source.buildPageTitleIndex(io, a, index_path, title_path);
+    const title_bytes = try std.Io.Dir.cwd().readFileAlloc(io, title_path, a, .limited(4096));
+    const titles = try dump_source.PageTitleIndex.init(title_bytes);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/zh-magal/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/zh-magal/namespace-siteinfo.raw.json"));
+    try std.testing.expect(ns.manual_conversion_context != null);
+    for ([_][]const u8{
+        "# wikidict-interface-messages-v1\n# wiki\tzhwiktionary\n# dump-date\t20261001\n# content-language\tzh\nzh\tconversiontable/zh\tM\n",
+        "unqualified unrelated message bytes",
+    }) |messages| {
+        try tmp.dir.writeFile(io, .{ .sub_path = "interface-messages.tsv", .data = messages });
+        try tmp.dir.writeFile(io, .{ .sub_path = "language-fallbacks.tsv", .data = "# wikidict-language-fallbacks-v1\n# wiki\tzhwiktionary\n# dump-date\t20261001\n# content-language\tzh\n# mode\tstrict\nzh\tzh-hans\tzh-hant\ten\n" });
+        try loadManualAutomaticIdentity(io, a, root, &ns, index, titles);
+        const profile = ns.manual_conversion_context orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("zh", profile.base);
+        try std.testing.expect(!profile.automatic_identity and profile.effective_override == null and profile.cite_framing == null);
+        try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "zh-hans", "zh-hant" }), profile.fallbacks);
+    }
 }

@@ -1,0 +1,13 @@
+==拉脫維亞語==
+
+===發音===
+<templatestyles src="Module:message box/styles.css" /><div class="noprint request-box" style="width: fit-content">
+{|
+|[[Image:Yaru-Theme-Icon (Ubuntu) – audio-input-microphone-symbolic.svg|45px|link=]]
+|本词条需要[[:Category:拉脫維亞語詞條發音音訊檔案請求|-{zh-hans:音频文件; zh-hant:音訊檔案;}-]]。如果您有麥克風，請錄製並[[commons:Special:Upload|上傳]]。
+|}</div>[[Category:拉脫維亞語詞條發音音訊檔案請求|VIENMER]]
+
+===副詞===
+<span class="headword-line"><strong class="Latn headword" lang="lv">-{vienmēr}-</strong></span>[[Category:拉脫維亞語詞元|VIENMER]][[Category:拉脫維亞語副詞|VIENMER]][[Category:有詞條的頁面|VIENMĒR]][[Category:有1個詞條的頁面|VIENMĒR]]
+
+# [[總是]]

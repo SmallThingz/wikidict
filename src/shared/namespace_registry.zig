@@ -290,6 +290,16 @@ pub const Registry = struct {
             .fallbacks = &.{"sr-ec"},
             .separators = &.{ "sr", "sr-ec", "sr-el" },
             .converter_sha256 = "b3d89e7f4d4b6c32ad78ebdbf96d1be89aa664bef81bd53aeabfaad97bc952cc",
+
+        } else if (std.mem.eql(u8, self.content_language, "zh")) .{
+            // Exact captured site-info exposes only these three variants.
+            // ZhConverter's ordered base fallback checks hans then hant before
+            // its disabled regional variants. This is manual choice only;
+            // no automatic conversion-table identity is granted here.
+            .variants = &.{ "zh", "zh-hans", "zh-hant" },
+            .fallbacks = &.{ "zh-hans", "zh-hant" },
+            .separators = &.{ "zh", "zh-hans", "zh-Hans", "zh-hant", "zh-Hant" },
+            .converter_sha256 = "6b8e52d8d9b415c91c6a70d34e51f18ef34a34d04551a2fd62e1318f34740558",
         } else return;
         const selected = self.language_conversion.?;
         if (selected.len != source_profile.variants.len) return;
@@ -816,4 +826,30 @@ test "captured SR base conversion profile keeps automatic identity unearned and 
     registry.content_language = "sr-ec";
     try std.testing.expectError(error.InvalidLanguageConversionProfile, registry.attachLanguageConversion(raw));
     try std.testing.expect(registry.manual_conversion_context == null);
+}
+
+test "captured ZH manual choices bind exact base variants without automatic conversion authority" {
+    const a = std.testing.allocator;
+    var registry = try Registry.init(a, @embedFile("testdata/zh-manual-choices/namespace-registry.tsv")); defer registry.deinit();
+    const raw = @embedFile("testdata/zh-manual-choices/namespace-siteinfo.raw.json");
+    try registry.attachLanguageConversion(raw);
+    const profile = registry.manual_conversion_context orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("bundle-base-content-v1", profile.policy);
+    try std.testing.expectEqualStrings("zh", profile.base);
+    try std.testing.expectEqualStrings("79b81ba96674efc8a803fc956bc501d347d440d2", profile.source_core);
+    try std.testing.expectEqualStrings("6b8e52d8d9b415c91c6a70d34e51f18ef34a34d04551a2fd62e1318f34740558", profile.source_converter_sha256);
+    try std.testing.expectEqualStrings("cd13407c3bdb469c51cc5f745a14c5c3b26ba294498b8e3c7d97e10db228959e", profile.siteinfo_sha256);
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "zh-hans", "zh-hant" }), profile.fallbacks);
+    try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "zh", "zh-hans", "zh-Hans", "zh-hant", "zh-Hant" }), profile.separator_variants);
+    try std.testing.expect(!profile.automatic_identity and profile.effective_override == null and !profile.source_citation_ascii_numbers);
+    for ([_]struct { before: []const u8, after: []const u8 }{
+        .{ .before = "79b81ba96674efc8a803fc956bc501d347d440d2", .after = "0000000000000000000000000000000000000000" },
+        .{ .before = "\"code\": \"zh-hant\"", .after = "\"code\": \"zh-tw\"" },
+        .{ .before = "\"langconversion\": true", .after = "\"langconversion\": false" },
+    }) |edit| {
+        const changed = try std.mem.replaceOwned(u8, a, raw, edit.before, edit.after); defer a.free(changed);
+        try std.testing.expect(!std.mem.eql(u8, changed, raw));
+        try registry.attachLanguageConversion(changed);
+        try std.testing.expect(registry.manual_conversion_context == null);
+    }
 }

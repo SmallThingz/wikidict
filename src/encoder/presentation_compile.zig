@@ -18671,6 +18671,53 @@ pub const Renderer = struct {
         return source;
     }
     const ManualConversion = struct { body: []const u8, end: usize };
+    // The ordinary link parser already owns this complete explicit label.
+    // Select only a whole-label plain choice before applying its unchanged
+    // action. No destination, attribute, generated label or nested rule is
+    // reinterpreted as converter source.
+    fn manualChoiceWikiLabel(self: *Renderer, input: []const u8, begin: usize, end: usize, label: MissingText, style: Style) Error!?MissingText {
+        if (self.context.content_conversion != true or begin >= end or end > input.len or
+            label.bytes.len < 5 or label.bytes.len > 16 * 1024 or
+            !starts(label.bytes, "-{") or !std.mem.endsWith(u8, label.bytes, "}-") or
+            label.lost_missing_range or !ordinaryNormalizationRange(label, 0, label.bytes.len)) return null;
+        const body = label.bytes[2 .. label.bytes.len - 2];
+        if (std.mem.indexOfAny(u8, body, "{}[]<>&|\r\n") != null or
+            std.mem.indexOf(u8, body, "''") != null or std.mem.indexOf(u8, body, "=>") != null) return null;
+        const parent = self.inline_missing orelse return null;
+        if (parent.lost_missing_range or parent.bytes.ptr != input.ptr or parent.bytes.len != input.len or
+            !ordinaryNormalizationRange(parent, begin, end)) return null;
+        var links: ir.InlineIterator = .{ .input = input[0..end], .cursor = begin, .renderer_boundaries = true, .link_trail = self.context.link_trail };
+        const node = links.next() orelse return null;
+        if (node.kind != .link or !node.link_has_pipe or node.link_empty_label or node.link_label_restored_close or
+            links.cursor != end or node.trail.len != 0 or node.text.ptr != label.bytes.ptr or node.text.len != label.bytes.len or
+            !safeInternalTarget(node.target) or !formattingAngleBodyPosition(input, begin)) return null;
+        var domain = self.inline_source_domain;
+        var remaining: usize = max_depth + 1;
+        while (domain) |current| {
+            if (remaining == 0) return null;
+            remaining -= 1;
+            const base = @intFromPtr(current.source.ptr);
+            const pointer = @intFromPtr(input.ptr);
+            if (pointer < base) return null;
+            const relative = pointer - base;
+            if (relative > current.source.len or input.len > current.source.len - relative or
+                !formattingAngleBodyPosition(current.source, relative + begin)) return null;
+            domain = current.parent;
+        }
+        // The body-position proof above covers the full link in every caller.
+        // The existing choice parser now sees exactly its authenticated label,
+        // while retaining all profile, style, flag and alternative guards.
+        const previous_domain = self.inline_source_domain;
+        const previous_missing = self.inline_missing;
+        self.inline_source_domain = null;
+        self.inline_missing = label;
+        defer {
+            self.inline_source_domain = previous_domain;
+            self.inline_missing = previous_missing;
+        }
+        const selected = try self.manualAlternative(label.bytes, 0, label.bytes.len - 2, style) orelse return null;
+        return try missingSlice(self.a, label, selected);
+    }
     fn manualAlternative(self: *Renderer, input: []const u8, at: usize, close: usize, style: Style) Error!?[]const u8 {
         if (at > close or close - at > 16 * 1024 or close + 2 > input.len) return null;
         const ns = self.context.namespace_catalog orelse return null;
@@ -20325,6 +20372,8 @@ pub const Renderer = struct {
                                     try restored_transport.append(self.a, missingEdit(restored_label_missing, restored_label_missing.bytes.len - 1, restored_label_missing.bytes.len, "&#93;"));
                                     restored_label_missing = try restored_transport.finish(self.a);
                                 }
+                                if (try self.manualChoiceWikiLabel(input, token_start, restored_link_end, restored_label_missing, s)) |selected_label|
+                                    restored_label_missing = selected_label;
                                 const previous_label = self.explicit_wiki_label;
                                 self.explicit_wiki_label = .{ .kind = action_style.kind, .target = destination.target };
                                 defer self.explicit_wiki_label = previous_label;
@@ -84941,4 +84990,87 @@ test "preceding formatted nested local labels prove only complete tracked siblin
         try std.testing.expect(Renderer.precedingFormattedNestedLinksEnd(source, 0, prior.len + 1, MissingText.untracked(source)) == null);
         try std.testing.expect(!Renderer.formattingAngleBodyPositionWithTrackedSiblings(source, prior.len + 1, true, MissingText.untracked(source)));
     }
+}
+
+const ZhManualChoiceTest = struct {
+    fn context() @import("namespace_registry").ManualConversionContext {
+        return .{ .base = "zh", .fallbacks = &.{ "zh-hans", "zh-hant" }, .automatic_identity = false,
+            .separator_variants = &.{ "zh", "zh-hans", "zh-Hans", "zh-hant", "zh-Hant" },
+            .source_core = "79b81ba96674efc8a803fc956bc501d347d440d2",
+            .source_converter_sha256 = "6b8e52d8d9b415c91c6a70d34e51f18ef34a34d04551a2fd62e1318f34740558",
+            .siteinfo_sha256 = "cd13407c3bdb469c51cc5f745a14c5c3b26ba294498b8e3c7d97e10db228959e" };
+    }
+};
+
+test "whole explicit wiki label manual choices retain action body formatting and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.content_language = "zh"; ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" };
+    ns.manual_conversion_context = ZhManualChoiceTest.context();
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    const codec = @import("blob_encoder").presentation_codec;
+    for ([_]struct { rules: []const u8, selected: []const u8 }{
+        .{ .rules = "zh-hans:音频文件; zh-hant:音訊檔案;", .selected = "音频文件" },
+        .{ .rules = "zh-hant:音訊檔案; zh-hans:音频文件;", .selected = "音频文件" },
+        .{ .rules = "zh-hans:other;zh:原文;zh-hant:other", .selected = "原文" },
+        .{ .rules = "zh-hant:音訊檔案;", .selected = "音訊檔案" },
+        .{ .rules = "zh-Hans:音频文件;zh-Hant:音訊檔案;", .selected = "音频文件" },
+    }) |case| {
+        const raw = try std.mem.concat(a, u8, &.{ "before <b>[[:Category:Audio request|-{", case.rules, "}-]]</b> after [[Next|next]]\n\n# complete definition" });
+        const reference = try std.mem.concat(a, u8, &.{ "before <b>[[:Category:Audio request|", case.selected, "]]</b> after [[Next|next]]\n\n# complete definition" });
+        var actual_renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior } };
+        var expected_renderer: Renderer = .{ .a = a, .context = actual_renderer.context };
+        const actual = try FormattingScopeTest.encode(a, &actual_renderer, try actual_renderer.renderBody(raw));
+        const expected = try FormattingScopeTest.encode(a, &expected_renderer, try expected_renderer.renderBody(reference));
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqualDeep(expected_renderer.fallbacks, actual_renderer.fallbacks);
+        const bytes = try codec.encodeAlloc(a, actual);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+        try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" }));
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" })));
+    }
+}
+
+test "whole wiki label choice refuses lost copied generated malformed and nonbody authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.content_language = "zh"; ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" }; ns.manual_conversion_context = ZhManualChoiceTest.context();
+    var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .content_conversion = true } };
+    const source = "[[Target|-{zh-hans:shown;zh-hant:other;}-]]";
+    const label: MissingText = .{ .bytes = source[9 .. source.len - 2] };
+    renderer.inline_missing = .{ .bytes = source };
+    try std.testing.expectEqualStrings("shown", (try renderer.manualChoiceWikiLabel(source, 0, source.len, label, .{})).?.bytes);
+    for ([_]MissingText{
+        .{ .bytes = label.bytes, .unknown = true },
+        .{ .bytes = label.bytes, .lost_missing_range = true },
+        .{ .bytes = label.bytes, .literal_curly_ranges = &.{.{ .start = 1, .end = 2 }} },
+        .{ .bytes = label.bytes, .ranges = &.{.{ .start = 1, .end = 2, .occurrence = 1 }} },
+        .{ .bytes = try a.dupe(u8, label.bytes) },
+    }) |bad| try std.testing.expect((try renderer.manualChoiceWikiLabel(source, 0, source.len, bad, .{})) == null);
+    renderer.inline_missing = .{ .bytes = source, .lost_missing_range = true };
+    try std.testing.expect((try renderer.manualChoiceWikiLabel(source, 0, source.len, label, .{})) == null);
+    renderer.inline_missing = .{ .bytes = source };
+    for ([_]Style{ .{ .kind = .link, .target = "Outer" }, .{ .code = true }, .{ .provenance = .protected_literal } }) |style|
+        try std.testing.expect((try renderer.manualChoiceWikiLabel(source, 0, source.len, label, style)) == null);
+    renderer.context.content_conversion = false;
+    try std.testing.expect((try renderer.manualChoiceWikiLabel(source, 0, source.len, label, .{})) == null);
+    renderer.context.content_conversion = true;
+    ns.manual_conversion_context = null;
+    try std.testing.expect((try renderer.manualChoiceWikiLabel(source, 0, source.len, label, .{})) == null);
+    ns.manual_conversion_context = ZhManualChoiceTest.context();
+    for ([_][]const u8{
+        "-{A|zh-hans:one;zh-hant:two}-", "-{zh-hans:one;zh-hans:two}-",
+        "-{unknown:one;zh-hant:two}-", "-{zh-hans:one;zh-hant:}-",
+        "-{zh-hans:[[Other|nested]];zh-hant:two}-", "-{zh-hans:<b>one</b>;zh-hant:two}-",
+        "-{zh-hans:&amp;;zh-hant:two}-", "-{zh-hans:one\nline;zh-hant:two}-",
+    }) |bad_label| {
+        const bad = try std.mem.concat(a, u8, &.{ "[[Target|", bad_label, "]]" });
+        renderer.inline_missing = .{ .bytes = bad };
+        try std.testing.expect((try renderer.manualChoiceWikiLabel(bad, 0, bad.len, .{ .bytes = bad[9 .. bad.len - 2] }, .{})) == null);
+    }
+    const attribute = "<span title='" ++ source ++ "'>body</span>";
+    renderer.inline_missing = .{ .bytes = attribute };
+    try std.testing.expect((try renderer.manualChoiceWikiLabel(attribute, 13, 13 + source.len, .{ .bytes = attribute[22 .. 13 + source.len - 2] }, .{})) == null);
 }
