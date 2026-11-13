@@ -1789,20 +1789,20 @@ fn observedCenterOpening(stack: []const ObservedOpenNode, tag: syntax.Tag) !void
 }
 
 fn observedBdiOpening(stack: []const ObservedOpenNode, tag: syntax.Tag) !void {
-    var inside_bdi = false;
-    for (stack) |open| if (open.tag.is("bdi")) { inside_bdi = true; break; };
-    if (inside_bdi) {
-        // Keep the isolate as a real stack node. This bounded inline domain
+    var inside_inline_scope = false;
+    for (stack) |open| if (open.tag.is("bdi") or open.tag.is("q")) { inside_inline_scope = true; break; };
+    if (inside_inline_scope) {
+        // Keep isolates and quotations as real stack nodes. This bounded inline domain
         // excludes block insertion and adoption repairs instead of flattening
         // the isolate or inferring its computed direction/language effects.
         var phrasing = false;
         for ([_][]const u8{ "span", "bdi", "a", "b", "strong", "i", "em", "small", "sup", "sub",
-            "abbr", "cite", "u", "s", "code", "font", "br", "wbr" }) |name|
+            "abbr", "cite", "q", "u", "s", "code", "font", "br", "wbr" }) |name|
             if (tag.is(name)) { phrasing = true; break; };
         if (!phrasing) return invalid;
         if (tag.is("a")) for (stack) |open| if (open.tag.is("a")) return invalid;
     }
-    if (!tag.is("bdi")) return;
+    if (!tag.is("bdi") and !tag.is("q")) return;
     // In a table insertion scope an inline opening would be foster-parented.
     // Explicit cells/captions start an ordinary inline scope again.
     var index = stack.len;
@@ -2254,7 +2254,7 @@ fn observedImagesWithServedPaintFailure(a: A, ns: *const namespaces.Registry, ht
         // cannot borrow a literal-looking Figure as a live DOM occurrence.
         var ordinary_tag = false;
         for ([_][]const u8{ "div", "span", "bdi", "a", "figure", "figcaption", "img", "meta", "link", "style",
-            "h1", "h2", "h3", "h4", "h5", "h6", "p", "b", "strong", "i", "em", "small", "sup", "sub", "abbr", "cite",
+            "h1", "h2", "h3", "h4", "h5", "h6", "p", "b", "strong", "i", "em", "small", "sup", "sub", "abbr", "cite", "q",
             "ul", "ol", "li", "dl", "dt", "dd", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption",
             "col", "colgroup", "br", "hr", "wbr", "u", "s", "code", "pre", "font", "center", "audio", "source", "mark", "ruby", "rp", "rt" }) |name|
             if (tag.is(name)) { ordinary_tag = true; break; };
@@ -8097,4 +8097,42 @@ test "captured FR cauannos alias preserves complete Book intake and rejects unpr
     unbound.end += "Fichier:Invented.jpg".len;
     unbound.end -= requested.len;
     try std.testing.expectError(invalid, originalOptions(a, &ns, &files, invented, unbound));
+}
+
+// Q is inventory traversal only, with no typography, pseudo-element or layout grant.
+test "observed balanced Q citations preserve complete FR image facts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const prefix = "testdata/figure-page-observations/fr-borracho/";
+    var ns = try namespaces.Registry.init(a, @embedFile(prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const parsed = try std.json.parseFromSlice(Document, a, @embedFile(prefix ++ "figure-page-observations.json"), .{}); defer parsed.deinit();
+    const page = parsed.value.pages[0];
+    const supplied = try responseSource(a, &ns, page);
+    const original = try observedImages(a, &ns, supplied.html, page.occurrences);
+    const opening = "<figure class=\"mw-default-size\" typeof=\"mw:File/Thumb\">";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, supplied.html, opening));
+    for ([_][]const u8{
+        "<q><bdi lang=\"fr\" class=\"lang-fr\"><i>citation</i></bdi></q>",
+        "<q>outer <q>inner</q> citation</q>",
+        "<bdi><q>quoted text</q></bdi>",
+    }) |citation| {
+        const sibling = try std.mem.replaceOwned(u8, a, supplied.html, opening,
+            try std.mem.concat(a, u8, &.{ citation, opening }));
+        const observed = try observedImages(a, &ns, sibling, page.occurrences);
+        try std.testing.expectEqualDeep(original, observed);
+    }
+}
+
+test "observed Q traversal retains strict malformed and inert refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, MissingServedTesting.namespace); defer ns.deinit();
+    for ([_][]const u8{
+        "<q/>", "<q>x", "<q><i>x</q></i>",
+        "<q><template>x</template></q>", "<q><select><option>x</option></select></q>",
+        "<q><svg><text>x</text></svg></q>", "<q><unknown>x</unknown></q>",
+        "<audio><q>x</q></audio>", "<table><q>x</q></table>",
+        "<q><div>x</div></q>", "<q><a href=\"/outer\"><a href=\"/inner\">x</a></a></q>", "<q cite=\"a\" CITE=\"b\">x</q>",
+    }) |body| {
+        const html = try std.mem.concat(a, u8, &.{ "<div>", body, "</div>" });
+        try std.testing.expectError(invalid, observedImages(a, &ns, html, &.{}));
+    }
 }

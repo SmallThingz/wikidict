@@ -1,0 +1,9 @@
+==印地語==
+
+===發音===
+* <span class="usage-label-accent"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">標準印地語</span><span class="ib-brac label-brac">)</span></span> [[Wiktionary:國際音標|國際音標]]<sup>([[Appendix:印地語發音|幫助]])</sup>:&#32;<span class="IPA nowrap">/d̪ʊ.pəʈ.ʈɑː/</span>, <span class="IPA nowrap">[d̪ʊ.pɐʈ̚.ʈäː]</span>[[Category:有國際音標的印地語詞|दुपट्टा]]
+
+===名詞===
+<span class="headword-line"><strong class="Deva headword" lang="hi">-{दुपट्टा}-</strong> (<span lang="hi-Latn" class="tr Latn" dir="ltr">-{dupaṭṭā}-</span>)&nbsp;<span class="gender"><abbr title="陽性">陽</abbr></span> (陰性等價詞-{ <b class="Deva form-of lang-hi f-form-of origin-दुपट्टा origin_transliteration-" lang="hi">[[:दुपट्टी#印地語|-{दुपट्टी}-]]</b>}-，烏爾都文拼寫-{ <b class="Aran" lang="ur">[[:دوپٹہ#烏爾都語|-{دوپٹہ}-]]</b> <small>或</small> <b class="Aran" lang="ur">[[:دوپٹا#烏爾都語|-{دوپٹا}-]]</b>}-)</span>[[Category:印地語詞元|दुपट्टा]][[Category:印地語名詞|दुपट्टा]][[Category:有其他性別等價詞的印地語名詞|दुपट्टा]][[Category:印地語陽性名詞|दुपट्टा]][[Category:有詞條的頁面|दुपट्टा]][[Category:有1個詞條的頁面|दुपट्टा]]
+
+# [[領巾]]，[[圍巾]]，[[圍脖兒]]

@@ -14647,14 +14647,109 @@ pub const Renderer = struct {
         return end;
     }
 
+    // Position only: a complete earlier formatted/multiple local-link scope
+    // cannot contribute an unfinished ancestor to the current conversion.
+    // This uses the original tracked bytes and admits only plain child labels;
+    // it does not compile, flatten or grant converter choices to that sibling.
+    fn precedingFormattedNestedLinksEnd(input: []const u8, start: usize, limit: usize, tracked: MissingText) ?usize {
+        if (start > limit or limit > input.len or limit - start < 9 or limit - start > 4096 or
+            !starts(input[start..limit], "-{") or tracked.unknown or tracked.lost_missing_range) return null;
+        const input_ptr = @intFromPtr(input.ptr);
+        const parent_ptr = @intFromPtr(tracked.bytes.ptr);
+        if (input_ptr < parent_ptr) return null;
+        const offset = input_ptr - parent_ptr;
+        if (offset > tracked.bytes.len or input.len > tracked.bytes.len - offset) return null;
+        var cursor = start + 2;
+        var stack: [max_depth][]const u8 = undefined;
+        var depth: usize = 0;
+        var children: usize = 0;
+        var formatted = false;
+        var literal_sibling = false;
+        while (cursor < limit) {
+            if (starts(input[cursor..limit], "}-")) {
+                // Preserve the old single bare-link/trailer refusal. New scope
+                // is balanced formatting or multiple plain links with optional whitespace.
+                if (depth != 0 or children == 0 or (!formatted and (children < 2 or literal_sibling))) return null;
+                const end = cursor + 2;
+                for (tracked.ranges) |range| if (range.start < offset + end and range.end > offset + start) return null;
+                for (tracked.literal_curly_ranges) |range| if (range.start < offset + end and range.end > offset + start) return null;
+                for (tracked.generated_links) |range| if (range.start < offset + end and range.end > offset + start) return null;
+                return end;
+            }
+            if (input[cursor] == ' ' or input[cursor] == '\t') { cursor += 1; continue; }
+            if (input[cursor] == '<') {
+                const tag = syntax.tagAt(input[0..limit], cursor) orelse return null;
+                const token = input[cursor..tag.end];
+                if (!std.unicode.utf8ValidateSlice(token) or tag.self_closing or
+                    !oneOf(tag.name, &.{ "b", "i", "strong", "em", "span", "sup", "small" }) or
+                    !formattingAngleAttributesBalanced(tag.attrs) or
+                    std.mem.indexOfAny(u8, token, "[]{}|:;&\r\n") != null or
+                    (tag.closing and trim(tag.attrs).len != 0)) return null;
+                for (token) |byte| if (std.ascii.isControl(byte) and byte != '\t') return null;
+                if (tag.closing) {
+                    if (depth == 0 or !tag.is(stack[depth - 1])) return null;
+                    depth -= 1;
+                } else {
+                    if (depth == stack.len) return null;
+                    stack[depth] = tag.name;
+                    depth += 1;
+                }
+                formatted = true;
+                cursor = tag.end;
+                continue;
+            }
+            if (starts(input[cursor..limit], "[[")) {
+                var links: ir.InlineIterator = .{ .input = input[0..limit], .cursor = cursor, .renderer_boundaries = true };
+                const link_node = links.next() orelse return null;
+                if (link_node.kind != .link or !link_node.link_has_pipe or link_node.link_empty_label or link_node.link_label_restored_close or
+                    links.cursor <= cursor or links.cursor > limit or link_node.trail.len != 0 or
+                    !safeInternalTarget(link_node.target) or !manualConversionInternalTarget(link_node.target) or
+                    !std.unicode.utf8ValidateSlice(input[cursor..links.cursor])) return null;
+                for (input[cursor..links.cursor]) |byte| if (std.ascii.isControl(byte)) return null;
+                const target = if (starts(link_node.target, ":")) link_node.target[1..] else link_node.target;
+                const page = target[0 .. (std.mem.indexOfScalar(u8, target, '#') orelse target.len)];
+                if (page.len == 0 or std.mem.indexOfScalar(u8, page, ':') != null or
+                    link_node.text.len < 5 or !starts(link_node.text, "-{") or !std.mem.endsWith(u8, link_node.text, "}-")) return null;
+                var title_buffer: [4096]u8 = undefined;
+                var title_writer = std.Io.Writer.fixed(&title_buffer);
+                @import("namespace_registry").normalizeSpacing(&title_writer, page) catch return null;
+                if (title_writer.buffered().len == 0) return null;
+                const label_ptr = @intFromPtr(link_node.text.ptr);
+                if (label_ptr < input_ptr) return null;
+                const label_at = label_ptr - input_ptr;
+                if (label_at < cursor + 2 or label_at > links.cursor or link_node.text.len > links.cursor - label_at or
+                    links.cursor - label_at - link_node.text.len != 2 or !starts(input[label_at + link_node.text.len .. links.cursor], "]]")) return null;
+                const label = link_node.text[2 .. link_node.text.len - 2];
+                if (trim(label).len == 0 or std.mem.indexOfAny(u8, label, ":;|{}[]<>&\r\n") != null or
+                    std.mem.indexOf(u8, label, "''") != null or std.mem.indexOf(u8, label, "=>") != null) return null;
+                children += 1;
+                cursor = links.cursor;
+                continue;
+            }
+            const begin = cursor;
+            while (cursor < limit and input[cursor] != '<' and input[cursor] != '[' and
+                !starts(input[cursor..limit], "}-")) : (cursor += 1) {}
+            const literal_bytes = input[begin..cursor];
+            if (literal_bytes.len == 0 or !std.unicode.utf8ValidateSlice(literal_bytes) or
+                std.mem.indexOfAny(u8, literal_bytes, ":;|{}&]\"'") != null or std.mem.indexOf(u8, literal_bytes, "=>") != null) return null;
+            for (literal_bytes) |byte| if (std.ascii.isControl(byte)) return null;
+            literal_sibling = true;
+        }
+        return null;
+    }
+
     fn formattingAngleBodyPositionWithTrackedSiblings(input: []const u8, at: usize, preceding_abbreviation: bool, tracked: ?MissingText) bool {
         if (at > input.len or at > 4096) return false;
         var stack: [max_depth + 1][]const u8 = undefined;
         var depth: usize = 0;
         var cursor: usize = 0;
         while (cursor < at) {
-            if (tracked) |source| if (starts(input[cursor..], "-{[[")) {
+            if (tracked) |source| if (starts(input[cursor..], "-{")) {
                 if (precedingPlainNestedLinkEnd(input, cursor, at, source)) |end| {
+                    cursor = end;
+                    continue;
+                }
+                if (precedingFormattedNestedLinksEnd(input, cursor, at, source)) |end| {
                     cursor = end;
                     continue;
                 }
@@ -18745,7 +18840,21 @@ pub const Renderer = struct {
                 cursor = tag.end;
                 continue;
             }
-            if (!starts(input[cursor..], "[[")) return null;
+            if (!starts(input[cursor..], "[[")) {
+                // Ordinary literal siblings survive recursive no-rule conversion.
+                // They cannot introduce flags, choices, entities, markup or a
+                // child wrapper. The final balanced linked-scope proof still
+                // validates the reduced whole; emission borrows original bytes.
+                const literal_start = cursor;
+                while (cursor < input.len and input[cursor] != '<' and input[cursor] != '[' and
+                    !starts(input[cursor..], "}-")) : (cursor += 1) {}
+                const literal_bytes = input[literal_start..cursor];
+                if (literal_bytes.len == 0 or !std.unicode.utf8ValidateSlice(literal_bytes) or
+                    std.mem.indexOfAny(u8, literal_bytes, ":;|{}&]\"'") != null or
+                    std.mem.indexOf(u8, literal_bytes, "=>") != null) return null;
+                for (literal_bytes) |byte| if (std.ascii.isControl(byte)) return null;
+                continue;
+            }
             var links: ir.InlineIterator = .{ .input = input, .cursor = cursor, .renderer_boundaries = true, .link_trail = self.context.link_trail };
             const node = links.next() orelse return null;
             if (node.kind != .link or links.cursor <= cursor or node.link_empty_label or node.link_label_restored_close or
@@ -84715,5 +84824,121 @@ test "finite caption HTTP and chained interwiki proofs retain source registry an
         var refused: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &profile, .figure_sizing = FigureProducerTest.sizing_source } };
         const source = try std.fmt.allocPrint(a, "[[File:Map.svg|thumb|400px|{s}]]", .{caption});
         try std.testing.expectError(error.UncompiledPresentation, refused.renderBody(source));
+    }
+}
+
+test "actual ZH dupatta nested label siblings preserve full body actions styles media and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" };
+    var behavior = try ManualConversionTest.behavior(a, &ns); defer behavior.deinit();
+    // Controlled namespace exercises complete captured body parity, not an
+    // ordinary edition language/owner or current expansion equivalence claim.
+    const context: Context = .{ .namespace_catalog = &ns, .behavior_switches = &behavior };
+    const source = @embedFile("testdata/zh-dupatta-manual-siblings/expanded.wikitext");
+    try std.testing.expectEqual(@as(usize, 1515), source.len);
+    var reference: []const u8 = source;
+    for ([_][]const u8{ "दुपट्टी", "دوپٹہ", "دوپٹا" }) |label| {
+        const from = try std.mem.concat(a, u8, &.{ "|-{", label, "}-]]" });
+        const to = try std.mem.concat(a, u8, &.{ "|", label, "]]" });
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, reference, from));
+        reference = try std.mem.replaceOwned(u8, a, reference, from, to);
+    }
+    try std.testing.expectEqual(source.len - 12, reference.len);
+    var actual_renderer: Renderer = .{ .a = a, .context = context };
+    var expected_renderer: Renderer = .{ .a = a, .context = context };
+    const actual = try FormattingScopeTest.encode(a, &actual_renderer, try actual_renderer.renderBody(source));
+    const expected = try FormattingScopeTest.encode(a, &expected_renderer, try expected_renderer.renderBody(reference));
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualDeep(expected_renderer.fallbacks, actual_renderer.fallbacks);
+    try std.testing.expectEqualDeep(expected_renderer.media.items, actual_renderer.media.items);
+    const spans = try FigureProducerTest.bodySpans(a, actual.entry.sections[0].blocks);
+    for ([_][]const u8{ "دوپٹہ", "دوپٹا" }) |label| {
+        const target = try std.mem.concat(a, u8, &.{ label, "#烏爾都語" });
+        var seen: usize = 0;
+        for (spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, target)) {
+            seen += 1;
+            try std.testing.expectEqualStrings(label, span.text);
+            try std.testing.expect(span.bold and std.mem.indexOf(u8, span.classes, "Aran") != null);
+        };
+        try std.testing.expectEqual(@as(usize, 1), seen);
+    }
+    for ([_][]const u8{ "領巾", "圍巾", "圍脖兒" }) |target| {
+        var found = false;
+        for (spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, target)) { found = true; };
+        try std.testing.expect(found);
+    }
+    const codec = @import("blob_encoder").presentation_codec;
+    const bytes = try codec.encodeAlloc(a, actual);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+    try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, bytes, "formatting scope", .language, .{ .heading = "English", .code = "en" }));
+}
+
+test "nested local label literal siblings retain rule markup taint and borrowed range refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" };
+    const context: Context = .{ .namespace_catalog = &ns };
+    const left = "-{<b>[[First|-{first}-]]</b>";
+    const right = "<b>[[Second|-{second}-]]</b>}-";
+    for ([_][]const u8{ " 或 ", "<small>或</small>", " literal text ", "，（另寫）", " 123 " }) |between| {
+        const source = try std.mem.concat(a, u8, &.{ left, between, right });
+        var proof: Renderer = .{ .a = a, .context = context, .inline_missing = MissingText.untracked(source) };
+        const recognized = (try proof.nestedRuleFreeLinkLabels(source, 0, .{})) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(recognized.body.ptr == source.ptr + 2 and recognized.end == source.len);
+        try std.testing.expectEqualStrings(source[2 .. source.len - 2], recognized.body);
+    }
+    for ([_][]const u8{ "zh:other", ";zh:other", "R|other", "a=>b", "&amp;", "''italic''", "[literal]", "-{other}-", "{{x}}", "\n", "\x01", "\xff", "<small>open", "<div>block</div>" }) |between| {
+        const source = try std.mem.concat(a, u8, &.{ left, between, right });
+        var proof: Renderer = .{ .a = a, .context = context, .inline_missing = MissingText.untracked(source) };
+        try std.testing.expect((try proof.nestedRuleFreeLinkLabels(source, 0, .{})) == null);
+    }
+    const source = left ++ "<small>或</small>" ++ right;
+    var proof: Renderer = .{ .a = a, .context = context, .inline_missing = MissingText.untracked(source) };
+    const ranges = [_]missing_dependency.Range{.{ .start = left.len, .end = left.len + 1, .occurrence = 1 }};
+    proof.inline_missing = .{ .bytes = source, .ranges = &ranges };
+    try std.testing.expect((try proof.nestedRuleFreeLinkLabels(source, 0, .{})) == null);
+    proof.inline_missing = .{ .bytes = source, .lost_missing_range = true };
+    try std.testing.expect((try proof.nestedRuleFreeLinkLabels(source, 0, .{})) == null);
+    proof.inline_missing = MissingText.untracked(try a.dupe(u8, source));
+    try std.testing.expect((try proof.nestedRuleFreeLinkLabels(source, 0, .{})) == null);
+    proof.inline_missing = MissingText.untracked(source);
+    try std.testing.expect((try proof.nestedRuleFreeLinkLabels(source, 0, .{ .code = true })) == null);
+    proof.in_reference = true;
+    try std.testing.expect((try proof.nestedRuleFreeLinkLabels(source, 0, .{})) == null);
+}
+
+test "preceding formatted nested local labels prove only complete tracked sibling positions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const current = "-{[[Current|-{current}-]]}-";
+    for ([_][]const u8{
+        "-{ <b class=\"Deva\" lang=\"hi\">[[:दुपट्टी#印地語|-{दुपट्टी}-]]</b>}-",
+        "-{[[:दूसरी#印地語|-{दूसरी}-]] [[:ओर#印地語|-{ओर}-]]}-",
+        "-{ <b>[[A|-{a}-]]</b><small>或</small><b>[[B|-{b}-]]</b>}-",
+    }) |prior| {
+        const source = try std.mem.concat(a, u8, &.{ prior, " ", current });
+        const at = prior.len + 1;
+        try std.testing.expectEqual(@as(?usize, prior.len), Renderer.precedingFormattedNestedLinksEnd(source, 0, at, MissingText.untracked(source)));
+        try std.testing.expect(Renderer.formattingAngleBodyPositionWithTrackedSiblings(source, at, true, MissingText.untracked(source)));
+        for ([_]MissingText{
+            .{ .bytes = source, .unknown = true }, .{ .bytes = source, .lost_missing_range = true },
+            .{ .bytes = source, .ranges = &.{.{ .start = 4, .end = 5, .occurrence = 1 }} },
+            .{ .bytes = source, .literal_curly_ranges = &.{.{ .start = 1, .end = 2 }} },
+            .{ .bytes = source[at..] }, .{ .bytes = try a.dupe(u8, source) },
+        }) |tracked| try std.testing.expect(Renderer.precedingFormattedNestedLinksEnd(source, 0, at, tracked) == null);
+        const tracked = MissingText{ .bytes = source, .ranges = &.{.{ .start = @intCast(at), .end = @intCast(source.len), .occurrence = 1 }} };
+        try std.testing.expectEqual(@as(?usize, prior.len), Renderer.precedingFormattedNestedLinksEnd(source, 0, at, tracked));
+    }
+    for ([_][]const u8{
+        "-{<b>[[A|-{a}-]]</b>", "-{R|<b>[[A|-{a}-]]</b>}-", "-{zh:<b>[[A|-{a}-]]</b>}-",
+        "-{<b>[[A|-{R|a}-]]</b>}-", "-{<b>[[A|-{zh:a}-]]</b>}-", "-{<b>[[A|-{a;b}-]]</b>}-",
+        "-{<b>[[A|-{<i>a</i>}-]]</b>}-", "-{<b>[[A|-{a}-]]</i>}-", "-{<b>[[A|-{a}-]]}-</b>",
+        "-{<br>[[A|-{a}-]]</br>}-", "-{<nowiki>[[A|-{a}-]]</nowiki>}-", "-{<b title='x:y'>[[A|-{a}-]]</b>}-",
+        "-{<b>[[File:A|-{a}-]]</b>}-", "-{<b>[[:Category:A|-{a}-]]</b>}-", "-{<b>[[#part|-{a}-]]</b>}-",
+        "-{<b>[[___|-{a}-]]</b>}-", "-{<b>[[A|-{a}-]]</b>;zh:other}-", "-{[[A|-{a}-]]trailer}-",
+    }) |prior| {
+        const source = try std.mem.concat(a, u8, &.{ prior, " ", current });
+        try std.testing.expect(Renderer.precedingFormattedNestedLinksEnd(source, 0, prior.len + 1, MissingText.untracked(source)) == null);
+        try std.testing.expect(!Renderer.formattingAngleBodyPositionWithTrackedSiblings(source, prior.len + 1, true, MissingText.untracked(source)));
     }
 }
