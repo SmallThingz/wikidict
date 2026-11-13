@@ -541,6 +541,14 @@ class PreparedSourceRequest:
             record['retained_dispatch']=retained.prepared_dispatch()
             if record['retained_dispatch']['selection']!=cfg['retained_native_roles']:
                 raise ValueError('Prepared retained map differs from attempt')
+        if retained is not None:
+            verdict=prepared_figure_verdict(cfg)
+            if verdict is not None:
+                record['figure_validation']=verdict
+                # Do not grow beyond the existing generation metadata bound.
+                # Oversized optional proof simply takes normal parent replay.
+                if len(json.dumps(record,sort_keys=True).encode())+1>64*1024*1024:
+                    del record['figure_validation']
         # This is a request, not authority. The parent validates these bindings
         # and original source before authorizing, then the child reopens them.
         reference=write_prepared_metadata(self.folder/'prepared-generation.json',record)
@@ -1626,6 +1634,98 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
             proofs['retained'].clear()
             proofs['inventory'].clear()
 
+
+
+def _prepared_figure_selection(cfg):
+    options=cfg.get('edition_options') or {}
+    if len(options)!=1:return None
+    edition,option=next(iter(options.items()))
+    snapshots=option.get('auxiliary_snapshots') or {}
+    paths={name:Path(value['path'] if isinstance(value,dict) else value)
+           for name,value in snapshots.items() if name in FIGURE_SNAPSHOT_FILES}
+    if set(paths)!=set(FIGURE_SNAPSHOT_FILES):return None
+    roots={path.parent for path in paths.values()}
+    if len(roots)!=1:return None
+    provider=snapshots.get('file-metadata')
+    if provider is not None:
+        provider=Path(provider['path'] if isinstance(provider,dict) else provider)
+        if provider.parent in roots:paths['file-metadata']=provider
+    key=tuple(sorted((name,str(path.absolute())) for name,path in paths.items()))
+    return edition,paths,key
+
+
+def _prepared_figure_wire(value):
+    # The existing guard contains tuples and Path directory members. Keep the
+    # full guard, including lexical/resolved identities, in its JSON form.
+    return json.loads(json.dumps(value,default=os.fspath,sort_keys=True,separators=(',',':')))
+
+
+def prepared_figure_verdict(cfg):
+    """Export only an actual successful replay from this child interpreter."""
+    selected=_prepared_figure_selection(cfg)
+    if selected is None:return None
+    edition,paths,key=selected
+    with _FIGURE_TUPLE_REPLAY_LOCK:
+        prior=_FIGURE_TUPLE_REPLAYS.get(key)
+    if prior is None or not isinstance(prior[1],str):return None
+    import prepare_figure_metadata as helper
+    guard=figure_tuple_guard(helper,next(iter(paths.values())).parent,authenticated=prior[0])
+    if guard is None or guard!=prior[0]:return None
+    result=json.loads(prior[1])
+    if (set(result)!=set(paths) or any(row[0].get('wiki')!=edition or row[0].get('date')!=cfg['date']
+                                     for row in result.values())):return None
+    return dict(version=1,source=cfg['source'],python_tooling=cfg.get('python_tooling'),
+                edition=edition,date=cfg['date'],paths=dict(key),
+                guard=_prepared_figure_wire(guard),result=result)
+
+
+def reuse_prepared_figure_verdict(cfg, verdict):
+    """Parent-only: caller has authenticated the exact-source tracked child.
+
+    This is not a public capture validator or a ready-marker policy. A supplied
+    generation/dispatch alone never calls it. Missing/stale verdicts leave the
+    ordinary validator authoritative, including its failures.
+    """
+    selected=_prepared_figure_selection(cfg)
+    if selected is None or not isinstance(verdict,dict):return False
+    edition,paths,key=selected
+    if (set(verdict)!={'version','source','python_tooling','edition','date','paths','guard','result'}
+            or type(verdict['version']) is not int or verdict['version']!=1 or verdict['source']!=cfg['source']
+            or verdict['python_tooling']!=cfg.get('python_tooling')
+            or verdict['edition']!=edition or verdict['date']!=cfg['date']
+            or verdict['paths']!=dict(key)):
+        return False
+    result=verdict['result']
+    if (not isinstance(result,dict) or set(result)!=set(paths)
+            or any(not isinstance(row,list) or len(row)!=2 or not isinstance(row[0],dict)
+                   or not isinstance(row[1],dict) or row[0].get('wiki')!=edition
+                   or row[0].get('date')!=cfg['date'] for row in result.values())):
+        return False
+    # Authenticate every Python validator/import from the original source
+    # inventory (or selected catalog), not a caller-supplied helper digest.
+    inventory=prepared_metadata(cfg['source']['inventory'])
+    if inventory.get('head')!=cfg['source']['head']:return False
+    python={}
+    for name,reference in inventory['files'].items():
+        if name.startswith('tools/') and name.endswith('.py') and not Path(name).name.startswith('test_'):
+            if reference['path']!=str(PROJECT/name):return False
+            python[name]=dict(sha256=reference['sha256'],mode=inventory['modes'][name])
+    source=object.__new__(PreparedSourceGeneration)
+    source.record=dict(python=python)
+    if cfg.get('python_tooling') is not None:source.record['python_tooling']=cfg['python_tooling']
+    source.require_python(force=True)
+    import prepare_figure_metadata as helper
+    # Deliberately no authenticated=child_guard: the parent hashes the complete
+    # helper/SQL/raw/parent readset itself before transporting semantic success.
+    guard=figure_tuple_guard(helper,next(iter(paths.values())).parent)
+    if guard is None or _prepared_figure_wire(guard)!=verdict['guard']:return False
+    source.require_python()
+    if figure_tuple_guard(helper,next(iter(paths.values())).parent,authenticated=guard)!=guard:return False
+    encoded=json.dumps(result,sort_keys=True,separators=(',',':'))
+    with _FIGURE_TUPLE_REPLAY_LOCK:
+        if len(_FIGURE_TUPLE_REPLAYS)>=32:_FIGURE_TUPLE_REPLAYS.clear()
+        _FIGURE_TUPLE_REPLAYS[key]=(guard,encoded)
+    return True
 
 
 def capture_figure_files(args, transport=None, sleep=time.sleep, *, target_contract=None):

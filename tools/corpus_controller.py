@@ -983,6 +983,24 @@ def authorize_prepared_source(cfg,start,start_ref,launch_path,generation_ref,*,p
                 and record.get('prepared_by_start')==start_ref
                 and record.get('tracked_process')==launch['identity'],
                 'Prepared generation belongs to another tracked attempt')
+    # Only this live child in the controller-created exclusive attempt may
+    # offer semantic success. Arbitrary generation/dispatch consumers do not
+    # transport it. Keep the final whole-source/Git and process checks below.
+    if (inherited is None and cfg.get('retained_native_roles') is not None
+            and record.get('figure_validation') is not None
+            and builder.prepared_metadata(start_ref)==start
+            and start.get('prepared_source_control',{}).get('configuration')==cfg
+            and {'argv','edition','workers_requested','memory_limit_bytes'}<=set(start)
+            and start['argv']==command(cfg,start['edition'],start['workers_requested'],start['memory_limit_bytes'],
+                prepared_bytecode_prefix=str(Path(start_ref['path']).parent/'unwritten-python-cache'))
+            and getattr(process,'args',None)==start['argv']
+            and record.get('source')==cfg['source']
+            and record.get('python_tooling')==cfg.get('python_tooling')
+            and process.pid==launch['identity']['pid'] and process.poll() is None
+            and process_identity(process.pid)==launch['identity'] and process.poll() is None):
+        with builder.build_phase(start['edition'],cfg['date'],'prepared_figure_semantic_verdict',
+                                 scope='controller',reused=False) as phase:
+            phase['reused']=builder.reuse_prepared_figure_verdict(cfg,record['figure_validation'])
     authenticated_roles=None
     if cfg.get('retained_native_roles') is not None:
         binding=record.get('retained_dispatch')

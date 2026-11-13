@@ -11106,4 +11106,254 @@ class FigureBorrowDigestReuseTests(unittest.TestCase):
             roles.bind_capture(self.args.output, inventory, figure_guard=guard)
 
 
+class PreparedFigureVerdictTests(unittest.TestCase):
+    setUp = CompleteParentTupleReplayTests.setUp
+    validate = CompleteParentTupleReplayTests.validate
+
+    @contextlib.contextmanager
+    def selected(self):
+        # Real recursive Figure/SQL/raw authorities; only the surrounding
+        # qualified Python inventory is a small local source fixture.
+        root=self.fixture.root/'verdict-source';(root/'tools').mkdir(parents=True,exist_ok=True)
+        helper=root/'tools/verdict_fixture.py';helper.write_text('VALUE=1\n')
+        inventory=_initial_sealed_write(root/'inventory.json',dict(head='original-source',
+            files={'tools/verdict_fixture.py':_initial_sealed_reference(helper)},
+            modes={'tools/verdict_fixture.py':0o644}))
+        cfg=dict(source=dict(head='original-source',fingerprint='a'*64,inventory=inventory),
+            date=self.fixture.date,edition_options={self.fixture.wiki:dict(
+                auxiliary_snapshots={name:_initial_sealed_reference(path) for name,path in self.paths.items()})})
+        with patch.object(b,'PROJECT',root):yield cfg,helper
+
+    def test_optional_absent_or_partial_selection_does_not_offer_authority(self):
+        with self.selected() as (cfg,_):
+            self.validate();proof=b.prepared_figure_verdict(cfg)
+            for snapshots in (None,{}, {'figure-sizing':str(self.paths['figure-sizing'])}):
+                with self.subTest(snapshots=snapshots):
+                    changed=copy.deepcopy(cfg)
+                    changed['edition_options'][self.fixture.wiki]['auxiliary_snapshots']=snapshots
+                    self.assertIsNone(b.prepared_figure_verdict(changed))
+                    self.assertFalse(b.reuse_prepared_figure_verdict(changed,proof))
+            malformed=copy.deepcopy(proof);malformed['version']=True
+            self.assertFalse(b.reuse_prepared_figure_verdict(cfg,malformed))
+
+    def test_successful_child_verdict_avoids_second_semantic_replay_but_parent_rehashes_complete_readset(self):
+        with self.selected() as (cfg,_),patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
+            expected=self.validate();self.assertEqual(replay.call_count,1)
+            verdict=b.prepared_figure_verdict(cfg);self.assertIsNotNone(verdict)
+            b._FIGURE_TUPLE_REPLAYS.clear()
+            with patch.object(self.figures.evidence,'fingerprint',wraps=self.figures.evidence.fingerprint) as hashes:
+                self.assertTrue(b.reuse_prepared_figure_verdict(cfg,verdict))
+            paths=[Path(call.args[0]) for call in hashes.call_args_list]
+            self.assertEqual(set(map(str,paths)),set(verdict['guard'][1]))
+            self.assertEqual(paths.count(self.args.sql[0]),1)
+            self.assertIn(self.parent/self.figures.ROLES['figure-sizing-raw'],paths)
+            self.assertEqual(self.validate(),expected);self.assertEqual(replay.call_count,1)
+            print('PREPARED_FIGURE_VERDICT_COUNTER '+json.dumps(dict(child_semantic_replays=1,
+                parent_semantic_replays=0,parent_fresh_hashes=len(paths),wall_time_saving_claimed=False)))
+
+    def test_no_successful_validator_return_means_no_transferable_verdict(self):
+        with self.selected() as (cfg,_):
+            self.assertIsNone(b.prepared_figure_verdict(cfg))
+            with patch.object(self.figures,'verify_tuple',side_effect=ValueError('original semantic failure')):
+                with self.assertRaisesRegex(ValueError,'original semantic failure'):self.validate()
+            self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
+            self.assertIsNone(b.prepared_figure_verdict(cfg))
+            self.assertFalse(b.reuse_prepared_figure_verdict(cfg,None))
+            with patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
+                self.validate();self.assertEqual(replay.call_count,1)
+
+    def test_missing_foreign_malformed_or_stale_proof_uses_normal_validation(self):
+        with self.selected() as (cfg,_):
+            self.validate();verdict=b.prepared_figure_verdict(cfg)
+            for mode in ('missing','version','source','catalog','edition','date','paths','guard','result-context','helper'):
+                with self.subTest(mode=mode):
+                    proof=copy.deepcopy(verdict)
+                    if mode=='missing':proof=None
+                    elif mode=='version':proof['version']=2
+                    elif mode=='source':proof['source']['fingerprint']='b'*64
+                    elif mode=='catalog':proof['python_tooling']={}
+                    elif mode=='edition':proof['edition']='foreignwiktionary'
+                    elif mode=='date':proof['date']='20990101'
+                    elif mode=='paths':proof['paths'].pop(next(iter(proof['paths'])))
+                    elif mode=='guard':proof['guard'][1].pop(next(iter(proof['guard'][1])))
+                    elif mode=='result-context':next(iter(proof['result'].values()))[0]['wiki']='foreignwiktionary'
+                    else:proof['guard'][0][0]['generator_sha256']='0'*64
+                    b._FIGURE_TUPLE_REPLAYS.clear()
+                    self.assertFalse(b.reuse_prepared_figure_verdict(cfg,proof))
+                    self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
+                    with patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
+                        self.validate();self.assertEqual(replay.call_count,1)
+
+    def test_mutated_sql_parent_external_raw_and_replacement_cannot_transfer(self):
+        record=json.loads(self.observation.read_text())
+        external=self.observation.parent/next(iter(record['artifacts']))
+        raw=self.parent/self.figures.ROLES['figure-sizing-raw']
+        for mode,path in (('sql',self.args.sql[0]),('raw',raw),('external',external),
+                          ('same-bytes-new-inode',raw),('membership',self.parent/'unexpected-member')):
+            with self.subTest(mode=mode),self.selected() as (cfg,_):
+                b._FIGURE_TUPLE_REPLAYS.clear();self.validate();proof=b.prepared_figure_verdict(cfg)
+                original=None if mode=='membership' else path.read_bytes()
+                try:
+                    if mode=='same-bytes-new-inode':
+                        replacement=path.with_name(path.name+'.new');replacement.write_bytes(original);replacement.replace(path)
+                    else:path.write_bytes(b'extra' if original is None else original+b'changed')
+                    b._FIGURE_TUPLE_REPLAYS.clear()
+                    self.assertFalse(b.reuse_prepared_figure_verdict(cfg,proof))
+                    self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
+                    # Fallback still executes the maintained validator; a
+                    # changed invalid source cannot inherit previous success.
+                    with patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
+                        if mode=='same-bytes-new-inode':self.validate()
+                        else:
+                            with self.assertRaises((ValueError,KeyError,UnicodeError,OSError)):self.validate()
+                        self.assertEqual(replay.call_count,1)
+                finally:
+                    if original is None:path.unlink()
+                    else:path.write_bytes(original)
+
+    def test_python_source_and_change_during_fresh_hash_refuse_before_publication(self):
+        for mode in ('validator-source','mid-hash'):
+            with self.subTest(mode=mode),self.selected() as (cfg,helper):
+                b._FIGURE_TUPLE_REPLAYS.clear();self.validate();proof=b.prepared_figure_verdict(cfg)
+                b._FIGURE_TUPLE_REPLAYS.clear()
+                if mode=='validator-source':helper.write_text('VALUE=2\n')
+                original=self.figures.evidence.fingerprint;changed=[]
+                def fingerprint(path):
+                    result=original(path)
+                    if mode=='mid-hash' and not changed:
+                        changed.append(True);helper.write_text('VALUE=2\n')
+                    return result
+                with patch.object(self.figures.evidence,'fingerprint',side_effect=fingerprint):
+                    with self.assertRaisesRegex(ValueError,'Python helper changed'):
+                        b.reuse_prepared_figure_verdict(cfg,proof)
+                self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
+
+    def test_real_offer_parent_and_child_keep_default_untrusted_and_wrong_process_paths_cold(self):
+        import corpus_controller as controller
+        import build_python_tooling as catalog_source
+        import importlib.util
+        for mode in ('trusted','stale-proof','no-start-command','wrong-command',
+                     'foreign-pid','foreign-birth','changed-start','catalog','catalog-mutation'):
+            with self.subTest(mode=mode),ReadonlyPreparedRetainedTests().fixture() as f:
+                b._FIGURE_TUPLE_REPLAYS.clear();expected=self.validate()
+                key=tuple(sorted((name,str(path.absolute())) for name,path in self.paths.items()))
+                guard=b._FIGURE_TUPLE_REPLAYS[key][0]
+                f.roles.bind_capture(self.args.output,next(iter(expected.values()))[1],figure_guard=guard)
+                # Production offers prepare's blob-tool subset, while the
+                # retained dispatch still authenticates all four native roles.
+                tools=f.roles.prepare(None,self.fixture.wiki,self.fixture.date,workspace=f.workspace)
+                self.assertEqual(set(tools),set(b.BLOB_TOOL_NAMES))
+                self.assertEqual(set(f.roles.tools),set(b.RETAINED_NATIVE_ROLE_NAMES))
+                cfg=copy.deepcopy(f.cfg)
+                inventory=_initial_sealed_write(f.root/'parent-python-inventory.json',dict(head=cfg['source']['head'],
+                    files={'tools/custody_fixture_helper.py':_initial_sealed_reference(f.python)},
+                    modes={'tools/custody_fixture_helper.py':0o644}))
+                cfg['source']['inventory']=inventory
+                cfg.update(date=self.fixture.date,output=str(f.root/'output'),raw_shard_root=str(f.root/'raw-owned'),
+                    compiler=_initial_sealed_reference(f.compiler),manifest=_initial_sealed_write(f.root/'manifest.json',{}),
+                    downloads=str(f.root/'downloads'),expansion_timeout_ms=60000,build_timeout_seconds=60,
+                    edition_options={self.fixture.wiki:dict(auxiliary_snapshots={name:_initial_sealed_reference(path)
+                        for name,path in self.paths.items()},extraction_cache_root=str(f.root/'cache-owned'))})
+                spec=None
+                if mode in ('catalog','catalog-mutation'):
+                    # Same actual selected-catalog fixture as the maintained
+                    # parent/child/retired test; no mocked catalog validator.
+                    def reference(path):
+                        return dict(_initial_sealed_reference(path),mode=stat.S_IMODE(Path(path).stat().st_mode))
+                    st=f.root.stat();directory=dict(path=str(f.root),device=st.st_dev,inode=st.st_ino,
+                                                   uid=st.st_uid,mode=stat.S_IMODE(st.st_mode))
+                    spec=dict(source_root=directory,workspace_root=directory,
+                        selector=reference(Path(catalog_source.__file__)),modules={
+                            'build_wiktionaries':reference(Path(b.__file__)),
+                            'corpus_controller':reference(Path(controller.__file__)),
+                            'custody_fixture_helper':reference(f.python)})
+                    cfg['python_tooling']=spec;f.identity['python_tooling']=spec
+                    (f.workspace/'state.json').unlink()
+                    f.helper.adopt(f.f,native_roles=f.roles)
+                folder=f.root/'semantic-parent-attempt';folder.mkdir();prefix=str(folder/'unwritten-python-cache')
+                argv=['exact-fixture-child','--prepared-source']
+                start=dict(context=controller.production_context(cfg),date=cfg['date'],edition=self.fixture.wiki,
+                    workers_requested=1,memory_limit_bytes=1024,argv=argv,
+                    prepared_source_control=dict(version=1,configuration=cfg,bytecode_prefix=prefix))
+                if mode=='no-start-command':del start['argv']
+                start_ref=_initial_sealed_write(folder/'start.json',start)
+                identity=dict(pid=123,start_time_ticks=456)
+                launch=folder/'launch.json';_initial_sealed_write(launch,dict(identity=identity))
+                process=SimpleNamespace(pid=124 if mode=='foreign-pid' else 123,poll=lambda:None,
+                    args=argv if mode!='wrong-command' else ['foreign-child'])
+                observed_identity=dict(identity,start_time_ticks=457) if mode=='foreign-birth' else identity
+                counts=[];observed=[];phases=[]
+                def authorize(reference):
+                    record=b.prepared_metadata(reference)
+                    self.assertIn('figure_validation',record)
+                    if mode=='stale-proof':
+                        record['figure_validation']['date']='20990101'
+                        Path(reference['path']).write_text(json.dumps(record))
+                        reference=b.prepared_metadata_ref(reference['path'])
+                    # Model the separate controller interpreter. Direct dispatch
+                    # reopening still never consumes the optional child proof.
+                    b._FIGURE_TUPLE_REPLAYS.clear()
+                    with patch.object(b,'reuse_prepared_figure_verdict',wraps=b.reuse_prepared_figure_verdict) as transfer, \
+                            patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
+                        direct=b.RetainedNativeToolRoles.from_prepared_dispatch(record['retained_dispatch'])
+                        self.assertFalse(b._FIGURE_TUPLE_REPLAYS);self.assertEqual(transfer.call_count,0)
+                        if mode=='changed-start':
+                            changed=copy.deepcopy(start);changed['workers_requested']=2
+                            Path(start_ref['path']).write_text(json.dumps(changed))
+                        elif mode=='catalog-mutation':f.python.write_text('VALUE=2\n')
+                        try:
+                            binding=controller.authorize_prepared_source(cfg,start,start_ref,launch,reference,process=process)
+                        finally:counts.append((transfer.call_count,replay.call_count))
+                    observed.append(binding)
+                    return b.prepared_authorized_generation(cfg,start,binding['authorization'])
+                def source_guard(value):
+                    self.assertEqual(value,cfg)
+                    return dict(qualified_head=cfg['source']['head'],current_head=cfg['source']['head'],
+                        producer_inventory=cfg['source']['inventory'],apps_acceptance=False)
+                # Synthetic native/source/process witnesses; actual Figure,
+                # catalog, guard, offer, parent and child reopen execute.
+                with patch.dict(sys._xoptions,{'wikidict_prepared_source':'1'}),patch.object(sys,'pycache_prefix',prefix), \
+                        patch.object(sys,'path',[sys._stdlib_dir,sys._stdlib_dir+'/lib-dynload']), \
+                        patch.object(b,'phase_event',side_effect=lambda *args,**kwargs:phases.append((args,kwargs))), \
+                        patch.object(controller,'command',return_value=argv), \
+                        patch.object(controller,'source_guard',side_effect=source_guard), \
+                        patch.object(controller,'prepared_git_source_authority',return_value={'fixture':'original'}), \
+                        patch.object(controller,'process_identity',return_value=observed_identity), \
+                        contextlib.ExitStack() as selected, b.prepared_source_request(start_ref) as request:
+                    if spec is not None:
+                        loader=importlib.util.spec_from_file_location('wikidict_python_tooling',spec['selector']['path'])
+                        module=importlib.util.module_from_spec(loader)
+                        selected.enter_context(patch.dict(sys.modules,{'wikidict_python_tooling':module}))
+                        selected.enter_context(patch.object(sys,'meta_path',list(sys.meta_path)))
+                        loader.loader.exec_module(module)
+                        catalog=module.select(spec,role='build_wiktionaries',origin=b.__file__)
+                        selected.enter_context(patch.object(b,'_PYTHON_TOOLING',catalog))
+                        selected.enter_context(patch.object(b,'_PREPARED_BOOTSTRAP_PYTHON_GUARD',None))
+                    request.await_authorization=authorize
+                    refusals={'foreign-pid':'Tracked CLI exited or changed','foreign-birth':'Tracked CLI exited or changed',
+                              'changed-start':'Prepared metadata changed','catalog-mutation':'Selected Python source identity changed'}
+                    if mode in refusals:
+                        with self.assertRaisesRegex(ValueError,refusals[mode]):
+                            request.offer(f.workspace,f.dump,tools,f.identity,123)
+                        self.assertFalse(observed);self.assertIsNone(request.generation)
+                        self.assertIsNone(getattr(b._PREPARED_SOURCE,'value',None))
+                        self.assertNotIn('prepared_source_authorization',controller.read_json(launch))
+                        if mode in ('changed-start','catalog-mutation'):self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
+                    else:
+                        generation=request.offer(f.workspace,f.dump,tools,f.identity,123)
+                        self.assertEqual(len(observed),1);generation.require_unchanged()
+                        self.assertEqual(self.validate(),expected)
+                expected_counts={'trusted':(1,0),'catalog':(1,0),'stale-proof':(1,1),
+                    'no-start-command':(0,1),'wrong-command':(0,1),'foreign-pid':(0,1),
+                    'foreign-birth':(0,1),'changed-start':(0,0),'catalog-mutation':(1,0)}
+                self.assertEqual(counts,[expected_counts[mode]])
+                ends=[fields for args,fields in phases if args[2:]==('prepared_figure_semantic_verdict','end')]
+                if mode in ('trusted','stale-proof','catalog','catalog-mutation'):
+                    self.assertEqual(len(ends),1)
+                    self.assertEqual(ends[0]['status'],'failure' if mode=='catalog-mutation' else 'success')
+                    self.assertEqual(ends[0]['reused'],mode in ('trusted','catalog'))
+                    self.assertIn('seconds',ends[0]);self.assertIn('self_cpu_seconds',ends[0])
+                else:self.assertEqual(ends,[])
+
+
 if __name__=='__main__':unittest.main()
