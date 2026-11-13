@@ -31,6 +31,8 @@
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QHelpEvent>
+#include <QPaintEvent>
+#include <QEventLoop>
 #include <QWheelEvent>
 #include <QGestureEvent>
 #include <QPanGesture>
@@ -478,6 +480,104 @@ private:
     }
 
 private slots:
+    void readingPaneKeyboardFocusCueRepaintsScrolledBackingStore()
+    {
+        MainWindow window{QString()}; window.resize(900, 700); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        auto *browser = window.reading_; auto *tabs = window.entryTabs_->tabBar();
+        window.entryTabs_->setCurrentWidget(browser); window.showCompactPane(false);
+        browser->setLineWrapMode(QTextEdit::NoWrap);
+        QString text;
+        for (int line = 0; line < 80; ++line)
+            text += QStringLiteral("Line %1: ").arg(line) + QString(180, QChar('M')) + QChar('\n');
+        browser->setPlainText(text);
+        struct PaintCoverage : QObject {
+            QRegion region;
+            int events = 0;
+            bool eventFilter(QObject *, QEvent *event) override {
+                if (event->type() == QEvent::Paint) {
+                    region += static_cast<QPaintEvent *>(event)->region();
+                    ++events;
+                }
+                return false;
+            }
+        } painted;
+        auto *view = browser->viewport(); view->installEventFilter(&painted);
+        QVERIFY(view->autoFillBackground()); QCOMPARE(view->palette().color(QPalette::Base).alpha(), 255);
+        const auto removeFilter = qScopeGuard([&] { view->removeEventFilter(&painted); });
+        auto *document = browser->document(); auto *layout = document->documentLayout();
+        const QString raw = document->toRawText(); const int count = document->characterCount(), revision = document->revision();
+        const auto entry = window.currentEntry_;
+        for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+            browser->setLayoutDirection(direction);
+            for (const int width : {900, 640}) {
+                window.resize(width, 700); window.showCompactPane(false);
+                QTRY_VERIFY(view->width() > 220 && view->height() > 180 && !window.readingFloatLayoutScheduled_);
+                layout->documentSize();
+                QTRY_VERIFY(!document->property("wikidict.figure.validationPending").toBool());
+                auto *horizontal = browser->horizontalScrollBar(); auto *vertical = browser->verticalScrollBar();
+                QTRY_VERIFY(horizontal->maximum() - horizontal->minimum() > 101);
+                QTRY_VERIFY(vertical->maximum() - vertical->minimum() > 67);
+                horizontal->setValue(horizontal->minimum()); vertical->setValue(vertical->minimum());
+                QTextCursor cursor(document); cursor.movePosition(QTextCursor::Start); browser->setTextCursor(cursor);
+                tabs->setFocus(Qt::TabFocusReason); QTRY_VERIFY(tabs->hasFocus());
+                painted.region = {}; painted.events = 0;
+                QTest::keyClick(tabs, Qt::Key_Tab); QTRY_VERIFY(browser->hasFocus());
+                QTRY_VERIFY(QRegion(view->rect()).subtracted(painted.region).isEmpty());
+                horizontal->setValue(horizontal->minimum()); vertical->setValue(vertical->minimum());
+                QCoreApplication::processEvents(QEventLoop::AllEvents);
+                QCoreApplication::sendPostedEvents(nullptr, QEvent::UpdateRequest);
+                QCOMPARE(horizontal->value(), horizontal->minimum()); QCOMPARE(vertical->value(), vertical->minimum());
+                auto *accessible = QAccessible::queryAccessibleInterface(browser);
+                QVERIFY(accessible && accessible->state().focused);
+                const QRect geometry = view->geometry(); const QRect viewport = view->rect();
+                const QSizeF size = layout->documentSize();
+                const auto block = document->begin(); const QRectF blockBox = layout->blockBoundingRect(block);
+                const auto selected = browser->textCursor();
+                const auto line = block.layout()->lineAt(0); QVERIFY(line.isValid());
+                const QPointF point = blockBox.topLeft() + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2,
+                    line.y() + line.height() / 2);
+                const int hit = layout->hitTest(point, Qt::ExactHit); QVERIFY(hit >= block.position());
+                const QRegion perimeter = QRegion(viewport).subtracted(QRegion(viewport.adjusted(3, 3, -3, -3)));
+                for (const bool horizontalAxis : {true, false}) {
+                    auto *bar = horizontalAxis ? horizontal : vertical;
+                    for (const bool forward : {true, false}) {
+                        // Drain the preceding actual paint, then observe only
+                        // paints queued by the normal scrollbar transition.
+                        QCoreApplication::processEvents(QEventLoop::AllEvents);
+                        QCoreApplication::sendPostedEvents(nullptr, QEvent::UpdateRequest);
+                        painted.region = {}; painted.events = 0;
+                        const int before = bar->value();
+                        const int target = bar->minimum() + (forward ? (horizontalAxis ? 101 : 67) : 0);
+                        QVERIFY(target != before);
+                        const int delta = before - target;
+                        const int dx = horizontalAxis ? (direction == Qt::RightToLeft ? -delta : delta) : 0;
+                        const int dy = horizontalAxis ? 0 : delta;
+                        const QRegion translated = perimeter.translated(dx, dy).intersected(QRegion(viewport.adjusted(3, 3, -3, -3)));
+                        QVERIFY(!translated.isEmpty());
+                        const QRegion required = perimeter.united(translated);
+                        bar->setValue(target); QCOMPARE(bar->value(), target);
+                        // A grab/render here would repaint the whole widget and
+                        // conceal a blitted stale outline. Require natural paint
+                        // coverage of the old interior edge before any capture.
+                        QTRY_VERIFY2_WITH_TIMEOUT(required.subtracted(painted.region).isEmpty(),
+                            qPrintable(QStringLiteral("Missing queued cue repaint: width=%1 direction=%2 axis=%3 delta=%4 events=%5 painted=%6,%7 %8x%9")
+                                .arg(width).arg(int(direction)).arg(horizontalAxis).arg(delta).arg(painted.events)
+                                .arg(painted.region.boundingRect().x()).arg(painted.region.boundingRect().y())
+                                .arg(painted.region.boundingRect().width()).arg(painted.region.boundingRect().height())), 3000);
+                        QVERIFY(painted.events > 0); QVERIFY(browser->hasFocus() && accessible->state().focused);
+                        QCOMPARE(view->geometry(), geometry); QCOMPARE(layout->documentSize(), size);
+                        QCOMPARE(layout->blockBoundingRect(block), blockBox); QCOMPARE(layout->hitTest(point, Qt::ExactHit), hit);
+                        QCOMPARE(document->toRawText(), raw); QCOMPARE(document->characterCount(), count); QCOMPARE(document->revision(), revision);
+                        QCOMPARE(window.currentEntry_, entry); QCOMPARE(browser->textCursor().position(), selected.position());
+                        QCOMPARE(browser->textCursor().anchor(), selected.anchor());
+                    }
+                }
+                QCOMPARE(horizontal->value(), horizontal->minimum()); QCOMPARE(vertical->value(), vertical->minimum());
+            }
+        }
+    }
+
     void readingPaneKeyboardFocusCuePreservesContentAndGeometry()
     {
         MainWindow window{QString()}; window.resize(900, 700); window.show(); window.activateWindow();

@@ -694,6 +694,16 @@ public:
         notifyDisclosureFocus();
     }
 protected:
+    void scrollContentsBy(int dx, int dy) override {
+        const QPointer<ReadingBrowser> guard(this);
+        const QPointer<QWidget> originalViewport(viewport());
+        QTextBrowser::scrollContentsBy(dx, dy);
+        if (!guard || !originalViewport || guard->viewport() != originalViewport) return;
+        // QTextEdit blits the backing store on scroll. The keyboard focus cue
+        // belongs to the viewport, so erase its translated pixels as well as
+        // repainting its fixed perimeter after the normal content scroll.
+        if (guard->hasFocus() && guard->missingState.focusVisible) originalViewport->update();
+    }
     void mouseMoveEvent(QMouseEvent *event) override {
         const QPointer<ReadingBrowser> guard(this);
         QTextBrowser::mouseMoveEvent(event);
