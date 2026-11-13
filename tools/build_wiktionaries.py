@@ -1680,7 +1680,31 @@ def validated_figure_tuple(snapshots, edition=None, date=None, *, parent_snapsho
     return verified_figure_tuple(prepare_figure_metadata,paths,edition,date,parent_paths=parent_paths)
 
 
+def preflight_selected_auxiliary_inputs(snapshots, *, captured_selection=None):
+    """Reject absent selected inputs before replay; confer no validation proof."""
+    figure_roots={Path(path).parent for name,path in (snapshots or {}).items()
+                  if name in FIGURE_SNAPSHOT_FILES}
+    for name,source in sorted((snapshots or {}).items()):
+        if name not in AUXILIARY_SNAPSHOT_NAMES:
+            raise ValueError(f'Unknown auxiliary snapshot: {name}')
+        path=Path(source)
+        if not path.resolve(strict=True).is_file():
+            raise ValueError(f'Auxiliary snapshot is not a file: {path}')
+        shared_figure=(name in FIGURE_SNAPSHOT_FILES or
+                       (name=='file-metadata' and path.parent in figure_roots))
+        captured_manifest=(captured_selection is not None and
+                           name in ('namespace-registry','site-info','category-stats','category-tree'))
+        # Reuse helper selection, including legacy manifest-optional contracts.
+        # The shared Figure Provider needs no additional manifest parse here.
+        if shared_figure or captured_manifest or auxiliary_capture_helper(name,path) is not None:
+            manifest=path.with_name('figure-inputs.manifest.json' if shared_figure
+                                    else auxiliary_manifest_filename(name,path))
+            if not manifest.resolve(strict=True).is_file():
+                raise ValueError(f'Auxiliary manifest is not a file: {manifest}')
+
+
 def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_selection=None):
+    preflight_selected_auxiliary_inputs(snapshots,captured_selection=captured_selection)
     hashes={};namespace_inputs={};captures={}
     figure_paths={name:Path(path) for name,path in (snapshots or {}).items() if name in FIGURE_SNAPSHOT_FILES}
     provider=(snapshots or {}).get('file-metadata')
@@ -3327,7 +3351,42 @@ def initial_sealed_generation(reference, native_roles):
     return selected, result, plan, workspace
 
 
-def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity, dump, reference, native_roles):
+def initial_page_language_providers(plan, expected, build_identity, snapshots, providers, native_roles):
+    """Join selected capture companions to the exact closed native input authority."""
+    names={'page-language.raw.json','page-language.html'} & set(providers)
+    names={name for name in names if providers[name] is not None}
+    if not names:return {}
+    path=Path((snapshots or {}).get('page-language',''))
+    if not path.is_absolute():raise ValueError('Initial sealed page-language capture is not selected')
+    capture=validated_auxiliary_capture('page-language',path,expected['edition'],expected['date'])
+    if capture is None:raise ValueError('Initial sealed page-language capture is not validated')
+    manifest,inventory=capture
+    manifests,artifacts=_project_auxiliary_capture_identities({'page-language':(*capture,auxiliary_manifest_filename('page-language',path))})
+    if (manifest['output_sha256']!=build_identity.get('auxiliary_snapshot_sha256',{}).get('page-language')
+            or manifest['namespace_registry_sha256']!=build_identity.get('auxiliary_snapshot_sha256',{}).get('namespace-registry')
+            or any(identity.get('auxiliary_capture_sha256',{}).get('page-language')!=manifests['page-language']
+                   or identity.get('auxiliary_capture_artifact_sha256',{}).get('page-language')!=artifacts['page-language']
+                   for identity in (expected,build_identity))):
+        raise ValueError('Initial sealed page-language capture identity differs')
+    # Every selected member, including the manifest and logical snapshot, must
+    # already be declared by the independently closed preparation at this path.
+    for filename,digest in inventory.items():
+        member=path.with_name(filename)
+        observed=native_roles.bind_input(member)
+        descriptor={key:observed[key] for key in ('path','bytes','sha256')}
+        if (observed['sha256']!=digest or
+                sum(row==descriptor for row in plan.get('inputs',[]))!=1):
+            raise ValueError('Initial sealed page-language member is not a closed preparation input')
+    result={}
+    for name in names:
+        row=manifest['artifacts'].get(name)
+        if row is None or providers[name]!=[row['bytes'],row['sha256']]:
+            raise ValueError('Initial sealed page-language provider differs from capture')
+        result[name]=row['sha256']
+    return result
+
+
+def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity, dump, reference, native_roles, auxiliary_snapshots=None):
     """Create genuine ordinary initial state for an explicitly selected sealed worker."""
     import extraction_cache as cache
     selected, result, plan, selected_workspace = initial_sealed_generation(reference, native_roles)
@@ -3384,6 +3443,7 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
                       'wikibase-page-links.tsv': plan['page_links']['sha256'],
                       'page-redirects.tsv': plan['page_redirects']['sha256']})
     providers = seal['identity']['providers']
+    snapshots.update(initial_page_language_providers(plan,expected,build_identity,auxiliary_snapshots,providers,native_roles))
     if (any(value is not None and value[1] != snapshots.get(name) for name, value in providers.items())
             or any(name not in providers or providers[name] is None or providers[name][1] != value
                    for name, value in snapshots.items())
@@ -3483,7 +3543,7 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     return epoch
 
 
-def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None, *, provider_update=None, build_identity=None, dump=None, sealed_recovery=None, native_roles=None, writer_figure_transition=None, initial_generation=None):
+def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None, *, provider_update=None, build_identity=None, dump=None, sealed_recovery=None, native_roles=None, writer_figure_transition=None, initial_generation=None, auxiliary_snapshots=None):
     expected=dict(expected)
     if 'raw_shards_path' in expected: raise ValueError('Raw shard path must be supplied explicitly')
     artifact_path(workspace)
@@ -3506,7 +3566,7 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
     if initial_generation is not None:
         if sealed_recovery is not None or writer_figure_transition is not None:
             raise ValueError('Initial sealed adoption cannot borrow another transition')
-        return adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity, dump, initial_generation, native_roles)
+        return adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity, dump, initial_generation, native_roles, auxiliary_snapshots)
     if writer_figure_transition is not None:
         if sealed_recovery is not None or generation is not None:
             raise ValueError('Writer Figure transition requires an ordinary completed worker')
@@ -5974,7 +6034,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
             update_args=dict(writer_figure_transition=writer_transition, native_roles=retained_roles,
                              build_identity=build_identity, dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
         if initial_generation is not None:
-            update_args=dict(initial_generation=initial_generation, native_roles=retained_roles,
+            update_args=dict(initial_generation=initial_generation, native_roles=retained_roles, auxiliary_snapshots=auxiliary_snapshots,
                              build_identity=build_identity, dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
         now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}),**update_args)
         if reviewed is not None:nonlexical.pin_review(reviewed,workspace/'reviewed-nonlexical-source.json')

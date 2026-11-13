@@ -7007,6 +7007,104 @@ class FigureTupleReplayReuseTests(unittest.TestCase):
     def validate(self):
         return b.validated_figure_tuple(self.paths, self.fixture.wiki, self.fixture.date)
 
+    def preflight_namespace(self, *, manifest=True):
+        root=self.fixture.root/'selected-namespace'
+        root.mkdir(exist_ok=True)
+        path=root/'namespace-registry.tsv'
+        path.write_bytes(self.fixture.namespace.read_bytes())
+        figure_manifest=json.loads((self.args.output/self.figures.MANIFEST).read_bytes())
+        selected=figure_manifest['source_dump_files']
+        capture=dict(source_xml={'name':'selected-pages.xml'},artifacts={
+            'namespace-siteinfo.raw.json':'a'*64,'dump-siteinfo.xml':'b'*64})
+        if manifest:
+            path.with_suffix('.manifest.json').write_text(json.dumps(dict(
+                wiki=self.fixture.wiki,date=self.fixture.date,output_sha256=b.sha256_file(path),
+                source_dump_files=[capture['source_xml']],raw_siteinfo_sha256='a'*64,
+                dump_siteinfo_sha256='b'*64)))
+        return path,(capture,selected,None)
+
+    def test_auxiliary_preflight_missing_namespace_avoids_one_cold_replay(self):
+        path,selection=self.preflight_namespace(manifest=False)
+        paths=dict(self.paths,**{'namespace-registry':path})
+        replay_counts=[]
+        for preflight in (False,True):
+            b._FIGURE_TUPLE_REPLAYS.clear()
+            # With only the new preflight disabled, the original validation body
+            # still performs its full cold replay before the same missing input.
+            guard=contextlib.nullcontext() if preflight else patch.object(
+                b,'preflight_selected_auxiliary_inputs',return_value=None)
+            with guard,patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
+                with self.assertRaises(FileNotFoundError) as caught:
+                    b._validated_auxiliary_state(paths,self.fixture.wiki,self.fixture.date,
+                        captured_selection=selection)
+                self.assertEqual(Path(caught.exception.filename),path.with_suffix('.manifest.json'))
+                replay_counts.append(replay.call_count)
+        self.assertEqual(replay_counts,[1,0])
+
+    def test_auxiliary_preflight_success_keeps_replay_hashes_and_every_capture_join(self):
+        path,selection=self.preflight_namespace()
+        paths=dict(self.paths,**{'namespace-registry':path})
+        with patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay, \
+             patch.object(b,'_validate_captured_snapshot_context',wraps=b._validate_captured_snapshot_context) as joins, \
+             patch.object(b,'sha256_file',wraps=b.sha256_file) as hashed:
+            hashes,captures=b._validated_auxiliary_state(paths,self.fixture.wiki,self.fixture.date,
+                captured_selection=selection)
+        self.assertEqual(replay.call_count,1)
+        self.assertEqual([call.args[0] for call in joins.call_args_list],sorted(paths))
+        self.assertEqual(set(hashes),set(paths));self.assertEqual(set(captures),set(self.paths))
+        self.assertIn(path,[call.args[0] for call in hashed.call_args_list])
+        self.assertEqual(hashes['namespace-registry'],hashlib.sha256(path.read_bytes()).hexdigest())
+        self.assertEqual({name:hashes[name] for name in self.paths},
+            json.loads((self.args.output/self.figures.MANIFEST).read_bytes())['outputs'])
+
+    def test_auxiliary_preflight_preserves_manifest_optional_standalone_roles(self):
+        root=self.fixture.root/'optional';root.mkdir()
+        paths={}
+        for name in ('language-registry','category-stats','category-tree','wikibase-sitelinks',
+                     'wikibase-entity-text','transclusion-redirects','file-metadata','commons-data',
+                     'interface-messages','namespace-registry'):
+            path=root/b.auxiliary_snapshot_filename(name)
+            path.write_bytes(self.fixture.namespace.read_bytes() if name=='namespace-registry'
+                             else b'legacy plain snapshot\n')
+            paths[name]=path
+        hashes,captures=b._validated_auxiliary_state(paths,self.fixture.wiki,self.fixture.date)
+        self.assertEqual(captures,{})
+        self.assertEqual(hashes,{name:hashlib.sha256(path.read_bytes()).hexdigest()
+                                for name,path in paths.items()})
+        self.assertEqual(b._validated_auxiliary_state(None),({},{}))
+
+    def test_auxiliary_preflight_refuses_missing_files_and_required_manifests_before_replay(self):
+        root=self.fixture.root/'early-refusals';root.mkdir()
+        for mode in ('missing','directory','dangling-link','capture-manifest','figure-manifest','unknown-role'):
+            with self.subTest(mode=mode),patch.object(self.figures,'verify_tuple') as replay:
+                path=root/mode
+                name='language-registry'
+                if mode=='directory':path.mkdir()
+                elif mode=='dangling-link':path.symlink_to(root/'absent-target')
+                elif mode in ('capture-manifest','figure-manifest','unknown-role'):path.write_bytes(b'input\n')
+                if mode=='capture-manifest':name='page-language'
+                elif mode=='figure-manifest':name='figure-sizing'
+                elif mode=='unknown-role':name='unrecognized-role'
+                with self.assertRaises((FileNotFoundError,ValueError)):
+                    b._validated_auxiliary_state({name:path},self.fixture.wiki,self.fixture.date)
+                replay.assert_not_called()
+
+    def test_auxiliary_preflight_does_not_authorize_later_manifest_or_content_changes(self):
+        path,selection=self.preflight_namespace()
+        paths=dict(self.paths,**{'namespace-registry':path})
+        preflight=b.preflight_selected_auxiliary_inputs
+        for mode in ('remove-manifest','change-content'):
+            with self.subTest(mode=mode):
+                path,selection=self.preflight_namespace()
+                def changed(*args,**kwargs):
+                    preflight(*args,**kwargs)
+                    if mode=='remove-manifest':path.with_suffix('.manifest.json').unlink()
+                    else:path.write_bytes(path.read_bytes()+b'changed\n')
+                with patch.object(b,'preflight_selected_auxiliary_inputs',side_effect=changed):
+                    with self.assertRaises((FileNotFoundError,ValueError)):
+                        b._validated_auxiliary_state(paths,self.fixture.wiki,self.fixture.date,
+                            captured_selection=selection)
+
     def test_figure_replay_reuse_runs_initial_sql_replay_once_and_returns_owned_values(self):
         with patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
             first = self.validate()
@@ -9543,6 +9641,77 @@ class InitialSealedGenerationTests(unittest.TestCase):
         f.closed.update(completed_expander_seal=f.seal_ref,preparation_result=f.result_ref)
         closed=_initial_sealed_write(f.root/'closure.json',f.closed)
         f.selection=_initial_sealed_write(f.root/'selection.json',dict(preparation_result=f.result_ref,preparation_closure=closed))
+
+    def page_language_fixture(self,f):
+        import test_page_language_snapshot as fixture
+        path,namespace=fixture.fixture(f.root/'captured/page-language')
+        capture=b.validated_auxiliary_capture('page-language',path,'testwiktionary','20261001')
+        manifests,artifacts=b._project_auxiliary_capture_identities({'page-language':(*capture,b.auxiliary_manifest_filename('page-language',path))})
+        f.expected['edition']='testwiktionary'
+        f.aux.update({'namespace-registry':b.sha256_file(namespace),'page-language':b.sha256_file(path)})
+        for identity in (f.expected,f.identity):
+            identity['auxiliary_capture_sha256']=manifests
+            identity['auxiliary_capture_artifact_sha256']=artifacts
+        f.plan['inputs']=[_initial_sealed_reference(path.with_name(name)) for name in capture[1]]
+        f.result['input_authority']=_initial_sealed_write(f.root/'preparation-data.json',f.plan)
+        for name,digest in f.aux.items():
+            f.seal['identity']['providers'][b.auxiliary_snapshot_filename(name)]=[10,digest]
+        for name in ('page-language.raw.json','page-language.html'):
+            row=capture[0]['artifacts'][name]
+            f.seal['identity']['providers'][name]=[row['bytes'],row['sha256']]
+        self.reseal_graph(f)
+        return path,capture
+
+    def test_initial_closed_page_language_companions_adopt_and_resume_without_relabel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f=self.fixture(Path(tmp));path,capture=self.page_language_fixture(f)
+            before=(f.expander/'.completed-expander.json').read_bytes()
+            with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2], \
+                 patch.object(b,'validated_auxiliary_capture',wraps=b.validated_auxiliary_capture) as validated:
+                self.assertEqual(self.adopt(f,auxiliary_snapshots={'page-language':path}),123)
+                self.assertEqual(self.adopt(f,auxiliary_snapshots={'page-language':path}),123)
+                self.assertEqual(validated.call_count,2)
+            self.assertEqual((f.expander/'.completed-expander.json').read_bytes(),before)
+            self.assertEqual(f.roles.records,f.records)
+
+    def test_initial_page_language_missing_changed_foreign_and_unbound_capture_refuse(self):
+        for mode in ('unselected','missing','changed','foreign','symlink','manifest'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp));path,capture=self.page_language_fixture(f)
+                snapshots={'page-language':path}
+                if mode=='unselected':snapshots={}
+                elif mode=='missing':path.with_name('page-language.raw.json').unlink()
+                elif mode=='changed':path.with_name('page-language.html').write_bytes(b'changed')
+                elif mode=='foreign':
+                    other=f.root/'foreign';other.mkdir()
+                    for member in path.parent.iterdir():(other/member.name).write_bytes(member.read_bytes())
+                    snapshots={'page-language':other/path.name}
+                elif mode=='symlink':
+                    raw=path.with_name('page-language.raw.json');saved=raw.with_suffix('.saved');raw.rename(saved);raw.symlink_to(saved)
+                else:path.with_name('page-language.manifest.json').write_text('{}')
+                with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2]:
+                    with self.assertRaises((ValueError,OSError)):
+                        self.adopt(f,auxiliary_snapshots=snapshots)
+                self.assertFalse((f.destination/'state.json').exists())
+
+    def test_initial_page_language_closed_descriptor_capture_identity_and_unknown_provider_refuse(self):
+        for mode in ('missing-declaration','duplicate','wrong-size','wrong-hash','capture-id','unknown','seal-size','seal-hash'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                f=self.fixture(Path(tmp));path,capture=self.page_language_fixture(f)
+                rows=f.plan['inputs'];row=next(row for row in rows if row['path'].endswith('page-language.raw.json'))
+                if mode=='missing-declaration':rows.remove(row)
+                elif mode=='duplicate':rows.append(copy.deepcopy(row))
+                elif mode=='wrong-size':row['bytes']+=1
+                elif mode=='wrong-hash':row['sha256']='0'*64
+                elif mode=='capture-id':f.identity['auxiliary_capture_sha256']={'page-language':'0'*64}
+                elif mode=='unknown':f.seal['identity']['providers']['foreign-provider.tsv']=[10,'0'*64]
+                elif mode=='seal-size':f.seal['identity']['providers']['page-language.html'][0]+=1
+                else:f.seal['identity']['providers']['page-language.raw.json'][1]='0'*64
+                f.result['input_authority']=_initial_sealed_write(f.root/'preparation-data.json',f.plan)
+                self.reseal_graph(f)
+                with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2]:
+                    with self.assertRaises(ValueError):self.adopt(f,auxiliary_snapshots={'page-language':path})
+                self.assertFalse((f.destination/'state.json').exists())
 
     def test_initial_relative_default_graph_observes_exact_bound_artifacts_without_refinalizing(self):
         import extraction_cache as cache
