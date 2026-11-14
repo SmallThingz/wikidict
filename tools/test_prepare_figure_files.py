@@ -5629,6 +5629,23 @@ class OfflineFigureMaterializationTests(unittest.TestCase):
             directory.unlink(); saved.rename(directory)
         self.verify_both(output)
 
+    def test_rematerialize_source_epoch_retains_pending_and_unique_failed_evidence(self):
+        args,proof=self.epoch_complete();first,_=self.materialize(args)
+        before={name:(first/name).read_bytes() for name in (*figure.ROLES.values(),figure.PROVIDER)}
+        prefix=json.loads(proof.read_bytes());origin=Path(prefix['source_root'])
+        args.output.rename(self.root/'complete-unavailable')
+        origin.rename(self.root/'closed-unavailable');proof.rename(proof.with_suffix('.unavailable'))
+        second=self.root/'rematerialized-epoch'
+        manifest=figure.materialize_complete_capture(first/figure.MANIFEST,second)
+        first.rename(self.root/'first-unavailable')
+        self.assertEqual(self.verify_both(second),manifest)
+        for name,raw in before.items():self.assertEqual((second/name).read_bytes(),raw)
+        plan=json.loads((second/figure.PLAN).read_bytes())
+        closed=next(row for row in plan['materialized_http_origins'] if row['pending'])
+        self.assertEqual(len(closed['pending']),2)
+        (second/closed['failure']['path']).unlink()
+        with self.assertRaises((ValueError,FileNotFoundError)):figure.verify(second)
+
     def test_bounds_and_unresolved_resume_authority_refuse_before_output_creation(self):
         args = self.complete(); output=self.root/'not-created'
         with self.assertRaisesRegex(ValueError, 'bound|oversized'):
@@ -7989,6 +8006,106 @@ class CaptureReplayContractTests(unittest.TestCase):
         self.assertEqual(plan['replay_contract'],figure.REPLAY_CONTRACT_V4)
         self.assertEqual(plan['complete_captures'],[dict(kind='complete-stream',path=str(materialized/figure.MANIFEST),sha256=figure.digest(original[figure.MANIFEST]))])
         self.assertEqual(figure.verify(args.output),manifest)
+
+    def consolidated_observation(self, slots=1):
+        parent, _, _ = self.donor.parent(figure.REPLAY_CONTRACT_V4)
+        materialized = self.fixture.root/'materialized-parent'
+        figure.materialize_complete_capture(parent/figure.MANIFEST,materialized)
+        parent.rename(self.fixture.root/'original-unavailable')
+        _, observed, _ = self.fixture.svg_observation(figure.FIGURE_CURRENT_CORE)
+        record = self.fixture.write_svg_observation(observed)
+        args = self.args('observed-current');args.reuse=[materialized];args.reuse_batch=[record]
+        args.max_inflight=slots
+        figure.capture_files(args,transport=lambda *_:self.fail('Retained append fetched'),target_contract=figure.REPLAY_CONTRACT_V4)
+        before = self.members(args.output); parent_before = self.members(materialized)
+        output = self.fixture.root/'consolidated-current'
+        with patch.object(figure.evidence,'get_response',side_effect=AssertionError('Materialization fetched')):
+            figure.materialize_complete_capture(args.output/figure.MANIFEST,output)
+        self.assertEqual(self.members(args.output),before)
+        self.assertEqual(self.members(materialized),parent_before)
+        return args.output,materialized,output,record,before
+
+    def verify_consolidated(self, output):
+        manifest=figure.verify(output)
+        paths={role:output/name for role,name in figure.output_roles(output).items()}
+        self.assertEqual(set(figure.verify_tuple(paths)),set(paths))
+        return manifest
+
+    def rebind_consolidated_plan(self, output, plan):
+        OfflineFigureMaterializationTests.rebind(self,output,plan)
+
+    def test_materialize_observed_materialized_parent_preserves_current_bytes_without_ancestor_payloads(self):
+        source,parent,output,record,before=self.consolidated_observation()
+        for name in (*figure.ROLES.values(),figure.PROVIDER,figure.INVENTORY):
+            self.assertEqual((output/name).read_bytes(),before[name])
+        old=json.loads(before[figure.PLAN]);plan=json.loads((output/figure.PLAN).read_bytes())
+        self.assertEqual(plan['base_batches'],old['base_batches'])
+        self.assertEqual(plan['observed_batches'],1)
+        self.assertEqual(plan['observed'],old['observed'])
+        self.assertEqual(plan['complete_captures'],[])
+        self.assertEqual(plan['retained'],[])
+        self.assertTrue(any(json.loads((output/row['plan']['path']).read_bytes()).get('metadata_mode')==figure.MATERIALIZED_HTTP_MODE for row in plan['materialized_http_origins']))
+        for row in plan['materialized_http_origins']:
+            self.assertFalse(set(row['files']) & {figure.ROLES['figure-sizing-raw'],figure.ROLES['figure-sizing'],figure.PROVIDER})
+        source.rename(source.with_name('observed-source-unavailable'))
+        parent.rename(parent.with_name('materialized-parent-unavailable'))
+        with patch.object(figure,'read_complete_capture',side_effect=AssertionError('Consolidation reopened an ancestor')):
+            self.verify_consolidated(output)
+        repeated=self.fixture.root/'consolidated-again'
+        figure.materialize_complete_capture(output/figure.MANIFEST,repeated)
+        output.rename(output.with_name('consolidated-source-unavailable'))
+        self.verify_consolidated(repeated)
+        for name in (*figure.ROLES.values(),figure.PROVIDER,figure.INVENTORY):
+            self.assertEqual((repeated/name).read_bytes(),before[name])
+        self.assertTrue(record.is_file())
+
+    def test_materialized_observation_keeps_two_slot_http_plan_separate(self):
+        source,parent,output,_,before=self.consolidated_observation(slots=2)
+        plan=json.loads((output/figure.PLAN).read_bytes())
+        self.assertEqual(plan['max_inflight'],2)
+        self.assertEqual(plan['observed_batches'],1)
+        source.rename(source.with_name('source-unavailable'));parent.rename(parent.with_name('parent-unavailable'))
+        self.verify_consolidated(output)
+        for name in (*figure.ROLES.values(),figure.PROVIDER,figure.INVENTORY):
+            self.assertEqual((output/name).read_bytes(),before[name])
+        plan['planned_requests_sha256']='0'*64
+        self.rebind_consolidated_plan(output,plan)
+        with self.assertRaisesRegex(ValueError,'occupied-slot'):figure.verify(output)
+
+    def test_materialized_observation_and_origin_partition_tampering_refuses(self):
+        _,_,output,_,_=self.consolidated_observation()
+        original=json.loads((output/figure.PLAN).read_bytes())
+        for mutation in ('observation-hash','observation-path','observation-count','partition','frame','omit-origin','wrapper-frame'):
+            plan=copy.deepcopy(original)
+            if mutation=='observation-hash':plan['observed'][0]['sha256']='0'*64
+            elif mutation=='observation-path':plan['observed'][0]['path']+='.other'
+            elif mutation=='observation-count':plan['observed_batches']=0
+            elif mutation=='partition':
+                plan['base_batches']+=1;plan['observed_batches']=0;plan['observed']=[]
+            elif mutation=='frame':
+                next(row for row in plan['materialized_http_origins'] if row['id']==plan['materialized_root'])['frame_map'].reverse()
+            elif mutation=='omit-origin':plan['materialized_http_origins'].pop()
+            else:
+                row=next(row for row in plan['materialized_http_origins'] if json.loads((output/row['plan']['path']).read_bytes()).get('metadata_mode')==figure.MATERIALIZED_HTTP_MODE)
+                row['frame_map'][0]=999
+            with self.subTest(mutation=mutation):
+                self.rebind_consolidated_plan(output,plan)
+                with self.assertRaises((ValueError,KeyError)):figure.verify(output)
+        self.rebind_consolidated_plan(output,original)
+        self.verify_consolidated(output)
+
+    def test_materialized_original_observation_and_imported_receipt_remain_required(self):
+        source,parent,output,record,_=self.consolidated_observation()
+        source.rename(source.with_name('source-unavailable'));parent.rename(parent.with_name('parent-unavailable'))
+        original=record.read_bytes();record.write_bytes(original+b' ')
+        with self.assertRaises(ValueError):figure.verify(output)
+        record.write_bytes(original)
+        plan=json.loads((output/figure.PLAN).read_bytes())
+        ref=next(ref for row in plan['materialized_http_origins'] for name,ref in row['files'].items() if name.endswith('.receipt.json'))
+        receipt=output/ref['path'];raw=receipt.read_bytes();receipt.write_bytes(raw+b' ')
+        with self.assertRaises(ValueError):figure.verify(output)
+        receipt.write_bytes(raw)
+        self.verify_consolidated(output)
 
     def test_capture_target_contract_refuses_unknown_values_before_source_or_transport(self):
         args=self.args('invalid-contract')
