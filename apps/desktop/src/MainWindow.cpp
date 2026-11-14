@@ -411,6 +411,151 @@ public:
     }
 };
 
+// A focus target for the represented source TABLE, separate from the native
+// scrollbar. It paints no content and never intercepts the table's A hit tests.
+class SourceTableScrollFocus final : public QWidget {
+public:
+    QPointer<QTextBrowser> browser;
+    QPointer<QTextDocument> boundDocument;
+    QPointer<QAbstractTextDocumentLayout> boundLayout;
+    QVariantMap owner;
+    QRect visibleClip;
+    std::function<bool(const QVariantMap &, qreal)> moveOwner;
+    bool keyboardFocus = false;
+    explicit SourceTableScrollFocus(QTextBrowser *reader) : QWidget(reader->viewport()), browser(reader) {
+        setObjectName(QStringLiteral("readingSourceTableScrollFocus"));
+        setAccessibleName(QStringLiteral("Table horizontal scroll"));
+        setFocusPolicy(Qt::TabFocus);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+    }
+    QVariantMap currentOwner() const {
+        const QPointer<SourceTableScrollFocus> self(const_cast<SourceTableScrollFocus *>(this));
+        const auto expected = owner;
+        const auto doc = boundDocument; const auto layout = boundLayout; const auto reader = browser;
+        if (!reader || !doc || !layout || reader->document() != doc || doc->documentLayout() != layout
+            || owner.value(QStringLiteral("revision")).toInt() != doc->revision()
+            || layout->property("_wikidictTablePairedScrollCapability").toString() != SemanticHtml::tablePairedViewportCapability) return {};
+        QVariantList values;
+        if (!QMetaObject::invokeMethod(layout, "wikidictScrollports", Qt::DirectConnection, Q_RETURN_ARG(QVariantList, values))
+            || !self || !reader || !doc || !layout || reader->document() != doc || doc->documentLayout() != layout
+            || self->owner != expected || self->boundDocument != doc || self->boundLayout != layout
+            || expected.value(QStringLiteral("revision")).toInt() != doc->revision()) return {};
+        for (const auto &value : values) {
+            const auto candidate = value.toMap();
+            if (candidate.value(QStringLiteral("owner")) == owner.value(QStringLiteral("owner"))
+                && candidate.value(QStringLiteral("first")) == owner.value(QStringLiteral("first"))
+                && candidate.value(QStringLiteral("last")) == owner.value(QStringLiteral("last"))
+                && candidate.value(QStringLiteral("source")) == owner.value(QStringLiteral("source"))
+                && candidate.value(QStringLiteral("focus_paint")) == owner.value(QStringLiteral("focus_paint"))) return candidate;
+        }
+        return {};
+    }
+    bool scroll(qreal delta, int edge = 0) {
+        const QPointer<SourceTableScrollFocus> self(this);
+        const auto current = currentOwner();
+        if (!self || current.isEmpty() || !current.value(QStringLiteral("focus_active")).toBool() || !moveOwner) return false;
+        const qreal minimum = current.value(QStringLiteral("minimum")).toDouble();
+        const qreal maximum = current.value(QStringLiteral("maximum")).toDouble();
+        if (minimum >= maximum) return false;
+        const qreal offset = edge < 0 ? current.value(QStringLiteral("minimum")).toDouble()
+            : edge > 0 ? current.value(QStringLiteral("maximum")).toDouble()
+            : current.value(QStringLiteral("offset")).toDouble() + delta;
+        const qreal used = qBound(minimum, offset, maximum);
+        if (used == current.value(QStringLiteral("offset")).toDouble()) return false;
+        const auto move = moveOwner;
+        return move(current, used);
+    }
+protected:
+    void focusInEvent(QFocusEvent *event) override {
+        const QPointer<SourceTableScrollFocus> self(this);
+        keyboardFocus = event->reason() == Qt::TabFocusReason || event->reason() == Qt::BacktabFocusReason
+            || event->reason() == Qt::ShortcutFocusReason;
+        QWidget::focusInEvent(event); if (self) update();
+    }
+    void focusOutEvent(QFocusEvent *event) override {
+        const QPointer<SourceTableScrollFocus> self(this);
+        keyboardFocus = false; QWidget::focusOutEvent(event); if (self) update();
+    }
+    void keyPressEvent(QKeyEvent *event) override {
+        const QPointer<SourceTableScrollFocus> self(this);
+        if (event->modifiers() == Qt::NoModifier) {
+            const qreal step = qMax(1, fontMetrics().averageCharWidth());
+            if ((event->key() == Qt::Key_Left && scroll(-step))
+                || (event->key() == Qt::Key_Right && scroll(step))
+                || (event->key() == Qt::Key_Home && scroll(0, -1))
+                || (event->key() == Qt::Key_End && scroll(0, 1))) { event->accept(); return; }
+        }
+        if (self) QWidget::keyPressEvent(event);
+    }
+    void paintEvent(QPaintEvent *) override {
+        const QPointer<SourceTableScrollFocus> self(this);
+        if (!hasFocus() || !keyboardFocus || visibleClip.isEmpty()) return;
+        const auto current = currentOwner();
+        if (!self || current.isEmpty() || !current.value(QStringLiteral("focus_active")).toBool()) return;
+        const auto policy = current.value(QStringLiteral("focus_paint")).value<QJsonObject>();
+        if (policy.value(QStringLiteral("mode")) != QStringLiteral("ua_auto")) return;
+        QStyleOptionFocusRect option; option.initFrom(this);
+        option.state |= QStyle::State_HasFocus | QStyle::State_KeyboardFocusChange;
+        option.rect = rect(); option.backgroundColor = palette().color(QPalette::Base);
+        const auto color = policy.value(QStringLiteral("color"));
+        if (SemanticHtml::present(color)) {
+            const QColor requested = SemanticFigure::color(color, option.palette, QPalette::Highlight);
+            for (const auto role : {QPalette::Highlight, QPalette::WindowText, QPalette::Text}) option.palette.setColor(role, requested);
+        }
+        QPainter painter(this);
+        painter.setClipRect(visibleClip);
+        style()->drawPrimitive(QStyle::PE_FrameFocusRect, &option, &painter, this);
+    }
+};
+
+class AccessibleSourceTableScrollFocus final : public QAccessibleWidget {
+public:
+    explicit AccessibleSourceTableScrollFocus(SourceTableScrollFocus *target)
+        : QAccessibleWidget(target, QAccessible::Pane) {}
+    SourceTableScrollFocus *target() const { return static_cast<SourceTableScrollFocus *>(object()); }
+    int childCount() const override { return 0; }
+    QAccessibleInterface *child(int) const override { return nullptr; }
+    int indexOfChild(const QAccessibleInterface *) const override { return -1; }
+    QRect rect() const override {
+        const QPointer<SourceTableScrollFocus> item(target());
+        const auto current = item ? item->currentOwner() : QVariantMap();
+        if (!item || current.isEmpty() || !item->isVisible() || item->visibleClip.isEmpty()) return {};
+        return QRect(item->mapToGlobal(item->visibleClip.topLeft()), item->visibleClip.size());
+    }
+    QAccessible::State state() const override {
+        auto result = QAccessibleWidget::state();
+        const auto *item = target();
+        const auto current = item ? item->currentOwner() : QVariantMap();
+        if (current.isEmpty()) { result.invalid = true; result.focusable = false; }
+        else result.focusable = current.value(QStringLiteral("focus_active")).toBool();
+        return result;
+    }
+    QStringList actionNames() const override {
+        const auto current = target() ? target()->currentOwner() : QVariantMap();
+        if (current.isEmpty() || !current.value(QStringLiteral("focus_active")).toBool()) return {};
+        QStringList result{setFocusAction()};
+        if (current.value(QStringLiteral("minimum")).toDouble() < current.value(QStringLiteral("maximum")).toDouble())
+            result << scrollLeftAction() << scrollRightAction();
+        return result;
+    }
+    void doAction(const QString &action) override {
+        const QPointer<SourceTableScrollFocus> item(target());
+        if (!item) return;
+        const auto current = item->currentOwner();
+        if (!item || current.isEmpty() || !current.value(QStringLiteral("focus_active")).toBool()) return;
+        if (action == setFocusAction()) item->setFocus(Qt::ShortcutFocusReason);
+        else if (action == scrollLeftAction()) item->scroll(-qMax(1, item->fontMetrics().averageCharWidth()));
+        else if (action == scrollRightAction()) item->scroll(qMax(1, item->fontMetrics().averageCharWidth()));
+    }
+    QStringList keyBindingsForAction(const QString &action) const override {
+        if (!actionNames().contains(action)) return {};
+        if (action == scrollLeftAction()) return {QStringLiteral("Left")};
+        if (action == scrollRightAction()) return {QStringLiteral("Right")};
+        return {};
+    }
+};
+
 class SectionDisclosure;
 
 class ReadingBrowser final : public QTextBrowser {
@@ -418,6 +563,7 @@ class ReadingBrowser final : public QTextBrowser {
 public:
     explicit ReadingBrowser(QWidget *parent);
     QHash<int, QPointer<QScrollBar>> localScrollBars;
+    QHash<int, QPointer<SourceTableScrollFocus>> sourceTableFocus;
     QPointer<QTextDocument> localScrollDocument;
     QPointer<QAbstractTextDocumentLayout> localScrollLayout;
     int localScrollRevision = -1;
@@ -480,6 +626,79 @@ public:
             self->syncLocalScrollports();
         });
     }
+    void syncSourceTableFocus(const QVariantList &values) {
+        const QPointer<ReadingBrowser> self(this);
+        const QPointer<QTextDocument> doc(document());
+        const QPointer<QAbstractTextDocumentLayout> layout(doc->documentLayout());
+        const int revision = doc->revision();
+        const auto current = [&] { return self && doc && layout && self->document() == doc
+            && doc->documentLayout() == layout && doc->revision() == revision; };
+        const auto retire = [&](QPointer<SourceTableScrollFocus> target) {
+            if (!target) return;
+            if (target->hasFocus() && self) self->setFocus(Qt::TabFocusReason);
+            if (target) target->hide();
+            if (target) target->deleteLater();
+        };
+        QSet<int> live;
+        QList<QPointer<SourceTableScrollFocus>> ordered;
+        for (const auto &value : values) {
+            const auto owner = value.toMap();
+            if (!owner.contains(QStringLiteral("focus_paint"))) continue;
+            if (layout->property("_wikidictTablePairedScrollCapability").toString() != SemanticHtml::tablePairedViewportCapability) return;
+            const int id = owner.value(QStringLiteral("owner")).toInt();
+            auto target = sourceTableFocus.value(id);
+            const bool active = owner.value(QStringLiteral("focus_active")).toBool();
+            if (!active && !target) continue;
+            if (target && (target->boundDocument != doc || target->boundLayout != layout
+                || target->owner.value(QStringLiteral("source")) != owner.value(QStringLiteral("source"))
+                || target->owner.value(QStringLiteral("first")) != owner.value(QStringLiteral("first"))
+                || target->owner.value(QStringLiteral("last")) != owner.value(QStringLiteral("last")))) {
+                sourceTableFocus.remove(id); retire(target); target = nullptr;
+                if (!current()) return;
+            }
+            if (!active && (!target || !target->hasFocus())) {
+                sourceTableFocus.remove(id); retire(target);
+                if (!current()) return;
+                continue;
+            }
+            if (!target) {
+                target = new SourceTableScrollFocus(this);
+                target->moveOwner = [self](const QVariantMap &bound, qreal offset) {
+                    return self && self->moveLocalScrollport(bound, offset);
+                };
+                sourceTableFocus.insert(id, target);
+            }
+            target->boundDocument = doc; target->boundLayout = layout; target->owner = owner;
+            target->setProperty("wikidict.sourceTable.owner", owner);
+            if (!current() || !target) return;
+            target->setFocusPolicy(active ? Qt::TabFocus : Qt::NoFocus);
+            if (!current() || !target) return;
+            const QRect geometry = owner.value(QStringLiteral("border_box")).toRectF().translated(-rootDocumentOffset()).toAlignedRect();
+            const QRect clip = owner.value(QStringLiteral("focus_clip")).toRectF().translated(-rootDocumentOffset()).toAlignedRect().intersected(viewport()->rect());
+            target->setGeometry(geometry);
+            if (!current() || !target) return;
+            target->visibleClip = clip.translated(-geometry.topLeft());
+            target->setMask(QRegion(target->visibleClip));
+            if (!current() || !target) return;
+            target->setVisible(!clip.isEmpty() || target->hasFocus());
+            if (!current() || !target) return;
+            target->raise();
+            if (!current() || !target) return;
+            target->update();
+            if (!current()) return;
+            live.insert(id); if (active) ordered.append(target);
+        }
+        for (auto it = sourceTableFocus.begin(); it != sourceTableFocus.end();) {
+            if (live.contains(it.key())) { ++it; continue; }
+            const auto target = it.value(); it = sourceTableFocus.erase(it); retire(target);
+            if (!current()) return;
+        }
+        std::sort(ordered.begin(), ordered.end(), [](const auto &a, const auto &b) {
+            return a && b && a->owner.value(QStringLiteral("first")).toInt() < b->owner.value(QStringLiteral("first")).toInt();
+        });
+        QWidget *previous = this;
+        for (const auto &target : ordered) if (target) { QWidget::setTabOrder(previous, target); previous = target; }
+    }
     void syncLocalScrollports() {
         if (localScrollSyncing) return;
         localScrollSyncing = true;
@@ -497,6 +716,8 @@ public:
             localScrollDocument = doc; localScrollLayout = layout; localScrollRevision = revision;
         }
         const auto values = localScrollports();
+        if (!current()) return;
+        syncSourceTableFocus(values);
         if (!current()) return;
         QSet<int> live;
         for (const auto &value : values) {
@@ -1773,6 +1994,7 @@ QTextBrowser *createReadingBrowser(QWidget *parent) {
         QAccessible::installFactory([](const QString &, QObject *object) -> QAccessibleInterface * {
             if (auto *browser = dynamic_cast<ReadingBrowser *>(object)) return new AccessibleReadingBrowser(browser);
             if (auto *item = dynamic_cast<SectionDisclosure *>(object)) return new AccessibleSectionDisclosure(item);
+            if (auto *owner = dynamic_cast<SourceTableScrollFocus *>(object)) return new AccessibleSourceTableScrollFocus(owner);
             return nullptr;
         });
         return true;

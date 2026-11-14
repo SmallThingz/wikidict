@@ -381,6 +381,44 @@ Only these maintained native patches and their manifest are delivered here.
 The private responsive DE Table changes are excluded by exact inverse sparse
 reconstruction. No application source, data, build, or test is changed or rerun.
 
+## Responsive source tables and preserved block boundaries
+
+The same semantic Table owner floats at wide widths and becomes a local scroll
+viewport at narrow widths. Its source grid, irregular rows, actions and physical
+saved pan remain stable. A distinct source Table focus target supports keyboard
+and accessibility actions even at zero horizontal range, without changing child
+link identity. Native focus paint follows the explicit authored-none/native-UA
+policy; it does not promise browser pixel equivalence.
+
+Intrinsic width probes no longer overwrite the saved scroll offset with a
+measurement-only range. The final layout still clamps that offset to its actual
+range. The affected native paired restoration/hit method passes in both directions;
+the nested probe and source-focus controls keep their separate earned passes.
+
+Wrapping a table now preserves the complete exterior following-block format,
+character format, visibility and list ownership. This fixes the demonstrated
+empty-cell body-boundary refusal while retaining the strict ownership check.
+Twelve contrasts cover CENTER alignment, headings, paragraphs, lists, visible and
+hidden empty blocks, and the body boundary marker. These scoped controls do not
+stand for all CENTER, overlap, crash or whole-corpus cases.
+
+The Reader control verifies the selected child link's reveal while Reading owns
+focus, then the ordinary accessibility focus transfer to the Table. Qt clears the
+link focus indicator on focus-out; its source endpoint and the earned pan remain
+stable. One current focus method and two unchanged App162 methods are qualified.
+Original failures and bounded observations remain linked in the manifest.
+
+Runtime production68 and the unchanged Library160 pass retain their exact identity.
+The genuine EN full-JSON decode and minimal wide/narrow rendered follow-up use the
+retained one-entry library, with images and audio OFF and normal Quit. The original
+GUI aggregate remains failed because review fields were omitted; the corrected
+saved-evidence review passed the same validator and Root inspection without a
+runtime replay. They do not
+qualify genuine DE Mai, missing source CSS, enabled media or the whole frontend.
+
+The imported history and prior native patch series remain intact. Promotion
+reuses qualified source and results; it performs no additional build or test.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,

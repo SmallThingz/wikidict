@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,12717 @@
+@@ -3,24 +3,13115 @@
  
  
  #include <QTest>
@@ -447,6 +447,31 @@
 +                {"max_width", QVariantMap{{"unit", "percent"}, {"value", maximum}}}, {"border_box", false},
 +                {"autos", QVariantList{false, true, false, true}}, {"margins", QVariantList{0.0, 0.0, 0.0, 0.0}},
 +                {"direction", int(containing)}, {"grid_direction", int(gridDirection)}});
++    return format;
++}
++
++static QTextFrameFormat pairedTableViewportOwnerFormat(Qt::LayoutDirection containing, double maximum)
++{
++    constexpr int property = QTextFormat::UserProperty + 0x57f5;
++    auto format = tableViewportOwnerFormat(containing, Qt::RightToLeft, maximum);
++    auto state = format.property(property).toMap();
++    auto source = QJsonDocument::fromJson(state.value("source").toByteArray()).object();
++    auto block = source.value("block_viewport").toObject(); auto box = block.value("box_style").toObject();
++    const QJsonObject zero{{"unit", "px"}, {"value", 0}};
++    const QJsonObject margins{{"top", zero}, {"right", zero}, {"bottom", zero}, {"left", zero}};
++    box.remove("width"); box.remove("margin_values"); box.remove("containing_direction"); box.insert("margins", margins);
++    const QJsonObject focus{{"mode", "ua_auto"}, {"color", QJsonObject{{"kind", "rgb"}, {"value", "#1256a0"}}}};
++    block.insert("box_style", box); block.insert("box_sizing", "border_box"); block.insert("focus_paint", focus);
++    source.insert("block_viewport", block);
++    source.insert("style", QJsonObject{{"float_side", "right"}, {"margins", margins}, {"collapse", "collapse"}});
++    source.insert("float_viewport", QJsonObject{{"max_viewport_width_px", 639}, {"language", "ru"},
++        {"grid_direction", "rtl"}, {"containing_direction", containing == Qt::RightToLeft ? "rtl" : "ltr"}});
++    source.insert("rows", QJsonArray{QJsonArray{QJsonObject{{"rowspan", 1}, {"colspan", 1}, {"empty_content", false}}}});
++    state.insert("source", QJsonDocument(source).toJson(QJsonDocument::Compact));
++    state.insert("paired", true); state.insert("focus_paint", focus); state.insert("border_box", true);
++    state.insert("autos", QVariantList{false, false, false, false});
++    state.insert("width", QVariantMap{{"unit", "fit_content"}, {"value", 0.0}});
++    format.setProperty(property, state);
 +    return format;
 +}
 +
@@ -3092,6 +3117,379 @@
 +            doc.setLayoutEnabled(false); foreign.setBlockFormat(ordinary); doc.setLayoutEnabled(true); native->documentSize();
 +            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(doc.toRawText(), source); QCOMPARE(doc.characterCount(), count);
 +            QCOMPARE(wrapper->objectIndex(), wrapperId); QCOMPARE(grid->objectIndex(), gridId);
++        }
++    }
++
++    void fitContentProbesPreserveNestedScrollState()
++    {
++        constexpr int plain = QTextFormat::UserProperty + 0x57e0;
++        const auto fitFormat = [] {
++            QTextFrameFormat format; format.setMargin(0); format.setBorder(0); format.setPadding(0);
++            format.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++            format.setProperty(plain, QStringLiteral("wikidict.plain-container/1"));
++            format.setProperty(plain + 1, 0);
++            format.setProperty(plain + 9, QVariantMap{{"edges", QVariantList{0., 0., 0., 0.}}, {"auto_width", true}});
++            format.setProperty(plain + 10, QVariantMap{{"autos", QVariantList{false, false, false, false}},
++                {"width", QVariantMap{{"unit", QStringLiteral("fit_content")}, {"value", 0.}}},
++                {"max_width", QVariantMap{{"unit", QStringLiteral("fixed")}, {"value", 240.}}}, {"border_box", false}});
++            return format;
++        };
++        for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) for (int depth : {1, 2}) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(600);
++            doc.setDefaultFont(QFont("DejaVu Sans", 12));
++            auto option = doc.defaultTextOption(); option.setWrapMode(QTextOption::WordWrap); doc.setDefaultTextOption(option);
++            QTextCursor cursor(&doc); QList<QTextFrame *> ancestors;
++            for (int level = 0; level < depth; ++level) ancestors.append(cursor.insertFrame(fitFormat()));
++            // This owner is percentage-sized, so only an ancestor is in the
++            // fit-content measurement set when its temporary range is computed.
++            auto *owner = cursor.insertFrame(tableViewportOwnerFormat(direction, direction, 100));
++            auto *grid = owner->firstCursorPosition().insertTable(1, 1, tableViewportGridFormat(owner));
++            QTextCharFormat action; action.setAnchor(true); action.setAnchorHref(QStringLiteral("dict:ProbeScroll"));
++            const QString word(100, QChar('M')); grid->cellAt(0, 0).firstCursorPosition().insertText(word, action);
++            tableViewportSourceRuns(grid);
++            for (auto *frame : ancestors + QList<QTextFrame *>{owner}) {
++                for (auto it = frame->begin(); !it.atEnd(); ++it) {
++                    auto block = it.currentBlock();
++                    if (block.isValid() && block.length() == 1) { block.setVisible(false); block.setLineCount(0); }
++                }
++            }
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            QVERIFY(native->wikidictConfigureScrollports(14)); doc.setLayoutEnabled(true); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            auto ports = native->wikidictScrollports(); QCOMPARE(ports.size(), 1);
++            auto port = ports.first().toMap();
++            const qreal minimum = port.value("minimum").toDouble(), maximum = port.value("maximum").toDouble();
++            QVERIFY(qIsFinite(minimum) && qIsFinite(maximum) && maximum > minimum);
++            QCOMPARE(port.value("offset").toDouble(), direction == Qt::RightToLeft ? maximum : minimum);
++            const qreal endpoint = qAbs(minimum) > qAbs(maximum) ? minimum : maximum;
++            QVERIFY(qIsFinite(endpoint) && endpoint != 0);
++            QVERIFY(native->wikidictScrollportOffset(owner->objectIndex(), owner->firstPosition(), doc.revision(), endpoint));
++            QCOMPARE(native->wikidictScrollports().first().toMap().value("offset").toDouble(), endpoint);
++            const auto source = doc.toRawText(); const int revision = doc.revision(), count = doc.characterCount();
++            const auto gridBox = native->tableBoundingRect(grid);
++            const auto block = grid->cellAt(0, 0).firstCursorPosition().block();
++            const auto blockBox = native->blockBoundingRect(block);
++            for (qreal width : {600., 620., 600.}) {
++                doc.setTextWidth(width); doc.markContentsDirty(0, doc.characterCount()); native->documentSize();
++                QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                ports = native->wikidictScrollports(); QCOMPARE(ports.size(), 1); port = ports.first().toMap();
++                qInfo().nospace() << "FIT_SCROLL_PROBE direction=" << int(direction) << " depth=" << depth
++                    << " width=" << width << " minimum=" << port.value("minimum").toDouble()
++                    << " maximum=" << port.value("maximum").toDouble() << " offset=" << port.value("offset").toDouble()
++                    << " expected=" << endpoint;
++                QCOMPARE(port.value("minimum").toDouble(), minimum); QCOMPARE(port.value("maximum").toDouble(), maximum);
++                QCOMPARE(port.value("offset").toDouble(), endpoint);
++                QCOMPARE(native->tableBoundingRect(grid), gridBox); QCOMPARE(native->blockBoundingRect(block), blockBox);
++                QCOMPARE(doc.toRawText(), source); QCOMPARE(doc.revision(), revision); QCOMPARE(doc.characterCount(), count);
++                QCOMPARE(doc.find(word).charFormat().anchorHref(), QStringLiteral("dict:ProbeScroll"));
++                QCOMPARE(grid->parentFrame(), owner); QCOMPARE(owner->parentFrame(), ancestors.last());
++            }
++            // A real content change must still clamp the old offset to the new
++            // finite range. The measurement exemption cannot preserve stale pan.
++            auto selected = grid->cellAt(0, 0).firstCursorPosition();
++            selected.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
++            selected.insertText(QString(10, QChar('M')), action); tableViewportSourceRuns(grid);
++            native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            ports = native->wikidictScrollports(); QCOMPARE(ports.size(), 1); port = ports.first().toMap();
++            const qreal newMinimum = port.value("minimum").toDouble(), newMaximum = port.value("maximum").toDouble();
++            QVERIFY(qIsFinite(newMinimum) && qIsFinite(newMaximum) && newMaximum >= newMinimum);
++            QVERIFY(newMaximum - newMinimum < maximum - minimum);
++            QCOMPARE(port.value("offset").toDouble(), qBound(newMinimum, endpoint, newMaximum));
++            QCOMPARE(doc.find(QString(10, QChar('M'))).charFormat().anchorHref(), QStringLiteral("dict:ProbeScroll"));
++            QCOMPARE(grid->parentFrame(), owner); QCOMPARE(owner->parentFrame(), ancestors.last());
++        }
++    }
++
++    void pairedTableViewportUsesAssignedIntervalAndContainingPercentageBasis()
++    {
++        constexpr int property = QTextFormat::UserProperty + 0x57f5;
++        for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0);
++            doc.setDefaultFont(QFont("DejaVu Sans", 12)); doc.setTextWidth(900);
++            auto option = doc.defaultTextOption(); option.setWrapMode(QTextOption::WordWrap); doc.setDefaultTextOption(option);
++            QTextCursor cursor(&doc); QTextFrameFormat floatFormat;
++            floatFormat.setMargin(0); floatFormat.setBorder(0); floatFormat.setPadding(0);
++            floatFormat.setPosition(QTextFrameFormat::FloatLeft); floatFormat.setWidth(120); floatFormat.setHeight(100);
++            auto *blocking = cursor.insertFrame(floatFormat); blocking->firstCursorPosition().insertText("Earlier float");
++            cursor.setPosition(blocking->lastPosition() + 1);
++            auto *owner = cursor.insertFrame(pairedTableViewportOwnerFormat(direction, 70));
++            auto *grid = owner->firstCursorPosition().insertTable(1, 1, tableViewportGridFormat(owner));
++            QTextCharFormat action; action.setAnchor(true); action.setAnchorHref("dict:Preserved");
++            grid->cellAt(0, 0).firstCursorPosition().insertText(QString(100, QChar('M')), action);
++            tableViewportSourceRuns(grid);
++            for (auto it = owner->begin(); !it.atEnd(); ++it) {
++                auto block = it.currentBlock(); if (block.isValid() && block.length() == 1) { block.setVisible(false); block.setLineCount(0); }
++            }
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            QCOMPARE(native->property("_wikidictTablePairedScrollCapability").toString(), QString("wikidict.table-paired-scroll/1"));
++            const auto block = grid->cellAt(0, 0).firstCursorPosition().block();
++            const int first = block.position(), last = first + block.length() - 1;
++            const QVariantList flows{QVariantMap{{"first", first}, {"last", last},
++                {"direction", int(Qt::RightToLeft)}, {"joins", QVariantList{}},
++                {"parts", QVariantList{QVariantMap{{"kind", "text"}, {"first", first}, {"last", last}}}}}};
++            QVERIFY(native->wikidictSetLogicalFlows(flows));
++            auto narrowOwner = owner->frameFormat();
++            narrowOwner.clearProperty(QTextFormat::ObjectIndex); narrowOwner.clearProperty(property);
++            auto gridFormat = grid->format(); gridFormat.clearProperty(QTextFormat::ObjectIndex);
++            QTextFrameFormat wideOwner;
++            wideOwner.setMargin(0); wideOwner.setBorder(0); wideOwner.setPadding(0);
++            wideOwner.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++            wideOwner.setPosition(QTextFrameFormat::FloatRight); wideOwner.setLayoutDirection(direction);
++            wideOwner.setProperty(QTextFormat::UserProperty + 0x57d2, 0);
++            constexpr int formatsProperty = QTextFormat::UserProperty + 0x57f7;
++            // Materialization saves format snapshots before attaching object IDs,
++            // the live allocation policy or this saved-state map.
++            const QVariantMap formats{
++                {"box", QVariant::fromValue(QTextFormat(narrowOwner))},
++                {"wide_owner", QVariant::fromValue(QTextFormat(wideOwner))},
++                {"grid", QVariant::fromValue(QTextFormat(gridFormat))},
++                {"wide_grid", QVariant::fromValue(QTextFormat(gridFormat))}};
++            const auto projectViewport = [&](qreal width) {
++                // SemanticHtml's responsive adapter supplies active and the two
++                // owner formats; native document width alone does not select them.
++                const auto sourceText = doc.toRawText(); const int sourceCount = doc.characterCount();
++                const int ownerObject = owner->objectIndex(), gridObject = grid->objectIndex();
++                const bool enabled = doc.isLayoutEnabled(); doc.setLayoutEnabled(false);
++                doc.setTextWidth(width);
++                auto policy = owner->frameFormat().property(property).toMap();
++                const bool active = width <= policy.value("threshold").toDouble();
++                bool registered = true;
++                if (active != policy.value("active").toBool()) {
++                    auto format = formats.value(active ? "box" : "wide_owner").value<QTextFormat>().toFrameFormat();
++                    policy.insert("active", active); format.setProperty(property, policy);
++                    format.setProperty(formatsProperty, formats);
++                    QTextCursor transaction(&doc); transaction.beginEditBlock();
++                    owner->setFrameFormat(format);
++                    // This fixture has the same zero-edge collapsed grid in both states.
++                    grid->setFormat(formats.value(active ? "grid" : "wide_grid").value<QTextFormat>().toTableFormat());
++                    transaction.endEditBlock();
++                    // Match LogicalFlow::editFormats after the format-only revision.
++                    registered = native->wikidictSetLogicalFlows(flows);
++                }
++                doc.setLayoutEnabled(enabled);
++                auto projectedOwner = QTextFormat(owner->frameFormat()), projectedGrid = QTextFormat(grid->format());
++                projectedOwner.clearProperty(QTextFormat::ObjectIndex); projectedOwner.clearProperty(property);
++                projectedOwner.clearProperty(formatsProperty); projectedGrid.clearProperty(QTextFormat::ObjectIndex);
++                const bool savedFormatsMatch = owner->frameFormat().property(formatsProperty).toMap() == formats
++                    && projectedOwner == formats.value(active ? "box" : "wide_owner").value<QTextFormat>()
++                    && projectedGrid == formats.value(active ? "grid" : "wide_grid").value<QTextFormat>();
++                qInfo().nospace() << "DE_PAIRED_STATE direction=" << int(direction) << " width=" << width
++                    << " active=" << active << " position=" << int(owner->frameFormat().position())
++                    << " saved_formats_match=" << savedFormatsMatch;
++                return registered && savedFormatsMatch && doc.toRawText() == sourceText && doc.characterCount() == sourceCount
++                    && owner->objectIndex() == ownerObject && grid->objectIndex() == gridObject
++                    && grid->parentFrame() == owner
++                    && owner->frameFormat().property(property).toMap().value("active").toBool() == active
++                    && owner->frameFormat().position() == (active ? QTextFrameFormat::InFlow : QTextFrameFormat::FloatRight);
++            };
++            QVERIFY(native->wikidictConfigureScrollports(14)); QVERIFY(projectViewport(900)); doc.setLayoutEnabled(true);
++            native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            const auto initialPorts = native->wikidictScrollports(); QCOMPARE(initialPorts.size(), 1);
++            QVERIFY(!initialPorts.first().toMap().value("focus_active").toBool());
++            const auto wideTable = native->tableBoundingRect(grid), wideFrame = native->frameBoundingRect(grid);
++            const auto wideBlock = native->blockBoundingRect(block);
++            const auto widePosition = native->wikidictLogicalPosition(last - 2);
++            QVERIFY(widePosition.value("handled").toBool());
++            const auto wideCharacter = widePosition.value("characterRect").toRectF();
++            QVERIFY(wideCharacter.width() > 0 && wideCharacter.height() > 0);
++            const auto wideNext = native->wikidictLogicalPosition(last - 1);
++            const QPointF widePoint((widePosition.value("leading").toDouble() + wideNext.value("leading").toDouble()) / 2,
++                wideCharacter.center().y());
++            QCOMPARE(native->anchorAt(widePoint), QString("dict:Preserved"));
++            const auto raw = doc.toRawText(); const int object = grid->objectIndex(), count = doc.characterCount();
++            for (qreal width : {600.0, 520.0, 600.0}) {
++                QVERIFY(projectViewport(width)); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                const auto ports = native->wikidictScrollports(); QCOMPARE(ports.size(), 1); const auto port = ports.first().toMap();
++                const auto bounds = port.value("border_box").toRectF();
++                // C is the parent width, while F is C minus the earlier float's120.
++                QVERIFY(qAbs(bounds.width() - width * .7) < .06);
++                QVERIFY(bounds.left() >= native->frameBoundingRect(blocking).right() - .06);
++                QVERIFY(bounds.top() < native->frameBoundingRect(blocking).bottom());
++                QVERIFY(native->tableBoundingRect(grid).width() > bounds.width());
++                QVERIFY(port.value("focus_active").toBool());
++                QVERIFY(port.value("maximum").toDouble() > port.value("minimum").toDouble());
++                const auto ownerState = owner->frameFormat().property(property).toMap();
++                QCOMPARE(port.value("source"), ownerState.value("source")); QCOMPARE(port.value("focus_paint"), ownerState.value("focus_paint"));
++                const qreal minimum = port.value("minimum").toDouble(), maximum = port.value("maximum").toDouble();
++                QVERIFY(qIsFinite(minimum) && qIsFinite(maximum));
++                // The physical scroll range may extend left of zero for RTL.
++                const qreal endpoint = qAbs(minimum) > qAbs(maximum) ? minimum : maximum;
++                QVERIFY(qIsFinite(endpoint) && endpoint != 0);
++                QVERIFY(native->wikidictScrollportOffset(owner->objectIndex(), owner->firstPosition(), doc.revision(), endpoint));
++                const qreal actualOffset = native->wikidictScrollports().first().toMap().value("offset").toDouble();
++                qInfo().nospace() << "DE_PAIRED_SCROLL direction=" << int(direction) << " width=" << width
++                    << " minimum=" << minimum << " maximum=" << maximum << " endpoint=" << endpoint << " actual=" << actualOffset;
++                QCOMPARE(actualOffset, endpoint);
++                QCOMPARE(doc.toRawText(), raw); QCOMPARE(doc.characterCount(), count); QCOMPARE(grid->objectIndex(), object);
++                QCOMPARE(doc.find(QString(100, QChar('M'))).charFormat().anchorHref(), QString("dict:Preserved"));
++            }
++            const auto narrowTable = native->tableBoundingRect(grid), narrowFrame = native->frameBoundingRect(grid);
++            const auto narrowBlock = native->blockBoundingRect(block);
++            const auto narrowPosition = native->wikidictLogicalPosition(last - 2);
++            const auto narrowCharacter = narrowPosition.value("characterRect").toRectF();
++            const qreal savedOffset = native->wikidictScrollports().first().toMap().value("offset").toDouble();
++            QVERIFY(qIsFinite(savedOffset) && savedOffset != 0);
++            QVERIFY(projectViewport(900)); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            QCOMPARE(native->tableBoundingRect(grid), wideTable); QCOMPARE(native->frameBoundingRect(grid), wideFrame);
++            QCOMPARE(native->blockBoundingRect(block), wideBlock);
++            QCOMPARE(native->wikidictLogicalPosition(last - 2).value("characterRect").toRectF(), wideCharacter);
++            QCOMPARE(native->anchorAt(widePoint), QString("dict:Preserved"));
++            QVERIFY(native->hitTest(widePoint, Qt::ExactHit) >= first);
++            QVERIFY(native->hitTest(widePoint, Qt::ExactHit) < last);
++            const auto widePort = native->wikidictScrollports().first().toMap();
++            QVERIFY(!widePort.value("focus_active").toBool()); QCOMPARE(widePort.value("offset").toDouble(), savedOffset);
++            QVERIFY(projectViewport(600)); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            QCOMPARE(native->tableBoundingRect(grid), narrowTable); QCOMPARE(native->frameBoundingRect(grid), narrowFrame);
++            QCOMPARE(native->blockBoundingRect(block), narrowBlock);
++            QCOMPARE(native->wikidictLogicalPosition(last - 2).value("characterRect").toRectF(), narrowCharacter);
++            QCOMPARE(native->wikidictScrollports().first().toMap().value("offset").toDouble(), savedOffset);
++            const auto port = native->wikidictScrollports().first().toMap();
++            const QRectF clip = port.value("clip").toRectF();
++            QVERIFY(clip.isValid() && !clip.isEmpty());
++            const auto next = native->wikidictLogicalPosition(last - 1);
++            const QPointF clippedPoint((narrowPosition.value("leading").toDouble() + next.value("leading").toDouble()) / 2,
++                narrowCharacter.center().y());
++            // The last source character is beyond the viewport after this pan.
++            // Its action must remain clipped even though its source range exists.
++            qInfo().nospace() << "DE_PAIRED_HIT direction=" << int(direction) << " clip=" << clip
++                << " clipped_point=" << clippedPoint << " offset=" << savedOffset;
++            QVERIFY(!clip.contains(clippedPoint));
++            QCOMPARE(native->anchorAt(clippedPoint), QString());
++            QCOMPARE(native->hitTest(clippedPoint, Qt::ExactHit), -1);
++            int visibleSource = -1; QPointF point; QRectF visibleCharacter;
++            for (int position = first; position + 1 < last; ++position) {
++                const auto current = native->wikidictLogicalPosition(position);
++                const auto following = native->wikidictLogicalPosition(position + 1);
++                if (!current.value("handled").toBool() || !following.value("handled").toBool()) continue;
++                const auto character = current.value("characterRect").toRectF();
++                const QPointF candidate((current.value("leading").toDouble() + following.value("leading").toDouble()) / 2,
++                    character.center().y());
++                // Choose by actual source geometry, independently of hit-test results.
++                if (!character.isEmpty() && clip.contains(character) && clip.contains(candidate)) {
++                    visibleSource = position; point = candidate; visibleCharacter = character; break;
++                }
++            }
++            QVERIFY(visibleSource >= first && visibleSource + 1 < last);
++            QVERIFY(clip.contains(visibleCharacter) && clip.contains(point));
++            qInfo().nospace() << "DE_PAIRED_VISIBLE_HIT direction=" << int(direction)
++                << " source=" << visibleSource << " point=" << point << " character=" << visibleCharacter;
++            QCOMPARE(native->anchorAt(point), QString("dict:Preserved"));
++            QVERIFY(native->hitTest(point, Qt::ExactHit) >= first); QVERIFY(native->hitTest(point, Qt::ExactHit) < last);
++            QCOMPARE(doc.toRawText(), raw); QCOMPARE(doc.characterCount(), count); QCOMPARE(grid->objectIndex(), object);
++        }
++        // Intrinsic grid minimum, rather than only the owner's edges, must
++        // choose a band below an earlier float when it cannot fit beside it.
++        for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(600);
++            doc.setDefaultFont(QFont("DejaVu Sans", 12));
++            auto option = doc.defaultTextOption(); option.setWrapMode(QTextOption::WordWrap); doc.setDefaultTextOption(option);
++            QTextCursor cursor(&doc); QTextFrameFormat obstacle;
++            obstacle.setMargin(0); obstacle.setPadding(0); obstacle.setBorder(0);
++            obstacle.setWidth(400); obstacle.setHeight(100); obstacle.setPosition(QTextFrameFormat::FloatLeft);
++            auto *blocking = cursor.insertFrame(obstacle); blocking->firstCursorPosition().insertText("Earlier float");
++            cursor.setPosition(blocking->lastPosition() + 1);
++            auto *owner = cursor.insertFrame(pairedTableViewportOwnerFormat(direction, 100));
++            auto *grid = owner->firstCursorPosition().insertTable(1, 1, tableViewportGridFormat(owner));
++            grid->cellAt(0, 0).firstCursorPosition().insertText(QString(25, QChar('M'))); tableViewportSourceRuns(grid);
++            for (auto it = owner->begin(); !it.atEnd(); ++it) {
++                auto block = it.currentBlock(); if (block.isValid() && block.length() == 1) { block.setVisible(false); block.setLineCount(0); }
++            }
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            QVERIFY(native->wikidictConfigureScrollports(14)); doc.setLayoutEnabled(true); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            const auto ports = native->wikidictScrollports(); QCOMPARE(ports.size(), 1);
++            const auto box = ports.first().toMap().value("border_box").toRectF();
++            const auto prior = native->frameBoundingRect(blocking);
++            QVERIFY(box.width() > 200); QVERIFY(box.width() <= 600);
++            QVERIFY(box.top() >= prior.bottom() - .06);
++            QVERIFY(box.left() >= -.06); QVERIFY(box.right() <= 600.06);
++            QCOMPARE(grid->parentFrame(), owner); QCOMPARE(doc.toPlainText().count(QString(25, QChar('M'))), 1);
++        }
++
++        // The source's second spanning row establishes all three columns;
++        // absent first-row slots remain zero-demand rectangularization cells.
++        {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(600);
++            auto format = pairedTableViewportOwnerFormat(Qt::LeftToRight, 100);
++            auto state = format.property(property).toMap();
++            auto source = QJsonDocument::fromJson(state.value("source").toByteArray()).object();
++            source.insert("rows", QJsonArray{
++                QJsonArray{QJsonObject{{"rowspan", 1}, {"colspan", 1}, {"empty_content", false}}},
++                QJsonArray{QJsonObject{{"rowspan", 1}, {"colspan", 3}, {"empty_content", true}}}});
++            state.insert("source", QJsonDocument(source).toJson(QJsonDocument::Compact)); format.setProperty(property, state);
++            QTextCursor cursor(&doc); auto *owner = cursor.insertFrame(format);
++            auto *grid = owner->firstCursorPosition().insertTable(2, 3, tableViewportGridFormat(owner)); grid->mergeCells(1, 0, 1, 3);
++            grid->cellAt(0, 0).firstCursorPosition().insertText("X"); tableViewportSourceRuns(grid);
++            for (int row = 0; row < 2; ++row) for (int column = 0; column < 3; ++column) {
++                auto cell = grid->cellAt(row, column); if (cell.row() != row || cell.column() != column) continue;
++                auto cellFormat = cell.format().toTableCellFormat(); cellFormat.setPadding(0); cellFormat.setBorder(0);
++                cellFormat.setBorderStyle(QTextFrameFormat::BorderStyle_None); cellFormat.setBorderBrush(QColor(Qt::transparent));
++                if (row == 0 && column > 0) cellFormat.setProperty(QTextFormat::UserProperty + 0x57fc, true);
++                if (row == 1) cellFormat.setProperty(QTextFormat::UserProperty + 0x5808, true);
++                cell.setFormat(cellFormat);
++            }
++            for (auto it = owner->begin(); !it.atEnd(); ++it) {
++                auto block = it.currentBlock(); if (block.isValid() && block.length() == 1) { block.setVisible(false); block.setLineCount(0); }
++            }
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            QVERIFY(native->wikidictConfigureScrollports(14)); doc.setLayoutEnabled(true); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            QVERIFY(native->tableCellBoundingRect(grid, grid->cellAt(0, 0)).width() > 0);
++            QCOMPARE(native->tableCellBoundingRect(grid, grid->cellAt(0, 1)).width(), 0.0);
++            QCOMPARE(native->tableCellBoundingRect(grid, grid->cellAt(0, 2)).width(), 0.0);
++            QCOMPARE(grid->rows(), 2); QCOMPARE(grid->columns(), 3); QCOMPARE(grid->cellAt(1, 0).columnSpan(), 3);
++            QCOMPARE(doc.toPlainText().count("X"), 1);
++        }
++    }
++
++    void pairedTableViewportStrictSourceFocusIdentityAndRecovery()
++    {
++        constexpr int property = QTextFormat::UserProperty + 0x57f5;
++        QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(600);
++        QTextCursor cursor(&doc); auto *owner = cursor.insertFrame(pairedTableViewportOwnerFormat(Qt::LeftToRight, 100));
++        auto *grid = owner->firstCursorPosition().insertTable(1, 1, tableViewportGridFormat(owner));
++        grid->cellAt(0, 0).firstCursorPosition().insertText("Short real cell"); tableViewportSourceRuns(grid);
++        for (auto it = owner->begin(); !it.atEnd(); ++it) {
++            auto block = it.currentBlock(); if (block.isValid() && block.length() == 1) { block.setVisible(false); block.setLineCount(0); }
++        }
++        auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++        QVERIFY(native->wikidictConfigureScrollports(14)); doc.setLayoutEnabled(true); native->documentSize();
++        QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++        const auto valid = owner->frameFormat(); const auto text = doc.toRawText(); const int count = doc.characterCount();
++        const auto ports = native->wikidictScrollports(); QCOMPARE(ports.size(), 1);
++        QCOMPARE(ports.first().toMap().value("minimum"), ports.first().toMap().value("maximum"));
++        QVERIFY(ports.first().toMap().value("focus_active").toBool());
++        const auto rect = native->frameBoundingRect(owner); QVERIFY(rect.width() < 600);
++        for (int mode = 0; mode < 6; ++mode) {
++            doc.setLayoutEnabled(false); auto bad = valid; auto state = bad.property(property).toMap();
++            const auto validGrid = grid->format();
++            if (mode == 0) state.insert("paired", 1);
++            if (mode == 1) state.insert("focus_paint", QVariantMap{{"mode", "ua_auto"}});
++            if (mode == 2) state.insert("focus_paint", QJsonObject{{"mode", "authored_none"}});
++            if (mode == 3) state.insert("width", QVariantMap{{"unit", "fixed"}, {"value", 100.0}});
++            if (mode == 4) state.insert("direction", int(Qt::RightToLeft));
++            if (mode == 5) {
++                auto source = QJsonDocument::fromJson(state.value("source").toByteArray()).object();
++                source.insert("rows", QJsonArray{QJsonArray{QJsonObject{{"rowspan", 1}, {"colspan", 2}, {"empty_content", false}}}});
++                const auto bytes = QJsonDocument(source).toJson(QJsonDocument::Compact);
++                state.insert("source", bytes);
++                auto changedGrid = validGrid; changedGrid.setProperty(QTextFormat::UserProperty + 0x57f6, bytes);
++                grid->setFormat(changedGrid);
++            }
++            bad.setProperty(property, state); owner->setFrameFormat(bad); doc.setLayoutEnabled(true); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1); QVERIFY(native->wikidictScrollports().isEmpty());
++            doc.setLayoutEnabled(false); grid->setFormat(validGrid); owner->setFrameFormat(valid); doc.setLayoutEnabled(true); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(native->frameBoundingRect(owner), rect);
++            QCOMPARE(doc.toRawText(), text); QCOMPARE(doc.characterCount(), count); QCOMPARE(grid->parentFrame(), owner);
++        }
++        auto cell = grid->cellAt(0, 0); const auto validCell = cell.format();
++        for (const int forgedProperty : {0x57fc, 0x5808}) {
++            doc.setLayoutEnabled(false);
++            auto forged = validCell; forged.setProperty(QTextFormat::UserProperty + forgedProperty, true);
++            cell.setFormat(forged); doc.setLayoutEnabled(true); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++            doc.setLayoutEnabled(false); cell.setFormat(validCell); doc.setLayoutEnabled(true); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(native->frameBoundingRect(owner), rect);
 +        }
 +    }
 +
