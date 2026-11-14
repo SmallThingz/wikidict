@@ -677,6 +677,26 @@ class OriginalSpacingRegistry(metadata.Registry):
         return ''.join(result)
 
 
+class PreAsciiSpacingRegistry(metadata.Registry):
+    """Exact committed e2ade spacing body, before the ASCII-only NFC shortcut."""
+    def spacing(self, text):
+        raw = text.encode('utf-8')
+        if len(raw) > 4096 or '\0' in text:
+            raise ValueError('Invalid or oversized file title')
+        count = self.nfc_lib.utf8proc_decompose(raw, len(raw), None, 0, 10)
+        if count < 0 or count > 16384:
+            raise ValueError('Cannot normalize file title')
+        storage = (metadata.ctypes.c_int32 * (count + 1))()
+        if self.nfc_lib.utf8proc_decompose(raw, len(raw), storage, count, 10) != count:
+            raise ValueError('Unicode normalization failed')
+        length = self.nfc_lib.utf8proc_reencode(storage, count, 10)
+        if length < 0 or length >= metadata.ctypes.sizeof(storage):
+            raise ValueError('Unicode normalization failed')
+        normalized = metadata.ctypes.string_at(storage, length).decode('utf-8')
+        # Preserve the explicit native space/bidi sets; Unicode split is broader.
+        return metadata._TITLE_SPACE_RUN.sub(' ', normalized.translate(metadata._TITLE_SPACING_TRANSLATION)).strip(' ')
+
+
 class SpacingKernelTests(unittest.TestCase):
     def registries(self):
         raw = registry_bytes(media_case='first-letter', file_case='first-letter')
@@ -718,6 +738,25 @@ class SpacingKernelTests(unittest.TestCase):
             with self.subTest(length=len(value), prefix=repr(value[:12])):
                 self.assertEqual(self.outcome(current.spacing, value), self.outcome(original.spacing, value))
         self.assertEqual(current.spacing('e\u0301'), '\u00e9')
+        # ASCII is already NFC, but input guards and exact explicit spacing still apply.
+        blocked = SimpleNamespace(
+            utf8proc_decompose=mock.Mock(side_effect=AssertionError('ASCII entered native NFC')),
+            utf8proc_reencode=mock.Mock(side_effect=AssertionError('ASCII entered native NFC')))
+        with mock.patch.object(current, 'nfc_lib', blocked):
+            for codepoint in range(1, 128):
+                value = 'A' + chr(codepoint) + 'B'
+                self.assertEqual(current.spacing(value), original.spacing(value))
+            for value in ('', 'File:ASCII_name.svg', ' _A\t_B\r\n ', 'x' * 4096):
+                self.assertEqual(current.spacing(value), original.spacing(value))
+            for value in ('x' * 4097, 'A\0B'):
+                self.assertEqual(self.outcome(current.spacing, value), self.outcome(original.spacing, value))
+        blocked.utf8proc_decompose.assert_not_called()
+        blocked.utf8proc_reencode.assert_not_called()
+        with mock.patch.object(current.nfc_lib, 'utf8proc_decompose', wraps=current.nfc_lib.utf8proc_decompose) as decompose, \
+                mock.patch.object(current.nfc_lib, 'utf8proc_reencode', wraps=current.nfc_lib.utf8proc_reencode) as reencode:
+            self.assertEqual(current.spacing('e\u0301'), '\u00e9')
+        self.assertEqual(decompose.call_count, 2)
+        self.assertEqual(reencode.call_count, 1)
         self.assertEqual(held, (raw, current.aliases, current.specs))
 
     def test_file_keys_and_native_normalization_failures_equal_original(self):
@@ -739,18 +778,31 @@ class SpacingKernelTests(unittest.TestCase):
                     utf8proc_decompose=mock.Mock(side_effect=list(decompositions)),
                     utf8proc_reencode=mock.Mock(return_value=length))
                 with mock.patch.object(registry, 'nfc_lib', library):
-                    outcomes.append(self.outcome(registry.spacing, 'A'))
+                    outcomes.append(self.outcome(registry.spacing, '\u00e9'))
             self.assertEqual(outcomes[0], outcomes[1])
             self.assertEqual(outcomes[0][0], 'error')
         self.assertEqual(raw, registry_bytes(media_case='first-letter', file_case='first-letter'))
         self.assertEqual(current.aliases, original.aliases)
         self.assertEqual(current.specs, original.specs)
+        # ASCII shortcuts do not bypass constructor-time mandatory library binding.
+        with mock.patch.object(metadata.ctypes, 'CDLL', side_effect=OSError('missing native library')):
+            with self.assertRaisesRegex(ValueError, 'Required native Unicode library unavailable'):
+                metadata.Registry(raw, WIKI, DATE)
+        cdll = metadata.ctypes.CDLL
+        def no_case_library(name):
+            if name in ('libunistring.so.5', 'libunistring.so'):
+                raise OSError('missing case library')
+            return cdll(name)
+        with mock.patch.object(metadata.ctypes, 'CDLL', side_effect=no_case_library):
+            with self.assertRaisesRegex(ValueError, 'Required native Unicode library unavailable'):
+                metadata.Registry(raw, WIKI, DATE)
 
     def test_report_paired_unprofiled_spacing_and_file_title_task_cost(self):
         import sys
         import time
         self.assertIsNone(sys.getprofile(), 'Measure the ordinary call path without cProfile overhead')
         current, original, raw = self.registries()
+        original = PreAsciiSpacingRegistry(raw, WIKI, DATE)
         bodies = (
             'Example.svg', 'Ru-\u0430\u043a\u0443\u043b\u0430.ogg', 'e\u0301cole_illustration.jpg',
             'Long_filename_with_four_words_and_2026_(detail).png', '\u74f6_\u1100\u1161\u11a8.svg',
@@ -783,7 +835,7 @@ class SpacingKernelTests(unittest.TestCase):
         self.assertEqual(current.aliases, original.aliases)
         self.assertEqual(current.specs, original.specs)
         print('FILE_TITLE_SPACING_PAIRED ' + json.dumps(dict(
-            order='ABBA per operation', profiled=False, parity=True, input_unchanged=True,
+            order='ABBA per operation', baseline='committed03bb-spacing-e2ade', profiled=False, parity=True, input_unchanged=True,
             setup_excluded=True, whole_capture_measured=False, rows=rows), sort_keys=True), flush=True)
 
 

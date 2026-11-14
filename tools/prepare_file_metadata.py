@@ -170,16 +170,19 @@ class Registry:
         raw = text.encode('utf-8')
         if len(raw) > 4096 or '\0' in text:
             raise ValueError('Invalid or oversized file title')
-        count = self.nfc_lib.utf8proc_decompose(raw, len(raw), None, 0, 10)
-        if count < 0 or count > 16384:
-            raise ValueError('Cannot normalize file title')
-        storage = (ctypes.c_int32 * (count + 1))()
-        if self.nfc_lib.utf8proc_decompose(raw, len(raw), storage, count, 10) != count:
-            raise ValueError('Unicode normalization failed')
-        length = self.nfc_lib.utf8proc_reencode(storage, count, 10)
-        if length < 0 or length >= ctypes.sizeof(storage):
-            raise ValueError('Unicode normalization failed')
-        normalized = ctypes.string_at(storage, length).decode('utf-8')
+        if text.isascii():
+            normalized = text
+        else:
+            count = self.nfc_lib.utf8proc_decompose(raw, len(raw), None, 0, 10)
+            if count < 0 or count > 16384:
+                raise ValueError('Cannot normalize file title')
+            storage = (ctypes.c_int32 * (count + 1))()
+            if self.nfc_lib.utf8proc_decompose(raw, len(raw), storage, count, 10) != count:
+                raise ValueError('Unicode normalization failed')
+            length = self.nfc_lib.utf8proc_reencode(storage, count, 10)
+            if length < 0 or length >= ctypes.sizeof(storage):
+                raise ValueError('Unicode normalization failed')
+            normalized = ctypes.string_at(storage, length).decode('utf-8')
         # Preserve the explicit native space/bidi sets; Unicode split is broader.
         return _TITLE_SPACE_RUN.sub(' ', normalized.translate(_TITLE_SPACING_TRANSLATION)).strip(' ')
 
