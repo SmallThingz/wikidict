@@ -5238,13 +5238,16 @@ def validate_materialized_echo(state, plan, wiki, date, namespace, *, root_recor
     return state['expected']
 
 
-def materialize_complete_capture(source, output, *, max_batches=64, max_input_bytes=64*1024*1024):
+def materialize_complete_capture(source, output, *, max_batches=64, max_input_bytes=64*1024*1024,
+                                 link_current_payloads=False, cleanup_failed_links=False, observations=None):
     """Offline, bounded materialization of verified stream ancestry.
 
     Original request/receipt bytes and per-origin plans remain immutable. The
     current raw/fact/provider roles are copied exactly once; predecessor raw and
     projection payloads are represented by terminal HTTP echoes, never copied.
     Retained observation records remain exact external source dependencies.
+    Explicit linked mode shares only the four immutable current payloads and
+    records each owned nlink/ctime transition; all original byte guards remain.
     The small defaults deliberately exclude production datasets unless a later
     separately admitted caller selects explicit larger bounds.
     """
@@ -5259,6 +5262,128 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         raise ValueError('Offline Figure materialization requires a fresh independent output')
     nodes, by_reference, active, stamps, roots = {}, {}, set(), {}, {}
     cache={}
+    if (type(link_current_payloads) is not bool or type(cleanup_failed_links) is not bool or
+            cleanup_failed_links and not link_current_payloads or
+            observations is not None and type(observations) is not dict):
+        raise ValueError('Invalid offline Figure link custody selection')
+    if link_current_payloads and observations is None:
+        raise ValueError('Linked Figure materialization requires explicit custody observations')
+    observations = {} if observations is None else observations
+    if observations:
+        raise ValueError('Figure materialization observations must be fresh')
+    observations.update(operation='materialize-complete', complete=False, linked_members=[],
+        original_members=[],remaining_owned_links=[],removed_owned_links=[],
+        source_complete_verified=False,new_output_adoption_allowed=False,failed_link_recovery_verified=False)
+    link_names={ROLES['figure-sizing'],ROLES['figure-sizing-raw'],PROVIDER,INVENTORY}
+    fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_size','st_mtime_ns','st_nlink','st_ctime_ns')
+    linked={}; source_identities={}; owned_output=None
+    def identity(path):
+        value=Path(path).lstat()
+        if not stat.S_ISREG(value.st_mode) or value.st_uid!=os.geteuid():
+            raise ValueError('Linked Figure payload is not an owned regular file')
+        return tuple(getattr(value,key) for key in fields)
+    def stamp(value):
+        return (value[0],value[1],value[5],value[6],value[8])
+    def accept_owned_link(before, after):
+        for path,value in source_identities.items():
+            if value[:2]==before[:2]:
+                if value!=before:raise ValueError('Linked Figure physical custody was already stale')
+                source_identities[path]=after
+        # Only this operation's measured same-inode link changes the custody
+        # stamps. Raw offsets/digests and every other source remain unchanged.
+        for held in [stamps,*(entry['stamps'] for entry in cache.values() if entry is not None)]:
+            for path,value in held.items():
+                if value[:2]==before[:2]:
+                    if value!=stamp(before):
+                        raise ValueError('Linked Figure source custody was already stale')
+                    held[path]=stamp(after)
+    def output_identity():
+        value=output.lstat()
+        if not stat.S_ISDIR(value.st_mode) or value.st_uid!=os.geteuid():
+            raise ValueError('Figure link output directory ownership changed')
+        return dict(path=str(output),device=value.st_dev,inode=value.st_ino,
+                    mode=value.st_mode,uid=value.st_uid)
+    def observe_link_custody(*, verified_artifacts=None):
+        rows=[];remaining=[];errors=[];preserved=True
+        for name in sorted(link_names):
+            before=expected_links[name]
+            row=dict(path=name,before=dict(zip(fields,before)),after=None,
+                     sha256_before=original_manifest['artifacts'][name]['sha256'],sha256_after=None)
+            rows.append(row)
+            try:
+                after=identity(root/name);row['after']=dict(zip(fields,after))
+                if after[:7]!=before[:7]:raise ValueError('Original Figure content identity changed')
+                if verified_artifacts is None:
+                    source_fd=os.open(root/name,os.O_RDONLY|os.O_NOFOLLOW)
+                    with os.fdopen(source_fd,'rb') as stream:
+                        if tuple(getattr(os.fstat(stream.fileno()),key) for key in fields)!=after:
+                            raise ValueError('Original Figure opened identity differs')
+                        hashed=hashlib.sha256();size=0
+                        while chunk:=stream.read(1024*1024):
+                            size+=len(chunk)
+                            if size>before[5]:raise ValueError('Original Figure grew during custody closure')
+                            hashed.update(chunk)
+                    if size!=before[5]:raise ValueError('Original Figure shrank during custody closure')
+                    row['sha256_after']=hashed.hexdigest()
+                else:row['sha256_after']=verified_artifacts[name]['sha256']
+                if identity(root/name)!=after or row['sha256_after']!=row['sha256_before']:
+                    raise ValueError('Original Figure bytes changed during custody closure')
+            except (OSError,ValueError) as error:
+                preserved=False;errors.append(name+': '+str(error))
+            destination=output/name
+            if os.path.lexists(destination):
+                try:
+                    actual=identity(destination)
+                    remaining.append(dict(path=name,target=str(destination),stamp=dict(zip(fields,actual))))
+                    if row['after']!=dict(zip(fields,actual)):
+                        raise ValueError('Remaining Figure target is not the original inode')
+                except (OSError,ValueError) as error:errors.append(name+': '+str(error))
+        observations.update(original_members=rows,remaining_owned_links=remaining,
+                            source_content_mode_inode_preserved=preserved)
+        try:
+            if owned_output is None or output_identity()!=owned_output:
+                raise ValueError('Owned Figure output directory changed')
+            check()
+            touched={row['path'] for row in observations['linked_members']}
+            removed={row['path'] for row in observations['removed_owned_links']}
+            kept={row['path'] for row in remaining}
+            if (len(touched)!=len(observations['linked_members']) or
+                    len(removed)!=len(observations['removed_owned_links']) or
+                    touched!=kept|removed or kept&removed):
+                raise ValueError('Figure link event membership differs')
+            for row in rows:
+                before=row['before'];after=row['after']
+                if after is None or after['st_nlink']!=before['st_nlink']+(row['path'] in kept):
+                    raise ValueError('Figure source has an unowned link-count change')
+        except (OSError,ValueError) as error:errors.append(str(error))
+        if verified_artifacts is None and os.path.lexists(output/COMPLETE):
+            errors.append('Failed Figure output retains a completion marker')
+        observations['custody_errors']=errors
+        observations['failed_link_recovery_verified']=preserved and not errors
+        if preserved and not errors:
+            by_name={row['path']:row for row in rows}
+            for row in observations['linked_members']:
+                row['sha256_after']=by_name[row['path']]['sha256_after']
+        return preserved and not errors
+    def cleanup_owned_failed_links():
+        if not observe_link_custody() or os.path.lexists(output/COMPLETE):
+            raise ValueError('Failed Figure links do not have safe owned cleanup custody')
+        for row in list(observations['remaining_owned_links']):
+            check()
+            if os.path.lexists(output/COMPLETE):
+                raise ValueError('Failed Figure output acquired a completion marker during cleanup')
+            name=row['path'];destination=Path(row['target']);before=identity(root/name)
+            if (output_identity()!=owned_output or dict(zip(fields,before))!=row['stamp'] or
+                    identity(destination)!=before):
+                raise ValueError('Failed Figure link changed before owned cleanup')
+            destination.unlink()
+            after=identity(root/name)
+            observations['removed_owned_links'].append(dict(path=name,target=str(destination),
+                before=dict(zip(fields,before)),after=dict(zip(fields,after))))
+            if (after[:7]!=before[:7] or after[7]!=before[7]-1 or after[8]<before[8] or
+                    os.path.lexists(destination)):
+                raise ValueError('Failed Figure owned cleanup changed source custody')
+            accept_owned_link(before,after);linked.pop(root/name)
     def saved(path, maximum=max_input_bytes):
         path=Path(path);before=evidence.stamp(path)
         if before[2]>maximum:raise ValueError('Offline Figure fixture/input bound exceeded')
@@ -5267,6 +5392,11 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         stamps[path]=before
         return raw
     def check():
+        if any(identity(path)!=expected for path,expected in source_identities.items()):
+            raise ValueError('Figure source changed outside its owned hard links')
+        for path,(destination,expected) in linked.items():
+            if identity(path)!=expected or identity(destination)!=expected:
+                raise ValueError('Figure payload changed outside its owned hard link')
         check_prefix_cache(cache)
         if any(evidence.stamp(path)!=before for path,before in stamps.items()):
             raise ValueError('Offline Figure metadata changed during materialization')
@@ -5384,8 +5514,9 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
     root_id=load({'kind':'complete-stream','path':str(source),'sha256':digest(manifest_raw)})
     top=nodes[root_id];root=top['root'];wiki,date=top['plan']['wiki'],top['plan']['date']
     # Bounds and all ancestry locators were checked before any full payload replay.
-    complete=read_complete_capture(source,cache)
+    complete=read_complete_capture(source,cache,include_document=False)
     if complete['manifest_sha256']!=digest(manifest_raw):raise ValueError('Offline complete Figure identity differs')
+    observations.update(source_complete_verified=True,source_manifest_sha256=digest(manifest_raw))
     for node in nodes.values():
         if node['reference']['kind']=='closed-prefix' and 'imported_row' not in node:
             prefix=read_closed_prefix(node['path'],cache)
@@ -5395,7 +5526,7 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
                 node['pending']=([terminal_pending(node['root'],prefix['lookahead'],node['plan']['wiki'],lean=False)] if prefix['lookahead'] is not None else [])
             node['frame_map']=[None]*(node['committed']+len(node['pending']))
     if len(complete['offsets'])!=len(top['frame_map']):raise ValueError('Offline Figure source count differs')
-    frames=[]
+    frames=[];planned=[]
     def scoped(identifier, value):
         result=copy.deepcopy(value)
         for name in ('batch','tiff_batch'):
@@ -5444,7 +5575,11 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         return dict(value) if value['kind']=='retained-request' else scoped(identifier,value)
     raw_values=stream_values(root/ROLES['figure-sizing-raw'],RAW_STREAM_SCHEMA);next(raw_values)
     for number,batch in enumerate(raw_values):
-        frames.append(resolve(root_id,number,number,batch,set()))
+        frame=resolve(root_id,number,number,batch,set());frames.append(frame)
+        # Preserve the ordered HTTP-only plan while this exact raw frame is in
+        # hand; retained observations do not contribute a request slot.
+        if frame['kind'] in ('http-archived','http-archived-light','http-archived-lean'):
+            planned.append(batch['requests'])
     if len(frames)!=len(top['frame_map']) or any(any(number is None for number in node['frame_map']) for node in nodes.values()):
         raise ValueError('Unresolved offline Figure origin frame')
     check()
@@ -5453,7 +5588,17 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
     # for the unchanged end guard without retaining million-record fact lists.
     for admitted in cache.values():
         if admitted is not None:admitted.pop('document',None)
+    if link_current_payloads:
+        source_identities.update((path,identity(path)) for path in complete['stamps'])
+        if any(stamp(value)!=complete['stamps'][path] for path,value in source_identities.items()):
+            raise ValueError('Linked Figure source changed after complete verification')
+    expected_links={name:source_identities[root/name] for name in link_names} if link_current_payloads else {}
+    if (len({value[:2] for value in expected_links.values()})!=len(expected_links) or
+            any(stamp(value)!=complete['stamps'][root/name] for name,value in expected_links.items())):
+        raise ValueError('Linked Figure payload identities are aliased or changed')
     output.parent.mkdir(parents=True,exist_ok=True)
+    if any(value[0]!=output.parent.stat().st_dev for value in expected_links.values()):
+        raise ValueError('Linked Figure payloads require the same filesystem')
     lock=output.with_name('.'+output.name+'.capture.lock')
     fd=os.open(lock,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
     try:
@@ -5462,6 +5607,7 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
             raise ValueError('Unsafe offline Figure capture lock')
         fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
         output.mkdir(mode=0o700,exist_ok=False)
+        owned_output=output_identity();observations['output_root']=owned_output
         def put(relative,path):
             observed_artifact_name(Path(relative).name)
             destination=output/relative;destination.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
@@ -5471,6 +5617,21 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
                 if evidence.stamp(destination)[2]!=before[2] or digest(small(destination,max_input_bytes))!=digest(saved(path)):
                     raise ValueError('Offline Figure shared metadata collision')
                 return {'path':relative,'bytes':before[2],'sha256':digest(small(destination,max_input_bytes))}
+            if link_current_payloads and relative in link_names and Path(path)==root/relative:
+                original=expected_links[relative]
+                if identity(path)!=original:
+                    raise ValueError('Figure payload changed before its owned hard link')
+                os.link(path,destination,follow_symlinks=False)
+                after=identity(path)
+                row=dict(path=relative,before=dict(zip(fields,original)),after=dict(zip(fields,after)),
+                         sha256_before=original_manifest['artifacts'][relative]['sha256'])
+                observations['linked_members'].append(row)
+                if (after[:7]!=original[:7] or after[7]!=original[7]+1 or after[8]<original[8] or
+                        identity(destination)!=after):
+                    raise ValueError('Figure hard link changed content, mode, identity or link count')
+                accept_owned_link(original,after)
+                linked[Path(path)]=(destination,after)
+                return {'path':relative,'bytes':after[5],'sha256':row['sha256_before']}
             with Path(path).open('rb') as source_stream,destination.open('xb') as target:
                 digestor=hashlib.sha256();size=0
                 while raw:=source_stream.read(1024*1024):
@@ -5518,11 +5679,6 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
             closed_prefixes=[],complete_captures=[],metadata_light_titles=[],
             materialized_root=root_id,materialized_http_origins=rows)
         # This is an ordered source-echo inventory, not evidence of new HTTP.
-        planned=[]
-        values=stream_values(root/ROLES['figure-sizing-raw'],RAW_STREAM_SCHEMA);next(values)
-        for value,source in zip(values,frames,strict=True):
-            if source['kind'] in ('http-archived','http-archived-light','http-archived-lean'):
-                planned.append(value['requests'])
         plan['planned_requests_sha256']=digest(encoded(planned))
         evidence.document(output/PLAN,plan)
         with (output/FILE_REQUESTS).open('xb') as stream:
@@ -5561,7 +5717,26 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         if inventory_physical_authority(sql_paths) != external_authority:
             raise ValueError('Materialized Figure external authority changed during publication')
         check()
+        if link_current_payloads and set(row['path'] for row in observations['linked_members'])!=link_names:
+            raise ValueError('Figure materialization did not record its exact linked payloads')
+        for row in observations['linked_members']:
+            row['sha256_after']=verified['artifacts'][row['path']]['sha256']
+        if link_current_payloads and not observe_link_custody(verified_artifacts=verified['artifacts']):
+            raise ValueError('Materialized Figure link custody changed after verification')
+        observations.update(complete=True,source_manifest_sha256=digest(manifest_raw),
+                            source_complete_verified=True,source_content_mode_inode_preserved=True,
+                            new_output_adoption_allowed=True,failed_link_recovery_verified=False)
         return manifest
+    except Exception:
+        if link_current_payloads and owned_output is not None:
+            if cleanup_failed_links:
+                try:cleanup_owned_failed_links()
+                except Exception as error:observations['cleanup_error']=str(error)
+            try:observe_link_custody()
+            except Exception as error:
+                observations['failed_link_recovery_verified']=False
+                observations.setdefault('custody_errors',[]).append(str(error))
+        raise
     finally:
         fcntl.flock(fd,fcntl.LOCK_UN);os.close(fd)
 
@@ -5783,6 +5958,19 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
     return new_manifest
 
 
+def materialize_command(args):
+    observations={}
+    try:
+        return materialize_complete_capture(args.source,args.output,max_batches=args.max_batches,
+            max_input_bytes=args.max_input_bytes,link_current_payloads=args.link_current_payloads,
+            cleanup_failed_links=getattr(args,'cleanup_failed_links',False),observations=observations)
+    finally:
+        if args.link_current_payloads:
+            # The caller retains this small stderr record on success or failure;
+            # stdout keeps the existing manifest result shape.
+            print(json.dumps(observations,sort_keys=True),file=sys.stderr,flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -5797,6 +5985,10 @@ def main():
     materialize.add_argument('--output', type=Path, required=True)
     materialize.add_argument('--max-batches', type=int, default=64)
     materialize.add_argument('--max-input-bytes', type=int, default=64*1024*1024)
+    materialize.add_argument('--link-current-payloads', action='store_true',
+        help='share the four unchanged payload inodes and emit exact custody observations on stderr')
+    materialize.add_argument('--cleanup-failed-links',action='store_true',
+        help='on failure remove only verified links created by this operation, retaining explicit cleanup evidence')
     prepare = commands.add_parser('stage', help='offline replay of retained source captures')
     for name in ('wiki', 'date'):
         prepare.add_argument('--' + name, required=True)
@@ -5824,7 +6016,7 @@ def main():
                          help='reviewed geometry profile; explicit selection preserves older projection policy')
     args = parser.parse_args()
     result = (stage(args) if args.command == 'stage' else capture_files(args) if args.command == 'capture-files' else
-              materialize_complete_capture(args.source,args.output,max_batches=args.max_batches,max_input_bytes=args.max_input_bytes)
+              materialize_command(args)
               if args.command == 'materialize-complete' else
               complete_capture(args.output, manifest_sha256=args.manifest_sha256, wiki=args.wiki, date=args.date)
               if args.command == 'complete-capture' else verify(args.output))

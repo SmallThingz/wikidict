@@ -1,5 +1,9 @@
 import argparse
 import copy
+import contextlib
+import errno
+import io
+import os
 import gzip
 import hashlib
 import json
@@ -5542,6 +5546,46 @@ class OfflineFigureMaterializationTests(unittest.TestCase):
         (output/figure.COMPLETE).write_bytes(figure.encoded({'schema':figure.SCHEMA,
             'manifest_sha256':figure.digest((output/figure.MANIFEST).read_bytes())}))
 
+    def test_materialization_verifies_source_without_retaining_unused_projection_document(self):
+        args=self.complete();source=args.output/figure.MANIFEST
+        before={name:(args.output/name).read_bytes()
+                for name in (*figure.ROLES.values(),figure.PROVIDER,figure.INVENTORY)}
+        read_complete=figure.read_complete_capture;verify=figure.verify
+        document_requests=[];verified=[]
+        def read_without_document(path,*values,**options):
+            selected=Path(path)==source
+            if selected:document_requests.append(options.get('include_document',True))
+            result=read_complete(path,*values,**options)
+            if selected:self.assertNotIn('document',result)
+            return result
+        def verify_source(path,*values,**options):
+            verified.append(Path(path))
+            return verify(path,*values,**options)
+        with (patch.object(figure,'read_complete_capture',side_effect=read_without_document),
+              patch.object(figure,'verify',side_effect=verify_source)):
+            output,manifest=self.materialize(args)
+            for name,raw in before.items():self.assertEqual((output/name).read_bytes(),raw)
+            self.assertEqual(self.verify_both(output),manifest)
+            self.assertIn(args.output,verified)
+            projection=args.output/figure.ROLES['figure-sizing']
+            rows=[json.loads(line) for line in projection.read_text().splitlines()]
+            record=next(row for row in rows[1:] if row.get('original_width') is not None)
+            record['original_width']+=1
+            projection.write_bytes(b''.join(figure.stream_encoded(row) for row in rows))
+            forged=json.loads(source.read_text())
+            forged['outputs']['figure-sizing']=figure.digest(projection.read_bytes())
+            forged['artifacts']=figure.payload(args.output)
+            source.write_bytes(figure.encoded(forged))
+            (args.output/figure.COMPLETE).write_bytes(figure.encoded(dict(schema=figure.SCHEMA,
+                manifest_sha256=figure.digest(source.read_bytes()))))
+            refused=self.root/'rehashed-source-refused'
+            with self.assertRaisesRegex(ValueError,'projection stream record differs from exact raw replay'):
+                figure.materialize_complete_capture(source,refused)
+            self.assertFalse(refused.exists())
+        self.assertGreaterEqual(len(document_requests),2)
+        self.assertEqual(set(document_requests),{False})
+        self.assertGreaterEqual(verified.count(args.output),2)
+
     def test_complete_origin_is_independent_of_original_payloads(self):
         args = self.complete()
         original = {p.name:p.read_bytes() for p in args.output.iterdir()}
@@ -5645,6 +5689,303 @@ class OfflineFigureMaterializationTests(unittest.TestCase):
         self.assertEqual(len(closed['pending']),2)
         (second/closed['failure']['path']).unlink()
         with self.assertRaises((ValueError,FileNotFoundError)):figure.verify(second)
+
+    def test_linked_current_payloads_preserve_source_bytes_modes_and_inodes(self):
+        args=self.complete();output=self.root/'linked-current';observations={}
+        names={figure.ROLES['figure-sizing'],figure.ROLES['figure-sizing-raw'],figure.PROVIDER,figure.INVENTORY}
+        members=figure.capture_member_paths(args.output,include_markers=True)[0]
+        before={name:(path.read_bytes(),path.stat()) for name,path in members.items()}
+        manifest=figure.materialize_complete_capture(args.output/figure.MANIFEST,output,
+            link_current_payloads=True,observations=observations)
+        self.assertEqual(observations['operation'],'materialize-complete')
+        self.assertTrue(observations['complete'])
+        self.assertTrue(observations['source_complete_verified'])
+        self.assertTrue(observations['source_content_mode_inode_preserved'])
+        self.assertEqual({row['path'] for row in observations['linked_members']},names)
+        for name,(raw,old) in before.items():
+            after=members[name].stat()
+            self.assertEqual(members[name].read_bytes(),raw)
+            for field in ('st_dev','st_ino','st_mode','st_uid','st_gid','st_size','st_mtime_ns'):
+                self.assertEqual(getattr(after,field),getattr(old,field))
+            self.assertEqual(after.st_nlink,old.st_nlink+(name in names))
+            if name in names:
+                self.assertEqual((output/name).stat().st_ino,old.st_ino)
+                row=next(r for r in observations['linked_members'] if r['path']==name)
+                self.assertEqual(row['before']['st_nlink'],old.st_nlink)
+                self.assertEqual(row['after']['st_ctime_ns'],after.st_ctime_ns)
+                self.assertEqual(row['sha256_before'],figure.digest(raw))
+                self.assertEqual(row['sha256_after'],figure.digest(raw))
+            else:self.assertEqual(after.st_ctime_ns,old.st_ctime_ns)
+        self.assertEqual(self.verify_both(output),manifest)
+        self.verify_both(args.output)
+
+    def test_link_mode_requires_explicit_fresh_custody_observations(self):
+        args=self.complete();output=self.root/'not-created'
+        for options in ({'link_current_payloads':1,'observations':{}},
+                        {'link_current_payloads':True},
+                        {'link_current_payloads':True,'observations':{'complete':True}}):
+            with self.subTest(options=options),self.assertRaises(ValueError):
+                figure.materialize_complete_capture(args.output/figure.MANIFEST,output,**options)
+            self.assertFalse(output.exists())
+
+    def test_link_mode_does_not_fallback_to_copy_across_filesystems(self):
+        args=self.complete();output=self.root/'no-fallback';observations={}
+        before={p:p.stat().st_nlink for p in args.output.iterdir()}
+        with patch.object(figure.os,'link',side_effect=OSError(errno.EXDEV,'cross-device')):
+            with self.assertRaises(OSError):
+                figure.materialize_complete_capture(args.output/figure.MANIFEST,output,
+                    link_current_payloads=True,observations=observations)
+        self.assertFalse((output/figure.COMPLETE).exists())
+        self.assertFalse(observations['complete'])
+        self.assertEqual(observations['linked_members'],[])
+        self.assertEqual({p:p.stat().st_nlink for p in before},before)
+
+    def assert_link_mutation_refuses(self, mutation):
+        args=self.complete();output=self.root/'refused-link';observations={};link=os.link
+        def changed(source,destination,**kwargs):
+            link(source,destination,**kwargs)
+            if mutation=='mode':Path(source).chmod((Path(source).stat().st_mode&0o777)^0o100)
+            elif mutation=='nlink':link(source,self.root/'unowned-extra-link')
+            else:
+                other=args.output/figure.ROLES['figure-sizing-site']
+                other.chmod((other.stat().st_mode&0o777)^0o100)
+        with patch.object(figure.os,'link',side_effect=changed):
+            with self.assertRaises(ValueError):
+                figure.materialize_complete_capture(args.output/figure.MANIFEST,output,
+                    link_current_payloads=True,observations=observations)
+        self.assertFalse((output/figure.COMPLETE).exists())
+        self.assertFalse(observations['complete'])
+        self.assertTrue(observations['linked_members'])
+
+    def test_link_mode_refuses_source_mode_change(self):
+        self.assert_link_mutation_refuses('mode')
+
+    def test_link_mode_refuses_unowned_link_count_change(self):
+        self.assert_link_mutation_refuses('nlink')
+
+    def test_link_mode_refuses_other_source_member_change(self):
+        self.assert_link_mutation_refuses('other')
+
+    def test_link_mode_refuses_mutation_after_complete_output_replay(self):
+        args=self.complete();output=self.root/'changed-after-verify';observations={};verify=figure.verify
+        def changed(root,*positional,**kwargs):
+            result=verify(root,*positional,**kwargs)
+            if Path(root)==output:
+                with (output/figure.ROLES['figure-sizing-raw']).open('ab') as stream:stream.write(b' ')
+            return result
+        with patch.object(figure,'verify',side_effect=changed):
+            with self.assertRaises(ValueError):
+                figure.materialize_complete_capture(args.output/figure.MANIFEST,output,
+                    link_current_payloads=True,observations=observations)
+        self.assertFalse((output/figure.COMPLETE).exists())
+        self.assertFalse(observations['complete'])
+        self.assertTrue(all('sha256_after' not in row for row in observations['linked_members']))
+
+    def test_linked_cli_keeps_manifest_stdout_shape_and_explicit_stderr_custody(self):
+        args=self.complete();output=self.root/'linked-command';stderr=io.StringIO()
+        command=argparse.Namespace(source=args.output/figure.MANIFEST,output=output,
+            max_batches=64,max_input_bytes=64*1024*1024,link_current_payloads=True)
+        with contextlib.redirect_stderr(stderr):manifest=figure.materialize_command(command)
+        observations=json.loads(stderr.getvalue())
+        self.assertTrue(observations['complete'])
+        self.assertEqual(len(observations['linked_members']),4)
+        self.assertEqual(self.verify_both(output),manifest)
+
+    def failed_link_case(self, *, cleanup=False, mutation=None):
+        args=self.complete();output=self.root/'failed-current';observations={};link=os.link
+        names={figure.ROLES['figure-sizing'],figure.ROLES['figure-sizing-raw'],figure.PROVIDER,figure.INVENTORY}
+        before={name:((args.output/name).read_bytes(),(args.output/name).stat()) for name in names}
+        targets=[]
+        def fail_third(source,destination,**kwargs):
+            if len(targets)==2:
+                first=Path(targets[0]);original=args.output/first.name
+                if mutation=='extra':link(original,self.root/'foreign-extra-link')
+                elif mutation=='replacement':first.unlink();first.write_bytes(b'foreign target')
+                elif mutation=='source':original.write_bytes(original.read_bytes()+b' ')
+                elif mutation=='directory':output.rename(self.root/'retained-old-output');output.mkdir()
+                raise OSError(errno.ENOSPC,'injected third-link failure')
+            link(source,destination,**kwargs);targets.append(str(destination))
+        with patch.object(figure.os,'link',side_effect=fail_third),self.assertRaises(OSError):
+            figure.materialize_complete_capture(args.output/figure.MANIFEST,output,
+                link_current_payloads=True,cleanup_failed_links=cleanup,observations=observations)
+        self.assertFalse(observations['complete'])
+        self.assertFalse(observations['new_output_adoption_allowed'])
+        self.assertTrue(observations['source_complete_verified'])
+        self.assertEqual({row['path'] for row in observations['original_members']},names)
+        self.assertFalse((output/figure.COMPLETE).exists())
+        return args,output,observations,before,targets
+
+    def test_failed_links_record_all_originals_and_exact_remaining_targets(self):
+        args,output,observations,before,targets=self.failed_link_case()
+        self.assertTrue(observations['failed_link_recovery_verified'])
+        self.assertTrue(observations['source_content_mode_inode_preserved'])
+        self.assertEqual(len(observations['linked_members']),2)
+        self.assertEqual(observations['removed_owned_links'],[])
+        self.assertEqual({row['target'] for row in observations['remaining_owned_links']},set(targets))
+        identity=output.stat()
+        self.assertEqual(observations['output_root'],dict(path=str(output),device=identity.st_dev,
+            inode=identity.st_ino,mode=identity.st_mode,uid=identity.st_uid))
+        for row in observations['original_members']:
+            name=row['path'];raw,original=before[name];after=(args.output/name).stat()
+            self.assertEqual(row['sha256_before'],figure.digest(raw))
+            self.assertEqual(row['sha256_after'],figure.digest(raw))
+            for key in ('st_dev','st_ino','st_mode','st_uid','st_gid','st_size','st_mtime_ns'):
+                self.assertEqual(row['before'][key],getattr(original,key))
+                self.assertEqual(row['after'][key],getattr(original,key))
+            self.assertEqual(after.st_nlink,original.st_nlink+(str(output/name) in targets))
+        for row in observations['remaining_owned_links']:
+            target=Path(row['target']);source=args.output/row['path']
+            self.assertEqual(target.stat().st_ino,source.stat().st_ino)
+            self.assertEqual(row['stamp'],next(r['after'] for r in observations['original_members'] if r['path']==row['path']))
+        self.verify_both(args.output)
+
+    def test_failed_links_explicit_cleanup_records_removals_and_empty_remaining(self):
+        args,output,observations,before,targets=self.failed_link_case(cleanup=True)
+        self.assertTrue(observations['failed_link_recovery_verified'])
+        self.assertTrue(observations['source_content_mode_inode_preserved'])
+        self.assertEqual(observations['remaining_owned_links'],[])
+        self.assertEqual({row['target'] for row in observations['removed_owned_links']},set(targets))
+        self.assertEqual(len(observations['removed_owned_links']),2)
+        for row in observations['removed_owned_links']:
+            self.assertFalse(Path(row['target']).exists())
+            self.assertEqual(row['after']['st_nlink'],row['before']['st_nlink']-1)
+            for key in ('st_dev','st_ino','st_mode','st_uid','st_gid','st_size','st_mtime_ns'):
+                self.assertEqual(row['after'][key],row['before'][key])
+        for row in observations['original_members']:
+            raw,original=before[row['path']]
+            self.assertEqual(row['after']['st_nlink'],original.st_nlink)
+            self.assertEqual(row['sha256_after'],figure.digest(raw))
+            self.assertEqual((args.output/row['path']).read_bytes(),raw)
+        self.verify_both(args.output)
+
+    def test_failed_link_cleanup_refuses_foreign_link_count(self):
+        args,output,observations,before,targets=self.failed_link_case(cleanup=True,mutation='extra')
+        self.assertFalse(observations['failed_link_recovery_verified'])
+        self.assertEqual(observations['removed_owned_links'],[])
+        self.assertTrue((self.root/'foreign-extra-link').is_file())
+        self.assertTrue(all(Path(path).is_file() for path in targets))
+        self.assertTrue(observations['source_content_mode_inode_preserved'])
+        self.verify_both(args.output)
+
+    def test_failed_link_cleanup_refuses_replaced_destination(self):
+        args,output,observations,before,targets=self.failed_link_case(cleanup=True,mutation='replacement')
+        self.assertFalse(observations['failed_link_recovery_verified'])
+        self.assertEqual(observations['removed_owned_links'],[])
+        self.assertEqual(Path(targets[0]).read_bytes(),b'foreign target')
+        self.assertTrue(Path(targets[1]).is_file())
+        self.verify_both(args.output)
+
+    def test_failed_link_cleanup_refuses_changed_original_bytes(self):
+        args,output,observations,before,targets=self.failed_link_case(cleanup=True,mutation='source')
+        self.assertFalse(observations['failed_link_recovery_verified'])
+        self.assertFalse(observations['source_content_mode_inode_preserved'])
+        self.assertEqual(observations['removed_owned_links'],[])
+        self.assertTrue(all(Path(path).is_file() for path in targets))
+        self.assertTrue(any(row['sha256_after'] is None for row in observations['original_members']))
+
+    def test_failed_links_without_mutation_record_all_four_originals(self):
+        args=self.complete();output=self.root/'never-linked';observations={}
+        with patch.object(figure.os,'link',side_effect=OSError(errno.EXDEV,'cross-device')),self.assertRaises(OSError):
+            figure.materialize_complete_capture(args.output/figure.MANIFEST,output,
+                link_current_payloads=True,cleanup_failed_links=True,observations=observations)
+        self.assertTrue(observations['failed_link_recovery_verified'])
+        self.assertEqual(len(observations['original_members']),4)
+        for key in ('linked_members','remaining_owned_links','removed_owned_links'):
+            self.assertEqual(observations[key],[])
+        for row in observations['original_members']:
+            self.assertEqual(row['before'],row['after'])
+            self.assertEqual(row['sha256_before'],row['sha256_after'])
+        self.verify_both(args.output)
+
+    def test_failed_link_cleanup_refuses_published_output_marker(self):
+        args=self.complete();output=self.root/'published-then-failed';observations={};document=figure.evidence.document
+        def fail_marker(path,*values,**kwargs):
+            result=document(path,*values,**kwargs)
+            if Path(path)==output/figure.COMPLETE:raise OSError(errno.EIO,'injected marker publication failure')
+            return result
+        with patch.object(figure.evidence,'document',side_effect=fail_marker),self.assertRaises(OSError):
+            figure.materialize_complete_capture(args.output/figure.MANIFEST,output,
+                link_current_payloads=True,cleanup_failed_links=True,observations=observations)
+        self.assertFalse(observations['complete'])
+        self.assertFalse(observations['new_output_adoption_allowed'])
+        self.assertFalse(observations['failed_link_recovery_verified'])
+        self.assertEqual(observations['removed_owned_links'],[])
+        self.assertEqual(len(observations['remaining_owned_links']),4)
+        self.assertTrue((output/figure.COMPLETE).is_file())
+        self.verify_both(args.output)
+
+    def test_failed_link_cleanup_refuses_output_directory_replacement(self):
+        args,output,observations,before,targets=self.failed_link_case(cleanup=True,mutation='directory')
+        self.assertFalse(observations['failed_link_recovery_verified'])
+        self.assertEqual(observations['removed_owned_links'],[])
+        self.assertNotEqual(observations['output_root']['inode'],output.stat().st_ino)
+        for path in targets:self.assertTrue((self.root/'retained-old-output'/Path(path).name).is_file())
+        self.verify_both(args.output)
+
+    def interrupted_owned_cleanup(self, mutation):
+        args=self.complete();output=self.root/'interrupted-cleanup';observations={}
+        link=os.link;unlink=Path.unlink;lstat=Path.lstat;targets=[];removed=[];injected=False
+        def fail_third(source,destination,**kwargs):
+            if len(targets)==2:raise OSError(errno.ENOSPC,'injected materialization failure')
+            link(source,destination,**kwargs);targets.append(Path(destination))
+        def remove(path,*values,**kwargs):
+            if path.parent==output:
+                if mutation=='error' and removed:raise OSError(errno.EIO,'injected second cleanup failure')
+                result=unlink(path,*values,**kwargs);removed.append(path.name);return result
+            return unlink(path,*values,**kwargs)
+        def observe(path,*values,**kwargs):
+            nonlocal injected
+            result=lstat(path,*values,**kwargs)
+            if (not injected and len(removed)==1 and path==args.output/removed[0] and
+                    mutation in ('marker','source')):
+                injected=True
+                if mutation=='marker':(output/figure.COMPLETE).write_bytes(b'foreign marker')
+                else:path.write_bytes(path.read_bytes()+b' ')
+            return result
+        with (patch.object(figure.os,'link',side_effect=fail_third),
+              patch.object(Path,'unlink',new=remove),patch.object(Path,'lstat',new=observe),
+              self.assertRaises(OSError)):
+            figure.materialize_complete_capture(args.output/figure.MANIFEST,output,
+                link_current_payloads=True,cleanup_failed_links=True,observations=observations)
+        self.assertEqual(len(removed),1)
+        self.assertEqual(len(observations['removed_owned_links']),1)
+        self.assertEqual(len(observations['remaining_owned_links']),1)
+        self.assertTrue(targets[1].is_file())
+        self.assertFalse(targets[0].exists())
+        self.assertFalse(observations['complete'])
+        self.assertFalse(observations['new_output_adoption_allowed'])
+        self.assertIn('cleanup_error',observations)
+        for row in observations['original_members']:
+            actual=(args.output/row['path']).stat()
+            self.assertEqual(row['after'],{name:getattr(actual,name) for name in row['after']})
+        return args,output,observations,targets
+
+    def test_interrupted_owned_cleanup_refreshes_final_source_and_remaining_links(self):
+        args,output,observations,targets=self.interrupted_owned_cleanup('error')
+        self.assertTrue(observations['failed_link_recovery_verified'])
+        self.assertTrue(observations['source_content_mode_inode_preserved'])
+        self.assertEqual(observations['remaining_owned_links'][0]['target'],str(targets[1]))
+        self.assertEqual(observations['removed_owned_links'][0]['target'],str(targets[0]))
+        for row in observations['original_members']:
+            self.assertEqual(row['sha256_before'],row['sha256_after'])
+            self.assertEqual(row['after']['st_nlink'],row['before']['st_nlink']+(row['path']==targets[1].name))
+        self.verify_both(args.output)
+
+    def test_owned_cleanup_rechecks_marker_between_removals(self):
+        args,output,observations,targets=self.interrupted_owned_cleanup('marker')
+        self.assertFalse(observations['failed_link_recovery_verified'])
+        self.assertTrue(observations['source_content_mode_inode_preserved'])
+        self.assertEqual((output/figure.COMPLETE).read_bytes(),b'foreign marker')
+        self.verify_both(args.output)
+
+    def test_owned_cleanup_rechecks_prior_source_between_removals(self):
+        args,output,observations,targets=self.interrupted_owned_cleanup('source')
+        self.assertFalse(observations['failed_link_recovery_verified'])
+        self.assertFalse(observations['source_content_mode_inode_preserved'])
+        changed=next(row for row in observations['original_members'] if row['path']==targets[0].name)
+        self.assertNotEqual(changed['after']['st_size'],changed['before']['st_size'])
+        self.assertIsNone(changed['sha256_after'])
+        self.assertFalse((output/figure.COMPLETE).exists())
 
     def test_bounds_and_unresolved_resume_authority_refuse_before_output_creation(self):
         args = self.complete(); output=self.root/'not-created'
@@ -8071,6 +8412,108 @@ class CaptureReplayContractTests(unittest.TestCase):
         plan['planned_requests_sha256']='0'*64
         self.rebind_consolidated_plan(output,plan)
         with self.assertRaisesRegex(ValueError,'occupied-slot'):figure.verify(output)
+
+    def test_linked_observed_consolidation_preserves_old_names_and_new_tuple_replay(self):
+        source,parent,_,record,before=self.consolidated_observation(slots=2)
+        output=self.fixture.root/'linked-observed';observations={}
+        names={figure.ROLES['figure-sizing'],figure.ROLES['figure-sizing-raw'],figure.PROVIDER,figure.INVENTORY}
+        identities={name:(source/name).stat() for name in names}
+        figure.materialize_complete_capture(source/figure.MANIFEST,output,
+            link_current_payloads=True,observations=observations)
+        parent.rename(parent.with_name('ancestor-unavailable'))
+        for name,old in identities.items():
+            self.assertEqual((source/name).stat().st_ino,old.st_ino)
+            self.assertEqual((output/name).stat().st_ino,old.st_ino)
+            self.assertEqual((source/name).stat().st_nlink,old.st_nlink+1)
+            self.assertEqual((source/name).read_bytes(),before[name])
+        self.verify_consolidated(output)
+        self.assertTrue(source.is_dir())
+        self.assertTrue(record.is_file())
+        self.assertTrue(observations['complete'])
+
+    def test_materialized_http_plan_uses_one_resolution_traversal_with_exact_observed_tuple(self):
+        import sys
+        source,parent,reference,_,before=self.consolidated_observation(slots=2)
+        raw_path=source/figure.ROLES['figure-sizing-raw']
+        values=figure.stream_values(raw_path,figure.RAW_STREAM_SCHEMA)
+        try:
+            header=next(values)
+            count=header['base_batches']+header['observed_batches']
+            frames=figure.source_records(reference/figure.FILE_REQUESTS,count)
+            planned=[batch['requests'] for batch,frame in zip(values,frames,strict=True)
+                     if frame['kind'] in ('http-archived','http-archived-light','http-archived-lean')]
+        finally:
+            values.close()
+        self.assertEqual(header['observed_batches'],1)
+        self.assertEqual(len(planned),header['base_batches'])
+        expected_digest=figure.digest(figure.encoded(planned))
+        expected_manifest=json.loads((reference/figure.MANIFEST).read_bytes())
+        self.assertEqual(json.loads((reference/figure.PLAN).read_bytes())['planned_requests_sha256'],expected_digest)
+        expected_tuple=figure.verify_tuple({role:reference/name for role,name in figure.output_roles(reference).items()})
+        original=figure.stream_values; materialize=figure.materialize_complete_capture
+        for linked in (False,True):
+            with self.subTest(linked=linked):
+                traversals=[]
+                def counted(path,schema,**options):
+                    direct=Path(path)==raw_path and sys._getframe(1).f_code is materialize.__code__
+                    values=original(path,schema,**options)
+                    if not direct:return values
+                    consumed=[0];traversals.append(consumed)
+                    def records():
+                        try:
+                            yield next(values)
+                            for batch in values:
+                                consumed[0]+=1
+                                yield batch
+                        finally:values.close()
+                    return records()
+                output=self.fixture.root/('single-plan-linked' if linked else 'single-plan-copied')
+                observations={}
+                with patch.object(figure,'stream_values',new=counted):
+                    manifest=materialize(source/figure.MANIFEST,output,
+                        link_current_payloads=linked,observations=observations)
+                self.assertEqual(traversals,[[count]])
+                self.assertEqual(manifest,expected_manifest)
+                self.assertEqual(json.loads((output/figure.PLAN).read_bytes())['planned_requests_sha256'],expected_digest)
+                actual_tuple=figure.verify_tuple({role:output/name for role,name in figure.output_roles(output).items()})
+                self.assertEqual(actual_tuple,expected_tuple)
+                for name in (*figure.ROLES.values(),figure.PROVIDER,figure.INVENTORY):
+                    self.assertEqual((output/name).read_bytes(),before[name])
+                self.assertEqual(self.members(source),before)
+                if linked:
+                    self.assertTrue(observations['complete'])
+                    self.assertEqual(len(observations['linked_members']),4)
+                    self.assertEqual(len(observations['remaining_owned_links']),4)
+
+    def test_materialized_http_plan_reuse_keeps_post_resolution_source_and_marker_fences(self):
+        import sys
+        source,_,_,_,before=self.consolidated_observation(slots=2)
+        raw_path=source/figure.ROLES['figure-sizing-raw']
+        original=figure.stream_values; materialize=figure.materialize_complete_capture
+        for name in (figure.ROLES['figure-sizing-raw'],figure.FILE_REQUESTS,figure.COMPLETE):
+            with self.subTest(member=name):
+                target=source/name; raw=target.read_bytes(); changed=[]; traversals=[]
+                def mutate_after_resolution(path,schema,**options):
+                    direct=Path(path)==raw_path and sys._getframe(1).f_code is materialize.__code__
+                    values=original(path,schema,**options)
+                    if not direct:return values
+                    traversals.append(True)
+                    def records():
+                        try:yield from values
+                        finally:values.close()
+                        target.write_bytes(raw+b'\n');changed.append(name)
+                    return records()
+                output=self.fixture.root/('changed-plan-'+str(len(name)))
+                try:
+                    with patch.object(figure,'stream_values',new=mutate_after_resolution):
+                        with self.assertRaisesRegex(ValueError,'changed'):
+                            materialize(source/figure.MANIFEST,output)
+                    self.assertEqual(traversals,[True])
+                    self.assertEqual(changed,[name])
+                    self.assertFalse(output.exists())
+                    self.assertEqual(target.read_bytes(),raw+b'\n')
+                finally:target.write_bytes(raw)
+                self.assertEqual(self.members(source),before)
 
     def test_materialized_observation_and_origin_partition_tampering_refuses(self):
         _,_,output,_,_=self.consolidated_observation()

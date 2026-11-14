@@ -309,6 +309,159 @@ def _metadata_custody_json(reference):
     return json.loads(raw)
 
 
+def _materialized_custody_contract(root, recorded, operation, native, observations, names):
+    """Validate a known link event without changing source or seal identity."""
+    import stat
+    payload_names = {'figure-sizing.json', 'figure-sizing.raw.json',
+                     'file-metadata.tsv', 'figure-file-inventory.json'}
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_size',
+              'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+    failed = operation.get('outcome') == 'FAILED-PHYSICALLY-SOURCE-CLOSED'
+    if (observations.get('operation') != 'materialize-complete'
+            or observations.get('complete') is not (not failed)
+            or observations.get('source_complete_verified') is not True
+            or 'repair_manifest_sha256' in observations
+            or 'repaired_manifest' in native
+            or (failed and (observations.get('failed_link_recovery_verified') is not True
+                            or observations.get('new_output_adoption_allowed') is not False
+                            or operation.get('output_manifest') is not None))):
+        raise ValueError('Known materialization custody disposition differs')
+    selected = operation['source_manifest'] if failed else operation['output_manifest']
+    if native.get('validated_manifest') != selected:
+        raise ValueError('Known custody did not validate its selected complete tuple')
+    compatibility = _metadata_custody_json(native['compatibility'])
+    argv = compatibility.get('argv', [])
+    selected_root = Path(selected['path']).parent
+    namespace = recorded['runtime_stamps']['snapshot_links'].get('namespace-registry.tsv')
+    namespace = Path(namespace) if namespace is not None else root / 'namespace-registry.tsv'
+    figure_names = ('figure-siteinfo.raw.json', 'figure-sizing.json',
+                    'figure-sizing.raw.json', 'figure-sizing.site.json')
+    expected_paths = [str(namespace.resolve(strict=True)),
+                      *(str(selected_root / name) for name in figure_names)]
+    if (not isinstance(argv, list) or len(argv) != 8
+            or argv[1:3] != ['--check-figure-compatibility', '--full']
+            or argv[3:] != expected_paths):
+        raise ValueError('Known custody validated another Figure root')
+    source = _metadata_custody_json(operation['source_manifest'])
+    if not failed:
+        output = _metadata_custody_json(operation['output_manifest'])
+        if any(source.get('artifacts', {}).get(name) != output.get('artifacts', {}).get(name)
+               for name in payload_names | set(figure_names)):
+            raise ValueError('Known materialization changed an original payload')
+    source_root = Path(operation['source_manifest']['path']).parent
+    members = observations.get('original_members', operation['linked_members'] if not failed else None)
+    if (not isinstance(members, list) or len(members) != 4
+            or {row.get('path') for row in members} != payload_names):
+        raise ValueError('Known custody lacks the complete original payload inventory')
+    changed = []
+    for row in members:
+        if set(row) != {'path', 'before', 'after', 'sha256_before', 'sha256_after'}:
+            raise ValueError('Invalid known custody source member')
+        before, after = row['before'], row['after']
+        if (not isinstance(before, dict) or not isinstance(after, dict)
+                or set(before) != set(fields) or set(after) != set(fields)
+                or any(type(value) is not int for value in [*before.values(), *after.values()])
+                or any(before[key] != after[key] for key in fields if key not in ('st_ctime_ns', 'st_nlink'))
+                or not stat.S_ISREG(before['st_mode']) or before['st_uid'] != os.geteuid()
+                or before['st_nlink'] < 1 or after['st_nlink'] < before['st_nlink']
+                or after['st_nlink'] > before['st_nlink'] + 1
+                or not isinstance(row['sha256_before'], str) or not re.fullmatch('[0-9a-f]{64}', row['sha256_before'])
+                or row['sha256_before'] != row['sha256_after']
+                or source.get('artifacts', {}).get(row['path']) !=
+                    {'bytes': before['st_size'], 'sha256': row['sha256_before']}):
+            raise ValueError('Known custody changed original payload bytes or stable identity')
+        path = source_root / row['path']
+        if path.is_symlink() or not path.is_file() or any(getattr(path.stat(), key) != after[key] for key in fields):
+            raise ValueError('Known custody source changed after closure')
+        if before != after:
+            changed.append(row)
+    events = operation.get('linked_members')
+    if (observations.get('linked_members') != events or not isinstance(events, list)
+            or len({row.get('path') for row in events}) != len(events)
+            or {row.get('path') for row in events} != {row['path'] for row in changed}
+            or len({(row['before']['st_dev'], row['before']['st_ino']) for row in members}) != 4):
+        raise ValueError('Known custody did not record exactly its touched sources')
+    members_by_name = {row['path']:row for row in members}
+    events_by_name = {row['path']:row for row in events}
+    for event in events:
+        member = members_by_name[event['path']]
+        if (set(event) != {'path', 'before', 'after', 'sha256_before', 'sha256_after'}
+                or event['before'] != member['before'] or not isinstance(event['after'], dict)
+                or set(event['after']) != set(fields)
+                or any(type(value) is not int for value in event['after'].values())
+                or any(event['after'][key] != member['before'][key] for key in fields
+                       if key not in ('st_ctime_ns', 'st_nlink'))
+                or event['after']['st_nlink'] != member['before']['st_nlink'] + 1
+                or any(event[key] != member[key] for key in ('sha256_before', 'sha256_after'))):
+            raise ValueError('Known custody creation event differs from original source')
+    selected_names = sorted(name for name, target in recorded['runtime_stamps']['snapshot_links'].items()
+                            if target is not None and Path(target).parent == source_root
+                            and Path(target).name in payload_names)
+    if names != selected_names:
+        raise ValueError('Known custody selected different native assets')
+    # Failed output is never adopted; surviving owned links remain explicit
+    # evidence. A removed link still has its original source ctime transition.
+    output_root = observations.get('output_root')
+    if (not isinstance(output_root, dict) or set(output_root) != {'path', 'device', 'inode', 'mode', 'uid'}):
+        raise ValueError('Known custody lacks its owned output root')
+    destination = Path(output_root['path'])
+    if not failed and destination != Path(operation['output_manifest']['path']).parent:
+        raise ValueError('Known custody output manifest belongs to another operation root')
+    if failed and os.path.lexists(destination / 'figure-inputs.complete.json'):
+        raise ValueError('Failed known custody output acquired a complete marker')
+    if (not destination.is_absolute() or str(destination) != os.path.normpath(str(destination))
+            or any(path.is_symlink() for path in (destination, *destination.parents))
+            or not destination.is_dir() or destination == source_root
+            or destination.is_relative_to(source_root) or source_root.is_relative_to(destination)
+            or destination.is_relative_to(root)):
+        raise ValueError('Unsafe known custody output root')
+    current = destination.stat()
+    if (current.st_dev, current.st_ino, current.st_mode, current.st_uid) != (
+            output_root['device'], output_root['inode'], output_root['mode'], output_root['uid']) or current.st_uid != os.geteuid():
+        raise ValueError('Known custody output identity changed')
+    remaining = observations.get('remaining_owned_links')
+    if not isinstance(remaining, list) or len({row.get('path') for row in remaining}) != len(remaining):
+        raise ValueError('Known custody remaining links are not exact')
+    remaining_by_name = {row['path']: row for row in remaining}
+    removed = observations.get('removed_owned_links', [])
+    if (not isinstance(removed, list) or len({row.get('path') for row in removed}) != len(removed)
+            or any(row.get('path') not in payload_names for row in removed)):
+        raise ValueError('Known custody removed links are not exact')
+    removed_by_name = {row['path']:row for row in removed}
+    if set(removed_by_name) & set(remaining_by_name) or (not failed and removed_by_name):
+        raise ValueError('Known custody mixed surviving and removed links')
+    if not set(remaining_by_name) <= payload_names:
+        raise ValueError('Known custody contains an unowned payload link')
+    for row in members:
+        count = row['after']['st_nlink'] - row['before']['st_nlink']
+        if row['before'] != row['after'] and count == 0:
+            event = removed_by_name.get(row['path'])
+            target = destination / row['path']
+            if (not isinstance(event, dict) or set(event) != {'path', 'target', 'before', 'after'}
+                    or event['target'] != str(target) or event['after'] != row['after']
+                    or not isinstance(event['before'], dict) or set(event['before']) != set(fields)
+                    or any(type(value) is not int for value in event['before'].values())
+                    or any(event['before'][key] != row['before'][key] for key in fields
+                           if key not in ('st_ctime_ns', 'st_nlink'))
+                    or event['before'] != events_by_name[row['path']]['after']
+                    or os.path.lexists(target)):
+                raise ValueError('Known custody cleanup lacks its explicit owned-target event')
+        elif row['path'] in removed_by_name:
+            raise ValueError('Known custody removal does not explain a source transition')
+        if count != int(row['path'] in remaining_by_name):
+            raise ValueError('Known custody nlink delta differs from its remaining owned links')
+        if row['path'] in remaining_by_name:
+            link = remaining_by_name[row['path']]
+            target = destination / row['path']
+            if (set(link) != {'path', 'target', 'stamp'} or link['target'] != str(target)
+                    or link['stamp'] != row['after'] or target.is_symlink() or not target.is_file()
+                    or any(getattr(target.stat(), key) != row['after'][key] for key in fields)):
+                raise ValueError('Known custody surviving link changed')
+    if not failed and set(remaining_by_name) != payload_names:
+        raise ValueError('Completed materialization did not retain all four links')
+    return failed
+
+
 def _closed_metadata_custody(root, recorded, expected_sha, receipt):
     # No payload, producer, logical Provider identity, or seal is rewritten.
     # Same-byte custody comes from an explicitly selected closed operation that
@@ -316,19 +469,23 @@ def _closed_metadata_custody(root, recorded, expected_sha, receipt):
     import stat
     if (not isinstance(receipt, dict) or set(receipt) != {'original_seal_sha256', 'operation', 'native_validation', 'names'} or
             receipt['original_seal_sha256'] != expected_sha or not isinstance(receipt['names'], list) or
-            not receipt['names'] or any(not isinstance(n, str) for n in receipt['names']) or
+            any(not isinstance(n, str) for n in receipt['names']) or
             receipt['names'] != sorted(set(receipt['names'])) or not set(receipt['names']) <= set(EXPANDER_SNAPSHOTS)):
         raise ValueError('Invalid metadata custody receipt selection')
     operation = _metadata_custody_json(receipt['operation']); native = _metadata_custody_json(receipt['native_validation'])
+    observations = _metadata_custody_json(operation['observations'])
+    known = isinstance(observations, dict) and observations.get('operation') == 'materialize-complete'
+    recovery = known and operation.get('outcome') == 'FAILED-PHYSICALLY-SOURCE-CLOSED'
     for evidence in (operation, native):
         if not isinstance(evidence, dict):
             raise ValueError('Invalid closed metadata custody evidence')
-        if (evidence.get('outcome') != 'PASSED-PHYSICALLY-SOURCE-CLOSED' or
+        expected_outcome = ('FAILED' if evidence is operation and recovery else 'PASSED') + '-PHYSICALLY-SOURCE-CLOSED'
+        if (evidence.get('outcome') != expected_outcome or
                 any(evidence.get(k) is not True for k in ('source_after', 'source_lease_released', 'allocation_released'))):
             raise ValueError('Metadata custody requires closed successful authorities')
     if (native.get('native_returncode') != 0 or native.get('ordinary_full_stream_validation') is not True or
             native.get('pages_executed') != 0 or native.get('compiler_executed') is not False or
-            native.get('repaired_manifest') != operation.get('output_manifest')):
+            (not known and native.get('repaired_manifest') != operation.get('output_manifest'))):
         raise ValueError('Metadata custody lacks matched full native validation')
     compatibility = _metadata_custody_json(native['compatibility'])
     if (not isinstance(compatibility, dict) or compatibility.get('returncode') != 0 or compatibility.get('ordinary_full_stream_validation') is not True or
@@ -336,13 +493,19 @@ def _closed_metadata_custody(root, recorded, expected_sha, receipt):
             compatibility.get('compiler_executed') is not False or
             compatibility.get('argv', [])[1:3] != ['--check-figure-compatibility', '--full']):
         raise ValueError('Metadata custody native result differs')
-    observations = _metadata_custody_json(operation['observations'])
-    if (not isinstance(observations, dict) or observations.get('complete') is not True or observations.get('source_content_mode_inode_preserved') is not True or
-            observations.get('linked_members') != operation.get('linked_members') or
-            observations.get('source_manifest_sha256') != operation['source_manifest']['sha256'] or
-            observations.get('repair_manifest_sha256') != operation['source_manifest']['sha256']):
+    if (not isinstance(observations, dict) or observations.get('source_content_mode_inode_preserved') is not True
+            or observations.get('linked_members') != operation.get('linked_members')
+            or observations.get('source_manifest_sha256') != operation['source_manifest']['sha256']):
         raise ValueError('Metadata custody operation observations differ')
-    _metadata_custody_json(operation['source_manifest']); _metadata_custody_json(operation['output_manifest'])
+    if known:
+        _materialized_custody_contract(root, recorded, operation, native, observations, receipt['names'])
+    elif (observations.get('operation') is not None or not receipt['names']
+            or observations.get('complete') is not True
+            or observations.get('repair_manifest_sha256') != operation['source_manifest']['sha256']):
+        raise ValueError('Metadata custody repair observations differ')
+    _metadata_custody_json(operation['source_manifest'])
+    if not recovery:
+        _metadata_custody_json(operation['output_manifest'])
     source_root = Path(operation['source_manifest']['path']).parent
     fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
     frozen_fields = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
@@ -360,7 +523,8 @@ def _closed_metadata_custody(root, recorded, expected_sha, receipt):
                 source.resolve(strict=True) != source or any(p.is_symlink() for p in (source, *source.parents)) or
                 not installed.is_symlink() or os.readlink(installed) != source_text):
             raise ValueError('Metadata custody changed an unrecorded Provider alias')
-        matches = [r for r in operation['linked_members'] if r.get('path') == source.name]
+        members = observations['original_members'] if known else operation['linked_members']
+        matches = [r for r in members if r.get('path') == source.name]
         if len(matches) != 1 or set(matches[0]) != {'path', 'before', 'after', 'sha256_before', 'sha256_after'}:
             raise ValueError('Metadata custody Provider operation is not unique')
         row = matches[0]; before, after = row['before'], row['after']
@@ -368,8 +532,8 @@ def _closed_metadata_custody(root, recorded, expected_sha, receipt):
                 any(type(v) is not int for v in [*before.values(), *after.values()]) or
                 any(before[k] != after[k] for k in fields if k not in ('st_ctime_ns', 'st_nlink')) or
                 not stat.S_ISREG(before['st_mode']) or before['st_nlink'] < 1 or after['st_nlink'] < 1 or
-                (before['st_ctime_ns'], before['st_nlink']) == (after['st_ctime_ns'], after['st_nlink']) or
-                [before[k] for k in frozen_fields] != recorded['runtime_stamps']['assets'][name]):
+                (not known and (before['st_ctime_ns'], before['st_nlink']) == (after['st_ctime_ns'], after['st_nlink'])) or
+                [before[k] for k in frozen_fields[:5 if known else 6]] != recorded['runtime_stamps']['assets'][name][:5 if known else 6]):
             raise ValueError('Metadata custody is not a recorded physical-only change')
         assets = [r for r in recorded['identity']['assets'] if r[0] == name]
         expected = [before['st_size'], row['sha256_before']]
@@ -421,14 +585,22 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, s
         return None
     _provider_update_provenance(recorded)
     original_recorded = recorded
-    if metadata_custody_refresh is not None:
-        if snapshot_metadata_refresh is not None or provider_update:
-            raise ValueError('Metadata custody requires an original ready context and separate authority')
-        recorded = _closed_metadata_custody(root, original_recorded, expected_sha, metadata_custody_refresh)
-    if snapshot_metadata_refresh is not None:
-        if provider_update:
-            raise ValueError('Snapshot refresh requires the original ready context')
-        recorded = _snapshot_metadata_refresh(root, recorded, expected_sha, snapshot_metadata_refresh)
+    def refreshed_context(original):
+        value = original
+        if snapshot_metadata_refresh is not None:
+            if provider_update:
+                raise ValueError('Snapshot refresh requires the original ready context')
+            value = _snapshot_metadata_refresh(root, value, expected_sha, snapshot_metadata_refresh)
+        if metadata_custody_refresh is not None:
+            if provider_update:
+                raise ValueError('Metadata custody requires an original ready context')
+            if snapshot_metadata_refresh is not None:
+                legacy = snapshot_metadata_refresh.get('snapshots', [snapshot_metadata_refresh])
+                if set(metadata_custody_refresh.get('names', [])) & {row['name'] for row in legacy}:
+                    raise ValueError('Snapshot and known-operation custody overlap')
+            value = _closed_metadata_custody(root, value, expected_sha, metadata_custody_refresh)
+        return value
+    recorded = refreshed_context(original_recorded)
     identity = recorded['identity']; stamps = recorded['runtime_stamps']
     if (set(stamps) != {'assets', 'plans', 'snapshot_links'} or
             type(identity.get('version')) is not int or identity.get('version') != COMPLETED_EXPANDER_VERSION):
@@ -484,12 +656,8 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, s
         raise ValueError('Frozen native context changed during validation')
     # This proves original context assets only. The custody caller must also
     # authorize the source/attempt and bind private tools, Python and live libs.
-    if snapshot_metadata_refresh is not None:
-        if _snapshot_metadata_refresh(root, original_recorded, expected_sha, snapshot_metadata_refresh) != recorded:
-            raise ValueError('Snapshot metadata refresh changed during validation')
-    if metadata_custody_refresh is not None:
-        if _closed_metadata_custody(root, original_recorded, expected_sha, metadata_custody_refresh) != recorded:
-            raise ValueError('Metadata custody changed during source validation')
+    if refreshed_context(original_recorded) != recorded:
+        raise ValueError('Metadata custody changed during source validation')
     return recorded
 
 

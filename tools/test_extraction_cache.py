@@ -3328,5 +3328,261 @@ class SitelinksProviderUpdateTests(unittest.TestCase):
                 self.assertEqual((root / cache.COMPLETED_EXPANDER).read_bytes(), old_seal)
 
 
+
+
+class KnownMaterializationCustodyTests(unittest.TestCase):
+    setUp = CompletedExpanderTests.setUp
+    fixture = CompletedExpanderTests.fixture
+    call = CompletedExpanderTests.call
+    binding = CompletedExpanderTests.binding
+    payload_names = ('file-metadata.tsv', 'figure-file-inventory.json', 'figure-sizing.json', 'figure-sizing.raw.json')
+
+    def known_fixture(self, *, failed=False, links=4, cleanup=0, prior=False, legacy=False):
+        from types import SimpleNamespace
+        root, dump, snapshots = self.fixture(ready=False)
+        source = self.base / ('known-source-' + str(self.sequence)); source.mkdir()
+        native_names = (*self.payload_names, 'figure-siteinfo.raw.json', 'figure-sizing.site.json')
+        for name in native_names:
+            path = source / name; path.write_bytes(('original ' + name).encode())
+            if name in cache.EXPANDER_SNAPSHOTS:
+                snapshots[name] = str(path); (root / name).symlink_to(path)
+        self.call('seal-expander', root, dump, snapshots); cache.shutil.rmtree(root / 'llvm')
+        (root / '.incomplete').unlink(); (root.parent / '.incomplete').write_bytes(b'expander ready')
+        seal = self.binding(root); original = cache.read_marker(root / cache.COMPLETED_EXPANDER)
+        def ref(path): return dict(path=str(path), bytes=path.stat().st_size, sha256=cache.sha256(path))
+        def write(path, value): path.write_text(json.dumps(value)); return ref(path)
+        def info(path): return {key:getattr(path.stat(),key) for key in ('st_dev','st_ino','st_mode','st_uid','st_gid','st_size','st_mtime_ns','st_ctime_ns','st_nlink')}
+        if prior:
+            cache.os.link(source / self.payload_names[0], self.base / ('prior-known-' + str(self.sequence)))
+        old_refresh = None
+        if legacy:
+            name = 'namespace-registry.tsv'; path = Path(snapshots[name])
+            cache.os.link(path, self.base / ('historical-namespace-' + str(self.sequence)))
+            old_refresh = dict(original_seal_sha256=seal, snapshots=[dict(name=name, source=str(path),
+                original_seal_sha256=seal, old_stamp=original['runtime_stamps']['assets'][name],
+                current_stamp=list(cache._full_stamp(path.stat())), current_nlink=path.stat().st_nlink,
+                ctime_cause='unknown', alias_stamp=list(cache._full_stamp((root/name).lstat())))])
+        artifacts = {name:dict(bytes=(source/name).stat().st_size, sha256=cache.sha256(source/name)) for name in native_names}
+        manifest = write(source / 'figure-inputs.manifest.json', dict(artifacts=artifacts))
+        before = {name:info(source/name) for name in self.payload_names}
+        output = self.base / ('known-output-' + str(self.sequence)); output.mkdir()
+        removed = []; events = []
+        for name in self.payload_names[:links]:
+            cache.os.link(source/name, output/name)
+            events.append(dict(path=name,before=before[name],after=info(source/name),
+                sha256_before=artifacts[name]['sha256'],sha256_after=cache.sha256(source/name)))
+        for name in self.payload_names[:cleanup]:
+            held = info(output/name); (output/name).unlink()
+            removed.append(dict(path=name,target=str(output/name),before=held,after=info(source/name)))
+        members = [dict(path=name,before=before[name],after=info(source/name),
+            sha256_before=artifacts[name]['sha256'],sha256_after=cache.sha256(source/name)) for name in self.payload_names]
+        touched = events
+        remaining = [dict(path=name,target=str(output/name),stamp=info(output/name)) for name in self.payload_names if (output/name).exists()]
+        state = output.stat(); directory = dict(path=str(output),device=state.st_dev,inode=state.st_ino,mode=state.st_mode,uid=state.st_uid)
+        observations = dict(operation='materialize-complete',complete=not failed,source_complete_verified=True,
+            source_content_mode_inode_preserved=True,source_manifest_sha256=manifest['sha256'],
+            original_members=members,linked_members=touched,remaining_owned_links=remaining,
+            removed_owned_links=removed,output_root=directory)
+        if failed: observations.update(new_output_adoption_allowed=False,failed_link_recovery_verified=True)
+        output_manifest = None if failed else write(output/'figure-inputs.manifest.json',dict(artifacts=artifacts))
+        common = dict(source_after=True,source_lease_released=True,allocation_released=True)
+        operation = dict(common,outcome=('FAILED' if failed else 'PASSED')+'-PHYSICALLY-SOURCE-CLOSED',
+            observations=None,linked_members=touched,source_manifest=manifest,output_manifest=output_manifest)
+        selected = manifest if failed else output_manifest
+        selected_root = Path(selected['path']).parent
+        if not failed:
+            for name in ('figure-siteinfo.raw.json','figure-sizing.site.json'):
+                (output/name).write_bytes((source/name).read_bytes())
+        native_argv = ['qualified-fixture-driver','--check-figure-compatibility','--full',
+            str(Path(snapshots['namespace-registry.tsv']).resolve()),
+            *(str(selected_root/name) for name in ('figure-siteinfo.raw.json','figure-sizing.json',
+                'figure-sizing.raw.json','figure-sizing.site.json'))]
+        compatibility = write(self.base/('known-native-result-'+str(self.sequence)+'.json'),dict(returncode=0,
+            ordinary_full_stream_validation=True,input_after=True,pages_executed=0,compiler_executed=False,
+            argv=native_argv))
+        native = dict(common,outcome='PASSED-PHYSICALLY-SOURCE-CLOSED',native_returncode=0,
+            ordinary_full_stream_validation=True,pages_executed=0,compiler_executed=False,
+            validated_manifest=selected,compatibility=compatibility)
+        receipt = dict(original_seal_sha256=seal,operation=None,native_validation=None,
+            names=sorted(name for name in self.payload_names if name in cache.EXPANDER_SNAPSHOTS))
+        f = SimpleNamespace(**locals())
+        self.publish_known(f)
+        return f
+
+    def publish_known(self, f):
+        prefix = self.base / ('known-proof-' + str(self.sequence))
+        f.operation['observations'] = f.write(prefix.with_suffix('.observations.json'), f.observations)
+        f.receipt['operation'] = f.write(prefix.with_suffix('.operation.json'), f.operation)
+        f.receipt['native_validation'] = f.write(prefix.with_suffix('.native.json'), f.native)
+
+    def known_context(self, f):
+        options = dict(metadata_custody_refresh=f.receipt)
+        if f.old_refresh is not None: options['snapshot_metadata_refresh'] = f.old_refresh
+        return cache.frozen_runtime_context(f.root,f.dump,f.seal,**options)
+
+    def test_complete_known_links_keep_original_native_identity_and_exact_owned_targets(self):
+        import stat
+        f = self.known_fixture(); raw = (f.root/cache.COMPLETED_EXPANDER).read_bytes()
+        with self.assertRaises(ValueError): cache.frozen_runtime_context(f.root,f.dump,f.seal)
+        current = self.known_context(f)
+        for key in ('identity','origin_graph','link','provenance'): self.assertEqual(current[key],f.original[key])
+        for name in f.receipt['names']:
+            self.assertEqual(current['runtime_stamps']['assets'][name],list(cache._full_stamp((f.root/name).stat())))
+        self.assertEqual((f.root/cache.COMPLETED_EXPANDER).read_bytes(),raw)
+        self.assertEqual(len(f.observations['remaining_owned_links']),4)
+        other = self.base / ('other-output-' + str(self.sequence)); other.mkdir()
+        value = other.stat()
+        f.observations['output_root'] = dict(path=str(other),device=value.st_dev,
+            inode=value.st_ino,mode=value.st_mode,uid=value.st_uid)
+        self.publish_known(f)
+        with self.assertRaisesRegex(ValueError,'another operation root'): self.known_context(f)
+
+    def test_failed_links_and_explicit_partial_cleanup_restore_only_original_context(self):
+        for links,cleanup in ((1,0),(2,1),(4,4),(0,0)):
+            with self.subTest(links=links,cleanup=cleanup):
+                f = self.known_fixture(failed=True,links=links,cleanup=cleanup)
+                raw = (f.root/cache.COMPLETED_EXPANDER).read_bytes(); current = self.known_context(f)
+                self.assertEqual(current['identity'],f.original['identity']); self.assertIsNone(f.operation['output_manifest'])
+                self.assertFalse(f.observations['new_output_adoption_allowed'])
+                self.assertEqual(len(f.observations['remaining_owned_links']),links-cleanup)
+                self.assertEqual(len(f.observations['removed_owned_links']),cleanup)
+                self.assertEqual((f.root/cache.COMPLETED_EXPANDER).read_bytes(),raw)
+
+    def test_known_full_revalidation_and_disjoint_historical_refresh_do_not_relabel_events(self):
+        f = self.known_fixture(failed=True,links=2,cleanup=1,prior=True,legacy=True)
+        current = self.known_context(f)
+        self.assertEqual(current['identity'],f.original['identity'])
+        self.assertNotIn('ctime_cause',f.observations)
+        self.assertEqual(current['runtime_stamps']['assets']['namespace-registry.tsv'],f.old_refresh['snapshots'][0]['current_stamp'])
+        f.old_refresh['snapshots'][0]['name'] = f.receipt['names'][0]
+        with self.assertRaises(ValueError): self.known_context(f)
+        with self.assertRaises(ValueError): cache.frozen_runtime_context(f.root,f.dump,f.seal,metadata_custody_refresh=f.receipt,provider_update=True)
+
+    def test_failed_recovery_refuses_unproved_cleanup_output_adoption_and_wrong_native_tuple(self):
+        for change in ('unverified','missing-original','missing-removal','foreign-removal','wrong-target',
+                       'new-output','wrong-native-root','repaired-label','unknown-mode','remaining-stamp','late-complete',
+                       'fictitious-root-flag','wrong-namespace','mixed-native-path','output-permission-mode'):
+            with self.subTest(change=change):
+                f = self.known_fixture(failed=True,links=2,cleanup=1)
+                if change=='unverified': f.observations['failed_link_recovery_verified']=False
+                elif change=='missing-original': f.observations['original_members'].pop()
+                elif change=='missing-removal': f.observations['removed_owned_links']=[]
+                elif change=='foreign-removal': f.observations['removed_owned_links'][0]['before']['st_ino']+=1
+                elif change=='wrong-target': f.observations['remaining_owned_links'][0]['target']=str(self.base/'foreign')
+                elif change=='new-output': f.observations['new_output_adoption_allowed']=True
+                elif change=='wrong-native-root': f.native['validated_manifest']=dict(f.operation['source_manifest'],path=str(f.output/'figure-inputs.manifest.json'))
+                elif change=='repaired-label': f.native['repaired_manifest']=f.operation['source_manifest']
+                elif change=='unknown-mode': f.observations['operation']='unknown'
+                elif change=='output-permission-mode': f.observations['output_root']['mode'] &= 0o777
+                elif change=='late-complete': (f.output/'figure-inputs.complete.json').write_text('{}')
+                elif change in ('fictitious-root-flag','wrong-namespace','mixed-native-path','output-permission-mode'):
+                    value=json.loads(Path(f.compatibility['path']).read_text())
+                    if change=='fictitious-root-flag': value['argv']=['qualified-fixture-driver','--check-figure-compatibility','--full','--figure-input-root',str(f.source)]
+                    elif change=='wrong-namespace': value['argv'][3]=str(self.base/'foreign-namespace')
+                    else: value['argv'][5]=str(f.output/'figure-sizing.json')
+                    f.native['compatibility']=f.write(Path(f.compatibility['path']),value)
+                else: f.observations['remaining_owned_links'][0]['stamp']['st_nlink']+=1
+                self.publish_known(f)
+                with self.assertRaises((ValueError,OSError)): self.known_context(f)
+
+    def test_known_custody_refuses_changed_bytes_inode_mode_mtime_and_unrecorded_links(self):
+        for change in ('bytes','inode','mode','mtime','extra-link','retarget','removed-reappeared'):
+            with self.subTest(change=change):
+                f = self.known_fixture(failed=True,links=2,cleanup=1); path=f.source/'figure-sizing.raw.json';old=path.stat()
+                if change=='bytes': path.write_bytes(b'x'*old.st_size);cache.os.utime(path,ns=(old.st_atime_ns,old.st_mtime_ns))
+                elif change=='inode': replacement=f.source/'replacement';replacement.write_bytes(path.read_bytes());replacement.replace(path)
+                elif change=='mode': path.chmod((old.st_mode&0o777)^0o100)
+                elif change=='mtime': cache.os.utime(path,ns=(old.st_atime_ns,old.st_mtime_ns+1))
+                elif change=='extra-link': cache.os.link(path,self.base/('unrecorded-'+str(self.sequence)))
+                elif change=='removed-reappeared': cache.os.link(f.source/self.payload_names[0],f.output/self.payload_names[0])
+                else:
+                    alias=f.root/'figure-sizing.json';alias.unlink();alias.symlink_to(f.source/'figure-sizing.raw.json')
+                with self.assertRaises(ValueError): self.known_context(f)
+
+    def test_known_custody_rechecks_authorities_and_source_after_native_source_binding(self):
+        f = self.known_fixture(failed=True,links=1)
+        old = cache.completed_source_binding
+        def mutate_after_source(root,dump):
+            value=old(root,dump)
+            path=Path(f.operation['observations']['path']);path.write_bytes(path.read_bytes()+b' ')
+            return value
+        with mock.patch.object(cache,'completed_source_binding',side_effect=mutate_after_source),self.assertRaises(ValueError):
+            self.known_context(f)
+
+    def test_actual_materializer_observations_keep_original_context_and_refuse_permission_only_mode(self):
+        import errno
+        import prepare_figure_metadata as figure
+        import test_prepare_figure_files as figure_tests
+        from types import SimpleNamespace
+        for failed in (False, True):
+            with self.subTest(failed=failed):
+                producer = figure_tests.OfflineFigureMaterializationTests()
+                producer.setUp(); self.addCleanup(producer.doCleanups)
+                args = producer.complete(); source = args.output
+                root, dump, snapshots = self.fixture(ready=False)
+                namespace = Path(snapshots['namespace-registry.tsv'])
+                namespace.write_bytes((source/'site-info.namespace-registry.tsv').read_bytes())
+                source_receipt = root/'extraction-source.json'
+                value = json.loads(source_receipt.read_text())
+                value['namespace_sha256'] = list(bytes.fromhex(cache.sha256(namespace)))
+                source_receipt.write_text(json.dumps(value))
+                for name in (*self.payload_names, 'figure-siteinfo.raw.json', 'figure-sizing.site.json'):
+                    if name in cache.EXPANDER_SNAPSHOTS:
+                        snapshots[name] = str(source/name); (root/name).symlink_to(source/name)
+                self.call('seal-expander', root, dump, snapshots)
+                cache.shutil.rmtree(root/'llvm'); (root/'.incomplete').unlink()
+                (root.parent/'.incomplete').write_bytes(b'expander ready')
+                seal = self.binding(root); original = cache.read_marker(root/cache.COMPLETED_EXPANDER)
+                marker_before = (root/cache.COMPLETED_EXPANDER).read_bytes()
+                observations = {}; output = producer.root/'custody-produced'
+                if failed:
+                    link = figure.os.link; calls = []
+                    def fail_third(*args, **kwargs):
+                        calls.append(args)
+                        if len(calls) == 3: raise OSError(errno.ENOSPC, 'owned fixture failure')
+                        return link(*args, **kwargs)
+                    with mock.patch.object(figure.os, 'link', side_effect=fail_third), self.assertRaises(OSError):
+                        figure.materialize_complete_capture(source/figure.MANIFEST, output,
+                            link_current_payloads=True, observations=observations)
+                    self.assertTrue(observations['failed_link_recovery_verified'])
+                    self.assertFalse(observations['complete'])
+                    self.assertEqual(len(observations['remaining_owned_links']), 2)
+                else:
+                    figure.materialize_complete_capture(source/figure.MANIFEST, output,
+                        link_current_payloads=True, observations=observations)
+                    self.assertTrue(observations['complete'])
+                self.assertEqual(observations['output_root']['mode'], output.stat().st_mode)
+                self.assertNotEqual(observations['output_root']['mode'], output.stat().st_mode & 0o777)
+                def ref(path): return dict(path=str(path),bytes=path.stat().st_size,sha256=cache.sha256(path))
+                def write(path, value): path.write_text(json.dumps(value)); return ref(path)
+                manifest = ref(source/figure.MANIFEST)
+                selected = manifest if failed else ref(output/figure.MANIFEST)
+                common = dict(source_after=True, source_lease_released=True, allocation_released=True)
+                operation = dict(common,outcome=('FAILED' if failed else 'PASSED')+'-PHYSICALLY-SOURCE-CLOSED',
+                    observations=None,linked_members=observations['linked_members'],source_manifest=manifest,
+                    output_manifest=None if failed else selected)
+                selected_root = Path(selected['path']).parent
+                compatibility = write(self.base/('produced-native-'+str(self.sequence)+'.json'),
+                    dict(returncode=0,ordinary_full_stream_validation=True,input_after=True,
+                        pages_executed=0,compiler_executed=False,
+                        argv=['qualified-fixture-driver','--check-figure-compatibility','--full',str(namespace),
+                            *(str(selected_root/name) for name in ('figure-siteinfo.raw.json','figure-sizing.json',
+                                'figure-sizing.raw.json','figure-sizing.site.json'))]))
+                native = dict(common,outcome='PASSED-PHYSICALLY-SOURCE-CLOSED',native_returncode=0,
+                    ordinary_full_stream_validation=True,pages_executed=0,compiler_executed=False,
+                    validated_manifest=selected,compatibility=compatibility)
+                receipt = dict(original_seal_sha256=seal,operation=None,native_validation=None,
+                    names=sorted(name for name in self.payload_names if name in cache.EXPANDER_SNAPSHOTS))
+                f = SimpleNamespace(**locals(),old_refresh=None)
+                self.publish_known(f)
+                current = self.known_context(f)
+                self.assertEqual(current['identity'], original['identity'])
+                self.assertEqual((root/cache.COMPLETED_EXPANDER).read_bytes(), marker_before)
+                observations['output_root']['mode'] &= 0o777
+                self.publish_known(f)
+                with self.assertRaisesRegex(ValueError, 'output identity changed'): self.known_context(f)
+
+
+
 if __name__ == "__main__":
     unittest.main()

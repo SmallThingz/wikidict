@@ -3931,11 +3931,67 @@ def initial_sealed_role_successor(original, native_roles):
             raise ValueError('Initial sealed successor authority changed')
 
 
+def initial_sealed_context_options(selected, native_roles):
+    """Retain the exact existing custody authorities selected for this worker."""
+    options = {}
+    references = []
+    for name in ('snapshot_metadata_refresh', 'metadata_custody_refresh'):
+        if name in selected:
+            reference = selected[name]
+            options[name] = prepared_metadata(reference)
+            references.append(reference)
+    if 'metadata_custody_refresh' in options:
+        if any(name in selected for name in ('file_metadata_provider_update', 'sitelinks_provider_update')):
+            raise ValueError('Initial metadata custody cannot mix Provider updates')
+        receipt = options['metadata_custody_refresh']
+        operation = prepared_metadata(receipt['operation'])
+        native = prepared_metadata(receipt['native_validation'])
+        references.extend([receipt['operation'], receipt['native_validation'],
+                           operation['observations'], operation['source_manifest'], native['compatibility']])
+        if operation.get('output_manifest') is not None:
+            references.append(operation['output_manifest'])
+    for reference in references:
+        observed = native_roles.bind_input(Path(reference['path']))
+        if any(observed[key] != reference[key] for key in ('path', 'bytes', 'sha256')):
+            raise ValueError('Initial metadata custody authority changed')
+    return options
+
+
+def require_initial_custody_inputs(options, auxiliary_snapshots, build_identity):
+    """A failed known event can restore only its original selected complete tuple."""
+    receipt = options.get('metadata_custody_refresh')
+    if receipt is None:
+        return
+    operation = prepared_metadata(receipt['operation'])
+    observations = prepared_metadata(operation['observations'])
+    if observations.get('operation') != 'materialize-complete':
+        return
+    failed = operation.get('outcome') == 'FAILED-PHYSICALLY-SOURCE-CLOSED'
+    source = operation['source_manifest']
+    allowed = {Path(source['path']).parent:source}
+    if not failed:
+        output = operation['output_manifest']
+        allowed[Path(output['path']).parent] = output
+    paths = {}
+    for name in (*FIGURE_SNAPSHOT_FILES, 'file-metadata'):
+        path = Path((auxiliary_snapshots or {}).get(name, ''))
+        if not path.is_absolute():
+            raise ValueError('Initial known custody requires its complete selected Figure tuple')
+        paths[name] = path.resolve(strict=True)
+    roots = {path.parent for path in paths.values()}
+    if len(roots) != 1 or next(iter(roots)) not in allowed:
+        raise ValueError('Failed metadata custody cannot adopt another Figure output')
+    selected = allowed[next(iter(roots))]
+    manifests = build_identity.get('auxiliary_capture_sha256', {})
+    if any(manifests.get(name) != selected['sha256'] for name in paths):
+        raise ValueError('Initial known custody selected another Figure manifest')
+
+
 def initial_sealed_generation(reference, native_roles):
     """Read a selected closed direct preparation, without inventing old shard state."""
     selected = prepared_metadata(reference)
     if (not {'preparation_result','preparation_closure'} <= set(selected)
-            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh','file_metadata_provider_update','sitelinks_provider_update'}):
+            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh','metadata_custody_refresh','file_metadata_provider_update','sitelinks_provider_update'}):
         raise ValueError('Invalid initial sealed generation selection')
     if 'file_metadata_provider_update' in selected and 'sitelinks_provider_update' in selected:
         raise ValueError('Mixed initial Provider update families')
@@ -4085,15 +4141,16 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
             raise ValueError('Initial Provider update differs from its authenticated constructor')
         expected_context=getattr(native_roles,'closed_native_origin',None)
         if expected_context is None:raise ValueError('Initial Provider update lacks a closed native origin')
-    if 'snapshot_metadata_refresh' in selected:
-        context_options = getattr(native_roles,'_closed_native_context_options',{})
-        if context_options != {'snapshot_metadata_refresh':prepared_metadata(selected['snapshot_metadata_refresh'])}:
-            raise ValueError('Initial snapshot refresh does not match its authenticated constructor')
-        expected_context = getattr(native_roles,'closed_native_origin',None)
+    context_options = initial_sealed_context_options(selected, native_roles)
+    if context_options:
+        if context_options != getattr(native_roles, '_closed_native_context_options', {}):
+            raise ValueError('Initial metadata custody differs from its authenticated constructor')
+        expected_context = getattr(native_roles, 'closed_native_origin', None)
         if expected_context is None:
-            raise ValueError('Initial snapshot refresh lacks its closed native origin')
-    elif getattr(native_roles,'_closed_native_context_options',{}):
-        raise ValueError('Initial snapshot metadata refresh selection changed')
+            raise ValueError('Initial metadata custody lacks its closed native origin')
+    elif getattr(native_roles, '_closed_native_context_options', {}):
+        raise ValueError('Initial metadata custody selection changed')
+    require_initial_custody_inputs(context_options, auxiliary_snapshots, build_identity)
     selected_role = native_roles.records['dict-bundle-build']
     dependencies = selected_role['dependencies']
     graph = seal['origin_graph']
@@ -4159,7 +4216,18 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
             or (after.st_dev, after.st_ino, after.st_mode, after.st_uid) != source_identity):
         raise ValueError('Initial sealed native producer changed')
     native_roles.require_unchanged()
-    if cache.frozen_runtime_context(root, dump, seal_reference['sha256'],**context_options) != expected_context:
+    checked_context = (getattr(native_roles, 'initial_sealed_context', None)
+                       or getattr(native_roles, '_closed_native_context', None))
+    if closed_origin is not None and checked_context is not None:
+        # require_unchanged just replayed the full frozen-context validator and
+        # compared its result with this exact origin. Reuse only that same call's
+        # pins here; the earlier and final adoption validators remain separate.
+        if (checked_context != (root, Path(dump), seal_reference['sha256'])
+                or getattr(native_roles, '_closed_native_context_options', {}) != context_options
+                or getattr(native_roles, 'closed_native_origin', None) is not closed_origin
+                or closed_origin != expected_context):
+            raise ValueError('Initial sealed checked context differs from adoption')
+    elif cache.frozen_runtime_context(root, dump, seal_reference['sha256'],**context_options) != expected_context:
         raise ValueError('Initial sealed generation is not finalized')
     assets = {name: (size, digest) for name, size, digest in seal['identity']['assets']}
     for key, name in (('worker', 'dict-bundle-expander'), ('metadata', 'lua-program.meta'),
@@ -5202,18 +5270,20 @@ class RetainedNativeToolRoles:
             update_references.extend([update[k]for k in ('result','closure','input_authority','original_seal_archive','current_seal','helper','wire_correspondence')])
         ready_seal_reference=reference
         producer=seal['identity']['producer']
-        options = {}
-        if 'snapshot_metadata_refresh' in selected:
-            refresh = prepared_metadata(selected['snapshot_metadata_refresh'])
-            options['snapshot_metadata_refresh'] = refresh
+        options = initial_sealed_context_options(selected, self)
         context = cache.frozen_runtime_context(root,Path(plan['dump']['path']),reference['sha256'],**options)
         comparable = context
         if context is not None and options:
             comparable = dict(context)
             comparable['runtime_stamps'] = dict(context['runtime_stamps'])
             comparable['runtime_stamps']['assets'] = dict(context['runtime_stamps']['assets'])
-            for member in refresh.get('snapshots',[refresh]):
-                name = member['name']
+            names = []
+            if 'snapshot_metadata_refresh' in options:
+                refresh = options['snapshot_metadata_refresh']
+                names.extend(member['name'] for member in refresh.get('snapshots', [refresh]))
+            if 'metadata_custody_refresh' in options:
+                names.extend(options['metadata_custody_refresh']['names'])
+            for name in names:
                 comparable['runtime_stamps']['assets'][name] = ready_seal['runtime_stamps']['assets'][name]
         if seal.get('provenance')!='ordinary-linked-expander' or comparable != ready_seal:
             raise ValueError('Selected closed execution origin is not finalized')
@@ -5776,7 +5846,6 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
                 post_started=time.monotonic()
                 if source_fingerprint()!=source or sha256_file(compiler)!=compiler_sha:
                     raise ValueError('Source or compiler changed during retained role selection')
-                retained_roles.require_unchanged()
                 outcome.update(preparation='retained-role-selection', orchestration_source=source,
                     zig_sha256=compiler_sha, native_role_provenance=retained_roles.provenance(),
                     selected_native_artifacts={name:dict(path=str(tool.path),bytes=tool.stamp[2],

@@ -13011,8 +13011,6 @@ class RetainedCompilationEnvelopeTests(unittest.TestCase):
             with self.assertRaises(ValueError): b.retained_compilation_source(f.current['dict-blob-build'], f.roles)
 
 
-
-
 class ClosedWholeRetainedPreimageTests(unittest.TestCase):
     def fixture(self, root):
         f = RetainedNativeRoleTests().closed_whole_fixture(root)
@@ -13074,6 +13072,271 @@ class ClosedWholeRetainedPreimageTests(unittest.TestCase):
                 roles=b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler));roles.require_unchanged()
                 c.snapshots[0].write_bytes(c.snapshots[0].read_bytes()+b'changed')
                 with self.assertRaises(ValueError): roles.require_unchanged()
+
+
+class InitialSealedKnownCustodyTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def fixture(self, *, failed=False):
+        with ReadonlyPreparedRetainedTests().fixture() as f:
+            source=f.root/'old-complete-figure';source.mkdir()
+            outputs={}
+            for name in (*b.FIGURE_SNAPSHOT_FILES,'file-metadata'):
+                path=source/b.auxiliary_snapshot_filename(name);path.write_bytes(('original '+name).encode())
+                outputs[name]=path;item=_initial_sealed_reference(path)
+                f.seal['identity']['providers'][path.name]=[item['bytes'],item['sha256']]
+                f.seal['identity']['assets'].append([path.name,item['bytes'],item['sha256']])
+            old_stamp=[1,2,33188,3,4,5];current_stamp=[1,2,33188,3,4,6]
+            f.seal['runtime_stamps']=dict(assets={name:old_stamp[:] for name in ('namespace-registry.tsv','figure-sizing.json')},plans=[],snapshot_links={})
+            InitialSealedGenerationTests().reseal_graph(f.f)
+            manifest=_initial_sealed_write(source/'figure-inputs.manifest.json',dict(complete=True))
+            destination=f.root/'new-figure-output';destination.mkdir()
+            output_manifest=None if failed else _initial_sealed_write(destination/'figure-inputs.manifest.json',dict(complete=True))
+            observations=_initial_sealed_write(f.root/'known-observations.json',dict(operation='materialize-complete',complete=not failed,new_output_adoption_allowed=not failed))
+            operation=_initial_sealed_write(f.root/'known-operation.json',dict(outcome=('FAILED' if failed else 'PASSED')+'-PHYSICALLY-SOURCE-CLOSED',source_manifest=manifest,output_manifest=output_manifest,observations=observations))
+            native_result=_initial_sealed_write(f.root/'known-native-result.json',dict(returncode=0))
+            native=_initial_sealed_write(f.root/'known-native-close.json',dict(compatibility=native_result))
+            receipt=dict(original_seal_sha256=f.f.seal_ref['sha256'],operation=operation,native_validation=native,names=['figure-sizing.json'])
+            authority=_initial_sealed_write(f.root/'known-custody.json',receipt)
+            legacy=dict(original_seal_sha256=f.f.seal_ref['sha256'],snapshots=[dict(name='namespace-registry.tsv',current_stamp=current_stamp)])
+            legacy_ref=_initial_sealed_write(f.root/'legacy-unknown.json',legacy)
+            selected=b.prepared_metadata(f.f.selection);selected.update(metadata_custody_refresh=authority,snapshot_metadata_refresh=legacy_ref)
+            selection=_initial_sealed_write(f.root/'known-initial-selection.json',selected)
+            records=copy.deepcopy(f.records);records['dict-bundle-build']['initial_sealed_generation']=selection
+            context=copy.deepcopy(f.seal)
+            for name in ('namespace-registry.tsv','figure-sizing.json'):context['runtime_stamps']['assets'][name]=current_stamp[:]
+            options=dict(snapshot_metadata_refresh=legacy,metadata_custody_refresh=receipt)
+            calls=[]
+            def frozen(root,dump,sha,**actual):
+                self.assertEqual(actual,options);self.assertEqual(sha,f.f.seal_ref['sha256']);calls.append(actual)
+                return copy.deepcopy(context)
+            # Physical link validation is covered by the real cache tests. Here
+            # this existing native-observation seam isolates constructor/adoption
+            # authority transport and refusal before any ordinary state write.
+            with patch.object(f.native_cache,'frozen_runtime_context',side_effect=frozen):
+                roles=b.RetainedNativeToolRoles(records,zig_sha256=f.identity['zig_sha256'])
+                fresh=copy.copy(f.f);fresh.identity=copy.deepcopy(f.identity);fresh.expected=copy.deepcopy(f.expected)
+                fresh.identity['native_tool_roles']=roles.provenance()
+                for name,path in outputs.items():
+                    for value in (fresh.identity,fresh.expected):
+                        value['auxiliary_snapshot_sha256'][name]=_initial_sealed_reference(path)['sha256']
+                fresh.identity['auxiliary_capture_sha256']={name:manifest['sha256'] for name in outputs}
+                fresh.destination=f.root/'known-output/viwiktionary/20261001.shards';fresh.selection=selection
+                yield SimpleNamespace(**locals())
+
+    def test_known_initial_custody_adopts_same_worker_and_binds_each_authority(self):
+        for failed in (False,True):
+            with self.subTest(failed=failed),self.fixture(failed=failed)as c:
+                raw=(c.f.expander/'.completed-expander.json').read_bytes()
+                self.assertEqual(InitialSealedGenerationTests().adopt(c.fresh,native_roles=c.roles,auxiliary_snapshots=c.outputs),123)
+                self.assertEqual(c.roles._closed_native_context_options,c.options)
+                for item in (c.authority,c.operation,c.observations,c.native,c.native_result,c.manifest):
+                    self.assertIn(Path(item['path']),c.roles.inputs)
+                reopened=b.RetainedNativeToolRoles.from_prepared_dispatch(c.roles.prepared_dispatch(),_authenticated_origin=c.roles)
+                self.assertEqual(reopened._closed_native_context_options,c.options);reopened.require_unchanged()
+                self.assertEqual((c.f.expander/'.completed-expander.json').read_bytes(),raw)
+
+    def test_failed_known_custody_refuses_new_tuple_manifest_and_stale_selection(self):
+        for change in ('new-root','capture-hash','stale-selection','late-operation'):
+            with self.subTest(change=change),self.fixture(failed=True)as c:
+                snapshots=dict(c.outputs)
+                if change=='new-root':
+                    for name,path in snapshots.items():
+                        target=c.destination/path.name;target.write_bytes(path.read_bytes());snapshots[name]=target
+                elif change=='capture-hash':c.fresh.identity['auxiliary_capture_sha256']['file-metadata']='0'*64
+                elif change=='stale-selection':c.fresh.selection=c.f.f.selection
+                else:Path(c.operation['path']).write_bytes(Path(c.operation['path']).read_bytes()+b' ')
+                with self.assertRaises((ValueError,OSError)):
+                    InitialSealedGenerationTests().adopt(c.fresh,native_roles=c.roles,auxiliary_snapshots=snapshots)
+                self.assertFalse((c.fresh.destination/'state.json').exists())
+
+    def test_known_custody_missing_mixed_and_late_receipts_never_grant_state(self):
+        for change in ('missing-native','mixed-provider','extra-context','late-compatibility'):
+            with self.subTest(change=change),self.fixture()as c:
+                if change=='missing-native':Path(c.native['path']).unlink()
+                elif change=='mixed-provider':
+                    mixed=dict(c.selected,sitelinks_provider_update={})
+                    with self.assertRaises(ValueError):b.initial_sealed_context_options(mixed,c.roles)
+                    continue
+                elif change=='extra-context':c.context['identity']['producer']['abi'][0][1]='0'*64
+                else:Path(c.native_result['path']).write_bytes(Path(c.native_result['path']).read_bytes()+b' ')
+                with self.assertRaises((ValueError,OSError)):
+                    InitialSealedGenerationTests().adopt(c.fresh,native_roles=c.roles,auxiliary_snapshots=c.outputs)
+                self.assertFalse((c.fresh.destination/'state.json').exists())
+
+
+class InitialSealedContextReuseTests(unittest.TestCase):
+    fixture = InitialSealedGenerationTests.fixture
+    adopt = InitialSealedGenerationTests.adopt
+    contexts = InitialSealedGenerationTests.contexts
+
+    def guarded_fixture(self, root):
+        f = self.fixture(root)
+        f.roles.closed_native_origin = copy.deepcopy(f.seal)
+        f.roles._closed_native_context = (f.expander, f.dump, f.seal_ref['sha256'])
+        f.roles._closed_native_context_options = {}
+        f.roles.input_identities = {}
+        f.roles.tools = {}
+        f.roles.bind_input = lambda path, retain=True: b.RetainedNativeToolRoles.bind_input(f.roles, path, retain=retain)
+        f.roles.closed_execution_resolution = lambda root: None
+        f.roles.require_unchanged = lambda: b.RetainedNativeToolRoles.require_unchanged(f.roles)
+        return f
+
+    def test_initial_adoption_reuses_only_adjacent_full_context_check_and_preserves_outputs(self):
+        self.check_adoption(5)
+
+    def check_adoption(self, expected_calls):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.guarded_fixture(Path(tmp))
+            seal_before = (f.expander/'.completed-expander.json').read_bytes()
+            artifacts_before = {name: dict(row['artifact']) for name, row in f.records.items()}
+            with self.contexts(f)[0], self.contexts(f)[1] as frozen, self.contexts(f)[2]:
+                self.assertEqual(self.adopt(f), 123)
+                self.assertEqual(frozen.call_count, expected_calls)
+                for call in frozen.call_args_list:
+                    self.assertEqual(call.args, (f.expander, f.dump, f.seal_ref['sha256']))
+                    self.assertEqual(call.kwargs, {})
+                self.assertEqual(self.adopt(f), 123)
+                self.assertEqual(frozen.call_count, 2 * expected_calls)
+            self.assertEqual((f.expander/'.completed-expander.json').read_bytes(), seal_before)
+            self.assertEqual({name: row['artifact'] for name, row in f.records.items()}, artifacts_before)
+            for name, expected in artifacts_before.items():
+                actual = _initial_sealed_reference(Path(expected['path']))
+                self.assertEqual(actual, {key: expected[key] for key in ('path', 'bytes', 'sha256')})
+            state = b.read_build_envelope(f.destination/'state.json')
+            self.assertEqual(state['native_generation']['seal_sha256'], f.seal_ref['sha256'])
+            self.assertEqual(state['native_generation']['build_inputs'], f.identity)
+            return dict(context_calls_per_adoption=expected_calls, total_calls=frozen.call_count,
+                artifacts={name: {key: row[key] for key in ('bytes', 'sha256')} for name, row in artifacts_before.items()},
+                snapshots=state['auxiliary_snapshot_sha256'])
+
+    def test_initial_adoption_reuse_keeps_all_context_failure_boundaries(self):
+        for boundary in (1, 2, 3, 4, 5):
+            for change in ('missing', 'changed', 'error'):
+                with self.subTest(boundary=boundary, change=change), tempfile.TemporaryDirectory() as tmp:
+                    f = self.guarded_fixture(Path(tmp))
+                    calls = []
+                    failure = ValueError('original frozen context failure')
+                    def verify(*args, **kwargs):
+                        calls.append((args, kwargs))
+                        if len(calls) == boundary:
+                            if change == 'error':
+                                raise failure
+                            if change == 'missing':
+                                return None
+                            result = copy.deepcopy(f.seal)
+                            result['identity']['producer'] = {'changed': True}
+                            return result
+                        return copy.deepcopy(f.seal)
+                    with self.contexts(f)[0], self.contexts(f)[1] as frozen, self.contexts(f)[2]:
+                        frozen.side_effect = verify
+                        with self.assertRaises(ValueError) as raised:
+                            self.adopt(f)
+                    if change == 'error':
+                        self.assertIs(raised.exception, failure)
+                    self.assertEqual(len(calls), boundary)
+                    self.assertFalse((f.destination/'state.json').exists())
+
+    def test_initial_adoption_reuse_refuses_changed_exact_context_pins(self):
+        for change in ('root', 'dump', 'digest', 'options', 'origin'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                f = self.guarded_fixture(Path(tmp))
+                real_guard = f.roles.require_unchanged
+                guard_calls = []
+                def changed_after_guard():
+                    real_guard()
+                    guard_calls.append(True)
+                    if len(guard_calls) != 2:
+                        return
+                    root, dump, digest = f.roles._closed_native_context
+                    if change == 'root':
+                        f.roles._closed_native_context = (f.root/'other', dump, digest)
+                    elif change == 'dump':
+                        f.roles._closed_native_context = (root, f.root/'other-dump', digest)
+                    elif change == 'digest':
+                        f.roles._closed_native_context = (root, dump, '0'*64)
+                    elif change == 'options':
+                        f.roles._closed_native_context_options = {'provider_update': True}
+                    else:
+                        f.roles.closed_native_origin = copy.deepcopy(f.roles.closed_native_origin)
+                f.roles.require_unchanged = changed_after_guard
+                with self.contexts(f)[0], self.contexts(f)[1] as frozen, self.contexts(f)[2]:
+                    with self.assertRaisesRegex(ValueError, 'checked context differs'):
+                        self.adopt(f)
+                    self.assertEqual(frozen.call_count, 3)
+                self.assertFalse((f.destination/'state.json').exists())
+
+
+class RetainedPreparationContextReuseTests(unittest.TestCase):
+    def test_retained_prepare_keeps_later_full_guard_without_adjacent_duplicate(self):
+        self.check_retained_prepare()
+
+    def check_retained_prepare(self, *, baseline=False):
+        import extraction_cache as cache
+        observations = []
+        for writable in (False, True):
+            for change in (('allowed',) if baseline else ('allowed', 'artifact-after', 'dependency-after', 'validator-error')):
+                with self.subTest(writable=writable, change=change), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    records, compiler = RetainedNativeRoleTests().fixture(root)
+                    if writable:
+                        for name in b.BLOB_TOOL_NAMES:
+                            Path(records[name]['artifact']['path']).chmod(0o755)
+                            records[name]['artifact']['mode'] = 0o755
+                    roles = b.RetainedNativeToolRoles(records, zig_sha256=b.sha256_file(compiler))
+                    identity = dict(source='current-orchestration', zig_sha256=b.sha256_file(compiler),
+                                    native_tool_roles=roles.provenance())
+                    roles._closed_native_context = (root/'context', root/'dump', '0'*64)
+                    roles._closed_native_context_options = {}
+                    roles.closed_native_origin = {'fixture': 'unchanged sealed origin'}
+                    roles.closed_execution_resolution = lambda root: None
+                    calls = []; source_calls = []; events = []
+                    expected_calls = (12 if writable else 3) + int(baseline)
+                    original_error = ValueError('original post-preparation context failure')
+                    def frozen(*args, **options):
+                        self.assertEqual(args, roles._closed_native_context)
+                        self.assertEqual(options, {})
+                        calls.append(args)
+                        if change == 'validator-error' and len(calls) == expected_calls:
+                            raise original_error
+                        return copy.deepcopy(roles.closed_native_origin)
+                    def fingerprint():
+                        source_calls.append(True)
+                        if len(source_calls) == 2:
+                            if change == 'artifact-after':
+                                replacement = root/'changed-role'
+                                replacement.write_bytes(b'changed retained tool')
+                                os.replace(replacement, roles.tools['dict-blob-build'].path)
+                            elif change == 'dependency-after':
+                                Path(records['dict-blob-build']['dependencies']['worker_object']['path']).write_bytes(b'changed dependency')
+                        return identity['source']
+                    with patch.object(cache, 'frozen_runtime_context', side_effect=frozen), \
+                            patch.object(b, 'source_fingerprint', side_effect=fingerprint), \
+                            patch.object(b, 'run_checked', side_effect=AssertionError('unexpected compile')), \
+                            patch.object(b, 'timed_run', side_effect=AssertionError('unexpected native dispatch')), \
+                            patch.object(b, 'phase_event', side_effect=lambda *args, **kw: events.append(kw)), \
+                            patch.object(b._PREPARED_SOURCE, 'request', None, create=True), \
+                            patch.object(b._PREPARED_SOURCE, 'value', None, create=True):
+                        if change == 'allowed':
+                            tools = b.prepare_blob_tools(root/'workspace', str(compiler), 'testwiktionary', '20261001', identity, retained_roles=roles)
+                            self.assertEqual(set(tools), set(b.BLOB_TOOL_NAMES))
+                            for name, tool in tools.items():
+                                actual = _initial_sealed_reference(tool.path)
+                                self.assertEqual((actual['bytes'], actual['sha256']), (records[name]['artifact']['bytes'], records[name]['artifact']['sha256']))
+                                self.assertEqual(stat.S_IMODE(tool.path.stat().st_mode), 0o555)
+                            self.assertEqual(events[-1]['native_role_provenance'], records)
+                            self.assertEqual(events[-1]['preparation'], 'retained-role-selection')
+                        else:
+                            with self.assertRaises(ValueError) as raised:
+                                b.prepare_blob_tools(root/'workspace', str(compiler), 'testwiktionary', '20261001', identity, retained_roles=roles)
+                            if change == 'validator-error':
+                                self.assertIs(raised.exception, original_error)
+                            self.assertNotIn('selected_native_artifacts', events[-1])
+                    self.assertEqual(len(calls), expected_calls)
+                    self.assertEqual(len(source_calls), 2)
+                    if change == 'allowed':
+                        observations.append(dict(writable=writable, context_calls=len(calls),
+                            artifacts={name: {key: row['artifact'][key] for key in ('bytes', 'sha256')} for name, row in records.items()}))
+        return observations
 
 
 if __name__=='__main__':unittest.main()
