@@ -6881,7 +6881,7 @@ class OfflinePolicyReprojectionTests(unittest.TestCase):
                 write=figure.write_projection_stream;verify=figure.verify
                 def writer(path,document,**kwargs):
                     if mode=='projection':
-                        document=copy.deepcopy(document)
+                        document=copy.deepcopy(dict(document,records=list(document['records'])))
                         next(row for row in document['records'] if row['requested_file'].endswith('.tif'))['state']='unsupported'
                     result=write(path,document,**kwargs)
                     if mode=='provider':(output/figure.PROVIDER).write_bytes(b'corrupted\n')
@@ -7797,7 +7797,7 @@ class MaterializedPolicyReprojectionTests(unittest.TestCase):
                 writer, verifier = figure.write_projection_stream, figure.verify
                 def write(path, document, **options):
                     if mutation == 'projection':
-                        document = copy.deepcopy(document)
+                        document = copy.deepcopy(dict(document, records=list(document['records'])))
                         next(row for row in document['records'] if row['requested_file'].endswith('.tif'))['state'] = 'unsupported'
                     result = writer(path, document, **options)
                     if mutation == 'provider': (output/figure.PROVIDER).write_bytes(b'corrupt\n')
@@ -8970,6 +8970,146 @@ class StaticWebPPinnedRepairTests(unittest.TestCase):
         self.assertTrue(output.exists())
         self.assertFalse((output/figure.COMPLETE).exists())
         self.assertEqual(before, {p.name:p.read_bytes() for p in source.iterdir()})
+
+
+class ReprojectionRecordReuseTests(unittest.TestCase):
+    def source(self):
+        self.owner = ExplicitProfileReprojectionTests()
+        self.owner.setUp()
+        self.addCleanup(self.owner.doCleanups)
+        root, _ = self.owner.parent()
+        namespace = (root / (figure.site_info.PREFIX + 'namespace-registry.tsv')).read_bytes()
+        site = (root / figure.ROLES['figure-sizing-site']).read_bytes()
+        args = (root / figure.ROLES['figure-sizing-raw'], namespace,
+                self.owner.fixture.wiki, self.owner.fixture.date, site)
+        options = dict(profile_kind=figure.FIGURE_PROFILE_V4, allow_tiff_companion=True,
+            allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True,
+            allow_default_tiff_page=False)
+        return root, args, options
+
+    def test_exact_written_records_compare_independently_and_transfer_once(self):
+        root, args, options = self.source()
+        real = figure.figure_stream_document
+        with patch.object(figure, 'figure_stream_document', wraps=real) as derive:
+            owned = figure._ReprojectionRecords(*args, figure.REPLAY_CONTRACT_V4, **options)
+            self.assertEqual(derive.call_count, 1)
+            projection = root / 'comparison.json'
+            owned.write(projection)
+            reused = figure.verify_stream_document(projection, *args, _reprojection_records=owned)
+            self.assertEqual(derive.call_count, 1)
+            self.assertIsNone(owned._document)
+            ordinary = figure.verify_stream_document(projection, *args)
+            self.assertEqual(derive.call_count, 2)
+            self.assertEqual(reused, ordinary)
+            with self.assertRaisesRegex(ValueError, 'already consumed'):
+                figure.verify_stream_document(projection, *args, _reprojection_records=owned)
+            with self.assertRaisesRegex(ValueError, 'Invalid private'):
+                figure.verify_stream_document(projection, *args, _reprojection_records=ordinary)
+
+    def test_context_options_and_source_identity_cannot_borrow_records(self):
+        root, args, options = self.source()
+        for mode in ('path', 'namespace', 'wiki', 'date', 'site', 'contract', 'profile', 'encoded', 'decimal'):
+            with self.subTest(mode=mode):
+                owned = figure._ReprojectionRecords(*args, figure.REPLAY_CONTRACT_V4, **options)
+                selected = list(args); selected_options = dict(options); contract = figure.REPLAY_CONTRACT_V4
+                if mode == 'path': selected[0] = root / 'foreign.raw.json'
+                elif mode == 'namespace': selected[1] += b'\n'
+                elif mode == 'wiki': selected[2] = 'enwiktionary'
+                elif mode == 'date': selected[3] = '19990101'
+                elif mode == 'site': selected[4] += b' '
+                elif mode == 'contract': contract = figure.REPLAY_CONTRACT
+                elif mode == 'profile': selected_options['profile_kind'] = figure.FIGURE_PROFILE_V5
+                elif mode == 'encoded': selected_options['allow_encoded'] = False
+                else: selected_options['allow_decimal_tiff_axes'] = False
+                with self.assertRaisesRegex(ValueError, 'context differs'):
+                    owned.take(*selected, contract, **selected_options)
+        for mode in ('same-byte-replacement', 'raw-content', 'hardlink'):
+            with self.subTest(mode=mode):
+                # Fresh genuine fixtures avoid restoring a mutated authority.
+                fresh, selected, current_options = self.source()
+                owned = figure._ReprojectionRecords(*selected, figure.REPLAY_CONTRACT_V4, **current_options)
+                raw = selected[0]
+                if mode == 'same-byte-replacement':
+                    value = raw.read_bytes(); raw.unlink(); raw.write_bytes(value)
+                elif mode == 'raw-content':
+                    with raw.open('ab') as stream: stream.write(b' ')
+                else: figure.os.link(raw, fresh / 'extra-link.raw')
+                with self.assertRaisesRegex(ValueError, 'source changed'):
+                    owned.take(*selected, figure.REPLAY_CONTRACT_V4, **current_options)
+
+    def test_corrupt_writer_header_record_and_partial_write_never_complete(self):
+        for mode in ('header', 'record', 'partial'):
+            with self.subTest(mode=mode):
+                root, _, _ = self.source()
+                before = {p.name: p.read_bytes() for p in root.iterdir()}
+                output = root.with_name(root.name + '-corrupt-' + mode)
+                real = figure.write_projection_stream
+                def corrupt(path, document, **kwargs):
+                    if mode == 'header': document['source_profile']['webp_handler_sha256'] = '0' * 64
+                    elif mode == 'record':
+                        rows = iter(document['records']); first = next(rows)
+                        first['original_width'] += 1
+                        document['records'] = figure.itertools.chain((first,), rows)
+                    else:
+                        Path(path).write_bytes(b'partial projection\n')
+                        raise OSError('controlled partial writer failure')
+                    return real(path, document, **kwargs)
+                with patch.object(figure, 'write_projection_stream', side_effect=corrupt):
+                    with self.assertRaises((ValueError, OSError)):
+                        figure.reproject_capture(root, output, target_profile=figure.FIGURE_PROFILE_V5)
+                self.assertTrue(output.exists())
+                self.assertFalse((output / figure.COMPLETE).exists())
+                self.assertEqual(before, {p.name: p.read_bytes() for p in root.iterdir()})
+
+    def test_raw_change_during_independent_projection_read_is_refused(self):
+        root, args, options = self.source()
+        owned = figure._ReprojectionRecords(*args, figure.REPLAY_CONTRACT_V4, **options)
+        projection = root / 'read-race.json'
+        owned.write(projection)
+        real = figure.stream_values
+        changed = []
+        def change_source_after_record(path, schema, **kwargs):
+            for value in real(path, schema, **kwargs):
+                yield value
+                if Path(path) == projection and 'requested_file' in value and not changed:
+                    with args[0].open('ab') as stream: stream.write(b' ')
+                    changed.append(True)
+        with patch.object(figure, 'stream_values', side_effect=change_source_after_record):
+            with self.assertRaisesRegex(ValueError, 'source changed'):
+                figure.verify_stream_document(projection, *args, _reprojection_records=owned)
+        self.assertTrue(changed)
+        self.assertIsNone(owned._document)
+
+    def test_output_derives_once_and_releases_records_before_source_replay(self):
+        import weakref
+        root, _, _ = self.source()
+        output = root.with_name(root.name + '-record-reuse')
+        selected_raw = output / figure.ROLES['figure-sizing-raw']
+        init, derive, replay_source = figure._ReprojectionRecords.__init__, figure.figure_stream_document, figure.replay_source
+        holders, weak_records, derivations, source_calls = [], [], [], []
+        class Records(list): pass
+        def observed_init(owned, *args, **kwargs):
+            init(owned, *args, **kwargs)
+            records = Records(owned._document['records'])
+            owned._document['records'] = records
+            holders.append(owned); weak_records.append(weakref.ref(records))
+        def observed_derive(path, *args, **kwargs):
+            derivations.append(Path(path))
+            return derive(path, *args, **kwargs)
+        def observed_source(*args, **kwargs):
+            if Path(args[0]) == output:
+                source_calls.append(True)
+                self.assertEqual(len(holders), 1)
+                self.assertTrue(all(item._document is None for item in holders))
+                self.assertTrue(all(item() is None for item in weak_records))
+            return replay_source(*args, **kwargs)
+        with patch.object(figure._ReprojectionRecords, '__init__', observed_init), \
+                patch.object(figure, 'figure_stream_document', side_effect=observed_derive), \
+                patch.object(figure, 'replay_source', side_effect=observed_source):
+            manifest = figure.reproject_capture(root, output, target_profile=figure.FIGURE_PROFILE_V5)
+        self.assertEqual(derivations.count(selected_raw), 1)
+        self.assertTrue(source_calls)
+        self.assertEqual(figure.verify(output), manifest)
 
 
 if __name__ == '__main__':

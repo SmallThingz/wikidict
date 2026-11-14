@@ -7,6 +7,7 @@ legacy projection and its raw authorities are replayed before normal staging.
 import argparse
 import base64
 import binascii
+import copy
 from compression import zstd
 from datetime import datetime
 import fcntl
@@ -936,7 +937,81 @@ def write_projection_stream(path, document, *, identity_out=None):
         identity_out.update(stamp=written)
 
 
-def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date, site_raw, *, regenerate_projection=None):
+class _ReprojectionRecords:
+    """Own one source-derived result until its written bytes are compared once."""
+    def __init__(self, raw_path, namespace_raw, wiki, date, site_raw, contract, **options):
+        if (type(namespace_raw) is not bytes or type(site_raw) is not bytes or
+                type(wiki) is not str or type(date) is not str or
+                contract not in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT)):
+            raise ValueError('Invalid private reprojection source context')
+        if (set(options) != {'profile_kind', 'allow_tiff_companion', 'allow_encoded',
+                'allow_compatible_epochs', 'allow_decimal_tiff_axes', 'allow_default_tiff_page'} or
+                options['profile_kind'] not in (FIGURE_PROFILE_V3, FIGURE_PROFILE_V4, FIGURE_PROFILE_V5) or
+                any(type(value) is not bool for key, value in options.items() if key != 'profile_kind')):
+            raise ValueError('Invalid private reprojection replay options')
+        self._raw_path = Path(raw_path)
+        self._context = (namespace_raw, wiki, date, site_raw, contract)
+        self._options = dict(options)
+        self._used = False
+        self._document = None
+        self._identity = self._source_identity()
+        document = figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, **options)
+        self.check_source()
+        document['replay_contract'] = contract
+        self._document = document
+
+    def _source_identity(self):
+        path = self._raw_path
+        if not path.is_absolute() or path.resolve(strict=True) != path:
+            raise ValueError('Reprojection raw path changed')
+        value = path.lstat()
+        parent = path.parent.stat()
+        if not stat.S_ISREG(value.st_mode) or not stat.S_ISDIR(parent.st_mode):
+            raise ValueError('Reprojection raw source is not regular')
+        return ((value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
+                 value.st_size, value.st_mtime_ns, value.st_ctime_ns, value.st_nlink),
+                (parent.st_dev, parent.st_ino, parent.st_mode, parent.st_uid, parent.st_gid))
+
+    def check_source(self):
+        if self._source_identity() != self._identity:
+            raise ValueError('Reprojection raw source changed after derivation')
+
+    def header(self):
+        if self._used or self._document is None:
+            raise ValueError('Reprojection records were already consumed')
+        return copy.deepcopy({key: value for key, value in self._document.items() if key != 'records'})
+
+    def write(self, path):
+        document = self.header()
+        # The writer cannot mutate the expected graph. Copy only the current
+        # record, including rare nested occurrence facts, never the whole list.
+        document['records'] = (copy.deepcopy(row) for row in self._document['records'])
+        self.check_source()
+        write_projection_stream(path, document)
+        self.check_source()
+
+    def coverage(self, inventory, query_titles):
+        if self._used or self._document is None:
+            raise ValueError('Reprojection records were already consumed')
+        self.check_source()
+        return file_coverage(self._document, inventory, query_titles)
+
+    def take(self, raw_path, namespace_raw, wiki, date, site_raw, contract, **options):
+        if self._used or self._document is None:
+            raise ValueError('Reprojection records were already consumed')
+        if (Path(raw_path) != self._raw_path or
+                (namespace_raw, wiki, date, site_raw, contract) != self._context or options != self._options):
+            raise ValueError('Reprojection replay context differs')
+        self.check_source()
+        document = self._document
+        self._document = None
+        self._used = True
+        return document
+
+
+def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date, site_raw, *, regenerate_projection=None, _reprojection_records=None):
+    if _reprojection_records is not None and (type(_reprojection_records) is not _ReprojectionRecords or regenerate_projection is not None):
+        raise ValueError('Invalid private reprojection record reuse')
     if regenerate_projection is None:
         values = stream_values(projection_path, FILES_STREAM_SCHEMA)
         header = next(values)
@@ -969,12 +1044,16 @@ def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date,
         generation_before = generation_identity()
     profile = header['source_profile']
     kind = profile.get('kind') if isinstance(profile, dict) else FIGURE_PROFILE_V3
-    expected = figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, profile_kind=kind,
+    options = dict(profile_kind=kind,
         allow_tiff_companion=replay_contract(header) or header['generator_sha256'] == LEGACY_TIFF_GENERATOR,
         allow_encoded=header.get('replay_contract') in (REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
         allow_compatible_epochs=header.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
         allow_decimal_tiff_axes=header.get('replay_contract') in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
         allow_default_tiff_page=header.get('replay_contract') == REPLAY_CONTRACT)
+    expected = (figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, **options)
+                if _reprojection_records is None else
+                _reprojection_records.take(raw_path, namespace_raw, wiki, date, site_raw,
+                                          header.get('replay_contract'), **options))
     expected_header = {key: value for key, value in expected.items() if key != 'records'}
     expected_header['generator_sha256'] = header['generator_sha256']
     if not replay_contract(header):
@@ -1013,6 +1092,8 @@ def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date,
             raise ValueError('Figure projection stream record differs from exact raw replay')
     if next(values, None) is not None:
         raise ValueError('Figure projection has unexpected trailing records')
+    if _reprojection_records is not None:
+        _reprojection_records.check_source()
     if regenerate_projection is not None:
         if generation_identity() != generation_published or evidence.stamp(projection_path) != published_identity:
             raise ValueError('Figure source changed during generated projection verification')
@@ -1750,7 +1831,7 @@ def payload(root):
     return result
 
 
-def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regenerate_projection=None):
+def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None):
     """Replay original source captures, retaining their exact finite scope."""
     root = Path(root)
     defaults = site_info.verify(root, embedded=True)
@@ -1766,10 +1847,10 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
     if type(general.get('rtl')) is not bool:
         raise ValueError('Figure defaults lack explicit source direction')
     site_info.figure_thumbnail_width(default_data['query'])
-    if regenerate_projection is not None:
+    if regenerate_projection is not None or _reprojection_records is not None:
         return replay_stream_capture(root, wiki, date, defaults, namespace, general,
             retained_cache=retained_cache, inventory_cache=inventory_cache,
-            regenerate_projection=regenerate_projection)
+            regenerate_projection=regenerate_projection, _reprojection_records=_reprojection_records)
     with (root / ROLES['figure-sizing']).open('rb') as source:
         first = source.readline(STREAM_HEADER_LIMIT + 1)
     try:
@@ -1881,7 +1962,7 @@ def _authenticate_figure_capture_files(root, manifest, inventory_cache):
         raise ValueError('Figure capture changed during content authentication')
 
 
-def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=None, regenerate_projection=None):
+def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None):
     inventory_cache = {} if inventory_cache is None else inventory_cache
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
@@ -1890,6 +1971,10 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
         raise ValueError('Figure projection regeneration requires an incomplete capture')
     manifest_raw, manifest = _figure_capture_manifest(root, require_complete)
     generation = {} if regenerate_projection is None else {'regenerate_projection': regenerate_projection}
+    if _reprojection_records is not None:
+        if require_complete is not False or regenerate_projection is not None or type(_reprojection_records) is not _ReprojectionRecords:
+            raise ValueError('Invalid private reprojection verification')
+        generation['_reprojection_records'] = _reprojection_records
     defaults, coverage = replay(root, manifest.get('wiki'), manifest.get('date'), retained_cache=retained_cache, inventory_cache=inventory_cache, **generation)
     if coverage['kind'] == 'file-logical-axes':
         inventory = inventory_document(root / INVENTORY)
@@ -2587,13 +2672,15 @@ def record_http_archive(root, source, batch, archived, *, origin_plan=None):
             archived[('tiff-titles', base_receipt['response'])] = request['titles']
 
 
-def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None, regenerate_projection=None):
+def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None):
     site_raw = small(root / ROLES['figure-sizing-site'], MAX_RESPONSE)
     raw_path = root / ROLES['figure-sizing-raw']
     def raw_identity():
         return (raw_path.resolve(), evidence.stamp(raw_path), complete_capture_directory_stamp(root))
     raw_before = raw_identity()
     generation = {} if regenerate_projection is None else {'regenerate_projection': regenerate_projection}
+    if _reprojection_records is not None:
+        generation['_reprojection_records'] = _reprojection_records
     projection = verify_stream_document(root / ROLES['figure-sizing'], raw_path,
                                         namespace, wiki, date, site_raw, **generation)
     if regenerate_projection is not None:
@@ -5478,13 +5565,12 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
     observations['phases']['link_seconds'] = time.monotonic() - link_started
     evidence.document(output / PLAN, new_plan)
     generation_started = time.monotonic()
-    document = figure_stream_document(output / ROLES['figure-sizing-raw'], namespace,
-        manifest['wiki'], manifest['date'], site,
+    records = _ReprojectionRecords(output / ROLES['figure-sizing-raw'], namespace,
+        manifest['wiki'], manifest['date'], site, target_contract,
         profile_kind=selected_profile,
         allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True,
         allow_decimal_tiff_axes=True, allow_default_tiff_page=target_contract == REPLAY_CONTRACT)
-    document['replay_contract'] = target_contract
-    new_header = {key: value for key, value in document.items() if key != 'records'}
+    new_header = records.header()
     expected_header = dict(header)
     if target_profile is not None:
         general = decode(site)['query']['general']
@@ -5493,13 +5579,12 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
     if ({key: value for key, value in new_header.items() if key not in ('generator_sha256', 'replay_contract')} !=
             {key: value for key, value in expected_header.items() if key not in ('generator_sha256', 'replay_contract')}):
         raise ValueError('Figure reprojection changed retained stream context')
-    write_projection_stream(output / ROLES['figure-sizing'], document)
+    records.write(output / ROLES['figure-sizing'])
     inventory = verify_inventory(inventory_document(output / INVENTORY), namespace,
         manifest['wiki'], manifest['date'], inventory_cache=inventory_cache)
     query_titles = provider_query_titles(output, decode(small(output / QUERY_INPUTS)), namespace,
         manifest['wiki'], manifest['date'])
-    coverage = file_coverage(document, inventory, query_titles)
-    del document
+    coverage = records.coverage(inventory, query_titles)
     observations['phases']['derive_write_seconds'] = time.monotonic() - generation_started
     check_source()
     # Every linked member is rehashed by the unchanged verifier below against
@@ -5515,7 +5600,8 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
     if set(before_members) != set(members) - {COMPLETE} or os.path.lexists(output / COMPLETE):
         raise ValueError('Figure reprojection output membership changed before verification')
     verify_started = time.monotonic()
-    verified = verify(output, require_complete=False, inventory_cache=inventory_cache)
+    verified = verify(output, require_complete=False, inventory_cache=inventory_cache,
+                      _reprojection_records=records)
     after_members, after_output, after_directories = snapshot(output)
     if (verified != new_manifest or after_members != before_members or after_output != before_output or
             after_directories != before_directories or os.path.lexists(output / COMPLETE)):
