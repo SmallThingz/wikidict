@@ -13012,7 +13012,7 @@ class RetainedCompilationEnvelopeTests(unittest.TestCase):
 
 
 class ClosedWholeRetainedPreimageTests(unittest.TestCase):
-    def fixture(self, root):
+    def fixture(self, root, mode_schema='top'):
         f = RetainedNativeRoleTests().closed_whole_fixture(root)
         refs = []; snapshots = []; applications = []
         for number in range(2):
@@ -13027,6 +13027,11 @@ class ClosedWholeRetainedPreimageTests(unittest.TestCase):
             row['after'] = _initial_sealed_reference(post)
             # The consumed shape matches the applied singleton/LF receipts:
             # retained before/after snapshots, canonical row.path/actual_post.
+            if mode_schema!='top':
+                # Actual six-file application230d records before/after modes,
+                # canonical row.path/actual_post, and no redundant row.mode.
+                row['before']['mode']=row['mode'];row['after']['mode']=row.pop('mode')
+                if mode_schema=='nested-canonical':row['before']['path']=str(f.helper)
             shaped = dict(applied=True,rows=[row])
             refs.append(_initial_sealed_write(root/('snapshot-application-'+str(number)+'.json'),shaped))
             applications.append(shaped); snapshots.append(snapshot)
@@ -13034,24 +13039,36 @@ class ClosedWholeRetainedPreimageTests(unittest.TestCase):
         return SimpleNamespace(f=f,refs=refs,snapshots=snapshots,applications=applications)
 
     def test_actual_applied_shapes_bind_snapshots_and_preserve_canonical_helper(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            c = self.fixture(Path(tmp)); f = c.f
-            with patch.dict(sys.modules,extraction_cache=f.cache),patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None):
-                roles = b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler))
-                roles.require_unchanged()
-                self.assertEqual(roles.records['dict-bundle-build']['dependencies']['extraction_helper']['path'],str(f.helper))
-                for snapshot in c.snapshots: self.assertIn(snapshot, roles.inputs)
-                self.assertEqual(len(c.refs),2)
+        for mode_schema in ('top','nested-retained','nested-canonical'):
+            with self.subTest(mode_schema=mode_schema), tempfile.TemporaryDirectory() as tmp:
+                c = self.fixture(Path(tmp),mode_schema); f = c.f
+                with patch.dict(sys.modules,extraction_cache=f.cache),patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None):
+                    roles = b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler))
+                    roles.require_unchanged()
+                    self.assertEqual(roles.records['dict-bundle-build']['dependencies']['extraction_helper']['path'],str(f.helper))
+                    if mode_schema!='nested-canonical':
+                        for snapshot in c.snapshots:self.assertIn(snapshot, roles.inputs)
+                    self.assertEqual(len(c.refs),2)
 
     def test_wrong_target_preimage_hash_mode_and_broken_chain_refuse(self):
-        for change in ('target','post-target','preimage-hash','mode','broken-chain','missing','symlink'):
+        for change in ('target','post-target','preimage-hash','mode','broken-chain','missing','symlink',
+                       'before-mode','after-mode','actual-post-mode','top-mode','missing-before-mode',
+                       'missing-after-mode','bool-mode','after-hash'):
             with self.subTest(change=change),tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp); c = self.fixture(root); f = c.f
+                root = Path(tmp); c = self.fixture(root,'nested-retained'); f = c.f
                 first = c.applications[0]
                 if change=='target': first['rows'][0]['path']='tools/other.py'
                 elif change=='post-target': first['rows'][0]['actual_post']['path']=str(root/'other-helper.py')
                 elif change=='preimage-hash': first['rows'][0]['before']['sha256']='0'*64
                 elif change=='mode': c.snapshots[0].chmod(0o600)
+                elif change=='before-mode':first['rows'][0]['before']['mode']=0o600
+                elif change=='after-mode':first['rows'][0]['after']['mode']=0o600
+                elif change=='actual-post-mode':first['rows'][0]['actual_post']['mode']=0o600
+                elif change=='top-mode':first['rows'][0]['mode']=0o600
+                elif change=='missing-before-mode':first['rows'][0]['before'].pop('mode')
+                elif change=='missing-after-mode':first['rows'][0]['after'].pop('mode')
+                elif change=='bool-mode':first['rows'][0]['before']['mode']=True
+                elif change=='after-hash':first['rows'][0]['after']['sha256']='0'*64
                 elif change=='missing': c.snapshots[0].unlink()
                 elif change=='symlink':
                     target=root/'foreign-alias.py'; target.write_bytes(c.snapshots[0].read_bytes())

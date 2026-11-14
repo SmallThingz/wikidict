@@ -5099,14 +5099,27 @@ class RetainedNativeToolRoles:
             for descriptor in applications:
                 application=metadata(descriptor)
                 rows=[row for row in application['rows']if row['path']=='tools/extraction_cache.py']
-                if (application.get('applied')is not True or len(rows)!=1
-                        or rows[0]['mode']!=live['mode']):
+                if application.get('applied')is not True or len(rows)!=1:
                     raise ValueError('Closed whole live helper application differs')
                 row=rows[0];before=row['before'];after=row['actual_post']
+                recorded_after=row.get('after')
+                if 'mode'in row:
+                    mode=row['mode']
+                else:
+                    if (not isinstance(recorded_after,dict) or 'mode'not in before
+                            or 'mode'not in recorded_after):
+                        raise ValueError('Closed whole helper application lacks exact modes')
+                    mode=before['mode']
+                if (type(mode)is not int or mode!=live['mode'] or mode!=cursor['mode']
+                        or any('mode'in value and (type(value['mode'])is not int or value['mode']!=mode)
+                               for value in (before,after,recorded_after) if isinstance(value,dict))
+                        or (recorded_after is not None and (not isinstance(recorded_after,dict)
+                            or any(recorded_after.get(key)!=after.get(key)for key in ('bytes','sha256'))))):
+                    raise ValueError('Closed whole helper application modes differ')
                 if (after.get('path')!=cursor['path']
                         or any(before.get(key)!=cursor[key]for key in ('bytes','sha256'))
-                        or before.get('mode',row['mode'])!=row['mode']
-                        or after.get('mode',row['mode'])!=row['mode']):
+                        or before.get('mode',mode)!=mode
+                        or after.get('mode',mode)!=mode):
                     raise ValueError('Closed whole live helper application chain differs')
                 if before.get('path')!=cursor['path']:
                     # Applied receipts may retain their exact preimage separately
@@ -5116,9 +5129,9 @@ class RetainedNativeToolRoles:
                             or preimage.stat().st_uid!=os.geteuid()):
                         raise ValueError('Unsafe closed whole helper preimage')
                     observed=self.bind_input(auth(before))
-                    if observed['mode']!=row['mode']:
+                    if observed['mode']!=mode:
                         raise ValueError('Closed whole helper preimage mode differs')
-                cursor=dict(after,mode=row['mode'])
+                cursor=dict(after,mode=mode)
             if cursor!=live:raise ValueError('Closed whole helper chain does not reach loaded helper')
         else:
             for descriptor in applications:metadata(descriptor)
