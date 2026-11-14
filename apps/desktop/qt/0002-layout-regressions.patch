@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,11318 @@
+@@ -3,24 +3,12638 @@
  
  
  #include <QTest>
@@ -514,7 +514,7 @@
 +    int count = 0, object = -1;
 +
 +    TableFloatViewportFixture(int dpi, Qt::LayoutDirection containing, Qt::LayoutDirection grid,
-+                              bool smallLines = false, int columns = 7)
++                              bool smallLines = false, int columns = 7, int footerColumns = 0)
 +        : device(1800, 900, QImage::Format_ARGB32_Premultiplied)
 +    {
 +        device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
@@ -534,11 +534,16 @@
 +        format.setProperty(QTextFormat::UserProperty + 0x57da, QStringLiteral("wikidict.cell-style/1"));
 +        format.setProperty(languageProperty, QStringLiteral("ru"));
 +        QTextCursor cursor(&document); table = cursor.insertTable(2, columns, format);
-+        table->mergeCells(1, 0, 1, columns);
++        const int footerSpan = footerColumns ? footerColumns : columns;
++        Q_ASSERT(footerSpan > 0 && footerSpan <= columns);
++        table->mergeCells(1, 0, 1, footerSpan);
++        if (footerSpan < columns) table->mergeCells(1, footerSpan, 1, columns - footerSpan);
 +        QJsonArray firstRow, lastRow;
 +        for (int column = 0; column < 4; ++column)
 +            firstRow.append(QJsonObject{{"rowspan", 1}, {"colspan", 1}, {"style", QJsonValue(QJsonValue::Null)}});
-+        lastRow.append(QJsonObject{{"rowspan", 1}, {"colspan", columns}, {"style", QJsonValue(QJsonValue::Null)}});
++        lastRow.append(QJsonObject{{"rowspan", 1}, {"colspan", footerSpan}, {"style", QJsonValue(QJsonValue::Null)}});
++        if (footerSpan < columns)
++            lastRow.append(QJsonObject{{"rowspan", 1}, {"colspan", columns - footerSpan}, {"style", QJsonValue(QJsonValue::Null)}});
 +        for (int row = 0; row < 2; ++row) for (int column = 0; column < columns; ++column) {
 +            auto cell = table->cellAt(row, column); if (cell.row() != row || cell.column() != column) continue;
 +            auto cf = cell.format().toTableCellFormat(); cf.setPadding(0); cf.setBorder(0);
@@ -546,6 +551,11 @@
 +            cf.setProperty(languageProperty, QStringLiteral("ru")); cf.setVerticalAlignment(QTextCharFormat::AlignTop);
 +            if (row == 0 && column >= 4) {
 +                cf.setProperty(fillerProperty, true); cell.setFormat(cf); continue;
++            }
++            if (row == 1 && column >= footerSpan) {
++                // This real empty source cell establishes the remaining grid
++                // columns without adding intrinsic text width to their tracks.
++                cell.setFormat(cf); continue;
 +            }
 +            QFont font(QStringLiteral("DejaVu Sans"), smallLines ? 4 : 12);
 +            if (smallLines) cf.setProperty(QTextFormat::UserProperty + 0x57dd, QVariantMap{
@@ -667,12 +677,1322 @@
 +        }
 +    }
 +};
++
++struct AuthoredRuleFixture
++{
++    static constexpr int policy = QTextFormat::UserProperty + 0x5803;
++    QImage device;
++    QTextDocument document;
++    QTextDocumentLayout *native = nullptr;
++    qreal scale = 1;
++    static QJsonObject length(qreal value, const QString &unit = QStringLiteral("px")) {
++        return {{"unit", unit}, {"value", value}};
++    }
++    static QJsonObject source(qreal height, qreal top, qreal right, qreal bottom, qreal left,
++                             const QString &unit = QStringLiteral("px")) {
++        return {{"kind", "rule"}, {"spans", QJsonArray{}}, {"rule_style", QJsonObject{
++            {"height", length(height, unit)}, {"fill", QJsonObject{{"light_dark", QJsonObject{{"light", "#123456"}, {"dark", "#abcdef"}}}}},
++            {"margins", QJsonObject{{"top", length(top, unit)}, {"right", length(right, unit)},
++                {"bottom", length(bottom, unit)}, {"left", length(left, unit)}}}}}};
++    }
++    static QVariantMap metadata(const QJsonObject &source, qreal em = 20, bool dark = false) {
++        const auto style = source.value("rule_style").toObject();
++        const auto used = [&](const QJsonValue &value) {
++            const auto spec = value.toObject();
++            return spec.value("value").toDouble() * (spec.value("unit") == QStringLiteral("em") ? em : 1);
++        };
++        QVariantList margins;
++        for (const char *side : {"top", "right", "bottom", "left"}) margins.append(used(style.value("margins").toObject().value(QLatin1String(side))));
++        return {{"capability", QStringLiteral("wikidict.authored-rule/1")}, {"source", QJsonDocument(source).toJson(QJsonDocument::Compact)},
++            {"em", em}, {"dark", dark}, {"height", used(style.value("height"))},
++            {"fill", QColor(dark ? "#abcdef" : "#123456")}, {"margins", margins}};
++    }
++    explicit AuthoredRuleFixture(int dpi = 96, Qt::LayoutDirection direction = Qt::LeftToRight) : device(1600, 1000, QImage::Format_ARGB32_Premultiplied) {
++        device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
++        native = qobject_cast<QTextDocumentLayout *>(document.documentLayout());
++        native->setPaintDevice(&device); scale = qreal(device.logicalDpiY()) / qt_defaultDpi();
++        document.setDocumentMargin(0); document.setUndoRedoEnabled(false);
++        auto option = document.defaultTextOption(); option.setTextDirection(direction); document.setDefaultTextOption(option);
++    }
++    QTextBlock append(const QJsonObject &source, bool first, qreal em = 20, bool dark = false) {
++        QTextCursor cursor(&document); cursor.movePosition(QTextCursor::End);
++        if (!first) cursor.insertBlock();
++        QTextBlockFormat format; format.setProperty(policy, metadata(source, em, dark)); cursor.setBlockFormat(format);
++        return cursor.block();
++    }
++    void layout(qreal width) { document.setTextWidth(width * scale); native->documentSize(); }
++};
  
  class tst_QTextDocumentLayout : public QObject
  {
      Q_OBJECT
  
  private slots:
++    void importedHorizontalRuleRetainsOnlyItsOwnUserState()
++    {
++        const int state = std::numeric_limits<int>::max() / 2;
++        for (int context = 0; context != 3; ++context) {
++            const auto html = [&](bool marked) {
++                const QString rule = marked
++                    ? QStringLiteral("<hr style='margin:0px;-qt-user-state:%1;'>").arg(state)
++                    : QStringLiteral("<hr style='margin:0px;'>");
++                if (context == 0) return rule;
++                if (context == 1) return QStringLiteral("<p>Before</p>") + rule + QStringLiteral("<p>After</p>");
++                return QStringLiteral("<table><tr><td><p>Before</p>") + rule
++                    + QStringLiteral("<p>After</p></td></tr></table>");
++            };
++            QTextDocument document;
++            QString sourceText; int sourceCount = -1;
++            for (bool marked : {false, true, false}) {
++                document.setHtml(html(marked));
++                document.setTextWidth(300);
++                document.documentLayout()->documentSize();
++                int rules = 0;
++                for (auto block = document.begin(); block.isValid(); block = block.next()) {
++                    if (block.blockFormat().hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth)) {
++                        ++rules;
++                        QVERIFY(block.text().isEmpty()); QCOMPARE(block.length(), 1);
++                        QCOMPARE(block.userState(), marked ? state : -1);
++                    } else {
++                        QCOMPARE(block.userState(), -1);
++                    }
++                }
++                QCOMPARE(rules, 1);
++                if (sourceCount < 0) { sourceText = document.toRawText(); sourceCount = document.characterCount(); }
++                QCOMPARE(document.toRawText(), sourceText); QCOMPARE(document.characterCount(), sourceCount);
++                QCOMPARE(document.toPlainText().count(QStringLiteral("Before")), context == 0 ? 0 : 1);
++                QCOMPARE(document.toPlainText().count(QStringLiteral("After")), context == 0 ? 0 : 1);
++            }
++        }
++    }
++
++    void tableFloatViewportFixedWidthAndNarrowClearUseExistingAllocator()
++    {
++        constexpr int widthProperty = QTextFormat::UserProperty + 0x57d3;
++        constexpr int clearProperty = QTextFormat::UserProperty + 0x57d2;
++        for (int dpi : {96, 144}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft})
++        for (bool em : {false, true}) for (auto side : {QTextFrameFormat::FloatLeft, QTextFrameFormat::FloatRight})
++        for (qreal fraction : {0.0, .5}) for (bool minimumWins : {false, true}) {
++            TableFloatViewportFixture f(dpi, direction, direction == Qt::LeftToRight ? Qt::RightToLeft : Qt::LeftToRight, !minimumWins);
++            f.document.setLayoutEnabled(false);
++            auto format = f.table->format(); auto policy = format.property(f.policyProperty).toMap();
++            auto source = QJsonDocument::fromJson(policy.value("source").toByteArray()).object();
++            auto style = source.value("style").toObject();
++            const qreal sourceWidth = (minimumWins ? (em ? 1.0 : 13.25) : (em ? 25.0 : 433.25)) + fraction;
++            style.insert("width", QJsonObject{{"unit", em ? "em" : "px"}, {"value", sourceWidth}});
++            style.insert("clear", "right"); source.insert("style", style);
++            auto responsive = source.value("float_viewport").toObject(); responsive.insert("narrow_clear", "both");
++            source.insert("float_viewport", responsive);
++            const qreal preferred = sourceWidth * (em ? f.bodyPixels : 1);
++            const QVariantMap width{{"unit", QStringLiteral("fixed")}, {"value", preferred}};
++            auto base = policy.value("base_format").value<QTextFormat>().toTableFormat();
++            base.setProperty(widthProperty, width); base.setProperty(clearProperty, 2);
++            policy.insert("base_format", QVariant::fromValue(QTextFormat(base)));
++            const auto sourceBytes = QJsonDocument(source).toJson(QJsonDocument::Compact); policy.insert("source", sourceBytes);
++            format.setProperty(widthProperty, width); format.setProperty(clearProperty, 2);
++            format.setProperty(f.policyProperty, policy); f.table->setFormat(format);
++            QTextCursor before(&f.document); before.setPosition(0);
++            QTextFrameFormat obstacle; obstacle.setMargin(0); obstacle.setPadding(0); obstacle.setBorder(0);
++            obstacle.setWidth(40); obstacle.setHeight(160); obstacle.setPosition(side); obstacle.setBackground(Qt::blue);
++            auto *preceding = before.insertFrame(obstacle); QVERIFY(preceding);
++            QVERIFY(preceding->lastPosition() < f.table->firstPosition());
++            const auto raw = f.document.toRawText(); const int count = f.document.characterCount();
++            const auto owners = f.document.rootFrame()->childFrames();
++            for (qreal available : {700.25, 300.5, 700.25}) for (qreal viewport : {639.25, 639.0, 638.5, 900.0}) {
++                const bool narrow = viewport <= 639;
++                f.document.setLayoutEnabled(false); auto current = f.table->format();
++                current.setProperty(clearProperty, narrow ? 3 : 2); f.table->setFormat(current);
++                f.allocate(viewport, available); QCOMPARE(f.native->wikidictParagraphBoxLayoutError(), 0);
++                const auto box = f.native->tableBoundingRect(f.table), prior = f.native->frameBoundingRect(preceding);
++                const qreal expectedWidth = QFixed::fromReal(preferred * f.scale).toReal() + f.margin(1) + f.margin(3);
++                const auto context = QStringLiteral("dpi=%1 scale=%2 direction=%3 em=%4 fraction=%5 minimumWins=%6 viewport=%7 available=%8 actual=%9 requestedWithMargins=%10")
++                    .arg(dpi).arg(f.scale, 0, 'g', 17).arg(int(direction)).arg(em).arg(fraction).arg(minimumWins)
++                    .arg(viewport).arg(available).arg(box.width(), 0, 'g', 17).arg(expectedWidth, 0, 'g', 17).toUtf8();
++                if (minimumWins) QVERIFY2(box.width() > expectedWidth, context.constData());
++                else QVERIFY2(qAbs(box.width() - expectedWidth) < .05, context.constData());
++                for (int row = 0; row < f.table->rows(); ++row) for (int column = 0; column < f.table->columns(); ++column) {
++                    const auto cell = f.table->cellAt(row, column);
++                    if (cell.row() != row || cell.column() != column || cell.format().boolProperty(f.fillerProperty)) continue;
++                    const auto textBlock = cell.firstCursorPosition().block(); QTextLayout probe(textBlock);
++                    auto option = f.document.defaultTextOption(); option.setWrapMode(QTextOption::WordWrap); probe.setTextOption(option);
++                    probe.beginLayout(); auto line = probe.createLine(); if (line.isValid()) line.setLineWidth(QFIXED_MAX); probe.endLayout();
++                    QVERIFY2(f.native->tableCellBoundingRect(f.table, cell).width() + .05 >= QFixed::fromReal(probe.minimumWidth()).ceil().toReal(), context.constData());
++                }
++
++                const bool beside = available > 600 && !narrow && side == QTextFrameFormat::FloatLeft;
++                if (beside) QVERIFY(box.top() < prior.bottom());
++                else QVERIFY(box.top() + f.margin(0) >= prior.bottom() - .05);
++                const qreal expectedLeft = !narrow || direction == Qt::RightToLeft ? available * f.scale - box.width() : 0;
++                const auto placement = context + " actualLeft=" + QByteArray::number(box.left(), 'g', 17)
++                    + " expectedLeft=" + QByteArray::number(expectedLeft, 'g', 17)
++                    + " boxTop=" + QByteArray::number(box.top(), 'g', 17)
++                    + " obstacleBottom=" + QByteArray::number(prior.bottom(), 'g', 17);
++                QVERIFY2(qAbs(box.left() - expectedLeft) < .05, placement.constData());
++                QCOMPARE(f.table->format().property(widthProperty).toMap(), width);
++                QCOMPARE(f.table->format().intProperty(clearProperty), narrow ? 3 : 2);
++                QCOMPARE(f.table->format().position(), narrow ? QTextFrameFormat::InFlow : QTextFrameFormat::FloatRight);
++                QCOMPARE(f.table->format().property(f.policyProperty).toMap().value("source").toByteArray(), sourceBytes);
++                for (const auto &owner : f.authoredOwners) QCOMPARE(owner.first.format(), owner.second);
++                const auto block = f.table->cellAt(0, 0).firstCursorPosition().block();
++                const auto line = block.layout()->lineAt(0); QVERIFY(line.isValid());
++                const auto rect = f.native->blockBoundingRect(block);
++                const QPointF point = rect.topLeft() + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
++                QVERIFY(f.native->hitTest(point, Qt::ExactHit) >= block.position());
++                QCOMPARE(f.native->anchorAt(point), QStringLiteral("dict:float-0-0"));
++                QTextCursor selected(&f.document); selected.select(QTextCursor::Document);
++                QVERIFY(selected.selectedText().contains(QStringLiteral("Footer")));
++                QCOMPARE(f.document.toRawText(), raw); QCOMPARE(f.document.characterCount(), count);
++                QCOMPARE(f.document.rootFrame()->childFrames(), owners); QCOMPARE(f.table->objectIndex(), f.object);
++            }
++            const auto good = f.table->format();
++            for (int mode = 0; mode < 5; ++mode) {
++                auto broken = good; auto data = good.property(f.policyProperty).toMap(); auto json = source;
++                auto changed = responsive;
++                if (mode == 0) changed.insert("narrow_clear", 3);
++                if (mode == 1) changed.insert("narrow_clear", "auto");
++                if (mode < 2) json.insert("float_viewport", changed);
++                if (mode == 2) { auto s = style; s.insert("width", QJsonObject{{"unit", "percent"}, {"value", 25.0}}); json.insert("style", s); }
++                if (mode == 3) { auto w = width; w.insert("value", preferred + 1); broken.setProperty(widthProperty, w); }
++                if (mode == 4) broken.setProperty(clearProperty, 3); // Wide state still owns clear:right.
++                data.insert("source", QJsonDocument(json).toJson(QJsonDocument::Compact)); broken.setProperty(f.policyProperty, data);
++                f.table->setFormat(broken); f.native->documentSize(); QCOMPARE(f.native->wikidictParagraphBoxLayoutError(), 1);
++                f.table->setFormat(good); f.native->documentSize(); QCOMPARE(f.native->wikidictParagraphBoxLayoutError(), 0);
++                QCOMPARE(f.document.toRawText(), raw); QCOMPARE(f.table->format(), good);
++            }
++        }
++        // A rounding residual belongs to the already allocated tracks. Here
++        // only an empty source cell spans the final filler track, so its minimum
++        // is zero; the full-span Footer cases above retain their own floor.
++        for (qreal fixedWidth : {42.125, 42.625}) {
++            TableFloatViewportFixture constrained(96, Qt::LeftToRight, Qt::RightToLeft, true, 7, 4);
++            constrained.document.setLayoutEnabled(false);
++            auto format = constrained.table->format(); auto policy = format.property(constrained.policyProperty).toMap();
++            auto source = QJsonDocument::fromJson(policy.value("source").toByteArray()).object();
++            auto style = source.value("style").toObject(); style.insert("width", QJsonObject{{"unit", "px"}, {"value", 120.25}});
++            source.insert("style", style); const auto encoded = QJsonDocument(source).toJson(QJsonDocument::Compact);
++            const auto footerRow = source.value("rows").toArray()[1].toArray();
++            QCOMPARE(footerRow.size(), 2);
++            QCOMPARE(footerRow[0].toObject().value("colspan").toInt(), 4);
++            QCOMPARE(footerRow[1].toObject().value("colspan").toInt(), 3);
++            QCOMPARE(footerRow[0].toObject().value("colspan").toInt() + footerRow[1].toObject().value("colspan").toInt(), constrained.table->columns());
++            const auto filler = constrained.table->cellAt(0, 6);
++            QVERIFY(filler.format().boolProperty(constrained.fillerProperty));
++            QCOMPARE(filler.columnSpan(), 1); QCOMPARE(filler.firstPosition(), filler.lastPosition());
++            const auto emptySourceCell = constrained.table->cellAt(1, 6);
++            QVERIFY(!emptySourceCell.format().hasProperty(constrained.fillerProperty));
++            QCOMPARE(emptySourceCell.column(), 4); QCOMPARE(emptySourceCell.columnSpan(), 3);
++            QCOMPARE(emptySourceCell.firstPosition(), emptySourceCell.lastPosition());
++            QVERIFY(constrained.document.findBlock(emptySourceCell.firstPosition()).text().isEmpty());
++            const QVariantMap request{{"unit", QStringLiteral("fixed")}, {"value", 120.25}};
++            QList<QTextLength> columns(7, QTextLength(QTextLength::VariableLength, 0));
++            columns[0] = QTextLength(QTextLength::FixedLength, fixedWidth);
++            columns[1] = QTextLength(QTextLength::PercentageLength, 25); columns[6] = QTextLength(QTextLength::FixedLength, 0);
++            auto base = policy.value("base_format").value<QTextFormat>().toTableFormat();
++            base.setColumnWidthConstraints(columns); base.setProperty(widthProperty, request);
++            policy.insert("base_format", QVariant::fromValue(QTextFormat(base))); policy.insert("source", encoded);
++            format.setColumnWidthConstraints(columns); format.setProperty(widthProperty, request);
++            format.setProperty(constrained.policyProperty, policy); constrained.table->setFormat(format);
++            const auto raw = constrained.document.toRawText();
++            for (qreal viewport : {900.0, 639.0, 900.0}) {
++                constrained.allocate(viewport, 300.5); QCOMPARE(constrained.native->wikidictParagraphBoxLayoutError(), 0);
++                const auto rect = constrained.native->tableBoundingRect(constrained.table);
++                const qreal expected = QFixed::fromReal(120.25 * constrained.scale).toReal() + constrained.margin(1) + constrained.margin(3);
++                QVERIFY(qAbs(rect.width() - expected) < .05);
++                const auto first = constrained.native->tableCellBoundingRect(constrained.table, constrained.table->cellAt(0, 0));
++                const auto last = constrained.native->tableCellBoundingRect(constrained.table, constrained.table->cellAt(0, 6));
++                const auto percent = constrained.native->tableCellBoundingRect(constrained.table, constrained.table->cellAt(0, 1));
++                const qreal percentWidth = (QFixed::fromReal(120.25 * constrained.scale) * QFixed::fromReal(25) / 100).toReal();
++                QVERIFY(qAbs(percent.width() - percentWidth) < .05);
++                QVERIFY(qAbs(first.width() - QFixed::fromReal(fixedWidth * constrained.scale).toReal()) < .05);
++                QCOMPARE(last.width(), qreal(0));
++                QCOMPARE(constrained.table->format().columnWidthConstraints(), columns);
++                QCOMPARE(constrained.table->format().property(constrained.policyProperty).toMap().value("source").toByteArray(), encoded);
++                QCOMPARE(constrained.document.toRawText(), raw);
++            }
++        }
++    }
++
++    void authoredRuleOutsideBodyCutCannotBorrowMetadataGap()
++    {
++        constexpr int boundary = QTextFormat::UserProperty + 0x5806;
++        for (int dpi : {96, 144}) {
++            AuthoredRuleFixture f(dpi); f.document.setLayoutEnabled(false);
++            const auto rule = f.append(AuthoredRuleFixture::source(1, 0, 0, 0, 0), true);
++            QTextCursor cursor(&f.document); cursor.movePosition(QTextCursor::End);
++            QTextBlockFormat metadata; metadata.setHeadingLevel(2); metadata.setTopMargin(0); metadata.setBottomMargin(0);
++            metadata.setProperty(boundary, QStringLiteral("wikidict.entry-body-end/1"));
++            cursor.insertBlock(metadata, QTextCharFormat()); cursor.insertText(QStringLiteral("References"));
++            const auto end = cursor.block();
++            const auto source = f.document.toRawText(); const int count = f.document.characterCount();
++            const auto ruleFormat = rule.blockFormat();
++            // Both scopes are valid: a body containing the Rule, and an empty
++            // body after it. Only the former owns the adjoining metadata edge.
++            for (int mode : {0, 1, 2, 1}) {
++                f.document.setLayoutEnabled(false);
++                const bool inside = mode == 0; metadata.setTopMargin(mode == 1 ? 0 : 8);
++                QTextCursor(end).setBlockFormat(metadata);
++                const auto begin = inside ? rule : end;
++                auto root = f.document.rootFrame()->frameFormat();
++                root.setProperty(boundary, QVariantMap{
++                    {"capability", QStringLiteral("wikidict.entry-body-boundary/1")},
++                    {"owner", QVariant::fromValue(static_cast<QObject *>(f.document.rootFrame()))}, {"end", end.position()},
++                    {"adjoining", QStringLiteral("ordinary")}, {"begin", begin.position()},
++                    {"begin_owner", QVariant::fromValue(static_cast<QObject *>(f.document.rootFrame()))},
++                    {"begin_format", QVariant::fromValue(QTextFormat(begin.blockFormat()))}, {"begin_text", begin.text()},
++                    {"paragraphs", QVariantList{}}});
++                f.document.rootFrame()->setFrameFormat(root); f.document.setTextWidth(180 * f.scale);
++                f.document.setLayoutEnabled(true); f.native->documentSize();
++                QCOMPARE(f.native->wikidictParagraphBoxLayoutError(), mode == 2 ? 1 : 0);
++                const auto geometry = f.native->wikidictAuthoredRuleGeometry(rule.position());
++                QVERIFY(geometry.value("handled").toBool()); QCOMPARE(geometry.value("error").toInt(), mode == 2 ? 1 : 0);
++                if (mode != 2) {
++                    QCOMPARE(rule.layout()->lineCount(), 0);
++                    QVERIFY(qAbs(f.native->blockBoundingRect(rule).height() / f.scale - 1) < .02);
++                }
++                QCOMPARE(rule.blockFormat(), ruleFormat); QCOMPARE(f.document.toRawText(), source);
++                QCOMPARE(f.document.characterCount(), count); QCOMPARE(f.document.rootFrame()->frameFormat(), root);
++                QVERIFY(f.document.rootFrame()->childFrames().isEmpty());
++                if (!inside) QVERIFY(rule.position() < begin.position());
++            }
++        }
++    }
++
++    void styledSectionHeadingUsesSourceFlowRootAndStrictCurrentIdentity()
++    {
++        constexpr int plain = QTextFormat::UserProperty + 0x57e0;
++        constexpr int headingProperty = QTextFormat::UserProperty + 0x5807;
++        for (int dpi : {96, 144}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) for (int clear : {0, 3}) {
++            QImage device(900, 700, QImage::Format_ARGB32_Premultiplied);
++            device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.documentLayout()->setPaintDevice(&device); doc.setDocumentMargin(0);
++            QFont font; font.setPointSizeF(15.25); font.setStyleHint(QFont::Serif);
++            const QStringList names{"Linux Libertine", "Georgia", "Times", "Source Serif 4"};
++            const auto terminal = font.defaultFamily(); QVERIFY(!terminal.isEmpty());
++            font.setFamilies(names + QStringList{terminal}); doc.setDefaultFont(font);
++            QTextCursor cursor(&doc);
++            QTextFrameFormat floating; floating.setMargin(0); floating.setBorder(0); floating.setPadding(0);
++            floating.setWidth(60); floating.setHeight(90); floating.setPosition(QTextFrameFormat::FloatLeft); floating.setBackground(Qt::red);
++            auto *obstacle = cursor.insertFrame(floating); cursor.setPosition(obstacle->lastPosition() + 1);
++            const auto px = [](double value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
++            const auto edges = [&](double top, double right, double bottom, double left) {
++                return QJsonObject{{"top", px(top)}, {"right", px(right)}, {"bottom", px(bottom)}, {"left", px(left)}};
++            };
++            const QJsonObject box{{"margins", edges(7.25, 3.5, 5.5, 2.25)}, {"padding", edges(1.25, 1.25, 1.25, 1.25)},
++                {"border", QJsonObject{{"solid", QJsonObject{{"width", px(.5)}, {"color", "#225588"}}}}},
++                {"owner_font_scale", 1.25}, {"line_height", QJsonObject{{"multiplier", 1.4}}},
++                {"font_family", QJsonObject{{"stack", QJsonObject{{"names", QJsonArray{"Linux Libertine", "Georgia", "Times", "Source Serif 4"}}, {"fallback", "serif"}}}}},
++                {"clear", clear ? "both" : "none"}, {"background", "#ddffaa"}};
++            const QString text = QStringLiteral("Headinglongword with source action");
++            const QJsonArray spans{QJsonObject{{"kind", "link"}, {"text", text}, {"target", "HeadingTarget"}, {"trail", ""}}};
++            const QJsonObject companion{{"kind", "heading"}, {"depth", 0}, {"level", 2}, {"spans", spans}};
++            const QJsonObject snapshot{{"font_scale", 1.25}, {"font_scale_basis", "normal_body"}, {"small", false},
++                {"superscript", false}, {"subscript", false}, {"font_normalized", false}, {"bold", false}, {"italic", false},
++                {"code", false}, {"language", "th"}, {"classes", ""}, {"role", "normal"}, {"font_features", "normal"}};
++            const QJsonObject section{{"level", 2}, {"title", text}, {"blocks", QJsonArray{companion}},
++                {"heading_style", QJsonObject{{"box", box}, {"font", snapshot}, {"direction", direction == Qt::RightToLeft ? "rtl" : "ltr"}}}};
++            auto paragraph = companion; paragraph.insert("kind", "paragraph"); paragraph.insert("level", 0);
++            const QJsonObject projected{{"kind", "container"}, {"depth", 0}, {"spans", QJsonArray{}},
++                {"container", QJsonObject{{"style", box}, {"blocks", QJsonArray{paragraph}}}}};
++            QTextFrameFormat format; format.setMargin(0); format.setPadding(1.25); format.setBorder(.5);
++            format.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++            format.setBorderStyle(QTextFrameFormat::BorderStyle_Solid); format.setBorderBrush(QColor("#225588"));
++            format.setBackground(QColor("#ddffaa")); format.setLayoutDirection(direction);
++            format.setProperty(plain, QStringLiteral("wikidict.plain-container/1")); format.setProperty(plain + 1, clear);
++            format.setProperty(plain + 2, QJsonDocument(projected).toJson(QJsonDocument::Compact));
++            format.setProperty(plain + 9, QVariantMap{{"edges", QVariantList{7.25, 3.5, 5.5, 2.25}}, {"auto_width", true}});
++            auto *heading = cursor.insertFrame(format);
++            QTextBlockFormat blockFormat; blockFormat.setHeadingLevel(2); blockFormat.setLayoutDirection(direction);
++            blockFormat.setProperty(plain + 4, QVariantMap{{"kind", QStringLiteral("multiplier")}, {"value", 1.4},
++                {"owner_px", font.pointSizeF() * QFontMetricsF(font).fontDpi() / 72}});
++            cursor.setBlockFormat(blockFormat); QTextCharFormat strut; strut.setFont(font); strut.setProperty(QTextFormat::UserProperty + 0x57fa, QStringLiteral("th")); cursor.setBlockCharFormat(strut);
++            QTextCharFormat action = strut; action.setAnchor(true); action.setAnchorHref(QStringLiteral("dict:HeadingTarget")); cursor.insertText(text, action);
++            const auto block = cursor.block();
++            const QVariantMap marker{{"capability", QStringLiteral("wikidict.section-heading/1")}, {"section", QJsonDocument(section).toJson(QJsonDocument::Compact)},
++                {"owner", heading->objectIndex()}, {"index", 1}, {"character", QVariant::fromValue(QTextFormat(block.charFormat()))},
++                {"block", QVariant::fromValue(QTextFormat(block.blockFormat()))}, {"text", block.text()}};
++            format = heading->frameFormat(); format.setProperty(headingProperty, marker); heading->setFrameFormat(format);
++            cursor.setPosition(heading->lastPosition() + 1); cursor.insertText(QStringLiteral("Following body"), QTextCharFormat());
++            for (auto b = doc.begin(); b.isValid(); b = b.next()) if (b.length() == 1) { b.setVisible(false); b.setLineCount(0); }
++            const auto raw = doc.toRawText(); const auto children = doc.rootFrame()->childFrames();
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            const qreal scale = device.logicalDpiY() / qreal(96);
++            for (int width : {260, 120, 260}) {
++                doc.setTextWidth(width * scale); doc.setLayoutEnabled(true); native->documentSize();
++                QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                const auto boxRect = native->frameBoundingRect(heading), obstacleRect = native->frameBoundingRect(obstacle);
++                QVERIFY(!boxRect.intersects(obstacleRect)); if (clear) QVERIFY(boxRect.top() >= obstacleRect.bottom());
++                QVERIFY(boxRect.width() > 0 && boxRect.height() > 0);
++                QCOMPARE(block.layout()->textOption().wrapMode(), QTextOption::WrapAtWordBoundaryOrAnywhere);
++                QCOMPARE(block.text(), text); QCOMPARE(block.blockFormat().headingLevel(), 2);
++                QCOMPARE(block.charFormat().font().families(), names + QStringList{terminal});
++                const auto line = block.layout()->lineAt(0);
++                const auto point = native->blockBoundingRect(block).topLeft() + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
++                QCOMPARE(native->anchorAt(point), QStringLiteral("dict:HeadingTarget"));
++                const int hit = native->hitTest(point, Qt::ExactHit); QVERIFY(hit >= block.position() && hit < block.position() + block.length() - 1);
++                device.fill(Qt::white); { QPainter painter(&device); native->draw(&painter, {}); }
++                int backgroundPixels = 0;
++                const auto paintedBounds = boxRect.toAlignedRect().intersected(device.rect());
++                for (int y = paintedBounds.top(); y <= paintedBounds.bottom(); ++y)
++                    for (int x = paintedBounds.left(); x <= paintedBounds.right(); ++x)
++                        backgroundPixels += device.pixelColor(x, y) == QColor("#ddffaa");
++                QVERIFY(backgroundPixels > 0);
++                QCOMPARE(doc.toRawText(), raw); QCOMPARE(doc.rootFrame()->childFrames(), children); QCOMPARE(heading->frameFormat(), format);
++                doc.setLayoutEnabled(false);
++            }
++            for (int badCase = 0; badCase < 5; ++badCase) {
++                auto bad = marker;
++                if (badCase == 0) bad.insert("owner", obstacle->objectIndex());
++                if (badCase == 1) bad.insert("index", 1.0);
++                if (badCase == 2) bad.insert("text", QStringLiteral("stale"));
++                if (badCase == 3) { auto changed = section; changed.insert("title", QStringLiteral("other")); bad.insert("section", QJsonDocument(changed).toJson(QJsonDocument::Compact)); }
++                if (badCase == 4) { QFont other = font; other.setFamilies(QStringList{terminal}); auto character = block.charFormat(); character.setFont(other); bad.insert("character", QVariant::fromValue(QTextFormat(character))); }
++                auto broken = format; broken.setProperty(headingProperty, bad); heading->setFrameFormat(broken);
++                doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++                doc.setLayoutEnabled(false); heading->setFrameFormat(format); doc.setLayoutEnabled(true); native->documentSize();
++                QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(doc.toRawText(), raw); doc.setLayoutEnabled(false);
++            }
++        }
++    }
++
++    void styledSectionHeadingFontAndMarkerCachesKeepOrderedTypedIdentity()
++    {
++        QFont first; first.setPointSizeF(14.5); first.setStyleHint(QFont::Serif);
++        const auto fallback = first.defaultFamily(); QVERIFY(!fallback.isEmpty());
++        first.setFamilies(QStringList{"Linux Libertine", "Georgia", fallback});
++        QFont second = first; second.setFamilies(QStringList{"Georgia", "Linux Libertine", fallback});
++        QVERIFY(first != second);
++        QTextCharFormat a, b; a.setFont(first); b.setFont(second); QVERIFY(a != b);
++        QTextDocument doc; QTextCursor cursor(&doc); cursor.insertText(QStringLiteral("A"), a); cursor.insertText(QStringLiteral("B"), b);
++        QCOMPARE(doc.begin().begin().fragment().charFormat().font().families(), first.families());
++        auto fragment = doc.begin().begin(); ++fragment; QVERIFY(!fragment.atEnd());
++        QCOMPARE(fragment.fragment().charFormat().font().families(), second.families());
++        constexpr int key = QTextFormat::UserProperty + 0x5807;
++        QTextFrameFormat left, right; left.setProperty(key, QVariantMap{{"index", 1}}); right.setProperty(key, QVariantMap{{"index", 1.0}});
++        QVERIFY(left != right);
++        const auto original = first; QFont detached = first; detached.setFamilies(QStringList{fallback}); QCOMPARE(first, original);
++        // Presence of a heading marker must enter its strict protocol, even
++        // without ordinary ownership or on a separately valid delegated owner.
++        QTextDocument unowned; unowned.setLayoutEnabled(false); unowned.setTextWidth(240);
++        QTextCursor unownedCursor(&unowned); QTextFrameFormat unownedFormat;
++        unownedFormat.setMargin(0); unownedFormat.setBorder(0); unownedFormat.setPadding(0); unownedFormat.setWidth(120);
++        auto *unownedFrame = unownedCursor.insertFrame(unownedFormat); unownedCursor.insertText(QStringLiteral("Unowned source"));
++        const auto width = [](qreal pixels) { return QJsonObject{{"length", QJsonObject{{"unit", "px"}, {"value", pixels}}}}; };
++        ContainerFlexFixture flex(QJsonObject{{"layout", "flex_row"}, {"width", width(240)}},
++            {QJsonObject{{"width", width(100)}}, QJsonObject{{"width", width(100)}}}, Qt::LeftToRight);
++        QTextDocument viewport; viewport.setLayoutEnabled(false); viewport.setDocumentMargin(0); viewport.setTextWidth(240);
++        auto *viewportNative = qobject_cast<QTextDocumentLayout *>(viewport.documentLayout()); QVERIFY(viewportNative);
++        QVERIFY(viewportNative->wikidictConfigureScrollports(14));
++        QTextCursor viewportCursor(&viewport);
++        auto *viewportFrame = viewportCursor.insertFrame(tableViewportOwnerFormat(Qt::LeftToRight, Qt::LeftToRight, 100));
++        auto *grid = viewportFrame->firstCursorPosition().insertTable(1, 1, tableViewportGridFormat(viewportFrame));
++        grid->cellAt(0, 0).firstCursorPosition().insertText(QStringLiteral("Viewport source"));
++        tableViewportSourceRuns(grid);
++        for (auto it = viewportFrame->begin(); !it.atEnd(); ++it) {
++            auto block = it.currentBlock(); if (block.isValid() && block.length() == 1) { block.setVisible(false); block.setLineCount(0); }
++        }
++        const QList<QPair<QTextDocument *, QTextFrame *>> owners{{&unowned, unownedFrame}, {&flex.document, flex.row}, {&viewport, viewportFrame}};
++        for (const auto &item : owners) {
++            auto *document = item.first; auto *frame = item.second;
++            auto *native = qobject_cast<QTextDocumentLayout *>(document->documentLayout()); QVERIFY(native);
++            const auto clean = frame->frameFormat(); const auto raw = document->toRawText();
++            const auto parent = frame->parentFrame(); const auto children = document->rootFrame()->childFrames();
++            document->setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            QVERIFY(!clean.hasProperty(key));
++            for (const QVariant &malformed : {QVariant(QVariantMap{}), QVariant(QStringLiteral("unowned-heading"))}) {
++                document->setLayoutEnabled(false); auto broken = clean; broken.setProperty(key, malformed); frame->setFrameFormat(broken);
++                document->setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++                QCOMPARE(document->toRawText(), raw); QCOMPARE(frame->parentFrame(), parent); QCOMPARE(document->rootFrame()->childFrames(), children);
++                document->setLayoutEnabled(false); frame->setFrameFormat(clean);
++                document->setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                QCOMPARE(frame->frameFormat(), clean); QCOMPARE(document->toRawText(), raw);
++            }
++        }
++    }
++
++    void entryBodyAdjoiningKeepsLeadingFloatsAndTrailingClearance()
++    {
++        constexpr int boundary = QTextFormat::UserProperty + 0x5806;
++        constexpr int plain = QTextFormat::UserProperty + 0x57e0;
++        const auto box = [&](double before, double after, double height, int clear = 0) {
++            QTextFrameFormat format; format.setMargin(0); format.setPadding(0); format.setBorder(0);
++            format.setWidth(QTextLength(QTextLength::PercentageLength, 100)); format.setHeight(height);
++            format.setProperty(plain, QStringLiteral("wikidict.plain-container/1")); format.setProperty(plain + 1, clear);
++            format.setProperty(plain + 9, QVariantMap{{"edges", QVariantList{before, 0.0, after, 0.0}}, {"auto_width", true}});
++            return format;
++        };
++        // Independently specified API cases: float+paragraph, paragraph alone,
++        // float alone, empty-through, blocked and unblocked trailing struts.
++        for (int mode = 0; mode < 7; ++mode) for (bool prefix : {false, true}) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(240);
++            QTextCursor cursor(&doc); QTextBlock prefixBlock;
++            if (prefix) {
++                QTextBlockFormat f; f.setTopMargin(0); f.setBottomMargin(7); f.setLineHeight(10, QTextBlockFormat::FixedHeight);
++                cursor.setBlockFormat(f); cursor.insertText(QStringLiteral("Preamble")); prefixBlock = cursor.block();
++                cursor.insertBlock(QTextBlockFormat(), QTextCharFormat());
++            }
++            QTextFrame *first = nullptr, *floating = nullptr, *normal = nullptr, *empty = nullptr;
++            const auto insert = [&](const QTextFrameFormat &format) {
++                auto *frame = cursor.insertFrame(format); if (!first) first = frame;
++                cursor.setPosition(frame->lastPosition() + 1); return frame;
++            };
++            if (mode == 0 || mode == 2 || mode >= 4) {
++                QTextFrameFormat f; f.setMargin(0); f.setPadding(0); f.setBorder(0); f.setWidth(20); f.setHeight(40);
++                f.setPosition(QTextFrameFormat::FloatLeft); f.setBackground(Qt::red); floating = insert(f);
++            }
++            if (mode == 0 || mode == 1) normal = insert(box(20, 30, 10));
++            if (mode == 3) empty = insert(box(20, 30, 0));
++            if (mode == 4 || mode == 5) {
++                normal = insert(box(0, 0, 10)); empty = insert(box(5, 30, 0, mode == 4 ? 3 : 0));
++            }
++            if (mode == 6) empty = insert(box(5, 30, 0, 3));
++            QVERIFY(first);
++            QTextBlockFormat metadata; metadata.setHeadingLevel(2); metadata.setTopMargin(0); metadata.setBottomMargin(0);
++            metadata.setProperty(boundary, QStringLiteral("wikidict.entry-body-end/1"));
++            cursor.setBlockFormat(metadata); cursor.insertText(QStringLiteral("References")); const auto end = cursor.block();
++            for (auto block = doc.begin(); block.isValid(); block = block.next()) if (block.length() == 1) block.setVisible(false);
++            auto root = doc.rootFrame()->frameFormat(); const QVariantMap policy{
++                {"capability", QStringLiteral("wikidict.entry-body-boundary/1")},
++                {"owner", QVariant::fromValue(static_cast<QObject *>(doc.rootFrame()))}, {"end", end.position()},
++                {"adjoining", QStringLiteral("ordinary")}, {"begin", first->firstPosition() - 1},
++                {"begin_owner", QVariant::fromValue(static_cast<QObject *>(first))},
++                {"begin_format", QVariant::fromValue(QTextFormat())}, {"begin_text", QString()}, {"paragraphs", QVariantList{}}};
++            root.setProperty(boundary, policy); doc.rootFrame()->setFrameFormat(root);
++            const auto raw = doc.toRawText(); const int count = doc.characterCount(); const auto children = doc.rootFrame()->childFrames();
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            for (int width : {240, 180, 240}) {
++                doc.setTextWidth(width); doc.setLayoutEnabled(true); native->documentSize();
++                if (mode == 6) { QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1); break; }
++                QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                // The prefix uses a fixed ten-pixel flow advance, even when
++                // its native glyph bounds are taller, followed by its seven-pixel gap.
++                const qreal origin = prefix ? 10 + 7 : 0;
++                if (floating) QCOMPARE(native->frameBoundingRect(floating).top(), origin);
++                if (normal) QCOMPARE(native->frameBoundingRect(normal).top(), origin);
++                if (empty) QCOMPARE(native->frameBoundingRect(empty).top(), origin + (mode == 4 ? 40 : mode == 5 ? 15 : 0));
++                const qreal expected = mode == 0 || mode == 2 || mode == 5 ? 40 : mode == 1 ? 10 : mode == 4 ? 65 : 0;
++                QCOMPARE(native->blockBoundingRect(end).top(), origin + expected);
++                QCOMPARE(doc.toRawText(), raw); QCOMPARE(doc.characterCount(), count); QCOMPARE(doc.rootFrame()->childFrames(), children);
++                QCOMPARE(doc.rootFrame()->frameFormat(), root);
++                QTextCursor selected(&doc); selected.select(QTextCursor::Document); QVERIFY(selected.selectedText().contains(QStringLiteral("References")));
++                if (floating) {
++                    QImage image(300, 200, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
++                    { QPainter painter(&image); native->draw(&painter, {}); }
++                    QCOMPARE(image.pixelColor(5, qFloor(origin) + 5), QColor(Qt::red));
++                }
++                if (mode == 3 && prefix) {
++                    // The existing UI gap is paid once through the empty body;
++                    // metadata's larger top margin wins the same stock max.
++                    QTextCursor metadataCursor(end);
++                    for (qreal metadataTop : {3.0, 19.0}) {
++                        auto changed = metadata; changed.setTopMargin(metadataTop);
++                        metadataCursor.setBlockFormat(changed); native->documentSize();
++                        QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                        QCOMPARE(native->frameBoundingRect(empty).top(), origin);
++                        QCOMPARE(native->blockBoundingRect(end).top(), qreal(10) + qMax(qreal(7), metadataTop));
++                        QCOMPARE(doc.toRawText(), raw); QCOMPARE(doc.characterCount(), count);
++                        QCOMPARE(doc.rootFrame()->childFrames(), children); QCOMPARE(doc.rootFrame()->frameFormat(), root);
++                    }
++                    metadataCursor.setBlockFormat(metadata); native->documentSize();
++                    QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                    QCOMPARE(native->blockBoundingRect(end).top(), origin + expected);
++                }
++                doc.setLayoutEnabled(false);
++            }
++        }
++    }
++
++    void plainContainerFitContentUsesIntrinsicWidthsCapsAndInvalidation()
++    {
++        constexpr int plain = QTextFormat::UserProperty + 0x57e0;
++        const auto request = [](const QString &unit, qreal amount) {
++            return QVariantMap{{"unit", unit}, {"value", amount}};
++        };
++        const auto format = [&](Qt::LayoutDirection direction, const QString &cap, qreal amount, bool borderBox) {
++            QTextFrameFormat f; f.setMargin(0); f.setPadding(3); f.setBorder(2);
++            f.setWidth(QTextLength(QTextLength::PercentageLength, 100)); f.setLayoutDirection(direction);
++            f.setProperty(plain, QStringLiteral("wikidict.plain-container/1")); f.setProperty(plain + 1, 0);
++            f.setProperty(plain + 9, QVariantMap{{"edges", QVariantList{0., 11., 0., 7.}}, {"auto_width", true}});
++            f.setProperty(plain + 10, QVariantMap{{"autos", QVariantList{false, false, false, false}},
++                {"width", request("fit_content", 0)}, {"max_width", request(cap, amount)}, {"border_box", borderBox}});
++            return f;
++        };
++        const auto metrics = [](const QString &text, const QFont &font) {
++            QTextLayout probe(text, font); QTextOption option; option.setWrapMode(QTextOption::WordWrap);
++            probe.setTextOption(option); probe.beginLayout(); auto line = probe.createLine(); line.setLineWidth(1000000); probe.endLayout();
++            return QPair<qreal, qreal>(probe.minimumWidth(), probe.maximumWidth());
++        };
++        QFont font; font.setPixelSize(16);
++        const QString text = QStringLiteral("Unbreakableword short next");
++        const auto measured = metrics(text, font); QVERIFY(measured.second > measured.first + 20);
++        const qreal minimum = measured.first + 10, preferred = measured.second + 10;
++        for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) for (int mode = 0; mode < 4; ++mode) {
++            QTextDocument doc; doc.setDocumentMargin(0); doc.setDefaultFont(font);
++            QTextOption option; option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere); doc.setDefaultTextOption(option);
++            const QString cap = mode == 3 ? QStringLiteral("percent") : mode == 0 ? QStringLiteral("none") : QStringLiteral("fixed");
++            const qreal amount = mode == 3 ? 50 : mode == 0 ? 0 : minimum / 2;
++            const bool borderBox = mode == 2;
++            QTextCursor cursor(&doc); auto *owner = cursor.insertFrame(format(direction, cap, amount, borderBox));
++            QTextCharFormat link; link.setAnchor(true); link.setAnchorHref(QStringLiteral("dict:FitTarget"));
++            cursor.insertText(text, link);
++            const auto ownedFormat = owner->frameFormat();
++            auto *layout = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(layout);
++            QCOMPARE(layout->property("_wikidictContainerFitContentCapability").toString(), QStringLiteral("wikidict.container-fit-content/1"));
++            for (qreal width : {preferred + 100., (minimum + preferred) / 2 + 18., minimum / 2, preferred + 100.}) {
++                doc.setTextWidth(width); layout->documentSize();
++                QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++                qreal expected = qMin(preferred, qMax(minimum, width - 18));
++                if (mode) expected = qMin(expected, qMax(qreal(10), (mode == 3 ? width / 2 : amount) + (borderBox ? 0 : 10)));
++                const auto rect = layout->frameBoundingRect(owner);
++                QVERIFY2(qAbs(rect.width() - expected) < .1, qPrintable(QStringLiteral("width %1 expected %2").arg(rect.width()).arg(expected)));
++                const qreal left = direction == Qt::RightToLeft ? width - 11 - expected : 7;
++                QVERIFY(qAbs(rect.left() - left) < .1);
++                QCOMPARE(owner->frameFormat(), ownedFormat);
++                const auto found = doc.find(QStringLiteral("Unbreakableword")); QVERIFY(!found.isNull());
++                QCOMPARE(found.charFormat().anchorHref(), QStringLiteral("dict:FitTarget"));
++                if (!mode && width < minimum) QVERIFY(rect.width() > width); // real min-content overflow
++            }
++            if (!mode) {
++                cursor.setPosition(owner->lastPosition()); cursor.insertText(QStringLiteral("extraordinarilylongsuffix"), link);
++                const auto changed = metrics(text + QStringLiteral("extraordinarilylongsuffix"), font);
++                doc.setTextWidth(2000); layout->documentSize();
++                QVERIFY(qAbs(layout->frameBoundingRect(owner).width() - changed.second - 10) < .1);
++                QFont larger = font; larger.setPixelSize(23); doc.setDefaultFont(larger); layout->documentSize();
++                const auto largerMetrics = metrics(text + QStringLiteral("extraordinarilylongsuffix"), larger);
++                QVERIFY(qAbs(layout->frameBoundingRect(owner).width() - largerMetrics.second - 10) < .1);
++                QCOMPARE(owner->frameFormat(), ownedFormat);
++            }
++        }
++    }
++
++    void plainContainerFitContentKeepsNestedTableEmptyAndStrictPolicies()
++    {
++        constexpr int plain = QTextFormat::UserProperty + 0x57e0;
++        const auto format = [] {
++            QTextFrameFormat f; f.setMargin(0); f.setPadding(0); f.setBorder(0);
++            f.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++            f.setProperty(plain, QStringLiteral("wikidict.plain-container/1")); f.setProperty(plain + 1, 0);
++            f.setProperty(plain + 9, QVariantMap{{"edges", QVariantList{0., 0., 0., 0.}}, {"auto_width", true}});
++            f.setProperty(plain + 10, QVariantMap{{"autos", QVariantList{false, false, false, false}},
++                {"width", QVariantMap{{"unit", QStringLiteral("fit_content")}, {"value", 0.}}},
++                {"max_width", QVariantMap{{"unit", QStringLiteral("none")}, {"value", 0.}}}, {"border_box", false}});
++            return f;
++        };
++        QTextDocument doc; doc.setDocumentMargin(0); QTextCursor cursor(&doc);
++        auto *outer = cursor.insertFrame(format()); auto *inner = cursor.insertFrame(format());
++        QTextTableFormat gridFormat; gridFormat.setBorder(0); gridFormat.setCellPadding(0); gridFormat.setCellSpacing(0);
++        auto *grid = cursor.insertTable(1, 2, gridFormat);
++        QTextCharFormat link; link.setAnchor(true); link.setAnchorHref(QStringLiteral("dict:NestedFit"));
++        auto cell = grid->cellAt(0, 0).firstCursorPosition(); cell.insertText(QStringLiteral("Longestnestedword short"), link);
++        cell = grid->cellAt(0, 1).firstCursorPosition(); cell.insertText(QStringLiteral("Secondcolumn"));
++        auto *layout = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(layout);
++        qreal firstWidth = 0;
++        for (qreal width : {900., 70., 900.}) {
++            doc.setTextWidth(width); layout->documentSize();
++            QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++            const auto a = layout->frameBoundingRect(outer), b = layout->frameBoundingRect(inner), table = layout->tableBoundingRect(grid);
++            QVERIFY(qAbs(a.width() - b.width()) < .1); QVERIFY(qAbs(b.width() - table.width()) < .1);
++            if (width == 70) QVERIFY(a.width() > 70); // table's two real unbreakable minima survive
++            else if (!firstWidth) { firstWidth = a.width(); QVERIFY(firstWidth < 900); }
++            else QVERIFY(qAbs(a.width() - firstWidth) < .1);
++            QCOMPARE(doc.find(QStringLiteral("Longestnestedword")).charFormat().anchorHref(), QStringLiteral("dict:NestedFit"));
++            QCOMPARE(grid->rows(), 1); QCOMPARE(grid->columns(), 2);
++        }
++        // A nested percentage cap is indefinite during its parent's intrinsic
++        // probe, then resolves against the final parent. It cannot poison MIN/MAX.
++        auto percentage = inner->frameFormat(); auto percentPolicy = percentage.property(plain + 10).toMap();
++        percentPolicy.insert("max_width", QVariantMap{{"unit", QStringLiteral("percent")}, {"value", 50.}});
++        percentage.setProperty(plain + 10, percentPolicy); inner->setFrameFormat(percentage);
++        doc.setTextWidth(900); layout->documentSize();
++        QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++        QVERIFY(qAbs(layout->frameBoundingRect(outer).width() - firstWidth) < .1);
++        QVERIFY(qAbs(layout->frameBoundingRect(inner).width() - firstWidth / 2) < .1);
++        inner->setFrameFormat(format()); layout->documentSize();
++        QVERIFY(qAbs(layout->frameBoundingRect(inner).width() - firstWidth) < .1);
++        QTextDocument media; media.setDocumentMargin(0); media.setTextWidth(300); QTextCursor mediaCursor(&media);
++        auto *mediaOwner = mediaCursor.insertFrame(format());
++        QImage resource(100, 20, QImage::Format_ARGB32_Premultiplied); resource.fill(Qt::blue);
++        media.addResource(QTextDocument::ImageResource, QUrl(QStringLiteral("fit-image")), resource);
++        QTextImageFormat image; image.setName(QStringLiteral("fit-image")); image.setWidth(40); image.setHeight(20); mediaCursor.insertImage(image);
++        for (qreal width : {40., 90., 40.}) {
++            image.setWidth(width); QTextCursor selected(&media); selected.setPosition(mediaOwner->firstPosition());
++            selected.setPosition(mediaOwner->firstPosition() + 1, QTextCursor::KeepAnchor); selected.setCharFormat(image);
++            media.documentLayout()->documentSize();
++            QCOMPARE(media.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++            QVERIFY(qAbs(media.documentLayout()->frameBoundingRect(mediaOwner).width() - width) < .1);
++        }
++        // Insets must not turn the intrinsic sentinel into a huge definite
++        // containing width for a descendant's 200% maximum.
++        auto padded = outer->frameFormat(); padded.setPadding(7); padded.setBorder(2); outer->setFrameFormat(padded);
++        percentPolicy.insert("max_width", QVariantMap{{"unit", QStringLiteral("percent")}, {"value", 200.}});
++        percentage.setProperty(plain + 10, percentPolicy); inner->setFrameFormat(percentage);
++        doc.setTextWidth(900); layout->documentSize();
++        QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++        QVERIFY(qAbs(layout->frameBoundingRect(outer).width() - firstWidth - 18) < .1);
++        QVERIFY(qAbs(layout->frameBoundingRect(inner).width() - firstWidth) < .1);
++        percentPolicy.insert("max_width", QVariantMap{{"unit", QStringLiteral("percent")}, {"value", 50.}});
++        percentage.setProperty(plain + 10, percentPolicy); inner->setFrameFormat(percentage); layout->documentSize();
++        QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++        QVERIFY(qAbs(layout->frameBoundingRect(inner).width() - firstWidth / 2) < .1);
++        // Negative external margins may clamp the outer contribution to zero;
++        // they cannot manufacture a larger intrinsic border box.
++        inner->setFrameFormat(format()); outer->setFrameFormat(format());
++        auto negative = outer->frameFormat(); negative.setProperty(plain + 9,
++            QVariantMap{{"edges", QVariantList{0., -1000., 0., -1000.}}, {"auto_width", true}});
++        outer->setFrameFormat(negative); doc.setTextWidth(50); layout->documentSize();
++        QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++        QVERIFY(qAbs(layout->frameBoundingRect(outer).width() - firstWidth) < .1);
++        QVERIFY(qAbs(layout->frameBoundingRect(outer).left() + 1000) < .1);
++        QTextDocument empty; empty.setDocumentMargin(0); empty.setTextWidth(300); QTextCursor emptyCursor(&empty);
++        auto *emptyOwner = emptyCursor.insertFrame(format()); auto storage = empty.findBlock(emptyOwner->firstPosition());
++        QVERIFY(storage.isVisible()); empty.documentLayout()->documentSize();
++        QCOMPARE(empty.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++        QCOMPARE(empty.documentLayout()->frameBoundingRect(emptyOwner).width(), qreal(0));
++        QVERIFY(empty.documentLayout()->frameBoundingRect(emptyOwner).height() > 0);
++        storage.setVisible(false);
++        empty.markContentsDirty(0, empty.characterCount()); auto *emptyLayout = empty.documentLayout(); emptyLayout->documentSize();
++        QCOMPARE(emptyLayout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++        QCOMPARE(emptyLayout->frameBoundingRect(emptyOwner).width(), qreal(0));
++        const auto valid = emptyOwner->frameFormat();
++        for (int malformed = 0; malformed < 3; ++malformed) {
++            auto changed = valid; auto policy = changed.property(plain + 10).toMap(); auto width = policy.value("width").toMap();
++            if (malformed == 0) width.insert("value", 1.);
++            else if (malformed == 1) width.insert("unit", QStringLiteral("content-sized"));
++            else changed.clearProperty(plain);
++            policy.insert("width", width); changed.setProperty(plain + 10, policy); emptyOwner->setFrameFormat(changed);
++            emptyLayout->documentSize(); QCOMPARE(emptyLayout->property("_wikidictParagraphBoxLayoutError").toInt(), 1);
++            emptyOwner->setFrameFormat(valid); emptyLayout->documentSize();
++            QCOMPARE(emptyLayout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++            QCOMPARE(emptyLayout->frameBoundingRect(emptyOwner).width(), qreal(0));
++        }
++    }
++
++    void entryBodyPostTableCaretPreservesLeadingAndPendingMargins()
++    {
++        constexpr int boundary = QTextFormat::UserProperty + 0x5806;
++        constexpr int paragraph = QTextFormat::UserProperty + 0x5760;
++        // Only the actual post-table storage caret is transparent. These
++        // authored alternatives must still end leading margin collapse.
++        for (bool preceding : {false, true}) for (int mode = 0; mode < 5; ++mode) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(240);
++            QTextCursor cursor(&doc); QTextBlock first, authoredEmpty;
++            const auto sourceFormat = [&] {
++                QTextBlockFormat format; format.setTopMargin(0); format.setBottomMargin(0);
++                format.setProperty(paragraph, QStringLiteral("wikidict.paragraph-box/2"));
++                format.setProperty(paragraph + 1, 0.0); format.setProperty(paragraph + 2, 0.0);
++                format.setProperty(paragraph + 3, false); return format;
++            };
++            if (preceding) {
++                cursor.setBlockFormat(sourceFormat()); cursor.insertText(QStringLiteral("Before")); first = cursor.block();
++                cursor.insertBlock(QTextBlockFormat(), QTextCharFormat());
++            }
++            QTextTableFormat tableFormat; tableFormat.setMargin(0); tableFormat.setPadding(0); tableFormat.setBorder(0);
++            tableFormat.setCellPadding(0); tableFormat.setCellSpacing(0); tableFormat.setWidth(40);
++            tableFormat.setPosition(QTextFrameFormat::FloatLeft);
++            auto *table = cursor.insertTable(1, 1, tableFormat);
++            table->cellAt(0, 0).firstCursorPosition().insertText(QStringLiteral("FLOAT"));
++            cursor.setPosition(table->lastPosition() + 1);
++            cursor.setBlockFormat(QTextBlockFormat()); const auto caret = cursor.block();
++            QCOMPARE(caret.position(), table->lastPosition() + 1); QCOMPARE(caret.length(), 1);
++            if (mode == 1) cursor.insertText(QStringLiteral("Authored text"));
++            if (mode == 2) { cursor.insertBlock(QTextBlockFormat(), QTextCharFormat()); authoredEmpty = cursor.block(); }
++            if (mode == 3) { cursor.setBlockFormat(sourceFormat()); authoredEmpty = cursor.block(); }
++            if (mode == 4) { QTextBlockFormat painted; painted.setBackground(Qt::yellow); cursor.setBlockFormat(painted); }
++            cursor.insertBlock(sourceFormat(), QTextCharFormat()); cursor.insertText(QStringLiteral("Body")); const auto body = cursor.block();
++            QTextBlockFormat metadata; metadata.setHeadingLevel(2); metadata.setTopMargin(0); metadata.setBottomMargin(0);
++            cursor.insertBlock(metadata, QTextCharFormat()); cursor.insertText(QStringLiteral("References")); const auto end = cursor.block();
++            // The pre-table storage block is not this regression's subject.
++            // Keep the post-table caret and every authored empty block visible.
++            for (auto block = doc.begin(); block.isValid(); block = block.next())
++                if (block.length() == 1 && block.position() == table->firstPosition() - 1) block.setVisible(false);
++            QVERIFY(caret.isVisible()); if (authoredEmpty.isValid()) QVERIFY(authoredEmpty.isVisible());
++            const auto record = [&](const QTextBlock &block, qreal before, qreal after) {
++                return QVariantMap{{"first", block.position()}, {"last", block.position() + block.length() - 1},
++                    {"before", before}, {"after", after}, {"start", 0.0}, {"end", 0.0}, {"through", false},
++                    {"format", QVariant::fromValue(QTextFormat(block.blockFormat()))}, {"text", block.text()}};
++            };
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            const auto originalRoot = doc.rootFrame()->frameFormat(); const auto raw = doc.toRawText();
++            const int count = doc.characterCount(); const auto children = doc.rootFrame()->childFrames();
++            doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            const auto nullBody = native->blockBoundingRect(body), nullTable = native->tableBoundingRect(table);
++            doc.setLayoutEnabled(false); auto endFormat = metadata;
++            endFormat.setProperty(boundary, QStringLiteral("wikidict.entry-body-end/1")); QTextCursor(end).setBlockFormat(endFormat);
++            const int begin = preceding ? first.position() : table->firstPosition() - 1;
++            QObject *beginOwner = preceding ? static_cast<QObject *>(doc.rootFrame()) : static_cast<QObject *>(table);
++            for (int width : {240, 180, 240}) {
++                doc.setTextWidth(width);
++                for (qreal after : {0.0, 30.0}) {
++                    qreal topWithoutBefore = -1;
++                    for (qreal before : {0.0, 20.0}) {
++                        QVariantList records;
++                        if (preceding) records.append(record(first, 0, after));
++                        if (mode == 3) records.append(record(authoredEmpty, 0, 0));
++                        records.append(record(body, before, 0));
++                        const QVariantMap policy{{"capability", QStringLiteral("wikidict.entry-body-boundary/1")},
++                            {"owner", QVariant::fromValue(static_cast<QObject *>(doc.rootFrame()))}, {"end", end.position()},
++                            {"adjoining", QStringLiteral("ordinary")}, {"begin", begin}, {"begin_owner", QVariant::fromValue(beginOwner)},
++                            {"begin_format", QVariant::fromValue(preceding ? QTextFormat(first.blockFormat()) : QTextFormat())},
++                            {"begin_text", preceding ? first.text() : QString()}, {"paragraphs", records}};
++                        auto root = originalRoot; root.setProperty(boundary, policy); doc.rootFrame()->setFrameFormat(root);
++                        doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                        const qreal top = native->blockBoundingRect(body).top();
++                        if (before == 0) topWithoutBefore = top;
++                        else {
++                            const qreal expected = mode == 0 && (!preceding || after == 30) ? 0 : 20;
++                            QCOMPARE(top - topWithoutBefore, expected);
++                        }
++                        if (!preceding && mode == 0) QCOMPARE(top, qreal(0));
++                        QVERIFY(native->blockBoundingRect(end).top() >= native->tableBoundingRect(table).bottom());
++                        QCOMPARE(doc.toRawText(), raw); QCOMPARE(doc.characterCount(), count); QCOMPARE(doc.rootFrame()->childFrames(), children);
++                        QCOMPARE(doc.rootFrame()->frameFormat(), root); doc.setLayoutEnabled(false);
++                    }
++                }
++            }
++            doc.rootFrame()->setFrameFormat(originalRoot); QTextCursor(end).setBlockFormat(metadata); doc.setTextWidth(240);
++            doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            QCOMPARE(native->blockBoundingRect(body), nullBody); QCOMPARE(native->tableBoundingRect(table), nullTable);
++            QCOMPARE(doc.toRawText(), raw); QCOMPARE(doc.characterCount(), count); QCOMPARE(doc.rootFrame()->childFrames(), children);
++        }
++    }
++
++    void entryBodyAdjoiningOwnsTypedParagraphEdgesAndRejectsStaleBindings()
++    {
++        constexpr int boundary = QTextFormat::UserProperty + 0x5806;
++        constexpr int paragraph = QTextFormat::UserProperty + 0x5760;
++        for (bool prefix : {false, true}) for (int mode = 0; mode < 4; ++mode) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(240);
++            QTextCursor cursor(&doc); QTextBlock prefixBlock, heading;
++            if (prefix) {
++                QTextBlockFormat f; f.setBottomMargin(7); cursor.setBlockFormat(f); cursor.insertText(QStringLiteral("Preamble"));
++                prefixBlock = cursor.block(); cursor.insertBlock(QTextBlockFormat(), QTextCharFormat());
++            }
++            QTextFrame *floating = nullptr; QObject *beginOwner = doc.rootFrame(); int begin = cursor.position();
++            if (mode == 0) {
++                QTextFrameFormat f; f.setMargin(0); f.setPadding(0); f.setBorder(0); f.setWidth(20); f.setHeight(80);
++                f.setPosition(QTextFrameFormat::FloatRight); floating = cursor.insertFrame(f);
++                begin = floating->firstPosition() - 1; beginOwner = floating; cursor.setPosition(floating->lastPosition() + 1);
++            }
++            if (mode == 3) {
++                QTextBlockFormat f; f.setHeadingLevel(2); f.setTopMargin(11); f.setBottomMargin(13);
++                cursor.setBlockFormat(f); cursor.insertText(QStringLiteral("Section heading")); heading = cursor.block();
++                cursor.insertBlock(QTextBlockFormat(), QTextCharFormat());
++            }
++            QTextBlockFormat source; source.setProperty(paragraph, QStringLiteral("wikidict.paragraph-box/2"));
++            source.setProperty(paragraph + 1, 0.0); source.setProperty(paragraph + 2, 0.0); source.setProperty(paragraph + 3, mode == 2);
++            cursor.setBlockFormat(source);
++            if (mode != 2) { QTextCharFormat link; link.setAnchor(true); link.setAnchorHref(QStringLiteral("dict:body-edge")); cursor.insertText(QStringLiteral("Owned"), link); }
++            const auto body = cursor.block(); const int last = body.position() + body.length() - 1;
++            QTextBlockFormat metadata; metadata.setHeadingLevel(2); metadata.setProperty(boundary, QStringLiteral("wikidict.entry-body-end/1"));
++            cursor.insertBlock(metadata, QTextCharFormat()); cursor.insertText(QStringLiteral("References")); const auto end = cursor.block();
++            for (auto block = doc.begin(); block.isValid(); block = block.next())
++                if (block.length() == 1 && block != body) block.setVisible(false);
++            const QVariantMap record{{"first", body.position()}, {"last", last}, {"before", 20.0}, {"after", 30.0},
++                {"start", 0.0}, {"end", 0.0}, {"through", mode == 2},
++                {"format", QVariant::fromValue(QTextFormat(body.blockFormat()))}, {"text", body.text()}};
++            auto root = doc.rootFrame()->frameFormat(); const auto beginBlock = doc.findBlock(begin);
++            const QVariantMap policy{{"capability", QStringLiteral("wikidict.entry-body-boundary/1")},
++                {"owner", QVariant::fromValue(static_cast<QObject *>(doc.rootFrame()))}, {"end", end.position()},
++                {"adjoining", QStringLiteral("ordinary")}, {"begin", begin}, {"begin_owner", QVariant::fromValue(beginOwner)},
++                {"begin_format", QVariant::fromValue(beginOwner == doc.rootFrame() ? QTextFormat(beginBlock.blockFormat()) : QTextFormat())},
++                {"begin_text", beginOwner == doc.rootFrame() ? beginBlock.text() : QString()}, {"paragraphs", QVariantList{record}}};
++            root.setProperty(boundary, policy); doc.rootFrame()->setFrameFormat(root);
++            const QString raw = doc.toRawText(); const int count = doc.characterCount();
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            const qreal origin = prefix ? native->blockBoundingRect(prefixBlock).bottom() + 7 : 0;
++            const auto bodyRect = native->blockBoundingRect(body);
++            if (mode == 3) QVERIFY(bodyRect.top() >= native->blockBoundingRect(heading).bottom() + 20);
++            else QCOMPARE(bodyRect.top(), origin);
++            if (mode == 2) { QCOMPARE(bodyRect.height(), 0.0); QCOMPARE(native->blockBoundingRect(end).top(), origin); }
++            else {
++                const qreal endY = floating ? qMax(bodyRect.bottom(), native->frameBoundingRect(floating).bottom()) : bodyRect.bottom();
++                QCOMPARE(native->blockBoundingRect(end).top(), endY);
++                QVERIFY(body.layout()->lineCount() > 0); const auto line = body.layout()->lineAt(0);
++                const QPointF point = body.layout()->position() + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
++                QCOMPARE(native->anchorAt(point), QStringLiteral("dict:body-edge"));
++                const int hit = native->hitTest(point, Qt::ExactHit); QVERIFY(hit >= body.position() && hit < last);
++            }
++            // Foreign owner, stale content, malformed range/type and unmatched
++            // v2 metric ownership fail visibly; exact restoration recovers.
++            QTextDocument foreign;
++            for (int badCase = 0; badCase < 5; ++badCase) {
++                doc.setLayoutEnabled(false); auto bad = policy; auto badRecord = record;
++                if (badCase == 0) bad.insert("begin_owner", QVariant::fromValue(static_cast<QObject *>(foreign.rootFrame())));
++                if (badCase == 1) badRecord.insert("text", QStringLiteral("stale"));
++                if (badCase == 2) badRecord.insert("last", end.position());
++                if (badCase == 3) badRecord.insert("before", 20);
++                if (badCase == 4) badRecord.insert("start", 1.0);
++                if (badCase) bad.insert("paragraphs", QVariantList{badRecord});
++                auto format = root; format.setProperty(boundary, bad); doc.rootFrame()->setFrameFormat(format);
++                doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++                doc.setLayoutEnabled(false); doc.rootFrame()->setFrameFormat(root); doc.setLayoutEnabled(true);
++                native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(native->blockBoundingRect(body), bodyRect);
++            }
++            QCOMPARE(doc.toRawText(), raw); QCOMPARE(doc.characterCount(), count); QCOMPARE(doc.rootFrame()->frameFormat(), root);
++        }
++    }
++
++    void entryBodyBoundaryClearsOnlyAfterAllSections()
++    {
++        constexpr int boundary = QTextFormat::UserProperty + 0x5806;
++        for (int depth : {0, 1, 2}) for (auto side : {QTextFrameFormat::FloatLeft, QTextFrameFormat::FloatRight}) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0);
++            doc.setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 12));
++            QTextCursor cursor(&doc); QList<QTextFrame *> containers, floats;
++            QTextFrameFormat plain; plain.setMargin(0); plain.setPadding(0); plain.setBorder(0);
++            plain.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++            plain.setProperty(QTextFormat::UserProperty + 0x57e0, QStringLiteral("wikidict.plain-container/1"));
++            plain.setProperty(QTextFormat::UserProperty + 0x57e1, 0);
++            for (int i = 0; i < depth; ++i) containers.append(cursor.insertFrame(plain));
++            for (int i = 0; i < 2; ++i) {
++                QTextFrameFormat floating; floating.setMargin(0); floating.setPadding(0); floating.setBorder(0);
++                floating.setWidth(48); floating.setHeight(i == 0 ? 180 : 140);
++                floating.setPosition(i == 0 ? side : side == QTextFrameFormat::FloatLeft ? QTextFrameFormat::FloatRight : QTextFrameFormat::FloatLeft);
++                floating.setBackground(QColor(200, 0, 0, 128));
++                auto *frame = cursor.insertFrame(floating); floats.append(frame);
++                QTextCharFormat link; link.setAnchor(true); link.setAnchorHref(QStringLiteral("dict:body-%1").arg(i));
++                cursor.insertText(QStringLiteral("F%1").arg(i), link);
++                cursor.setPosition(frame->lastPosition() + 1);
++            }
++            if (depth) cursor.setPosition(containers.first()->lastPosition() + 1);
++            QTextBlockFormat heading; heading.setHeadingLevel(2); heading.setTopMargin(0); heading.setBottomMargin(0);
++            cursor.setBlockFormat(heading); cursor.insertText(QStringLiteral("Second section"), QTextCharFormat());
++            const auto second = cursor.block();
++            cursor.insertBlock(QTextBlockFormat(), QTextCharFormat()); cursor.insertText(QStringLiteral("Body tail"));
++            const auto tail = cursor.block();
++            auto metadata = heading; metadata.setProperty(boundary, QStringLiteral("wikidict.entry-body-end/1"));
++            cursor.insertBlock(metadata, QTextCharFormat()); cursor.insertText(QStringLiteral("References"));
++            const auto end = cursor.block();
++            cursor.insertBlock(QTextBlockFormat(), QTextCharFormat()); cursor.insertText(QStringLiteral("Metadata note"));
++            for (auto block = doc.begin(); block.isValid(); block = block.next()) if (block.length() == 1) block.setVisible(false);
++            auto root = doc.rootFrame()->frameFormat(); root.setProperty(boundary, QVariantMap{
++                {"capability", QStringLiteral("wikidict.entry-body-boundary/1")},
++                {"owner", QVariant::fromValue(static_cast<QObject *>(doc.rootFrame()))}, {"end", end.position()}});
++            doc.rootFrame()->setFrameFormat(root);
++            const QString raw = doc.toRawText(); const int count = doc.characterCount();
++            QTextCursor selection(&doc); selection.select(QTextCursor::Document); const QString selected = selection.selectedText();
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            QList<QRectF> firstRects; QSizeF firstSize;
++            int sample = 0;
++            for (int width : {320, 200, 320}) {
++                doc.setLayoutEnabled(false); doc.setTextWidth(width); doc.setLayoutEnabled(true);
++                const auto size = native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                const auto first = native->frameBoundingRect(floats[0]), peer = native->frameBoundingRect(floats[1]);
++                const auto secondRect = native->blockBoundingRect(second), tailRect = native->blockBoundingRect(tail);
++                const auto endRect = native->blockBoundingRect(end);
++                QVERIFY(secondRect.top() < first.bottom()); QVERIFY(tailRect.top() < first.bottom());
++                QCOMPARE(endRect.top(), qMax(first.bottom(), peer.bottom()));
++                QCOMPARE(QTextCursor(second).currentFrame(), doc.rootFrame());
++                QCOMPARE(QTextCursor(end).currentFrame(), doc.rootFrame());
++                for (auto *container : containers) QCOMPARE(native->frameBoundingRect(container).height(), 0.0);
++                const auto line = second.layout()->lineAt(0); QVERIFY(line.isValid());
++                QVERIFY(line.width() <= width - 96 + 1.0 / 64);
++                const auto metadataLine = end.layout()->lineAt(0); QVERIFY(metadataLine.isValid());
++                const QPointF point = endRect.topLeft() + QPointF((metadataLine.cursorToX(0) + metadataLine.cursorToX(1)) / 2,
++                    metadataLine.y() + metadataLine.height() / 2);
++                const int hit = native->hitTest(point, Qt::ExactHit); QVERIFY(hit >= end.position() && hit < end.position() + end.length());
++                QVERIFY(native->anchorAt(point).isEmpty());
++                QImage raster(400, 320, QImage::Format_ARGB32_Premultiplied); raster.fill(Qt::white);
++                { QPainter paint(&raster); native->draw(&paint, {}); }
++                const auto ink = first.adjusted(4, 70, -4, -4).center().toPoint();
++                const auto color = raster.pixelColor(ink); QVERIFY(qAbs(color.red() - 227) <= 1 && qAbs(color.green() - 127) <= 1);
++                const QList<QRectF> rects{first, peer, secondRect, tailRect, endRect};
++                if (sample == 0) { firstRects = rects; firstSize = size; }
++                if (sample == 2) { QCOMPARE(rects, firstRects); QCOMPARE(size, firstSize); }
++                ++sample;
++                QCOMPARE(doc.toRawText(), raw); QCOMPARE(doc.characterCount(), count);
++                selection.select(QTextCursor::Document); QCOMPARE(selection.selectedText(), selected);
++                QCOMPARE(doc.rootFrame()->frameFormat(), root);
++            }
++            const auto original = floats.first()->frameFormat(); auto taller = original; taller.setHeight(210);
++            floats.first()->setFrameFormat(taller); native->documentSize(); QCOMPARE(native->blockBoundingRect(end).top(), 210.0);
++            floats.first()->setFrameFormat(original); native->documentSize(); QCOMPARE(native->documentSize(), firstSize);
++            QCOMPARE(doc.toRawText(), raw);
++        }
++        // No-float and empty-body boundaries retain the existing real block,
++        // including its margins and horizontal-rule allocation, exactly.
++        for (const QString &prefix : {QString(), QStringLiteral("<p>Body</p>")})
++            for (const QString &metadata : {QStringLiteral("<h2>References</h2><p>Note</p>"), QStringLiteral("<hr><p>Attribution</p>")}) {
++                QTextDocument ordinary, owned; ordinary.setHtml(prefix + metadata); ordinary.setTextWidth(320);
++                const auto ordinarySize = ordinary.size();
++                QString marked = metadata; const int close = marked.indexOf(QChar('>'));
++                marked.insert(close, QStringLiteral(" data-wikidict-entry-body-end='wikidict.entry-body-end/1'"));
++                owned.setLayoutEnabled(false); owned.setHtml(prefix + marked); owned.setTextWidth(320);
++                QTextBlock marker;
++                for (auto block = owned.begin(); block.isValid(); block = block.next())
++                    if (block.blockFormat().hasProperty(boundary)) { QVERIFY(!marker.isValid()); marker = block; }
++                QVERIFY(marker.isValid());
++                auto root = owned.rootFrame()->frameFormat(); root.setProperty(boundary, QVariantMap{
++                    {"capability", QStringLiteral("wikidict.entry-body-boundary/1")},
++                    {"owner", QVariant::fromValue(static_cast<QObject *>(owned.rootFrame()))}, {"end", marker.position()}});
++                owned.rootFrame()->setFrameFormat(root); owned.setLayoutEnabled(true);
++                QCOMPARE(owned.size(), ordinarySize); QCOMPARE(owned.toRawText(), ordinary.toRawText());
++                QCOMPARE(owned.characterCount(), ordinary.characterCount());
++                auto a = owned.begin(), b = ordinary.begin();
++                while (a.isValid()) {
++                    QCOMPARE(owned.documentLayout()->blockBoundingRect(a), ordinary.documentLayout()->blockBoundingRect(b));
++                    auto format = a.blockFormat(); format.clearProperty(boundary); QCOMPARE(format, b.blockFormat());
++                    a = a.next(); b = b.next();
++                }
++                QVERIFY(!b.isValid());
++            }
++    }
++
++    void entryBodyBoundaryRejectsStaleForeignAndDuplicateMarkers()
++    {
++        constexpr int boundary = QTextFormat::UserProperty + 0x5806;
++        QTextDocument foreign;
++        for (int failure = 0; failure < 7; ++failure) {
++            QTextDocument doc; doc.setLayoutEnabled(false);
++            doc.setHtml(QStringLiteral("<p>Body</p><h2 data-wikidict-entry-body-end='wikidict.entry-body-end/1'>References</h2><p>Note</p>"));
++            doc.setTextWidth(320); const auto end = doc.find(QStringLiteral("References")).block(); QVERIFY(end.isValid());
++            auto root = doc.rootFrame()->frameFormat(); const QVariantMap policy{
++                {"capability", QStringLiteral("wikidict.entry-body-boundary/1")},
++                {"owner", QVariant::fromValue(static_cast<QObject *>(doc.rootFrame()))}, {"end", end.position()}};
++            root.setProperty(boundary, policy); doc.rootFrame()->setFrameFormat(root);
++            const auto endFormat = end.blockFormat(); auto bad = policy;
++            if (failure == 0) bad.insert("end", end.position() + 1);
++            if (failure == 1) bad.insert("end", double(end.position()));
++            if (failure == 2) bad.insert("owner", QVariant::fromValue(static_cast<QObject *>(foreign.rootFrame())));
++            if (failure == 3) bad.insert("extra", true);
++            if (failure <= 3) { auto format = root; format.setProperty(boundary, bad); doc.rootFrame()->setFrameFormat(format); }
++            if (failure == 4) { auto format = endFormat; format.setProperty(boundary, false); QTextCursor(end).setBlockFormat(format); }
++            if (failure == 5) { auto format = doc.begin().blockFormat(); format.setProperty(boundary, QStringLiteral("wikidict.entry-body-end/1")); QTextCursor(doc.begin()).setBlockFormat(format); }
++            if (failure == 6) { auto format = root; format.clearProperty(boundary); doc.rootFrame()->setFrameFormat(format); }
++            const QString raw = doc.toRawText(); const int count = doc.characterCount();
++            doc.setLayoutEnabled(true); auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            native->documentSize(); QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++            QCOMPARE(doc.toRawText(), raw); QCOMPARE(doc.characterCount(), count);
++            doc.setLayoutEnabled(false); doc.rootFrame()->setFrameFormat(root); QTextCursor(end).setBlockFormat(endFormat);
++            auto first = doc.begin().blockFormat(); first.clearProperty(boundary); QTextCursor(doc.begin()).setBlockFormat(first);
++            doc.markContentsDirty(0, count); doc.setLayoutEnabled(true); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(doc.toRawText(), raw);
++            doc.setPlainText(QStringLiteral("Recovered stock content")); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            QVERIFY(!doc.rootFrame()->frameFormat().hasProperty(boundary));
++        }
++    }
++
++    void authoredInlineHelpKeepsMetricsAndRejectsEmptyOwnerTargets()
++    {
++        constexpr int policy = QTextFormat::UserProperty + 0x5804, owners = QTextFormat::UserProperty + 0x5805;
++        const QVariantMap help{{"policy", QStringLiteral("wikidict.inline-text/1")}, {"normalized", false}, {"cursor", QStringLiteral("help")}};
++        QTextDocument plain, authored;
++        for (auto *doc : {&plain, &authored}) {
++            doc->setLayoutEnabled(false); doc->setDocumentMargin(0); doc->setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 12));
++            QTextCursor cursor(doc); QTextCharFormat format;
++            format.setFontItalic(true);
++            if (doc == &authored) format.setProperty(policy, help);
++            cursor.insertText(QStringLiteral("Help text keeps its glyphs"), format); doc->setTextWidth(160); doc->setLayoutEnabled(true);
++        }
++        auto *native = qobject_cast<QTextDocumentLayout *>(authored.documentLayout()); QVERIFY(native);
++        QCOMPARE(authored.size(), plain.size()); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++        QCOMPARE(authored.toRawText(), plain.toRawText());
++        QCOMPARE(authored.begin().layout()->lineCount(), plain.begin().layout()->lineCount());
++        for (int i = 0; i < authored.begin().layout()->lineCount(); ++i)
++            QCOMPARE(authored.begin().layout()->lineAt(i).rect(), plain.begin().layout()->lineAt(i).rect());
++        QImage ordinaryPixels(240, 120, QImage::Format_ARGB32_Premultiplied), helpPixels(ordinaryPixels.size(), ordinaryPixels.format());
++        ordinaryPixels.fill(Qt::white); helpPixels.fill(Qt::white);
++        { QPainter painter(&ordinaryPixels); plain.drawContents(&painter); }
++        { QPainter painter(&helpPixels); authored.drawContents(&painter); }
++        QCOMPARE(helpPixels, ordinaryPixels);
++        for (const QVariant &bad : {QVariant(true), QVariant(0), QVariant(QStringLiteral("auto"))}) {
++            auto malformed = help; malformed.insert("cursor", bad);
++            QTextCursor cursor(&authored); cursor.select(QTextCursor::Document); auto format = cursor.charFormat(); format.setProperty(policy, malformed);
++            cursor.setCharFormat(format); authored.markContentsDirty(0, authored.characterCount()); native->documentSize();
++            QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++            format.setProperty(policy, help); cursor.setCharFormat(format); authored.markContentsDirty(0, authored.characterCount()); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++        }
++        authored.setLayoutEnabled(false); auto metric = help; metric.insert("height", 24.0);
++        QTextCharFormat empty; empty.setFont(authored.defaultFont()); empty.setProperty(policy, metric);
++        auto block = authored.begin().blockFormat(); block.setProperty(owners, QVariantMap{
++            {"text", authored.begin().text()}, {"owners", QVariantList{QVariantMap{{"offset", 0}, {"format", QVariant::fromValue(QTextFormat(empty))}}}}});
++        QTextCursor(authored.begin()).setBlockFormat(block); authored.setLayoutEnabled(true); native->documentSize();
++        QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++        authored.setLayoutEnabled(false); metric.remove("cursor"); empty.setProperty(policy, metric);
++        block.setProperty(owners, QVariantMap{{"text", authored.begin().text()},
++            {"owners", QVariantList{QVariantMap{{"offset", 0}, {"format", QVariant::fromValue(QTextFormat(empty))}}}}});
++        QTextCursor(authored.begin()).setBlockFormat(block); authored.setLayoutEnabled(true); native->documentSize();
++        QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(authored.toRawText(), plain.toRawText());
++        QCOMPARE(authored.characterCount(), plain.characterCount());
++    }
++
++    void authoredInlineMetricsUseOneBaselineAndPreserveLegacyFont()
++    {
++        constexpr int policyKey = QTextFormat::UserProperty + 0x5804;
++        for (int dpi : {96, 192}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++            QImage device(1000, 600, QImage::Format_ARGB32_Premultiplied);
++            device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
++            const qreal scaling = qreal(device.logicalDpiY()) / QFontMetricsF(QFont()).fontDpi();
++            QTextDocument document; document.setDefaultFont(QFont("DejaVu Sans", 24)); document.setDocumentMargin(0);
++            document.documentLayout()->setPaintDevice(&device);
++            auto option = document.defaultTextOption(); option.setTextDirection(direction); document.setDefaultTextOption(option);
++            auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native);
++            QCOMPARE(native->property("_wikidictInlineTextCapability").toString(), QStringLiteral("wikidict.inline-text/1"));
++            for (bool normalized : {false, true}) for (qreal rise : {-11.25, 13.5}) {
++                document.clear(); QTextCursor cursor(&document);
++                auto format = cursor.charFormat(); format.setFont(document.defaultFont());
++                format.setVerticalAlignment(QTextCharFormat::AlignSuperScript);
++                const QVariantMap policy{{"policy", QStringLiteral("wikidict.inline-text/1")}, {"normalized", normalized},
++                    {"height", 72.0}, {"shift", rise}};
++                format.setProperty(policyKey, policy); format.setAnchor(true); format.setAnchorHref("dict:Script7");
++                cursor.insertText(QStringLiteral("7"), format); document.setTextWidth(400 * scaling);
++                native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                const auto block = document.begin(); const auto *layout = block.layout(); QCOMPARE(layout->lineCount(), 1);
++                const auto line = layout->lineAt(0); const auto *engine = layout->engine();
++                const auto &item = engine->layoutData->items.at(engine->findItem(0));
++                const QFont used = engine->font(item); const QFontMetricsF run(used, &device);
++                QFont independent(document.defaultFont(), &device);
++                if (!normalized) independent.setPointSize((independent.pointSize() * 2) / 3);
++                QCOMPARE(used.pointSizeF(), independent.pointSizeF());
++                const QFontMetricsF owner(block.charFormat().font(), &device);
++                const qreal leading = (72.0 * scaling - run.ascent() - run.descent()) / 2;
++                const qreal above = qMax(owner.ascent() + qMax(qreal(0), owner.leading()) / 2,
++                    run.ascent() + leading + rise * scaling);
++                const qreal below = qMax(owner.descent() + qMax(qreal(0), owner.leading()) / 2,
++                    run.descent() + leading - rise * scaling);
++                QVERIFY(qAbs(line.ascent() - above) < .04);
++                QVERIFY(qAbs(line.height() - above - below) < .06);
++                const auto geometry = native->wikidictLogicalPosition(0);
++                QVERIFY(!geometry.value("handled").toBool());
++                QVERIFY(geometry.contains("inlineCharacterRect"));
++                const auto character = geometry.value("inlineCharacterRect").toRectF();
++                QVERIFY(qAbs(character.top() - (line.y() + line.ascent() - rise * scaling - run.ascent())) < .06);
++                QVERIFY(qAbs(character.height() - run.ascent() - run.descent()) < .06);
++                const auto caret = native->wikidictLogicalPosition(1).value("cursorRect").toRectF();
++                QVERIFY(qAbs(caret.top() - character.top()) < .06);
++                QVERIFY(qAbs(caret.height() - character.height()) < .06);
++                const QString raw = document.toRawText(); const int revision = document.revision();
++                device.fill(Qt::white); QPainter painter(&device); native->draw(&painter, {}); painter.end();
++                const qreal x = (line.cursorToX(0) + line.cursorToX(1)) / 2;
++                const QPointF hit(x, line.position().y() + line.ascent() - rise * scaling - run.xHeight() / 2);
++                QCOMPARE(native->hitTest(hit, Qt::ExactHit), 0);
++                QCOMPARE(native->anchorAt(hit), QStringLiteral("dict:Script7"));
++                QCOMPARE(document.toRawText(), raw); QCOMPARE(document.revision(), revision);
++                QCOMPARE(document.begin().begin().fragment().charFormat().property(policyKey).toMap(), policy);
++            }
++            // A parent SUP metric owner covers every wrapped SMALL descendant
++            // line, not only the line containing a zero-width start marker.
++            for (qreal factor : {1.0, 0.0}) {
++                document.clear(); QTextCursor wrapped(&document);
++                QTextCharFormat owner; owner.setFont(document.defaultFont()); owner.setFontPointSize(72);
++                owner.setVerticalAlignment(QTextCharFormat::AlignSuperScript);
++                auto child = owner; child.setFontPointSize(12);
++                child.setProperty(policyKey, QVariantMap{{"policy", QStringLiteral("wikidict.inline-text/1")}, {"normalized", false},
++                    {"height_font", QVariant::fromValue(QTextFormat(owner))}, {"height_factor", factor}});
++                wrapped.insertText(QStringLiteral("7 7 7 7 7 7 7 7 7 7 7 7"), child); document.setTextWidth(45 * scaling);
++                native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                QFont ownerUsed(owner.font(), &device); ownerUsed.setPointSize((ownerUsed.pointSize() * 2) / 3);
++                const QFontMetricsF ownerMetrics(ownerUsed, &device);
++                const qreal ownerHeight = factor * ownerUsed.pointSizeF() * ownerMetrics.fontDpi() / 72.0;
++                const qreal ownerRise = (ownerMetrics.ascent() + ownerMetrics.descent()) / 2;
++                const qreal expectedAbove = ownerMetrics.ascent() + (ownerHeight - ownerMetrics.ascent() - ownerMetrics.descent()) / 2 + ownerRise;
++                QVERIFY(document.begin().layout()->lineCount() > 1);
++                for (int line = 0; line < document.begin().layout()->lineCount(); ++line)
++                    QVERIFY(document.begin().layout()->lineAt(line).ascent() >= expectedAbove - .06);
++            }
++
++        }
++    }
++
++    void authoredInlineUnderlineKeepsDottedLayerAcrossLinkState()
++    {
++        constexpr int policyKey = QTextFormat::UserProperty + 0x5804;
++        for (int dpi : {96, 192}) {
++            QImage image(900, 300, QImage::Format_ARGB32_Premultiplied);
++            image.setDotsPerMeterX(qRound(dpi / .0254)); image.setDotsPerMeterY(qRound(dpi / .0254));
++            QTextDocument document; document.setDefaultFont(QFont("DejaVu Sans", 24)); document.setDocumentMargin(8);
++            document.documentLayout()->setPaintDevice(&image); QTextCursor cursor(&document);
++            auto format = cursor.charFormat(); format.setForeground(Qt::black); format.setAnchor(true); format.setAnchorHref("dict:Joyo");
++            format.setUnderlineColor(QColor("#0000ff"));
++            format.setProperty(policyKey, QVariantMap{{"policy", QStringLiteral("wikidict.inline-text/1")}, {"normalized", false},
++                {"decoration", QVariantMap{{"style", QStringLiteral("dotted")}, {"color", QStringLiteral("#ff0000")}, {"thickness", 1.0}}}});
++            cursor.insertText(QString::fromUtf8("J\xc5\x8dy\xc5\x8d"), format); document.setTextWidth(700);
++            const QString raw = document.toRawText(); int redWithLink = 0;
++            for (bool linkUnderline : {true, false}) {
++                cursor.select(QTextCursor::Document); auto changed = cursor.charFormat();
++                changed.setUnderlineStyle(linkUnderline ? QTextCharFormat::SingleUnderline : QTextCharFormat::NoUnderline);
++                cursor.setCharFormat(changed); image.fill(Qt::white);
++                QPainter painter(&image); painter.setRenderHint(QPainter::Antialiasing, false); document.drawContents(&painter); painter.end();
++                int red = 0, blue = 0;
++                for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
++                    red += image.pixelColor(x, y) == QColor("#ff0000"); blue += image.pixelColor(x, y) == QColor("#0000ff");
++                }
++                QVERIFY(red > 0);
++                if (linkUnderline) { QVERIFY(blue > 0); redWithLink = red; }
++                else { QCOMPARE(blue, 0); QCOMPARE(red, redWithLink); }
++                QCOMPARE(document.toRawText(), raw); QCOMPARE(cursor.charFormat().anchorHref(), QStringLiteral("dict:Joyo"));
++            }
++            // Keep the typed traversal mode fixed while changing only the
++            // explicit source stroke; zero must not invent an ink extent.
++            QTextDocument zeroDocument; zeroDocument.setDefaultFont(QFont("DejaVu Sans", 24)); zeroDocument.setDocumentMargin(0);
++            zeroDocument.documentLayout()->setPaintDevice(&image); zeroDocument.setTextWidth(700);
++            QTextCursor zeroCursor(&zeroDocument); QTextCharFormat plain;
++            plain.setFont(zeroDocument.defaultFont()); plain.setForeground(Qt::black);
++            const QVariantMap baseline{{"policy", QStringLiteral("wikidict.inline-text/1")}, {"normalized", true}};
++            plain.setProperty(policyKey, baseline); zeroCursor.insertText(QStringLiteral("x"), plain);
++            zeroCursor.select(QTextCursor::Document);
++            const auto render = [&] {
++                auto frame = image.copy(); frame.fill(Qt::white);
++                QPainter painter(&frame); zeroDocument.drawContents(&painter); painter.end(); return frame;
++            };
++            const auto rawZero = zeroDocument.toRawText();
++            for (bool legacyUnderline : {false, true}) {
++                auto original = plain; original.setUnderlineStyle(legacyUnderline ? QTextCharFormat::SingleUnderline : QTextCharFormat::NoUnderline);
++                zeroCursor.setCharFormat(original); const auto beforeSize = zeroDocument.documentLayout()->documentSize(); const auto beforePixels = render();
++                auto withZero = original; auto zeroPolicy = baseline;
++                zeroPolicy.insert("decoration", QVariantMap{{"style", QStringLiteral("dotted")}, {"color", QStringLiteral("#ff0000")}, {"thickness", 0.0}});
++                withZero.setProperty(policyKey, zeroPolicy); zeroCursor.setCharFormat(withZero);
++                QCOMPARE(zeroDocument.documentLayout()->documentSize(), beforeSize);
++                QCOMPARE(zeroDocument.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++                QCOMPARE(render(), beforePixels); QCOMPARE(zeroDocument.toRawText(), rawZero);
++                QCOMPARE(zeroCursor.charFormat().underlineStyle(), original.underlineStyle());
++            }
++            auto invalid = format; auto p = invalid.property(policyKey).toMap(); p.insert("normalized", 0.0); invalid.setProperty(policyKey, p);
++            QVERIFY(format != invalid); cursor.setCharFormat(invalid); document.documentLayout()->documentSize();
++            QCOMPARE(document.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 1);
++            cursor.setCharFormat(format); document.documentLayout()->documentSize();
++            QCOMPARE(document.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++            if (dpi == 192) for (const QString &field : {QStringLiteral("height"), QStringLiteral("shift"), QStringLiteral("thickness")}) {
++                auto overflow = format; auto typed = overflow.property(policyKey).toMap();
++                const qreal finiteSource = qreal(QFIXED_MAX) * .75;
++                if (field == QStringLiteral("thickness")) {
++                    auto decoration = typed.value("decoration").toMap(); decoration.insert(field, finiteSource); typed.insert("decoration", decoration);
++                } else typed.insert(field, finiteSource);
++                overflow.setProperty(policyKey, typed); cursor.setCharFormat(overflow); document.documentLayout()->documentSize();
++                QCOMPARE(document.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 2);
++                cursor.setCharFormat(format); document.documentLayout()->documentSize();
++                QCOMPARE(document.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++                QCOMPARE(document.toRawText(), raw); QCOMPARE(cursor.charFormat().anchorHref(), QStringLiteral("dict:Joyo"));
++            }
++        }
++    }
++
++    void authoredInlineEmptyOwnersKeepTextOffsetsAndRejectStaleBinding()
++    {
++        constexpr int policyKey = QTextFormat::UserProperty + 0x5804;
++        constexpr int ownersKey = QTextFormat::UserProperty + 0x5805;
++        QTextDocument document; document.setDefaultFont(QFont("DejaVu Sans", 18)); document.setDocumentMargin(0);
++        document.setPlainText("ab"); document.setTextWidth(400);
++        const auto originalText = document.toRawText(); const int count = document.characterCount();
++        auto strut = document.begin().charFormat(); strut.setFontPointSize(30); strut.setVerticalAlignment(QTextCharFormat::AlignSuperScript);
++        strut.setProperty(policyKey, QVariantMap{{"policy", QStringLiteral("wikidict.inline-text/1")}, {"normalized", false},
++            {"height", 100.0}, {"shift", 20.0}});
++        QVariantList owners;
++        for (int offset : {0, 1, 1, 2}) owners.append(QVariantMap{{"offset", offset}, {"format", QVariant::fromValue(QTextFormat(strut))}});
++        auto blockFormat = document.begin().blockFormat(); blockFormat.setProperty(ownersKey, QVariantMap{{"text", QStringLiteral("ab")}, {"owners", owners}});
++        QTextCursor cursor(document.begin()); cursor.setBlockFormat(blockFormat);
++        document.documentLayout()->documentSize();
++        QCOMPARE(document.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++        QVERIFY(document.begin().layout()->lineAt(0).height() >= 99.98);
++        QCOMPARE(document.toRawText(), originalText); QCOMPARE(document.characterCount(), count);
++        cursor.select(QTextCursor::Document); QCOMPARE(cursor.selectedText(), QStringLiteral("ab"));
++        const auto usedSize = document.size(); const auto before = document.begin().blockFormat(); const int revision = document.revision();
++        document.markContentsDirty(0, count); QCOMPARE(document.size(), usedSize); QCOMPARE(document.revision(), revision);
++        QCOMPARE(document.begin().blockFormat(), before);
++        auto bad = blockFormat.property(ownersKey).toMap(); bad.insert("text", QStringLiteral("stale"));
++        blockFormat.setProperty(ownersKey, bad); cursor.setBlockFormat(blockFormat); document.documentLayout()->documentSize();
++        QCOMPARE(document.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 1);
++        cursor.setBlockFormat(before); document.documentLayout()->documentSize();
++        QCOMPARE(document.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
++        QCOMPARE(document.toRawText(), originalText);
++    }
++
++    void authoredRuleUsesSourceBoxWithoutTextStrutAndPaintsExactFill()
++    {
++        for (int dpi : {96, 144}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft})
++            for (bool dark : {false, true}) for (const QString &unit : {QStringLiteral("px"), QStringLiteral("em")}) {
++                AuthoredRuleFixture f(dpi, direction);
++                const qreal multiplier = unit == QStringLiteral("em") ? 20 : 1;
++                const auto block = f.append(AuthoredRuleFixture::source(.5, .25, .5, .75, .25, unit), true, 20, dark);
++                for (int pixels : {8, 64}) {
++                    QFont font = f.document.defaultFont(); font.setPixelSize(pixels); f.document.setDefaultFont(font);
++                    for (qreal width : {200.5, 60.25, 15.0, 200.5}) {
++                        f.layout(width); QCOMPARE(f.native->wikidictParagraphBoxLayoutError(), 0);
++                        const auto raw = f.document.toRawText(); const int revision = f.document.revision(), count = f.document.characterCount();
++                        const auto format = block.blockFormat();
++                        const auto fixed = [&](qreal value) { return QFixed::fromReal(value * multiplier * f.scale).toReal(); };
++                        const auto rect = f.native->blockBoundingRect(block);
++                        QVERIFY(qAbs(rect.x() - fixed(.25)) < .04); QVERIFY(qAbs(rect.y() - fixed(.25)) < .04);
++                        QVERIFY(qAbs(rect.height() - fixed(.5)) < .04);
++                        QVERIFY(qAbs(rect.width() - qMax(qreal(0), QFixed::fromReal(width * f.scale).toReal() - fixed(.5) - fixed(.25))) < .04);
++                        QCOMPARE(block.layout()->lineCount(), 0); QCOMPARE(block.lineCount(), 0); QVERIFY(block.text().isEmpty());
++                        const auto query = f.native->wikidictAuthoredRuleGeometry(block.position());
++                        QVERIFY(query.value("handled").toBool()); QCOMPARE(query.value("error").toInt(), 0);
++                        QCOMPARE(query.value("characterRect").toRectF(), rect); QCOMPARE(query.value("cursorRect").toRectF().height(), rect.height());
++                        if (rect.width() > 0 && rect.height() > 0) QCOMPARE(f.native->hitTest(rect.center(), Qt::ExactHit), block.position());
++                        QImage canvas(f.device.size(), QImage::Format_ARGB32_Premultiplied); canvas.fill(Qt::white);
++                        QPainter painter(&canvas); f.native->draw(&painter, {}); painter.end();
++                        if (rect.height() >= 1 && rect.width() >= 2) {
++                            const QPoint pixel(qCeil(rect.left()) + 1, qCeil(rect.top()));
++                            if (rect.contains(QPointF(pixel) + QPointF(.5, .5))) QCOMPARE(canvas.pixelColor(pixel), QColor(dark ? "#abcdef" : "#123456"));
++                        }
++                        QCOMPARE(f.document.toRawText(), raw); QCOMPARE(f.document.characterCount(), count); QCOMPARE(f.document.revision(), revision); QCOMPARE(block.blockFormat(), format);
++                    }
++                }
++            }
++    }
++
++    void authoredRuleZeroHeightMarginsAdjoinThroughAndPositiveHeightSeparates()
++    {
++        for (int dpi : {96, 144}) for (qreal middleHeight : {0.0, 2.0}) {
++            AuthoredRuleFixture f(dpi);
++            const auto first = f.append(AuthoredRuleFixture::source(3, 5, 0, 7, 0), true);
++            const auto middle = f.append(AuthoredRuleFixture::source(middleHeight, 11, 0, 13, 0), false);
++            const auto last = f.append(AuthoredRuleFixture::source(2, 17, 0, 19, 0), false);
++            f.layout(100); QCOMPARE(f.native->wikidictParagraphBoxLayoutError(), 0);
++            const auto firstRect = f.native->blockBoundingRect(first), middleRect = f.native->blockBoundingRect(middle), lastRect = f.native->blockBoundingRect(last);
++            const qreal expectedLast = middleHeight == 0 ? 25 : 38;
++            QVERIFY(qAbs(firstRect.top() / f.scale - 5) < .04); QVERIFY(qAbs(firstRect.height() / f.scale - 3) < .04);
++            QVERIFY(qAbs(middleRect.top() / f.scale - 19) < .04); QVERIFY(qAbs(middleRect.height() / f.scale - middleHeight) < .04);
++            QVERIFY(qAbs(lastRect.top() / f.scale - expectedLast) < .04);
++            QVERIFY(qAbs(f.native->documentSize().height() / f.scale - (expectedLast + 2 + 19)) < .04);
++            const auto query = f.native->wikidictAuthoredRuleGeometry(middle.position());
++            QCOMPARE(query.value("error").toInt(), 0); QCOMPARE(query.value("cursorRect").toRectF().height(), middleRect.height());
++            const auto raw = f.document.toRawText(); const int revision = f.document.revision();
++            for (qreal width : {40.25, 0.0, 100.0}) {
++                f.layout(width); QCOMPARE(f.native->wikidictParagraphBoxLayoutError(), 0);
++                QVERIFY(qAbs(f.native->blockBoundingRect(last).top() / f.scale - expectedLast) < .04);
++                QVERIFY(qAbs(f.native->blockBoundingRect(last).width() / f.scale - width) < .04);
++                QCOMPARE(f.document.toRawText(), raw); QCOMPARE(f.document.revision(), revision);
++            }
++        }
++    }
++
++    void authoredRuleRejectsForeignMetadataAndLegacyGapThenRecoversCopy()
++    {
++        AuthoredRuleFixture f; const auto block = f.append(AuthoredRuleFixture::source(1, 2, 0, 3, 0), true);
++        f.layout(100); QCOMPARE(f.native->wikidictParagraphBoxLayoutError(), 0);
++        const auto original = block.blockFormat(); const auto policy = original.property(AuthoredRuleFixture::policy).toMap();
++        const auto raw = f.document.toRawText();
++        for (int mode = 0; mode < 5; ++mode) {
++            auto foreign = original; auto value = policy;
++            if (mode == 0) value.insert("height", 1); // Same numeric value, wrong native metatype.
++            if (mode == 1) value.insert("dark", 0); // Bool is not interchangeable with an integer.
++            if (mode == 2) value.insert("source", QString::fromUtf8(value.value("source").toByteArray()));
++            if (mode == 3) value.insert("extra", true);
++            if (mode == 4) foreign.setTopMargin(2);
++            foreign.setProperty(AuthoredRuleFixture::policy, value);
++            QTextCursor cursor(block); cursor.setBlockFormat(foreign); f.native->documentSize();
++            QVERIFY(f.native->wikidictParagraphBoxLayoutError() != 0);
++            const auto refused = f.native->wikidictAuthoredRuleGeometry(block.position());
++            QVERIFY(refused.value("handled").toBool()); QVERIFY(refused.value("error").toInt() != 0);
++            cursor.setBlockFormat(original); f.native->documentSize(); QCOMPARE(f.native->wikidictParagraphBoxLayoutError(), 0);
++            QCOMPARE(block.blockFormat(), original); QCOMPARE(f.document.toRawText(), raw);
++        }
++        QTextCursor cursor(&f.document); cursor.movePosition(QTextCursor::End); cursor.insertBlock(); cursor.insertText("Following source");
++        auto ordinary = cursor.blockFormat(); ordinary.clearProperty(AuthoredRuleFixture::policy); ordinary.setTopMargin(8); cursor.setBlockFormat(ordinary);
++        f.native->documentSize(); QVERIFY(f.native->wikidictParagraphBoxLayoutError() != 0);
++        ordinary.setTopMargin(0); cursor.setBlockFormat(ordinary); f.native->documentSize(); QCOMPARE(f.native->wikidictParagraphBoxLayoutError(), 0);
++        AuthoredRuleFixture copied;
++        QTextCursor all(&f.document); all.select(QTextCursor::Document); QTextCursor destination(&copied.document); destination.insertFragment(QTextDocumentFragment(all));
++        copied.layout(100); QCOMPARE(copied.native->wikidictParagraphBoxLayoutError(), 0);
++        QCOMPARE(copied.document.toRawText(), f.document.toRawText());
++        QCOMPARE(copied.document.begin().blockFormat().property(AuthoredRuleFixture::policy), policy);
++        QCOMPARE(copied.native->blockBoundingRect(copied.document.begin()), f.native->blockBoundingRect(f.document.begin()));
++    }
++
 +    void namedAnchorPreservesFollowingLinkRangeAndNameOnlySemantics()
 +    {
 +#ifdef QT_NO_WIDGETS

@@ -37,6 +37,7 @@ struct Placement {
     int cellFirst = -1;
     int cellLast = -1;
     bool ordinary = false;
+    bool bodyAdjoining = false;
     bool empty = false;
     qreal scale = 1;
     ParagraphBox::Resolved box;
@@ -97,6 +98,13 @@ inline bool project(QTextDocument *document, QVector<FlowConstruction::Owner> &o
         == QStringLiteral("wikidict.paragraph-box/2"));
     const QString raw = document->toRawText();
     const int count = document->characterCount();
+    constexpr int bodyProperty = QTextFormat::UserProperty + 0x5806;
+    const auto body = document->rootFrame()->frameFormat().property(bodyProperty).toMap();
+    const bool adjoiningBody = body.value(QStringLiteral("adjoining")) == QVariant(QStringLiteral("ordinary"));
+    const int bodyBegin = body.value(QStringLiteral("begin")).toInt(), bodyEnd = body.value(QStringLiteral("end")).toInt();
+    if (adjoiningBody) CompiledContent::require(body.value(QStringLiteral("begin")).metaType().id() == QMetaType::Int
+        && body.value(QStringLiteral("end")).metaType().id() == QMetaType::Int && bodyBegin >= 0 && bodyBegin <= bodyEnd
+        && layout->property("_wikidictEntryBodyAdjoiningCapability") == QVariant(QStringLiteral("wikidict.entry-body-adjoining/1")));
     QVector<Placement> plans;
     plans.reserve(owners.size());
     for (auto &owner : owners) {
@@ -171,6 +179,12 @@ inline bool project(QTextDocument *document, QVector<FlowConstruction::Owner> &o
         } else {
             p.box = {legacy, {}, false};
         }
+        p.bodyAdjoining = adjoiningBody && p.container == document->rootFrame()
+            && owner.first.position() >= bodyBegin && owner.last.position() < bodyEnd
+            && p.ordinary && p.box.authoredMargins;
+        // No implicit reader gap acquires source-margin meaning. A separate
+        // intrinsic edge needs an explicit retained representation first.
+        if (p.bodyAdjoining) CompiledContent::require(p.intrinsicTop == 0 && p.intrinsicBottom == 0);
         plans.append(p);
     }
 
@@ -261,6 +275,23 @@ inline bool project(QTextDocument *document, QVector<FlowConstruction::Owner> &o
             }
             metric(p.start); metric(p.end);
         }
+        if (adjoiningBody && container == document->rootFrame()) for (int n = 0; n < nodes.size(); ++n) {
+            const int index = nodes[n].owner; if (index < 0) continue;
+            auto &p = plans[index]; const Node *before = n ? &nodes[n - 1] : nullptr;
+            if (p.bodyAdjoining) {
+                qreal legacyBefore = 0;
+                if (p.owner->first.position() != bodyBegin && before
+                    && ((before->owner >= 0 && !plans[before->owner].bodyAdjoining)
+                        || (before->block.isValid() && before->block.position() >= bodyBegin)))
+                    legacyBefore = qMax(qreal(0), p.start - p.box.padding[ParagraphBox::Top] - p.box.margins[ParagraphBox::Top]);
+                p.start = add(p.box.padding[ParagraphBox::Top], legacyBefore);
+                p.end = p.box.padding[ParagraphBox::Bottom]; p.publishedBottom = 0; p.publishStorageTail = false;
+            } else if (before && before->owner >= 0 && plans[before->owner].bodyAdjoining) {
+                // That source owner's padding now lives in its own height;
+                // this opaque/legacy row retains only its original remaining gap.
+                p.start = metric(p.start - plans[before->owner].box.padding[ParagraphBox::Bottom]);
+            }
+        }
     }
     CompiledContent::require(visited.size() == plans.size());
 
@@ -306,6 +337,26 @@ inline bool project(QTextDocument *document, QVector<FlowConstruction::Owner> &o
     for (const auto &mutation : mutations) {
         QTextCursor cursor(mutation.cursor);
         cursor.setBlockFormat(mutation.format);
+    }
+    if (adjoiningBody) {
+        QVariantList records;
+        for (const auto &p : plans) if (p.bodyAdjoining) {
+            const auto block = p.owner->first.block();
+            records.append(QVariantMap{{QStringLiteral("first"), p.owner->first.position()},
+                {QStringLiteral("last"), p.owner->last.position()},
+                {QStringLiteral("before"), double(p.box.margins[ParagraphBox::Top])},
+                {QStringLiteral("after"), double(p.box.margins[ParagraphBox::Bottom])},
+                {QStringLiteral("start"), double(p.start)}, {QStringLiteral("end"), double(p.end)},
+                {QStringLiteral("through"), p.empty && p.start == 0 && p.end == 0},
+                {QStringLiteral("format"), QVariant::fromValue(QTextFormat(block.blockFormat()))},
+                {QStringLiteral("text"), block.text()}});
+        }
+        std::sort(records.begin(), records.end(), [](const QVariant &a, const QVariant &b) {
+            return a.toMap().value(QStringLiteral("first")).toInt() < b.toMap().value(QStringLiteral("first")).toInt();
+        });
+        auto rootFormat = document->rootFrame()->frameFormat(); auto policy = rootFormat.property(bodyProperty).toMap();
+        policy.insert(QStringLiteral("paragraphs"), records); rootFormat.setProperty(bodyProperty, policy);
+        document->rootFrame()->setFrameFormat(rootFormat);
     }
     const int revision = document->revision();
     ended = true; transaction.endEditBlock();

@@ -156,7 +156,7 @@ quint64 varuint(QIODevice &file) {
     }
     fail(QStringLiteral("The dictionary contains an invalid record length."));
 }
-void validateAlias(const QByteArray &payload, const QByteArray &key) {
+QByteArray validateAlias(const QByteArray &payload, const QByteArray &key) {
     const auto invalid = [] { fail(QStringLiteral("The dictionary contains an invalid redirect record.")); };
     if (payload.size() < 15 || !payload.startsWith("DAL1")) invalid();
     const auto sourceNamespace = qFromLittleEndian<quint32>(payload.constData() + 4);
@@ -189,6 +189,7 @@ void validateAlias(const QByteArray &payload, const QByteArray &key) {
     if (fields[1] != lookupKey(fields[0], sourceKind) ||
         (targetKind ? fields[4].isEmpty() || fields[4] != lookupKey(fields[3], targetKind) : !fields[4].isEmpty()) ||
         key != QByteArray(1, char('0' + sourceKind)) + '\t' + fields[1]) invalid();
+    return fields[6];
 }
 Dictionary validate(const QString &path, const std::atomic_bool &cancel, const Progress &progress) {
     QFile file(path);
@@ -230,7 +231,9 @@ Dictionary validate(const QString &path, const std::atomic_bool &cancel, const P
             fail(QStringLiteral("The dictionary contains an invalid or truncated record."));
         const QByteArray payload = file.read(qint64(length));
         if (quint64(payload.size()) != length) fail(QStringLiteral("The dictionary contains an invalid or truncated record."));
-        if (result.kind == QStringLiteral("alias")) validateAlias(payload, title);
+        const QByteArray presentation = result.kind == QStringLiteral("alias")
+            ? validateAlias(payload, title) : payload;
+        validator.requirePresentationCapability(presentation);
         validator.validateRecord(header, title, payload);
         checkCancel(cancel);
         ++result.words;

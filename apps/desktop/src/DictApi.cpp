@@ -3,8 +3,25 @@
 #include <QByteArray>
 #include <QString>
 #include <string_view>
+#include <mutex>
+#include <optional>
 
 namespace {
+struct AuthoredRuleCapabilityProbe {
+    QByteArray header, title, payload;
+};
+const AuthoredRuleCapabilityProbe &authoredRuleCapabilityProbe() {
+    // Fixed source-audited DPRN: supplemental "rule", one body section,
+    // empty Rule with height 1px, black fill and four zero px margins.
+    static const AuthoredRuleCapabilityProbe value{
+        QByteArray::fromHex("57494b424c42303807"), QByteArrayLiteral("rule"),
+        QByteArray::fromHex(
+            "4450524e00000000010000000204000000626f64790000000000000000010000"
+            "000b000000000000000000000000000000000000000000000000000000000100"
+            "0000803f01070000002330303030303000000000000000000000000000000000"
+            "000000000000000000000000000000000000000000000000")};
+    return value;
+}
 std::string errorText(dict_handle *handle, dict_status status, const char *operation) {
     size_t length = 0;
     const char *detail = dict_last_error(handle, &length);
@@ -47,6 +64,42 @@ QByteArray DictApi::take(dict_buffer &buffer) {
     return result;
 }
 
+void DictApi::requirePresentationCapability(const QByteArray &presentation) {
+    if (!presentation.startsWith(QByteArrayLiteral("DPRN"))) return;
+    // DictApi calls the normally linked core; that mapping remains loaded for
+    // this process. Key the cached answer to its resolved validation function,
+    // never ABI10, a filename, or the bytes of the user's record.
+    struct Capability {
+        decltype(&dict_validate_record) library = nullptr;
+        std::optional<bool> supported;
+        std::mutex mutex;
+    };
+    static Capability capability;
+    const auto validate = &dict_validate_record;
+    std::lock_guard lock(capability.mutex);
+    if (capability.library != validate) {
+        capability.library = validate;
+        capability.supported.reset();
+    }
+    if (!capability.supported) {
+        const auto &probe = authoredRuleCapabilityProbe();
+        const auto status = static_cast<dict_status>(validate(handle_,
+            reinterpret_cast<const uint8_t *>(probe.header.constData()), size_t(probe.header.size()),
+            probe.title.constData(), size_t(probe.title.size()),
+            reinterpret_cast<const uint8_t *>(probe.payload.constData()), size_t(probe.payload.size())));
+        if (status == DICT_OK) capability.supported = true;
+        else {
+            size_t length = 0; const char *detail = dict_last_error(handle_, &length);
+            const std::string_view error = detail ? std::string_view(detail, length) : std::string_view();
+            if (status == DICT_INTERNAL_ERROR && (error == "validate record: InvalidPresentation"
+                    || error == "validate record: UnsupportedPresentationVersion")) capability.supported = false;
+            else throw DictApiError(errorText(handle_, status, "check reader capability"), status);
+        }
+    }
+    if (!*capability.supported)
+        throw DictApiError("This dictionary requires a newer reader with authored separator support.", DICT_INTERNAL_ERROR, false, true);
+}
+
 void DictApi::validateRecord(const QByteArray &header, const QByteArray &title, const QByteArray &payload) {
     const auto status = static_cast<dict_status>(dict_validate_record(
         handle_, reinterpret_cast<const uint8_t *>(header.constData()), static_cast<size_t>(header.size()),
@@ -59,6 +112,10 @@ void DictApi::validateRecord(const QByteArray &header, const QByteArray &title, 
     // exact validator diagnostic identifies malformed compiled presentation.
     const bool invalidEntryData = status == DICT_INTERNAL_ERROR && detail != nullptr
         && std::string_view(detail, length) == "validate record: InvalidPresentation";
+    const bool unsupported = status == DICT_INTERNAL_ERROR && detail != nullptr
+        && std::string_view(detail, length) == "validate record: UnsupportedPresentationVersion";
+    if (unsupported)
+        throw DictApiError("This dictionary requires a newer reader presentation format.", status, false, true);
     throw DictApiError(errorText(handle_, status, "validate compiled entry"), status, invalidEntryData);
 }
 

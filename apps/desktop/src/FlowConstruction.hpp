@@ -2,6 +2,7 @@
 
 #include "CompiledContent.hpp"
 #include "SemanticHtml.hpp"
+#include "SectionHeading.hpp"
 #include <QPointer>
 #include <QColor>
 #include <QMargins>
@@ -29,6 +30,10 @@ struct ContainerLineInput {
 struct RenderContext {
     QString language;
     QString alignment;
+    QJsonValue fontFamily;
+    QJsonObject sectionHeading;
+    int sectionIndex = -1;
+    qreal headingNormalBodyPoints = 0;
     qreal pointSize = 0;
     qreal normalBodyEm = 0;
     qreal legacyVerticalScale = 1;
@@ -313,6 +318,7 @@ inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal nor
     const auto input = containerInputs(block, 0, 1, normalBodyCssPixels, effectiveDark);
     const auto &style = input.effectiveStyle;
     const bool fixedFloat = !input.floatSide.isEmpty();
+    const bool fitContent = input.width.mode == ContainerWidthInput::Mode::FitContent;
     if (fixedFloat) {
         const auto unit = style.value(QStringLiteral("width")).toObject()
             .value(QStringLiteral("length")).toObject().value(QStringLiteral("unit"));
@@ -325,10 +331,11 @@ inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal nor
     }
     CompiledContent::require(!CompiledContent::present(style.value(QStringLiteral("screen_max_width")))
         && input.layout == QStringLiteral("flow") && !input.flexNone
-        && (input.maximumWidth.mode == ContainerWidthInput::Mode::None || input.marginValuesAuthored || input.localScrollport)
-        && input.width.mode != ContainerWidthInput::Mode::FitContent);
+        && (input.maximumWidth.mode == ContainerWidthInput::Mode::None || input.marginValuesAuthored || input.localScrollport || fitContent));
+    if (fitContent) CompiledContent::require(!fixedFloat && !input.localScrollport && !input.columnCount
+        && !input.relativeAuto && input.maximumWidth.mode != ContainerWidthInput::Mode::FitContent);
     const bool adjoining = input.margins.top() != 0 || input.margins.bottom() != 0
-        || input.margins.left() < 0 || input.margins.right() < 0 || input.marginValuesAuthored || input.localScrollport;
+        || input.margins.left() < 0 || input.margins.right() < 0 || input.marginValuesAuthored || input.localScrollport || fitContent;
     CompiledContent::require(!adjoining || !input.columnCount);
     QTextFrameFormat format;
     format.setProperty(containerPolicyProperty, QStringLiteral("wikidict.plain-container/1"));
@@ -366,7 +373,7 @@ inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal nor
     if (adjoining) {
         format.setProperty(containerMarginsProperty, QVariantMap{
             {QStringLiteral("edges"), QVariantList{input.margins.top(), input.margins.right(), input.margins.bottom(), input.margins.left()}},
-            {QStringLiteral("auto_width"), input.marginValuesAuthored || input.width.mode == ContainerWidthInput::Mode::Auto}});
+            {QStringLiteral("auto_width"), input.marginValuesAuthored || input.width.mode == ContainerWidthInput::Mode::Auto || fitContent}});
     } else { format.setLeftMargin(input.margins.left()); format.setRightMargin(input.margins.right()); }
     format.setPadding(input.padding.top());
     format.setBorder(input.borderWidth);
@@ -399,9 +406,11 @@ inline QTextFrameFormat plainContainerFormat(const QJsonObject &block, qreal nor
         format.setHeight(QTextLength(QTextLength::FixedLength, outer));
     }
     const qreal margins = input.margins.left() + input.margins.right();
-    if (input.marginValuesAuthored || input.localScrollport) {
+    if (input.marginValuesAuthored || input.localScrollport || fitContent) {
         const auto nativeWidth = [&](const QString &key, const QString &absent) {
             const auto width = style.value(key).toObject();
+            if (key == QStringLiteral("width") && fitContent)
+                return QVariantMap{{QStringLiteral("unit"), QStringLiteral("fit_content")}, {QStringLiteral("value"), qreal(0)}};
             const auto length = width.value(QStringLiteral("length")).toObject();
             if (length.isEmpty()) return QVariantMap{{QStringLiteral("unit"), absent}, {QStringLiteral("value"), qreal(0)}};
             const auto unit = length.value(QStringLiteral("unit"));
@@ -650,6 +659,16 @@ inline QString placeholder(const QJsonObject &block, const Rendered &rendered, c
         {QStringLiteral("legacy_vertical_scale"), context.legacyVerticalScale},
         {QStringLiteral("context_points"), context.pointSize},
         {QStringLiteral("flex_item"), context.flexItem}};
+    if (CompiledContent::present(context.fontFamily)) {
+        CompiledContent::containerFontFamily(context.fontFamily);
+        metadata.insert(QStringLiteral("font_family"), context.fontFamily);
+    }
+    if (!context.sectionHeading.isEmpty()) {
+        CompiledContent::require(block == SectionHeading::projection(context.sectionHeading) && context.sectionIndex >= 0);
+        metadata.insert(QStringLiteral("section_heading"), context.sectionHeading);
+        metadata.insert(QStringLiteral("section_index"), context.sectionIndex);
+        metadata.insert(QStringLiteral("heading_body_points"), context.headingNormalBodyPoints);
+    }
     if (context.containerTypography) {
         const auto mode = context.containerLineHeight.mode;
         const QString kind = mode == ContainerLineInput::Mode::Multiplier ? QStringLiteral("multiplier")
@@ -747,23 +766,45 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
         CompiledContent::require(!CompiledContent::present(cellHeightValue) || (cellHeightValue.isBool() && cellHeightValue.toBool() && typedFont));
         const bool cellHeight = cellHeightValue.toBool();
         const bool zeroOwner = item.metadata.value(QStringLiteral("owner_zero")).toBool();
+        const qreal points = item.metadata.value(QStringLiteral("context_points")).toDouble(-1);
+        CompiledContent::require(std::isfinite(points) && (zeroOwner ? points == 0 : points > 0));
+        // The placeholder carries the original semantic context for every Flow,
+        // including an ordinary paragraph without a Container typography policy.
+        if (!zeroOwner) contextFont.setPointSizeF(points);
         if (typedFont) {
             const auto capability = layout->property("_wikidictContainerTypographyCapability");
             CompiledContent::require(capability.metaType().id() == QMetaType::QString
                 && capability.toString() == QStringLiteral("wikidict.container-typography/1"));
-            const qreal points = item.metadata.value(QStringLiteral("context_points")).toDouble(-1);
-            CompiledContent::require(std::isfinite(points) && (zeroOwner ? points == 0 : points > 0));
-            // Import positive child overrides in the ordinary family even when
-            // the owner's own strut is zero. Zero spans have explicit metadata.
-            if (!zeroOwner) contextFont.setPointSizeF(points);
         }
+        const auto family = item.metadata.value(QStringLiteral("font_family"));
+        const auto headingValue = item.metadata.value(QStringLiteral("section_heading"));
+        const bool headingOwner = CompiledContent::present(headingValue);
+        QJsonObject headingSection, headingStyle;
+        if (headingOwner) {
+            CompiledContent::require(headingValue.isObject() && typedFont && !cellHeight
+                && item.metadata.value(QStringLiteral("section_index")).isDouble()
+                && item.metadata.value(QStringLiteral("section_index")).toDouble() >= 0
+                && std::floor(item.metadata.value(QStringLiteral("section_index")).toDouble()) == item.metadata.value(QStringLiteral("section_index")).toDouble()
+                && item.metadata.value(QStringLiteral("heading_body_points")).isDouble()
+                && item.metadata.value(QStringLiteral("heading_body_points")).toDouble() > 0
+                && layout->property("_wikidictSectionHeadingCapability").toString() == QStringLiteral("wikidict.section-heading/1"));
+            headingSection = headingValue.toObject(); headingStyle = SectionHeading::validate(headingSection);
+            CompiledContent::require(item.metadata.value(QStringLiteral("block")).toObject() == SectionHeading::projection(headingSection)
+                && family == headingStyle.value(QStringLiteral("box")).toObject().value(QStringLiteral("font_family")));
+            contextFont = SectionHeading::ownerFont(headingSection, contextFont,
+                item.metadata.value(QStringLiteral("heading_body_points")).toDouble());
+        } else SemanticHtml::applyFontFamily(contextFont, family);
         temporary.setDefaultFont(contextFont);
         temporary.setDefaultTextOption(document->defaultTextOption());
         temporary.setDocumentMargin(0);
         QString importedHtml = item.metadata.value(QStringLiteral("html")).toString();
-        const auto sourceLanguage = insertion.charFormat().property(SemanticHtml::tableSourceLanguageProperty);
+        const auto sourceLanguage = headingOwner
+            ? QVariant(headingStyle.value(QStringLiteral("font")).toObject().value(QStringLiteral("language")).toString())
+            : insertion.charFormat().property(SemanticHtml::tableSourceLanguageProperty);
         if (sourceLanguage.isValid()) {
-            const auto sourceDirection = insertion.blockFormat().layoutDirection();
+            const auto sourceDirection = headingOwner
+                ? (headingStyle.value(QStringLiteral("direction")) == QStringLiteral("rtl") ? Qt::RightToLeft : Qt::LeftToRight)
+                : insertion.blockFormat().layoutDirection();
             CompiledContent::require(sourceLanguage.metaType().id() == QMetaType::QString
                 && SemanticHtml::sourceLanguageTag(sourceLanguage.toString())
                 && (sourceDirection == Qt::LeftToRight || sourceDirection == Qt::RightToLeft)
@@ -806,6 +847,34 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                     format.setProperty(containerTypographyProperty, policy);
                 paragraph.setBlockFormat(format);
             }
+        }
+        if (!typedFont) {
+            // A fragment does not carry its temporary document's default font.
+            // Resolve only unset child traits; explicit point/pixel sizes remain.
+            for (auto block = temporary.begin(); block.isValid(); block = block.next()) {
+                QVector<QPair<QTextCursor, QTextCharFormat>> runs;
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const auto fragment = it.fragment(); if (!fragment.isValid()) continue;
+                    auto format = fragment.charFormat(); format.setFont(format.font().resolve(contextFont));
+                    QTextCursor run(&temporary); run.setPosition(fragment.position());
+                    run.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
+                    runs.append(qMakePair(run, format));
+                }
+                for (auto &run : runs) run.first.setCharFormat(run.second);
+                QTextCursor cursor(block); auto strut = cursor.blockCharFormat();
+                strut.setFont(strut.font().resolve(contextFont)); cursor.setBlockCharFormat(strut);
+            }
+        }
+        if (headingOwner) {
+            CompiledContent::require(temporary.rootFrame()->childFrames().isEmpty() && temporary.begin() == temporary.lastBlock()
+                && temporary.begin().text() == headingSection.value(QStringLiteral("title")).toString());
+            QTextCursor heading(temporary.begin()); auto format = heading.blockFormat();
+            format.setHeadingLevel(headingSection.value(QStringLiteral("level")).toInt());
+            format.setLayoutDirection(headingStyle.value(QStringLiteral("direction")) == QStringLiteral("rtl") ? Qt::RightToLeft : Qt::LeftToRight);
+            const auto alignment = headingStyle.value(QStringLiteral("box")).toObject().value(QStringLiteral("text_align")).toString();
+            if (!alignment.isEmpty()) format.setAlignment(alignment == QStringLiteral("center") ? Qt::AlignHCenter
+                : (alignment == QStringLiteral("right") ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignAbsolute);
+            heading.setBlockFormat(format);
         }
         const auto restoreTypography = item.metadata.value(QStringLiteral("responsive_typography"));
         if (CompiledContent::present(restoreTypography)) {
@@ -1019,6 +1088,10 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
             if (format.hasProperty(containerAutoMarginsProperty)) {
                 CompiledContent::require(layout->property("_wikidictContainerAutoMarginsCapability").toString()
                     == QStringLiteral("wikidict.container-auto-margins/1"));
+                if (format.property(containerAutoMarginsProperty).toMap().value(QStringLiteral("width")).toMap()
+                        .value(QStringLiteral("unit")) == QStringLiteral("fit_content"))
+                    CompiledContent::require(layout->property("_wikidictContainerFitContentCapability").toString()
+                        == QStringLiteral("wikidict.container-fit-content/1"));
                 const auto direction = insertion.blockFormat().layoutDirection();
                 format.setLayoutDirection(direction == Qt::LayoutDirectionAuto
                     ? document->defaultTextOption().textDirection() : direction);
@@ -1028,6 +1101,10 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                     == QStringLiteral("wikidict.container-flex/1"));
                 const auto direction = insertion.blockFormat().layoutDirection();
                 format.setLayoutDirection(direction == Qt::LayoutDirectionAuto ? document->defaultTextOption().textDirection() : direction);
+            }
+            if (headingOwner) {
+                CompiledContent::require(parent == document->rootFrame());
+                format.setLayoutDirection(headingStyle.value(QStringLiteral("direction")) == QStringLiteral("rtl") ? Qt::RightToLeft : Qt::LeftToRight);
             }
             const QPointer<QTextFrame> frame(insertion.insertFrame(format));
             CompiledContent::require(guard && layout && document->documentLayout() == layout && parent && frame
@@ -1262,6 +1339,17 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 CompiledContent::require(frame->childFrames().isEmpty()
                     && frame->firstCursorPosition().block() == frame->lastCursorPosition().block());
                 hideStorage(frame->firstCursorPosition().block(), frame);
+            }
+            if (headingOwner) {
+                const auto block = frame->firstCursorPosition().block();
+                CompiledContent::require(frame->childFrames().isEmpty() && block == frame->lastCursorPosition().block()
+                    && block.isVisible() && block.text() == headingSection.value(QStringLiteral("title")).toString());
+                QVariantMap marker{{QStringLiteral("capability"), QStringLiteral("wikidict.section-heading/1")},
+                    {QStringLiteral("section"), QJsonDocument(headingSection).toJson(QJsonDocument::Compact)},
+                    {QStringLiteral("owner"), frame->objectIndex()}, {QStringLiteral("index"), item.metadata.value(QStringLiteral("section_index")).toInt()},
+                    {QStringLiteral("character"), QVariant::fromValue(QTextFormat(block.charFormat()))},
+                    {QStringLiteral("block"), QVariant::fromValue(QTextFormat(block.blockFormat()))}, {QStringLiteral("text"), block.text()}};
+                auto owned = frame->frameFormat(); owned.setProperty(SectionHeading::property, marker); frame->setFrameFormat(owned);
             }
             containers->append(frame);
             continue;

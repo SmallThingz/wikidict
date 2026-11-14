@@ -243,9 +243,71 @@ bool showCompiledAdvisory(QTextBrowser *browser, QEvent *event, bool viewportCoo
     return true;
 }
 
+struct CompiledHelpCursor {
+    QPointer<QWidget> viewport;
+    std::optional<QCursor> ordinary;
+};
+void restoreCompiledHelpCursor(CompiledHelpCursor &state) {
+    const auto viewport = state.viewport; const auto ordinary = state.ordinary;
+    state.ordinary.reset(); state.viewport.clear();
+    const bool restore = viewport && ordinary && viewport->cursor().shape() == Qt::WhatsThisCursor;
+    if (viewport) viewport->setProperty("_wikidictHelpCursorBase", QVariant());
+    if (viewport && restore) viewport->setCursor(*ordinary);
+}
+void updateCompiledHelpCursor(QTextBrowser *browser, CompiledHelpCursor &state) {
+    const QPointer<QTextBrowser> guard(browser);
+    const QPointer<QWidget> viewport(browser->viewport());
+    const QPointer<QTextDocument> document(browser->document());
+    const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
+    if (state.viewport && state.viewport != viewport) {
+        restoreCompiledHelpCursor(state);
+        if (!guard || !viewport || !document || !layout || guard->viewport() != viewport
+            || guard->document() != document || document->documentLayout() != layout) return;
+    }
+    const QPoint global = QCursor::pos(), local = viewport->mapFromGlobal(global);
+    bool help = false;
+    if (viewport->rect().contains(local) && QApplication::widgetAt(global) == viewport) {
+        const auto *bar = browser->horizontalScrollBar();
+        const qint64 x = browser->isRightToLeft() ? qint64(bar->minimum()) + bar->maximum() - bar->value() : bar->value();
+        const int revision = document->revision();
+        const int position = layout->hitTest(QPointF(local) + QPointF(x, browser->verticalScrollBar()->value()), Qt::ExactHit);
+        if (!guard || !viewport || !document || !layout || guard->viewport() != viewport
+            || guard->document() != document || document->documentLayout() != layout) return;
+        if (document->revision() == revision && position >= 0 && position < document->characterCount() - 1
+            && layout->property("_wikidictParagraphBoxLayoutError").toInt() == 0) {
+            if (!guard || !viewport || !document || !layout || guard->document() != document
+                || guard->viewport() != viewport || document->documentLayout() != layout || document->revision() != revision) return;
+            const auto block = document->findBlock(position);
+            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment();
+                if (!fragment.isValid() || position < fragment.position() || position >= fragment.position() + fragment.length()) continue;
+                const auto policy = fragment.charFormat().property(SemanticHtml::inlineStyleProperty).toMap();
+                help = policy.value("policy") == SemanticHtml::inlineStyleCapability
+                    && policy.value("cursor").metaType().id() == QMetaType::QString
+                    && policy.value("cursor").toString() == QStringLiteral("help");
+                break;
+            }
+        }
+    }
+    if (!help) { restoreCompiledHelpCursor(state); return; }
+    if (state.viewport == viewport && state.ordinary && viewport->cursor().shape() == Qt::WhatsThisCursor) return;
+    state.viewport = viewport; state.ordinary = viewport->cursor();
+    viewport->setProperty("_wikidictHelpCursorBase", QVariant::fromValue(*state.ordinary));
+    if (!guard || !viewport || !document || !layout || guard->viewport() != viewport
+        || guard->document() != document || document->documentLayout() != layout) return;
+    // Qt names its public question-mark Help pointer WhatsThisCursor.
+    viewport->setCursor(Qt::WhatsThisCursor);
+}
+bool compiledHelpPointerEvent(QEvent::Type type) {
+    return type == QEvent::MouseMove || type == QEvent::MouseButtonPress || type == QEvent::MouseButtonRelease
+        || type == QEvent::Enter || type == QEvent::Leave || type == QEvent::Wheel || type == QEvent::Resize;
+}
+
 class HeadingBrowser final : public QTextBrowser {
+    CompiledHelpCursor inlineHelpCursor_;
 public:
     explicit HeadingBrowser(QWidget *parent) : QTextBrowser(parent) {
+        setProperty("_wikidictHelpCursorOverrideCapability", QStringLiteral("wikidict.help-cursor-override/1"));
         setFrameShape(QFrame::NoFrame);
         setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -264,6 +326,11 @@ public:
                 this, [this] { fitHeight(); });
     }
 protected:
+    void paintEvent(QPaintEvent *event) override {
+        const QPointer<HeadingBrowser> guard(this);
+        QTextBrowser::paintEvent(event);
+        if (guard) updateCompiledHelpCursor(guard, guard->inlineHelpCursor_);
+    }
     bool event(QEvent *event) override {
         // Ignored viewport help propagates here. Keep QTextEdit's nearest-text
         // fallback from replacing a tooltip that the owned rule just dismissed.
@@ -271,6 +338,14 @@ protected:
         return QTextBrowser::event(event);
     }
     bool viewportEvent(QEvent *event) override {
+        const QPointer<HeadingBrowser> helpGuard(this);
+        const bool pointerEvent = compiledHelpPointerEvent(event->type());
+        const bool leaving = event->type() == QEvent::Leave;
+        if (pointerEvent) restoreCompiledHelpCursor(inlineHelpCursor_);
+        if (!helpGuard) return true;
+        const auto refreshHelp = qScopeGuard([helpGuard, pointerEvent, leaving] {
+            if (helpGuard && pointerEvent && !leaving) updateCompiledHelpCursor(helpGuard, helpGuard->inlineHelpCursor_);
+        });
         if (showCompiledAdvisory(this, event)) return true;
         return QTextBrowser::viewportEvent(event);
     }
@@ -339,6 +414,7 @@ public:
 class SectionDisclosure;
 
 class ReadingBrowser final : public QTextBrowser {
+    CompiledHelpCursor inlineHelpCursor_;
 public:
     explicit ReadingBrowser(QWidget *parent);
     QHash<int, QPointer<QScrollBar>> localScrollBars;
@@ -723,6 +799,10 @@ protected:
         }
     }
     void paintEvent(QPaintEvent *event) override {
+        const QPointer<ReadingBrowser> helpGuard(this);
+        const auto refreshHelp = qScopeGuard([helpGuard] {
+            if (helpGuard) updateCompiledHelpCursor(helpGuard, helpGuard->inlineHelpCursor_);
+        });
         requestLocalScrollSync();
         const QPointer<ReadingBrowser> guard(this);
         const QPointer<QTextDocument> original(document());
@@ -778,6 +858,14 @@ protected:
         return QTextBrowser::event(event);
     }
     bool viewportEvent(QEvent *event) override {
+        const QPointer<ReadingBrowser> helpGuard(this);
+        const bool pointerEvent = compiledHelpPointerEvent(event->type());
+        const bool leaving = event->type() == QEvent::Leave;
+        if (pointerEvent) restoreCompiledHelpCursor(inlineHelpCursor_);
+        if (!helpGuard) return true;
+        const auto refreshHelp = qScopeGuard([helpGuard, pointerEvent, leaving] {
+            if (helpGuard && pointerEvent && !leaving) updateCompiledHelpCursor(helpGuard, helpGuard->inlineHelpCursor_);
+        });
         if (event->type() == QEvent::Resize) requestLocalScrollSync();
         if (event->type() == QEvent::Wheel) {
             auto *wheel = static_cast<QWheelEvent *>(event);
@@ -947,10 +1035,25 @@ public:
     bool active = true;
     int position = -1;
     int end = -1;
+    QPointer<QTextFrame> sourceHeading;
+    bool sourceOwnedHeading = false;
 
     QUrl url() const { return QUrl(QStringLiteral("section:%1").arg(index)); }
     bool current() const {
         if (!active || !browser || position < 0) return false;
+        if (sourceOwnedHeading) {
+            if (!sourceHeading) return false;
+            const auto marker = sourceHeading->frameFormat().property(SectionHeading::property).toMap();
+            return sourceHeading->document() == browser->document()
+                && browser->document()->object(sourceHeading->objectIndex()) == sourceHeading
+                && sourceHeading->parentFrame() == browser->document()->rootFrame()
+                && marker.value(QStringLiteral("capability")).toString() == QStringLiteral("wikidict.section-heading/1")
+                && marker.value(QStringLiteral("owner")).metaType().id() == QMetaType::Int
+                && marker.value(QStringLiteral("owner")).toInt() == sourceHeading->objectIndex()
+                && marker.value(QStringLiteral("index")).metaType().id() == QMetaType::Int
+                && marker.value(QStringLiteral("index")).toInt() == index
+                && sourceHeading->firstCursorPosition().block().text() == name;
+        }
         QTextCursor cursor(browser->document());
         if (position >= browser->document()->characterCount() - 1) return false;
         cursor.setPosition(position);
@@ -958,7 +1061,7 @@ public:
         return QUrl(cursor.charFormat().anchorHref()) == url();
     }
     bool focused() const {
-        if (!current() || !browser->hasFocus()) return false;
+        if (sourceOwnedHeading || !current() || !browser->hasFocus()) return false;
         const auto cursor = browser->textCursor();
         return cursor.hasSelection() && cursor.selectionStart() == position && cursor.selectionEnd() == end;
     }
@@ -1030,6 +1133,7 @@ void ReadingBrowser::updateDisclosures(const QJsonArray &sections, const QSet<in
             item->expanded = expanded;
             item->name = sections[index].toObject().value(QStringLiteral("title")).toString();
             if (item->name.isEmpty()) item->name = QStringLiteral("Section %1").arg(index + 1);
+            item->sourceHeading.clear(); item->sourceOwnedHeading = false;
             item->position = fragment.position();
             item->end = fragment.position() + fragment.length();
             auto next = it;
@@ -1042,6 +1146,24 @@ void ReadingBrowser::updateDisclosures(const QJsonArray &sections, const QSet<in
             disclosures.append(item);
         }
     }
+    for (auto *frame : document()->rootFrame()->childFrames()) {
+        const auto marker = frame->frameFormat().property(SectionHeading::property).toMap();
+        if (marker.value(QStringLiteral("capability")).toString() != QStringLiteral("wikidict.section-heading/1")) continue;
+        if (marker.value(QStringLiteral("index")).metaType().id() != QMetaType::Int) continue;
+        const int index = marker.value(QStringLiteral("index")).toInt();
+        if (index < 0 || index >= sections.size() || found.contains(index)) continue;
+        const auto section = sections[index].toObject();
+        if (!SemanticHtml::present(section.value(QStringLiteral("heading_style")))
+            || QJsonDocument::fromJson(marker.value(QStringLiteral("section")).toByteArray()).object() != SectionHeading::identity(section)) continue;
+        found.insert(index);
+        auto *item = previous.take(index);
+        if (!item) { item = new SectionDisclosure(this, index); reordered = true; }
+        const bool expanded = !collapsed.contains(index);
+        if (item->expanded != expanded) changed.append(item);
+        item->expanded = expanded; item->name = section.value(QStringLiteral("title")).toString();
+        item->sourceHeading = frame; item->sourceOwnedHeading = true; item->position = frame->firstPosition(); item->end = frame->lastPosition();
+        disclosures.append(item);
+    }
     reordered |= !previous.isEmpty();
     for (auto *item : previous) { item->active = false; item->deleteLater(); }
     notifyDisclosures(reordered, changed);
@@ -1053,6 +1175,7 @@ SectionDisclosure *ReadingBrowser::focusedDisclosure() const {
 }
 
 ReadingBrowser::ReadingBrowser(QWidget *parent) : QTextBrowser(parent) {
+    setProperty("_wikidictHelpCursorOverrideCapability", QStringLiteral("wikidict.help-cursor-override/1"));
     setMouseTracking(true);
     viewport()->grabGesture(Qt::PanGesture);
     connect(this, &QTextEdit::cursorPositionChanged, this, &ReadingBrowser::requestLocalReveal);
@@ -1108,7 +1231,7 @@ public:
     }
     QRect rect() const override {
         const QPointer<SectionDisclosure> value(item());
-        if (!value || !value->current()) return {};
+        if (!value || !value->current() || value->sourceOwnedHeading) return {};
         const int position = value->position;
         auto *reader = parent();
         // The disclosure glyph is separate from the rich heading's lexical links.
@@ -1119,19 +1242,23 @@ public:
         QAccessible::State state;
         if (!isValid()) { state.invalid = true; state.invisible = true; return state; }
         const auto *value = item();
-        state.focusable = true; state.focused = value->focused(); state.expandable = true;
+        state.focusable = !value->sourceOwnedHeading; state.focused = value->focused(); state.expandable = true;
         state.expanded = value->expanded; state.collapsed = !value->expanded;
         state.disabled = !value->browser->isEnabled(); state.invisible = !value->browser->isVisible();
         const QRect viewport(value->browser->viewport()->mapToGlobal(QPoint()), value->browser->viewport()->size());
-        state.offscreen = !viewport.intersects(rect());
+        state.offscreen = !value->sourceOwnedHeading && !viewport.intersects(rect());
         return state;
     }
     void *interface_cast(QAccessible::InterfaceType type) override {
         if (type == QAccessible::ActionInterface) return static_cast<QAccessibleActionInterface *>(this);
         return QAccessibleObject::interface_cast(type);
     }
-    QStringList actionNames() const override { return {pressAction(), toggleAction(), setFocusAction()}; }
+    QStringList actionNames() const override {
+        return item() && item()->sourceOwnedHeading ? QStringList{pressAction(), toggleAction()}
+            : QStringList{pressAction(), toggleAction(), setFocusAction()};
+    }
     QStringList keyBindingsForAction(const QString &action) const override {
+        if (item() && item()->sourceOwnedHeading) return {};
         return (action == pressAction() || action == toggleAction()) ? QStringList{QStringLiteral("Space"), QStringLiteral("Enter")} : QStringList();
     }
     void doAction(const QString &action) override {
@@ -1142,6 +1269,11 @@ public:
         const QPointer<ReadingBrowser> browser(target->browser);
         if (!browser->isVisible() || !browser->isEnabled()) return;
         const QUrl url = target->url();
+        if (target->sourceOwnedHeading) {
+            // This is an existing Section action, not an anchor in the source title.
+            if (activate) emit browser->anchorClicked(url);
+            return;
+        }
         browser->setFocus(Qt::OtherFocusReason);
         if (!browser || !target || !target->current()) return;
         browser->restoreAnchor(url);
@@ -1296,11 +1428,28 @@ public:
             finder.setPosition(start);
             if (!finder.isAtBoundary()) start = finder.toPreviousBoundary();
         }
-        const auto projected = LogicalFlow::position(document, block.position() + start);
+        const bool authoredRule = block.blockFormat().hasProperty(SemanticHtml::authoredRuleProperty);
+        const auto projected = authoredRule ? LogicalFlow::Position{LogicalFlow::Status::Stock, 0, {}}
+            : LogicalFlow::position(document, block.position() + start);
         if (!current() || projected.status == LogicalFlow::Status::Refused) return {};
         QRectF result;
         const auto media = InlineVectorImages::figureMediaPolicy(document, block.position() + start);
-        if (!media.isEmpty()) {
+        if (authoredRule) {
+            const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
+            QVariantMap geometry;
+            const bool queried = QMetaObject::invokeMethod(layout, "wikidictAuthoredRuleGeometry", Qt::DirectConnection,
+                Q_RETURN_ARG(QVariantMap, geometry), Q_ARG(int, offset));
+            if (!current() || !layout || document->documentLayout() != layout || !queried
+                || geometry.value(QStringLiteral("handled")) != QVariant(true)
+                || geometry.value(QStringLiteral("error")).metaType().id() != QMetaType::Int
+                || geometry.value(QStringLiteral("error")).toInt() != 0
+                || geometry.value(QStringLiteral("position")).metaType().id() != QMetaType::Int
+                || geometry.value(QStringLiteral("position")).toInt() != offset
+                || geometry.value(QStringLiteral("revision")).metaType().id() != QMetaType::Int
+                || geometry.value(QStringLiteral("revision")).toInt() != revision
+                || !LogicalFlow::finiteRect(geometry.value(QStringLiteral("characterRect")))) return {};
+            result = geometry.value(QStringLiteral("characterRect")).toRectF();
+        } else if (!media.isEmpty()) {
             const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
             QVariantMap geometry;
             const bool queried = QMetaObject::invokeMethod(layout, "wikidictFigureMediaGeometry", Qt::DirectConnection,
@@ -1309,11 +1458,15 @@ public:
                 || !geometry.value(QStringLiteral("handled")).toBool()
                 || geometry.value(QStringLiteral("revision")).toInt() != revision) return {};
             result = geometry.value(QStringLiteral("anchor")).toRectF().united(geometry.value(QStringLiteral("after")).toRectF());
-        } else if (projected.status == LogicalFlow::Status::Handled) {
-            // These are original-offset, document-coordinate rectangles from
-            // the paired native engine, never projected QTextLayout indices.
-            result = projected.values.value(QStringLiteral("characterRect"),
-                projected.values.value(QStringLiteral("cursorRect"))).toRectF();
+        } else if (projected.status == LogicalFlow::Status::Handled
+            || projected.values.contains(QStringLiteral("inlineCharacterRect"))) {
+            // Inline geometry keeps stock movement/source ownership; its ink,
+            // character rectangle and caret still share the native baseline.
+            const auto geometry = projected.status == LogicalFlow::Status::Handled
+                ? projected.values.value(QStringLiteral("characterRect"), projected.values.value(QStringLiteral("cursorRect")))
+                : projected.values.value(QStringLiteral("inlineCharacterRect"));
+            if (!LogicalFlow::finiteRect(geometry)) return {};
+            result = geometry.toRectF();
             result.setWidth(qMax(qreal(1), result.width()));
         } else {
             const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
@@ -1644,6 +1797,10 @@ bool compiledBookSourcesTarget(const QString &target) {
 QStringList poemClassTokens(const QJsonObject &span);
 
 QJsonArray sectionHeadingSpans(const QJsonObject &section) {
+    if (SemanticHtml::present(section.value(QStringLiteral("heading_style")))) {
+        SectionHeading::validate(section);
+        return section.value(QStringLiteral("blocks")).toArray().first().toObject().value(QStringLiteral("spans")).toArray();
+    }
     const QString title = section.value(QStringLiteral("title")).toString();
     const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
     if (blocks.isEmpty()) return {};
@@ -1670,7 +1827,8 @@ QJsonArray sectionHeadingSpans(const QJsonObject &section) {
         if ((kind == QStringLiteral("link") || kind == QStringLiteral("external_link")) &&
             !span.value(QStringLiteral("target")).toString().isEmpty() && (!text.isEmpty() || !trail.isEmpty()))
             rich = true;
-        bool styled = false;
+        bool styled = SemanticHtml::present(span.value(QStringLiteral("inline_style"))) || SemanticHtml::present(span.value(QStringLiteral("font_family")));
+        rich = rich || styled;
         for (const QString &flag : {QStringLiteral("bold"), QStringLiteral("italic"), QStringLiteral("code"),
              QStringLiteral("small"), QStringLiteral("superscript"), QStringLiteral("subscript"),
              QStringLiteral("strike"), QStringLiteral("underline")})
@@ -1799,6 +1957,7 @@ QVector<HeadingDestination> headingDestinations(const QJsonObject &entry) {
 bool ordinaryLayoutWhitespaceSpan(const QJsonObject &span, bool allowBreak) {
     if (SemanticHtml::present(span.value(QStringLiteral("image")))) return false;
     if (SemanticHtml::present(span.value(QStringLiteral("tooltip")))) return false;
+    if (SemanticHtml::present(span.value(QStringLiteral("inline_style"))) || SemanticHtml::present(span.value(QStringLiteral("font_family")))) return false;
     const QString kind = span.value(QStringLiteral("kind")).toString();
     if (kind != QStringLiteral("text") && !(allowBreak && kind == QStringLiteral("line_break"))) return false;
     for (const QString &key : {QStringLiteral("target"), QStringLiteral("trail"), QStringLiteral("language"),
@@ -1821,6 +1980,7 @@ bool ordinaryLayoutWhitespaceSpan(const QJsonObject &span, bool allowBreak) {
     return true;
 }
 QJsonArray compactSectionHeadingDisplaySpans(const QJsonArray &spans) {
+    if (SemanticHtml::hasInlineFamily(spans)) return spans;
     qsizetype start = 0, end = spans.size();
     while (start < end && ordinaryLayoutWhitespaceSpan(spans[start].toObject(), true)) ++start;
     while (end > start && ordinaryLayoutWhitespaceSpan(spans[end - 1].toObject(), true)) --end;
@@ -1998,6 +2158,7 @@ MainWindow::~MainWindow() {
 
 void MainWindow::setLoading(bool loading) {
     loading_ = loading;
+    if (sectionFold_) updateSectionFoldControl();
     const bool ready = !loading && bool(api_);
     kind_->setEnabled(ready);
     language_->setVisible(api_ && api_->kind() == QStringLiteral("language") && language_->count() > 0);
@@ -2389,6 +2550,10 @@ void MainWindow::setupUi() {
     sections_->setMinimumContentsLength(10);
     sections_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     sections_->setEnabled(false);
+    sectionFold_ = new QPushButton(content);
+    sectionFold_->setObjectName(QStringLiteral("sourceSectionFold"));
+    sectionFold_->setVisible(false);
+    navigation->addWidget(sectionFold_, 0, 5);
     navigation->addWidget(sections_, 0, 2);
     navigation->setColumnStretch(2, 1);
     auto *smaller = new QPushButton(QStringLiteral("A-"), content);
@@ -2651,6 +2816,20 @@ void MainWindow::setupUi() {
     connect(title_, &QTextBrowser::anchorClicked, reading_, &QTextBrowser::anchorClicked);
     connect(back_, &QPushButton::clicked, this, [this] { navigate(-1); });
     connect(forward_, &QPushButton::clicked, this, [this] { navigate(1); });
+    connect(sections_, &QComboBox::currentIndexChanged, this, [this] { updateSectionFoldControl(); });
+    connect(sectionFold_, &QPushButton::clicked, this, [this] {
+        const int index = sections_->currentData().toInt();
+        const auto sections = currentEntry_.value(QStringLiteral("sections")).toArray();
+        if (loading_ || index < 0 || index >= sections.size()
+            || !SemanticHtml::present(sections[index].toObject().value(QStringLiteral("heading_style")))) return;
+        const QPointer<MainWindow> live(this);
+        const QPointer<ReadingBrowser> browser(static_cast<ReadingBrowser *>(reading_));
+        const bool keyboard = browser->keyboardActivation;
+        browser->keyboardActivation = false;
+        emit browser->anchorClicked(QUrl(QStringLiteral("section:%1").arg(index)));
+        if (browser) browser->keyboardActivation = keyboard;
+        if (live) live->updateSectionFoldControl();
+    });
     connect(sections_, &QComboBox::activated, this, [this](int index) {
         const int section = sections_->itemData(index).toInt();
         if (section < 0) return;
@@ -2873,15 +3052,16 @@ void MainWindow::updateReaderLayout() {
             cursor.setPosition(qBound(0, position, last), QTextCursor::KeepAnchor);
             title_->setTextCursor(cursor);
         }
-        for (auto *widget : std::array<QWidget *, 5>{back_, forward_, sections_, smaller_, larger_})
+        for (auto *widget : std::array<QWidget *, 6>{back_, forward_, sections_, smaller_, larger_, sectionFold_})
             navigationLayout_->removeWidget(widget);
-        for (int column = 0; column < 5; ++column) navigationLayout_->setColumnStretch(column, 0);
+        for (int column = 0; column < 6; ++column) navigationLayout_->setColumnStretch(column, 0);
         if (compact) {
             navigationLayout_->addWidget(back_, 0, 0);
             navigationLayout_->addWidget(forward_, 0, 1);
             navigationLayout_->addWidget(sections_, 1, 0, 1, 2);
             navigationLayout_->addWidget(smaller_, 2, 0);
             navigationLayout_->addWidget(larger_, 2, 1);
+            navigationLayout_->addWidget(sectionFold_, 3, 0, 1, 2);
             navigationLayout_->setColumnStretch(0, 1);
             navigationLayout_->setColumnStretch(1, 1);
         } else {
@@ -2890,6 +3070,7 @@ void MainWindow::updateReaderLayout() {
             navigationLayout_->addWidget(sections_, 0, 2);
             navigationLayout_->addWidget(smaller_, 0, 3);
             navigationLayout_->addWidget(larger_, 0, 4);
+            navigationLayout_->addWidget(sectionFold_, 0, 5);
             navigationLayout_->setColumnStretch(2, 1);
         }
         readerContent_->layout()->setContentsMargins(compact ? 12 : 28, 20, compact ? 12 : 28, 24);
@@ -3612,6 +3793,18 @@ void MainWindow::showAbbreviations() {
     reading_->setFocus(Qt::OtherFocusReason);
 }
 
+void MainWindow::updateSectionFoldControl() {
+    const auto sections = currentEntry_.value(QStringLiteral("sections")).toArray();
+    const int index = sections_->currentIndex() < 0 ? -1 : sections_->currentData().toInt();
+    const bool visible = index >= 0 && index < sections.size()
+        && SemanticHtml::present(sections[index].toObject().value(QStringLiteral("heading_style")));
+    sectionFold_->setVisible(visible); sectionFold_->setEnabled(visible && !loading_);
+    if (!visible) return;
+    sectionFold_->setText(collapsedSections_.contains(index) ? QStringLiteral("Expand section") : QStringLiteral("Collapse section"));
+    sectionFold_->setAccessibleName(sectionFold_->text() + QStringLiteral(": ")
+        + sections[index].toObject().value(QStringLiteral("title")).toString());
+}
+
 bool MainWindow::refreshReading() {
     if (currentEntry_.isEmpty()) return true;
     const QPointer<MainWindow> self(this);
@@ -3662,7 +3855,8 @@ bool MainWindow::refreshReading() {
     };
     document->setLayoutEnabled(false);
     CompiledContent::require(unchangedInitial());
-    const QString html = entryHtml(currentEntry_);
+    const QString html = entryHtml(currentEntry_, true);
+    const bool bodyOrdinary = currentEntry_.value(QStringLiteral("body_adjoining")) == QJsonValue(QStringLiteral("ordinary"));
     CompiledContent::require(unchangedInitial());
     // Recomposition intentionally replaces the old registration and all its
     // source positions. Format callbacks only use the new authenticated list.
@@ -3766,11 +3960,111 @@ bool MainWindow::refreshReading() {
         }
         CompiledContent::require(current() && (!owners.isEmpty() || !containers.isEmpty()));
         if (hasFigures) SemanticFigure::reflow(document, contentsRect().width());
-        CompiledContent::require(current() && ParagraphProjection::project(document, owners) && current());
+        if (!bodyOrdinary) CompiledContent::require(current() && ParagraphProjection::project(document, owners) && current());
+    }
+    // Flow expansion happens after the outer HTML import. Its source runs must
+    // satisfy browser interaction capabilities before registration and painting.
+    CompiledContent::require(current());
+    SemanticHtml::requireBrowserInlineSupport(browser);
+    CompiledContent::require(current());
+    // The real first metadata block ends the one shared semantic-body flow.
+    // No wrapper frame may change the containing interval of existing floats.
+    constexpr int bodyBoundary = QTextFormat::UserProperty + 0x5806;
+    CompiledContent::require(document->documentLayout()->property("_wikidictEntryBodyBoundaryCapability")
+        == QVariant(QStringLiteral("wikidict.entry-body-boundary/1")));
+    int bodyEnd = -1;
+    for (auto block = document->begin(); block.isValid(); block = block.next()) {
+        const auto format = block.blockFormat();
+        if (!format.hasProperty(bodyBoundary)) continue;
+        const auto marker = format.property(bodyBoundary);
+        CompiledContent::require(bodyEnd == -1 && marker.metaType().id() == QMetaType::QString
+            && marker.toString() == QStringLiteral("wikidict.entry-body-end/1") && block.isVisible()
+            && !block.textList() && QTextCursor(block).currentFrame() == document->rootFrame()
+            && (format.headingLevel() == 2 || format.hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth)));
+        bodyEnd = block.position();
+    }
+    CompiledContent::require(bodyEnd >= 0);
+    auto rootFormat = document->rootFrame()->frameFormat();
+    QVariantMap bodyPolicy{
+        {QStringLiteral("capability"), QStringLiteral("wikidict.entry-body-boundary/1")},
+        {QStringLiteral("owner"), QVariant::fromValue(static_cast<QObject *>(document->rootFrame()))},
+        {QStringLiteral("end"), bodyEnd}};
+    int bodyBegin = bodyEnd;
+    QPointer<QTextFrame> bodyBeginOwner(document->rootFrame());
+    if (bodyOrdinary) {
+        CompiledContent::require(layout->property("_wikidictEntryBodyAdjoiningCapability")
+            == QVariant(QStringLiteral("wikidict.entry-body-adjoining/1")));
+        const QString beginName = QStringLiteral("wikidict-private-entry-body-begin/1");
+        const auto consider = [&](int position) {
+            CompiledContent::require(position >= 0 && position < document->characterCount());
+            auto *owner = document->frameAt(position); CompiledContent::require(owner);
+            while (owner != document->rootFrame() && owner->parentFrame() != document->rootFrame()) owner = owner->parentFrame();
+            const int start = owner == document->rootFrame() ? document->findBlock(position).position() : owner->firstPosition() - 1;
+            if (start < bodyBegin) { bodyBegin = start; bodyBeginOwner = owner; }
+        };
+        struct BeginEdit { QTextCursor cursor; QTextCharFormat format; bool block; };
+        QVector<BeginEdit> beginEdits; QSet<int> namedNodes;
+        const auto withoutBegin = [&](QTextCharFormat format) {
+            auto names = format.anchorNames(); names.removeAll(beginName); format.setAnchorNames(names);
+            if (names.isEmpty()) format.clearProperty(QTextFormat::AnchorName);
+            if (names.isEmpty() && !format.hasProperty(QTextFormat::AnchorHref)) format.clearProperty(QTextFormat::IsAnchor);
+            return format;
+        };
+        for (auto block = document->begin(); block.isValid(); block = block.next()) {
+            if (block.charFormat().anchorNames().contains(beginName)) {
+                namedNodes.insert(block.position()); consider(block.position());
+                beginEdits.append({QTextCursor(block), withoutBegin(block.charFormat()), true});
+            }
+            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment();
+                if (!fragment.isValid() || !fragment.charFormat().anchorNames().contains(beginName)) continue;
+                namedNodes.insert(block.position()); consider(fragment.position());
+                QTextCursor cursor(document); cursor.setPosition(fragment.position());
+                cursor.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
+                beginEdits.append({cursor, withoutBegin(fragment.charFormat()), false});
+            }
+        }
+        CompiledContent::require(namedNodes.size() <= 1);
+        for (const auto &edit : beginEdits) {
+            if (edit.block) { QTextCursor cursor(edit.cursor); cursor.setBlockCharFormat(edit.format); }
+            else { QTextCursor cursor(edit.cursor); cursor.setCharFormat(edit.format); }
+            CompiledContent::require(current());
+        }
+        // Flow expansion can consume an empty placeholder's anchor. Its actual
+        // typed source owner remains authoritative; prefix spans own no Flow
+        // paragraphs or nonempty frames. References begin after bodyEnd.
+        for (const auto &owner : owners) if (owner.first.position() < bodyEnd) consider(owner.first.position());
+        for (auto *frame : document->rootFrame()->childFrames())
+            if (frame->firstPosition() <= frame->lastPosition() && frame->firstPosition() - 1 < bodyEnd) consider(frame->firstPosition());
+        CompiledContent::require(bodyBegin >= 0 && bodyBegin <= bodyEnd && bodyBeginOwner);
+        bodyPolicy.insert(QStringLiteral("adjoining"), QStringLiteral("ordinary"));
+        bodyPolicy.insert(QStringLiteral("begin"), bodyBegin);
+        bodyPolicy.insert(QStringLiteral("begin_owner"), QVariant::fromValue(static_cast<QObject *>(bodyBeginOwner.data())));
+        bodyPolicy.insert(QStringLiteral("begin_format"), QVariant::fromValue(QTextFormat()));
+        bodyPolicy.insert(QStringLiteral("begin_text"), QString());
+        bodyPolicy.insert(QStringLiteral("paragraphs"), QVariantList{});
+    }
+    rootFormat.setProperty(bodyBoundary, bodyPolicy);
+    document->rootFrame()->setFrameFormat(rootFormat);
+    CompiledContent::require(current());
+    if (bodyOrdinary) {
+        CompiledContent::require(ParagraphProjection::project(document, owners) && current());
+        // Root block geometry was finalized by projection. Bind that exact
+        // block; a direct child frame binds its object/range, while its existing
+        // typed validator remains responsible for responsive formats.
+        rootFormat = document->rootFrame()->frameFormat(); bodyPolicy = rootFormat.property(bodyBoundary).toMap();
+        if (bodyBeginOwner == document->rootFrame()) {
+            const auto block = document->findBlock(bodyBegin);
+            CompiledContent::require(block.isValid() && block.position() == bodyBegin && QTextCursor(block).currentFrame() == document->rootFrame());
+            bodyPolicy.insert(QStringLiteral("begin_format"), QVariant::fromValue(QTextFormat(block.blockFormat())));
+            bodyPolicy.insert(QStringLiteral("begin_text"), block.text());
+        }
+        rootFormat.setProperty(bodyBoundary, bodyPolicy); document->rootFrame()->setFrameFormat(rootFormat);
+        CompiledContent::require(current());
     }
     QVariantList descriptors = SemanticHtml::inlineTableOwners(document);
     for (const auto &owner : owners) descriptors.append(FlowConstruction::descriptor(owner));
-    const bool checkedNativeLayout = !descriptors.isEmpty() || !containers.isEmpty() || SemanticHtml::hasTableBoxes(document);
+    const bool checkedNativeLayout = bodyEnd >= 0 || !descriptors.isEmpty() || !containers.isEmpty() || SemanticHtml::hasTableBoxes(document) || SemanticHtml::hasInlineText(document);
     const QString source = document->toRawText();
     const int revision = document->revision(), count = document->characterCount();
     const auto sameSource = [&] {
@@ -3815,6 +4109,7 @@ bool MainWindow::refreshReading() {
     }
     static_cast<ReadingBrowser *>(browser.data())->updateDisclosures(
         currentEntry_.value(QStringLiteral("sections")).toArray(), collapsedSections_);
+    updateSectionFoldControl();
     auto *missingReader = static_cast<ReadingBrowser *>(browser.data());
     missingReader->missingState.context = api_ ? api_->root() + QChar('|') + api_->language() + QChar('|') + api_->kind() : QString();
     missingReader->missingState.fixedContext = api_ ? QString::fromUtf8(QJsonDocument(QJsonArray{
@@ -4062,12 +4357,36 @@ void MainWindow::openSavedWord(const SavedWord &word) {
     if (api_->kind() == requested.kind && (requested.kind != QStringLiteral("language") || api_->language() == requested.language)) activateUserWord(requested.title);
     else loadDataset(api_->root(), requested.language, requested.kind, false, requested.title, -1, originRoot_, originEdition_);
 }
-QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const QString &prefix, const QString &cellBackground, qreal contextPointSize, const QColor &inheritedInk, int sourceRun, bool zeroFontContext, bool typedScopeOwnsIsolation, const QJsonObject &linkPaint, bool computedCellTraits) const {
+QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const QString &prefix, const QString &cellBackground, qreal contextPointSize, const QColor &inheritedInk, int sourceRun, bool zeroFontContext, bool typedScopeOwnsIsolation, const QJsonObject &linkPaint, bool computedCellTraits, const QJsonValue &contextFamily) const {
     const qreal basePoints = contextPointSize > 0 ? contextPointSize : readingPointSize_;
+    CompiledContent::containerFontFamily(contextFamily);
+    const bool familyOwner = SemanticHtml::hasInlineFamily(spans);
+    if (familyOwner && hasPoemSpans(spans))
+        throw DictApiError("authored font family in legacy poem layout is not available");
     const auto flatHtml = [&](const QJsonArray &parts) {
         QString out;
         for (const QJsonValue &value : parts) {
             const QJsonObject span = value.toObject();
+            const auto ownFamily = CompiledContent::containerFontFamily(span.value(QStringLiteral("font_family")));
+            // Explicit requests win family heuristics. Null retains code/script selection;
+            // other descendants inherit the actual source owner, not a UI default.
+            const bool legacyFamily = span.value(QStringLiteral("code")).toBool()
+                || span.value(QStringLiteral("classes")).toString().simplified().split(QChar(' '), Qt::SkipEmptyParts).contains(QStringLiteral("Egyp"));
+            const auto effectiveFamily = SemanticHtml::present(ownFamily) ? ownFamily : legacyFamily ? QJsonValue() : contextFamily;
+            const bool hasFamily = SemanticHtml::present(effectiveFamily);
+            const auto inlineStyle = SemanticHtml::inlineTextStyle(span);
+            const bool hasInlineStyle = !inlineStyle.isEmpty();
+            const bool normalizedInlineFont = inlineStyle.value("font_normalized").toBool();
+            QString inlineOwnerHtml;
+            const auto relative = inlineStyle.value("line_height").toObject().value("font_relative");
+            if (relative.isObject()) {
+                auto owner = SemanticHtml::inlineFontSnapshot(relative.toObject().value("font"));
+                const bool normalized = owner.take("font_normalized").toBool();
+                owner.insert("kind", "text"); owner.insert("text", "X"); owner.insert("target", "");
+                if (normalized) owner.insert("inline_style", QJsonObject{{"font_normalized", true}});
+                inlineOwnerHtml = spansHtml(QJsonArray{owner}, 0, {}, {}, basePoints, {}, -1, zeroFontContext, true, {}, true, contextFamily);
+            }
+            const bool emptyInline = hasInlineStyle && span.value("text").toString().isEmpty() && span.value("trail").toString().isEmpty();
             const QJsonValue fontFeatures = span.value(QStringLiteral("font_features"));
             const bool hasFontFeatures = SemanticHtml::fontFeaturePolicy(fontFeatures) != SemanticHtml::FontFeaturePolicy::Legacy;
             const QJsonValue advisory = span.value(QStringLiteral("tooltip"));
@@ -4124,12 +4443,12 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 const QString lineBreak = QStringLiteral("<br>");
                 if (cssPx)
                     out += SemanticHtml::scaledText(lineBreak, numericScale.toDouble(), {}, SemanticHtml::Basis::CssPx,
-                        readingPointSize_, false, false, false, 0, {}, false, sourceRun, {}, -1, 0, false, fontFeatures);
+                        readingPointSize_, false, false, false, 0, {}, false, sourceRun, {}, -1, 0, false, fontFeatures, false, {}, 0, 0, {}, effectiveFamily);
                 else if (zeroFontContext && !absoluteFont)
                     out += SemanticHtml::scaledText(lineBreak, 0, {}, SemanticHtml::Basis::Context,
-                        0, false, false, false, 0, {}, false, sourceRun, {}, -1, 0, false, fontFeatures);
-                else out += sourceRun < 0 && !hasFontFeatures ? lineBreak : SemanticHtml::scaledText(lineBreak, 1,
-                    {}, SemanticHtml::Basis::Context, 0, false, false, false, 0, {}, true, sourceRun, {}, -1, 0, false, fontFeatures);
+                        0, false, false, false, 0, {}, false, sourceRun, {}, -1, 0, false, fontFeatures, false, {}, 0, 0, {}, effectiveFamily);
+                else out += sourceRun < 0 && !hasFontFeatures && !hasFamily ? lineBreak : SemanticHtml::scaledText(lineBreak, 1,
+                    {}, SemanticHtml::Basis::Context, 0, false, false, false, 0, {}, true, sourceRun, {}, -1, 0, false, fontFeatures, false, {}, 0, 0, {}, effectiveFamily);
                 if (span.value(QStringLiteral("trail")).toString().isEmpty()) continue;
             }
             const bool zeroScale = (!inlineImage || cssPx) && ((zeroFontContext && !absoluteFont)
@@ -4138,15 +4457,16 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             QString text = ((kind == QStringLiteral("line_break") ? QString() : span.value(QStringLiteral("text")).toString())
                 + span.value(QStringLiteral("trail")).toString()).toHtmlEscaped();
             if (inlineImage) text = SemanticHtml::inlineImageHtml(image);
+            if (emptyInline) text = QStringLiteral("&#xe000;");
             const QString explanation = span.value(QStringLiteral("explanation")).toString();
             if ((!inlineImage || cssPx) && (zeroScale || (numericScale.isDouble() && numericScale.toDouble() >= 0 && (numericScale.toDouble() != 1 || absoluteFont))))
                 text = SemanticHtml::scaledText(text, zeroScale ? 0 : numericScale.toDouble(), explanation,
                     cssPx ? SemanticHtml::Basis::CssPx : normalBody ? SemanticHtml::Basis::NormalBody : SemanticHtml::Basis::Context, readingPointSize_,
                     span.value(QStringLiteral("small")).toBool(), span.value(QStringLiteral("superscript")).toBool(),
-                    span.value(QStringLiteral("subscript")).toBool(), basePoints, advisory, false, sourceRun, fixedLink ? selectedPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures, ordinaryLink);
-            else if (hasAdvisory || sourceRun >= 0 || fixedLink || hasFontFeatures)
+                    span.value(QStringLiteral("subscript")).toBool(), basePoints, advisory, false, sourceRun, fixedLink ? selectedPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures, ordinaryLink, hasInlineStyle ? span : QJsonObject{}, readingPointSize_, basePoints, inlineOwnerHtml, effectiveFamily);
+            else if (hasAdvisory || sourceRun >= 0 || fixedLink || hasFontFeatures || hasInlineStyle || hasFamily)
                 text = SemanticHtml::scaledText(text, 1, explanation, SemanticHtml::Basis::Context,
-                    0, false, false, false, 0, advisory, true, sourceRun, fixedLink ? selectedPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures, ordinaryLink);
+                    0, false, false, false, 0, advisory, true, sourceRun, fixedLink ? selectedPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures, ordinaryLink, hasInlineStyle ? span : QJsonObject{}, readingPointSize_, basePoints, inlineOwnerHtml, effectiveFamily);
             if (!explanation.isEmpty() && !hasAdvisory)
                 text = QStringLiteral("<span title=\"%1\">%2</span>")
                     .arg(explanation.toHtmlEscaped(), text);
@@ -4155,7 +4475,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                     .arg(zeroFontFamily().toHtmlEscaped(), text);
             // Keep the script font on the characters themselves: Qt's full-page
             // body style can otherwise replace an outer span's font inside <b>.
-            if (!zeroScale && !span.value(QStringLiteral("code")).toBool() &&
+            if (!zeroScale && !SemanticHtml::present(ownFamily) && !span.value(QStringLiteral("code")).toBool() &&
                 classes.simplified().split(QChar(' '), Qt::SkipEmptyParts).contains(QStringLiteral("Egyp")))
                 text = QStringLiteral("<span style=\"font-family:'%1'\">%2</span>")
                     .arg(egyptianFamily().toHtmlEscaped(), text);
@@ -4219,12 +4539,12 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                     resets.append(QStringLiteral("font-weight:normal"));
                 if (span.value(QStringLiteral("italic")).isBool() && !span.value(QStringLiteral("italic")).toBool())
                     resets.append(QStringLiteral("font-style:normal"));
-                if (span.value(QStringLiteral("code")).isBool() && !span.value(QStringLiteral("code")).toBool())
-                    resets.append(QStringLiteral("font-family:'%1'").arg(reading_->document()->defaultFont().family().toHtmlEscaped()));
+                // A false code flag keeps the actual semantic owner's family.
+                // Only code=true introduces the legacy monospace element below.
                 if (!resets.isEmpty()) text = QStringLiteral("<span style=\"%1\">%2</span>").arg(resets.join(QChar(';')), text);
             }
             if (span.value(QStringLiteral("code")).toBool()) text = QStringLiteral("<code>%1</code>").arg(text);
-            if (span.value(QStringLiteral("small")).toBool()) text = QStringLiteral("<small>%1</small>").arg(text);
+            if (!normalizedInlineFont && span.value(QStringLiteral("small")).toBool()) text = QStringLiteral("<small>%1</small>").arg(text);
             if (span.value(QStringLiteral("bold")).toBool()) text = QStringLiteral("<b>%1</b>").arg(text);
             if (span.value(QStringLiteral("italic")).toBool()) text = QStringLiteral("<i>%1</i>").arg(text);
             if (!zeroScale && span.value(QStringLiteral("underline")).toBool()) text = QStringLiteral("<u>%1</u>").arg(text);
@@ -4254,7 +4574,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (direction == QStringLiteral("auto")) isolate = 0x2068; // FSI
             else if (direction == QStringLiteral("rtl")) isolate = 0x2067; // RLI
             else if (direction == QStringLiteral("ltr")) isolate = 0x2066; // LRI
-            if (isolate) text = QString(QChar(isolate)) + text + QChar(0x2069); // PDI
+            if (isolate && !emptyInline) text = QString(QChar(isolate)) + text + QChar(0x2069); // PDI
             if (!classes.isEmpty() || !language.isEmpty() || !direction.isEmpty()) {
                 QString attrs;
                 if (!classes.isEmpty()) attrs += QStringLiteral(" class=\"%1\"").arg(classes.toHtmlEscaped());
@@ -4273,7 +4593,16 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
         return out;
     };
 
-    if (!hasPoemSpans(spans)) return prefix + flatHtml(spans);
+    if (!hasPoemSpans(spans)) {
+        const QString body = flatHtml(spans);
+        return prefix + (familyOwner ? QStringLiteral("<span style='white-space:pre-wrap'>%1</span>").arg(body) : body);
+    }
+    for (const auto &value : spans) {
+        const auto span = value.toObject();
+        if (SemanticHtml::present(span.value("inline_style")) && span.value("text").toString().isEmpty()
+            && span.value("trail").toString().isEmpty())
+            throw DictApiError("empty authored inline metrics in legacy poem layout are not available");
+    }
 
     QString out;
     QString firstLinePrefix = prefix;
@@ -4440,7 +4769,7 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             captionHtml += blockHtml(CompiledContent::object(value), tableBackground, tableDepth + 1,
                 {}, inheritedAlignment, captionContext);
     } else captionHtml = spansHtml(caption, 0, {}, tableBackground, context.pointSize,
-        context.inheritedInk, -1, context.zeroFontContext, context.typedScopeOwnsIsolation, context.captionLinkPaint, context.computedCellTraits);
+        context.inheritedInk, -1, context.zeroFontContext, context.typedScopeOwnsIsolation, context.captionLinkPaint, context.computedCellTraits, context.fontFamily);
     if (!captionHtml.isEmpty()) out += QStringLiteral("<caption%1>%2</caption>")
         .arg(inheritedAlignment.isEmpty() ? QString() : QStringLiteral(" align='%1'").arg(inheritedAlignment), captionHtml);
     qsizetype rowIndex = 0;
@@ -4450,8 +4779,8 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
         for (const QJsonValue &cellValue : rowValue.toObject().value(QStringLiteral("cells")).toArray()) {
             const QJsonObject cell = cellValue.toObject();
             const QString tag = cell.value(QStringLiteral("header")).toBool() ? QStringLiteral("th") : QStringLiteral("td");
-            const int colspan = std::max(1, cell.value(QStringLiteral("colspan")).toInt(1));
-            const int rowspan = std::max(1, cell.value(QStringLiteral("rowspan")).toInt(1));
+            const int colspan = SemanticHtml::compiledTableSpan(cell.value(QStringLiteral("colspan")));
+            const int rowspan = SemanticHtml::compiledTableSpan(cell.value(QStringLiteral("rowspan")));
             QString style = QStringLiteral("border:%1px solid %2").arg(border).arg(palette().color(QPalette::Mid).name());
             const QJsonValue backgroundValue = cell.value(QStringLiteral("background"));
             const QString background = backgroundValue.toString();
@@ -4516,7 +4845,7 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
                 if (!child.isObject() || !cellSpans.isEmpty()) throw DictApiError("invalid nested table cell");
                 contents = tableHtml(child.toObject(), 0, tableDepth + 1, effectiveBackground,
                     cellLocation.isEmpty() ? QString() : cellLocation + QStringLiteral("-table"), alignment, {}, cellContext);
-            } else contents = spansHtml(cellSpans, 0, {}, effectiveBackground, cellContext.pointSize, cellContext.inheritedInk, -1, cellContext.zeroFontContext, cellContext.typedScopeOwnsIsolation, cellContext.captionLinkPaint, cellContext.computedCellTraits);
+            } else contents = spansHtml(cellSpans, 0, {}, effectiveBackground, cellContext.pointSize, cellContext.inheritedInk, -1, cellContext.zeroFontContext, cellContext.typedScopeOwnsIsolation, cellContext.captionLinkPaint, cellContext.computedCellTraits, cellContext.fontFamily);
             ++cellIndex;
             out += QStringLiteral("<%1 colspan='%2' rowspan='%3' style='%4'%5%6>%7</%1>")
                 .arg(tag).arg(colspan).arg(rowspan).arg(style, alignAttribute, metricAttribute, contents);
@@ -4614,6 +4943,8 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
             if (capability.metaType().id() != QMetaType::QString || capability.toString() != QStringLiteral("wikidict.container-typography/1"))
                 throw DictApiError("compiled Container typography is not available");
         }
+        if (CompiledContent::present(style.value(QStringLiteral("font_family"))))
+            context.fontFamily = CompiledContent::containerFontFamily(style.value(QStringLiteral("font_family")));
         const QString ownAlignment = SemanticHtml::textAlignment(style.value(QStringLiteral("text_align")));
         if (!ownAlignment.isEmpty()) context.alignment = ownAlignment;
         ++context.contentDepth;
@@ -4677,7 +5008,7 @@ QString MainWindow::flowBlockHtml(const QJsonObject &block, const QString &cellB
         parts = QJsonArray{QJsonObject{{"kind", "figure"}, {"spans", QJsonArray{}}, {"figure", figureValue}}};
     } else parts = QJsonArray{QJsonObject{{"kind", "inline"}, {"spans", blockSpans}}};
     auto inlineRenderer = [&](const QJsonArray &spans, int run, const FlowConstruction::RenderContext &local) {
-        return spansHtml(spans, 0, {}, cellBackground, local.pointSize, local.inheritedInk, run, local.zeroFontContext, local.typedScopeOwnsIsolation, local.captionLinkPaint, local.computedCellTraits);
+        return spansHtml(spans, 0, {}, cellBackground, local.pointSize, local.inheritedInk, run, local.zeroFontContext, local.typedScopeOwnsIsolation, local.captionLinkPaint, local.computedCellTraits, local.fontFamily);
     };
     auto figureRenderer = [&](const QJsonObject &sourceFigure, int run,
                               const FlowConstruction::RenderContext &local, CompiledContent::Depth nestedDepth) {
@@ -4687,7 +5018,7 @@ QString MainWindow::flowBlockHtml(const QJsonObject &block, const QString &cellB
         QString imageHtml = spansHtml(QJsonArray{renderedImage}, 0, {}, {}, local.pointSize,
             SemanticFigure::missing(figure) ? local.inheritedInk : QColor(), -1,
             SemanticFigure::missing(figure) && local.zeroFontContext, false,
-            figure.value("table_caption_layout").toObject().value("missing_link_paint").toObject());
+            figure.value("table_caption_layout").toObject().value("missing_link_paint").toObject(), false, local.fontFamily);
         if (SemanticFigure::missing(figure))
             imageHtml = QStringLiteral("<span style='white-space:pre-wrap'>%1</span>").arg(imageHtml);
         const double scale = figure.value(QStringLiteral("caption_font_scale")).toDouble();
@@ -4716,7 +5047,7 @@ QString MainWindow::flowBlockHtml(const QJsonObject &block, const QString &cellB
                 captionHtml += blockHtml(CompiledContent::object(value), {}, tableDepth, {},
                     captionContext.alignment, captionContext);
         } else captionHtml = spansHtml(caption, 0, {}, {}, captionContext.pointSize,
-            captionContext.inheritedInk, -1, captionContext.zeroFontContext, captionContext.typedScopeOwnsIsolation, captionContext.captionLinkPaint, captionContext.computedCellTraits);
+            captionContext.inheritedInk, -1, captionContext.zeroFontContext, captionContext.typedScopeOwnsIsolation, captionContext.captionLinkPaint, captionContext.computedCellTraits, captionContext.fontFamily);
         const QString html = SemanticFigure::placeholder(figure, imageHtml, captionHtml,
             SemanticFigure::captionPresent(figure), local.normalBodyEm, captionPoints,
             captionContext.alignment, reading_->palette());
@@ -4733,9 +5064,17 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
                                      const FlowConstruction::RenderContext &context, const QString *bodyOverride) const {
     const QString kind = block.value(QStringLiteral("kind")).toString();
     if (kind == QStringLiteral("blank")) return {};
-    if (kind == QStringLiteral("rule"))
+    if (kind == QStringLiteral("rule")) {
+        if (CompiledContent::present(block.value(QStringLiteral("rule_style")))) {
+            const auto capability = reading_->document()->documentLayout()->property("_wikidictAuthoredRuleCapability");
+            if (capability.metaType().id() != QMetaType::QString || capability.toString() != QStringLiteral("wikidict.authored-rule/1"))
+                throw DictApiError("compiled authored Rule layout is not available");
+            return SemanticHtml::authoredRuleHtml(block, context.normalBodyEm / context.legacyVerticalScale,
+                reading_->document()->property(SemanticHtml::imageDarkThemeProperty).toBool());
+        }
         return cellBackground.isEmpty() ? QStringLiteral("<hr>")
             : QStringLiteral("<hr style='background-color:%1'>").arg(backgroundInk(cellBackground));
+    }
     const QJsonValue table = block.value(QStringLiteral("table"));
     const QJsonObject feature = block.value(QStringLiteral("feature")).toObject();
     const QString color = feature.value(QStringLiteral("data")).toString();
@@ -4797,7 +5136,7 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
         prefix = QStringLiteral("<i>Example:</i> ");
     }
     QJsonArray displaySpans = spans;
-    if (!poem && (kind == QStringLiteral("example") || kind == QStringLiteral("quotation"))) {
+    if (!poem && !SemanticHtml::hasInlineFamily(spans) && (kind == QStringLiteral("example") || kind == QStringLiteral("quotation"))) {
         // Detail blocks already supply their boundary spacing. Only discard inert
         // terminal breaks; retain authored text, internal breaks and protected spans.
         while (!displaySpans.isEmpty()) {
@@ -4828,7 +5167,7 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
         if (!std::isfinite(contextPoints) || contextPoints <= 0)
             throw DictApiError("unable to resolve heading font context");
     }
-    const QString body = bodyOverride ? *bodyOverride : spansHtml(displaySpans, poem ? outerIndent : 0, prefix, cellBackground, contextPoints, context.inheritedInk, -1, context.zeroFontContext, context.typedScopeOwnsIsolation, context.captionLinkPaint, context.computedCellTraits);
+    const QString body = bodyOverride ? *bodyOverride : spansHtml(displaySpans, poem ? outerIndent : 0, prefix, cellBackground, contextPoints, context.inheritedInk, -1, context.zeroFontContext, context.typedScopeOwnsIsolation, context.captionLinkPaint, context.computedCellTraits, context.fontFamily);
     const QString anchor = kind == QStringLiteral("heading") && !location.isEmpty()
         ? QStringLiteral("<a name='%1'></a>").arg(location.toHtmlEscaped()) : QString();
     if (poem) {
@@ -4868,7 +5207,15 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
     return QStringLiteral("<p>%1</p>").arg(body);
 }
 
-QString MainWindow::entryHtml(const QJsonObject &entry) const {
+QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const {
+    const auto adjoining = entry.value(QStringLiteral("body_adjoining"));
+    const bool bodyOrdinary = CompiledContent::present(adjoining);
+    CompiledContent::require(!bodyOrdinary || (adjoining.isString() && adjoining.toString() == QStringLiteral("ordinary")));
+    const auto sourceSections = entry.value(QStringLiteral("sections")).toArray();
+    const bool authoredBody = bodyOrdinary || std::any_of(sourceSections.begin(), sourceSections.end(), [](const QJsonValue &value) {
+        return CompiledContent::present(value.toObject().value(QStringLiteral("heading_style")));
+    });
+    if (authoredBody) bodyBoundary = true;
     FlowConstruction::RenderContext rootContext;
     rootContext.language = entry.value(QStringLiteral("language_code")).toString();
     if (rootContext.language.isEmpty()) rootContext.language = entry.value(QStringLiteral("language")).toString();
@@ -4976,6 +5323,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
                 }
             }
     };
+    if (bodyOrdinary) out += QStringLiteral("<a name='wikidict-private-entry-body-begin/1'></a>");
     int index = -1;
     for (const QJsonValue &sectionValue : sections) {
         ++index;
@@ -4984,12 +5332,48 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
         const QJsonObject section = sectionValue.toObject();
         const QString title = section.value(QStringLiteral("title")).toString();
         const int level = section.value(QStringLiteral("level")).toInt();
-        out += QStringLiteral("<a name='section-%1'></a>").arg(index);
+        const bool bodyPrefix = authoredBody && index == 0 && section.value(QStringLiteral("level")).isDouble()
+            && section.value(QStringLiteral("level")).toDouble() == 0 && section.value(QStringLiteral("title")).isString() && title.isEmpty()
+            && section.value(QStringLiteral("anchor")).toString().isEmpty()
+            && section.value(QStringLiteral("anchor_fallback")).toString().isEmpty()
+            && (!SemanticHtml::present(section.value(QStringLiteral("anchor"))) || section.value(QStringLiteral("anchor")).isString())
+            && (!SemanticHtml::present(section.value(QStringLiteral("anchor_fallback"))) || section.value(QStringLiteral("anchor_fallback")).isString())
+            && section.value(QStringLiteral("blocks")).isArray() && !section.value(QStringLiteral("blocks")).toArray().isEmpty()
+            && !SemanticHtml::present(section.value(QStringLiteral("heading_style")));
+        if (!bodyPrefix && !SemanticHtml::present(section.value(QStringLiteral("heading_style"))))
+            out += QStringLiteral("<a name='section-%1'></a>").arg(index);
         const bool ownerLanguage = entry.value(QStringLiteral("kind")).toString() == QStringLiteral("language") &&
             level == 2 && title == entry.value(QStringLiteral("language")).toString();
         const QJsonArray richHeading = sectionHeadingSpans(section);
         const bool renderRichHeading = !richHeading.isEmpty();
-        if (renderRichHeading) {
+        if (SemanticHtml::present(section.value(QStringLiteral("heading_style")))) {
+            const auto heading = SectionHeading::validate(section);
+            const auto projected = SectionHeading::projection(section);
+            const auto box = heading.value(QStringLiteral("box")).toObject();
+            const auto font = SemanticHtml::inlineFontSnapshot(heading.value(QStringLiteral("font")));
+            const auto capability = reading_->document()->documentLayout()->property("_wikidictSectionHeadingCapability");
+            CompiledContent::require(capability.metaType().id() == QMetaType::QString
+                && capability.toString() == QStringLiteral("wikidict.section-heading/1"));
+            auto context = rootContext;
+            context.legacyVerticalScale = documentVerticalScale(reading_->document());
+            context.sectionHeading = SectionHeading::identity(section); context.sectionIndex = index;
+            context.headingNormalBodyPoints = readingPointSize_;
+            context.pointSize = readingPointSize_ * font.value(QStringLiteral("font_scale")).toDouble();
+            CompiledContent::require(std::isfinite(context.pointSize) && context.pointSize >= 0
+                && context.pointSize <= SemanticHtml::maximumFontPoints(reading_->document()));
+            context.zeroFontContext = context.pointSize == 0;
+            context.containerTypography = true;
+            context.language = font.value(QStringLiteral("language")).toString(); context.languageKnown = true;
+            context.containerLineHeight = FlowConstruction::containerBaseLine(box.value(QStringLiteral("line_height")),
+                context.normalBodyEm / context.legacyVerticalScale);
+            context.alignment = SemanticHtml::textAlignment(box.value(QStringLiteral("text_align")));
+            context.fontFamily = box.value(QStringLiteral("font_family"));
+            FlowConstruction::Rendered rendered;
+            rendered.html = QStringLiteral("<p style='margin:0;white-space:pre-wrap'><a name='section-%1'></a><a name='block-%1-0'></a>%2</p>")
+                .arg(index).arg(spansHtml(richHeading, 0, {}, {}, context.pointSize, {}, -1,
+                    context.zeroFontContext, true, {}, true, context.fontFamily));
+            out += QStringLiteral("<p style='margin:0'>%1</p>").arg(FlowConstruction::placeholder(projected, rendered, context));
+        } else if (renderRichHeading) {
             // The fold control and lexical links are siblings, never nested anchors.
             collectEmbeddedMedia(richHeading);
             const QJsonObject companion = section.value(QStringLiteral("blocks")).toArray().first().toObject();
@@ -5000,11 +5384,11 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
             out += QStringLiteral("<h%1 class='wikidict-section-heading' style='font-family:sans-serif;font-size:%2pt;margin-top:20px;margin-left:%3px'><a href='section:%4'>%5</a> %6</h%1>")
                 .arg(headingLevel).arg(readingPointSize_).arg(margin).arg(index)
                 .arg(collapsedSections_.contains(index) ? QStringLiteral("▸") : QStringLiteral("▾"), spansHtml(compactSectionHeadingDisplaySpans(richHeading)));
-        } else if (!ownerLanguage) {
+        } else if (!ownerLanguage && !bodyPrefix) {
             out += QStringLiteral("<h2 class='wikidict-section-heading'><a href='section:%1'>%2 %3</a></h2>").arg(index)
                 .arg(collapsedSections_.contains(index) ? QStringLiteral("▸") : QStringLiteral("▾"), title.toHtmlEscaped());
         }
-        if (collapsedSections_.contains(index)) continue;
+        if (!bodyPrefix && collapsedSections_.contains(index)) continue;
         const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
         for (qsizetype blockIndex = 0; blockIndex < blocks.size(); ++blockIndex) {
             if (blockIndex == 0 && renderRichHeading) continue;
@@ -5024,10 +5408,16 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
             out += blockHtml(block, {}, 1, QStringLiteral("block-%1-%2").arg(index).arg(blockIndex), {}, rootContext);
         }
     }
+    bool bodyEndEmitted = false;
+    const auto metadataStart = [&](const QString &tag) -> QString {
+        if (!bodyBoundary || bodyEndEmitted) return QChar('<') + tag + QChar('>');
+        bodyEndEmitted = true;
+        return QChar('<') + tag + QStringLiteral(" data-wikidict-entry-body-end='wikidict.entry-body-end/1'>");
+    };
     if (!references.isEmpty()) {
         if (metadataReferencesSection >= 0)
             out += QStringLiteral("<a name='section-%1'></a>").arg(metadataReferencesSection);
-        out += QStringLiteral("<h2>References</h2>");
+        out += metadataStart(QStringLiteral("h2")) + QStringLiteral("References</h2>");
         for (qsizetype referenceIndex = 0; referenceIndex < references.size(); ++referenceIndex) {
             const QJsonObject ref = references[referenceIndex].toObject();
             const QJsonValue contents = referenceBlocks(ref);
@@ -5073,7 +5463,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
     }
     const QJsonArray media = entry.value(QStringLiteral("media")).toArray();
     if (!media.isEmpty()) {
-        out += QStringLiteral("<h2>Media</h2><ul>");
+        out += metadataStart(QStringLiteral("h2")) + QStringLiteral("Media</h2><ul>");
         for (const QJsonValue &value : media) {
             const QJsonObject item = value.toObject();
             const QString file = item.value(QStringLiteral("file")).toString();
@@ -5099,7 +5489,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry) const {
         else if (redirect.value(QStringLiteral("followed")).toBool()) pageTitle = redirect.value(QStringLiteral("target_title")).toString();
         if (!pageTitle.isEmpty()) source += QStringLiteral("wiki/") + QString::fromLatin1(QUrl::toPercentEncoding(pageTitle));
     }
-    out += QStringLiteral("<hr><p><small><a href='%1'>Wiktionary contributors</a> · <a href='https://creativecommons.org/licenses/by-sa/4.0/'>CC BY-SA 4.0</a></small></p>").arg(source.toHtmlEscaped());
+    out += metadataStart(QStringLiteral("hr")) + QStringLiteral("<p><small><a href='%1'>Wiktionary contributors</a> · <a href='https://creativecommons.org/licenses/by-sa/4.0/'>CC BY-SA 4.0</a></small></p>").arg(source.toHtmlEscaped());
     return out + QStringLiteral("</body>");
 }
 

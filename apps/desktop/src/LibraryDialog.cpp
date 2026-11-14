@@ -262,9 +262,11 @@ void LibraryDialog::runWorker(std::function<void()> task, std::function<void(con
         catch (const DictApiError &e) {
             *validationDiagnostic = exceptionText(e);
             qWarning("Dictionary validation failed (status %d): %s", int(e.status()), e.what());
-            *error = e.isInvalidEntryData()
-                ? QStringLiteral("Could not import this dictionary. The file contains invalid entry data.")
-                : QStringLiteral("Could not validate this dictionary.");
+            *error = e.isUnsupportedPresentation()
+                ? QStringLiteral("Could not import this dictionary. It requires a newer reader.")
+                : e.isInvalidEntryData()
+                    ? QStringLiteral("Could not import this dictionary. The file contains invalid entry data.")
+                    : QStringLiteral("Could not validate this dictionary.");
         }
         catch (const std::exception &e) { *error = exceptionText(e); }
         catch (...) { *error = QStringLiteral("An unexpected dictionary error occurred."); }

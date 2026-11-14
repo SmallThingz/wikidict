@@ -527,7 +527,587 @@ private:
             "        }").object();
     }
 
+    static QJsonObject retainedEnglishLastRowSpanEntry() {
+        // Exact complete Entry from en-last-00-json.stdout (f26d82f917594f1e),
+        // page 10700467 / revision 84928488. Stored rowspan 100 is unchanged.
+        return QJsonDocument::fromJson(QByteArrayLiteral(
+            "{\"organization\":{\"lexemes\":[{\"language\":\"Assyrian Neo-Aramaic\",\"kind\":\"Noun\",\"section\":3,\"etymology\":1,\"definitions\":[{\"block\":1,\"parent\":null,\"examples\":[],\"quotations\":[],\"notes\":[2],\"form\":null}],\"introduction\":[0],\"other_blocks\":[],\"related_sections\":[4]}],\"other_sections\":[0,1,2]},\"title\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0710\",\"display_title\":[{\"kind\":\"text\",\"text\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0710\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"}],\"kind\":\"language\",\"language\":\"Assyrian Neo-Aramaic\",\"language_code\":\"aii\",\"sections\":[{\"level\":2,\"title\":\"Assyrian Neo-Aramaic\",\"anchor\":\"Assyrian_Neo-Aramaic\",\"anchor_fallback\":\"\",\"blocks\":[{\"kind\":\"paragraph\",\"depth\":0,\"spans\":[],\"feature\":null,\"list_path\":\"\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null,\"figure\":{\"image_span\":{\"kind\":\"link\",\"text\":\"\",\"target\":\"File:Chinese vase.jpg\",\"trail\":\"\",\"language\":\"\",\"classes\":\"wikidict-media wikidict-media-file-4368696e65736520766173652e6a7067\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"image\":{\"file\":\"Chinese vase.jpg\",\"width_px\":190,\"alt\":\"\"},\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},\"caption\":[{\"kind\":\"text\",\"text\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0710\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"font_scale\":0.8840000033378601,\"font_scale_basis\":\"normal_body\",\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"caption_text_align\":\"left\",\"format\":\"thumbnail\",\"sizing\":\"requested_fit\",\"placement\":\"float_right\",\"clear\":\"right\",\"margins\":{\"top\":{\"unit\":\"em\",\"value\":0.5},\"right\":{\"unit\":\"px\",\"val"
+            "ue\":0},\"bottom\":{\"unit\":\"em\",\"value\":1.2999999523162842},\"left\":{\"unit\":\"em\",\"value\":1.399999976158142}},\"image_insets\":{\"top\":{\"unit\":\"px\",\"value\":3},\"right\":{\"unit\":\"px\",\"value\":3},\"bottom\":{\"unit\":\"px\",\"value\":3},\"left\":{\"unit\":\"px\",\"value\":3}},\"caption_padding\":{\"top\":{\"unit\":\"px\",\"value\":0},\"right\":{\"unit\":\"px\",\"value\":6},\"bottom\":{\"unit\":\"px\",\"value\":6},\"left\":{\"unit\":\"px\",\"value\":6}},\"caption_font_scale\":0.8840000033378601,\"caption_line_height\":{\"unit\":\"em\",\"value\":1.2375999689102173},\"frame_background\":{\"kind\":\"native_theme\"},\"frame_border\":{\"kind\":\"solid\",\"width\":{\"unit\":\"px\",\"value\":1},\"color\":{\"kind\":\"native_theme\"}},\"image_background\":{\"kind\":\"native_theme\"},\"image_border\":{\"kind\":\"solid\",\"width\":{\"unit\":\"px\",\"value\":1},\"color\":{\"kind\":\"native_theme\"}},\"caption_foreground\":{\"kind\":\"native_theme\"},\"caption_background\":{\"kind\":\"native_theme\"}}}]},{\"level\":3,\"title\":\"Etymology\",\"anchor\":\"Etymology\",\"anchor_fallback\":\"\",\"blocks\":[{\"kind\":\"container\",\"depth\":0,\"spans\":[],\"feature\":null,\"list_path\":\"\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null,\"container\":{\"blocks\":[{\"kind\":\"table\",\"depth\":0,\"spans\":[],\"feature\":null,\"list_path\":\"\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":{\"caption\":[],\"rows\":[{\"cells\":[{\"spans\":[{\"kind\":\"external_link\",\"text\":\"Root\",\"target\":\"https://en.wikipedia.org/wiki/Semitic_root\",\"trail\":\"\",\"language\":\"\",\"classes\":\"extiw\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null}]},{\"cells\":[{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717 \\u0712 \\u0712\",\"target\":\"\\u0717 \\u0712 \\u0712#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role"
+            "\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"h b b\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null}]},{\"cells\":[{\"spans\":[{\"kind\":\"link\",\"text\":\"2 terms\",\"target\":\"Category:Assyrian Neo-Aramaic terms belonging to the root \\u0717 \\u0712 \\u0712\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null}]}]}}],\"style\":{\"width\":{\"fit_content\":{}}}}},{\"kind\":\"paragraph\",\"depth\":0,\"spans\":[{\"kind\":\"text\",\"text\":\"Of the noun pattern 1a22\\u01013\\u012b\\u1e6f\\u0101 derived from \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\""
+            "italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u0735\\u0710\",\"target\":\"\\u0717\\u0712\\u0712\\u0710#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc mention\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":true,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u0101\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"mention-tr tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\", \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"\\u201c\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-double-quote\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"nor"
+            "mal\"},{\"kind\":\"text\",\"text\":\"flower\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"\\u201d\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-double-quote\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\".\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"feature\":null,\"list_path\":\"\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null}]},{\"level\":3,\"title\":\"Pronunciation\",\"anchor\":\"Pronunciation\",\"anchor_fallback\":\"\",\"blocks\":[{\"kind\":\"list_item\",\"depth\":1,\"spans\":[{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"ib-brac qualifier-brac\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"Standard\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"ib-content qualifier-content usage-label-accent\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":f"
+            "alse,\"strike\":false,\"underline\":false,\"role\":\"label\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"ib-brac qualifier-brac\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"link\",\"text\":\"IPA\",\"target\":\"Wiktionary:International Phonetic Alphabet\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":true,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"external_link\",\"text\":\"key\",\"target\":\"https://en.wikipedia.org/wiki/Assyrian_Neo-Aramaic_phonology\",\"trail\":\"\",\"language\":\"\",\"classes\":\"extiw\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":true,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":true,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\":\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":fal"
+            "se,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"[hab.b\\u0251\\u02d0wi\\u02d0\\u03b8\\u0251\\u02d0]\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"IPA nowrap\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"pronunciation\"}],\"feature\":null,\"list_path\":\"*\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null}]},{\"level\":3,\"title\":\"Noun\",\"anchor\":\"Noun\",\"anchor_fallback\":\"\",\"blocks\":[{\"kind\":\"paragraph\",\"depth\":0,\"spans\":[{\"kind\":\"text\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u073c\\u072c\\u0742\\u0735\\u0710\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"headword-line Syrc headword\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":true,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"link\",\"text\":\"\\u2022\",\"target\":\"Wiktionary:Assyrian Neo-Aramaic transliteration\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\" (\",\"target\""
+            ":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u012b\\u1e6f\\u0101\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"headword-line headword-tr tr Latn\",\"direction\":\"ltr\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\"\\u00a0\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\"f\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line gender\",\"direction\":\"\",\"explanation\":\"feminine gender\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\" (\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\"plural\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":true,\"code\":fal"
+            "se,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\"\\u0717\\u0732\\u0712\\u0742\\u0735\\u0712\\u0742\\u0308\\u071d\\u0735\\u072c\\u0742\\u0735\\u0710\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"headword-line Syrc selflink\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":true,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\"ha\\u1e07\\u0101\\u1e07y\\u0101\\u1e6f\\u0101\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"headword-line tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscri"
+            "pt\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"headword-line\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"headword\"}],\"feature\":null,\"list_path\":\"\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null},{\"kind\":\"definition\",\"depth\":1,\"spans\":[{\"kind\":\"link\",\"text\":\"vase\",\"target\":\"vase\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\", \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"link\",\"text\":\"flowerpot\",\"target\":\"flowerpot\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"feature\":null,\"list_path\":\"#\",\"number\":\"1\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null},{\"kind\":\"example\",\"depth\":2,\"spans\":[{\"kind\":\"text\",\"text\":\"Synonyms:\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"nyms synonym\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"font_scale\":0.8888888955116272,\"font_scale_basis\":\"normal_body\",\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"nyms synonym\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foregrou"
+            "nd\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"link\",\"text\":\"\\u0713\\u0718\\u073c\\u0720\\u0715\\u0735\\u0722\\u0735\\u0710\",\"target\":\"\\u0713\\u0718\\u0720\\u0715\\u0722\\u0710#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"nyms synonym Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"nyms synonym\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"nyms synonym mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"guld\\u0101n\\u0101\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"nyms synonym tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"nyms synonym mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\", \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"nyms synonym\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":fal"
+            "se,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"link\",\"text\":\"\\u0729\\u0738\\u071b\\u0723\\u0735\\u0710\",\"target\":\"\\u0729\\u071b\\u0723\\u0710#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"nyms synonym Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"nyms synonym\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"nyms synonym mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"qi\\u1e6ds\\u0101\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"nyms synonym tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"nyms synonym mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"feature\":null,\"list_path\":\"#:\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null}]},{\"level\":4,\"title\":\"Inflection\",\"anchor\":\"Inflection\",\"anchor_fallback\":\"\",\"blocks\":[{\"kind\":\"container\",\"depth\":0,\"spans\":[],\"feature\":null,\"list_path\":\"\",\"number\":\"\""
+            ",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null,\"container\":{\"blocks\":[{\"kind\":\"table\",\"depth\":0,\"spans\":[],\"feature\":null,\"list_path\":\"\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":{\"caption\":[{\"kind\":\"text\",\"text\":\"Inflection of \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u073c\\u072c\\u0742\\u0735\\u0710\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc mention selflink\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":true,\"italic\":true,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"rows\":[{\"cells\":[{\"spans\":[],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"isolated forms\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":2,\"rowspan\":1,\"background\":null},{\"spans\":[],\"header\":true,\"colspan\":1,\"rowspan\":100,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"with possessive pronouns\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":5,\"rowspan\":1,\"background\":null}]},{\"cells\":[{\"spans\":[],\"header\":true,\"colspan\":1,\"rowspan\":2,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"state\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"ita"
+            "lic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":2,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"form\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":2,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"person\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":2,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"singular\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":2,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"plural\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":2,\"background\":null}]},{\"cells\":[{\"spans\":[{\"kind\":\"text\",\"text\":\"m\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"gender\",\"direction\":\"\",\"explanation\":\"masculine gender\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"f\",\"target\":\"\",\"t"
+            "rail\":\"\",\"language\":\"\",\"classes\":\"gender\",\"direction\":\"\",\"explanation\":\"feminine gender\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null}]},{\"cells\":[{\"spans\":[{\"kind\":\"text\",\"text\":\"singular\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":3,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"absolute\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u073c\",\"target\":\"\\u0717\\u0712\\u0712\\u071d#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\""
+            "},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u012b\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"1\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"st\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":true,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" person\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u073c\\u072c\\u0742\\u071d\\u073c\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u071d#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"n"
+            "ormal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u012b\\u1e6f\\u012b\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":2,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u073c\\u072c\\u0742\\u0732\\u0722\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0722#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"tex"
+            "t\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u012b\\u1e6fan\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null}]},{\"cells\":[{\"spans\":[{\"kind\":\"text\",\"text\":\"construct\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u073c\\u072c\\u0742\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\""
+            "underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u012b\\u1e6f\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"2\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"nd\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":true,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" person\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712"
+            "\\u0742\\u071d\\u073c\\u072c\\u0742\\u0718\\u073c\\u071f\\u0742\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0718\\u071f#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u012b\\u1e6f\\u014d\\u1e35\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u073c\\u072c\\u0742\\u0735\\u071f\\u0742\\u071d\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u071f\\u071d#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":fals"
+            "e,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u012b\\u1e6f\\u0101\\u1e35\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u073c\\u072c\\u0742\\u0732\\u0718\\u071f\\u0742\\u0718\\u073f\\u0722\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0718\\u071f\\u0718\\u0722#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold"
+            "\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u012b\\u1e6faw\\u1e35\\u014dn\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null}]},{\"cells\":[{\"spans\":[{\"kind\":\"text\",\"text\":\"emphatic\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u073c\\u072c\\u0742\\u0735\\u0710\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc selflink\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":true,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":n"
+            "ull,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u012b\\u1e6f\\u0101\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"3\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"rd\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":true,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" person\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\""
+            "role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u073c\\u072c\\u0742\\u0739\\u0717\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0717#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u012b\\u1e6f\\u0113h\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u073c\\u072c\\u0742\\u0735\\u0717\\u0307\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0717#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"d"
+            "irection\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u012b\\u1e6f\\u0101h\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u073c\\u072c\\u0742\\u0717\\u0718\\u073f\\u0722\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0717\\u0718\\u0722#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":"
+            "\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07\\u012b\\u1e6fh\\u014dn\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null}]},{\"cells\":[{\"spans\":[{\"kind\":\"text\",\"text\":\"plural\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":3,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"absolute\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\"
+            "u0735\\u0722\\u0308\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u0722#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07y\\u0101n\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"1\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"st\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tool"
+            "tip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":true,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" person\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u0735\\u072c\\u0742\\u071d\\u073c\\u0308\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u071d#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07y\\u0101\\u1e6f\\u012b\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null"
+            ",\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":2,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u0735\\u072c\\u0742\\u0732\\u0722\\u0308\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0722#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07y\\u0101\\u1e6fan\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null}]},{\"cells\":[{\"spans\":[{\"kind\":\"text\",\"text\":\"construct\",\"target\":\"\",\"trail\":\"\",\""
+            "language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u0735\\u072c\\u0742\\u0308\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07y\\u0101\\u1e6f\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"tex"
+            "t\":\"2\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"nd\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":true,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" person\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u0735\\u072c\\u0742\\u0718\\u073c\\u0308\\u071f\\u0742\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0718\\u071f#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07y\\u0101\\u1e6f\\u014d\\u1e35\",\"target\":\"\",\"trail\":\"\",\"lang"
+            "uage\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u0735\\u072c\\u0742\\u0735\\u071f\\u0742\\u071d\\u0308\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u071f\\u071d#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07y\\u0101\\u1e6f\\u0101\\u1e35\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"t"
+            "arget\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u0735\\u072c\\u0742\\u0732\\u0718\\u0308\\u071f\\u0742\\u0718\\u073f\\u0722\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0718\\u071f\\u0718\\u0722#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07y\\u0101\\u1e6faw\\u1e35\\u014dn\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":fals"
+            "e,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null}]},{\"cells\":[{\"spans\":[{\"kind\":\"text\",\"text\":\"emphatic\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u0308\\u071d\\u0735\\u072c\\u0742\\u0735\\u0710\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc selflink\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":true,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07y\\u0101\\u1e6f\\u0101\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscrip"
+            "t\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"text\",\"text\":\"3\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"rd\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":true,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" person\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":true,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u0308\\u071d\\u0735\\u072c\\u0742\\u0739\\u0717\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0717#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":fal"
+            "se,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07y\\u0101\\u1e6f\\u0113h\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u0308\\u071d\\u0735\\u072c\\u0742\\u0735\\u0717\\u0307\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0717#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07y\\u0101\\u1e6f\\u0101h\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"smal"
+            "l\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null},{\"spans\":[{\"kind\":\"link\",\"text\":\"\\u0717\\u0732\\u0712\\u0735\\u0712\\u0742\\u071d\\u0735\\u072c\\u0742\\u0717\\u0308\\u0718\\u073f\\u0722\",\"target\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0717\\u0718\\u0722#Assyrian Neo-Aramaic\",\"trail\":\"\",\"language\":\"aii\",\"classes\":\"Syrc\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"habb\\u0101\\u1e07y\\u0101\\u1e6fh\\u014dn\",\"target\":\"\",\"trail\":\"\",\"language\":\"aii-Latn\",\"classes\":\"tr Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"mention-gloss-paren annotation-paren\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":nu"
+            "ll,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null}]}]}}],\"style\":{\"width\":{\"fit_content\":{}}}}}]}],\"preamble_spans\":[],\"references\":[],\"media\":[{\"file\":\"Chinese vase.jpg\",\"kind\":\"image\",\"caption\":\"\\u0717\\u0712\\u0712\\u071d\\u072c\\u0710\"}],\"redirect\":null,\"alias\":null}"
+        )).object();
+    }
+
 private slots:
+    void retainedEnglishLastRowSpanKeepsCompleteEntryAndExactQtGrid() {
+        QSettings().setValue("media/allowImages", false);
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const auto entry = retainedEnglishLastRowSpanEntry();
+        const QByteArray before = QJsonDocument(entry).toJson(QJsonDocument::Compact);
+        const auto sourceTable = entry.value("sections").toArray()[4].toObject().value("blocks").toArray()[0].toObject()
+            .value("container").toObject().value("blocks").toArray()[0].toObject().value("table").toObject();
+        const auto sourceRows = sourceTable.value("rows").toArray();
+        QCOMPARE(sourceRows.size(), 9);
+        QCOMPARE(sourceRows[0].toObject().value("cells").toArray()[2].toObject().value("rowspan").toInt(), 100);
+        const auto spansIn = [](const QJsonValue &root) {
+            QJsonArray spans;
+            const auto visit = [&](auto &&self, const QJsonValue &value) -> void {
+                if (value.isArray()) { for (const auto &child : value.toArray()) self(self, child); }
+                else if (value.isObject()) {
+                    const auto object = value.toObject();
+                    const auto kind = object.value("kind").toString();
+                    if (object.value("text").isString() && (kind == "text" || kind == "link" || kind == "external_link")) spans.append(object);
+                    for (auto it = object.begin(); it != object.end(); ++it) self(self, it.value());
+                }
+            };
+            visit(visit, root); return spans;
+        };
+        const auto entrySpans = spansIn(entry), tableSpans = spansIn(sourceTable);
+        const auto countLanguage = [](const QJsonArray &spans, const QString &language) {
+            int result = 0; for (const auto &value : spans) result += value.toObject().value("language").toString() == language; return result;
+        };
+        const auto countActions = [](const QJsonArray &spans) {
+            int result = 0; for (const auto &value : spans) {
+                const auto kind = value.toObject().value("kind").toString(); result += kind == "link" || kind == "external_link";
+            } return result;
+        };
+        QCOMPARE(entrySpans.size(), 212); QCOMPARE(tableSpans.size(), 147);
+        QCOMPARE(countLanguage(entrySpans, "aii"), 30); QCOMPARE(countLanguage(entrySpans, "aii-Latn"), 28);
+        QCOMPARE(countLanguage(tableSpans, "aii"), 23); QCOMPARE(countLanguage(tableSpans, "aii-Latn"), 22);
+        QCOMPARE(countActions(entrySpans), 32); QCOMPARE(countActions(tableSpans), 20);
+        QVector<SemanticHtml::TableInfo> records; int tableCount = 0;
+        const auto html = window.tableHtml(sourceTable, 0);
+        SemanticHtml::prepareTables(html, records, tableCount);
+        QCOMPARE(tableCount, 1); QCOMPARE(records.size(), 1);
+        QCOMPARE(records[0].value.value("rows").toArray()[0].toArray()[2].toObject().value("rowspan").toInt(), 100);
+        const auto metadataBefore = records[0].value;
+        QVERIFY(html.contains(QStringLiteral("rowspan='100'")));
+        const auto plain = [](QString value) {
+            for (const QChar ch : {QChar(0x2066), QChar(0x2067), QChar(0x2068), QChar(0x2069)}) value.remove(ch);
+            value.replace(QChar::ParagraphSeparator, QChar('\n')); value.replace(QChar::LineSeparator, QChar('\n'));
+            return value;
+        };
+        for (int width : {900, 640}) {
+            window.resize(width, 700);
+            QVERIFY(composeReadingEntry(window, entry));
+            auto *doc = window.reading_->document(); doc->documentLayout()->documentSize();
+            QCOMPARE(window.currentEntry_, entry);
+            QCOMPARE(QJsonDocument(entry).toJson(QJsonDocument::Compact), before);
+            QVector<QTextTable *> tables;
+            const auto collect = [&](auto &&self, QTextFrame *frame) -> void {
+                for (auto *child : frame->childFrames()) { if (auto *table = qobject_cast<QTextTable *>(child)) tables.append(table); self(self, child); }
+            };
+            collect(collect, doc->rootFrame()); QCOMPARE(tables.size(), 2);
+            // The complete Entry owns its Root table before the inflection table.
+            const auto rootTable = entry.value("sections").toArray()[1].toObject().value("blocks").toArray()[0].toObject()
+                .value("container").toObject().value("blocks").toArray()[0].toObject().value("table").toObject();
+            const auto rootRows = rootTable.value("rows").toArray(); QCOMPARE(rootRows.size(), 3);
+            auto *actualRoot = tables[0]; QCOMPARE(actualRoot->rows(), 3); QCOMPARE(actualRoot->columns(), 1);
+            for (int row = 0; row < rootRows.size(); ++row) {
+                const auto cells = rootRows[row].toObject().value("cells").toArray(); QCOMPARE(cells.size(), 1);
+                const auto source = cells[0].toObject(); const auto cell = actualRoot->cellAt(row, 0);
+                QCOMPARE(cell.row(), row); QCOMPARE(cell.column(), 0);
+                QCOMPARE(cell.rowSpan(), source.value("rowspan").toInt()); QCOMPARE(cell.columnSpan(), source.value("colspan").toInt());
+                QTextCursor text = cell.firstCursorPosition(); text.setPosition(cell.lastCursorPosition().position(), QTextCursor::KeepAnchor);
+                for (const auto &span : source.value("spans").toArray())
+                    QVERIFY2(plain(text.selectedText()).contains(span.toObject().value("text").toString()),
+                        qPrintable(span.toObject().value("text").toString()));
+            }
+            auto *actual = tables[1]; QVERIFY(actualRoot->lastPosition() < actual->firstPosition());
+            QCOMPARE(actual->rows(), 9); QCOMPARE(actual->columns(), 9);
+            QCOMPARE(actual->cellAt(0, 3).rowSpan(), 9); QCOMPARE(actual->cellAt(0, 3).columnSpan(), 1);
+            // Independently place every declared cell in the source grid. Native
+            // occupancy is an output under comparison, not the span authority.
+            QVector<QVector<bool>> occupied(9, QVector<bool>(9, false)); int sourceCells = 0;
+            for (int row = 0; row < sourceRows.size(); ++row) {
+                int column = 0;
+                for (const auto &value : sourceRows[row].toObject().value("cells").toArray()) {
+                    while (column < 9 && occupied[row][column]) ++column;
+                    const auto source = value.toObject(); const int columns = source.value("colspan").toInt();
+                    const int rows = std::min(source.value("rowspan").toInt(), 9 - row);
+                    QVERIFY(column < 9 && columns > 0 && column + columns <= 9 && rows > 0);
+                    const auto cell = actual->cellAt(row, column); QVERIFY(cell.isValid());
+                    QCOMPARE(cell.row(), row); QCOMPARE(cell.column(), column);
+                    QCOMPARE(cell.rowSpan(), rows); QCOMPARE(cell.columnSpan(), columns);
+                    for (int r = row; r < row + rows; ++r) for (int c = column; c < column + columns; ++c) {
+                        QVERIFY(!occupied[r][c]); occupied[r][c] = true; QCOMPARE(actual->cellAt(r, c), cell);
+                    }
+                    QTextCursor text = cell.firstCursorPosition(); text.setPosition(cell.lastCursorPosition().position(), QTextCursor::KeepAnchor);
+                    const QString actualText = plain(text.selectedText());
+                    for (const auto &spanValue : source.value("spans").toArray()) {
+                        const auto span = spanValue.toObject(); const auto label = span.value("text").toString();
+                        if (!label.isEmpty()) QVERIFY2(actualText.contains(label), qPrintable(label));
+                    }
+                    column += columns; ++sourceCells;
+                }
+            }
+            QCOMPARE(sourceCells, 48);
+            const QString body = plain(doc->toPlainText());
+            QHash<QString, QString> actionText;
+            for (auto block = doc->begin(); block.isValid(); block = block.next()) for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment(); if (fragment.isValid() && !fragment.charFormat().anchorHref().isEmpty())
+                    actionText[fragment.charFormat().anchorHref()] += plain(fragment.text());
+            }
+            int visibleActions = 0, imageActions = 0;
+            for (const auto &value : entrySpans) {
+                const auto span = value.toObject(); const auto label = span.value("text").toString();
+                if (span.value("language") == "aii" || span.value("language") == "aii-Latn") QVERIFY2(body.contains(label), qPrintable(label));
+                const auto kind = span.value("kind").toString(); if (kind != "link" && kind != "external_link") continue;
+                if (label.isEmpty()) {
+                    QVERIFY(span.value("image").isObject()); QCOMPARE(span.value("target").toString(), QStringLiteral("File:Chinese vase.jpg"));
+                    ++imageActions; continue; // Its original Figure action is retained in currentEntry_, not replaced by a fake label.
+                }
+                const auto target = span.value("target").toString();
+                const auto href = kind == "link" ? QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(target))
+                    : QUrl(target.startsWith("//") ? QStringLiteral("https:") + target : target).toString(QUrl::FullyEncoded);
+                QVERIFY2(actionText.contains(href) && actionText.value(href).contains(label), qPrintable(href + " / " + label));
+                ++visibleActions;
+            }
+            QCOMPARE(visibleActions, 31); QCOMPARE(imageActions, 1);
+            QCOMPARE(records[0].value, metadataBefore);
+            QCOMPARE(window.currentEntry_.value("sections"), entry.value("sections"));
+        }
+    }
+
+    void tableUsedRowSpanKeepsDeclaredMetadataAndRejectsForeignShape() {
+        MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const auto cell = [](const QString &text, int rowspan = 1, int colspan = 1) {
+            return QJsonObject{{"rowspan", rowspan}, {"colspan", colspan}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", text}}}}};
+        };
+        const auto make = [&](int start, int declared) {
+            QJsonArray rows;
+            for (int row = 0; row < 3; ++row) {
+                QJsonArray cells;
+                if (row <= start || row >= start + declared) cells.append(cell(row == start ? "Span owner" : QString("First %1").arg(row), row == start ? declared : 1));
+                cells.append(cell(QString("Second %1").arg(row))); rows.append(QJsonObject{{"cells", cells}});
+            }
+            return QJsonObject{{"rows", rows}};
+        };
+        for (int start : {0, 1, 2}) for (int declared : {1, 3 - start, 100}) {
+            const auto source = make(start, declared); const auto before = QJsonDocument(source).toJson(QJsonDocument::Compact);
+            const auto html = window.tableHtml(source, 0);
+            QVector<SemanticHtml::TableInfo> records; int count = 0;
+            const auto imported = SemanticHtml::prepareTables(html, records, count);
+            QCOMPARE(count, 1); QCOMPARE(records.size(), 1);
+            QCOMPARE(records[0].value.value("rows").toArray()[start].toArray()[0].toObject().value("rowspan").toInt(), declared);
+            QTextDocument doc; doc.setHtml(imported); SemanticHtml::normalizeTables(&doc, records, count);
+            auto *table = doc.find("Span owner").currentTable(); QVERIFY(table); QCOMPARE(table->rows(), 3); QCOMPARE(table->columns(), 2);
+            const auto actual = table->cellAt(start, 0); QCOMPARE(actual.rowSpan(), std::min(declared, 3 - start)); QCOMPARE(actual.columnSpan(), 1);
+            QCOMPARE(QJsonDocument(source).toJson(QJsonDocument::Compact), before);
+            QCOMPARE(records[0].value.value("rows").toArray()[start].toArray()[0].toObject().value("rowspan").toInt(), declared);
+        }
+        const auto valid = make(1, 100); const auto html = window.tableHtml(valid, 0);
+        const auto changeFirst = [&](const QString &key, const QJsonValue &value) {
+            auto table = valid; auto rows = table.value("rows").toArray(); auto row = rows[1].toObject(); auto cells = row.value("cells").toArray();
+            auto first = cells[0].toObject(); first.insert(key, value); cells[0] = first; row.insert("cells", cells); rows[1] = row; table.insert("rows", rows); return table;
+        };
+        for (const auto &key : {QStringLiteral("rowspan"), QStringLiteral("colspan")})
+            for (const QJsonValue invalid : {QJsonValue(0), QJsonValue(-1), QJsonValue(1.5), QJsonValue(101), QJsonValue(QJsonValue::Null), QJsonValue("2"), QJsonValue(true)}) {
+                const auto source = changeFirst(key, invalid);
+                QVERIFY_EXCEPTION_THROWN(window.tableHtml(source, 0), std::runtime_error);
+                QVERIFY_EXCEPTION_THROWN(SemanticHtml::tableStyleMarker(source, 12, 0), std::runtime_error);
+            }
+        QVector<SemanticHtml::TableInfo> records; int count = 0; const auto imported = SemanticHtml::prepareTables(html, records, count);
+        const auto reject = [&](const QVector<SemanticHtml::TableInfo> &changed, const QString &text) {
+            QTextDocument doc; doc.setHtml(text); bool refused = false;
+            try { SemanticHtml::normalizeTables(&doc, changed, count); } catch (const std::runtime_error &) { refused = true; }
+            return refused;
+        };
+        for (const auto &key : {QStringLiteral("rowspan"), QStringLiteral("colspan")}) {
+            auto changed = records; auto rows = changed[0].value.value("rows").toArray(); auto cells = rows[1].toArray(); auto first = cells[0].toObject();
+            first.remove(key); cells[0] = first; rows[1] = cells; changed[0].value.insert("rows", rows);
+            QVERIFY(reject(changed, imported));
+        }
+        auto missingRow = records; auto rows = missingRow[0].value.value("rows").toArray(); rows.removeLast(); missingRow[0].value.insert("rows", rows);
+        QVERIFY(reject(missingRow, imported));
+        // The expected used span is two, never any observed native value.
+        QVERIFY(reject(records, QString(imported).replace("rowspan='100'", "rowspan='1'")));
+        QVERIFY(reject(records, QString(imported).replace("colspan='1'", "colspan='2'")));
+        auto overlap = make(0, 2); auto overlapRows = overlap.value("rows").toArray();
+        auto second = overlapRows[1].toObject(); second.insert("cells", QJsonArray{cell("Overlapping two columns", 1, 2)}); overlapRows[1] = second; overlap.insert("rows", overlapRows);
+        auto overlapHtml = window.tableHtml(overlap, 0); QVector<SemanticHtml::TableInfo> overlapRecords; int overlapCount = 0;
+        auto overlapImport = SemanticHtml::prepareTables(overlapHtml, overlapRecords, overlapCount);
+        // Tampering the source's occupied first column cannot be accepted as a
+        // different two-column native merge; all source cells must still match.
+        overlapImport.replace("rowspan='2'", "rowspan='1'");
+        QTextDocument overlapDoc; overlapDoc.setHtml(overlapImport);
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::normalizeTables(&overlapDoc, overlapRecords, overlapCount), std::runtime_error);
+        QTextDocument recovered; SemanticHtml::setHtml(&recovered, html);
+        QCOMPARE(recovered.find("Span owner").currentTable()->cellAt(1, 0).rowSpan(), 2);
+    }
+
+    void authoredInlineHelpUsesOnlyItsRunAndKeepsAnnotationActions()
+    {
+        MainWindow window{QString()}; window.resize(700, 650); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        ExternalUrlReceiver receiver; QDesktopServices::setUrlHandler("https", &receiver, "capture");
+        const auto restoreHandler = qScopeGuard([] { QDesktopServices::unsetUrlHandler("https"); });
+        QCOMPARE(window.reading_->property("_wikidictHelpCursorOverrideCapability"), QVariant(QStringLiteral("wikidict.help-cursor-override/1")));
+        QCOMPARE(window.title_->property("_wikidictHelpCursorOverrideCapability"), QVariant(QStringLiteral("wikidict.help-cursor-override/1")));
+        const QString target = QStringLiteral("https://example.test/authored-help");
+        const QJsonObject policy{{"cursor", "help"}};
+        const QJsonObject marked{{"kind", "external_link"}, {"text", "Authored"}, {"target", target},
+            {"explanation", "Authored annotation"}, {"inline_style", policy}};
+        const QJsonObject plainHelp{{"kind", "text"}, {"text", "Explicit"}, {"inline_style", policy}};
+        const QJsonObject advice{{"kind", "text"}, {"text", "Advisory"}, {"explanation", "Tooltip alone is not cursor authority"}};
+        const QJsonObject ordinaryLink{{"kind", "external_link"}, {"text", "Ordinary"}, {"target", "https://example.test/ordinary"}};
+        const QJsonObject space{{"kind", "text"}, {"text", " "}};
+        const QJsonArray spans{marked, space, plainHelp, space, advice, space, ordinaryLink};
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", spans}};
+        const QJsonObject table{{"kind", "table"}, {"table", QJsonObject{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{
+            QJsonObject{{"spans", spans}}}}}}}}}};
+        for (const auto &source : {paragraph, table}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+            QVERIFY(composeReadingBlocks(window, QJsonArray{source}, direction)); window.readingPaneAction_->trigger();
+            auto *browser = window.reading_; auto *doc = browser->document(); QTRY_VERIFY(browser->isVisible());
+            doc->documentLayout()->documentSize(); QCOMPARE(doc->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const QString raw = doc->toRawText(); const auto entry = window.currentEntry_; const int count = doc->characterCount();
+            auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->textInterface());
+            auto *ax = accessible->textInterface(); const auto axText = ax->text(0, -1);
+            const auto authored = doc->find(QStringLiteral("Authored")); QVERIFY(!authored.isNull());
+            QCOMPARE(SemanticHtml::spanExplanation(authored.charFormat()), QStringLiteral("Authored annotation"));
+            const auto authoredFormat = authored.charFormat();
+            const auto hover = [&](const QString &label) {
+                const auto word = doc->find(label); if (word.isNull()) return false;
+                browser->setTextCursor(word); browser->ensureCursorVisible();
+                const auto rect = ax->characterRect(word.selectionStart()); if (rect.isEmpty()) return false;
+                const auto local = browser->viewport()->mapFromGlobal(rect.center());
+                if (!browser->viewport()->rect().contains(local)) return false;
+                QTest::mouseMove(browser->viewport(), local);
+                return true;
+            };
+            QVERIFY(hover(QStringLiteral("Advisory")));
+            const auto ordinaryPointer = browser->viewport()->cursor().shape();
+            QVERIFY(ordinaryPointer != Qt::WhatsThisCursor && ordinaryPointer != Qt::PointingHandCursor);
+            QVERIFY(hover(QStringLiteral("Authored"))); QTRY_COMPARE(browser->viewport()->cursor().shape(), Qt::WhatsThisCursor);
+            const auto global = ax->characterRect(authored.selectionStart()).center();
+            QCOMPARE(browser->anchorAt(browser->viewport()->mapFromGlobal(global)), target);
+            QTest::mouseClick(browser->viewport(), Qt::LeftButton, {}, browser->viewport()->mapFromGlobal(global));
+            QTRY_VERIFY(!receiver.opened.isEmpty()); QCOMPARE(receiver.opened.last(), QUrl(target));
+            QVERIFY(hover(QStringLiteral("Explicit"))); QTRY_COMPARE(browser->viewport()->cursor().shape(), Qt::WhatsThisCursor);
+            QVERIFY(hover(QStringLiteral("Advisory"))); QTRY_COMPARE(browser->viewport()->cursor().shape(), ordinaryPointer);
+            QVERIFY(hover(QStringLiteral("Ordinary"))); QTRY_COMPARE(browser->viewport()->cursor().shape(), Qt::PointingHandCursor);
+            QVERIFY(hover(QStringLiteral("Authored"))); QTRY_COMPARE(browser->viewport()->cursor().shape(), Qt::WhatsThisCursor);
+            QTest::mouseMove(browser->viewport(), browser->viewport()->rect().bottomLeft() + QPoint(8, -8));
+            QTRY_VERIFY(browser->viewport()->cursor().shape() != Qt::WhatsThisCursor);
+            browser->setFocus(Qt::TabFocusReason); QTRY_VERIFY(browser->hasFocus());
+            QTextCursor start(doc); start.setPosition(authored.block().position()); browser->setTextCursor(start);
+            QTest::keyClick(browser, Qt::Key_Tab); QCOMPARE(browser->textCursor().selectionStart(), authored.selectionStart());
+            QCOMPARE(browser->textCursor().selectionEnd(), authored.selectionEnd());
+            const int calls = receiver.opened.size(); QTest::keyClick(browser, Qt::Key_Return);
+            QTRY_COMPARE(receiver.opened.size(), calls + 1); QCOMPARE(receiver.opened.last(), QUrl(target));
+            QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(window.currentEntry_, entry);
+            QCOMPARE(doc->find(QStringLiteral("Authored")).charFormat(), authoredFormat); QCOMPARE(ax->text(0, -1), axText);
+            QVERIFY(hover(QStringLiteral("Authored"))); QTRY_COMPARE(browser->viewport()->cursor().shape(), Qt::WhatsThisCursor);
+            auto cleared = marked; cleared.remove("inline_style");
+            QVERIFY(composeReadingBlocks(window, QJsonArray{QJsonObject{{"kind", "paragraph"},
+                {"spans", QJsonArray{cleared, space, advice, space, ordinaryLink}}}}, direction));
+            browser->viewport()->update(); QCoreApplication::processEvents();
+            QTRY_VERIFY(browser->viewport()->cursor().shape() != Qt::WhatsThisCursor);
+            QCOMPARE(SemanticHtml::spanExplanation(doc->find(QStringLiteral("Authored")).charFormat()), QStringLiteral("Authored annotation"));
+            // Recomposition while Help is active must not teach QTextBrowser
+            // that Help is its ordinary non-link cursor.
+            QVERIFY(hover(QStringLiteral("Ordinary"))); QTRY_COMPARE(browser->viewport()->cursor().shape(), Qt::PointingHandCursor);
+            QVERIFY(hover(QStringLiteral("Advisory"))); QTRY_COMPARE(browser->viewport()->cursor().shape(), ordinaryPointer);
+        }
+        for (const QJsonValue &bad : {QJsonValue(QStringLiteral("auto")), QJsonValue(QStringLiteral("pointer")), QJsonValue(true), QJsonValue(0)}) {
+            auto span = marked; span.insert("inline_style", QJsonObject{{"cursor", bad}});
+            QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineTextStyle(span), std::runtime_error);
+        }
+        auto empty = plainHelp; empty.insert("text", ""); auto metric = policy;
+        metric.insert("line_height", QJsonObject{{"computed", QJsonObject{{"value", 1.0}, {"font_scale_basis", "normal_body"}}}});
+        empty.insert("inline_style", metric); QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineTextStyle(empty), std::runtime_error);
+        QCOMPARE(SemanticHtml::inlineFontSnapshot(QJsonObject{{"font_scale", 1.0}, {"font_scale_basis", "context"}}), SemanticHtml::inlineFontSnapshot(QJsonObject{}));
+        QVERIFY(SemanticHtml::inlineFontSnapshot(QJsonObject{{"font_scale", 1.0}, {"font_scale_basis", "normal_body"}})
+            != SemanticHtml::inlineFontSnapshot(QJsonObject{}));
+        {
+            auto *browser = window.reading_;
+            const auto capability = browser->property("_wikidictHelpCursorOverrideCapability");
+            browser->setProperty("_wikidictHelpCursorOverrideCapability", QVariant());
+            const auto restore = qScopeGuard([&] { browser->setProperty("_wikidictHelpCursorOverrideCapability", capability); });
+            QVERIFY(!composeReadingBlocks(window, QJsonArray{paragraph}));
+            QVERIFY(!composeReadingBlocks(window, QJsonArray{table}));
+            // Failure is explicit; no guessed pointer fallback is installed.
+            QVERIFY(browser->viewport()->cursor().shape() != Qt::WhatsThisCursor);
+        }
+        QVERIFY(composeReadingBlocks(window, QJsonArray{paragraph}));
+        auto *native = window.reading_->document()->documentLayout();
+        const auto capability = native->property("_wikidictInlineHelpCursorCapability");
+        native->setProperty("_wikidictInlineHelpCursorCapability", QVariant());
+        const auto restoreCapability = qScopeGuard([&] { native->setProperty("_wikidictInlineHelpCursorCapability", capability); });
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::resolveInlineStyle(window.reading_->document(), marked, 12, 12, QString()), std::runtime_error);
+    }
+
+    void authoredInlineKeepsAbbreviationActionsAndEmptyScriptOwners()
+    {
+        const auto oldPoints = QSettings().value("reader/pointSize");
+        const auto restore = qScopeGuard([&] { if (oldPoints.isValid()) QSettings().setValue("reader/pointSize", oldPoints); else QSettings().remove("reader/pointSize"); });
+        QSettings().setValue("reader/pointSize", 12);
+        MainWindow window{QString()}; window.resize(700, 650); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        const QJsonObject ownerFont{{"font_scale", QJsonValue()}, {"font_scale_basis", "context"}, {"small", false},
+            {"superscript", true}, {"subscript", false}, {"font_normalized", false},
+            {"bold", false}, {"italic", false}, {"code", false}, {"language", ""}, {"classes", ""}, {"role", "normal"}, {"font_features", QJsonValue()}};
+        const QJsonObject lineHeight{{"font_relative", QJsonObject{{"factor", 1.0}, {"font", ownerFont}}}};
+        const QJsonObject metric{{"line_height", lineHeight}};
+        const QJsonObject empty{{"kind", "text"}, {"text", ""}, {"target", ""}, {"superscript", true}, {"inline_style", metric}};
+        const QJsonObject dotted{{"decoration", QJsonObject{{"style", "dotted"}, {"color", "#d00000"}, {"thickness", QJsonValue()}}}};
+        auto paint = figureLinkPaintFixture(false);
+        paint.insert("hover_active", QJsonObject{{"foreground", "#789abc"}, {"underline", true}});
+        paint.insert("visited_hover_active", QJsonObject{{"foreground", "#89abcd"}, {"underline", true}});
+        const QString label = QString::fromUtf8("J\xc5\x8dy\xc5\x8d");
+        const QString expansion = QStringLiteral("This reading is listed in the Joyo kanji table.");
+        const QJsonObject abbreviation{{"kind", "link"}, {"text", label}, {"target", "Joyo"}, {"explanation", expansion},
+            {"inline_style", dotted}, {"link_paint", paint}, {"foreground", paint.value("normal").toObject().value("foreground")},
+            {"underline", paint.value("normal").toObject().value("underline")}};
+        auto plusStyle = metric; plusStyle.insert("decoration", dotted.value("decoration"));
+        const QJsonObject plus{{"kind", "text"}, {"text", "+"}, {"explanation", "Add Mandarin homophones"},
+            {"small", true}, {"superscript", true}, {"inline_style", plusStyle}};
+        auto subFont = ownerFont; subFont.insert("superscript", false); subFont.insert("subscript", true);
+        const QJsonObject sub{{"kind", "text"}, {"text", "7"}, {"subscript", true},
+            {"inline_style", QJsonObject{{"line_height", QJsonObject{{"font_relative", QJsonObject{{"factor", 1.0}, {"font", subFont}}}}}}}};
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{empty, abbreviation, empty, empty, plus, sub, empty}}};
+        const QJsonObject table{{"kind", "table"}, {"table", QJsonObject{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{
+            QJsonObject{{"spans", paragraph.value("spans")}}}}}}}}}};
+        for (const auto &source : {paragraph, table}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+            QVERIFY(composeReadingBlocks(window, QJsonArray{source}, direction)); window.readingPaneAction_->trigger();
+            auto *browser = window.reading_; auto *doc = browser->document();
+            QTRY_VERIFY(browser->isVisible()); doc->documentLayout()->documentSize();
+            QCOMPARE(doc->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const auto word = doc->find(label); QVERIFY(!word.isNull());
+            QCOMPARE(word.block().text(), label + "+7");
+            const auto owners = word.block().blockFormat().property(SemanticHtml::inlineEmptyOwnersProperty).toMap();
+            QCOMPARE(owners.value("text").toString(), label + "+7");
+            const auto list = owners.value("owners").toList(); QCOMPARE(list.size(), 4);
+            QCOMPARE(list[0].toMap().value("offset").toInt(), 0);
+            QCOMPARE(list[1].toMap().value("offset").toInt(), label.size());
+            QCOMPARE(list[2].toMap().value("offset").toInt(), label.size());
+            QCOMPARE(list[3].toMap().value("offset").toInt(), label.size() + 2);
+            const auto format = word.charFormat(); QCOMPARE(SemanticHtml::spanExplanation(format), expansion);
+            QCOMPARE(format.anchorHref(), QStringLiteral("dict:Joyo"));
+            QCOMPARE(format.property(SemanticHtml::inlineStyleProperty).toMap().value("decoration").toMap().value("style").toString(), QStringLiteral("dotted"));
+            const auto plusFormat = doc->find(QStringLiteral("+")).charFormat();
+            const auto frozen = plusFormat.property(SemanticHtml::inlineStyleProperty).toMap().value("height_font").value<QTextFormat>().toCharFormat();
+            QVERIFY(frozen.font().pointSizeF() > plusFormat.font().pointSizeF());
+            QCOMPARE(frozen.verticalAlignment(), QTextCharFormat::AlignSuperScript);
+            const QString raw = doc->toRawText(); const auto entry = window.currentEntry_; const int count = doc->characterCount();
+            QVERIFY(!raw.contains(QChar(0xe000))); QVERIFY(!raw.contains(QChar::ObjectReplacementCharacter));
+            QTextCursor reset(doc); reset.setPosition(word.block().position()); browser->setTextCursor(reset);
+            browser->setFocus(Qt::TabFocusReason); QTRY_VERIFY(browser->hasFocus());
+            QTest::keyClick(browser, Qt::Key_Tab); QTRY_COMPARE(browser->textCursor().selectedText(), label);
+            QCOMPARE(browser->textCursor().selectionStart(), word.selectionStart()); QCOMPARE(browser->textCursor().selectionEnd(), word.selectionEnd());
+            auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->textInterface());
+            const auto rect = accessible->textInterface()->characterRect(word.selectionStart()); QVERIFY(!rect.isEmpty());
+            QCOMPARE(browser->anchorAt(browser->viewport()->mapFromGlobal(rect.center())), QStringLiteral("dict:Joyo"));
+            QCOMPARE(accessible->textInterface()->text(word.selectionStart(), word.selectionEnd()), label);
+            const auto sourcePolicy = format.property(SemanticHtml::inlineStyleProperty);
+            for (const auto &selection : browser->extraSelections()) {
+                if (!selection.format.boolProperty(MissingFigurePaint::overlayProperty)) continue;
+                auto merged = format; merged.merge(selection.format);
+                QCOMPARE(merged.property(SemanticHtml::inlineStyleProperty), sourcePolicy);
+            }
+            browser->setTextCursor(word); QCOMPARE(browser->textCursor().selectedText(), label);
+            const auto frame = browser->grab().toImage(); int red = 0;
+            for (int y = 0; y < frame.height(); ++y) for (int x = 0; x < frame.width(); ++x) red += frame.pixelColor(x, y) == QColor("#d00000");
+            QVERIFY(red > 0);
+            window.resize(390, 650); QTRY_VERIFY(!window.readingFloatLayoutScheduled_); doc->documentLayout()->documentSize();
+            QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(window.currentEntry_, entry);
+            QCOMPARE(doc->find(label).block().blockFormat().property(SemanticHtml::inlineEmptyOwnersProperty), QVariant(owners));
+            window.resize(700, 650);
+        }
+        auto plainEmpty = empty; plainEmpty.remove("inline_style");
+        const auto emptyBlock = [](const QJsonObject &span) { return QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{span}}}; };
+        QVERIFY(composeReadingBlocks(window, QJsonArray{emptyBlock(plainEmpty)}));
+        const auto emptyRaw = window.reading_->document()->toRawText();
+        const auto emptyCount = window.reading_->document()->characterCount();
+        QVERIFY(composeReadingBlocks(window, QJsonArray{emptyBlock(empty)}));
+        auto *emptyDocument = window.reading_->document(); emptyDocument->documentLayout()->documentSize();
+        QCOMPARE(emptyDocument->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QCOMPARE(emptyDocument->toRawText(), emptyRaw); QCOMPARE(emptyDocument->characterCount(), emptyCount);
+        int emptyOwnerBlocks = 0;
+        for (auto b = emptyDocument->begin(); b.isValid(); b = b.next()) {
+            if (!b.blockFormat().hasProperty(SemanticHtml::inlineEmptyOwnersProperty)) continue;
+            ++emptyOwnerBlocks; QVERIFY(b.text().isEmpty());
+            const auto owners = b.blockFormat().property(SemanticHtml::inlineEmptyOwnersProperty).toMap().value("owners").toList();
+            QCOMPARE(owners.size(), 1); QCOMPARE(owners.first().toMap().value("offset").toInt(), 0);
+            QVERIFY(!owners.first().toMap().value("format").value<QTextFormat>().toCharFormat().isAnchor());
+        }
+        QCOMPARE(emptyOwnerBlocks, 1);
+        // The retained outer SUP contains Jpan/bold descendants and a generic
+        // transliteration. Its declaring font must not be cloned from either run.
+        auto ownerProbe = ownerFont; ownerProbe.remove("font_normalized");
+        ownerProbe.insert("kind", "text"); ownerProbe.insert("text", "O"); ownerProbe.insert("target", "");
+        QVERIFY(composeReadingBlocks(window, QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{ownerProbe}}}}));
+        const auto expectedOwner = window.reading_->document()->find(QStringLiteral("O")).charFormat();
+        QCOMPARE(expectedOwner.font().pointSizeF(), qreal(window.readingPointSize_));
+        auto marked = plus; marked.insert("text", QString::fromUtf8("\xe9\x96\x93")); marked.insert("small", false);
+        marked.insert("bold", true); marked.insert("classes", "Jpan headword"); marked.insert("language", "ja");
+        marked.insert("role", "headword"); marked.insert("inline_style", metric);
+        // The actual window minimum leaves a 420-pixel viewport. These real
+        // words still wrap at the small script font after that layout settles.
+        auto translation = plus;
+        translation.insert("text", QStringLiteral("(translation with enough words to wrap across several narrow lines) ").repeated(8));
+        translation.insert("italic", true); translation.insert("classes", "tr"); translation.insert("inline_style", metric);
+        auto nestedScript = plus; nestedScript.insert("text", "?"); nestedScript.insert("small", false); nestedScript.insert("inline_style", metric);
+        const QJsonArray mixed{empty, marked, translation, nestedScript};
+        const QJsonObject mixedBlock{{"kind", "paragraph"}, {"spans", mixed}};
+        window.resize(390, 650);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{mixedBlock}));
+        QTRY_VERIFY(!window.readingFloatLayoutScheduled_);
+        auto *mixedDocument = window.reading_->document(); mixedDocument->documentLayout()->documentSize();
+        QCOMPARE(mixedDocument->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        const auto markedFormat = mixedDocument->find(marked.value("text").toString()).charFormat();
+        QVERIFY(markedFormat.font().bold()); QVERIFY(!expectedOwner.font().bold());
+        const auto translationFormat = mixedDocument->find(translation.value("text").toString()).charFormat();
+        QVERIFY(translationFormat.font().italic()); QVERIFY(!expectedOwner.font().italic());
+        for (const auto &run : {markedFormat, translationFormat, mixedDocument->find(QStringLiteral("?")).charFormat()}) {
+            const auto parent = run.property(SemanticHtml::inlineStyleProperty).toMap().value("height_font").value<QTextFormat>().toCharFormat();
+            QCOMPARE(parent.font(), expectedOwner.font());
+            QCOMPARE(parent.verticalAlignment(), expectedOwner.verticalAlignment());
+            QCOMPARE(parent.fontFeatures(), expectedOwner.fontFeatures());
+        }
+        QVERIFY(paintedBlockLines(mixedDocument, mixedDocument->find(translation.value("text").toString()).block()).size() > 1);
+        QCOMPARE(window.currentEntry_.value("sections").toArray().first().toObject().value("blocks").toArray(), QJsonArray{mixedBlock});
+        QCOMPARE(mixedDocument->toPlainText().count(QChar(0xe000)), 0);
+        // The declaring context can differ from the Reader widget's default.
+        // False code inherits it; true code takes the same ordinary monospace path.
+        for (bool code : {false, true}) {
+            QTextDocument contextDocument;
+            QFont contextFont = window.reading_->document()->defaultFont();
+            contextFont.setPointSizeF(window.readingPointSize_);
+            contextFont.setFamilies(QStringList{"Wikidict Declaring Context", "Newsreader"});
+            contextDocument.setDefaultFont(contextFont);
+            auto declaring = ownerFont; declaring.insert("code", code);
+            auto probe = declaring; probe.remove("font_normalized");
+            probe.insert("kind", "text"); probe.insert("text", "Owner");
+            auto child = probe; child.insert("text", "Child"); child.insert("bold", true); child.insert("italic", true);
+            child.insert("inline_style", QJsonObject{{"line_height", QJsonObject{{"font_relative",
+                QJsonObject{{"factor", 1.0}, {"font", declaring}}}}}});
+            const auto html = window.spansHtml(QJsonArray{probe, child});
+            QCOMPARE(html.contains(QStringLiteral("<code>")), code);
+            SemanticHtml::setHtml(&contextDocument, html);
+            QCOMPARE(contextDocument.toRawText(), QStringLiteral("OwnerChild"));
+            const auto ordinary = contextDocument.find(QStringLiteral("Owner")).charFormat();
+            const auto childFormat = contextDocument.find(QStringLiteral("Child")).charFormat();
+            const auto snapshot = childFormat.property(SemanticHtml::inlineStyleProperty).toMap()
+                .value("height_font").value<QTextFormat>().toCharFormat();
+            QCOMPARE(snapshot.font(), ordinary.font().resolve(contextDocument.defaultFont()));
+            QCOMPARE(snapshot.verticalAlignment(), ordinary.verticalAlignment());
+            QVERIFY(childFormat.font().bold() && childFormat.font().italic());
+            QVERIFY(!snapshot.font().bold() && !snapshot.font().italic());
+            if (!code) QCOMPARE(snapshot.font().families(), contextFont.families());
+        }
+    }
+
+    void authoredInlineRejectsMalformedOwnersAndRecoversWithoutChangingAnnotations()
+    {
+        MainWindow window{QString()}; window.resize(700, 650); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        const QJsonObject policy{{"line_height", QJsonObject{{"computed", QJsonObject{{"value", 2.0}, {"font_scale_basis", "normal_body"}}}}},
+            {"baseline_shift", QJsonObject{{"value", -3.0}, {"font_scale_basis", "css_px"}}}, {"font_normalized", true}};
+        const QJsonObject good{{"kind", "text"}, {"text", "7"}, {"target", ""}, {"font_scale", 1.5}, {"font_scale_basis", "normal_body"},
+            {"small", true}, {"superscript", true}, {"explanation", "authored script"}, {"tooltip", "advisory"}, {"inline_style", policy}};
+        const auto block = [](const QJsonObject &span) { return QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{span}}}; };
+        QVERIFY(composeReadingBlocks(window, QJsonArray{block(good)}));
+        const auto format = window.reading_->document()->find(QStringLiteral("7")).charFormat();
+        QCOMPARE(format.font().pointSizeF(), window.readingPointSize_ * 1.5);
+        QCOMPARE(format.verticalAlignment(), QTextCharFormat::AlignSuperScript);
+        QCOMPARE(format.toolTip(), QStringLiteral("advisory")); QCOMPARE(SemanticHtml::spanExplanation(format), QStringLiteral("authored script"));
+        QVERIFY(format.property(SemanticHtml::inlineStyleProperty).toMap().value("normalized").toBool());
+        window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+        auto *document = window.reading_->document(); const auto script = document->find(QStringLiteral("7"));
+        document->documentLayout()->documentSize();
+        const auto geometry = LogicalFlow::position(document, script.selectionStart());
+        QCOMPARE(geometry.status, LogicalFlow::Status::Handled);
+        const auto nativeRect = geometry.values.value("characterRect").toRectF(); QVERIFY(!nativeRect.isEmpty());
+        auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+        const auto actual = accessible->textInterface()->characterRect(script.selectionStart()); QVERIFY(!actual.isEmpty());
+        QVERIFY(qAbs(actual.height() - nativeRect.height()) <= 2);
+        QCOMPARE(accessible->textInterface()->text(script.selectionStart(), script.selectionEnd()), QStringLiteral("7"));
+        const auto caretMap = LogicalFlow::position(document, script.selectionEnd()).values.value("cursorRect").toRectF();
+        QVERIFY(qAbs(caretMap.top() - nativeRect.top()) < .06); QVERIFY(qAbs(caretMap.height() - nativeRect.height()) < .06);
+        const QJsonObject equalFont{{"font_scale", 1.5}, {"font_scale_basis", "normal_body"}, {"small", true},
+            {"superscript", true}, {"subscript", false}, {"font_normalized", true},
+            {"bold", false}, {"italic", false}, {"code", false}, {"language", ""}, {"classes", ""}, {"role", "normal"}, {"font_features", QJsonValue()}};
+        auto equalPolicy = policy; equalPolicy.insert("line_height", QJsonObject{{"font_relative", QJsonObject{{"factor", 1.0}, {"font", equalFont}}}});
+        auto equalOwner = good; equalOwner.insert("inline_style", equalPolicy);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{block(equalOwner)}));
+        QCOMPARE(window.reading_->document()->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{block(good)}));
+        // A zero semantic parent uses a zero-metric storage font. Its positive
+        // QFont storage size is not the parent's used CSS font size.
+        QJsonObject zeroOwner; auto zeroPolicy = policy; zeroPolicy.remove("baseline_shift");
+        zeroPolicy.insert("line_height", QJsonObject{{"font_relative", QJsonObject{{"factor", 1.0}, {"font", zeroOwner}}}});
+        auto visibleChild = good; visibleChild.insert("inline_style", zeroPolicy);
+        QTextDocument zeroContext;
+        zeroContext.setDefaultFont(window.reading_->document()->defaultFont());
+        SemanticHtml::setHtml(&zeroContext, window.spansHtml(QJsonArray{visibleChild}, 0, {}, {}, 0, {}, -1, true));
+        zeroContext.documentLayout()->documentSize();
+        QCOMPARE(zeroContext.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        const auto zeroFormat = zeroContext.find(QStringLiteral("7")).charFormat();
+        const auto zeroMetric = zeroFormat.property(SemanticHtml::inlineStyleProperty).toMap();
+        QVERIFY(zeroMetric.contains("height")); QCOMPARE(zeroMetric.value("height").toDouble(), 0.0);
+        QVERIFY(!zeroMetric.contains("height_font"));
+        QCOMPARE(zeroFormat.font().pointSizeF(), window.readingPointSize_ * 1.5);
+        QCOMPARE(zeroContext.toPlainText(), QStringLiteral("7"));
+        QVector<QJsonObject> bad;
+        auto changed = good; changed.insert("inline_style", QJsonObject{}); bad.append(changed);
+        changed = good; changed.insert("font_scale_basis", "context"); bad.append(changed);
+        changed = good; changed.insert("image", QJsonObject{}); bad.append(changed);
+        changed = good; changed.insert("kind", "link"); changed.insert("target", "Target"); changed.insert("text", ""); bad.append(changed);
+        changed = good; auto p = policy; p.insert("baseline_shift", QJsonObject{{"value", 1.0}, {"font_scale_basis", "context"}}); changed.insert("inline_style", p); bad.append(changed);
+        changed = good; p = policy; p.insert("decoration", QJsonObject{{"style", "dotted"}, {"color", "#ABCDEF"}}); changed.insert("inline_style", p); bad.append(changed);
+        changed = good; p = policy; p.insert("extra", true); changed.insert("inline_style", p); bad.append(changed);
+        changed = equalOwner; auto differentFont = equalFont; differentFont.insert("small", false);
+        p = equalPolicy; p.insert("line_height", QJsonObject{{"font_relative", QJsonObject{{"factor", 1.0}, {"font", differentFont}}}});
+        changed.insert("inline_style", p); bad.append(changed);
+        for (const auto &span : bad) {
+            QVERIFY(!composeReadingBlocks(window, QJsonArray{block(span)}));
+            QCOMPARE(window.currentEntry_.value("sections").toArray().first().toObject().value("blocks").toArray(), QJsonArray{block(span)});
+            QVERIFY(composeReadingBlocks(window, QJsonArray{block(good)}));
+            QCOMPARE(window.reading_->document()->find(QStringLiteral("7")).charFormat().property(SemanticHtml::inlineStyleProperty), format.property(SemanticHtml::inlineStyleProperty));
+        }
+        auto legacy = good; legacy.remove("inline_style");
+        QVERIFY(composeReadingBlocks(window, QJsonArray{block(legacy)}));
+        const auto oldFormat = window.reading_->document()->find(QStringLiteral("7")).charFormat();
+        QVERIFY(!oldFormat.hasProperty(SemanticHtml::inlineStyleProperty));
+        QCOMPARE(oldFormat.toolTip(), QStringLiteral("advisory")); QCOMPARE(SemanticHtml::spanExplanation(oldFormat), QStringLiteral("authored script"));
+    }
+
     void blockMediaRequiresCompleteSourceStatesAndPinnedResourceIdentity()
     {
         const auto source = blockMediaFigureFixture(); const QPalette palette;
@@ -4665,6 +5245,60 @@ private slots:
         QCOMPARE(minimumOnly.find("Child").charFormat().anchorHref(), QString("dict:PreferredChild"));
     }
 
+    void plainContainerFitContentKeepsSourceActionsAndCapabilityBoundary() {
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const auto container = [](const QJsonArray &children, const QJsonObject &style) {
+            return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}},
+                {"container", QJsonObject{{"blocks", children}, {"style", style}}}};
+        };
+        const QJsonObject fit{{"width", QJsonObject{{"fit_content", QJsonObject{}}}}};
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{
+            QJsonObject{{"kind", "external_link"}, {"text", "ContainerAction"}, {"target", "https://example.test/fit"}},
+            QJsonObject{{"kind", "text"}, {"text", " several separate words"}}}}};
+        const auto inner = container(QJsonArray{paragraph}, fit), source = container(QJsonArray{inner}, fit);
+        const auto bytes = QJsonDocument(source).toJson(QJsonDocument::Compact);
+        const auto projected = FlowConstruction::plainContainerFormat(source, 20, false);
+        QCOMPARE(projected.property(FlowConstruction::containerAutoMarginsProperty).toMap()
+            .value("width").toMap().value("unit").toString(), QStringLiteral("fit_content"));
+        for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+            auto option = window.reading_->document()->defaultTextOption(); option.setTextDirection(direction);
+            window.reading_->document()->setDefaultTextOption(option);
+            QVERIFY(composeReadingBlocks(window, QJsonArray{source})); window.showCompactPane(false);
+            auto *doc = window.reading_->document(); auto *layout = doc->documentLayout();
+            QCOMPARE(layout->property("_wikidictContainerFitContentCapability").toString(), QStringLiteral("wikidict.container-fit-content/1"));
+            const auto action = doc->find(QStringLiteral("ContainerAction")); QVERIFY(!action.isNull());
+            QPointer<QTextFrame> owner = action.currentFrame(), outer = owner->parentFrame(); QVERIFY(owner && outer);
+            const auto raw = doc->toRawText(); QTextCursor selection(doc); selection.select(QTextCursor::Document); const auto selected = selection.selectedText();
+            qreal initial = 0;
+            for (int width : {700, 220, 700}) {
+                doc->setTextWidth(width); layout->documentSize();
+                QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0); QVERIFY(owner && outer);
+                const auto a = layout->frameBoundingRect(owner), b = layout->frameBoundingRect(outer);
+                QVERIFY(qAbs(a.width() - b.width()) < .1);
+                if (!initial) { initial = a.width(); QVERIFY(initial < width - 2 * doc->documentMargin()); }
+                else if (width == 700) QVERIFY(qAbs(a.width() - initial) < .1);
+                const auto left = LogicalFlow::position(doc, action.selectionStart() + 1);
+                const auto right = LogicalFlow::position(doc, action.selectionStart() + 2);
+                QCOMPARE(left.status, LogicalFlow::Status::Handled); QCOMPARE(right.status, LogicalFlow::Status::Handled);
+                const auto first = left.values.value("cursorRect").toRectF(), second = right.values.value("cursorRect").toRectF();
+                const QPointF point((first.left() + second.left()) / 2, first.center().y());
+                const int hit = layout->hitTest(point, Qt::ExactHit); QVERIFY(hit >= action.selectionStart() && hit < action.selectionEnd());
+                QCOMPARE(layout->anchorAt(point), QStringLiteral("https://example.test/fit"));
+                QCOMPARE(QJsonDocument::fromJson(outer->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), source);
+                QCOMPARE(doc->toRawText(), raw); QCOMPARE(selection.selectedText(), selected);
+            }
+            auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+            QVERIFY(accessible->textInterface()->text(0, accessible->textInterface()->characterCount()).contains(QStringLiteral("ContainerAction")));
+            const auto capability = layout->property("_wikidictContainerFitContentCapability");
+            layout->setProperty("_wikidictContainerFitContentCapability", QString());
+            QVERIFY(!composeReadingBlocks(window, QJsonArray{source}));
+            layout->setProperty("_wikidictContainerFitContentCapability", capability);
+            QVERIFY(composeReadingBlocks(window, QJsonArray{source}));
+            QCOMPARE(QJsonDocument(source).toJson(QJsonDocument::Compact), bytes);
+        }
+    }
+
     void plainContainerBaseAutoMarginsKeepNativeBoxSourceAndActions() {
         MainWindow window{QString()}; window.resize(1180, 700); window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
@@ -4765,7 +5399,10 @@ private slots:
         auto extra = margins; extra.insert("logical_start", zero); invalid.append(QJsonObject{{"margin_values", extra}});
         auto floating = base; floating.insert("float_side", "left"); invalid.append(floating);
         auto flex = base; flex.insert("layout", "flex_row"); invalid.append(flex);
-        auto fit = base; fit.insert("width", QJsonObject{{"fit_content", QJsonObject{}}}); invalid.append(fit);
+        auto fit = base; fit.insert("width", QJsonObject{{"fit_content", QJsonObject{}}});
+        QCOMPARE(FlowConstruction::plainContainerFormat(block(fit), 20, false)
+            .property(FlowConstruction::containerAutoMarginsProperty).toMap().value("width").toMap().value("unit").toString(), QStringLiteral("fit_content"));
+        auto unknownFit = fit; unknownFit.insert("width", QJsonObject{{"fit_content", QJsonObject{{"unexpected", 1}}}}); invalid.append(unknownFit);
         auto screen = base; screen.insert("screen_max_width", QJsonObject{{"max_width_px", 600}, {"width", QJsonObject{{"auto", QJsonObject{}}}}}); invalid.append(screen);
         for (const auto &style : invalid) QVERIFY_EXCEPTION_THROWN(FlowConstruction::plainContainerFormat(block(style), 20, false), std::exception);
         const QJsonObject signedSide{{"length", QJsonObject{{"unit", "em"}, {"value", -.5}}}};
@@ -5106,6 +5743,172 @@ private slots:
         QVERIFY_EXCEPTION_THROWN(window.blockHtml(box(QJsonObject{{"positioning", "relative_auto"}}, QJsonArray{staticHead})), std::exception);
         QVERIFY_EXCEPTION_THROWN(window.blockHtml(box(QJsonObject{{"positioning", "relative_auto"}, {"columns", QJsonObject{{"count", 2}, {"gap", height}}}}, QJsonArray{headParagraph})), std::exception);
         QVERIFY(composeReadingBlocks(window, QJsonArray{staticHead, table})); QCOMPARE(window.reading_->document()->toRawText(), raw);
+    }
+
+    void authoredRuleKeepsTypedSeparatorSourceGeometrySelectionAndAccessibility() {
+        MainWindow window{QString()}; window.resize(900, 650); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const auto length = [](qreal value, const QString &unit = QStringLiteral("px")) { return QJsonObject{{"unit", unit}, {"value", value}}; };
+        const auto edges = [&](qreal top, qreal right, qreal bottom, qreal left, const QString &unit = QStringLiteral("px")) {
+            return QJsonObject{{"top", length(top, unit)}, {"right", length(right, unit)}, {"bottom", length(bottom, unit)}, {"left", length(left, unit)}};
+        };
+        const QJsonObject rule{{"kind", "rule"}, {"spans", QJsonArray{}}, {"rule_style", QJsonObject{
+            {"height", length(1)}, {"fill", QJsonObject{{"rgb", "#123456"}}}, {"margins", edges(.2, 0, .2, 0, "em")}}}};
+        const QJsonObject link{{"kind", "paragraph"}, {"style", QJsonObject{{"margins", edges(0, 0, 0, 0)}, {"padding", QJsonValue::Null}}},
+            {"spans", QJsonArray{QJsonObject{{"kind", "link"}, {"text", "Following source"}, {"target", "RuleDestination"}}}}};
+        auto above = link; above.insert("spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Above source"}}});
+        const QJsonObject owner{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{
+            {"style", QJsonObject{{"padding", edges(4, 6.25, 4, 8.5)}}}, {"blocks", QJsonArray{above, rule, link}}}}};
+        for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) for (int points : {12, 24}) {
+            window.readingPointSize_ = points;
+            QVERIFY(composeReadingBlocks(window, QJsonArray{owner}, direction));
+            auto *browser = window.reading_; auto *document = browser->document(); auto *layout = document->documentLayout();
+            QTextBlock separator;
+            for (auto block = document->begin(); block.isValid(); block = block.next())
+                if (block.blockFormat().hasProperty(SemanticHtml::authoredRuleProperty)) { QVERIFY(!separator.isValid()); separator = block; }
+            QVERIFY(separator.isValid()); QVERIFY(separator.text().isEmpty()); QCOMPARE(separator.length(), 1);
+            const auto policy = separator.blockFormat().property(SemanticHtml::authoredRuleProperty).toMap();
+            QCOMPARE(QJsonDocument::fromJson(policy.value("source").toByteArray()).object(), rule);
+            const qreal normalEm = points * QFontMetricsF(QFont()).fontDpi() / 72.0;
+            QVERIFY(qAbs(policy.value("em").toDouble() - normalEm) < .000001);
+            QCOMPARE(policy.value("height").toDouble(), 1.0);
+            QVERIFY(qAbs(policy.value("margins").toList()[0].toDouble() - .2 * normalEm) < .000001);
+            const QString raw = document->toRawText(); const int revision = document->revision(), count = document->characterCount();
+            const auto format = separator.blockFormat();
+            for (int width : {900, 639, 420, 900}) {
+                window.resize(width, 650); QCoreApplication::processEvents(); layout->documentSize();
+                QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                const auto rect = layout->blockBoundingRect(separator);
+                const qreal scale = layout->paintDevice() ? qreal(layout->paintDevice()->logicalDpiY()) / QFontMetricsF(QFont()).fontDpi() : 1;
+                QVERIFY(qAbs(rect.height() - scale) < .04); QVERIFY(rect.width() > 0);
+                QCOMPARE(separator.layout()->lineCount(), 0);
+                QVariantMap geometry;
+                QVERIFY(QMetaObject::invokeMethod(layout, "wikidictAuthoredRuleGeometry", Qt::DirectConnection,
+                    Q_RETURN_ARG(QVariantMap, geometry), Q_ARG(int, separator.position())));
+                QVERIFY(geometry.value("handled").toBool()); QCOMPARE(geometry.value("error").toInt(), 0);
+                QCOMPARE(geometry.value("characterRect").toRectF(), rect);
+                QCOMPARE(layout->hitTest(rect.center(), Qt::ExactHit), separator.position());
+                QTextCursor cursor(separator); browser->setTextCursor(cursor);
+                QVERIFY(qAbs(browser->cursorRect().height() - rect.height()) <= 1);
+                auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->textInterface());
+                const QRect accessibleRect = accessible->textInterface()->characterRect(separator.position());
+                QRect expected = rect.toAlignedRect(); expected.translate(-browser->horizontalScrollBar()->value(), -browser->verticalScrollBar()->value());
+                expected.moveTopLeft(browser->viewport()->mapToGlobal(expected.topLeft())); QCOMPARE(accessibleRect, expected);
+                QTextCursor selection(document); selection.setPosition(separator.position()); selection.setPosition(separator.position() + 1, QTextCursor::KeepAnchor);
+                QCOMPARE(selection.selectedText(), QString(QChar::ParagraphSeparator));
+                const auto following = document->find(QStringLiteral("Following source")); QVERIFY(!following.isNull());
+                const auto action = following.charFormat().anchorHref(); QVERIFY(!action.isEmpty());
+                const auto preceding = document->find(QStringLiteral("Above source")); QVERIFY(!preceding.isNull());
+                // The paragraph's physical block stores source text; the registered
+                // logical flow owns its painted lines and original-offset mapping.
+                int lastLine = -1, lastLineStart = -1;
+                for (int at = preceding.block().position(); at < preceding.block().position() + preceding.block().text().size(); ++at) {
+                    const auto mapped = LogicalFlow::position(document, at);
+                    QCOMPARE(mapped.status, LogicalFlow::Status::Handled);
+                    QCOMPARE(mapped.values.value("lineNumber").metaType().id(), QMetaType::Int);
+                    const int line = mapped.values.value("lineNumber").toInt(); QVERIFY(line >= 0);
+                    if (line > lastLine) { lastLine = line; lastLineStart = at; }
+                }
+                QVERIFY(lastLineStart >= preceding.block().position());
+                QVERIFY(!paintedBlockLines(document, preceding.block()).isEmpty());
+                const auto originalInteraction = browser->textInteractionFlags();
+                QVERIFY(!originalInteraction.testFlag(Qt::TextSelectableByKeyboard));
+                {
+                    const auto restoreInteraction = qScopeGuard([&] { browser->setTextInteractionFlags(originalInteraction); });
+                    // Exercise caret movement explicitly; the normal Reader arrow keys scroll.
+                    browser->setTextInteractionFlags(originalInteraction | Qt::TextSelectableByKeyboard);
+                    QVERIFY(browser->textInteractionFlags().testFlag(Qt::TextSelectableByKeyboard));
+                    QTextCursor vertical(preceding.block());
+                    vertical.setPosition(lastLineStart);
+                    browser->setTextCursor(vertical); browser->setFocus();
+                    QTest::keyClick(browser, Qt::Key_Down); QCOMPARE(browser->textCursor().position(), separator.position());
+                    QTest::keyClick(browser, Qt::Key_Down); QCOMPARE(browser->textCursor().block(), following.block());
+                    QTest::keyClick(browser, Qt::Key_Up); QCOMPARE(browser->textCursor().position(), separator.position());
+                    QTest::keyClick(browser, Qt::Key_Up); QCOMPARE(browser->textCursor().block(), preceding.block());
+                }
+                QCOMPARE(browser->textInteractionFlags(), originalInteraction);
+                browser->setTextCursor(QTextCursor(separator)); browser->setFocus(); QTest::keyClick(browser, Qt::Key_Tab);
+                QTRY_COMPARE(browser->textCursor().selectionStart(), following.selectionStart()); QCOMPARE(browser->textCursor().selectionEnd(), following.selectionEnd());
+                QCOMPARE(browser->textCursor().charFormat().anchorHref(), action);
+                QImage image(browser->viewport()->size(), QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
+                QPainter painter(&image); layout->draw(&painter, {}); painter.end();
+                const QPoint pixel(qCeil(rect.left()) + 1, qFloor(rect.center().y()));
+                if (image.rect().contains(pixel) && rect.contains(QPointF(pixel) + QPointF(.5, .5))) QCOMPARE(image.pixelColor(pixel), QColor("#123456"));
+                QCOMPARE(document->toRawText(), raw); QCOMPARE(document->characterCount(), count); QCOMPARE(document->revision(), revision); QCOMPARE(separator.blockFormat(), format);
+            }
+        }
+    }
+
+    void authoredRuleStrictParsingCopyAndOldNullSeparatorRemainDistinct() {
+        MainWindow window{QString()};
+        const auto px = [](qreal value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const QJsonObject margins{{"top", px(0)}, {"right", px(0)}, {"bottom", px(0)}, {"left", px(0)}};
+        const QJsonObject rule{{"kind", "rule"}, {"spans", QJsonArray{}}, {"rule_style", QJsonObject{
+            {"height", px(0)}, {"fill", QJsonObject{{"transparent", QJsonObject{}}}}, {"margins", margins}}}};
+        QCOMPARE(window.blockHtml(QJsonObject{{"kind", "rule"}, {"spans", QJsonArray{}}}), QStringLiteral("<hr>"));
+        auto nullRule = rule; nullRule.insert("rule_style", QJsonValue::Null);
+        QCOMPARE(window.blockHtml(nullRule), QStringLiteral("<hr>"));
+        for (int mode = 0; mode < 8; ++mode) {
+            auto bad = rule; auto style = rule.value("rule_style").toObject();
+            if (mode == 0) bad.insert("kind", "paragraph");
+            if (mode == 1) bad.insert("spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "forbidden"}}});
+            if (mode == 2) bad.insert("anchor", "forbidden");
+            if (mode == 3) bad.insert("depth", 1);
+            if (mode == 4) style.insert("height", px(-1));
+            if (mode == 5) style.insert("fill", QJsonObject{{"rgb", "#ABCDEF"}});
+            if (mode == 6) style.insert("width", px(100));
+            if (mode == 7) { auto edges = margins; edges.insert("left", QJsonObject{{"auto", QJsonObject{}}}); style.insert("margins", edges); }
+            bad.insert("rule_style", style);
+            QVERIFY_EXCEPTION_THROWN(CompiledContent::ruleStyle(bad), std::exception);
+        }
+        QTextDocument original; SemanticHtml::setHtml(&original, window.blockHtml(rule)
+            + QStringLiteral("<p style='margin:0px'>Copy tail</p>"));
+        original.setTextWidth(200); original.documentLayout()->documentSize();
+        QCOMPARE(original.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QTextBlock ruleBlock;
+        for (auto block = original.begin(); block.isValid(); block = block.next()) if (block.blockFormat().hasProperty(SemanticHtml::authoredRuleProperty)) ruleBlock = block;
+        QVERIFY(ruleBlock.isValid()); const auto policy = ruleBlock.blockFormat().property(SemanticHtml::authoredRuleProperty);
+        QCOMPARE(original.documentLayout()->blockBoundingRect(ruleBlock).height(), 0.0);
+        QTextCursor all(&original); all.select(QTextCursor::Document);
+        QVERIFY(all.hasSelection());
+        QVERIFY(all.selectionStart() <= ruleBlock.position() && all.selectionEnd() > ruleBlock.position());
+        QVERIFY(all.selectedText().contains(QChar::ParagraphSeparator));
+        QTextDocument copied; QTextCursor destination(&copied); destination.insertFragment(QTextDocumentFragment(all));
+        copied.setTextWidth(200); copied.documentLayout()->documentSize();
+        QCOMPARE(copied.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QCOMPARE(copied.toRawText(), original.toRawText());
+        bool found = false;
+        for (auto block = copied.begin(); block.isValid(); block = block.next()) if (block.blockFormat().hasProperty(SemanticHtml::authoredRuleProperty)) {
+            QVERIFY(!found); found = true; QCOMPARE(block.blockFormat().property(SemanticHtml::authoredRuleProperty), policy);
+            QCOMPARE(copied.documentLayout()->blockBoundingRect(block).height(), 0.0);
+        }
+        QVERIFY(found);
+        const auto capability = window.reading_->document()->documentLayout()->property("_wikidictAuthoredRuleCapability");
+        window.reading_->document()->documentLayout()->setProperty("_wikidictAuthoredRuleCapability", QVariant());
+        QVERIFY_EXCEPTION_THROWN(window.blockHtml(rule), DictApiError);
+        window.reading_->document()->documentLayout()->setProperty("_wikidictAuthoredRuleCapability", capability);
+
+        const QVariant sources = QSettings().value(QStringLiteral("library/catalogSources"));
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        auto restoreSources = qScopeGuard([&] { QSettings().setValue(QStringLiteral("library/catalogSources"), sources); });
+        QTemporaryDir root(QStringLiteral(".tmp/ui-rule-capability-XXXXXX")); QVERIFY(root.isValid());
+        LibraryDialog dialog(&window, root.path()); dialog.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!dialog.worker_, 30000);
+        for (bool unknown : {true, false}) {
+            const QByteArray payload = unknown ? QByteArrayLiteral("DPRZ") : QByteArrayLiteral("DPRN");
+            const QByteArray bytes = QByteArrayLiteral("WIKBLB08") + char(7) + QByteArray("rule\0", 5) + char(4) + payload;
+            const QString path = root.filePath(QStringLiteral("source.wikblb"));
+            QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly)); QCOMPARE(file.write(bytes), bytes.size()); file.close();
+            dialog.startImport(path);
+            const QString expected = unknown
+                ? QStringLiteral("Could not import this dictionary. It requires a newer reader.")
+                : QStringLiteral("Could not import this dictionary. The file contains invalid entry data.");
+            QTRY_VERIFY2_WITH_TIMEOUT(!dialog.worker_ && dialog.status_->text() == expected,
+                qPrintable(dialog.status_->text()), 30000);
+            QVERIFY(dialog.importButton_->isEnabled()); QVERIFY(!dialog.libraryChanged()); QVERIFY(!dialog.originalRootChanged());
+            QVERIFY(LibraryStorage::installed(root.path()).isEmpty());
+            QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), bytes); file.close();
+        }
     }
 
     void containerFlexViewportBandsKeepRealFramesActionsAndAccessibleGeometry() {
@@ -8351,10 +9154,12 @@ private slots:
         const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "link"},
             {"text", "Container action body"}, {"target", "Destination"}}}}};
         const QJsonObject container{{"kind", "container"}, {"spans", QJsonArray{}},
-            {"container", QJsonObject{{"blocks", QJsonArray{paragraph}}, {"style", QJsonObject{{"width", QJsonObject{{"fit_content", QJsonObject{}}}}}}}}};
+            {"container", QJsonObject{{"blocks", QJsonArray{paragraph}}, {"style", QJsonObject{{"width", QJsonObject{{"fit_content", QJsonObject{}}}}, {"overflow", "auto"}}}}}};
         const auto before = QJsonDocument(container).toJson(QJsonDocument::Compact);
+        QCOMPARE(CompiledContent::containerBlock(container).value("blocks").toArray(), QJsonArray{paragraph});
         QVERIFY_EXCEPTION_THROWN(window.blockHtml(container), DictApiError);
         auto empty = container; auto owned = empty.value("container").toObject(); owned.insert("blocks", QJsonArray{}); empty.insert("container", owned);
+        QVERIFY(CompiledContent::containerBlock(empty).value("blocks").toArray().isEmpty());
         QVERIFY_EXCEPTION_THROWN(window.blockHtml(empty), DictApiError);
         QCOMPARE(QJsonDocument(container).toJson(QJsonDocument::Compact), before);
         const auto firstImageName = [](const QString &html) {
@@ -8844,7 +9649,7 @@ private slots:
         QVERIFY_EXCEPTION_THROWN(FlowConstruction::plainContainerFormat(responsiveSource, 20, false), std::runtime_error);
         QCOMPARE(QJsonDocument(responsiveSource).toJson(QJsonDocument::Compact), responsiveBytes);
         const QVector<QJsonObject> unsupported{
-            {{"layout", "flex_row"}}, {{"float_side", "left"}}, {{"width", QJsonObject{{"fit_content", QJsonObject{}}}}},
+            {{"layout", "flex_row"}}, {{"float_side", "left"}}, {{"max_width", QJsonObject{{"fit_content", QJsonObject{}}}}},
             {{"max_width", QJsonObject{{"length", length("px", 50)}}}}, {{"line_height", QJsonObject{{"multiplier", -1}}}},
             {{"float_side", "left"}, {"margins", edges(1)}}, {{"overflow", "hidden"}},
             {{"padding", QJsonObject{{"top", length("px", 0)}, {"right", length("px", -1)}, {"bottom", length("px", 0)}, {"left", length("px", 0)}}}},
@@ -8864,7 +9669,7 @@ private slots:
         QCOMPARE(percent.width().type(), QTextLength::PercentageLength); QCOMPARE(percent.width().rawValue(), qreal(50));
     }
 
-    void plainContainerCompilerDiagnosticKeepsFitContentRefusal() {
+    void plainContainerCompilerDiagnosticKeepsFitContentSource() {
         const QString path = qEnvironmentVariable("WIKIDICT_CONTAINER_COMPILER_DIAGNOSTIC_JSON");
         if (path.isEmpty()) QSKIP("The retained compiler diagnostic is a selected external fixture, not a full-page acceptance fixture.");
         QFile input(path); QVERIFY(input.open(QIODevice::ReadOnly)); const auto bytes = input.readAll();
@@ -8878,10 +9683,14 @@ private slots:
         const auto container = entry.value("sections").toArray().at(3).toObject().value("blocks").toArray().at(0).toObject();
         QCOMPARE(container.value("container").toObject().value("style").toObject(), QJsonObject({{"width", QJsonObject{{"fit_content", QJsonObject{}}}}}));
         QCOMPARE(CompiledContent::containerBlock(container).value("blocks").toArray().size(), 1);
-        MainWindow window{QString()}; QVERIFY_EXCEPTION_THROWN(window.blockHtml(container), DictApiError);
-        const auto response = QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson();
-        QVERIFY(!window.renderResponse(response, false)); QCOMPARE(window.currentEntry_, entry);
-        QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("This entry could not be displayed")));
+        MainWindow window{QString()}; QVERIFY(!window.blockHtml(container).isEmpty());
+        // This retained diagnostic proves only its exact Container subtree.
+        // Its surrounding compiler diagnostic is not whole-page acceptance.
+        QVERIFY(composeReadingBlocks(window, QJsonArray{container}));
+        auto *owner = window.reading_->document()->rootFrame()->childFrames().value(0); QVERIFY(owner);
+        QCOMPARE(QJsonDocument::fromJson(owner->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), container);
+        window.reading_->document()->documentLayout()->documentSize();
+        QCOMPARE(window.reading_->document()->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
         QVERIFY(window.reading_->document()->isLayoutEnabled());
         const QJsonObject recovery{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Available entry after diagnostic"}}}}};
         QVERIFY(composeReadingBlocks(window, QJsonArray{recovery}));
@@ -11810,12 +12619,12 @@ private slots:
                 : QJsonArray{paragraph(QStringLiteral("First bounded paragraph"), QStringLiteral("px"), 5000000),
                     paragraph(QStringLiteral("Second bounded paragraph"), QStringLiteral("px"), 5000000)};
             if (variant == 2) {
-                // A valid current DPRL fit-content Container remains unsupported
-                // by this native slice; it is not empty or malformed data.
+                // Fit-content with a scrolling Container is semantically valid,
+                // but remains outside the ordinary native fit-content domain.
                 const QJsonObject child{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{
                     {"kind", "link"}, {"text", "Container child must not vanish"}, {"target", "dog"}}}}};
                 const QJsonObject container{{"kind", "container"}, {"spans", QJsonArray{}},
-                    {"container", QJsonObject{{"blocks", QJsonArray{child}}, {"style", QJsonObject{{"width", QJsonObject{{"fit_content", QJsonObject{}}}}}}}}};
+                    {"container", QJsonObject{{"blocks", QJsonArray{child}}, {"style", QJsonObject{{"width", QJsonObject{{"fit_content", QJsonObject{}}}}, {"overflow", "auto"}}}}}};
                 QCOMPARE(CompiledContent::containerBlock(container).value("blocks").toArray(), QJsonArray{child});
                 blocks = QJsonArray{container};
             }
@@ -12052,6 +12861,697 @@ private slots:
         QCOMPARE(window.visitIndex_, priorIndex);
     }
 
+
+    void entryBodyBoundaryKeepsSectionsFloatsAndMetadataDistinct() {
+        QSettings().setValue("media/allowImages", false);
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        constexpr int boundary = QTextFormat::UserProperty + 0x5806;
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value}}; };
+        const auto paragraph = [&](const QString &value) { return QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{text(value)}}}; };
+        const auto px = [](qreal value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const QJsonObject zero{{"top", px(0)}, {"right", px(0)}, {"bottom", px(0)}, {"left", px(0)}};
+        for (const QString &side : {QStringLiteral("left"), QStringLiteral("right")}) for (bool nested : {false, true})
+            for (int firstMetadata = 0; firstMetadata < 3; ++firstMetadata) {
+                const QJsonObject cell{{"spans", QJsonArray{}}, {"blocks", QJsonArray{paragraph(QStringLiteral("Tall cell\n").repeated(20))}}};
+                const QJsonObject table{{"kind", "table"}, {"table", QJsonObject{
+                    {"geometry", QJsonObject{{"width", px(140)}, {"border", 0}, {"cell_padding", 0}, {"cell_spacing", 0}}},
+                    {"style", QJsonObject{{"float_side", side}, {"margins", zero}}},
+                    {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell}}}}}}}};
+                const QJsonObject body = nested ? QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}},
+                    {"container", QJsonObject{{"style", QJsonObject{}}, {"blocks", QJsonArray{table}}}}} : table;
+                const QJsonObject link{{"kind", "paragraph"}, {"spans", QJsonArray{
+                    QJsonObject{{"kind", "external_link"}, {"text", "Continue"}, {"target", "https://example.test/body-end"}}}}};
+                QJsonObject entry{{"kind", "language"}, {"title", "Body boundary"}, {"language", "English"}, {"language_code", "en"},
+                    {"sections", QJsonArray{
+                        QJsonObject{{"level", 2}, {"title", "First section"}, {"blocks", QJsonArray{body}}},
+                        QJsonObject{{"level", 2}, {"title", "Second section"}, {"blocks", QJsonArray{link}}}}},
+                    {"references", QJsonArray{}}, {"media", QJsonArray{}}};
+                if (firstMetadata == 0) entry.insert("references", QJsonArray{QJsonObject{{"kind", "fragment"}, {"spans", QJsonArray{text("Metadata note")}}}});
+                if (firstMetadata <= 1) entry.insert("media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", "Metadata-only.png"}, {"caption", "Catalogue"}}});
+                const auto oldHtml = window.entryHtml(entry); auto markedHtml = window.entryHtml(entry, true);
+                const QString attribute = QStringLiteral(" data-wikidict-entry-body-end='wikidict.entry-body-end/1'");
+                QCOMPARE(markedHtml.count(attribute), 1); markedHtml.remove(attribute); QCOMPARE(markedHtml, oldHtml);
+                QVERIFY(composeReadingEntry(window, entry)); auto *doc = window.reading_->document();
+                auto *native = doc->documentLayout(); auto *browser = window.reading_;
+                const QString raw = doc->toRawText(); const int count = doc->characterCount();
+                QTextCursor selected(doc); selected.select(QTextCursor::Document); const QString selection = selected.selectedText();
+                auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->textInterface());
+                auto *accessibleText = accessible->textInterface(); const QString ax = accessibleText->text(0, -1);
+                QVERIFY(ax.contains("First section") && ax.contains("Second section") && ax.contains("Continue"));
+                QList<QTextFrame *> frames = doc->rootFrame()->childFrames();
+                QTextBlock marker;
+                for (auto block = doc->begin(); block.isValid(); block = block.next())
+                    if (block.blockFormat().hasProperty(boundary)) { QVERIFY(!marker.isValid()); marker = block; }
+                QVERIFY(marker.isValid());
+                const int originalBodyEnd = marker.position();
+                if (firstMetadata == 0) QCOMPARE(marker.text(), QStringLiteral("References"));
+                else if (firstMetadata == 1) QCOMPARE(marker.text(), QStringLiteral("Media"));
+                else QVERIFY(marker.blockFormat().hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth));
+                const auto bodyLink = doc->find(QStringLiteral("Continue")); QVERIFY(!bodyLink.isNull());
+                const auto cellText = doc->find(QStringLiteral("Tall cell")); QVERIFY(!cellText.isNull());
+                QPointer<QTextTable> floatTable(cellText.currentTable()); QVERIFY(floatTable);
+                QPointer<QTextFrame> floatParent(floatTable->parentFrame()); QVERIFY(floatParent);
+                if (nested) QVERIFY(floatParent != doc->rootFrame()); else QCOMPARE(floatParent.data(), doc->rootFrame());
+                const auto rootPolicy = doc->rootFrame()->frameFormat().property(boundary);
+                QCOMPARE(rootPolicy.toMap().value("owner").value<QObject *>(), static_cast<QObject *>(doc->rootFrame()));
+                QCOMPARE(rootPolicy.toMap().value("end").toInt(), marker.position());
+                for (int width : {900, 640, 900}) {
+                    window.resize(width, 700);
+                    const auto settled = std::make_shared<bool>(false);
+                    QTimer::singleShot(0, doc, [doc, settled] {
+                        QTimer::singleShot(0, doc, [settled] { *settled = true; });
+                    });
+                    QTRY_VERIFY_WITH_TIMEOUT(*settled, 10000);
+                    QTRY_VERIFY_WITH_TIMEOUT(window.contentsRect().width() == width && !window.readingFloatLayoutScheduled_, 10000);
+                    native->documentSize(); QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                    QVERIFY(floatTable && floatParent); QCOMPARE(floatTable->parentFrame(), floatParent.data());
+                    QCOMPARE(doc->rootFrame()->childFrames(), frames);
+                    const auto floatRect = native->frameBoundingRect(floatTable);
+                    const auto second = doc->find(QStringLiteral("Second section")).block(); QVERIFY(second.isValid());
+                    const auto lines = paintedBlockLines(doc, second); QVERIFY(!lines.isEmpty());
+                    QVERIFY(lines.first().top() < floatRect.bottom());
+                    const auto linkLines = paintedBlockLines(doc, bodyLink.block()); QVERIFY(!linkLines.isEmpty());
+                    QVERIFY(linkLines.first().top() < floatRect.bottom());
+                    const auto metadataRect = native->blockBoundingRect(marker);
+                    QVERIFY2(metadataRect.top() + 1.0 / 64 >= floatRect.bottom(), qPrintable(QString("metadata %1 before float bottom %2").arg(metadataRect.top()).arg(floatRect.bottom())));
+                    const QPointF point = linkLines.first().center();
+                    const int hit = native->hitTest(point, Qt::ExactHit); QVERIFY(hit >= bodyLink.selectionStart() && hit < bodyLink.selectionEnd());
+                    QCOMPARE(native->anchorAt(point), QStringLiteral("https://example.test/body-end"));
+                    browser->setTextCursor(bodyLink); browser->ensureCursorVisible();
+                    const auto axRect = accessibleText->characterRect(bodyLink.selectionStart()); QVERIFY(!axRect.isEmpty());
+                    const int axHit = accessibleText->offsetAtPoint(axRect.center()); QVERIFY(axHit >= bodyLink.selectionStart() && axHit < bodyLink.selectionEnd());
+                    QImage raster(1200, 1600, QImage::Format_ARGB32_Premultiplied); raster.fill(Qt::white);
+                    { QPainter painter(&raster); native->draw(&painter, {}); }
+                    QVERIFY(native->documentSize().height() >= metadataRect.bottom());
+                    QCOMPARE(doc->rootFrame()->frameFormat().property(boundary), rootPolicy);
+                    QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count);
+                    selected.select(QTextCursor::Document); QCOMPARE(selected.selectedText(), selection);
+                    QCOMPARE(accessibleText->text(0, -1), ax); QCOMPARE(window.currentEntry_, entry);
+                }
+                browser->setFocus(); QTRY_VERIFY(browser->hasFocus());
+                QTest::keyClick(browser, Qt::Key_Home, Qt::ControlModifier);
+                for (int tries = 0; tries < 8 && browser->textCursor().selectedText() != QStringLiteral("Continue"); ++tries)
+                    QTest::keyClick(browser, Qt::Key_Tab);
+                QCOMPARE(browser->textCursor().selectionStart(), bodyLink.selectionStart());
+                QCOMPARE(browser->textCursor().selectionEnd(), bodyLink.selectionEnd());
+                // Folding one section rebuilds the single boundary; expanding
+                // recovers the identical source and float parents, not a wrapper.
+                window.collapsedSections_.insert(0); QVERIFY(window.refreshReading());
+                QVERIFY(doc->find(QStringLiteral("Tall cell")).isNull());
+                QVERIFY(doc->rootFrame()->frameFormat().property(boundary).toMap().value("end").toInt() < originalBodyEnd);
+                window.collapsedSections_.clear(); QVERIFY(window.refreshReading());
+                QCOMPARE(doc->toRawText(), raw); QCOMPARE(window.currentEntry_, entry);
+                QCOMPARE(doc->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            }
+    }
+
+    static QJsonObject styledHeadingEntry(Qt::LayoutDirection direction, bool floating = true) {
+        const auto px = [](double value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto edges = [&](double top, double right, double bottom, double left) {
+            return QJsonObject{{"top", px(top)}, {"right", px(right)}, {"bottom", px(bottom)}, {"left", px(left)}};
+        };
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value}, {"trail", ""}}; };
+        const auto paragraph = [&](const QString &value) {
+            return QJsonObject{{"kind", "paragraph"}, {"depth", 0}, {"spans", QJsonArray{text(value)}},
+                {"style", QJsonObject{{"margins", edges(0, 0, 0, 0)}}}};
+        };
+        const QJsonObject stack{{"names", QJsonArray{"Linux Libertine", "Georgia", "Times", "Source Serif 4"}}, {"fallback", "serif"}};
+        const QJsonObject family{{"stack", stack}};
+        const QJsonObject font{{"font_scale", 1.25}, {"font_scale_basis", "normal_body"},
+            {"small", false}, {"superscript", false}, {"subscript", false}, {"font_normalized", false},
+            {"bold", false}, {"italic", false}, {"code", false}, {"language", "th"}, {"classes", ""}, {"role", "normal"}, {"font_features", "normal"}};
+        const QJsonObject box{{"margins", edges(7.25, 3.5, 5.5, 2.25)}, {"padding", edges(1.25, 2.5, 1.75, 3.25)},
+            {"border", QJsonObject{{"solid", QJsonObject{{"width", px(0.5)}, {"color", QJsonObject{{"rgb", "#225588"}}}}}}},
+            {"owner_font_scale", 1.25}, {"line_height", QJsonObject{{"multiplier", 1.4}}},
+            {"font_family", family}, {"clear", "none"}, {"text_align", "left"}};
+        const QString title = QStringLiteral("  Thai") + QChar(0x00a0) + QStringLiteral("  title  ");
+        const QJsonArray spans{text(QStringLiteral("  ")), QJsonObject{{"kind", "link"}, {"text", "Thai"}, {"target", "dog"}, {"trail", ""}},
+            text(QString(QChar(0x00a0)) + QStringLiteral("  title  "))};
+        const QJsonObject companion{{"kind", "heading"}, {"depth", 0}, {"level", 2}, {"anchor", "typed-heading"},
+            {"anchor_fallback", "typed-heading-fallback"}, {"spans", spans}};
+        const QJsonObject heading{{"title", title}, {"level", 2}, {"anchor", "typed-heading"}, {"anchor_fallback", "typed-heading-fallback"},
+            {"heading_style", QJsonObject{{"box", box}, {"font", font}, {"direction", direction == Qt::RightToLeft ? "rtl" : "ltr"}}},
+            {"blocks", QJsonArray{companion, paragraph("AFTER HEADING")}}};
+        QJsonArray prefix;
+        if (floating) {
+            const QJsonObject cell{{"spans", QJsonArray{}}, {"blocks", QJsonArray{paragraph(QStringLiteral("FLOAT\n").repeated(5))}}};
+            const QJsonObject table{{"geometry", QJsonObject{{"width", px(70)}, {"border", 0}, {"cell_padding", 0}, {"cell_spacing", 0}}},
+                {"style", QJsonObject{{"float_side", "left"}, {"margins", edges(0, 0, 0, 0)}}},
+                {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell}}}}}};
+            prefix.append(QJsonObject{{"kind", "table"}, {"table", table}});
+        } else prefix.append(paragraph("REAL PREFIX BODY"));
+        return QJsonObject{{"title", "Typed heading control"}, {"kind", "language"}, {"language", "English"}, {"language_code", "en"},
+            {"body_adjoining", "ordinary"}, {"preamble_spans", QJsonArray{text("PREFIX OUTSIDE BODY")}},
+            {"sections", QJsonArray{QJsonObject{{"title", ""}, {"level", 0}, {"anchor", ""}, {"anchor_fallback", ""}, {"blocks", prefix}}, heading}},
+            {"references", QJsonArray{QJsonObject{{"kind", "fragment"}, {"spans", QJsonArray{text("METADATA NOTE")}}}}}, {"media", QJsonArray{}}};
+    }
+
+    void styledHeadingPrefixTableKeepsFixedWidthAndResponsiveClear()
+    {
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        window.readingPointSize_ = 20 * 72 / QFontMetricsF(QFont()).fontDpi();
+        for (bool em : {false, true}) for (const QString direction : {QStringLiteral("ltr"), QStringLiteral("rtl")}) {
+            auto source = tableFloatViewportFixture(direction, direction == "ltr" ? "rtl" : "ltr");
+            auto style = source.value("style").toObject(); style.insert("clear", "right");
+            style.insert("width", QJsonObject{{"unit", em ? "em" : "px"}, {"value", em ? 25.0 : 433.25}});
+            source.insert("style", style); auto policy = source.value("float_viewport").toObject();
+            policy.insert("narrow_clear", "both"); source.insert("float_viewport", policy);
+            auto entry = styledHeadingEntry(direction == "rtl" ? Qt::RightToLeft : Qt::LeftToRight, true);
+            auto sections = entry.value("sections").toArray(); auto prefix = sections[0].toObject();
+            prefix.insert("blocks", QJsonArray{QJsonObject{{"kind", "table"}, {"table", source}}}); sections[0] = prefix; entry.insert("sections", sections);
+            const auto title = sections[1].toObject().value("title").toString();
+            QVERIFY(composeReadingEntry(window, entry));
+            auto *document = window.reading_->document(); QPointer<QTextTable> table = document->find(QStringLiteral("First")).currentTable();
+            QVERIFY(table); const int object = table->objectIndex(); const QString raw = document->toRawText();
+            const int count = document->characterCount();
+            for (int viewport : {900, 640, 639, 638, 900}) {
+                window.resize(viewport, 700);
+                QTRY_VERIFY(!window.readingFloatLayoutScheduled_
+                    && table && table->format().property(SemanticHtml::tableFloatViewportProperty).toMap().value("viewport").toDouble()
+                        == window.contentsRect().width());
+                auto *layout = document->documentLayout(); layout->documentSize();
+                QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                const bool active = window.contentsRect().width() <= 639;
+                const auto data = table->format().property(SemanticHtml::tableFloatViewportProperty).toMap();
+                QCOMPARE(data.value("active").toBool(), active);
+                QCOMPARE(table->format().position(), active ? QTextFrameFormat::InFlow : QTextFrameFormat::FloatRight);
+                QCOMPARE(table->format().intProperty(SemanticHtml::tableBoxClearProperty), active ? 3 : 2);
+                const auto width = table->format().property(SemanticHtml::tableBoxWidthProperty).toMap();
+                QCOMPARE(width.value("unit").toString(), QStringLiteral("fixed"));
+                QCOMPARE(width.value("value").toDouble(), em ? data.value("body_pixels").toDouble() * 25 : 433.25);
+                const auto decoded = QJsonDocument::fromJson(data.value("source").toByteArray()).object();
+                QCOMPARE(decoded.value("style").toObject(), style); QCOMPARE(decoded.value("float_viewport").toObject(), policy);
+                QTextFrame *heading = nullptr;
+                for (auto *frame : document->rootFrame()->childFrames())
+                    if (frame->frameFormat().hasProperty(QTextFormat::UserProperty + 0x5807)) { QVERIFY(!heading); heading = frame; }
+                auto *native = qobject_cast<QTextDocumentLayout *>(layout); QVERIFY(native);
+                QVERIFY(heading); const auto tableBox = native->tableBoundingRect(table), headingBox = layout->frameBoundingRect(heading);
+                QVERIFY(!tableBox.intersects(headingBox));
+                if (active) QVERIFY(headingBox.top() >= tableBox.bottom() - .06);
+                const auto body = document->rootFrame()->frameFormat().property(QTextFormat::UserProperty + 0x5806).toMap();
+                QCOMPARE(body.value("begin_owner").value<QObject *>(), static_cast<QObject *>(table.data()));
+                QCOMPARE(body.value("begin").toInt(), table->firstPosition() - 1);
+                const auto metadata = document->findBlock(body.value("end").toInt()); QVERIFY(metadata.isValid());
+                QVERIFY(layout->blockBoundingRect(metadata).top() >= qMax(tableBox.bottom(), headingBox.bottom()) - .06);
+                QCOMPARE(document->toRawText(), raw); QCOMPARE(document->characterCount(), count); QCOMPARE(table->objectIndex(), object);
+                QCOMPARE(document->toRawText().count(title), 1); QVERIFY(!hasAnchor(document, QStringLiteral("section-0")));
+                QCOMPARE(document->find(QStringLiteral("First")).charFormat().anchorHref(), QStringLiteral("dict:MaiFirst"));
+                QCOMPARE(document->find(QStringLiteral("Thai")).charFormat().anchorHref(), QStringLiteral("dict:dog"));
+                auto *ax = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(ax && ax->textInterface());
+                const auto accessible = ax->textInterface()->text(0, ax->textInterface()->characterCount());
+                QVERIFY(accessible.contains(QStringLiteral("First")) && accessible.contains(title));
+                QTextCursor selection(document); selection.select(QTextCursor::Document); QVERIFY(selection.selectedText().contains(QStringLiteral("Surname header")));
+                const int revision = document->revision(); const auto currentFormat = table->format();
+                QImage image(1100, 1000, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
+                { QPainter painter(&image); layout->draw(&painter, {}); }
+                QCOMPARE(document->revision(), revision); QCOMPARE(table->format(), currentFormat); QCOMPARE(window.currentEntry_, entry);
+            }
+            window.readingPaneAction_->trigger(); window.reading_->setFocus(Qt::OtherFocusReason);
+            window.reading_->setTextCursor(QTextCursor(document)); QTest::keyClick(window.reading_, Qt::Key_Tab);
+            QCOMPARE(window.reading_->textCursor().selectedText(), QStringLiteral("First"));
+            QCOMPARE(window.reading_->textCursor().charFormat().anchorHref(), QStringLiteral("dict:MaiFirst"));
+            // Absent and explicit null retain clear:right even in the narrow band.
+            window.resize(639, 700);
+            for (bool explicitNull : {false, true}) {
+                auto legacy = source; auto legacyPolicy = policy; legacyPolicy.remove("narrow_clear");
+                if (explicitNull) legacyPolicy.insert("narrow_clear", QJsonValue::Null);
+                legacy.insert("float_viewport", legacyPolicy);
+                QVERIFY(composeReadingBlocks(window, QJsonArray{QJsonObject{{"kind", "table"}, {"table", legacy}}}));
+                QPointer<QTextTable> owner = window.reading_->document()->find(QStringLiteral("First")).currentTable(); QVERIFY(owner);
+                QTRY_VERIFY(!window.readingFloatLayoutScheduled_ && owner && owner->format().position() == QTextFrameFormat::InFlow);
+                QCOMPARE(owner->format().intProperty(SemanticHtml::tableBoxClearProperty), 2);
+                QCOMPARE(owner->format().property(SemanticHtml::tableBoxWidthProperty).toMap().value("value").toDouble(),
+                    em ? owner->format().property(SemanticHtml::tableFloatViewportProperty).toMap().value("body_pixels").toDouble() * 25 : 433.25);
+            }
+            for (const QJsonValue &clear : {QJsonValue(3), QJsonValue(QStringLiteral("auto")), QJsonValue(QJsonObject{})}) {
+                auto bad = source; auto badPolicy = policy; badPolicy.insert("narrow_clear", clear); bad.insert("float_viewport", badPolicy);
+                QVERIFY_EXCEPTION_THROWN(SemanticHtml::tableFloatViewport(bad), std::exception);
+            }
+            for (const QJsonValue &width : {QJsonValue(QJsonObject{{"unit", "percent"}, {"value", 25}}),
+                                           QJsonValue(QJsonObject{{"unit", "em"}, {"value", -1}})}) {
+                auto bad = source; auto badStyle = style; badStyle.insert("width", width); bad.insert("style", badStyle);
+                QVERIFY_EXCEPTION_THROWN(SemanticHtml::tableFloatViewport(bad), std::exception);
+            }
+            QVERIFY(composeReadingEntry(window, entry)); QCOMPARE(window.currentEntry_, entry);
+        }
+    }
+
+    void authoredRuleAndHeadingShareBodyCutWithoutBorrowingUiMargins() {
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const auto length = [](double value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto rule = [&](double top, double bottom) {
+            return QJsonObject{{"kind", "rule"}, {"spans", QJsonArray{}}, {"rule_style", QJsonObject{
+                {"height", length(1)}, {"fill", QJsonObject{{"rgb", "#123456"}}},
+                {"margins", QJsonObject{{"top", length(top)}, {"right", length(0)}, {"bottom", length(bottom)}, {"left", length(0)}}}}}};
+        };
+        for (int width : {900, 640}) {
+            window.resize(width, 700); QCoreApplication::processEvents();
+            QRectF firstBaseline, lastBaseline, metadataBaseline, prefixBaseline;
+            QString rawBaseline;
+            for (bool outsideMargins : {false, true}) {
+                auto entry = styledHeadingEntry(Qt::LeftToRight, true);
+                auto sections = entry.value("sections").toArray(); auto prefix = sections[0].toObject();
+                auto blocks = prefix.value("blocks").toArray(); blocks.prepend(rule(outsideMargins ? 31 : 0, 0));
+                prefix.insert("blocks", blocks); sections[0] = prefix;
+                auto section = sections[1].toObject(); blocks = section.value("blocks").toArray();
+                blocks.append(rule(0, outsideMargins ? 37 : 0)); section.insert("blocks", blocks); sections[1] = section;
+                entry.insert("sections", sections);
+                QVERIFY(composeReadingEntry(window, entry)); QTRY_VERIFY(!window.readingFloatLayoutScheduled_);
+                auto *document = window.reading_->document(); auto *layout = document->documentLayout(); layout->documentSize();
+                QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                QList<QTextBlock> separators;
+                for (auto block = document->begin(); block.isValid(); block = block.next())
+                    if (block.blockFormat().hasProperty(SemanticHtml::authoredRuleProperty)) separators.append(block);
+                QCOMPARE(separators.size(), 2);
+                const auto body = document->rootFrame()->frameFormat().property(QTextFormat::UserProperty + 0x5806).toMap();
+                QCOMPARE(body.value("begin").toInt(), separators.first().position());
+                const auto metadata = document->findBlock(body.value("end").toInt()); QVERIFY(metadata.isValid());
+                QVERIFY(metadata.position() > separators.last().position());
+                const auto beforeBody = separators.first().previous(); QVERIFY(beforeBody.isValid());
+                QVERIFY(beforeBody.position() < body.value("begin").toInt());
+                QVERIFY(beforeBody.blockFormat().bottomMargin() > 0);
+                QVERIFY(metadata.blockFormat().topMargin() > 0);
+                const auto first = layout->blockBoundingRect(separators.first()), last = layout->blockBoundingRect(separators.last());
+                const auto end = layout->blockBoundingRect(metadata);
+                const auto preamble = layout->blockBoundingRect(document->find(QStringLiteral("PREFIX OUTSIDE BODY")).block());
+                QVERIFY(first.top() > preamble.bottom());
+                auto *floating = document->find(QStringLiteral("FLOAT")).currentTable(); QVERIFY(floating);
+                QVERIFY(end.top() >= last.bottom() - .05 && end.top() >= layout->frameBoundingRect(floating).bottom() - .05);
+                for (const auto &separator : separators) {
+                    QVERIFY(separator.text().isEmpty()); QCOMPARE(separator.layout()->lineCount(), 0);
+                    QVERIFY(!separator.charFormat().isAnchor());
+                    QVariantMap geometry;
+                    QVERIFY(QMetaObject::invokeMethod(layout, "wikidictAuthoredRuleGeometry", Qt::DirectConnection,
+                        Q_RETURN_ARG(QVariantMap, geometry), Q_ARG(int, separator.position())));
+                    QVERIFY(geometry.value("handled").toBool()); QCOMPARE(geometry.value("error").toInt(), 0);
+                }
+                QCOMPARE(document->toRawText().count(section.value("title").toString()), 1);
+                QVERIFY(!hasAnchor(document, QStringLiteral("section-0")));
+                QCOMPARE(document->find(QStringLiteral("Thai")).charFormat().anchorHref(), QStringLiteral("dict:dog"));
+                if (!outsideMargins) {
+                    firstBaseline = first; lastBaseline = last; metadataBaseline = end; prefixBaseline = preamble; rawBaseline = document->toRawText();
+                } else {
+                    QCOMPARE(first, firstBaseline); QCOMPARE(last, lastBaseline); QCOMPARE(end, metadataBaseline);
+                    QCOMPARE(preamble, prefixBaseline); QCOMPARE(document->toRawText(), rawBaseline);
+                }
+                QCOMPARE(window.currentEntry_, entry);
+            }
+        }
+    }
+
+    void styledSectionHeadingKeepsOneOwnerFontsActionsAndKeyboardFolding() {
+        QSettings().setValue("media/allowImages", false);
+        MainWindow window(fixture_, QStringLiteral("cat")); window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        auto *doc = window.reading_->document();
+        const auto findHeading = [&]() -> QTextFrame * {
+            for (auto *frame : doc->rootFrame()->childFrames()) if (frame->frameFormat().hasProperty(SectionHeading::property)) return frame;
+            return nullptr;
+        };
+        for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) for (bool floating : {false, true}) {
+            const auto entry = styledHeadingEntry(direction, floating);
+            const auto section = entry.value("sections").toArray()[1].toObject();
+            const auto sourceTitle = section.value("title").toString();
+            QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson()));
+            QCOMPARE(window.currentEntry_, entry);
+            QVERIFY(!hasAnchor(doc, QStringLiteral("section-0")));
+            QVERIFY(hasAnchor(doc, QStringLiteral("section-1")) && hasAnchor(doc, QStringLiteral("block-1-0")));
+            QCOMPARE(doc->toRawText().count(sourceTitle), 1);
+            QVERIFY(!doc->toRawText().contains(QChar(0x25be)) && !doc->toRawText().contains(QChar(0x25b8)));
+            for (int width : {900, 640, 900}) {
+                window.resize(width, 700); QTRY_VERIFY(!window.readingFloatLayoutScheduled_);
+                auto *frame = findHeading(); QVERIFY(frame); auto *layout = doc->documentLayout(); layout->documentSize();
+                QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                const auto block = frame->firstCursorPosition().block();
+                QCOMPARE(block.text(), sourceTitle); QCOMPARE(block.blockFormat().headingLevel(), 2);
+                QCOMPARE(frame->frameFormat().layoutDirection(), direction);
+                QVERIFY(!(frame->frameFormat().hasProperty(FlowConstruction::containerScrollportProperty)));
+                QCOMPARE(block, frame->lastCursorPosition().block()); QVERIFY(frame->childFrames().isEmpty());
+                const auto owner = block.charFormat().font();
+                QVERIFY(std::abs(owner.pointSizeF() - window.readingPointSize_ * 1.25) < .001);
+                const QStringList sourceNames{"Linux Libertine", "Georgia", "Times", "Source Serif 4"};
+                QCOMPARE(owner.families().mid(0, sourceNames.size()), sourceNames);
+                QCOMPARE(owner.styleHint(), QFont::Serif); QVERIFY(!(owner.styleStrategy() & QFont::NoFontMerging));
+                QVERIFY(owner.families().size() == sourceNames.size() + 1 && !owner.families().last().isEmpty());
+                const auto anchor = doc->find(QStringLiteral("Thai")); QVERIFY(!anchor.isNull());
+                QCOMPARE(anchor.selectedText(), QStringLiteral("Thai")); QCOMPARE(anchor.charFormat().anchorHref(), QStringLiteral("dict:dog"));
+                const auto line = block.layout()->lineForTextPosition(anchor.selectionStart() - block.position()); QVERIFY(line.isValid());
+                // The leading caret is ambiguous at the LTR word's RTL
+                // boundary. Both interior carets delimit the same source glyph.
+                const int interior = anchor.selectionStart() - block.position() + 1;
+                QVERIFY(anchor.selectionEnd() - anchor.selectionStart() >= 3);
+                const auto x = (line.cursorToX(interior) + line.cursorToX(interior + 1)) / 2;
+                const auto point = layout->blockBoundingRect(block).topLeft() + QPointF(x, line.y() + line.height() / 2);
+                QCOMPARE(layout->anchorAt(point), QStringLiteral("dict:dog"));
+                const int hit = layout->hitTest(point, Qt::ExactHit); QVERIFY(hit >= anchor.selectionStart() && hit < anchor.selectionEnd());
+                const int end = doc->rootFrame()->frameFormat().property(QTextFormat::UserProperty + 0x5806).toMap().value("end").toInt();
+                QVERIFY(layout->blockBoundingRect(doc->findBlock(end)).top() >= layout->frameBoundingRect(frame).bottom() - .05);
+                if (floating) {
+                    auto *table = doc->find(QStringLiteral("FLOAT")).currentTable(); QVERIFY(table);
+                    auto *native = qobject_cast<QTextDocumentLayout *>(layout); QVERIFY(native);
+                    const auto floatRect = native->tableBoundingRect(table), headingRect = layout->frameBoundingRect(frame);
+                    QVERIFY(!floatRect.intersects(headingRect));
+                    QVERIFY(layout->blockBoundingRect(doc->findBlock(end)).top() >= floatRect.bottom() - .05);
+                }
+                const auto raw = doc->toRawText(); const auto revision = doc->revision(); const auto format = frame->frameFormat();
+                QImage image(1100, 900, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
+                { QPainter painter(&image); layout->draw(&painter, {}); }
+                layout->documentSize(); QCOMPARE(doc->revision(), revision); QCOMPARE(doc->toRawText(), raw); QCOMPARE(frame->frameFormat(), format);
+                auto *ax = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(ax && ax->textInterface());
+                QVERIFY(ax->textInterface()->text(0, ax->textInterface()->characterCount()).contains(QStringLiteral("Thai")));
+                bool foldAction = false;
+                for (int index = 0; index < ax->childCount(); ++index) {
+                    auto *child = ax->child(index);
+                    if (!child || child->text(QAccessible::Name) != sourceTitle) continue;
+                    QVERIFY(child->isValid()); QVERIFY(child->rect().isEmpty()); QVERIFY(!child->state().focusable);
+                    auto *actions = child->actionInterface(); QVERIFY(actions);
+                    QVERIFY(actions->actionNames().contains(QAccessibleActionInterface::toggleAction()));
+                    QVERIFY(!actions->actionNames().contains(QAccessibleActionInterface::setFocusAction())); foldAction = true;
+                }
+                QVERIFY(foldAction);
+            }
+            const int toc = window.sections_->findData(1); QVERIFY(toc >= 0);
+            window.sections_->setCurrentIndex(toc); window.sections_->setFocus(Qt::OtherFocusReason);
+            QTRY_VERIFY(window.sections_->hasFocus());
+            QTest::keyClick(window.sections_, Qt::Key_Tab);
+            // Traverse the real widget chain, including text-size controls.
+            for (int tries = 0; tries < 5 && !window.sectionFold_->hasFocus(); ++tries) {
+                QVERIFY(QApplication::focusWidget()); QTest::keyClick(QApplication::focusWidget(), Qt::Key_Tab);
+            }
+            QTRY_VERIFY(window.sectionFold_->isVisible() && window.sectionFold_->hasFocus());
+            QCOMPARE(window.sectionFold_->text(), QStringLiteral("Collapse section"));
+            QTest::keyClick(window.sectionFold_, Qt::Key_Space);
+            QTRY_VERIFY(window.collapsedSections_.contains(1)); QVERIFY(window.sectionFold_->hasFocus());
+            QVERIFY(!doc->toPlainText().contains(QStringLiteral("AFTER HEADING")));
+            QCOMPARE(doc->toRawText().count(sourceTitle), 1);
+            QCOMPARE(window.sectionFold_->text(), QStringLiteral("Expand section"));
+            QTest::keyClick(window.sectionFold_, Qt::Key_Space);
+            QTRY_VERIFY(!window.collapsedSections_.contains(1)); QVERIFY(window.sectionFold_->hasFocus());
+            QVERIFY(doc->toPlainText().contains(QStringLiteral("AFTER HEADING")));
+            window.readingPaneAction_->trigger(); window.reading_->setFocus(Qt::OtherFocusReason);
+            window.reading_->setTextCursor(QTextCursor(doc)); QTest::keyClick(window.reading_, Qt::Key_Tab);
+            const auto selected = window.reading_->textCursor(); QCOMPARE(selected.selectedText(), QStringLiteral("Thai"));
+            QCOMPARE(selected.charFormat().anchorHref(), QStringLiteral("dict:dog"));
+            QCOMPARE(window.currentEntry_, entry);
+        }
+        // A full-band initial float does not spend the body's leading strut.
+        // Avoiding it must not reapply the heading's already-adjoining 7.25px.
+        auto entry = styledHeadingEntry(Qt::LeftToRight, true);
+        QVERIFY(composeReadingEntry(window, entry));
+        auto sections = entry.value("sections").toArray(); auto prefix = sections[0].toObject();
+        auto blocks = prefix.value("blocks").toArray(); auto first = blocks.first().toObject();
+        auto table = first.value("table").toObject(); auto geometry = table.value("geometry").toObject();
+        const qreal band = doc->textWidth() - 2 * doc->documentMargin(); QVERIFY(band > 0);
+        geometry.insert("width", QJsonObject{{"unit", "px"}, {"value", band}}); table.insert("geometry", geometry);
+        first.insert("table", table); blocks[0] = first; prefix.insert("blocks", blocks); sections[0] = prefix; entry.insert("sections", sections);
+        QVERIFY(composeReadingEntry(window, entry)); auto *heading = findHeading(); QVERIFY(heading);
+        auto *floatingTable = doc->find(QStringLiteral("FLOAT")).currentTable(); QVERIFY(floatingTable);
+        auto *layout = doc->documentLayout(); layout->documentSize();
+        QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        const auto diagnosticFormat = [](const QTextFormat &format) {
+            QVariantMap result; const auto properties = format.properties();
+            for (auto it = properties.cbegin(); it != properties.cend(); ++it) result.insert(QString::number(it.key()), it.value());
+            return result;
+        };
+        const auto diagnosticRect = [](const QRectF &rect) { return QVariantList{rect.x(), rect.y(), rect.width(), rect.height()}; };
+        QVariantList rootItems;
+        for (auto it = doc->rootFrame()->begin(); !it.atEnd(); ++it) {
+            if (const auto *frame = it.currentFrame()) rootItems.append(QVariantMap{{"kind", "frame"},
+                {"first", frame->firstPosition()}, {"last", frame->lastPosition()}, {"format", diagnosticFormat(frame->frameFormat())}});
+            else if (const auto block = it.currentBlock(); block.isValid()) rootItems.append(QVariantMap{{"kind", "block"},
+                {"first", block.position()}, {"length", block.length()}, {"visible", block.isVisible()}, {"text", block.text()},
+                {"format", diagnosticFormat(block.blockFormat())}});
+        }
+        qInfo().noquote() << "APP151_HEADING_GEOMETRY " << QJsonDocument::fromVariant(QVariantMap{
+            {"heading", diagnosticRect(layout->frameBoundingRect(heading))}, {"generic_table", diagnosticRect(layout->frameBoundingRect(floatingTable))},
+            {"allocated_table", diagnosticRect(qobject_cast<QTextDocumentLayout *>(layout)->tableBoundingRect(floatingTable))},
+            {"root_format", diagnosticFormat(doc->rootFrame()->frameFormat())}, {"root_items", rootItems}, {"requested_band", band}}).toJson(QJsonDocument::Compact);
+        QVERIFY(std::abs(layout->frameBoundingRect(heading).top() - qobject_cast<QTextDocumentLayout *>(layout)->tableBoundingRect(floatingTable).bottom()) < .06);
+        QCOMPARE(window.currentEntry_, entry);
+    }
+
+    void styledSectionHeadingRejectsMalformedOwnersAndPreservesNullFamilyBehavior() {
+        MainWindow window{QString()}; window.resize(900, 700); window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const auto entry = styledHeadingEntry(Qt::LeftToRight, false);
+        const auto sourceSection = entry.value("sections").toArray()[1].toObject();
+        QVERIFY(composeReadingEntry(window, entry));
+        for (int badCase = 0; badCase < 15; ++badCase) {
+            auto sections = entry.value("sections").toArray(); auto section = sourceSection;
+            auto heading = section.value("heading_style").toObject(); auto box = heading.value("box").toObject();
+            auto blocks = section.value("blocks").toArray(); auto companion = blocks.first().toObject();
+            if (badCase == 0) companion.insert("level", 3);
+            if (badCase == 1) companion.insert("anchor", "other");
+            if (badCase == 2) companion.insert("text_align", "center");
+            if (badCase == 3) { auto spans = companion.value("spans").toArray(); auto span = spans.first().toObject(); span.insert("text", ""); spans[0] = span; companion.insert("spans", spans); }
+            if (badCase == 4) box.insert("margin_values", QJsonObject{});
+            if (badCase == 5) box.insert("font_family", QJsonObject{{"stack", QJsonObject{{"names", QJsonArray{"serif"}}, {"fallback", "serif"}}}});
+            if (badCase == 6) box.insert("font_family", QJsonObject{{"stack", QJsonObject{{"names", QJsonArray{"Family [Foundry]"}}, {"fallback", "serif"}}}});
+            if (badCase == 7) box.insert("font_family", QJsonObject{{"stack", QJsonObject{{"names", QJsonArray{"sans  serif"}}, {"fallback", "serif"}}}});
+            if (badCase == 8) box.insert("font_family", QJsonObject{{"stack", QJsonObject{{"names", QJsonArray{}}, {"fallback", 1}}}});
+            if (badCase == 9) box.insert("overflow", "auto");
+            if (badCase == 10) { auto font = heading.value("font").toObject(); font.insert("font_scale", 1); heading.insert("font", font); }
+            if (badCase == 11) heading.insert("direction", "auto");
+            if (badCase == 12) { auto spans = companion.value("spans").toArray(); auto span = spans.first().toObject(); span.insert("trail", " "); spans[0] = span; companion.insert("spans", spans); }
+            if (badCase == 13) { auto spans = companion.value("spans").toArray(); auto span = spans.first().toObject(); span.insert("direction", "rtl"); spans[0] = span; companion.insert("spans", spans); }
+            if (badCase == 14) { auto font = heading.value("font").toObject(); font.insert("font_family", "sans_serif"); heading.insert("font", font); }
+            blocks[0] = companion; section.insert("blocks", blocks); heading.insert("box", box); section.insert("heading_style", heading); sections[1] = section;
+            auto invalid = entry; invalid.insert("sections", sections); QVERIFY(!composeReadingEntry(window, invalid));
+            QVERIFY(composeReadingEntry(window, entry)); QCOMPARE(window.currentEntry_, entry);
+        }
+        QFont font; font.setPointSizeF(17.25); font.setBold(true); font.setItalic(true);
+        const auto original = font; SemanticHtml::applyFontFamily(font, QJsonValue::Null); QCOMPARE(font, original);
+        SemanticHtml::applyFontFamily(font, QStringLiteral("sans_serif")); QCOMPARE(font.styleHint(), QFont::SansSerif);
+        QCOMPARE(font.pointSizeF(), 17.25); QVERIFY(font.bold() && font.italic());
+        QFont generic = original; SemanticHtml::applyFontFamily(generic, QJsonObject{{"stack", QJsonObject{{"names", QJsonArray{}}, {"fallback", "serif"}}}});
+        QCOMPARE(generic.styleHint(), QFont::Serif); QCOMPARE(generic.families().size(), 1); QVERIFY(!generic.families().first().isEmpty());
+        // Source family requests retain the entire inline owner, including null
+        // neighbors, trails and the real source action. Names are requests only.
+        const QJsonObject familyA{{"stack", QJsonObject{{"names", QJsonArray{"Wikidict Owner Probe", "Times"}}, {"fallback", "serif"}}}};
+        const QJsonObject familyB{{"stack", QJsonObject{{"names", QJsonArray{"Wikidict Child Probe", "Georgia"}}, {"fallback", "sans_serif"}}}};
+        QJsonObject child{{"kind", "link"}, {"text", "Hani"}, {"trail", "  "}, {"target", "dog"},
+            {"font_family", familyB}, {"code", true}, {"classes", "Egyp"}, {"language", "ja"},
+            {"bold", true}, {"italic", true}, {"font_scale", 1.125}, {"font_scale_basis", "normal_body"}};
+        const QJsonArray inlineSpans{QJsonObject{{"kind", "text"}, {"text", "  lead  "}}, child,
+            QJsonObject{{"kind", "text"}, {"text", QString(QChar(0x00a0)) + QStringLiteral("  tail  ")}}};
+        const auto inlineCopy = inlineSpans;
+        QTextDocument text;
+        auto base = window.reading_->document()->defaultFont(); base.setPointSizeF(window.readingPointSize_);
+        text.setDefaultFont(base);
+        SemanticHtml::setHtml(&text, window.spansHtml(inlineSpans));
+        QCOMPARE(text.toRawText(), QStringLiteral("  lead  Hani  ") + QChar(0x00a0) + QStringLiteral("  tail  "));
+        QCOMPARE(inlineSpans, inlineCopy);
+        const auto run = text.find(QStringLiteral("Hani")); QVERIFY(!run.isNull());
+        QCOMPARE(run.charFormat().anchorHref(), QStringLiteral("dict:dog"));
+        const auto childFont = run.charFormat().font();
+        QCOMPARE(childFont.families().mid(0, 2), QStringList({"Wikidict Child Probe", "Georgia"}));
+        QCOMPARE(childFont.styleHint(), QFont::SansSerif); QVERIFY(childFont.bold() && childFont.italic());
+        QVERIFY(std::abs(childFont.pointSizeF() - window.readingPointSize_ * 1.125) < .001);
+        QCOMPARE(childFont.families().size(), 3);
+        auto owner = sourceSection.value("heading_style").toObject().value("font").toObject();
+        owner.insert("font_family", familyA); owner.insert("font_scale", 1.0);
+        auto metricsChild = child; metricsChild.insert("code", false); metricsChild.insert("classes", "");
+        metricsChild.insert("inline_style", QJsonObject{{"line_height", QJsonObject{{"font_relative", QJsonObject{{"factor", 1.0}, {"font", owner}}}}}});
+        SemanticHtml::setHtml(&text, window.spansHtml(QJsonArray{metricsChild}));
+        const auto metricsRun = text.find(QStringLiteral("Hani")); QVERIFY(!metricsRun.isNull());
+        QCOMPARE(metricsRun.charFormat().fontFamilies().toStringList().mid(0, 2), childFont.families().mid(0, 2));
+        const auto policy = metricsRun.charFormat().property(SemanticHtml::inlineStyleProperty).toMap();
+        QVERIFY(policy.contains("height_font"));
+        const auto ownerFormat = policy.value("height_font").value<QTextFormat>().toCharFormat();
+        QCOMPARE(ownerFormat.fontFamilies().toStringList().mid(0, 2), QStringList({"Wikidict Owner Probe", "Times"}));
+        QCOMPARE(ownerFormat.font().styleHint(), QFont::Serif);
+        QVERIFY(std::abs(ownerFormat.font().pointSizeF() - window.readingPointSize_) < .001);
+        QVERIFY(ownerFormat.fontFamilies() != metricsRun.charFormat().fontFamilies());
+        auto invalidFamily = child; invalidFamily.insert("font_family", 1);
+        QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{invalidFamily}), std::runtime_error);
+        auto invalidSnapshot = owner; invalidSnapshot.insert("font_family", QJsonObject{{"stack", QJsonObject{{"names", QJsonArray{"serif"}}, {"fallback", "serif"}}}});
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineFontSnapshot(invalidSnapshot), std::runtime_error);
+        auto zero = child; zero.insert("font_scale", 0.0);
+        SemanticHtml::setHtml(&text, window.spansHtml(QJsonArray{zero}));
+        QVERIFY(text.find(QStringLiteral("Hani")).charFormat().fontFamilies().toStringList().contains(SemanticHtml::zeroFontFamilyName));
+        // Deep ordered request identity, not whichever face happens to resolve.
+        auto mismatchedShift = metricsChild;
+        auto policyJson = mismatchedShift.value("inline_style").toObject();
+        policyJson.insert("baseline_shift", QJsonObject{{"value", 0.0}, {"font_scale_basis", "normal_body"}});
+        mismatchedShift.insert("inline_style", policyJson);
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineTextStyle(mismatchedShift), std::runtime_error);
+        auto same = child; same.remove("inline_style");
+        auto sameOwner = SemanticHtml::inlineFontSnapshot(QJsonObject{{"font_scale", 1.125}, {"font_scale_basis", "normal_body"},
+            {"font_family", familyB}, {"code", true}, {"classes", "Egyp"}, {"language", "ja"}, {"bold", true}, {"italic", true}});
+        same.insert("inline_style", QJsonObject{{"line_height", QJsonObject{{"font_relative", QJsonObject{{"factor", 1.0}, {"font", sameOwner}}}}},
+            {"baseline_shift", QJsonObject{{"value", 0.0}, {"font_scale_basis", "normal_body"}}}});
+        QVERIFY(!SemanticHtml::inlineTextStyle(same).isEmpty());
+        auto ordered = familyB; auto stack = ordered.value("stack").toObject();
+        stack.insert("names", QJsonArray{"Georgia", "Wikidict Child Probe"}); ordered.insert("stack", stack);
+        auto wrongOwner = sameOwner; wrongOwner.insert("font_family", ordered);
+        auto wrongPolicy = same.value("inline_style").toObject();
+        wrongPolicy.insert("line_height", QJsonObject{{"font_relative", QJsonObject{{"factor", 1.0}, {"font", wrongOwner}}}});
+        same.insert("inline_style", wrongPolicy);
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineTextStyle(same), std::runtime_error);
+        // Null-family requests keep the exact legacy semantic path.
+        auto nullSpan = child; nullSpan.remove("font_family");
+        const auto legacySpanHtml = window.spansHtml(QJsonArray{nullSpan});
+        nullSpan.insert("font_family", QJsonValue::Null);
+        QCOMPARE(window.spansHtml(QJsonArray{nullSpan}), legacySpanHtml);
+        auto equalHeading = entry; auto equalSections = equalHeading.value("sections").toArray();
+        auto equalSection = equalSections[1].toObject(); auto equalStyle = equalSection.value("heading_style").toObject();
+        auto equalFont = equalStyle.value("font").toObject(); equalFont.insert("font_family", equalStyle.value("box").toObject().value("font_family"));
+        equalStyle.insert("font", equalFont); equalSection.insert("heading_style", equalStyle); equalSections[1] = equalSection;
+        equalHeading.insert("sections", equalSections); QVERIFY(composeReadingEntry(window, equalHeading)); QCOMPARE(window.currentEntry_, equalHeading);
+        // A styled heading alone also owns the real titleless prefix; body
+        // adjoining is a separate source proof and is not inferred here.
+        auto noAdjoining = styledHeadingEntry(Qt::LeftToRight, true); noAdjoining.remove("body_adjoining");
+        QVERIFY(composeReadingEntry(window, noAdjoining));
+        QVERIFY(!hasAnchor(window.reading_->document(), QStringLiteral("section-0")));
+        QVERIFY(window.reading_->document()->find(QStringLiteral("FLOAT")).currentTable());
+        QCOMPARE(window.currentEntry_, noAdjoining);
+        auto legacy = entry; legacy.remove("body_adjoining"); auto sections = legacy.value("sections").toArray(); auto section = sections[1].toObject();
+        section.remove("heading_style"); sections[1] = section; legacy.insert("sections", sections);
+        const auto html = window.entryHtml(legacy);
+        section.insert("heading_style", QJsonValue::Null); sections[1] = section; auto explicitNull = legacy; explicitNull.insert("sections", sections);
+        QCOMPARE(window.entryHtml(explicitNull), html);
+        QVERIFY(composeReadingEntry(window, explicitNull)); QVERIFY(!window.sectionFold_->isVisible());
+        QVERIFY(window.reading_->document()->toRawText().contains(QChar(0x25be)) || window.reading_->document()->toRawText().contains(QChar(0x25b8)));
+    }
+
+    void entryBodyAdjoiningUsesSectionEdgesWithoutMovingPrefixOrMetadata() {
+        QSettings().setValue("media/allowImages", false);
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        constexpr int boundary = QTextFormat::UserProperty + 0x5806;
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value}}; };
+        const auto px = [](double value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto edges = [&](double top, double bottom) { return QJsonObject{{"top", px(top)}, {"right", px(0)}, {"bottom", px(bottom)}, {"left", px(0)}}; };
+        const auto paragraph = [&](const QString &value, double top, double bottom, double padding = 0) {
+            QJsonObject style{{"margins", edges(top, bottom)}};
+            if (padding) style.insert("padding", edges(padding, padding));
+            return QJsonObject{{"kind", "paragraph"}, {"spans", value.isEmpty() ? QJsonArray{} : QJsonArray{text(value)}}, {"style", style}};
+        };
+        const QJsonObject cell{{"spans", QJsonArray{}}, {"blocks", QJsonArray{paragraph(QStringLiteral("Float cell\n").repeated(20), 0, 0)}}};
+        const QJsonObject table{{"kind", "table"}, {"table", QJsonObject{
+            {"geometry", QJsonObject{{"width", px(140)}, {"border", 0}, {"cell_padding", 0}, {"cell_spacing", 0}}},
+            {"style", QJsonObject{{"float_side", "left"}, {"margins", edges(0, 0)}}},
+            {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell}}}}}}}};
+        const auto entry = [&](QJsonArray blocks, bool heading) {
+            return QJsonObject{{"kind", "language"}, {"title", "Body adjoining"}, {"language", "English"}, {"language_code", "en"},
+                {"redirect", QJsonObject{{"followed", true}, {"source_title", "Prefix source"}}},
+                {"preamble_spans", QJsonArray{text("Preamble outside the body")}},
+                {"sections", QJsonArray{QJsonObject{{"level", 2}, {"title", heading ? "Source section" : "English"}, {"blocks", blocks}}}},
+                {"references", QJsonArray{QJsonObject{{"kind", "fragment"}, {"spans", QJsonArray{text("Metadata note")}}}}}, {"media", QJsonArray{}}};
+        };
+        auto *browser = window.reading_; auto *doc = browser->document();
+        for (bool floating : {false, true}) for (bool heading : {false, true}) for (double padding : {0.0, 3.0}) {
+            const auto make = [&](double before, double after) {
+                auto body = paragraph("Body action", before, after, padding);
+                body.insert("spans", QJsonArray{QJsonObject{{"kind", "external_link"}, {"text", "Body action"}, {"target", "https://example.test/body-adjoining"}}});
+                QJsonArray blocks; if (floating) blocks.append(table); blocks.append(body);
+                auto result = entry(blocks, heading); result.insert("body_adjoining", "ordinary"); return result;
+            };
+            const auto zero = make(0, 0), authored = make(20, 30);
+            QVERIFY(composeReadingEntry(window, zero));
+            auto *native = qobject_cast<QTextDocumentLayout *>(doc->documentLayout()); QVERIFY(native); native->documentSize();
+            const auto zeroBody = paintedBlockLines(doc, doc->find("Body action").block()); QVERIFY(!zeroBody.isEmpty());
+            const auto prefix = doc->find("Preamble outside the body").block(); QVERIFY(prefix.isValid());
+            const QRectF zeroPrefix = native->blockBoundingRect(prefix);
+            const int zeroEnd = doc->rootFrame()->frameFormat().property(boundary).toMap().value("end").toInt();
+            const qreal zeroMetadata = native->blockBoundingRect(doc->findBlock(zeroEnd)).top();
+            const QRectF zeroFloat = floating ? native->tableBoundingRect(doc->find("Float cell").currentTable()) : QRectF();
+            QVERIFY(composeReadingEntry(window, authored));
+            native = qobject_cast<QTextDocumentLayout *>(doc->documentLayout()); QVERIFY(native); native->documentSize();
+            QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const auto rootPolicy = doc->rootFrame()->frameFormat().property(boundary).toMap();
+            QCOMPARE(rootPolicy.value("adjoining"), QVariant(QStringLiteral("ordinary")));
+            const auto bodyLink = doc->find("Body action"); QVERIFY(!bodyLink.isNull());
+            const auto bodyLines = paintedBlockLines(doc, bodyLink.block()); QVERIFY(!bodyLines.isEmpty());
+            const auto actualPrefix = doc->find("Preamble outside the body").block();
+            QCOMPARE(native->blockBoundingRect(actualPrefix), zeroPrefix);
+            const int begin = rootPolicy.value("begin").toInt();
+            const int prefixTextEnd = actualPrefix.position() + actualPrefix.text().size();
+            QVERIFY(begin >= prefixTextEnd);
+            if (begin == prefixTextEnd) {
+                // A real first frame may replace the prefix's terminating marker,
+                // but no prefix glyph belongs to the semantic body.
+                auto *beginOwner = qobject_cast<QTextFrame *>(rootPolicy.value("begin_owner").value<QObject *>());
+                QVERIFY(beginOwner && beginOwner != doc->rootFrame());
+                QCOMPARE(beginOwner->parentFrame(), doc->rootFrame());
+                QCOMPARE(beginOwner->firstPosition() - 1, begin);
+            }
+            QCOMPARE(bodyLines.first().top() - zeroBody.first().top(), heading ? 20.0 : 0.0);
+            const auto metadata = doc->findBlock(rootPolicy.value("end").toInt()); QCOMPARE(metadata.text(), QStringLiteral("References"));
+            if (!heading) QCOMPARE(native->blockBoundingRect(metadata).top(), zeroMetadata);
+            QPointer<QTextTable> floated(floating ? doc->find("Float cell").currentTable() : nullptr);
+            if (floated) {
+                QCOMPARE(native->tableBoundingRect(floated), zeroFloat);
+                QVERIFY(bodyLines.first().top() < native->tableBoundingRect(floated).bottom());
+                QVERIFY(native->blockBoundingRect(metadata).top() >= native->tableBoundingRect(floated).bottom());
+            }
+            const auto records = rootPolicy.value("paragraphs").toList(); QCOMPARE(records.size(), 1);
+            QCOMPARE(records.first().toMap().value("before"), QVariant(20.0)); QCOMPARE(records.first().toMap().value("after"), QVariant(30.0));
+            QCOMPARE(records.first().toMap().value("end"), QVariant(padding));
+            const auto raw = doc->toRawText(); const int count = doc->characterCount();
+            auto *ax = QAccessible::queryAccessibleInterface(browser); QVERIFY(ax && ax->textInterface());
+            const auto axText = ax->textInterface()->text(0, -1);
+            QVERIFY(axText.contains("Preamble outside the body") && axText.contains("Body action") && axText.contains("Metadata note"));
+            const auto frames = doc->rootFrame()->childFrames();
+            for (int width : {640, 900}) {
+                window.resize(width, 700);
+                const auto settled = std::make_shared<bool>(false);
+                QTimer::singleShot(0, doc, [doc, settled] { QTimer::singleShot(0, doc, [settled] { *settled = true; }); });
+                QTRY_VERIFY_WITH_TIMEOUT(*settled && !window.readingFloatLayoutScheduled_, 10000);
+                native->documentSize(); QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                QCOMPARE(doc->rootFrame()->childFrames(), frames); QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count);
+                QCOMPARE(doc->rootFrame()->frameFormat().property(boundary).toMap(), rootPolicy);
+                QCOMPARE(ax->textInterface()->text(0, -1), axText); QCOMPARE(window.currentEntry_, authored);
+                const auto lines = paintedBlockLines(doc, bodyLink.block()); QVERIFY(!lines.isEmpty());
+                const QPointF point = lines.first().center();
+                QCOMPARE(native->anchorAt(point), QStringLiteral("https://example.test/body-adjoining"));
+                const int hit = native->hitTest(point, Qt::ExactHit); QVERIFY(hit >= bodyLink.selectionStart() && hit < bodyLink.selectionEnd());
+                browser->setTextCursor(bodyLink); browser->ensureCursorVisible();
+                const auto rect = ax->textInterface()->characterRect(bodyLink.selectionStart()); QVERIFY(!rect.isEmpty());
+                const int axHit = ax->textInterface()->offsetAtPoint(rect.center()); QVERIFY(axHit >= bodyLink.selectionStart() && axHit < bodyLink.selectionEnd());
+                QTextCursor selected(doc); selected.select(QTextCursor::Document); QVERIFY(selected.selectedText().contains("Body action"));
+                QImage raster(1200, 1600, QImage::Format_ARGB32_Premultiplied); raster.fill(Qt::white);
+                { QPainter painter(&raster); native->draw(&painter, {}); }
+                if (floated) QVERIFY(native->blockBoundingRect(metadata).top() >= native->tableBoundingRect(floated).bottom());
+            }
+            browser->setFocus(); QTRY_VERIFY(browser->hasFocus()); QTest::keyClick(browser, Qt::Key_Home, Qt::ControlModifier);
+            for (int n = 0; n < 8 && browser->textCursor().selectedText() != "Body action"; ++n) QTest::keyClick(browser, Qt::Key_Tab);
+            QCOMPARE(browser->textCursor().selectionStart(), bodyLink.selectionStart()); QCOMPARE(browser->textCursor().selectionEnd(), bodyLink.selectionEnd());
+        }
+        // Through-empty and an actually empty section cut introduce no glyph,
+        // source node, margin or line between the unchanged prefix and metadata.
+        auto empty = entry({}, false); empty.insert("body_adjoining", "ordinary");
+        QVERIFY(composeReadingEntry(window, empty)); auto *native = doc->documentLayout(); native->documentSize();
+        const auto emptyRaw = doc->toRawText(), emptyAx = QAccessible::queryAccessibleInterface(browser)->textInterface()->text(0, -1);
+        const auto emptyPolicy = doc->rootFrame()->frameFormat().property(boundary).toMap();
+        QCOMPARE(emptyPolicy.value("begin"), emptyPolicy.value("end"));
+        const auto emptyEnd = native->blockBoundingRect(doc->findBlock(emptyPolicy.value("end").toInt()));
+        auto through = entry(QJsonArray{paragraph("", 20, 30)}, false); through.insert("body_adjoining", "ordinary");
+        QVERIFY(composeReadingEntry(window, through)); native->documentSize();
+        const auto throughPolicy = doc->rootFrame()->frameFormat().property(boundary).toMap();
+        const auto throughRecords = throughPolicy.value("paragraphs").toList(); QCOMPARE(throughRecords.size(), 1);
+        QVERIFY(throughRecords.first().toMap().value("through").toBool());
+        QCOMPARE(native->blockBoundingRect(doc->findBlock(throughPolicy.value("end").toInt())).top(), emptyEnd.top());
+        QVERIFY(doc->toRawText().contains("Preamble outside the body"));
+        // Absent and explicit-null retain exactly the old serialized HTML and
+        // native coordinates, including the reader's legacy paragraph spacing.
+        auto legacy = entry(QJsonArray{paragraph("Legacy body", 20, 30)}, false); auto explicitNull = legacy;
+        explicitNull.insert("body_adjoining", QJsonValue::Null); QCOMPARE(window.entryHtml(legacy), window.entryHtml(explicitNull));
+        QVERIFY(composeReadingEntry(window, legacy)); native->documentSize(); const auto legacyRaw = doc->toRawText();
+        const auto legacySize = native->documentSize(); QList<QRectF> legacyRects;
+        for (auto block = doc->begin(); block.isValid(); block = block.next()) legacyRects.append(native->blockBoundingRect(block));
+        QVERIFY(composeReadingEntry(window, explicitNull)); QCOMPARE(native->documentSize(), legacySize); QCOMPARE(doc->toRawText(), legacyRaw);
+        int index = 0; for (auto block = doc->begin(); block.isValid(); block = block.next()) QCOMPARE(native->blockBoundingRect(block), legacyRects.at(index++));
+        QCOMPARE(index, legacyRects.size()); QCOMPARE(doc->rootFrame()->frameFormat().property(boundary).toMap().size(), 3);
+        for (const auto bad : {QJsonValue(true), QJsonValue("unknown"), QJsonValue(QJsonObject{})}) {
+            auto rejected = legacy; rejected.insert("body_adjoining", bad); QVERIFY(!composeReadingEntry(window, rejected));
+            QVERIFY(composeReadingEntry(window, through)); native->documentSize(); QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        }
+        QVERIFY(composeReadingEntry(window, empty)); QCOMPARE(doc->toRawText(), emptyRaw);
+        QCOMPARE(QAccessible::queryAccessibleInterface(browser)->textInterface()->text(0, -1), emptyAx);
+    }
 
     void floatingTableKeepsFollowingHeadingAndParagraphSeparate() {
         QSettings().setValue("media/allowImages", false);

@@ -88,6 +88,7 @@ private:
     bool renderResponse(const QByteArray &json, bool addVisit = true, const std::optional<QString> &fragment = std::nullopt, bool deferCommit = false);
     void commitReadingEntry();
     bool refreshReading();
+    void updateSectionFoldControl();
     void reflowFigures();
     QVector<QPair<QString, QString>> readingExplanations() const;
     QVector<QPair<QString, QString>> readingAdvisories() const;
@@ -101,11 +102,11 @@ private:
     void saveVisit();
     bool restoreVisitReading(const Visit &visit);
     void updateNavigation();
-    QString entryHtml(const QJsonObject &entry) const;
+    QString entryHtml(const QJsonObject &entry, bool bodyBoundary = false) const;
     QString blockHtml(const QJsonObject &block, const QString &cellBackground = {}, int tableDepth = 1, const QString &location = {}, const QString &inheritedAlignment = {}, FlowConstruction::RenderContext context = {}) const;
     QString blockContentsHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &alignment, const FlowConstruction::RenderContext &context, const QString *bodyOverride = nullptr) const;
     QString flowBlockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const FlowConstruction::RenderContext &context) const;
-    QString spansHtml(const QJsonArray &spans, qreal leftMargin = 0, const QString &prefix = {}, const QString &cellBackground = {}, qreal contextPointSize = 0, const QColor &inheritedInk = {}, int sourceRun = -1, bool zeroFontContext = false, bool typedScopeOwnsIsolation = false, const QJsonObject &linkPaint = {}, bool computedCellTraits = false) const;
+    QString spansHtml(const QJsonArray &spans, qreal leftMargin = 0, const QString &prefix = {}, const QString &cellBackground = {}, qreal contextPointSize = 0, const QColor &inheritedInk = {}, int sourceRun = -1, bool zeroFontContext = false, bool typedScopeOwnsIsolation = false, const QJsonObject &linkPaint = {}, bool computedCellTraits = false, const QJsonValue &contextFamily = {}) const;
     QString tableHtml(const QJsonObject &table, int depth, int tableDepth = 1, const QString &inheritedBackground = {}, const QString &location = {}, const QString &inheritedAlignment = {}, const QString &listMarker = {}, FlowConstruction::RenderContext context = {}) const;
     SavedWord savedWord(const QJsonObject &entry) const;
     QString clueFor(const QJsonObject &entry) const;
@@ -133,6 +134,7 @@ private:
     QProgressBar *openingProgress_ = nullptr;
     QLabel *resultStatus_ = nullptr;
     QComboBox *sections_ = nullptr;
+    QPushButton *sectionFold_ = nullptr;
     QWidget *readerContent_ = nullptr;
     QWidget *readerHeading_ = nullptr;
     QGridLayout *navigationLayout_ = nullptr;

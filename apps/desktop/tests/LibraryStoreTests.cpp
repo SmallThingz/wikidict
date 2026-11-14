@@ -1,4 +1,5 @@
 #include "LibraryStore.hpp"
+#include "DictApi.hpp"
 #include "LibraryStoreRecovery_p.hpp"
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -238,7 +239,62 @@ int main(int argc, char **argv) {
             LibraryStorage::recoverPendingMutation(first.path());
             require(!QFileInfo::exists(destination) && !QFileInfo::exists(first.filePath(QStringLiteral("languages.tsv"))), "interrupted first import restores genuinely empty root");
         }
-        // Both ordinary and DAL1 records use the ABI4 full native DPR2-9 decoder.
+        // The paired N core must decode the fixed capability record and the
+        // user's complete payload independently; a successful probe is no
+        // substitute for validating the next record.
+        const QByteArray authoredRule = QByteArray::fromHex(
+            "4450524e00000000010000000204000000626f64790000000000000000010000"
+            "000b000000000000000000000000000000000000000000000000000000000100"
+            "0000803f01070000002330303030303000000000000000000000000000000000"
+            "000000000000000000000000000000000000000000000000");
+        require(authoredRule.size() == 120, "fixed independently audited N fixture length");
+        {
+            DictApi validator(temporary.path());
+            const QByteArray header = QByteArrayLiteral("WIKBLB08") + char(7);
+            validator.requirePresentationCapability(authoredRule);
+            validator.validateRecord(header, "rule", authoredRule);
+            // A second handle uses the same linked library, but keeps its own
+            // mutable error buffer and validates its own actual record.
+            DictApi second(temporary.path());
+            second.requirePresentationCapability(authoredRule);
+            second.validateRecord(header, "rule", authoredRule);
+            for (const auto &bad : {authoredRule.chopped(1), authoredRule + char(0),
+                                   QByteArrayLiteral("DPRN")}) {
+                bool invalid = false;
+                try { second.validateRecord(header, "rule", bad); }
+                catch (const DictApiError &error) {
+                    invalid = error.isInvalidEntryData() && !error.isUnsupportedPresentation();
+                }
+                require(invalid, "malformed known N remains invalid after successful capability probe");
+            }
+            bool unsupported = false;
+            try { second.validateRecord(header, "rule", QByteArrayLiteral("DPRZ")); }
+            catch (const DictApiError &error) {
+                unsupported = error.isUnsupportedPresentation() && !error.isInvalidEntryData();
+            }
+            require(unsupported, "complete unknown presentation version reports unsupported capability");
+            bool truncated = false;
+            try { second.validateRecord(header, "rule", QByteArrayLiteral("DPR")); }
+            catch (const DictApiError &error) {
+                truncated = error.isInvalidEntryData() && !error.isUnsupportedPresentation();
+            }
+            require(truncated, "truncated version header remains malformed");
+        }
+        // A malformed alias envelope must be rejected before inspecting its
+        // inner capability, even if that inner prefix names a future version.
+        {
+            QByteArray badAlias = aliasRecord("Cats", "cat", QByteArrayLiteral("DPRZ"));
+            badAlias[9] = char(2);
+            write(source, aliasBlob(badAlias));
+            bool invalidAlias = false;
+            try { LibraryStorage::prepareImport(temporary.filePath(QStringLiteral("rule-bad-alias")), source, {}, -1, cancelled, progress); }
+            catch (const DictApiError &) { throw std::runtime_error("malformed alias reached the presentation decoder"); }
+            catch (const std::exception &error) {
+                invalidAlias = QString::fromUtf8(error.what()).contains(QStringLiteral("invalid redirect record"));
+            }
+            require(invalidAlias, "malformed alias retains its envelope classification");
+        }
+        // Both ordinary and DAL1 records use the full native record decoder.
         const QByteArray coloredPresentation = QByteArray::fromHex("445052340100000000000005000000636f6c6f72000000000000000000000000000000000000000000000000010700000023316333396262000000000000000000000000000000000000000000000000");
         QByteArray paintedPresentation = coloredPresentation;
         paintedPresentation.replace(0, 4, "DPR6");
@@ -257,7 +313,7 @@ int main(int argc, char **argv) {
             orderedPresentation({}),
             orderedPresentation({cellBlock(0), cellBlock(9, QByteArray(1, '\0'), "Cell_heading", "cell-heading"),
                                  cellBlock(5), cellBlock(11), cellBlock(12, orderedCellTable({cellBlock(0)})), cellBlock(0)}),
-            coloredPresentation, paintedPresentation,
+            coloredPresentation, paintedPresentation, authoredRule,
         };
         for (qsizetype version = 0; version < supportedPresentations.size(); ++version) {
             const auto &presentation = supportedPresentations[version];

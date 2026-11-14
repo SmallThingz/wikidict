@@ -37,6 +37,25 @@
 // Renderer-owned HTML metadata is transient. Original semantic text and links
 // never change, and original tooltips are restored before returning to the UI.
 namespace SemanticHtml {
+inline void applyFontFamily(QFont &font, const QJsonValue &value) {
+    CompiledContent::containerFontFamily(value);
+    if (!CompiledContent::present(value)) return;
+    QStringList names;
+    QString generic = QStringLiteral("sans_serif");
+    if (value.isObject()) {
+        const auto stack = value.toObject().value(QStringLiteral("stack")).toObject();
+        for (const auto &name : stack.value(QStringLiteral("names")).toArray()) names.append(name.toString());
+        generic = stack.value(QStringLiteral("fallback")).toString();
+    }
+    // The request is data, not CSS and not a claim about an installed face.
+    // Keep ordinary glyph fallback; the closed generic is a native style hint.
+    font.setStyleHint(generic == QStringLiteral("serif") ? QFont::Serif : QFont::SansSerif,
+        QFont::StyleStrategy(font.styleStrategy() & ~QFont::NoFontMerging));
+    const auto terminal = font.defaultFamily();
+    CompiledContent::require(!terminal.isEmpty());
+    names.append(terminal);
+    font.setFamilies(names);
+}
 inline const QString markerOpen = QStringLiteral("<span data-wikidict-font-scale=\"");
 inline const QString scalePrefix = QStringLiteral("wikidict-font-scale:scaled:");
 inline const QString escapedPrefix = QStringLiteral("wikidict-font-scale:escaped:");
@@ -50,6 +69,97 @@ inline constexpr int spanExpansionProperty = QTextFormat::UserProperty + 0x5749;
 inline QString spanExplanation(const QTextCharFormat &format) {
     return format.hasProperty(spanAdvisoryProperty)
         ? format.stringProperty(spanExpansionProperty) : format.toolTip();
+}
+
+inline constexpr int authoredRuleProperty = QTextFormat::UserProperty + 0x5803;
+inline const QString authoredRuleMarkerOpen = QStringLiteral("<hr data-wikidict-authored-rule=\"");
+inline QVariantMap authoredRuleMetadata(const QJsonObject &block, qreal normalBodyCssPixels, bool dark) {
+    const auto style = CompiledContent::ruleStyle(block);
+    CompiledContent::require(!style.isEmpty() && std::isfinite(normalBodyCssPixels) && normalBodyCssPixels > 0);
+    const auto length = [&](const QJsonValue &value) {
+        const auto spec = value.toObject();
+        const qreal result = spec.value(QStringLiteral("value")).toDouble()
+            * (spec.value(QStringLiteral("unit")) == QStringLiteral("em") ? normalBodyCssPixels : 1);
+        CompiledContent::require(std::isfinite(result) && result >= 0);
+        return result;
+    };
+    const auto color = style.value(QStringLiteral("fill")).toObject();
+    QColor fill(Qt::transparent);
+    if (color.contains(QStringLiteral("rgb"))) fill = QColor(color.value(QStringLiteral("rgb")).toString());
+    else if (color.contains(QStringLiteral("light_dark")))
+        fill = QColor(color.value(QStringLiteral("light_dark")).toObject().value(dark ? QStringLiteral("dark") : QStringLiteral("light")).toString());
+    QVariantList margins;
+    for (const auto &side : {QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")})
+        margins.append(length(style.value(QStringLiteral("margins")).toObject().value(side)));
+    return {{QStringLiteral("capability"), QStringLiteral("wikidict.authored-rule/1")},
+        {QStringLiteral("source"), QJsonDocument(block).toJson(QJsonDocument::Compact)},
+        {QStringLiteral("em"), normalBodyCssPixels}, {QStringLiteral("dark"), dark},
+        {QStringLiteral("height"), length(style.value(QStringLiteral("height")))},
+        {QStringLiteral("fill"), fill}, {QStringLiteral("margins"), margins}};
+}
+inline QString authoredRuleHtml(const QJsonObject &block, qreal em, bool dark) {
+    authoredRuleMetadata(block, em, dark);
+    const QJsonObject payload{{QStringLiteral("block"), block}, {QStringLiteral("em"), em}, {QStringLiteral("dark"), dark}};
+    const auto encoded = QJsonDocument(payload).toJson(QJsonDocument::Compact)
+        .toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    return authoredRuleMarkerOpen + QString::fromLatin1(encoded) + QStringLiteral("\">");
+}
+inline QString prepareAuthoredRules(const QString &html, QHash<int, QVariantMap> &rules) {
+    QString out;
+    qsizetype cursor = 0, at = 0;
+    while ((at = html.indexOf(authoredRuleMarkerOpen, cursor)) >= 0) {
+        const qsizetype begin = at + authoredRuleMarkerOpen.size();
+        const qsizetype end = html.indexOf(QStringLiteral("\">"), begin);
+        CompiledContent::require(end >= 0 && rules.size() < std::numeric_limits<int>::max() / 2);
+        const auto encoded = html.mid(begin, end - begin).toLatin1();
+        const auto decoded = QByteArray::fromBase64(encoded, QByteArray::Base64UrlEncoding | QByteArray::AbortOnBase64DecodingErrors);
+        CompiledContent::require(decoded.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals) == encoded);
+        QJsonParseError error;
+        const auto json = QJsonDocument::fromJson(decoded, &error);
+        const auto payload = json.object();
+        CompiledContent::require(error.error == QJsonParseError::NoError && json.isObject() && payload.size() == 3
+            && payload.value(QStringLiteral("block")).isObject() && payload.value(QStringLiteral("em")).isDouble()
+            && payload.value(QStringLiteral("dark")).isBool());
+        const int state = std::numeric_limits<int>::max() / 2 + int(rules.size());
+        rules.insert(state, authoredRuleMetadata(payload.value(QStringLiteral("block")).toObject(),
+            payload.value(QStringLiteral("em")).toDouble(), payload.value(QStringLiteral("dark")).toBool()));
+        out += html.mid(cursor, at - cursor) + QStringLiteral("<hr style='margin:0px;-qt-user-state:%1;'>").arg(state);
+        cursor = end + 2;
+    }
+    return out + html.mid(cursor);
+}
+inline bool normalizeAuthoredRules(QTextDocument *document, const QHash<int, QVariantMap> &rules) {
+    const QPointer<QTextDocument> guard(document);
+    if (!guard) return false;
+    if (rules.isEmpty()) return true;
+    const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
+    const auto source = document->toRawText(); const int count = document->characterCount();
+    QHash<int, QTextBlock> blocks;
+    for (auto block = document->begin(); block.isValid(); block = block.next()) {
+        if (!rules.contains(block.userState())) continue;
+        CompiledContent::require(!blocks.contains(block.userState()) && block.length() == 1 && block.text().isEmpty()
+            && !block.textList() && block.blockFormat().hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth));
+        blocks.insert(block.userState(), block);
+    }
+    CompiledContent::require(blocks.size() == rules.size());
+    QTextCursor edit(document); edit.beginEditBlock();
+    auto finish = qScopeGuard([&] { if (guard) edit.endEditBlock(); });
+    for (auto it = blocks.cbegin(); it != blocks.cend(); ++it) {
+        if (!guard || !layout || document->documentLayout() != layout) return false;
+        auto block = it.value(); auto format = block.blockFormat();
+        format.clearProperty(QTextFormat::BlockTrailingHorizontalRulerWidth);
+        format.clearProperty(QTextFormat::LineHeight); format.clearProperty(QTextFormat::LineHeightType);
+        format.setTopMargin(0); format.setRightMargin(0); format.setBottomMargin(0); format.setLeftMargin(0);
+        format.clearBackground();
+        format.setProperty(authoredRuleProperty, rules.value(it.key()));
+        QTextCursor cursor(block); cursor.setBlockFormat(format);
+        if (!guard || !layout || document->documentLayout() != layout) return false;
+        block.setUserState(-1);
+    }
+    finish.dismiss(); edit.endEditBlock();
+    if (!guard || !layout || document->documentLayout() != layout) return false;
+    CompiledContent::require(document->toRawText() == source && document->characterCount() == count);
+    return true;
 }
 
 enum class Basis { Context, NormalBody, CssPx };
@@ -750,15 +860,24 @@ inline constexpr int tableFloatViewportProperty = QTextFormat::UserProperty + 0x
 inline constexpr int tableFloatViewportFillerProperty = QTextFormat::UserProperty + 0x57fc;
 inline const QString tableFloatViewportCapability = QStringLiteral("wikidict.table-float-viewport/1");
 
+inline int tableFloatViewportNarrowClear(const QJsonObject &policy) {
+    const auto value = policy.value(QStringLiteral("narrow_clear"));
+    if (!present(value)) return -1;
+    const int clear = QStringList{"none", "left", "right", "both"}.indexOf(value.toString());
+    if (!value.isString() || clear < 0) throw std::runtime_error("invalid table float viewport narrow clear");
+    return clear;
+}
+
 inline QJsonObject tableFloatViewport(const QJsonObject &table) {
     const auto value = table.value(QStringLiteral("float_viewport"));
     if (!present(value)) return {};
     const auto policy = value.toObject();
     const QStringList fields{"max_viewport_width_px", "containing_direction", "grid_direction", "language"};
-    if (!value.isObject() || policy.size() != fields.size())
+    if (!value.isObject() || policy.size() != fields.size() + int(policy.contains(QStringLiteral("narrow_clear"))))
         throw std::runtime_error("invalid table float viewport");
     for (const auto &field : fields) if (!policy.contains(field))
         throw std::runtime_error("incomplete table float viewport");
+    tableFloatViewportNarrowClear(policy);
     const auto threshold = policy.value(QStringLiteral("max_viewport_width_px"));
     if (!threshold.isDouble() || !std::isfinite(threshold.toDouble()) || threshold.toDouble() <= 0
         || threshold.toDouble() > 4294967295.0 || std::floor(threshold.toDouble()) != threshold.toDouble())
@@ -777,8 +896,9 @@ inline QJsonObject tableFloatViewport(const QJsonObject &table) {
         || !table.value(QStringLiteral("caption")).toArray().isEmpty() || present(table.value(QStringLiteral("caption_blocks")))
         || style.value(QStringLiteral("float_side")) != QStringLiteral("right"))
         throw std::runtime_error("unsupported table float viewport owner");
-    for (const auto &key : {"width", "padding", "margin_values", "containing_direction", "display", "vertical_align", "line_height"})
+    for (const auto &key : {"padding", "margin_values", "containing_direction", "display", "vertical_align", "line_height"})
         if (present(style.value(QLatin1StringView(key)))) throw std::runtime_error("unsupported table float viewport style");
+    if (present(style.value(QStringLiteral("width")))) tableBoxLength(style.value(QStringLiteral("width")), 12, false);
     const auto margins = style.value(QStringLiteral("margins"));
     if (!margins.isObject() || margins.toObject().size() != 4)
         throw std::runtime_error("missing fixed table float viewport margins");
@@ -878,21 +998,42 @@ inline void reflowTableFloatViewports(QTextDocument *document, qreal viewportCss
             || policy.value(QStringLiteral("threshold")).metaType().id() != QMetaType::Double
             || policy.value(QStringLiteral("viewport")).metaType().id() != QMetaType::Double
             || policy.value(QStringLiteral("active")).metaType().id() != QMetaType::Bool
-            || policy.value(QStringLiteral("base_format")).metaType().id() != QMetaType::QTextFormat)
+            || policy.value(QStringLiteral("base_format")).metaType().id() != QMetaType::QTextFormat
+            || policy.value(QStringLiteral("source")).metaType().id() != QMetaType::QByteArray)
             throw std::runtime_error("invalid table float viewport state");
         const bool active = viewportCssWidth <= policy.value(QStringLiteral("threshold")).toDouble();
-        auto expected = policy.value(QStringLiteral("base_format")).value<QTextFormat>().toTableFormat();
+        const auto source = QJsonDocument::fromJson(policy.value(QStringLiteral("source")).toByteArray());
+        if (!source.isObject() || !source.object().value(QStringLiteral("float_viewport")).isObject())
+            throw std::runtime_error("invalid table float viewport source");
+        const int narrowClear = tableFloatViewportNarrowClear(source.object().value(QStringLiteral("float_viewport")).toObject());
+        const auto base = policy.value(QStringLiteral("base_format")).value<QTextFormat>().toTableFormat();
+        auto expected = base;
         expected.setPosition(policy.value(QStringLiteral("active")).toBool() ? QTextFrameFormat::InFlow : QTextFrameFormat::FloatRight);
+        if (policy.value(QStringLiteral("active")).toBool() && narrowClear >= 0)
+            expected.setProperty(tableBoxClearProperty, narrowClear);
         auto current = format; current.clearProperty(QTextFormat::ObjectIndex); current.clearProperty(tableFloatViewportProperty);
         if (QTextFormat(current) != QTextFormat(expected)) throw std::runtime_error("changed table float viewport format");
         if (policy.value(QStringLiteral("viewport")).toDouble() == viewportCssWidth) continue;
         policy.insert(QStringLiteral("viewport"), viewportCssWidth); policy.insert(QStringLiteral("active"), active);
         format.setPosition(active ? QTextFrameFormat::InFlow : QTextFrameFormat::FloatRight);
+        if (active && narrowClear >= 0) format.setProperty(tableBoxClearProperty, narrowClear);
+        else if (base.hasProperty(tableBoxClearProperty)) format.setProperty(tableBoxClearProperty, base.property(tableBoxClearProperty));
+        else format.clearProperty(tableBoxClearProperty);
         format.setProperty(tableFloatViewportProperty, policy);
         owner->setFormat(format);
         if (!live || !native || !owner || owner->document() != live || live->documentLayout() != native)
             throw std::runtime_error("replaced table float viewport during reflow");
     }
+}
+
+// Stored spans stay declared values. Qt's used row span is checked separately
+// against the authenticated source row count, never inferred from its result.
+inline int compiledTableSpan(const QJsonValue &value, bool allowAbsent = true) {
+    if (value.isUndefined() && allowAbsent) return 1;
+    const double number = value.toDouble(-1);
+    if (!value.isDouble() || !std::isfinite(number) || number < 1 || number > 100 || std::floor(number) != number)
+        throw std::runtime_error("invalid compiled table span");
+    return int(number);
 }
 
 inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false,
@@ -917,8 +1058,8 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
         QJsonArray cells;
         for (const QJsonValue &cellValue : rowValue.toObject().value(QStringLiteral("cells")).toArray()) {
             const QJsonObject cell = cellValue.toObject();
-            QJsonObject shape{{"rowspan", qMax(1, cell.value(QStringLiteral("rowspan")).toInt(1))},
-                {"colspan", qMax(1, cell.value(QStringLiteral("colspan")).toInt(1))}};
+            QJsonObject shape{{"rowspan", compiledTableSpan(cell.value(QStringLiteral("rowspan")))},
+                {"colspan", compiledTableSpan(cell.value(QStringLiteral("colspan")))}};
             if (present(cell.value(QStringLiteral("style")))) { shape.insert(QStringLiteral("style"), cell.value(QStringLiteral("style"))); styled = true; }
             if (!viewport.isEmpty()) shape.insert(QStringLiteral("background"), cell.value(QStringLiteral("background")).isUndefined()
                 ? QJsonValue(QJsonValue::Null) : cell.value(QStringLiteral("background")));
@@ -1716,7 +1857,16 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                     continue;
                 }
                 const QJsonObject expected = cells[index++].toObject();
-                if (expected.value(QStringLiteral("rowspan")).toInt() != cell.rowSpan() || expected.value(QStringLiteral("colspan")).toInt() != cell.columnSpan()) throw std::runtime_error("table style span mismatch");
+                const int declaredRows = compiledTableSpan(expected.value(QStringLiteral("rowspan")), false);
+                const int declaredColumns = compiledTableSpan(expected.value(QStringLiteral("colspan")), false);
+                // QTextHtmlImporter allocates the source's real rows; mergeCells
+                // bounds the used span to that allocation. Preserve the declared
+                // metadata and require exactly this result, not an arbitrary match.
+                const int remainingSourceRows = int(rows.size()) - row;
+                const int usedRows = qMin(declaredRows, remainingSourceRows);
+                if ((floatViewport && declaredRows > remainingSourceRows)
+                    || usedRows != cell.rowSpan() || declaredColumns != cell.columnSpan())
+                    throw std::runtime_error("table style span mismatch");
                 const QJsonObject cellStyle = typedStyle(expected.value(QStringLiteral("style")), {"border", "padding", "text_align", "border_edges", "letter_spacing", "width", "min_width", "vertical_align", "line_height"});
                 if (cellStyle.isEmpty()) continue;
                 QTextTableCellFormat cellFormat = cell.format().toTableCellFormat();
@@ -2209,11 +2359,216 @@ inline void normalizeImages(QTextDocument *document) {
     }
 }
 
+inline constexpr int inlineStyleProperty = QTextFormat::UserProperty + 0x5804;
+inline constexpr int inlineEmptyOwnersProperty = QTextFormat::UserProperty + 0x5805;
+inline const QString inlineStyleCapability = QStringLiteral("wikidict.inline-text/1");
+inline QJsonObject inlineObject(const QJsonValue &value, const QStringList &keys, const QStringList &required = {}) {
+    if (!value.isObject()) throw std::runtime_error("invalid inline text policy object");
+    const auto object = value.toObject();
+    for (auto it = object.begin(); it != object.end(); ++it)
+        if (!keys.contains(it.key())) throw std::runtime_error("unknown inline text policy field");
+    for (const auto &key : required)
+        if (!object.contains(key)) throw std::runtime_error("missing inline text policy field");
+    return object;
+}
+inline double inlineNumber(const QJsonValue &value, bool signedValue = false) {
+    if (!value.isDouble() || !std::isfinite(value.toDouble())
+        || (!signedValue && value.toDouble() < 0) || std::abs(value.toDouble()) > std::numeric_limits<float>::max())
+        throw std::runtime_error("invalid inline text metric");
+    return value.toDouble();
+}
+inline void inlineComputed(const QJsonValue &value, bool signedValue = false) {
+    const auto v = inlineObject(value, {"value", "font_scale_basis"}, {"value", "font_scale_basis"});
+    inlineNumber(v.value("value"), signedValue);
+    if (v.value("font_scale_basis") != QStringLiteral("normal_body") && v.value("font_scale_basis") != QStringLiteral("css_px"))
+        throw std::runtime_error("inline metric requires explicit font basis");
+}
+inline QJsonObject inlineFontSnapshot(const QJsonValue &value) {
+    const QStringList keys{"font_scale", "font_scale_basis", "small", "superscript", "subscript", "font_normalized",
+        "bold", "italic", "code", "language", "classes", "role", "font_features", "font_family"};
+    auto font = inlineObject(value, keys);
+    for (const auto &key : {"font_scale", "font_features", "font_family"}) if (!font.contains(key)) font.insert(key, QJsonValue());
+    if (!font.contains("font_scale_basis")) font.insert("font_scale_basis", "context");
+    for (const auto &key : {"small", "superscript", "subscript", "font_normalized", "bold", "italic", "code"})
+        if (!font.contains(key)) font.insert(key, false);
+    for (const auto &key : {"language", "classes"}) if (!font.contains(key)) font.insert(key, "");
+    if (!font.contains("role")) font.insert("role", "normal");
+    const auto basis = font.value("font_scale_basis");
+    if (basis != QStringLiteral("context") && basis != QStringLiteral("normal_body") && basis != QStringLiteral("css_px"))
+        throw std::runtime_error("invalid inline font snapshot basis");
+    if (present(font.value("font_scale"))) inlineNumber(font.value("font_scale"));
+    if (basis != QStringLiteral("context") && !present(font.value("font_scale")))
+        throw std::runtime_error("inline font snapshot missing scale");
+    for (const auto &key : {"small", "superscript", "subscript", "font_normalized", "bold", "italic", "code"})
+        if (!font.value(key).isBool()) throw std::runtime_error("invalid inline font snapshot flag");
+    for (const auto &key : {"language", "classes", "role"})
+        if (!font.value(key).isString() || font.value(key).toString().contains(QChar(0))) throw std::runtime_error("invalid inline font snapshot string");
+    const QStringList roles{"normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference"};
+    if (!roles.contains(font.value("role").toString())) throw std::runtime_error("invalid inline font snapshot role");
+    fontFeaturePolicy(font.value("font_features"));
+    CompiledContent::containerFontFamily(font.value("font_family"));
+    if (font.value("font_normalized").toBool() && basis == QStringLiteral("context"))
+        throw std::runtime_error("normalized inline font snapshot needs explicit basis");
+    if (basis == QStringLiteral("context") && present(font.value("font_scale")) && font.value("font_scale").toDouble() == 1)
+        font.insert("font_scale", QJsonValue());
+    return font;
+}
+inline QJsonObject inlineTextStyle(const QJsonObject &span) {
+    const auto raw = span.value("inline_style");
+    if (!present(raw)) return {};
+    const auto style = inlineObject(raw, {"decoration", "line_height", "baseline_shift", "font_normalized", "cursor"});
+    if (!span.value("kind").isString() || !span.value("text").isString()
+        || (present(span.value("trail")) && !span.value("trail").isString())
+        || (present(span.value("target")) && !span.value("target").isString()))
+        throw std::runtime_error("invalid inline text policy content");
+    for (const auto &flag : {"small", "superscript", "subscript", "bold", "italic", "code"})
+        if (span.contains(flag) && !span.value(flag).isBool()) throw std::runtime_error("invalid inline size flag");
+    const auto kind = span.value("kind").toString();
+    const bool action = kind == QStringLiteral("link") || kind == QStringLiteral("external_link");
+    if ((kind != QStringLiteral("text") && !action) || present(span.value("image"))
+        || (action && (span.value("text").toString().isEmpty() || span.value("target").toString().isEmpty()))
+        || (!action && !span.value("target").toString().isEmpty())) throw std::runtime_error("invalid inline text policy owner");
+    if (present(style.value("cursor")) && (style.value("cursor") != QStringLiteral("help")
+        || span.value("text").toString().isEmpty())) throw std::runtime_error("invalid authored inline cursor");
+    if (style.contains("font_normalized") && !style.value("font_normalized").isBool())
+        throw std::runtime_error("invalid inline normalized font flag");
+    if (style.value("font_normalized").toBool()) {
+        inlineNumber(span.value("font_scale"));
+        if (span.value("font_scale_basis") != QStringLiteral("normal_body") && span.value("font_scale_basis") != QStringLiteral("css_px"))
+            throw std::runtime_error("normalized inline text needs explicit basis");
+    }
+    if (present(style.value("decoration"))) {
+        const auto decoration = inlineObject(style.value("decoration"), {"style", "color", "thickness"}, {"style"});
+        if (decoration.value("style") != QStringLiteral("solid") && decoration.value("style") != QStringLiteral("dotted"))
+            throw std::runtime_error("invalid inline underline style");
+        if (present(decoration.value("color"))) styleColor(decoration.value("color"));
+        if (present(decoration.value("thickness"))) {
+            const auto length = inlineObject(decoration.value("thickness"), {"unit", "value"}, {"unit", "value"});
+            inlineNumber(length.value("value"));
+            if (length.value("unit") != QStringLiteral("px") && length.value("unit") != QStringLiteral("em"))
+                throw std::runtime_error("invalid inline underline thickness unit");
+        }
+    }
+    if (present(style.value("line_height"))) {
+        const auto line = inlineObject(style.value("line_height"), {"computed", "font_relative"});
+        if (line.size() != 1) throw std::runtime_error("invalid inline line-height tag");
+        if (line.contains("computed")) inlineComputed(line.value("computed"));
+        else {
+            const auto relative = inlineObject(line.value("font_relative"), {"factor", "font"}, {"factor", "font"});
+            inlineNumber(relative.value("factor")); inlineFontSnapshot(relative.value("font"));
+        }
+    }
+    if (present(style.value("baseline_shift"))) inlineComputed(style.value("baseline_shift"), true);
+    QJsonObject ownFont;
+    for (const auto &key : {"font_scale", "font_scale_basis", "small", "superscript", "subscript",
+            "bold", "italic", "code", "language", "classes", "role", "font_features", "font_family"})
+        if (span.contains(key)) ownFont.insert(key, span.value(key));
+    ownFont.insert("font_normalized", style.value("font_normalized").toBool());
+    ownFont = inlineFontSnapshot(ownFont);
+    const auto line = style.value("line_height").toObject();
+    if (present(style.value("baseline_shift")) && line.contains("font_relative")) {
+        const auto snapshot = inlineFontSnapshot(line.value("font_relative").toObject().value("font"));
+        if (snapshot != ownFont) throw std::runtime_error("explicit shift cannot cross a distinct inline font owner");
+    }
+    if (!present(style.value("decoration")) && !present(style.value("line_height"))
+        && !present(style.value("baseline_shift")) && !present(style.value("cursor")) && !style.value("font_normalized").toBool())
+        throw std::runtime_error("empty inline text policy");
+    if (span.value("text").toString().isEmpty() && span.value("trail").toString().isEmpty()
+        && !present(style.value("line_height"))) throw std::runtime_error("empty inline text requires a metric owner");
+    return style;
+}
+inline QTextCharFormat inlineSnapshotFormat(QTextDocument *, const QJsonObject &, const QString &, qreal);
+inline QVariantMap resolveInlineStyle(QTextDocument *document, const QJsonObject &span, qreal bodyPoints, qreal contextPoints, const QString &ownerHtml) {
+    const auto style = inlineTextStyle(span);
+    if (style.isEmpty()) return {};
+    if (document->documentLayout()->property("_wikidictInlineTextCapability").toString() != inlineStyleCapability)
+        throw std::runtime_error("authored inline text needs paired native support");
+    const qreal dpi = QFontMetricsF(QFont()).fontDpi();
+    const auto metric = [&](const QJsonValue &value) {
+        const auto v = value.toObject();
+        const qreal base = v.value("font_scale_basis") == QStringLiteral("css_px") ? cssPixelFontBase(bodyPoints) : bodyPoints;
+        const qreal resolved = v.value("value").toDouble() * base * dpi / 72.0;
+        if (!std::isfinite(resolved) || std::abs(resolved) >= (1 << 23)) throw std::runtime_error("unrepresentable inline metric");
+        return resolved;
+    };
+    QVariantMap policy{{"policy", inlineStyleCapability}, {"normalized", style.value("font_normalized").toBool()}};
+    if (present(style.value("cursor"))) {
+        if (document->documentLayout()->property("_wikidictInlineHelpCursorCapability") != QVariant(QStringLiteral("wikidict.inline-help-cursor/1")))
+            throw std::runtime_error("authored Help cursor needs paired native support");
+        policy.insert("cursor", QStringLiteral("help"));
+    }
+    if (present(style.value("line_height"))) {
+        const auto line = style.value("line_height").toObject();
+        if (line.contains("computed")) policy.insert("height", metric(line.value("computed")));
+        else {
+            const auto relative = line.value("font_relative").toObject();
+            const auto font = inlineFontSnapshot(relative.value("font"));
+            if (present(font.value("font_scale")) && font.value("font_scale").toDouble() == 0) policy.insert("height", 0.0);
+            else {
+                const auto owner = inlineSnapshotFormat(document, font, ownerHtml, contextPoints);
+                if (owner.fontFamilies().toStringList().contains(zeroFontFamilyName)) policy.insert("height", 0.0);
+                else {
+                    policy.insert("height_factor", relative.value("factor").toDouble());
+                    policy.insert("height_font", QVariant::fromValue(QTextFormat(owner)));
+                }
+            }
+        }
+    }
+    if (present(style.value("baseline_shift"))) policy.insert("shift", metric(style.value("baseline_shift")));
+    if (present(style.value("decoration"))) {
+        const auto d = style.value("decoration").toObject();
+        QVariantMap decoration{{"style", d.value("style").toString()}};
+        if (present(d.value("color"))) decoration.insert("color", d.value("color").toString());
+        if (present(d.value("thickness"))) {
+            const auto length = d.value("thickness").toObject();
+            const qreal base = length.value("unit") == QStringLiteral("em") ? bodyPoints * dpi / 72.0 : 1.0;
+            const qreal width = base * length.value("value").toDouble();
+            if (!std::isfinite(width) || width >= (1 << 23)) throw std::runtime_error("unrepresentable inline underline width");
+            decoration.insert("thickness", width);
+        }
+        policy.insert("decoration", decoration);
+    }
+    return policy;
+}
+
+inline bool hasInlineFamily(const QJsonArray &spans) {
+    for (const auto &value : spans) {
+        const auto span = value.toObject();
+        if (present(span.value("font_family")) || present(span.value("inline_style").toObject()
+            .value("line_height").toObject().value("font_relative").toObject()
+            .value("font").toObject().value("font_family"))) return true;
+    }
+    return false;
+}
+
+inline bool hasInlineText(const QTextDocument *document) {
+    for (auto block = document->begin(); block.isValid(); block = block.next()) {
+        if (block.blockFormat().hasProperty(inlineEmptyOwnersProperty)) return true;
+        for (auto it = block.begin(); !it.atEnd(); ++it)
+            if (it.fragment().isValid() && it.fragment().charFormat().hasProperty(inlineStyleProperty)) return true;
+    }
+    return false;
+}
+
 inline QString scaledText(const QString &html, double scale, const QString &tooltip,
                           Basis basis = Basis::Context, qreal normalBodyPoints = 0,
                           bool small = false, bool superscript = false, bool subscript = false, qreal contextPoints = 0,
-                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}, bool ordinaryLink = false) {
+                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}, bool ordinaryLink = false, const QJsonObject &inlineSpan = {}, qreal inlineBodyPoints = 0, qreal inlineContextPoints = 0, const QString &inlineOwnerHtml = {}, const QJsonValue &fontFamily = {}) {
     QJsonObject metadata{{"scale", scale}, {"tooltip", tooltip}};
+    CompiledContent::containerFontFamily(fontFamily);
+    if (present(fontFamily)) metadata.insert("font_family", fontFamily);
+    if (!inlineSpan.isEmpty()) {
+        inlineTextStyle(inlineSpan);
+        if (!std::isfinite(inlineBodyPoints) || inlineBodyPoints <= 0
+            || !std::isfinite(inlineContextPoints) || inlineContextPoints <= 0)
+            throw std::runtime_error("inline policy lost its original font context");
+        metadata.insert("inline_span", inlineSpan);
+        metadata.insert("inline_body_points", inlineBodyPoints);
+        metadata.insert("inline_context_points", inlineContextPoints);
+        const bool relative = inlineSpan.value("inline_style").toObject().value("line_height").toObject().contains("font_relative");
+        if (relative != !inlineOwnerHtml.isEmpty()) throw std::runtime_error("inline owner font probe missing or unexpected");
+        if (relative) metadata.insert("inline_owner_html", inlineOwnerHtml);
+    }
     if (fontFeaturePolicy(fontFeatures) != FontFeaturePolicy::Legacy) metadata.insert("font_features", fontFeatures);
     if (!linkPaint.isEmpty()) {
         if (ordinaryLink) MissingFigurePaint::validateOrdinary(linkPaint, linkEm);
@@ -2261,6 +2616,11 @@ struct ScaleInfo {
     bool linkUnderline = false;
     bool ordinaryLink = false;
     FontFeaturePolicy fontFeatures = FontFeaturePolicy::Legacy;
+    QJsonObject inlineSpan;
+    qreal inlineBodyPoints = 0;
+    qreal inlineContextPoints = 0;
+    QString inlineOwnerHtml;
+    QJsonValue fontFamily;
 };
 
 inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) {
@@ -2296,6 +2656,9 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
         const QJsonValue sourceRun = value.value(QStringLiteral("source_run"));
         const bool hasSourceRun = !sourceRun.isUndefined();
         const bool hasLinkPaint = present(value.value("link_paint"));
+        const bool hasInline = present(value.value("inline_span"));
+        const auto fontFamily = CompiledContent::containerFontFamily(value.value("font_family"));
+        const bool hasFamily = present(fontFamily);
         const auto fontFeatures = fontFeaturePolicy(value.value("font_features"));
         const double run = sourceRun.toDouble(-1);
         if (error.error != QJsonParseError::NoError || !payload.isObject()
@@ -2305,7 +2668,7 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
             || (present(advisory) && !advisory.isString())
             || (hasSourceRun && (!sourceRun.isDouble() || !std::isfinite(run)
                 || run < 0 || run > std::numeric_limits<int>::max() || std::floor(run) != run))
-            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && fontFeatures == FontFeaturePolicy::Legacy)
+            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && !hasInline && !hasFamily && fontFeatures == FontFeaturePolicy::Legacy)
                 || value.contains(QStringLiteral("context_points")) || value.contains(QStringLiteral("legacy_flags"))))
             || (!basisValue.isUndefined() && (!basisValue.isString()
                 || (basisValue.toString() != QStringLiteral("context") && !absolute))))
@@ -2331,7 +2694,25 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
             }
         } else if (value.contains("link_owner") || value.contains("link_em") || value.contains("link_underline") || value.contains("ordinary_link"))
             throw std::runtime_error("unowned compiled link span metadata");
+        if (hasInline) {
+            if (!value.value("inline_span").isObject()) throw std::runtime_error("invalid inline marker owner");
+            info.inlineSpan = value.value("inline_span").toObject();
+            inlineTextStyle(info.inlineSpan);
+            for (const auto &key : {"inline_body_points", "inline_context_points"})
+                if (!value.value(key).isDouble() || !std::isfinite(value.value(key).toDouble()) || value.value(key).toDouble() <= 0)
+                    throw std::runtime_error("invalid inline marker typography context");
+            info.inlineBodyPoints = value.value("inline_body_points").toDouble();
+            info.inlineContextPoints = value.value("inline_context_points").toDouble();
+            const bool relative = info.inlineSpan.value("inline_style").toObject().value("line_height").toObject().contains("font_relative");
+            if (relative) {
+                if (!value.value("inline_owner_html").isString() || value.value("inline_owner_html").toString().isEmpty())
+                    throw std::runtime_error("invalid inline owner semantic probe");
+                info.inlineOwnerHtml = value.value("inline_owner_html").toString();
+            } else if (value.contains("inline_owner_html")) throw std::runtime_error("unowned inline font probe");
+        } else if (value.contains("inline_body_points") || value.contains("inline_context_points") || value.contains("inline_owner_html"))
+            throw std::runtime_error("unowned inline marker typography");
         info.fontFeatures = fontFeatures;
+        info.fontFamily = fontFamily;
         info.advisory = advisory;
         info.metadataOnly = metadataOnly;
         if (hasSourceRun) info.sourceRun = int(run);
@@ -2439,6 +2820,8 @@ inline bool normalizeParagraphRuns(QTextDocument *document, const QHash<int, int
 inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &markers) {
     struct Edit { int start; int length; QTextCharFormat format; };
     QVector<Edit> edits;
+    struct EmptyInline { QTextBlock block; int offset; QTextCharFormat format; QStringList names; };
+    QVector<EmptyInline> emptyInlines;
     struct ZeroBlock {
         QTextBlock block;
         QTextCharFormat parent;
@@ -2487,7 +2870,8 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                         qreal points;
                         if (marker->basis == Basis::NormalBody || marker->basis == Basis::CssPx) {
                             qreal ratio = 1;
-                            if (marker->legacyFlags & 1) {
+                            if ((marker->legacyFlags & 1)
+                                && !marker->inlineSpan.value("inline_style").toObject().value("font_normalized").toBool()) {
                                 QFont bodyFont = document->defaultFont();
                                 bodyFont.setPointSizeF(marker->normalBodyPoints);
                                 const QString key = bodyFont.toString() + QLatin1Char(':') + QString::number(marker->legacyFlags);
@@ -2534,7 +2918,26 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                             format.setFontFamilies(document->defaultFont().families());
                     }
                 }
+                if (present(marker->fontFamily) && !format.fontFamilies().toStringList().contains(zeroFontFamilyName)) {
+                    auto font = format.font().resolve(document->defaultFont());
+                    applyFontFamily(font, marker->fontFamily);
+                    format.setFontFamilies(font.families());
+                    format.setFontStyleHint(font.styleHint(), font.styleStrategy());
+                }
                 applyFontFeatures(format, marker->fontFeatures, document->defaultFont());
+                if (!marker->inlineSpan.isEmpty()) {
+                    format.setProperty(inlineStyleProperty, resolveInlineStyle(document, marker->inlineSpan,
+                        marker->inlineBodyPoints, marker->inlineContextPoints, marker->inlineOwnerHtml));
+                    if (marker->inlineSpan.value("text").toString().isEmpty() && marker->inlineSpan.value("trail").toString().isEmpty()) {
+                        for (int i = 0; i < fragment.length(); ++i) {
+                            if (fragment.text().at(i) != QChar(0xe000)) throw std::runtime_error("empty inline marker changed");
+                            auto owner = format;
+                            owner.clearProperty(QTextFormat::TextToolTip);
+                            owner.setAnchor(false); owner.clearProperty(QTextFormat::AnchorHref); owner.clearProperty(QTextFormat::AnchorName);
+                            emptyInlines.append({block, fragment.position() - block.position() + i, owner, i == 0 ? format.anchorNames() : QStringList{}});
+                        }
+                    }
+                }
                 if (!marker->linkPaint.isEmpty()) {
                     if (!format.isAnchor() || format.anchorHref().isEmpty() || format.isImageFormat())
                         throw std::runtime_error("compiled link span lost its action");
@@ -2618,6 +3021,50 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
         QTextCursor blockCursor(zero.block);
         blockCursor.setBlockFormat(blockFormat);
     }
+    for (auto it = emptyInlines.crbegin(); it != emptyInlines.crend(); ++it) {
+        cursor.setPosition(it->block.position() + it->offset);
+        cursor.setPosition(cursor.position() + 1, QTextCursor::KeepAnchor);
+        if (cursor.selectedText() != QString(QChar(0xe000))) throw std::runtime_error("empty inline marker position changed");
+        cursor.removeSelectedText();
+    }
+    int oldBlock = -1, removed = 0;
+    QVariantList owners;
+    QTextBlock ownerBlock;
+    const auto finishOwners = [&] {
+        if (!ownerBlock.isValid()) return;
+        auto blockFormat = ownerBlock.blockFormat();
+        blockFormat.setProperty(inlineEmptyOwnersProperty, QVariantMap{{"text", ownerBlock.text()}, {"owners", owners}});
+        QTextCursor(ownerBlock).setBlockFormat(blockFormat);
+    };
+    for (const auto &empty : emptyInlines) {
+        if (empty.block.blockNumber() != oldBlock) {
+            finishOwners(); owners.clear(); removed = 0; oldBlock = empty.block.blockNumber(); ownerBlock = empty.block;
+        }
+        const int offset = empty.offset - removed++;
+        if (offset < 0 || offset > ownerBlock.text().size()) throw std::runtime_error("empty inline source offset escaped block");
+        owners.append(QVariantMap{{"offset", offset}, {"format", QVariant::fromValue(QTextFormat(empty.format))}});
+        if (!empty.names.isEmpty()) {
+            // Named destinations attached by Qt to our temporary first scalar
+            // belong to the next real scalar, exactly as in the ordinary importer.
+            if (offset == 0 && ownerBlock.text().isEmpty()) {
+                // The existing anchor lookup already reads block.charFormat()
+                // for empty paragraphs. Merge only names, preserving cell markers.
+                auto names = ownerBlock.charFormat().anchorNames();
+                for (const auto &name : empty.names) if (!names.contains(name)) names.append(name);
+                QTextCharFormat named; named.setAnchor(true); named.setAnchorNames(names);
+                QTextCursor(ownerBlock).mergeBlockCharFormat(named);
+                continue;
+            }
+            if (offset >= ownerBlock.text().size()) throw std::runtime_error("empty named inline destination has no real scalar");
+            QTextCursor target(document); target.setPosition(ownerBlock.position() + offset);
+            const int units = ownerBlock.text().at(offset).isHighSurrogate() ? 2 : 1;
+            target.setPosition(target.position() + units, QTextCursor::KeepAnchor);
+            auto format = target.charFormat(); auto names = format.anchorNames();
+            for (const auto &name : empty.names) if (!names.contains(name)) names.append(name);
+            format.setAnchor(true); format.setAnchorNames(names); target.setCharFormat(format);
+        }
+    }
+    finishOwners();
     cursor.endEditBlock();
 }
 
@@ -2639,14 +3086,14 @@ inline void finishFloatingLayout(QTextDocument *document) {
 }
 
 inline void setHtml(QTextDocument *document, const QString &html) {
-    if (!html.contains(markerOpen) && !html.contains(tableMarkerOpen) && !html.contains(paragraphRunOpen) && !html.contains(inlineImageScheme + QChar(':'))) { document->setHtml(html); return; }
+    if (!html.contains(markerOpen) && !html.contains(tableMarkerOpen) && !html.contains(paragraphRunOpen) && !html.contains(authoredRuleMarkerOpen) && !html.contains(inlineImageScheme + QChar(':'))) { document->setHtml(html); return; }
     QHash<QString, ScaleInfo> markers;
     QVector<TableInfo> tables; int tableCount = 0;
-    QHash<int, int> paragraphRuns;
-    const QString fontHtml = prepare(prepareParagraphRuns(html, paragraphRuns), markers);
+    QHash<int, int> paragraphRuns; QHash<int, QVariantMap> rules;
+    const QString fontHtml = prepare(prepareParagraphRuns(prepareAuthoredRules(html, rules), paragraphRuns), markers);
     const QString prepared = html.contains(tableMarkerOpen) ? prepareTables(fontHtml, tables, tableCount) : fontHtml;
     document->setHtml(prepared);
-    if (!normalizeParagraphRuns(document, paragraphRuns)) return;
+    if (!normalizeParagraphRuns(document, paragraphRuns) || !normalizeAuthoredRules(document, rules)) return;
     normalize(document, markers);
     normalizeTables(document, tables, tableCount);
     normalizeImages(document);
@@ -2654,18 +3101,36 @@ inline void setHtml(QTextDocument *document, const QString &html) {
     finishFloatingLayout(document);
 }
 
+inline void requireBrowserInlineSupport(QTextBrowser *browser) {
+    if (browser->property("_wikidictHelpCursorOverrideCapability") == QVariant(QStringLiteral("wikidict.help-cursor-override/1"))) return;
+    // Inspect every currently materialized range. Callers that expand nested
+    // Flow owners later must repeat this check after that expansion.
+    for (auto block = browser->document()->begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (fragment.isValid() && fragment.charFormat().property(inlineStyleProperty).toMap().contains("cursor"))
+                throw std::runtime_error("authored Help cursor needs paired browser support");
+        }
+    }
+}
 template <typename AfterImport>
 inline void setHtml(QTextBrowser *browser, const QString &html, AfterImport afterImport) {
-    if (!html.contains(markerOpen) && !html.contains(tableMarkerOpen) && !html.contains(paragraphRunOpen) && !html.contains(inlineImageScheme + QChar(':'))) {
-        browser->setHtml(html); afterImport(); return;
+    const QPointer<QTextBrowser> browserGuard(browser);
+    const QPointer<QTextDocument> document(browser->document());
+    if (!html.contains(markerOpen) && !html.contains(tableMarkerOpen) && !html.contains(paragraphRunOpen) && !html.contains(authoredRuleMarkerOpen) && !html.contains(inlineImageScheme + QChar(':'))) {
+        browser->setHtml(html); afterImport();
+        if (browserGuard && document && browser->document() == document) requireBrowserInlineSupport(browser);
+        return;
     }
     QHash<QString, ScaleInfo> markers;
     QVector<TableInfo> tables; int tableCount = 0;
-    QHash<int, int> paragraphRuns;
-    const QString fontHtml = prepare(prepareParagraphRuns(html, paragraphRuns), markers);
+    QHash<int, int> paragraphRuns; QHash<int, QVariantMap> rules;
+    const QString fontHtml = prepare(prepareParagraphRuns(prepareAuthoredRules(html, rules), paragraphRuns), markers);
     const QString prepared = html.contains(tableMarkerOpen) ? prepareTables(fontHtml, tables, tableCount) : fontHtml;
-    const QPointer<QTextBrowser> browserGuard(browser);
-    const QPointer<QTextDocument> document(browser->document());
+    for (const auto &marker : std::as_const(markers))
+        if (present(marker.inlineSpan.value("inline_style").toObject().value("cursor"))
+            && browser->property("_wikidictHelpCursorOverrideCapability") != QVariant(QStringLiteral("wikidict.help-cursor-override/1")))
+            throw std::runtime_error("authored Help cursor needs paired browser support");
     browser->setHtml(prepared);
     // The owning compositor completes its structural edit before table
     // traversal, then may batch the following format normalization separately.
@@ -2673,12 +3138,41 @@ inline void setHtml(QTextBrowser *browser, const QString &html, AfterImport afte
     if (!browserGuard || !document || browser->document() != document) return;
     if (!normalizeParagraphRuns(document, paragraphRuns)
         || !browserGuard || !document || browser->document() != document) return;
+    if (!normalizeAuthoredRules(document, rules)
+        || !browserGuard || !document || browser->document() != document) return;
     normalize(browser->document(), markers);
     normalizeTables(browser->document(), tables, tableCount);
     normalizeImages(browser->document());
+    requireBrowserInlineSupport(browser);
     finishFloatingLayout(browser->document());
 }
 inline void setHtml(QTextBrowser *browser, const QString &html) {
     setHtml(browser, html, [] {});
 }
+inline QTextCharFormat inlineSnapshotFormat(QTextDocument *document, const QJsonObject &snapshot,
+    const QString &ownerHtml, qreal contextPoints) {
+    inlineFontSnapshot(snapshot);
+    if (!std::isfinite(contextPoints) || contextPoints <= 0 || ownerHtml.isEmpty())
+        throw std::runtime_error("inline font snapshot lost its semantic context");
+    // MainWindow renders this closed semantic snapshot through the ordinary
+    // span path. Start from its original document context, never the child's font.
+    QFont base = document->defaultFont();
+    base.setPointSizeF(contextPoints);
+    QTextDocument control;
+    control.setDefaultFont(base);
+    control.setDefaultStyleSheet(document->defaultStyleSheet());
+    control.setDefaultTextOption(document->defaultTextOption());
+    control.documentLayout()->setPaintDevice(document->documentLayout()->paintDevice());
+    setHtml(&control, ownerHtml);
+    if (control.toPlainText() != QStringLiteral("X")) throw std::runtime_error("inline owner probe changed its text");
+    const auto found = control.find(QStringLiteral("X"));
+    if (found.isNull()) throw std::runtime_error("unresolved inline owner font snapshot");
+    auto format = found.charFormat();
+    // A stored format must retain its declaring document's inherited font after
+    // this independent owner probe is destroyed.
+    format.setFont(format.font().resolve(control.defaultFont()));
+    format.setAnchor(false); format.clearProperty(QTextFormat::AnchorHref); format.clearProperty(QTextFormat::AnchorName);
+    return format;
+}
+
 } // namespace SemanticHtml

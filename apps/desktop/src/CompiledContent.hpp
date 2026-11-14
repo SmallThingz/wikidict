@@ -110,6 +110,37 @@ inline void containerColor(const QJsonValue &value) {
         containerRgb(pair.value(QStringLiteral("light"))); containerRgb(pair.value(QStringLiteral("dark")));
     }
 }
+inline QJsonObject ruleStyle(const QJsonObject &block) {
+    const auto value = block.value(QStringLiteral("rule_style"));
+    if (!present(value)) return {};
+    containerObject(block, {QStringLiteral("kind"), QStringLiteral("depth"), QStringLiteral("level"),
+        QStringLiteral("spans"), QStringLiteral("list_path"), QStringLiteral("number"), QStringLiteral("anchor"),
+        QStringLiteral("anchor_fallback"), QStringLiteral("feature"), QStringLiteral("table"), QStringLiteral("figure"),
+        QStringLiteral("flow"), QStringLiteral("container"), QStringLiteral("style"), QStringLiteral("text_align"), QStringLiteral("rule_style")});
+    require(block.value(QStringLiteral("kind")) == QStringLiteral("rule"));
+    for (const auto &key : {QStringLiteral("depth"), QStringLiteral("level")}) {
+        const auto field = block.value(key);
+        require(field.isUndefined() || (field.isDouble() && field.toDouble() == 0));
+    }
+    for (const auto &key : {QStringLiteral("spans")}) {
+        const auto field = block.value(key);
+        require(field.isUndefined() || (field.isArray() && field.toArray().isEmpty()));
+    }
+    for (const auto &key : {QStringLiteral("list_path"), QStringLiteral("number"), QStringLiteral("anchor"), QStringLiteral("anchor_fallback")}) {
+        const auto field = block.value(key);
+        require(field.isUndefined() || (field.isString() && field.toString().isEmpty()));
+    }
+    for (const auto &key : {QStringLiteral("feature"), QStringLiteral("table"), QStringLiteral("figure"),
+            QStringLiteral("flow"), QStringLiteral("container"), QStringLiteral("style"), QStringLiteral("text_align")})
+        require(!present(block.value(key)));
+    const QStringList keys{QStringLiteral("height"), QStringLiteral("fill"), QStringLiteral("margins")};
+    const auto style = containerObject(value, keys, keys);
+    containerLength(style.value(QStringLiteral("height")));
+    containerColor(style.value(QStringLiteral("fill")));
+    containerEdges(style.value(QStringLiteral("margins")));
+    return style;
+}
+
 inline void containerLineHeight(const QJsonValue &value) {
     const auto kind = containerUnion(value, {QStringLiteral("normal"), QStringLiteral("multiplier"), QStringLiteral("length")});
     const auto data = value.toObject().value(kind);
@@ -129,17 +160,41 @@ inline void containerBorderEdge(const QJsonValue &value) {
         containerLength(edge.value(QStringLiteral("width"))); containerColor(edge.value(QStringLiteral("color")));
     }
 }
+inline QJsonValue containerFontFamily(const QJsonValue &value) {
+    if (!present(value)) return {};
+    if (value.isString()) { require(value.toString() == QStringLiteral("sans_serif")); return value; }
+    const auto outer = containerObject(value, {QStringLiteral("stack")}, {QStringLiteral("stack")});
+    const auto stack = containerObject(outer.value(QStringLiteral("stack")),
+        {QStringLiteral("names"), QStringLiteral("fallback")}, {QStringLiteral("names"), QStringLiteral("fallback")});
+    require(stack.value(QStringLiteral("names")).isArray()
+        && stack.value(QStringLiteral("names")).toArray().size() <= 16
+        && stack.value(QStringLiteral("fallback")).isString()
+        && (stack.value(QStringLiteral("fallback")) == QStringLiteral("serif")
+            || stack.value(QStringLiteral("fallback")) == QStringLiteral("sans_serif")));
+    const QStringList aliases{QStringLiteral("serif"), QStringLiteral("sans-serif"), QStringLiteral("sans serif"),
+        QStringLiteral("sans"), QStringLiteral("monospace"), QStringLiteral("cursive"), QStringLiteral("fantasy"),
+        QStringLiteral("system"), QStringLiteral("system-ui"), QStringLiteral("ui-serif"), QStringLiteral("ui-sans-serif"),
+        QStringLiteral("ui-monospace"), QStringLiteral("ui-rounded"), QStringLiteral("emoji"), QStringLiteral("math"), QStringLiteral("fangsong")};
+    for (const auto &item : stack.value(QStringLiteral("names")).toArray()) {
+        require(item.isString()); const auto name = item.toString();
+        require(!name.isEmpty() && name.size() <= 128 && name.front() != QChar(' ') && name.back() != QChar(' '));
+        for (const auto ch : name) require(ch.unicode() >= 0x20 && ch.unicode() <= 0x7e && ch != QChar('[') && ch != QChar(']'));
+        require(!aliases.contains(name.simplified().toLower()));
+    }
+    return value;
+}
 inline QJsonObject containerStyle(const QJsonValue &value) {
     if (value.isUndefined()) return {};
     const auto style = containerObject(value, {QStringLiteral("margins"), QStringLiteral("padding"),
         QStringLiteral("width"), QStringLiteral("float_side"), QStringLiteral("clear"), QStringLiteral("max_width"),
         QStringLiteral("box_sizing"), QStringLiteral("layout"), QStringLiteral("align_items"), QStringLiteral("flex_item"),
         QStringLiteral("background"), QStringLiteral("border"), QStringLiteral("line_height"),
-        QStringLiteral("text_align"), QStringLiteral("screen_max_width"), QStringLiteral("owner_font_scale"), QStringLiteral("height"), QStringLiteral("columns"), QStringLiteral("positioning"), QStringLiteral("min_height"), QStringLiteral("margin_values"), QStringLiteral("overflow")});
+        QStringLiteral("text_align"), QStringLiteral("screen_max_width"), QStringLiteral("owner_font_scale"), QStringLiteral("height"), QStringLiteral("columns"), QStringLiteral("positioning"), QStringLiteral("min_height"), QStringLiteral("margin_values"), QStringLiteral("overflow"), QStringLiteral("font_family")});
     const auto enumeration = [](const QJsonObject &owner, const QString &key, const QStringList &choices) {
         const auto field = owner.value(key);
         if (present(field)) require(field.isString() && choices.contains(field.toString()));
     };
+    containerFontFamily(style.value(QStringLiteral("font_family")));
     if (present(style.value(QStringLiteral("margins")))) containerMargins(style.value(QStringLiteral("margins")));
     if (present(style.value(QStringLiteral("margin_values")))) {
         require(!present(style.value(QStringLiteral("margins"))));
@@ -340,6 +395,7 @@ public:
         for (const QJsonValue &value : values) block(object(value), depth, context);
     }
     void block(const QJsonObject &value, Depth depth = {}, Context context = {}) {
+        ruleStyle(value);
         const QJsonArray spans = array(value.value(QStringLiteral("spans")));
         const QJsonValue flow = value.value(QStringLiteral("flow"));
         const QJsonValue figureValue = value.value(QStringLiteral("figure"));

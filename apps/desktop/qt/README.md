@@ -309,6 +309,48 @@ The app's focused Reader and Media commands are listed in the qualification
 manifest. Reusing qualified binaries requires exact source, dependency and runtime
 library identity; a source-only promotion is not a fresh full-suite execution.
 
+## Typed body owners and intrinsic fit-content
+
+The maintained patches retain typed Section headings, their source font families,
+inline typography and Help, authored Rules, and one semantic body margin owner.
+Native table storage carets preserve pending source margins. Fit-content owners
+use measured minimum/preferred widths and available space, keep percentage caps
+indefinite during intrinsic probes, and retain real nested tables and empty lines.
+
+The EN reader keeps declared row spans and validates Qt's used span from the
+actual source row count. Its complete genuine Entry retains both real tables,
+Syriac/Latin text and actions. This does not rewrite Stored or qualify the source
+rowspan999-to-Stored100 conversion or missing stylesheet authority.
+
+Native123 passed two fit-content controls. Earlier native120/121/122 results keep
+their original scopes. App154 passed seven affected Reader controls and carries
+eighteen unchanged method sources. The two Media controls and standalone Library
+check passed separately on retained artifacts. The paired CLI/FFI is the exact
+I45 emission recorded in the manifest; ABI10 alone grants no semantic capability.
+
+The genuine EN run exercised ordinary import, both expanded tables, wide/narrow
+Syriac reading, horizontal pan, End navigation, normal Quit and persistence.
+Three Tab inputs did not expose a selected href, so source-link activation and
+Back navigation remain unqualified. Images/audio stayed OFF. This is neither a
+whole-frontend result nor a Wiktionary browser-equivalence claim.
+
+Root's later review of retained frame0048 also found the Noun headword line
+extending beyond the Reading right edge. Whether this follows source nowrap or
+wide-table/document-width coupling remains unresolved; full responsive layout
+acceptance is not claimed. The original manual review is retained unchanged.
+
+Reproduce the current affected native checks with the pinned build below:
+
+```sh
+"$qt_build/qtbase/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout" \
+  plainContainerFitContentUsesIntrinsicWidthsCapsAndInvalidation \
+  plainContainerFitContentKeepsNestedTableEmptyAndStrictPolicies
+```
+
+The manifest names current Reader controls, retained histories, source components,
+real-page captures and original failures. Source promotion reuses these earned
+results without claiming another build or a full-suite replay.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,
