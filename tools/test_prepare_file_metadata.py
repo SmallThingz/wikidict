@@ -648,5 +648,144 @@ class BoundedHttpContentCodingTests(unittest.TestCase):
                                          ([title], raw))
 
 
+class OriginalSpacingRegistry(metadata.Registry):
+    """The pre-change normalizer is the independent paired result/cost oracle."""
+    def spacing(self, text):
+        raw = text.encode('utf-8')
+        if len(raw) > 4096 or '\0' in text:
+            raise ValueError('Invalid or oversized file title')
+        count = self.nfc_lib.utf8proc_decompose(raw, len(raw), None, 0, 10)
+        if count < 0 or count > 16384:
+            raise ValueError('Cannot normalize file title')
+        storage = (metadata.ctypes.c_int32 * (count + 1))()
+        if self.nfc_lib.utf8proc_decompose(raw, len(raw), storage, count, 10) != count:
+            raise ValueError('Unicode normalization failed')
+        length = self.nfc_lib.utf8proc_reencode(storage, count, 10)
+        if length < 0 or length >= metadata.ctypes.sizeof(storage):
+            raise ValueError('Unicode normalization failed')
+        normalized = metadata.ctypes.string_at(storage, length).decode('utf-8')
+        result, pending = [], False
+        for char in normalized:
+            if char in metadata.BIDI:
+                continue
+            if char in metadata.SPACES:
+                pending = bool(result)
+            else:
+                if pending:
+                    result.append(' ')
+                result.append(char); pending = False
+        return ''.join(result)
+
+
+class SpacingKernelTests(unittest.TestCase):
+    def registries(self):
+        raw = registry_bytes(media_case='first-letter', file_case='first-letter')
+        return (metadata.Registry(raw, WIKI, DATE), OriginalSpacingRegistry(raw, WIKI, DATE), raw)
+
+    @staticmethod
+    def outcome(function, value):
+        try:
+            return ('value', function(value))
+        except (ValueError, UnicodeError, TypeError, AttributeError) as error:
+            return ('error', type(error).__name__, str(error))
+
+    def test_explicit_spacing_unicode_boundaries_equal_original(self):
+        current, original, raw = self.registries()
+        held = (raw, dict(current.aliases), {key: dict(value) for key, value in current.specs.items()})
+        for separator in sorted(metadata.SPACES):
+            for value, expected in ((separator, ''), ('A' + separator + 'B', 'A B'),
+                                    (separator + 'A' + separator * 3 + 'B' + separator, 'A B')):
+                with self.subTest(separator=ord(separator), value=value):
+                    self.assertEqual(current.spacing(value), expected)
+                    self.assertEqual(current.spacing(value), original.spacing(value))
+        for bidi in sorted(metadata.BIDI):
+            for value, expected in (('A' + bidi + 'B', 'AB'), (' _A\t' + bidi + '_B ', 'A B'),
+                                    (bidi + '\u1100\u1161\u11a8' + bidi, '\uac01')):
+                with self.subTest(bidi=ord(bidi), value=value):
+                    self.assertEqual(current.spacing(value), expected)
+                    self.assertEqual(current.spacing(value), original.spacing(value))
+        # These characters are not members of the explicit MediaWiki space set.
+        # Generic Unicode whitespace splitting would incorrectly change several.
+        for character in ('\v', '\f', '\x1c', '\x1d', '\x1e', '\x1f', '\u0085', '\u200b', '\u2060', '\ufeff'):
+            self.assertNotIn(character, metadata.SPACES | metadata.BIDI)
+            value = 'A' + character + 'B'
+            self.assertEqual(current.spacing(value), value)
+            self.assertEqual(current.spacing(value), original.spacing(value))
+        cases = ('', 'e\u0301', '\u1100\u1161\u11a8', '\u03b9\u0308\u0301',
+                 '\u0627\u0654', 'a' * 4096, '\u00e9' * 2048, ' ' * 4096,
+                 'a' * 4097, '\u00e9' * 2049, 'a\0b', '\ud800')
+        for value in cases:
+            with self.subTest(length=len(value), prefix=repr(value[:12])):
+                self.assertEqual(self.outcome(current.spacing, value), self.outcome(original.spacing, value))
+        self.assertEqual(current.spacing('e\u0301'), '\u00e9')
+        self.assertEqual(held, (raw, current.aliases, current.specs))
+
+    def test_file_keys_and_native_normalization_failures_equal_original(self):
+        current, original, raw = self.registries()
+        cases = ('File:e\u0301cole.svg', ' : Media :\u200f Ru__e\u0301\u00a0cole.ogg ',
+                 'Media:\u0390.svg', 'File:\u0390.svg', 'File:\u00dffoo.svg',
+                 'IMAGE:Japanese_\u74f6_\u1100\u1161\u11a8.svg', 'Audio:Ru-\u0430\u043a\u0443\u043b\u0430.ogg',
+                 'File:File:example.svg', 'File:A\vB.svg', 'File:A\u0085B.svg',
+                 'Template:Example', 'Example.svg', 'File:', 'Media:   ',
+                 'File:A|B.svg', 'File:A\0B.svg', 'File:' + 'x' * 4096, None, 4)
+        for value in cases:
+            with self.subTest(value=repr(value)[:100]):
+                self.assertEqual(self.outcome(current.file_title, value), self.outcome(original.file_title, value))
+        failures = (([-1], 0), ([16385], 0), ([1, 0], 0), ([1, 1], -1), ([1, 1], 8))
+        for decompositions, length in failures:
+            outcomes = []
+            for registry in (current, original):
+                library = SimpleNamespace(
+                    utf8proc_decompose=mock.Mock(side_effect=list(decompositions)),
+                    utf8proc_reencode=mock.Mock(return_value=length))
+                with mock.patch.object(registry, 'nfc_lib', library):
+                    outcomes.append(self.outcome(registry.spacing, 'A'))
+            self.assertEqual(outcomes[0], outcomes[1])
+            self.assertEqual(outcomes[0][0], 'error')
+        self.assertEqual(raw, registry_bytes(media_case='first-letter', file_case='first-letter'))
+        self.assertEqual(current.aliases, original.aliases)
+        self.assertEqual(current.specs, original.specs)
+
+    def test_report_paired_unprofiled_spacing_and_file_title_task_cost(self):
+        import sys
+        import time
+        self.assertIsNone(sys.getprofile(), 'Measure the ordinary call path without cProfile overhead')
+        current, original, raw = self.registries()
+        bodies = (
+            'Example.svg', 'Ru-\u0430\u043a\u0443\u043b\u0430.ogg', 'e\u0301cole_illustration.jpg',
+            'Long_filename_with_four_words_and_2026_(detail).png', '\u74f6_\u1100\u1161\u11a8.svg',
+            '\u03b9\u0308\u0301_\u03b1\u03b2\u03b3.png', '\u00dffoo.svg', '\u01c6ABC.svg',
+            '\u0627\u0654_\u0628\u064a\u062a.jpg', '\u05d0\u05b7_\u05d1.svg',
+            'A\u00a0B\u202fC\u3000D.svg', '\u200fA_B\u202c.svg',
+            'Mixed_\u30ab\u30bf\u30ab\u30ca_\u00e9_42.jpg', 'a' * 120 + '.svg',
+            'No_change-required.ogg', '\u0390.svg',
+        )
+        titles = tuple(prefix + body for prefix in ('File:', 'Media:') for body in bodies)
+        spaces = tuple(' _' + body + '\u200f\t' for body in bodies) + bodies
+        inputs = (titles, spaces, raw)
+        rows = []
+        rounds = 256
+        for operation, values in (('spacing', spaces), ('file_title', titles)):
+            expected = tuple(getattr(original, operation)(value) for value in values) * rounds
+            self.assertEqual(tuple(getattr(current, operation)(value) for value in values) * rounds, expected)
+            for position, (label, registry) in enumerate((('baseline', original), ('candidate', current),
+                                                        ('candidate', current), ('baseline', original))):
+                function = getattr(registry, operation)
+                wall_start = time.perf_counter_ns()
+                cpu_start = time.process_time_ns()
+                actual = tuple(function(value) for _ in range(rounds) for value in values)
+                cpu_ns = time.process_time_ns() - cpu_start
+                wall_ns = time.perf_counter_ns() - wall_start
+                self.assertEqual(actual, expected)
+                rows.append(dict(operation=operation, position=position, implementation=label,
+                                 calls=len(values) * rounds, process_cpu_ns=cpu_ns, wall_ns=wall_ns))
+        self.assertEqual(inputs, (titles, spaces, raw))
+        self.assertEqual(current.aliases, original.aliases)
+        self.assertEqual(current.specs, original.specs)
+        print('FILE_TITLE_SPACING_PAIRED ' + json.dumps(dict(
+            order='ABBA per operation', profiled=False, parity=True, input_unchanged=True,
+            setup_excluded=True, whole_capture_measured=False, rows=rows), sort_keys=True), flush=True)
+
+
 if __name__ == '__main__':
     unittest.main()

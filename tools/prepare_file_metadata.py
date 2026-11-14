@@ -41,6 +41,8 @@ EVIDENCE_FIELDS = ('namespace_registry', 'input_sources', 'dumpstatus', 'russian
 REPO = Path(__file__).resolve().parent.parent
 SPACES = set(' _\t\r\n') | {chr(x) for x in (0xa0, 0x1680, 0x180e, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000)} | {chr(x) for x in range(0x2000, 0x200b)}
 BIDI = {chr(x) for x in (0x200e, 0x200f)} | {chr(x) for x in range(0x202a, 0x202f)}
+_TITLE_SPACING_TRANSLATION = {**{ord(char): ' ' for char in SPACES}, **{ord(char): None for char in BIDI}}
+_TITLE_SPACE_RUN = re.compile(' +')
 WMF_UNCHANGED = {0xdf, 0x19b, 0x264, 0x1c8a, 0xa7cd, 0xa7cf, 0xa7d3, 0xa7d5, 0xa7db} | set(range(0x10d70, 0x10d86)) | set(range(0x16ebb, 0x16ed4))
 
 
@@ -178,17 +180,8 @@ class Registry:
         if length < 0 or length >= ctypes.sizeof(storage):
             raise ValueError('Unicode normalization failed')
         normalized = ctypes.string_at(storage, length).decode('utf-8')
-        result, pending = [], False
-        for char in normalized:
-            if char in BIDI:
-                continue
-            if char in SPACES:
-                pending = bool(result)
-            else:
-                if pending:
-                    result.append(' ')
-                result.append(char); pending = False
-        return ''.join(result)
+        # Preserve the explicit native space/bidi sets; Unicode split is broader.
+        return _TITLE_SPACE_RUN.sub(' ', normalized.translate(_TITLE_SPACING_TRANSLATION)).strip(' ')
 
     def first(self, text):
         cp = ord(text[0])
