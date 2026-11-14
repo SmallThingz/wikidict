@@ -12670,4 +12670,63 @@ class InitialSealedSitelinksUpdateTests(unittest.TestCase):
                     else:
                         with self.assertRaises((ValueError,OSError)):b.RetainedNativeToolRoles(u.records,zig_sha256=f.identity['zig_sha256'])
 
+class CategoryFormattingSingleReplayTests(unittest.TestCase):
+    def fixture(self, root):
+        import test_prepare_category_statistics_format as fixtures
+        fixture=fixtures.CategoryFormattingTests()
+        folder=fixture.captured(root)
+        return fixture,fixtures.capture,folder/fixtures.capture.OUTPUT
+
+    def test_each_boundary_replays_real_helper_once_and_preserves_selected_descriptors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            _,helper,path=self.fixture(Path(temp))
+            expected=helper.validate_snapshot(path,'arwiktionary','20261001')
+            artifacts=helper.capture_artifacts(path,expected)
+            self.assertEqual(artifacts[path.name],expected['output_sha256'])
+            with patch.object(helper,'verify',wraps=helper.verify) as replay:
+                for boundary in range(4):
+                    with self.subTest(boundary=boundary):
+                        selected=b.validated_auxiliary_capture('category-statistics-format',path,'arwiktionary','20261001')
+                        self.assertEqual(selected,(expected,artifacts))
+                        self.assertEqual(replay.call_count,boundary+1)
+                        selected[0]['configuration'].clear()
+                        selected[1].clear()
+
+    def test_real_semantic_and_receipt_failures_propagate_without_second_replay(self):
+        for mode in ('stats','receipt'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as temp:
+                fixture,helper,path=self.fixture(Path(temp))
+                if mode=='stats':
+                    (path.parent/'original-category-stats.tsv').write_bytes(b'A\t9\t2\t3\n')
+                else:
+                    receipt=path.parent/'02-01.receipt.json'
+                    value=json.loads(receipt.read_bytes());value['accepted']=False
+                    receipt.write_bytes(helper.e.encoded(value))
+                fixture.reseal(path.parent)
+                with self.assertRaises(ValueError) as original:
+                    helper.validate_snapshot(path,'arwiktionary','20261001')
+                with patch.object(helper,'verify',wraps=helper.verify) as replay:
+                    with self.assertRaises(ValueError) as selected:
+                        b.validated_auxiliary_capture('category-statistics-format',path,'arwiktionary','20261001')
+                    self.assertEqual(str(selected.exception),str(original.exception))
+                    self.assertEqual(replay.call_count,1)
+
+    def test_identity_and_manifest_change_keep_existing_refusals(self):
+        with tempfile.TemporaryDirectory() as temp:
+            fixture,helper,path=self.fixture(Path(temp))
+            for wiki,date in (('enwiktionary','20261001'),('arwiktionary','20261002')):
+                with self.subTest(wiki=wiki,date=date),patch.object(helper,'verify',wraps=helper.verify) as replay:
+                    with self.assertRaisesRegex(ValueError,'edition/date'):
+                        b.validated_auxiliary_capture('category-statistics-format',path,wiki,date)
+                    self.assertEqual(replay.call_count,0)
+            capture_artifacts=helper.capture_artifacts
+            def change_after_preread(selected,manifest):
+                fixture.reseal(path.parent,lambda record:record.update(retrieved_utc='changed after preread'))
+                return capture_artifacts(selected,manifest)
+            with patch.object(helper,'capture_artifacts',side_effect=change_after_preread),patch.object(helper,'verify',wraps=helper.verify) as replay:
+                with self.assertRaisesRegex(ValueError,'Category manifest changed'):
+                    b.validated_auxiliary_capture('category-statistics-format',path,'arwiktionary','20261001')
+                self.assertEqual(replay.call_count,1)
+
+
 if __name__=='__main__':unittest.main()

@@ -510,7 +510,7 @@ def _sitelinks_append(before, after, selected_rows):
         if not raw.endswith(b'\n'):
             raise ValueError('Sitelinks snapshot must end in a newline')
         comments, result = [], {}
-        for line in raw.splitlines():
+        for line in raw[:-1].split(b'\n'):
             if line.startswith(b'#'):
                 comments.append(line)
                 continue

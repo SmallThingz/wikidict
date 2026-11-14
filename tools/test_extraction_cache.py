@@ -3300,6 +3300,7 @@ class SitelinksProviderUpdateTests(unittest.TestCase):
         before = b'# source\nQ7850\tviwiki\tOld title\n'
         good = before + b'Q33090\tviwiki\t\n'
         for raw, rows in ((good, []), (good, [['Q33090', 'viwiki', 'invented']]),
+                (good.replace(b'\n', b'\r\n'), [['Q33090', 'viwiki', '']]),
                 (good.replace(b'Old title', b'other'), [['Q33090', 'viwiki', '']]),
                 (good + b'Q33090\tviwiki\t\n', [['Q33090', 'viwiki', '']]),
                 (good.replace(b'# source', b'# other'), [['Q33090', 'viwiki', '']]),

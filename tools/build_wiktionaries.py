@@ -1271,7 +1271,8 @@ def validated_auxiliary_capture(name, path, edition=None, date=None):
     if getattr(helper,'__name__',None) in (
             'prepare_wikibase_entities','prepare_language_messages',
             'prepare_language_messages_v2','prepare_date_numbering',
-            'prepare_site_info','prepare_language_names_translate','prepare_parser_function_facts'):
+            'prepare_site_info','prepare_language_names_translate','prepare_parser_function_facts',
+            'prepare_category_statistics_format'):
         # These helpers replay the complete capture inside capture_artifacts.
         # Bind that one replay to exact preread bytes, rather than replaying the
         # inventory twice at this boundary. Other boundaries still replay.
@@ -1280,6 +1281,9 @@ def validated_auxiliary_capture(name, path, edition=None, date=None):
         if helper.__name__=='prepare_wikibase_entities':
             manifest_raw=helper.regular(manifest_path,helper.MAX_PROOF_BYTES)
             record=helper.parse_json(manifest_raw)
+        elif helper.__name__=='prepare_category_statistics_format':
+            manifest_raw=helper.read(manifest_path)
+            record=helper.e.decode(manifest_raw)
         else:
             manifest_raw=helper.evidence.small(manifest_path,helper.MAX_MANIFEST)
             record=helper.evidence.decode(manifest_raw)
