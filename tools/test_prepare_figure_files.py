@@ -9374,6 +9374,96 @@ class FigureBatchSiteReuseTests(unittest.TestCase):
             figure.file_records(source(), self.namespace.read_bytes(), self.wiki, self.date,
                 raw, has_batches=True, record_limit=50)
 
+    def test_registration_reuse_checks_same_bytes_once_with_complete_result_parity(self):
+        raw=figure.encoded(self.site_api)
+        batches=[self.batch(),self.batch('\u0645\u0644\u0641:Second.svg')]
+        before=copy.deepcopy(batches); registration=copy.deepcopy(self.site_api)
+        self.assertTrue(all(batch['response'].encode()!=raw for batch in batches))
+        approved=figure.FIGURE_SOURCE_PROFILES[self.core]
+        profile=dict(approved,site_raw_sha256=figure.digest(raw))
+        decode,digest,validate=figure.decode,figure.digest,figure._figure_site_registration
+        def original_registration(site,general,wiki,selected):
+            if site==registration:
+                with patch.object(figure,'_figure_site_registration',new=validate):
+                    return figure._figure_site_profile(raw,general,wiki,profile,selected)
+            return validate(site,general,wiki,selected)
+        def run(reference):
+            counts={'decode':0,'digest':0}
+            def counted_decode(value):
+                if value==raw:counts['decode']+=1
+                return decode(value)
+            def counted_digest(value):
+                if value==raw:counts['digest']+=1
+                return digest(value)
+            with patch.object(figure,'decode',new=counted_decode),patch.object(figure,'digest',new=counted_digest):
+                if reference:
+                    with patch.object(figure,'_figure_site_registration',new=original_registration):
+                        result=figure.file_records(batches,self.namespace.read_bytes(),self.wiki,self.date,
+                            raw,has_batches=True,record_limit=50)
+                else:
+                    result=figure.file_records(batches,self.namespace.read_bytes(),self.wiki,self.date,
+                        raw,has_batches=True,record_limit=50)
+            return result,counts
+        expected,old_counts=run(True);actual,new_counts=run(False)
+        self.assertEqual(actual,expected)
+        self.assertEqual(actual['source_profile'],profile)
+        self.assertEqual(b''.join(figure.provider_chunks(actual)),b''.join(figure.provider_chunks(expected)))
+        self.assertEqual(old_counts,{'decode':2,'digest':2})
+        self.assertEqual(new_counts,{'decode':1,'digest':1})
+        self.assertEqual(batches,before);self.assertEqual(self.site_api,registration)
+        self.assertEqual(figure.encoded(self.site_api),raw)
+        print(json.dumps({'registration_operations':{'original_wrapper':old_counts,'decoded_caller':new_counts},
+            'whole_tuple_timing_claimed':False},sort_keys=True))
+
+    def test_registration_reuse_preserves_edition_source_registration_and_json_refusals(self):
+        batches=[self.batch()];before=copy.deepcopy(batches)
+        for mode in ('edition','server','core','language','extensions','duplicate-extension',
+                     'missing-extensions','timestamp','missing-timestamp','warning','duplicate-json'):
+            with self.subTest(mode=mode):
+                site=copy.deepcopy(self.site_api);general=site['query']['general']
+                if mode=='edition':general['wikiid']='frwiktionary'
+                elif mode=='server':general['server']='https://foreign.invalid'
+                elif mode=='core':general['git-hash']='0'*40
+                elif mode=='language':general['lang']='fr'
+                elif mode=='extensions':site['query']['extensions']=[]
+                elif mode=='duplicate-extension':site['query']['extensions'].append(copy.deepcopy(site['query']['extensions'][0]))
+                elif mode=='missing-extensions':del site['query']['extensions']
+                elif mode=='timestamp':site['curtimestamp']='2026-13-05T23:00:00Z'
+                elif mode=='missing-timestamp':del site['curtimestamp']
+                elif mode=='warning':site['warnings']={}
+                raw=figure.encoded(site)
+                if mode=='duplicate-json':raw=b'{"curtimestamp":"2026-10-05T23:00:00Z",'+raw[1:]
+                original=bytes(raw);site_before=copy.deepcopy(site)
+                with self.assertRaises(ValueError):
+                    figure.file_records(batches,self.namespace.read_bytes(),self.wiki,self.date,
+                        raw,has_batches=True,record_limit=50)
+                self.assertEqual(raw,original);self.assertEqual(site,site_before);self.assertEqual(batches,before)
+
+    def test_registration_reuse_keeps_no_batch_and_external_profile_hash_contracts(self):
+        raw=figure.encoded(self.site_api);namespace=self.namespace.read_bytes()
+        decode,digest=figure.decode,figure.digest;counts={'decode':0,'digest':0}
+        def counted_decode(value):
+            if value==raw:counts['decode']+=1
+            return decode(value)
+        def counted_digest(value):
+            if value==raw:counts['digest']+=1
+            return digest(value)
+        with patch.object(figure,'decode',new=counted_decode),patch.object(figure,'digest',new=counted_digest), \
+                patch.object(figure,'_figure_site_registration',side_effect=AssertionError('no-batch registration changed')), \
+                patch.object(figure,'_figure_site_profile',side_effect=AssertionError('no-batch profile changed')):
+            result=figure.file_records((),namespace,self.wiki,self.date,raw,has_batches=False,record_limit=0)
+        self.assertEqual(result,dict(wiki=self.wiki,content_language=self.site_api['query']['general']['lang'],
+            core_revision=self.core,namespace_registry_sha256=figure.digest(namespace),source_profile=None,
+            records=[],base_batches=0,observed_batches=0))
+        self.assertEqual(counts,{'decode':1,'digest':0})
+        approved=figure.FIGURE_SOURCE_PROFILES[self.core]
+        profile=dict(approved,site_raw_sha256='0'*64)
+        with patch.object(figure,'decode',side_effect=AssertionError('external hash must refuse before parsing')):
+            with self.assertRaisesRegex(ValueError,'Unreviewed or changed figure sizing source profile'):
+                figure._figure_site_profile(raw,self.site_api['query']['general'],self.wiki,profile,approved)
+        self.assertEqual(figure.encoded(self.site_api),raw)
+
+
 
 class StaticWebPOptionalMediaTests(unittest.TestCase):
     setUp = StaticWebPProfileTests.setUp

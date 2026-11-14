@@ -1183,7 +1183,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         if approved is None:
             raise ValueError('Unreviewed Figure handler source version; retain the response for source reconciliation')
         profile = dict(approved, site_raw_sha256=digest(site_raw))
-        _figure_site_profile(site_raw, site_general, wiki, profile, approved)
+        _figure_site_registration(registration, site_general, wiki, approved)
     records, seen, canonical_facts, observed_files, height_keys = [], set(), {}, set(), set()
     jpeg_evidence, jpeg_supplemented = {}, set()
     observing = False
