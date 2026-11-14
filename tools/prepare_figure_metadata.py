@@ -3333,6 +3333,51 @@ def complete_stream_batch(reference, cache):
     return raw_record_decode(raw, complete['raw_encoding'])
 
 
+def _verified_contained_http_leaf(node, slot, batch, cache, namespace, source_stamps):
+    """Reuse only an exact HTTP frame in this operation's fully verified tree."""
+    value=node['sources'][slot] if slot < node['committed'] else None
+    if (value is None or value.get('kind') not in
+            ('http-archived','http-archived-light','http-archived-lean')):
+        return False
+    imported='imported_row'in node
+    reference=node['container_reference'] if imported else node['reference']
+    if reference.get('kind')!='complete-stream':return False
+    container=Path(reference['path']).parent
+    if imported:
+        if (node['container']!=container or node['root']!=container/node['identifier']
+                or node['imported_row']['id']!=node['identifier']):
+            raise ValueError('Verified HTTP origin belongs to another container')
+    elif node['root']!=container or node['path']!=Path(reference['path']):
+        raise ValueError('Verified HTTP source root differs')
+    complete=cache.get(('complete-stream',str(reference['path'])))
+    if complete is None:return False
+    if (complete['root']!=container or complete['manifest_sha256']!=reference['sha256']
+            or complete['namespace']!=namespace):
+        raise ValueError('Verified HTTP container authority differs')
+    if (node['source_rows_sha256'][slot]!=digest(stream_encoded(value)) or
+            imported and node['imported_row_sha256']!=digest(encoded(node['imported_row']))):
+        raise ValueError('Verified HTTP source journal or origin mapping changed')
+    frame=node['imported_row']['frame_map'][slot] if imported else slot
+    if type(frame)is not int:
+        raise ValueError('Verified HTTP frame is not selected')
+    authorities={node['path'],node['root']/PLAN,node['root']/FILE_REQUESTS}
+    if imported:authorities.add(container/PLAN)
+    for path in authorities:
+        expected=complete['stamps'].get(path)
+        if expected is None or source_stamps.get(path)!=expected or evidence.stamp(path)!=expected:
+            raise ValueError('Verified HTTP journal or authority changed')
+    for name in {*value.get('artifacts',[]),*value.get('tiff_artifacts',[])}:
+        relative=Path(name)
+        if relative.is_absolute() or '..'in relative.parts or relative.as_posix()!=name:
+            raise ValueError('Verified HTTP member escapes its origin')
+        path=node['root']/relative;expected=complete['stamps'].get(path)
+        if expected is None or evidence.stamp(path)!=expected:
+            raise ValueError('Verified HTTP source member changed')
+    if complete_stream_batch(dict(reference,batch=frame),cache)!=batch:
+        raise ValueError('Verified HTTP frame differs from its complete source')
+    return True
+
+
 def validate_metadata_light(batch, namespace, wiki, date):
     """Permit only proved SVG logical axes or existing unsupported/missing facts."""
     result = file_records((batch,), namespace, wiki, date, batch['response'].encode(),
@@ -5467,6 +5512,7 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         node=dict(identifier=identifier,reference=dict(reference),path=path,root=root,authority=authority,
                   authority_raw=authority_raw,plan=plan,sources=sources,pending=pending,
                   committed=committed,artifacts=artifacts,closure_path=closure_path,
+                  source_rows_sha256=tuple(digest(stream_encoded(row)) for row in sources),
                   failure_path=failure_path,frame_map=[None]*(committed+len(pending)),epochs=set())
         nodes[identifier]=node;by_reference[key]=identifier
         if plan.get('metadata_mode') == MATERIALIZED_HTTP_MODE:
@@ -5501,6 +5547,8 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         nodes[identifier]=dict(identifier=identifier,reference=dict(reference),path=path,root=origin_root,
             authority=authority,authority_raw=authority_raw,plan=plan,sources=sources,pending=row['pending'],
             committed=committed,artifacts=artifacts,
+            source_rows_sha256=tuple(digest(stream_encoded(value)) for value in sources),
+            imported_row_sha256=digest(encoded(row)),
             closure_path=local(row['closure']) if row['closure'] else None,
             failure_path=local(row['failure']) if row['failure'] else None,
             frame_map=[None]*len(row['frame_map']),epochs=set(),imported_row=row,
@@ -5560,7 +5608,8 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
             return resolve(other,value['batch'],number,batch,visiting|{edge})
         # Full verification above authenticated the immutable original leaf. A
         # fresh equality check keeps the admitted stream and source echo joined.
-        if slot < node['committed']:
+        if (slot < node['committed'] and not _verified_contained_http_leaf(
+                node,slot,batch,cache,complete['namespace'],stamps)):
             replay_source(node['root'],value,batch,wiki,date,complete['namespace'],set(),cache,
                           profile_kind=node['plan'].get('figure_profile',FIGURE_PROFILE_V3),
                           allow_compatible_epochs=node['plan'].get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT),

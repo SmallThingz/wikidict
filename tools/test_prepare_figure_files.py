@@ -9877,5 +9877,132 @@ class CompleteRawIndexReuseTests(unittest.TestCase):
             self.assertNotIn(('complete-stream', str(root / figure.MANIFEST)), cache)
 
 
+
+
+class VerifiedContainedHttpReuseTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def fixture(self, replay=False):
+        donor=CaptureReplayContractTests() if replay else OfflineFigureMaterializationTests()
+        donor.setUp()
+        try:yield donor
+        finally:donor.doCleanups()
+
+    @staticmethod
+    def members(root):
+        return {path.relative_to(root).as_posix():path.read_bytes()
+                for path in root.rglob('*') if path.is_file()}
+
+    def test_contained_http_reuse_matches_replay_for_direct_and_imported_copy_and_links(self):
+        import sys
+        for imported in (False,True):
+            for linked in (False,True):
+                with self.subTest(imported=imported,linked=linked),self.fixture() as donor:
+                    args=donor.complete();source=args.output
+                    if imported:
+                        contained=donor.root/'contained-input'
+                        figure.materialize_complete_capture(source/figure.MANIFEST,contained)
+                        source=contained
+                    before=self.members(source)
+                    counts={'baseline_resolve':0,'candidate_resolve':0,'reuse':0,'indexed_frame':0}
+                    replay_source=figure.replay_source;reuse=figure._verified_contained_http_leaf
+                    indexed=figure.complete_stream_batch;arm=['baseline']
+                    def replay(*args,**kwargs):
+                        if sys._getframe(1).f_code.co_name=='resolve':counts[arm[0]+'_resolve']+=1
+                        return replay_source(*args,**kwargs)
+                    def checked_reuse(*args,**kwargs):
+                        value=reuse(*args,**kwargs)
+                        if value:counts['reuse']+=1
+                        return value
+                    def checked_frame(*args,**kwargs):
+                        if sys._getframe(1).f_code is reuse.__code__:counts['indexed_frame']+=1
+                        return indexed(*args,**kwargs)
+                    outputs=[];manifests=[]
+                    with patch.object(figure,'replay_source',new=replay),patch.object(figure,'complete_stream_batch',new=checked_frame):
+                        for label in ('baseline','candidate'):
+                            arm[0]=label;output=donor.root/label;observations={}
+                            with patch.object(figure,'_verified_contained_http_leaf',
+                                    new=(lambda *args,**kwargs:False) if label=='baseline' else checked_reuse):
+                                manifests.append(figure.materialize_complete_capture(source/figure.MANIFEST,output,
+                                    link_current_payloads=linked,observations=observations))
+                            outputs.append(output)
+                            if linked:
+                                self.assertEqual({row['path'] for row in observations['linked_members']},
+                                    {*figure.ROLES.values(),figure.PROVIDER,figure.INVENTORY}&
+                                    {figure.ROLES['figure-sizing'],figure.ROLES['figure-sizing-raw'],figure.PROVIDER,figure.INVENTORY})
+                                self.assertTrue(observations['complete'])
+                    self.assertGreater(counts['baseline_resolve'],0)
+                    self.assertEqual(counts['candidate_resolve'],0)
+                    self.assertGreater(counts['reuse'],0)
+                    self.assertEqual(counts['indexed_frame'],counts['reuse'])
+                    self.assertEqual(manifests[0],manifests[1])
+                    self.assertEqual(self.members(outputs[0]),self.members(outputs[1]))
+                    self.assertEqual(self.members(source),before)
+                    for output,manifest in zip(outputs,manifests):self.assertEqual(donor.verify_both(output),manifest)
+                    print('CONTAINED_HTTP_REUSE '+json.dumps(dict(imported=imported,linked=linked,
+                        counts=counts,parity=True,production_timing_claimed=False),sort_keys=True))
+
+    def test_mutations_after_first_complete_proof_refuse_before_output(self):
+        for change in ('member','journal','source-object','frame','foreign-container','after-reuse'):
+            with self.subTest(change=change),self.fixture() as donor:
+                args=donor.complete();source=args.output
+                if change=='foreign-container':
+                    contained=donor.root/'contained-input'
+                    figure.materialize_complete_capture(source/figure.MANIFEST,contained);source=contained
+                output=donor.root/'refused';original=figure._verified_contained_http_leaf;changed=[]
+                def mutate(node,slot,batch,cache,namespace,stamps):
+                    if changed:return original(node,slot,batch,cache,namespace,stamps)
+                    if change=='foreign-container' and 'imported_row'not in node:
+                        return original(node,slot,batch,cache,namespace,stamps)
+                    changed.append(True);value=node['sources'][slot]
+                    if change=='member':
+                        member=node['root']/value['artifacts'][0];member.write_bytes(member.read_bytes()+b' ')
+                    elif change=='journal':
+                        member=node['root']/figure.FILE_REQUESTS;member.write_bytes(member.read_bytes()+b' ')
+                    elif change=='source-object':value['batch']['request']='foreign-request.json'
+                    elif change=='frame':
+                        batch=copy.deepcopy(batch);batch['requests']=['File:Foreign.svg']
+                    elif change=='foreign-container':node['container']=donor.root/'foreign-container'
+                    verdict=original(node,slot,batch,cache,namespace,stamps)
+                    if change=='after-reuse':
+                        self.assertTrue(verdict)
+                        member=node['root']/value['artifacts'][0];member.write_bytes(member.read_bytes()+b' ')
+                    return verdict
+                with patch.object(figure,'_verified_contained_http_leaf',new=mutate):
+                    with self.assertRaises(ValueError):figure.materialize_complete_capture(source/figure.MANIFEST,output)
+                self.assertEqual(changed,[True]);self.assertFalse(output.exists())
+
+    def test_external_and_pending_sources_keep_original_validation(self):
+        import sys
+        with self.fixture(replay=True) as donor:
+            current,parent,_,record,before=donor.consolidated_observation()
+            output=donor.fixture.root/'external-kept';calls=[];reuse=figure._verified_contained_http_leaf
+            replay_source=figure.replay_source
+            def checked_reuse(node,slot,batch,*args,**kwargs):
+                verdict=reuse(node,slot,batch,*args,**kwargs)
+                if node['sources'][slot]['kind']=='retained-request':self.assertFalse(verdict)
+                return verdict
+            def checked_replay(root,source,*args,**kwargs):
+                if sys._getframe(1).f_code.co_name=='resolve':calls.append(source['kind'])
+                return replay_source(root,source,*args,**kwargs)
+            with patch.object(figure,'_verified_contained_http_leaf',new=checked_reuse),patch.object(figure,'replay_source',new=checked_replay):
+                figure.materialize_complete_capture(current/figure.MANIFEST,output)
+            self.assertIn('retained-request',calls)
+            donor.verify_consolidated(output)
+            self.assertEqual(donor.members(current),before)
+        with self.fixture() as donor:
+            args,proof=donor.epoch_complete();reads=[];read=figure.read_closed_prefix
+            def checked_prefix(path,*args,**kwargs):
+                reads.append(Path(path));return read(path,*args,**kwargs)
+            output=donor.root/'pending-kept'
+            with patch.object(figure,'read_closed_prefix',new=checked_prefix):
+                manifest=figure.materialize_complete_capture(args.output/figure.MANIFEST,output)
+            self.assertIn(proof,reads);self.assertEqual(donor.verify_both(output),manifest)
+        for kind in ('retained-request','closed-prefix','unknown'):
+            node=dict(sources=[dict(kind=kind)],committed=1)
+            self.assertFalse(figure._verified_contained_http_leaf(node,0,{}, {},b'',{}))
+        node=dict(sources=[],pending=[dict(kind='http-archived')],committed=0)
+        self.assertFalse(figure._verified_contained_http_leaf(node,0,{}, {},b'',{}))
+
+
 if __name__ == '__main__':
     unittest.main()
