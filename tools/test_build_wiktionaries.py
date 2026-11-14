@@ -12153,4 +12153,99 @@ class InitialSealedSnapshotRefreshTests(unittest.TestCase):
                         self.assertTrue(calls)
                 self.assertEqual(raw,(f.expander/'.completed-expander.json').read_bytes())
 
+
+class InitialSealedProviderUpdateTests(unittest.TestCase):
+    def updated(self,f):
+        name='file-metadata.tsv';old=f.root/'old-provider.tsv';old.write_bytes(b'original provider\n')
+        before=_initial_sealed_reference(old);f.seal['identity']['providers'][name]=[before['bytes'],before['sha256']]
+        f.seal['identity']['assets'].append([name,before['bytes'],before['sha256']])
+        f.seal['runtime_stamps']=dict(assets={name:[1,2,33188,before['bytes'],4,5]},snapshot_links={name:str(old)},plans=[])
+        InitialSealedGenerationTests().reseal_graph(f.f)
+        original=f.f.seal_ref;archive=_initial_sealed_write(f.root/'archived-original.json',f.seal)
+        source=f.root/'updated-provider.tsv';source.write_bytes(b'original provider\nnew AUDIO\n');source_ref=_initial_sealed_reference(source)
+        current=copy.deepcopy(f.seal);current['identity']['providers'][name]=[source_ref['bytes'],source_ref['sha256']]
+        current['identity']['assets']=[([name,source_ref['bytes'],source_ref['sha256']]if row[0]==name else row)for row in current['identity']['assets']]
+        current['runtime_stamps']['assets'][name]=[1,3,33188,source_ref['bytes'],6,7];current['runtime_stamps']['snapshot_links'][name]=str(source)
+        current['provenance']='ordinary-file-metadata-provider-update';current['provider_update']=dict(original_seal_sha256=original['sha256'],previous_seal_sha256=original['sha256'],original_providers={name:f.seal['identity']['providers'][name]})
+        current_ref=_initial_sealed_write(Path(original['path']),current)
+        selected=b.prepared_metadata(f.f.selection);helper=_initial_sealed_reference(Path(f.records['dict-bundle-build']['dependencies']['extraction_helper']['path']))
+        data=dict(original_preparation=selected['preparation_result'],original_closure=selected['preparation_closure'],root=str(f.expander),dump=str(f.f.dump),original_seal=original,helper=helper,snapshot_metadata_refresh_authority=None,selected_source=source_ref,dependency={'fixture':'original external-data proof'})
+        data_ref=_initial_sealed_write(f.root/'provider-data.json',data)
+        changed=dict(passed=True,ready=True,source_after=True,original_native_producer_unchanged=True,original_source_receipt_unchanged=True,logical_provider_identity_changed_only_file_metadata=True,all_other_native_asset_stamps_unchanged_except_bound_book_ctime=True,source_metadata_and_nlinks_unchanged=True,compiler_executed=False,worker_rebuilt=False,lua_pages_executed=0,input_authority=data_ref,worker=f.f.result['worker'],current_seal=current_ref,current_seal_sha256=current_ref['sha256'],original_seal_archive=archive,original_seal_sha256=original['sha256'],snapshot_metadata_refresh_authority=None,aliases={name:str(source)})
+        changed_ref=_initial_sealed_write(f.root/'provider-result.json',changed)
+        closed=dict(outcome='PASSED-PHYSICALLY-SOURCE-CLOSED',source_after=True,source_lease_released=True,allocation_released=True,ready=True,file_metadata_provider_update=True,old_native_producer_unchanged=True,logical_provider_identity_changed_only_file_metadata=True,source_metadata_nlinks_unchanged=True,pages_executed=0,worker_rebuilt=False,restoration_result=changed_ref,input_authority=data_ref,original_worker=f.f.result['worker'],current_seal=current_ref,original_seal_archive=archive,snapshot_metadata_refresh_authority=None,aliases=changed['aliases'])
+        closed_ref=_initial_sealed_write(f.root/'provider-closure.json',closed)
+        wire=_initial_sealed_write(f.root/'provider-wire.json',dict(original_preparation=selected['preparation_result'],old_worker=f.f.result['worker'],dependency=data['dependency'],standalone_wire_equal=True,native_abi_equivalence_claimed=False))
+        update=dict(result=changed_ref,closure=closed_ref,input_authority=data_ref,original_seal_archive=archive,current_seal=current_ref,helper=helper,snapshot_metadata_refresh_authority=None,wire_correspondence=wire)
+        selected['file_metadata_provider_update']=update;selection=_initial_sealed_write(f.root/'updated-selection.json',selected)
+        records=copy.deepcopy(f.records);records['dict-bundle-build']['initial_sealed_generation']=selection
+        return SimpleNamespace(**locals())
+
+    def test_closed_provider_update_preserves_original_and_current_context_across_dispatch(self):
+        with ReadonlyPreparedRetainedTests().fixture()as f:
+            u=self.updated(f);raw=Path(u.archive['path']).read_bytes()
+            with patch.object(f.native_cache,'frozen_runtime_context',return_value=u.current):
+                roles=b.RetainedNativeToolRoles(u.records,zig_sha256=f.identity['zig_sha256']);roles.require_unchanged()
+                self.assertEqual(roles.closed_native_origin,u.current)
+                self.assertEqual(roles._closed_native_context[2],u.current_ref['sha256'])
+                for descriptor in u.update.values():
+                    if descriptor is not None:self.assertIn(Path(descriptor['path']),roles.inputs)
+                fresh=copy.copy(f.f);fresh.identity=copy.deepcopy(f.identity);fresh.identity['native_tool_roles']=roles.provenance()
+                fresh.expected=copy.deepcopy(f.expected)
+                for identity in (fresh.identity,fresh.expected):identity['auxiliary_snapshot_sha256']['file-metadata']=u.source_ref['sha256']
+                fresh.destination=f.root/'updated-output/viwiktionary/20261001.shards';fresh.selection=u.selection
+                wrong=copy.copy(fresh);wrong.identity=copy.deepcopy(fresh.identity);wrong.expected=copy.deepcopy(fresh.expected)
+                for identity in (wrong.identity,wrong.expected):identity['auxiliary_snapshot_sha256']['file-metadata']=u.before['sha256']
+                wrong.destination=f.root/'stale-provider-output/viwiktionary/20261001.shards'
+                with self.assertRaises(ValueError):InitialSealedGenerationTests().adopt(wrong,native_roles=roles)
+                self.assertEqual(InitialSealedGenerationTests().adopt(fresh,native_roles=roles),123)
+                reopened=b.RetainedNativeToolRoles.from_prepared_dispatch(roles.prepared_dispatch(),_authenticated_origin=roles)
+                self.assertEqual(reopened.closed_native_origin,u.current);reopened.require_unchanged()
+                self.assertEqual(Path(u.archive['path']).read_bytes(),raw)
+
+    def test_closed_provider_update_rejects_missing_mismatched_and_late_authorities(self):
+        for change in ('archive','unclosed','current-native','foreign-source','wire','late-authority'):
+            with self.subTest(change=change),ReadonlyPreparedRetainedTests().fixture()as f:
+                u=self.updated(f)
+                if change=='archive':Path(u.archive['path']).write_text('{}')
+                elif change=='unclosed':
+                    u.closed['source_lease_released']=False;u.update['closure']=_initial_sealed_write(f.root/'provider-closure.json',u.closed)
+                elif change=='current-native':u.current['identity']['producer']['abi'][0][1]='0'*64
+                elif change=='foreign-source':Path(u.source_ref['path']).write_bytes(b'foreign provider bytes')
+                elif change=='wire':
+                    bad=b.prepared_metadata(u.wire);bad['old_worker']=u.source_ref;u.update['wire_correspondence']=_initial_sealed_write(f.root/'provider-wire.json',bad)
+                if change in ('unclosed','wire'):
+                    u.selected['file_metadata_provider_update']=u.update;u.records['dict-bundle-build']['initial_sealed_generation']=_initial_sealed_write(f.root/'updated-selection.json',u.selected)
+                with patch.object(f.native_cache,'frozen_runtime_context',return_value=u.current):
+                    if change=='late-authority':
+                        roles=b.RetainedNativeToolRoles(u.records,zig_sha256=f.identity['zig_sha256'])
+                        Path(u.changed_ref['path']).write_bytes(Path(u.changed_ref['path']).read_bytes()+b' ')
+                        with self.assertRaises(ValueError):roles.require_unchanged()
+                    else:
+                        with self.assertRaises((ValueError,OSError)):b.RetainedNativeToolRoles(u.records,zig_sha256=f.identity['zig_sha256'])
+
+class ClosedWholeHelperChainTests(unittest.TestCase):
+    def test_closed_whole_execution_authenticates_ordered_helper_application_chain(self):
+        for change in ('allowed','reversed','missing-link','late-authority'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory()as tmp:
+                f=RetainedNativeRoleTests().closed_whole_fixture(Path(tmp));application=f.update_helper()
+                first=copy.deepcopy(application);second=copy.deepcopy(application)
+                middle=dict(first['rows'][0]['actual_post'],sha256='a'*64)
+                first['rows'][0]['actual_post']=middle
+                second['rows'][0]['before']=dict(middle)
+                refs=[_initial_sealed_write(Path(tmp)/'helper-first.json',first),_initial_sealed_write(Path(tmp)/'helper-second.json',second)]
+                if change=='reversed':refs.reverse()
+                elif change=='missing-link':refs=refs[1:]
+                f.selection['live_helper_application']=refs;f.republish()
+                with patch.dict(sys.modules,extraction_cache=f.cache),patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None):
+                    if change in ('reversed','missing-link'):
+                        with self.assertRaises(ValueError):b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler))
+                    else:
+                        roles=b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler));roles.require_unchanged()
+                        self.assertEqual(len(refs),2)
+                        for ref in refs:self.assertIn(Path(ref['path']),roles.inputs)
+                        if change=='late-authority':
+                            Path(refs[0]['path']).write_bytes(Path(refs[0]['path']).read_bytes()+b' ')
+                            with self.assertRaises(ValueError):roles.require_unchanged()
+
 if __name__=='__main__':unittest.main()

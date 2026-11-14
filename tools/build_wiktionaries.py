@@ -3740,7 +3740,7 @@ def initial_sealed_generation(reference, native_roles):
     """Read a selected closed direct preparation, without inventing old shard state."""
     selected = prepared_metadata(reference)
     if (not {'preparation_result','preparation_closure'} <= set(selected)
-            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh'}):
+            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh','file_metadata_provider_update'}):
         raise ValueError('Invalid initial sealed generation selection')
     result = prepared_metadata(selected['preparation_result'])
     closed = prepared_metadata(selected['preparation_closure'])
@@ -3830,10 +3830,15 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
             or expected.get('interwiki_map_sha256') != build_identity.get('interwiki_map_sha256')):
         raise ValueError('Initial sealed generation differs from ordinary inputs or tools')
     root = selected_workspace / 'expander' / '.bundle-expander'
-    seal_reference = result['completed_expander_seal']
+    seal_reference = (selected['file_metadata_provider_update']['current_seal'] if selected.get('file_metadata_provider_update') is not None else result['completed_expander_seal'])
     seal = prepared_metadata(seal_reference)
     context_options = {}
     expected_context = seal
+    if selected.get('file_metadata_provider_update') is not None:
+        if getattr(native_roles,'_closed_native_context',None)!=(root,Path(dump),seal_reference['sha256']):
+            raise ValueError('Initial Provider update differs from its authenticated constructor')
+        expected_context=getattr(native_roles,'closed_native_origin',None)
+        if expected_context is None:raise ValueError('Initial Provider update lacks a closed native origin')
     if 'snapshot_metadata_refresh' in selected:
         context_options = getattr(native_roles,'_closed_native_context_options',{})
         if context_options != {'snapshot_metadata_refresh':prepared_metadata(selected['snapshot_metadata_refresh'])}:
@@ -3847,7 +3852,8 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     dependencies = selected_role['dependencies']
     graph = seal['origin_graph']
     source_root = Path(selected_role['source_root'])
-    if (seal.get('provenance') != 'ordinary-linked-expander'
+    expected_provenance=('ordinary-file-metadata-provider-update' if selected.get('file_metadata_provider_update') is not None else 'ordinary-linked-expander')
+    if (seal.get('provenance') != expected_provenance
             or not source_root.is_absolute() or source_root.resolve() != source_root
             or any(path.is_symlink() for path in (source_root, *source_root.parents))
             or not source_root.is_dir()
@@ -4687,7 +4693,8 @@ class RetainedNativeToolRoles:
         original_roles=metadata(h['normal_role_binding'])
         comparisons=[copy.deepcopy(value)for value in (original_roles,self.records)]
         for value in comparisons:value['dict-bundle-build']['dependencies'].pop('extraction_helper',None)
-        if comparisons[0]!=comparisons[1]:raise ValueError('Closed whole compiled roles changed')
+        if comparisons[0]!=comparisons[1]:
+            initial_sealed_blob_successor(original_roles,self)
         executed=selected['execution_python']
         if set(executed)!={'builder','extraction_helper'}:raise ValueError('Invalid closed whole Python inputs')
         if Path(executed['builder']['path'])!=Path(__file__).absolute() or Path(executed['extraction_helper']['path'])!=Path(cache.__file__).absolute():
@@ -4696,17 +4703,24 @@ class RetainedNativeToolRoles:
         live=self.records['dict-bundle-build']['dependencies']['extraction_helper']
         if live!=executed['extraction_helper']:raise ValueError('Closed whole live helper selection differs')
         old_live=original_roles['dict-bundle-build']['dependencies']['extraction_helper']
+        applications=selected['live_helper_application']
+        if applications is None: applications=[]
+        elif isinstance(applications,dict): applications=[applications]
+        if not isinstance(applications,list):raise ValueError('Invalid closed whole helper application chain')
         if live!=old_live:
-            if not isinstance(selected['live_helper_application'],dict):raise ValueError('Closed whole helper application is missing')
-            application=metadata(selected['live_helper_application'])
-            rows=[row for row in application['rows']if row['path']=='tools/extraction_cache.py']
-            if (application.get('applied')is not True or len(rows)!=1
-                    or any(rows[0]['before'][key]!=old_live[key]for key in ('path','bytes','sha256'))
-                    or any(rows[0]['actual_post'][key]!=live[key]for key in ('path','bytes','sha256'))
-                    or rows[0]['mode']!=live['mode']):
-                raise ValueError('Closed whole live helper application differs')
-        elif selected['live_helper_application']is not None:
-            metadata(selected['live_helper_application'])
+            if not applications:raise ValueError('Closed whole helper application is missing')
+            cursor=old_live
+            for descriptor in applications:
+                application=metadata(descriptor)
+                rows=[row for row in application['rows']if row['path']=='tools/extraction_cache.py']
+                if (application.get('applied')is not True or len(rows)!=1
+                        or any(rows[0]['before'][key]!=cursor[key]for key in ('path','bytes','sha256'))
+                        or rows[0]['mode']!=live['mode']):
+                    raise ValueError('Closed whole live helper application differs')
+                cursor=dict(rows[0]['actual_post'],mode=rows[0]['mode'])
+            if cursor!=live:raise ValueError('Closed whole helper chain does not reach loaded helper')
+        else:
+            for descriptor in applications:metadata(descriptor)
         if (attempt.get('outcome')!='failed' or attempt.get('exit_code')!=1
                 or attempt.get('accepted')is not None or attempt['edition_build'].get('status')!='failure'):
             raise ValueError('Closed whole attempt is not the original failed whole build')
@@ -4767,8 +4781,66 @@ class RetainedNativeToolRoles:
         """Authenticate the selected closed producer, never current compiler source."""
         import extraction_cache as cache
         selected,result,plan,workspace=initial_sealed_generation(self.initial_sealed_generation,self)
-        reference=result['completed_expander_seal'];seal=prepared_metadata(reference)
+        original_reference=result['completed_expander_seal'];reference=original_reference
         root=workspace/'expander'/'.bundle-expander';deps=self.records['dict-bundle-build']['dependencies']
+        update=selected.get('file_metadata_provider_update');update_references=[]
+        if update is None:
+            seal=prepared_metadata(reference);ready_seal=seal
+        else:
+            required={'result','closure','input_authority','original_seal_archive','current_seal','helper','snapshot_metadata_refresh_authority','wire_correspondence'}
+            if not isinstance(update,dict) or set(update)!=required:
+                raise ValueError('Invalid closed prepared Provider update selection')
+            changed=prepared_metadata(update['result']);closed=prepared_metadata(update['closure']);data=prepared_metadata(update['input_authority'])
+            if (closed.get('outcome')!='PASSED-PHYSICALLY-SOURCE-CLOSED'
+                    or any(closed.get(k)is not True for k in ('source_after','source_lease_released','allocation_released','ready','file_metadata_provider_update','old_native_producer_unchanged','logical_provider_identity_changed_only_file_metadata','source_metadata_nlinks_unchanged'))
+                    or closed.get('pages_executed')!=0 or closed.get('worker_rebuilt')is not False
+                    or any(changed.get(k)is not True for k in ('passed','ready','source_after','original_native_producer_unchanged','original_source_receipt_unchanged','logical_provider_identity_changed_only_file_metadata','all_other_native_asset_stamps_unchanged_except_bound_book_ctime','source_metadata_and_nlinks_unchanged'))
+                    or changed.get('compiler_executed')is not False or changed.get('worker_rebuilt')is not False or changed.get('lua_pages_executed')!=0):
+                raise ValueError('Prepared Provider update is not independently closed')
+            if (closed.get('restoration_result')!=update['result'] or closed.get('input_authority')!=update['input_authority'] or changed.get('input_authority')!=update['input_authority']
+                    or data.get('original_preparation')!=selected['preparation_result'] or data.get('original_closure')!=selected['preparation_closure']
+                    or data.get('root')!=str(root) or data.get('dump')!=plan['dump']['path'] or data.get('original_seal')!=original_reference
+                    or data.get('helper')!=update['helper'] or changed.get('worker')!=result['worker'] or closed.get('original_worker')!=result['worker']
+                    or changed.get('current_seal')!=update['current_seal'] or closed.get('current_seal')!=update['current_seal']
+                    or changed.get('original_seal_archive')!=update['original_seal_archive'] or closed.get('original_seal_archive')!=update['original_seal_archive']
+                    or any(update['original_seal_archive'][k]!=original_reference[k]for k in ('bytes','sha256'))
+                    or changed.get('original_seal_sha256')!=original_reference['sha256']
+                    or update['current_seal']['path']!=original_reference['path']):
+                raise ValueError('Prepared Provider update changed original preparation or output origin')
+            seal=prepared_metadata(update['original_seal_archive']);reference=update['current_seal'];ready_seal=prepared_metadata(reference)
+            baseline=seal
+            refresh=update['snapshot_metadata_refresh_authority']
+            if (data.get('snapshot_metadata_refresh_authority')!=refresh or changed.get('snapshot_metadata_refresh_authority')!=refresh or closed.get('snapshot_metadata_refresh_authority')!=refresh):
+                raise ValueError('Prepared Provider metadata custody authority differs')
+            if refresh is not None:
+                authority=prepared_metadata(refresh)
+                if authority.get('old_seal')!=original_reference:raise ValueError('Prepared Provider custody has another original seal')
+                baseline=cache._snapshot_metadata_refresh(root,seal,original_reference['sha256'],authority['receipt'])
+                update_references.append(refresh)
+            wire=prepared_metadata(update['wire_correspondence'])
+            if (wire.get('original_preparation')!=selected['preparation_result']
+                    or wire.get('old_worker')!=result['worker'] or wire.get('dependency')!=data.get('dependency')
+                    or wire.get('standalone_wire_equal')is not True or wire.get('native_abi_equivalence_claimed')is not False):
+                raise ValueError('Prepared Provider update wire origin differs')
+            if changed.get('current_seal_sha256')!=reference['sha256']:
+                raise ValueError('Prepared Provider update current seal digest differs')
+            source=data['selected_source'];name='file-metadata.tsv';value=[source['bytes'],source['sha256']]
+            actual=self.bind_input(Path(source['path']))
+            if any(actual[key]!=source[key]for key in ('path','bytes','sha256')):
+                raise ValueError('Prepared Provider update source differs')
+            expected=dict(baseline);expected['identity']=dict(baseline['identity']);expected['identity']['providers']=dict(baseline['identity']['providers'])
+            expected['identity']['providers'][name]=value
+            expected['identity']['assets']=[[name,*value]if row[0]==name else row for row in baseline['identity']['assets']]
+            expected['runtime_stamps']=dict(baseline['runtime_stamps']);expected['runtime_stamps']['assets']=dict(baseline['runtime_stamps']['assets']);expected['runtime_stamps']['snapshot_links']=dict(baseline['runtime_stamps']['snapshot_links'])
+            expected['runtime_stamps']['assets'][name]=ready_seal['runtime_stamps']['assets'][name]
+            expected['runtime_stamps']['snapshot_links'][name]=source['path']
+            expected['provenance']='ordinary-file-metadata-provider-update'
+            expected['provider_update']=dict(original_seal_sha256=original_reference['sha256'],previous_seal_sha256=original_reference['sha256'],original_providers={name:seal['identity']['providers'][name]})
+            if (expected!=ready_seal or changed.get('aliases')!={name:source['path']} or closed.get('aliases')!={name:source['path']}
+                    or data['selected_source']['path']!=ready_seal['runtime_stamps']['snapshot_links'][name]):
+                raise ValueError('Prepared Provider update exceeds its authorized data delta')
+            update_references.extend([update[k]for k in ('result','closure','input_authority','original_seal_archive','current_seal','helper','wire_correspondence')])
+        ready_seal_reference=reference
         producer=seal['identity']['producer']
         options = {}
         if 'snapshot_metadata_refresh' in selected:
@@ -4782,8 +4854,8 @@ class RetainedNativeToolRoles:
             comparable['runtime_stamps']['assets'] = dict(context['runtime_stamps']['assets'])
             for member in refresh.get('snapshots',[refresh]):
                 name = member['name']
-                comparable['runtime_stamps']['assets'][name] = seal['runtime_stamps']['assets'][name]
-        if seal.get('provenance')!='ordinary-linked-expander' or comparable != seal:
+                comparable['runtime_stamps']['assets'][name] = ready_seal['runtime_stamps']['assets'][name]
+        if seal.get('provenance')!='ordinary-linked-expander' or comparable != ready_seal:
             raise ValueError('Selected closed execution origin is not finalized')
         self._closed_native_context_options = options
         for field,dependency in (('runtime','worker_object'),('leaf','value_leaf_bc'),('main_c','worker_main_c')):
@@ -4803,7 +4875,7 @@ class RetainedNativeToolRoles:
             if assets.get(name)!=(result[key]['bytes'],result[key]['sha256']):
                 raise ValueError('Closed execution output differs from authenticated preparation')
         for reference in (self.initial_sealed_generation,selected['preparation_result'],selected['preparation_closure'],
-                          result['input_authority'],plan['roles'],result['completed_expander_seal']):
+                          result['input_authority'],plan['roles'],reference,*update_references):
             actual=self.bind_input(Path(reference['path']))
             if any(actual[key]!=reference[key] for key in ('path','bytes','sha256')):
                 raise ValueError('Closed execution authority changed')
@@ -4827,7 +4899,7 @@ class RetainedNativeToolRoles:
             if self.bind_input(resolved)['sha256']!=digest:
                 raise ValueError('Closed execution library bytes differ')
             self._closed_library_routes[name]=str(resolved)
-        self._closed_native_context=(root,Path(plan['dump']['path']),result['completed_expander_seal']['sha256'])
+        self._closed_native_context=(root,Path(plan['dump']['path']),ready_seal_reference['sha256'])
         return context
 
     def closed_execution_resolution(self, root):
@@ -5039,9 +5111,10 @@ class RetainedNativeToolRoles:
         if any(self.directories.get(path)!=value for path,value in derived.directories.items()):
             raise ValueError('Prepared retained binding omitted an execution directory')
         self.require_unchanged()
-        _, result, plan, workspace = initial_sealed_generation(self.initial_sealed_generation,self)
+        selected, result, plan, workspace = initial_sealed_generation(self.initial_sealed_generation,self)
+        current_reference=(selected['file_metadata_provider_update']['current_seal'] if selected.get('file_metadata_provider_update') is not None else result['completed_expander_seal'])
         if self.initial_sealed_context!=(workspace/'expander'/'.bundle-expander',
-                Path(plan['dump']['path']),result['completed_expander_seal']['sha256']):
+                Path(plan['dump']['path']),current_reference['sha256']):
             raise ValueError('Prepared retained readonly origin differs')
         return self
 
