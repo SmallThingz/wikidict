@@ -3416,6 +3416,9 @@ def main(argv=None):
     campaign = campaign_selection(cfg, manifest)
     require({x['date'] for x in manifest['files']} == {cfg['date']} == {'20261001'}, 'Dump date selection changed')
     source_guard(cfg)
+    # Reject an uncommitted qualified inventory before child/input setup.
+    if cfg.get('prepared_source_custody') is True:
+        prepared_git_source_authority(cfg)
     gate(cfg['qualification'], cfg, ('passed-closed',))
     gate(cfg['diagnostic_disposition'], cfg, ('resolved', 'passed-closed'))
     context = production_context(cfg)

@@ -4877,6 +4877,89 @@ class PreparedGitAuthorityTests(unittest.TestCase):
             with mock.patch.object(controller, 'source_roots', return_value=(root, root)):
                 yield root, cfg, inventory, git
 
+    @contextmanager
+    def initial_preflight(self, root, source_cfg, *, custody=True):
+        downloads = root / 'downloads'
+        downloads.mkdir()
+        manifest = downloads / 'manifest.json'
+        controller.write_json(manifest, dict(requested_editions=['toy'],
+            files=[dict(wiki='toy', date='20261001')]))
+        cfg = dict(source_cfg, armed=True, prepared_source_custody=custody,
+            compiler=controller.descriptor(root / 'compiler.zig'),
+            manifest=controller.descriptor(manifest), downloads=str(downloads),
+            output=str(root / 'output'), raw_shard_root=str(root / 'raw'),
+            state_directory=str(root / 'state'), date='20261001',
+            qualification={}, diagnostic_disposition={})
+        config = root / 'config.json'
+        controller.write_json(config, cfg)
+        with mock.patch.object(controller, 'validate_pipeline_paths'), \
+             mock.patch.object(controller, 'execution_layout', return_value=None), \
+             mock.patch.object(controller, 'source_guard') as current_source, \
+             mock.patch.object(controller, 'gate', return_value={}) as gates, \
+             mock.patch.object(controller, 'production_context', side_effect=RuntimeError('input setup reached')) as setup, \
+             mock.patch.object(controller, 'execute') as launch, \
+             mock.patch.object(controller.resource, 'getrlimit', return_value=(controller.resource.RLIM_INFINITY, controller.resource.RLIM_INFINITY)):
+            yield config, cfg, current_source, gates, setup, launch
+
+    def test_dirty_qualified_git_inventory_refuses_before_input_setup_or_launch(self):
+        import build_wiktionaries as builder
+        for change in ('added-path', 'blob', 'mode', 'descriptor-path'):
+            with self.subTest(change=change), self.repository() as (root, cfg, inventory, git):
+                if change == 'added-path':
+                    name = 'tools/added.py'
+                    (root / name).write_text('ADDED = 1\n')
+                    git('add', name)
+                    inventory['files'][name] = controller.descriptor(root / name)
+                    inventory['modes'][name] = 0o644
+                elif change == 'blob':
+                    (root / 'compiler.zig').write_text('const value = 2;\n')
+                    inventory['files']['compiler.zig'] = controller.descriptor(root / 'compiler.zig')
+                elif change == 'mode':
+                    (root / 'compiler.zig').chmod(0o755)
+                    inventory['modes']['compiler.zig'] = 0o755
+                else:
+                    inventory['files']['compiler.zig']['path'] = str(root / 'different.zig')
+                self.assertEqual(git('rev-parse', 'HEAD'), cfg['source']['head'])
+                controller.write_json(root / 'inventory.json', inventory, replace=True)
+                cfg['source']['inventory'] = controller.descriptor(root / 'inventory.json')
+                with mock.patch.object(builder, 'PROJECT', root):
+                    cfg['source']['fingerprint'] = builder.source_fingerprint()
+                with self.initial_preflight(root, cfg) as (config, selected, current_source, gates, setup, launch), \
+                     mock.patch.object(controller, 'prepared_git_source_authority', wraps=controller.prepared_git_source_authority) as authority:
+                    with self.assertRaisesRegex(ValueError, 'Prepared Git (commit|bytes|path or mode)'):
+                        controller.main(['--config', str(config), '--phase', 'all'])
+                    current_source.assert_called_once_with(selected)
+                    authority.assert_called_once_with(selected)
+                    gates.assert_not_called()
+                    setup.assert_not_called()
+                    launch.assert_not_called()
+                    self.assertFalse((root / 'state').exists())
+
+    def test_committed_git_inventory_passes_early_check_before_input_setup(self):
+        with self.repository() as (root, cfg, inventory, git):
+            with self.initial_preflight(root, cfg) as (config, selected, current_source, gates, setup, launch), \
+                 mock.patch.object(controller, 'prepared_git_source_authority', wraps=controller.prepared_git_source_authority) as authority:
+                with self.assertRaisesRegex(RuntimeError, '^input setup reached$'):
+                    controller.main(['--config', str(config), '--phase', 'all'])
+                current_source.assert_called_once_with(selected)
+                authority.assert_called_once_with(selected)
+                self.assertEqual(gates.call_count, 2)
+                setup.assert_called_once_with(selected)
+                launch.assert_not_called()
+                self.assertFalse((root / 'state').exists())
+
+    def test_non_custody_preflight_keeps_existing_source_guard_without_git_authority(self):
+        with self.repository() as (root, cfg, inventory, git):
+            with self.initial_preflight(root, cfg, custody=False) as (config, selected, current_source, gates, setup, launch), \
+                 mock.patch.object(controller, 'prepared_git_source_authority', side_effect=AssertionError('Unselected custody authority')) as authority:
+                with self.assertRaisesRegex(RuntimeError, '^input setup reached$'):
+                    controller.main(['--config', str(config), '--phase', 'all'])
+                current_source.assert_called_once_with(selected)
+                authority.assert_not_called()
+                self.assertEqual(gates.call_count, 2)
+                setup.assert_called_once_with(selected)
+                launch.assert_not_called()
+
     def test_original_git_bytes_survive_unrelated_head_and_canonical_source_edits(self):
         with self.repository() as (root, cfg, inventory, git):
             authority = controller.prepared_git_source_authority(cfg)
