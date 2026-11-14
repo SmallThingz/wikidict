@@ -102,6 +102,7 @@ fn configurationForSelectedPage(a: A, text: []const u8, page_id: u64, revision_i
         // before RLCONF; unknown programs remain rejected.
         if (!std.mem.eql(u8, &hash, "4596a0a448783bdf5cd823d3b017520464502eba17da6e0277049df0c171bf39") and
             !std.mem.eql(u8, &hash, "296e5797ae51141a36d124508c23b7e0aeb2cb5be620e060fc6eb5aceb39cc89") and
+            !std.mem.eql(u8, &hash, "ff0406678d57587b7409bfba7f818a44a9ec8dd418eb27da4b32823b3e19ed0d") and
             !std.mem.eql(u8, &hash, "50617cc2b928696b5f738520ed06f6814b186a4a6ddcadd9743d34abd74a8d5d") and
             !std.mem.eql(u8, &hash, "1e6d52df99a5b900fc18cec459f5e77aee670a50858da0923389f6c308ac7c49") and
             !std.mem.eql(u8, &hash, "1a3d0fcd4371047de9a485248822f83026e5d7361fb2e9ec9b547c0093bf1bb0") and
@@ -440,5 +441,24 @@ test "page prefix body responsive fact is exact scoped and never guessed from la
         const parsed = try parseAlloc(a, try std.mem.concat(a, u8, &.{head, case.classes, tail}), 1153, 3369675);
         try std.testing.expectEqual(case.expected, parsed.body_skin_responsive);
         try std.testing.expectEqualStrings("hu", parsed.root_language);
+    }
+}
+
+test "page prefix exact retained SR available TOC program preserves revision and script boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const script = @embedFile("testdata/sr-prefix-alexander/alexander-config.actual.js");
+    try std.testing.expect(try configurationForPage(a, script, 12600, 676512, "Alexander"));
+    try std.testing.expectError(invalid, configurationForPage(a, script, 12601, 676512, "Alexander"));
+    try std.testing.expectError(invalid, configurationForPage(a, script, 12600, 676513, "Alexander"));
+    try std.testing.expectError(invalid, configurationForPage(a, script, 12600, 676512, "Elsewhere"));
+    for ([_][2][]const u8{
+        .{ "srwiktionarymwclientpreferences", "xxwiktionarymwclientpreferences" },
+        .{ "vector-toc-available", "vector-toc-availablx" },
+        .{ "RLCONF=", "if(false)RLCONF=" },
+        .{ "\"wgCurRevisionId\":676512", "\"wgCurRevisionId\":676513" },
+    }) |change| {
+        const altered = try std.mem.replaceOwned(u8, a, script, change[0], change[1]);
+        try std.testing.expect(!std.mem.eql(u8, script, altered));
+        try std.testing.expectError(invalid, configurationForPage(a, altered, 12600, 676512, "Alexander"));
     }
 }

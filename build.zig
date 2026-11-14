@@ -1,6 +1,14 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const test_step_memory = b.option(u64, "test-step-max-rss", "Opt-in RSS reservation per compile/run/translate step; pair with --maxrss") orelse 0;
+    validateQualificationStepMemory(test_step_memory) catch |err| {
+        std.log.err("invalid test step memory reservation: {s}", .{@errorName(err)});
+        b.invalid_user_input = true;
+        return;
+    };
+    // Run after all graph construction, including every prepared early return.
+    defer if (!b.invalid_user_input) claimQualificationMemory(b, test_step_memory);
     const target = b.standardTargetOptions(.{});
     const optimize = b.option(
         std.builtin.Optimize,
@@ -1484,4 +1492,113 @@ test "retained bundle driver preparation rejects empty and relative artifact pat
             try std.testing.expectError(error.InvalidRetainedBundlePath, retainedBundleDriverSelected(selected));
         }
     }
+}
+
+// The scheduler claims memory before dispatching either a worker or an inline
+// step. This opt-in uses the existing claims rather than failure dependencies.
+fn validateQualificationStepMemory(bytes: u64) !void {
+    // Zig 0.17 serializes claims in 256-byte units inside a u32.
+    if (bytes % 256 != 0 or bytes > 0xffff_ffff00) return error.InvalidStepMemoryClaim;
+}
+
+fn claimQualificationMemory(b: *std.Build, bytes: u64) void {
+    if (bytes == 0) return;
+    var seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    defer seen.deinit(b.allocator);
+    for (b.top_level_steps.values()) |top| claimQualificationStep(b, &top.step, bytes, &seen);
+    // Module-generated dependencies enter Step.dependencies during Serialize.
+    // Their already-requested output owners are registered here beforehand.
+    // Do not call getEmitted* or create dependencies merely to annotate them.
+    for (b.graph.generated_files.items) |step| claimQualificationStep(b, step, bytes, &seen);
+}
+
+fn claimQualificationStep(b: *std.Build, step: *std.Build.Step, bytes: u64,
+    seen: *std.AutoHashMapUnmanaged(*std.Build.Step, void)) void
+{
+    const entry = seen.getOrPut(b.allocator, step) catch @panic("OOM");
+    if (entry.found_existing) return;
+    switch (step.tag) {
+        .compile, .run, .translate_c => step.max_rss = @max(step.max_rss, bytes),
+        else => {},
+    }
+    for (step.dependencies.items) |dependency| claimQualificationStep(b, dependency, bytes, seen);
+}
+
+test "qualification memory claims cover late clones runs and registered generated dependencies without enrolling work" {
+    var b: std.Build = undefined;
+    b.allocator = std.testing.allocator;
+    b.top_level_steps = .{};
+    defer b.top_level_steps.deinit(b.allocator);
+    var graph: std.Build.Graph = undefined;
+    b.graph = &graph;
+    var top: std.Build.Step.TopLevel = undefined;
+    top.step.tag = .top_level;
+    top.step.max_rss = 0;
+    var run: std.Build.Step = undefined;
+    run.tag = .run;
+    run.max_rss = 0;
+    var clone: std.Build.Step = undefined;
+    clone.tag = .compile;
+    clone.max_rss = 0;
+    clone.dependencies = .empty;
+    var translate: std.Build.Step = undefined;
+    translate.tag = .translate_c;
+    translate.max_rss = 0;
+    var linked: std.Build.Step = undefined;
+    linked.tag = .compile;
+    linked.max_rss = 0;
+    linked.dependencies = .empty;
+    var untouched: std.Build.Step = undefined;
+    untouched.tag = .compile;
+    untouched.max_rss = 0;
+    untouched.dependencies = .empty;
+    var root_deps = [_]*std.Build.Step{&run};
+    top.step.dependencies = .initBuffer(&root_deps);
+    top.step.dependencies.items = &root_deps;
+    var run_deps = [_]*std.Build.Step{ &clone, &top.step };
+    run.dependencies = .initBuffer(&run_deps);
+    run.dependencies.items = &run_deps;
+    var generated_deps = [_]*std.Build.Step{&linked};
+    translate.dependencies = .initBuffer(&generated_deps);
+    translate.dependencies.items = &generated_deps;
+    var generated = [_]*std.Build.Step{ &translate, &clone, &translate };
+    graph.generated_files = .initBuffer(&generated);
+    graph.generated_files.items = &generated;
+    try b.top_level_steps.put(b.allocator, "prepare-tests", &top);
+    // A clone attached late (including on an early-return path) is present
+    // when the deferred annotation runs. The duplicate and cycle are harmless.
+    const claim: u64 = 6 * 1024 * 1024 * 1024;
+    claimQualificationMemory(&b, 0);
+    try std.testing.expectEqual(@as(u64, 0), run.max_rss);
+    claimQualificationMemory(&b, claim);
+    for ([_]*std.Build.Step{ &run, &clone, &translate, &linked }) |step|
+        try std.testing.expectEqual(claim, step.max_rss);
+    try std.testing.expectEqual(@as(u64, 0), top.step.max_rss);
+    try std.testing.expectEqual(@as(u64, 0), untouched.max_rss);
+    try std.testing.expectEqual(@as(usize, 1), b.top_level_steps.count());
+    try std.testing.expectEqualSlices(*std.Build.Step, &.{&run}, top.step.dependencies.items);
+    try std.testing.expectEqualSlices(*std.Build.Step, &.{ &clone, &top.step }, run.dependencies.items);
+    try std.testing.expectEqualSlices(*std.Build.Step, &.{&linked}, translate.dependencies.items);
+    try std.testing.expectEqualSlices(*std.Build.Step, &.{ &translate, &clone, &translate }, graph.generated_files.items);
+    // Existing larger claims must refuse an insufficient runner budget, not
+    // be silently reduced by the selected qualification reservation.
+    linked.max_rss = claim + 256;
+    claimQualificationMemory(&b, claim);
+    try std.testing.expectEqual(claim + 256, linked.max_rss);
+}
+
+test "qualification memory claims preserve exact scheduler units and disabled behavior" {
+    try validateQualificationStepMemory(0);
+    try validateQualificationStepMemory(6 * 1024 * 1024 * 1024);
+    try validateQualificationStepMemory(0xffff_ffff00);
+    try std.testing.expectError(error.InvalidStepMemoryClaim, validateQualificationStepMemory(1));
+    try std.testing.expectError(error.InvalidStepMemoryClaim, validateQualificationStepMemory(257));
+    try std.testing.expectError(error.InvalidStepMemoryClaim, validateQualificationStepMemory(0x1_0000_000000));
+    try std.testing.expectError(error.InvalidStepMemoryClaim, validateQualificationStepMemory(std.math.maxInt(u64)));
+    var b: std.Build = undefined;
+    // The disabled route must not inspect or alter any graph state.
+    claimQualificationMemory(&b, 0);
+    const claim: u64 = 6 * 1024 * 1024 * 1024;
+    try std.testing.expectEqual(claim, std.Build.Configuration.MaxRss.fromBytes(claim).toBytes());
+    try std.testing.expect(claim + claim > claim);
 }

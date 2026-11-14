@@ -1,0 +1,65 @@
+[[Категорија:Енглески говор]]__NOEDITSECTION__
+<templatestyles src="Модул:minitoc/styles.css"></templatestyles><div class="NavFrame" data-toggle-category="table of contents" style="max-width:40em;margin:0.5em 0" data-minitoc-length="0"><div class="NavHead" style="background:#eee;padding: 0.25em 0.5em">Језици (0)</div><div class="NavContent" style="text-align:center;padding:0.5em"><hr>[[#catlinks|Страна категорија]]</div></div><div data-toc-length="0">__TOC__</div>
+
+==<div id="toc" class="toccolours" ><big><big>[[File:English language.svg|border|32px]] Енглески</big></big></div>==
+[[Категорија:en:Систем]]__NOEDITSECTION__
+===Систем===
+
+[[Додатак:Систем#ен|ен]]+[[Додатак:Систем#нг|нг]]=[[Додатак:Систем#енг|енг]]
+
+
+
+__БЕЗСАДРЖАЈА____NOEDITSECTION____БЕЗКН__
+== -{ Alexander }- <span style="font-size:80%;">([[Викиречник:Енглески|енглески]])</span> ==
+[[Категорија:Енглеска именица]]
+
+[[Слика:Napoli BW 2013-05-16 16-24-01.jpg|right|180px|thumb|[1] [[w:en:Alexander the Great|Alexander the Great]] ([[w:Александар Велики|Александар Велики]])]]
+<p style="margin-bottom: -0.5em; cursor:help;" title="Раздвајање речи на слогове">'''Слогови:''' -,&nbsp; [[мн.]] -</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Објашњење изговора по међународном стандарду (IPA) и примери изговора речи">'''Изговор:'''</p>
+:[[Помоћ:МФА|IPA]]: <span style="text-decoration:none; font-family:'Arial Unicode MS','Lucida Sans Unicode','MS Mincho',Arial,sans-serif;">[...] </span> &nbsp;<table class="audiotable" style="vertical-align: top; display:inline-block; list-style:none;line-height: 1em;"><tr><td>'''Аудио: '''[[Слика:Loudspeaker.svg|12п]]</td><td class="audiofile">[[Image:En-Alexander.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:Image:en-Alexander.ogg|датотека]])</td></tr></table>
+<p style="margin-bottom: -0.5em;" title="Изглед деклиниране речи и њезине множине">'''Морфолошке варијације:'''</p>
+<p style="margin-bottom: -0.5em; cursor: help;" title="Смисао или семантичко објашњење">'''Значења:''' 
+:[1] мушко [[име]]
+</p>
+<p style="margin-bottom: -0.5em; cursor:help;" title="Акроними, скраћени облици писања или изговора">'''Скраћенице:''' 
+:-{[[Alex]]}-
+</p>
+
+<p style="margin-bottom: -0.5em; cursor:help;" title="Етимологија речи">'''Порекло:''' 
+:
+</p>
+
+<p style="margin-bottom: -0.5em; cursor: help;" title="Примери свакодневне употребе"></p>'''Примери:''' 
+:[1] -
+
+
+=== Преводи ===
+{| border="0" width="100%" title="Преводи на друге језике"
+|- 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+
+*Африканс: 
+
+*Немачки: [1] -{ [[Alexander]] [[:de:Alexander|☞<sup>de</sup>]] }-
+
+|} 
+| width="1%" | 
+| style="color:#0000C0; background-color:#FFFFE0; border:5px solid #EEEEEE; padding:2px;" valign="top" width="48%" | 
+{|
+
+*Српски: [1] [[Александар]]
+*Шведски: 
+
+|} 
+|}
+<p style="margin-bottom:-0.5em; cursor:help;" title="Сродни чланци са википедије">'''Сродни чланци са  [[w:|Википедије]]:''' 
+:[1] [[:w:en:Alexander|Alexander]]
+</p>
+<p style="margin-top:20px; margin-bottom:0em; border-bottom:1px solid #AAAAAA; cursor:help;" title="Речи које се слично изговарају или се слично пишу">'''Сличне речи:''' 
+:
+</p>
+[[Категорија:Енглеско мушко име]]
+[[Категорија:Илустриран чланак]]

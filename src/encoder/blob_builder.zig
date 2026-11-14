@@ -4063,11 +4063,9 @@ const PageSourceFragment = struct {
 
 const PageLanguageGroup = struct {
     language: ResolvedLanguage,
-    source: std.ArrayList(u8) = .empty,
     fragments: std.ArrayList(PageSourceFragment) = .empty,
 
     fn appendSource(self: *PageLanguageGroup, a: std.mem.Allocator, fragment: PageSourceFragment) !void {
-        try self.source.appendSlice(a, fragment.source);
         if (fragment.source.len != 0) try self.fragments.append(a, fragment);
     }
 };
@@ -4479,6 +4477,8 @@ fn observeSourceElements(sizing: ?presentation_document.FigureSizingSource, sour
     const selected = sizing orelse return false;
     if (selected.table_containing_direction) |direction|
         if (direction.source.ptr == source.ptr and direction.source.len == source.len) return true;
+    if (selected.table_float_source) |floating|
+        if (floating.source.ptr == source.ptr and floating.source.len == source.len) return true;
     const observed = selected.text_class_scope orelse return false;
     return (observed.scope.source_siblings.len != 0 or observed.scope.source_root_tables.len != 0 or (observed.scope.page_styles != null and observed.scope.page_style_root != null)) and
         observed.source.ptr == source.ptr and observed.source.len == source.len;
@@ -5104,7 +5104,7 @@ fn processMain(
     // Ordinary navigation admission is established by the actual renderer,
     // before ownership cuts. The same raw-domain map later carries rendering.
     const early_observation: presentation_document.PreObservation = if (may_cross_link)
-        try presentation_document.observePreScopesWithTextPaintAndMissingAlloc(page_allocator, title, source_missing, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, reference_context, poem_phase, codes.table_styles)
+        try presentation_document.observePreScopesWithSelectedPageAndMissingAlloc(page_allocator, title, source_missing, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, reference_context, poem_phase, codes.table_styles, codes.figure_sizing, if (numbered.source_element_projection) |*proof| proof else null)
     else
         .{ .scopes = &.{}, .unclosed_formatting = false };
     defer freePreObservation(page_allocator, early_observation);
@@ -5349,7 +5349,6 @@ fn processMain(
     var groups: std.ArrayList(PageLanguageGroup) = .empty;
     defer {
         for (groups.items) |*group| {
-            group.source.deinit(page_allocator);
             group.fragments.deinit(page_allocator);
         }
         groups.deinit(page_allocator);
@@ -5658,7 +5657,7 @@ fn processMain(
     const pre_observation: presentation_document.PreObservation = if (may_cross_link)
         early_observation
     else if (may_cross_pre and (groups.items.len > 1 or page_prefix.len != 0))
-        try presentation_document.observePreScopesWithTextPaintAndMissingAlloc(page_allocator, title, source_missing, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, reference_context, poem_phase, codes.table_styles)
+        try presentation_document.observePreScopesWithSelectedPageAndMissingAlloc(page_allocator, title, source_missing, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, reference_context, poem_phase, codes.table_styles, codes.figure_sizing, if (numbered.source_element_projection) |*proof| proof else null)
     else
         .{ .scopes = &.{}, .unclosed_formatting = false };
     defer if (!may_cross_link) freePreObservation(page_allocator, pre_observation);
@@ -5727,7 +5726,6 @@ fn processMain(
                 try groups.append(page_allocator, .{ .language = unowned });
                 break :blk groups.items.len - 1;
             };
-            try groups.items[index].source.insertSlice(page_allocator, 0, page_prefix);
             try groups.items[index].fragments.insert(page_allocator, 0, .{ .source = page_prefix, .original_start = 0 });
             fallbacks.missing_language_heading = true;
         }
@@ -5809,8 +5807,10 @@ fn processNamespace(
     // Supplemental namespaces share one file, so keep their full localized
     // names to avoid collisions between identically named namespace suffixes.
     const local_title = if (kind == .supplemental) title else localNamespaceTitle(title);
-    const numbered = try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, if (missing_phase) |phase| phase.output() else MissingText.untracked(source), .{
+    const raw_missing = if (missing_phase) |phase| phase.output() else MissingText.untracked(source);
+    const numbered = try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, raw_missing, .{
         .title = local_title,
+        .observe_source_elements = observeSourceElements(figure_sizing, raw_missing.bytes),
         .link_trail = link_trail,
         .namespace_catalog = namespace_catalog,
         .behavior_switches = behavior_switches,
@@ -5819,6 +5819,14 @@ fn processNamespace(
         .poem_phase = poem_phase,
     });
     fallbacks.merge(numbered.fallbacks);
+    defer if (numbered.source_element_projection) |proof| page_allocator.free(proof.copies);
+    var fragment: presentation_document.SourceFragment = .{
+        .source = numbered.source, .original_start = 0, .missing = numbered.missing, .whole_body = true,
+        .parser_output_range = .{ .page = numbered.source, .start = 0, .prepared = numbered.missing.bytes,
+            .original_page = if (std.mem.eql(u8, numbered.source, raw_missing.bytes)) raw_missing.bytes else null },
+    };
+    bindOwnerTextClassTransition(numbered.source, raw_missing.bytes, numbered.source, numbered.class_scope_transition, &fragment);
+    bindOwnerSourceElements(numbered.source, raw_missing.bytes, if (numbered.source_element_projection) |*proof| proof else null, &fragment);
     var reference_context = try presentation_document.referenceDefinitionsWithMissingAlloc(page_allocator, numbered.missing);
     reference_context.citations = numbered.citations;
     reference_context.content_conversion = numbered.content_conversion;
@@ -5837,7 +5845,7 @@ fn processNamespace(
         reference_context,
         fallbacks,
         numbered.poem_phase,
-        &.{},
+        if (numbered.source_element_projection != null) &.{fragment} else &.{},
         null,
         &.{},
         null,
@@ -20864,4 +20872,144 @@ test "complete retained fille raw keeps ten corresponding language regions and n
         try std.testing.expectEqualDeep(expected, actual);
         try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, actual));
     }
+}
+
+test "supplemental namespace Writer binds complete source projection while retaining foreign and missing proof refusals" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const styles = @import("table_style_profile.zig");
+    const syntax = blobs.wikitext_syntax;
+    const title = "Pêvek:Source projection";
+    const source = "==Section==\n[https://example.org]\n<div style=\"clear:both\"></div>\n[[Kept#part|complete body]]\n";
+    var ns = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tkuwiktionary\n# dump-date\t20261001\n# content-language\tku\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "10\tŞablon\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\tداڕێژە\n" ++
+        "14\tKategorî\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\tپۆل\n" ++
+        "100\tPêvek\tAppendix\tcase-sensitive\t1\t0\t0\t\tsupplemental\tunclassified_subject_retained\n");
+    defer ns.deinit();
+    var global = try styles.parseForTargetAlloc(a, "", .screen); defer global.deinit();
+    // The custody positive independently refutes this entire page rule using
+    // the complete absent-class certificate. Physical DIV parent proof alone
+    // does not certify all possible page descendants for root preflight.
+    var selected = try styles.joinPageSourcesAlloc(a, &global, &.{}, &.{.{ .css = ".absent blockquote > :last-child{margin-bottom:0}", .base_url = "" }}); defer selected.deinit();
+    // Retain the original potentially active page rule as an explicit refusal.
+    var unproved = try styles.joinPageSourcesAlloc(a, &global, &.{}, &.{.{ .css = ".mw-body blockquote > :last-child{margin-bottom:0}", .base_url = "" }}); defer unproved.deinit();
+    var roots = [_]styles.TextElement{
+        .{ .tag = "html", .ancestry_complete = true, .physical_ancestry_complete = true },
+        .{ .tag = "body", .classes = "mw-body", .ancestry_complete = true, .physical_ancestry_complete = true },
+        .{ .tag = "div", .classes = "mw-parser-output", .ancestry_complete = true, .physical_ancestry_complete = true },
+    };
+    roots[1].parent = &roots[0]; roots[2].parent = &roots[1];
+    const start = std.mem.indexOf(u8, source, "<div").?;
+    const tag = syntax.tagAt(source, start).?;
+    const proof = [_]styles.SourceLiteralDivProof{.{ .range = .{
+        .anchor_start = start, .anchor_end = syntax.matchingTag(source, tag).?.end,
+        .name_start = start + 1, .name_len = tag.name.len,
+        .attrs_start = @intFromPtr(tag.attrs.ptr) - @intFromPtr(source.ptr), .attrs_len = tag.attrs.len,
+    }, .parent_start = null }};
+    const base_scope: styles.BoundedTextClassScope = .{
+        .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "",
+        .complete_ancestor_class_superset = "mw-body mw-parser-output", .complete_ancestor_id_superset = "",
+        .page_styles = &selected, .page_style_root = &roots[2], .page_style_complete_root = &roots[2],
+        .source_literal_divs_source = source, .source_literal_divs = &proof,
+    };
+    const Control = struct {
+        fn sizing(_: ?*const anyopaque, _: std.mem.Allocator, _: []const u8, _: blobs.presentation_types.FigureFormat, _: ?u32, _: ?u32) std.mem.Allocator.Error!?blobs.presentation_types.FigureSizingPolicy { return null; }
+    };
+    var complete_payload: ?[]const u8 = null;
+    for (0..6) |mode| {
+        var scope = base_scope;
+        var selected_source: []const u8 = source;
+        switch (mode) {
+            0 => {},
+            1 => selected_source = try a.dupe(u8, source),
+            2 => scope.source_literal_divs = &.{},
+            3 => scope.page_style_complete_root = null,
+            4 => {}, // Independent empty-sheet rendering of the same complete page.
+            5 => scope.page_styles = &unproved,
+            else => unreachable,
+        }
+        // Keep the original root-uncertain sheet in every custody negative.
+        // The absent-class sheet is the independent custody positive only.
+        if (mode != 0 and mode != 4) scope.page_styles = &unproved;
+        const figure: presentation_document.FigureSizingSource = .{ .resolve_fn = Control.sizing,
+            .text_class_scope = .{ .source = selected_source, .scope = &scope } };
+        const codes: LanguageCodes = .{ .namespace_catalog = &ns, .table_styles = if (mode == 4) &global else if (mode == 0) &selected else &unproved, .figure_sizing = if (mode == 4) null else figure };
+        const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/namespace-projection-{d}", .{ tmp.sub_path, mode });
+        var writer = try Writer.init(std.testing.io, a, output); defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 100, .kind = .supplemental }, title, source, source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.supplemental_records);
+        try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+        const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ output, "fallback-pages.jsonl" }), a, .limited(64 * 1024));
+        if (mode == 0 or mode == 4) try std.testing.expectEqualStrings("", report) else if (mode == 5) {
+            try std.testing.expect(std.mem.indexOf(u8, report, "unresolved_table_style") != null);
+            try std.testing.expect(std.mem.indexOf(u8, report, "unsupported_element") == null);
+        } else {
+            try std.testing.expect(std.mem.indexOf(u8, report, "unresolved_table_style") != null);
+            try std.testing.expect(std.mem.indexOf(u8, report, "unsupported_element") != null);
+        }
+        var mapped = try mmapPath(std.testing.io, try std.fs.path.join(a, &.{ output, "supplemental.wikblb" })); defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find(title)) orelse return error.TestUnexpectedResult;
+        if (mode == 0) complete_payload = try a.dupe(u8, record.payload);
+        if (mode == 4 or mode == 5) try std.testing.expectEqualSlices(u8, complete_payload.?, record.payload);
+        const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, title, .supplemental, null);
+        try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+        try std.testing.expectEqualStrings(title, stored.entry.title);
+        try std.testing.expect(stored.entry.language == null and stored.entry.language_code.len == 0);
+        try std.testing.expect(LeadingRegionFixture.contains(stored.entry, "complete body"));
+        try std.testing.expect(LeadingRegionFixture.contains(stored.entry, "https://example.org"));
+        var internal: usize = 0; var numbered: usize = 0;
+        for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, "Kept#part") and span.target_fragment == null) internal += 1;
+            if (std.mem.eql(u8, span.target, "https://example.org") and std.mem.eql(u8, span.text, "[1]")) numbered += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), internal);
+        try std.testing.expectEqual(@as(usize, 1), numbered);
+    }
+}
+
+test "language group fragment allocation failure preserves provenance and permits retry" {
+    const a = std.testing.allocator;
+    const source = "prefixfirstsecond";
+    const first: PageSourceFragment = .{ .source = source[6..11], .original_start = 6 };
+    const second: PageSourceFragment = .{ .source = source[11..], .original_start = 11 };
+    var group: PageLanguageGroup = .{ .language = .{ .code = "en", .heading = "English" } };
+    defer group.fragments.deinit(a);
+    try group.fragments.ensureTotalCapacityPrecise(a, 1);
+    try group.appendSource(a, first);
+    var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0, .resize_fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory, group.appendSource(failing.allocator(), second));
+    try std.testing.expectEqual(@as(usize, 1), group.fragments.items.len);
+    try std.testing.expectEqual(first.original_start, group.fragments.items[0].original_start);
+    try std.testing.expect(group.fragments.items[0].source.ptr == first.source.ptr);
+    try std.testing.expectEqualStrings("first", group.fragments.items[0].source);
+    try group.appendSource(a, second);
+    try std.testing.expectEqual(@as(usize, 2), group.fragments.items.len);
+    try std.testing.expect(group.fragments.items[1].source.ptr == second.source.ptr);
+
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const tracked: MissingText = .{ .bytes = source, .ranges = &.{.{ .start = 6, .end = 11, .occurrence = 1 }},
+        .unknown = true, .lost_missing_range = true };
+    const owner = try missingOwnerSourceAlloc(arena.allocator(), tracked, group.fragments.items, source[0..6]);
+    try std.testing.expectEqualStrings(source, owner.bytes);
+    try std.testing.expectEqualDeep(tracked.ranges, owner.ranges);
+    try std.testing.expect(owner.unknown and owner.lost_missing_range);
+    const projection = try ownerHeadingSourceRangesAlloc(arena.allocator(), group.fragments.items, 6);
+    const expected_projection: []const presentation_document.HeadingSourceRange = &.{
+        .{ .owner_start = 0, .page_start = 0, .len = 6 },
+        .{ .owner_start = 6, .page_start = 6, .len = 5 },
+        .{ .owner_start = 11, .page_start = 11, .len = 6 },
+    };
+    try std.testing.expectEqualDeep(expected_projection, projection);
+    var invalid = second;
+    invalid.original_start = source.len + 1;
+    try std.testing.expectError(error.InvalidPreContext,
+        missingOwnerSourceAlloc(arena.allocator(), tracked, &.{invalid}, ""));
+    try std.testing.expectEqualStrings(source, tracked.bytes);
 }

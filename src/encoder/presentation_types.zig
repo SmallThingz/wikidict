@@ -69,6 +69,19 @@ pub const StaticPoster = struct {
 pub fn staticPosterHeight(width: u32) u32 {
     return @intCast((@as(u64, width) * 3 + 2) / 4);
 }
+pub const InlineImageVerticalAlign = enum(u8) {
+    middle = 0,
+    baseline = 1,
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        if (try source.peekNextTokenType() != .string) return error.UnexpectedToken;
+        const raw = try std.json.innerParse([]const u8, a, source, options);
+        return std.meta.stringToEnum(@This(), raw) orelse error.InvalidEnumTag;
+    }
+    pub fn jsonParseFromValue(_: std.mem.Allocator, source: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        if (source != .string) return error.UnexpectedToken;
+        return std.meta.stringToEnum(@This(), source.string) orelse error.InvalidEnumTag;
+    }
+};
 pub const InlineImage = struct {
     file: []const u8,
     width_px: ?u32 = null,
@@ -84,12 +97,14 @@ pub const InlineImage = struct {
     svg_language: ?[]const u8 = null,
     /// Source-proven static PNG poster and localized visual/accessibility badge.
     static_poster: ?StaticPoster = null,
+    // Explicit source-computed image alignment, distinct from legacy null.
+    vertical_align: ?InlineImageVerticalAlign = null,
 
     pub fn jsonStringify(self: InlineImage, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("file");
         try jw.write(self.file);
-        inline for (.{ "width_px", "height_px", "alt", "tooltip", "map", "dark_mode_filter", "svg_language", "static_poster" }) |name| {
+        inline for (.{ "width_px", "height_px", "alt", "tooltip", "map", "dark_mode_filter", "svg_language", "static_poster", "vertical_align" }) |name| {
             if (@field(self, name)) |value| {
                 try jw.objectField(name);
                 try jw.write(value);
@@ -397,6 +412,14 @@ pub const TableContainingDirection = enum(u8) {
         return std.meta.stringToEnum(@This(), source.string) orelse error.InvalidEnumTag;
     }
 };
+/// Circular physical corners, in clockwise order. Only fixed CSS px are
+/// admitted by the initial table paint contract; decoding never clamps them.
+pub const TableCornerRadii = struct {
+    top_left: StyleLength,
+    top_right: StyleLength,
+    bottom_right: StyleLength,
+    bottom_left: StyleLength,
+};
 pub const TableStyle = struct {
     background: ?[]const u8 = null,
     border: ?StyleBorder = null,
@@ -412,6 +435,7 @@ pub const TableStyle = struct {
     display: ?TableDisplay = null,
     vertical_align: ?InlineBoxVerticalAlign = null,
     line_height: ?ComputedLineHeight = null,
+    corner_radii: ?TableCornerRadii = null,
 
     pub fn jsonStringify(self: TableStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
@@ -431,10 +455,21 @@ pub const CellVerticalAlign = enum(u8) {
         return std.meta.stringToEnum(@This(), source.string) orelse error.InvalidEnumTag;
     }
 };
-/// Only the cell size unavailable from its represented native owner context.
+/// Cell metric owner; painted descendants retain their own font tuples.
 pub const CellTextStrut = struct {
     font_scale: f32,
     font_scale_basis: FontScaleBasis,
+    owner_font: ?InlineFontSnapshot = null,
+
+    pub fn jsonStringify(self: CellTextStrut, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("font_scale"); try jw.write(self.font_scale);
+        try jw.objectField("font_scale_basis"); try jw.write(self.font_scale_basis);
+        if (self.owner_font) |font| {
+            try jw.objectField("owner_font"); try jw.write(font);
+        }
+        try jw.endObject();
+    }
 };
 pub const CellLineHeightValue = union(enum) {
     normal,
@@ -555,10 +590,13 @@ pub const TableBlockViewport = struct {
     grid_direction: TableContainingDirection,
     language: []const u8,
     focus_paint: ?TableScrollFocusPaint = null,
+    intrinsic_containing_direction: ?TableContainingDirection = null,
     pub fn jsonStringify(self: @This(), jw: anytype) !void {
         try jw.beginObject();
         inline for (@typeInfo(@This()).@"struct".field_names) |name| {
-            if (comptime std.mem.eql(u8, name, "focus_paint")) {
+            if (comptime std.mem.eql(u8, name, "intrinsic_containing_direction")) {
+                if (self.intrinsic_containing_direction) |value| { try jw.objectField(name); try jw.write(value); }
+            } else if (comptime std.mem.eql(u8, name, "focus_paint")) {
                 if (self.focus_paint) |value| { try jw.objectField(name); try jw.write(value); }
             } else { try jw.objectField(name); try jw.write(@field(self, name)); }
         }
@@ -569,6 +607,7 @@ pub const TableBlockViewport = struct {
         max_viewport_width_px: u32, box_style: TableStyle, box_sizing: std.json.Value,
         max_width: StyleWidth, grid_style: TableStyle, grid_direction: TableContainingDirection, language: []const u8,
         focus_paint: ?TableScrollFocusPaint = null,
+        intrinsic_containing_direction: ?TableContainingDirection = null,
     };
     pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
         var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
@@ -584,7 +623,8 @@ pub const TableBlockViewport = struct {
         return .{ .max_viewport_width_px = value.max_viewport_width_px, .box_style = value.box_style,
             .box_sizing = std.meta.stringToEnum(ContainerBoxSizing, value.box_sizing.string) orelse return error.InvalidEnumTag,
             .max_width = value.max_width, .grid_style = value.grid_style,
-            .grid_direction = value.grid_direction, .language = value.language, .focus_paint = value.focus_paint };
+            .grid_direction = value.grid_direction, .language = value.language, .focus_paint = value.focus_paint,
+            .intrinsic_containing_direction = value.intrinsic_containing_direction };
     }
 };
 /// One ordinary Table body: physical right float above the root threshold,
@@ -1353,6 +1393,35 @@ pub const RuleStyle = struct {
     height: StyleLength,
     fill: ContainerColor,
     margins: StyleEdges,
+    clear: ?FigureClear = null,
+    const JsonFields = struct {
+        height: StyleLength, fill: ContainerColor, margins: StyleEdges,
+        clear: std.json.Value = .null,
+    };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn fromJson(value: JsonFields) error{ UnexpectedToken, InvalidEnumTag }!@This() {
+        const clear: ?FigureClear = switch (value.clear) {
+            .null => null,
+            .string => |name| std.meta.stringToEnum(FigureClear, name) orelse return error.InvalidEnumTag,
+            else => return error.UnexpectedToken,
+        };
+        return .{ .height = value.height, .fill = value.fill, .margins = value.margins, .clear = clear };
+    }
+    pub fn jsonStringify(self: RuleStyle, jw: anytype) !void {
+        try jw.beginObject();
+        inline for (.{ "height", "fill", "margins" }) |name| {
+            try jw.objectField(name); try jw.write(@field(self, name));
+        }
+        if (self.clear) |clear| { try jw.objectField("clear"); try jw.write(clear); }
+        try jw.endObject();
+    }
 };
 pub fn validRuleStyle(value: RuleStyle) bool {
     return validStyleLength(value.height) and validContainerColor(value.fill) and validStyleEdges(value.margins);
@@ -1660,7 +1729,7 @@ pub fn validInlineImage(value: InlineImage) bool {
         const width = value.width_px orelse return false;
         const height = value.height_px orelse return false;
         if (height != staticPosterHeight(width)) return false;
-        if (value.map != null or value.svg_language != null or value.dark_mode_filter != null) return false;
+        if (value.map != null or value.svg_language != null or value.dark_mode_filter != null or value.vertical_align != null) return false;
         switch (poster.policy) { .three_d_stl_v1 => {} }
     }
     return true;
@@ -1698,7 +1767,7 @@ pub fn inlineTableSpanSupported(span: anytype) bool {
 pub fn inlineTableSpanSupportedM(span: anytype) bool {
     const trail: []const u8 = if (comptime @hasField(@TypeOf(span), "trail")) span.trail else "";
     if (span.image) |image| return validInlineImage(image) and image.map == null and
-        image.static_poster == null and image.dark_mode_filter == null and
+        image.static_poster == null and image.dark_mode_filter == null and image.vertical_align == null and
         span.text.len == 0 and trail.len == 0 and
         (if (span.kind == .text) span.target.len == 0 else if (span.kind == .link or span.kind == .external_link) span.target.len != 0 else false);
     return inlineTableSpanSupported(span);
@@ -1923,15 +1992,26 @@ pub fn validTableMarginValues(value: ContainerMargins) bool {
     };
     return value.left == .auto or value.right == .auto;
 }
+pub fn validTableCornerRadii(value: TableCornerRadii) bool {
+    inline for (.{ "top_left", "top_right", "bottom_right", "bottom_left" }) |name| {
+        const corner = @field(value, name);
+        if (corner.unit != .px or !validStyleLength(corner) or corner.value > 16_777_216) return false;
+    }
+    return true;
+}
 pub fn validTableStyle(value: TableStyle) bool {
-    if ((value.margin_values != null) != (value.containing_direction != null)) return false;
+    // Q corner numeric margins need the true containing-block direction when
+    // their percent content box plus physical edges is overconstrained.
+    if (value.margin_values == null and value.containing_direction != null) {
+        if (value.corner_radii == null or value.margins == null) return false;
+    } else if ((value.margin_values != null) != (value.containing_direction != null)) return false;
     return validUnboundTableStyle(value);
 }
 /// Build-only parsed declaration components, before actual parent direction is
 /// bound. This predicate never grants Stored/codec/native table admission.
 pub fn validUnboundTableStyle(value: TableStyle) bool {
     if (value.vertical_align) |alignment| if (alignment == .top and !tableStyleIsInline(value)) return false;
-    if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.margin_values == null and value.float_side == null and value.width == null and value.padding == null and value.clear == null and value.display == null and value.vertical_align == null and value.line_height == null) return false;
+    if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.margin_values == null and value.float_side == null and value.width == null and value.padding == null and value.clear == null and value.display == null and value.vertical_align == null and value.line_height == null and value.corner_radii == null) return false;
     if (value.background) |color| if (!isCanonicalRgb(color)) return false;
     if (value.border) |border| if (!validBorder(border)) return false;
     if (value.margins) |margins| if (!validStyleEdges(margins)) return false;
@@ -1940,6 +2020,11 @@ pub fn validUnboundTableStyle(value: TableStyle) bool {
     if (value.padding) |padding| if (!validStyleEdges(padding)) return false;
     if (value.line_height) |height| if (!validComputedLineHeight(height)) return false;
     if (value.display) |display| if (display != .table and value.float_side != null) return false;
+    if (value.corner_radii) |corners| {
+        if (!validTableCornerRadii(corners) or tableStyleIsInline(value) or value.collapse == .collapse) return false;
+        const border = value.border orelse return false;
+        switch (border) { .none, .solid => {}, .edges => return false }
+    }
     return true;
 }
 pub fn validTableBlockViewport(value: TableBlockViewport) bool {
@@ -1951,6 +2036,8 @@ pub fn validTableScrollViewport(value: TableBlockViewport) bool {
     return validTableBlockViewportIn(value, true);
 }
 fn validTableBlockViewportIn(value: TableBlockViewport, paired: bool) bool {
+    if (value.intrinsic_containing_direction != null) return false;
+    if (value.grid_style.corner_radii != null) return false;
     if (paired) {
         if (!validTableScrollFocusPaint(value.focus_paint orelse return false)) return false;
     } else if (value.focus_paint != null) return false;
@@ -1968,8 +2055,72 @@ fn validTableBlockViewportIn(value: TableBlockViewport, paired: bool) bool {
         grid.padding == null and grid.width == null and grid.margins == null and grid.margin_values == null and
         grid.containing_direction == null and grid.float_side == null and grid.clear == null and grid.display == null and grid.vertical_align == null;
 }
+/// Q-only source-owned separate responsive grid. Legacy block and P32
+/// predicates above remain unchanged; a required corner field selects Q.
+pub fn validTableCornerBlockViewport(value: TableBlockViewport) bool {
+    return tableCornerBlockViewportShape(value) and validTableScrollFocusPaint(value.focus_paint orelse return false);
+}
+/// Build-only local wire-shape discriminator, before required Q focus is read.
+/// The complete policy and enclosing Table geometry still require validation.
+pub fn tableCornerBlockViewportShape(value: TableBlockViewport) bool {
+    if (value.intrinsic_containing_direction != null) return false;
+    if (value.language.len == 0 or value.language.len > 32 * 1024 * 1024 or
+        !std.unicode.utf8ValidateSlice(value.language)) return false;
+    const box = value.box_style;
+    if (!validTableStyle(box) or box.corner_radii == null or box.width == null or
+        box.width.?.unit != .percent or box.width.?.value != 100 or
+        value.max_width.unit != .percent or value.max_width.value != 100 or
+        box.margins == null or box.margin_values != null or box.containing_direction == null or
+        box.float_side != null or box.display != null or box.vertical_align != null or
+        box.collapse != null or box.line_height != null) return false;
+    const grid = value.grid_style;
+    return validTableStyle(grid) and grid.collapse == .separate and grid.corner_radii == null and
+        grid.background == null and grid.border == null and grid.padding == null and grid.width == null and
+        grid.margins == null and grid.margin_values == null and grid.containing_direction == null and
+        grid.float_side == null and grid.clear == null and grid.display == null and
+        grid.vertical_align == null and grid.line_height == null;
+}
+fn validTableCornerGridGeometry(geometry: ?TableGeometry) bool {
+    const value = geometry orelse return false;
+    return validTableGeometry(value) and value.border == null and value.width == null and
+        value.cell_spacing != null and value.cell_padding != null;
+}
+/// R-only nonfloating automatic-wide / intrinsic-block-narrow source owner.
+/// The direction belongs to both source allocations, not the anonymous grid.
+pub fn validTableIntrinsicViewport(value: TableBlockViewport) bool {
+    if (value.intrinsic_containing_direction == null or value.max_viewport_width_px == 0 or
+        value.max_width.unit != .percent or value.max_width.value != 100 or
+        !validTableScrollFocusPaint(value.focus_paint orelse return false)) return false;
+    // Reuse the exact paired fit-content box/grid shape, but never its float.
+    var shape = value;
+    shape.intrinsic_containing_direction = null;
+    return validTableScrollViewport(shape) and shape.box_style.corner_radii == null and
+        shape.grid_style.line_height == null;
+}
+fn validTableIntrinsicViewportHeader(geometry: ?TableGeometry, style: ?TableStyle, value: TableBlockViewport) bool {
+    if (!validTableIntrinsicViewport(value)) return false;
+    const hints = geometry orelse return false;
+    if (!validTableGeometry(hints) or hints.width != null or hints.border == null or
+        hints.cell_spacing == null or hints.cell_padding == null) return false;
+    const wide = style orelse return false;
+    return validTableStyle(wide) and wide.width == null and wide.float_side == null and
+        wide.display == null and wide.vertical_align == null and wide.line_height == null and
+        wide.collapse == .collapse and wide.corner_radii == null and wide.margins != null and
+        wide.margin_values == null and wide.containing_direction == null;
+}
+
 pub fn validTableBlockViewportHeader(geometry: ?TableGeometry, style: ?TableStyle, viewport: ?*const TableBlockViewport) bool {
     const value = viewport orelse return true;
+    if (value.intrinsic_containing_direction != null)
+        return validTableIntrinsicViewportHeader(geometry, style, value.*);
+    if (validTableCornerBlockViewport(value.*)) {
+        if (!validTableCornerGridGeometry(geometry) or tableStyleIsInline(style)) return false;
+        if (style) |wide| if (!validTableStyle(wide) or wide.float_side != null or
+            wide.collapse != .separate or wide.corner_radii == null or wide.width == null or
+            wide.width.?.unit != .percent or wide.width.?.value != 100 or wide.margins == null or
+            wide.margin_values != null or wide.containing_direction == null) return false;
+        return style != null;
+    }
     if (geometry != null or tableStyleIsInline(style)) return false;
     if (style) |wide| if (!validTableStyle(wide) or wide.float_side != null) return false;
     return validTableBlockViewport(value.*);
@@ -1979,6 +2130,7 @@ pub fn validTableBlockViewportHeader(geometry: ?TableGeometry, style: ?TableStyl
 pub fn validTableViewportHeaders(geometry: ?TableGeometry, style: ?TableStyle,
     block: ?*const TableBlockViewport, floating: ?TableFloatViewport) bool
 {
+    if (style) |base| if (base.corner_radii != null and base.collapse != .separate) return false;
     if (block) |narrow| if (floating) |wide| {
         return validTableFloatViewportHeader(geometry, style, wide) and
             validTableScrollViewport(narrow.*) and wide.narrow_clear == null and
@@ -1999,8 +2151,18 @@ pub fn validCellTextMetric(value: ComputedLineHeight) bool {
     return std.math.isFinite(value.value) and value.value >= 0 and
         (value.font_scale_basis == .normal_body or value.font_scale_basis == .css_px);
 }
+pub fn validCellTextStrut(value: CellTextStrut) bool {
+    if (!validCellTextMetric(.{ .value = value.font_scale, .font_scale_basis = value.font_scale_basis })) return false;
+    if (value.owner_font) |font| {
+        if (!validInlineFontSnapshot(font) or font.font_scale == null or font.font_scale.? != value.font_scale or
+            font.font_scale_basis != value.font_scale_basis or font.font_family == null or font.font_features == null or
+            font.language.len == 0 or font.language.len > 1024 or font.small or font.superscript or font.subscript or
+            font.font_normalized or font.code or font.classes.len != 0 or font.role != .normal) return false;
+    }
+    return true;
+}
 pub fn validCellLineHeight(value: CellLineHeight) bool {
-    if (value.strut) |strut| if (!validCellTextMetric(.{ .value = strut.font_scale, .font_scale_basis = strut.font_scale_basis })) return false;
+    if (value.strut) |strut| if (!validCellTextStrut(strut)) return false;
     return switch (value.height) {
         .normal => true,
         .multiplier => |factor| std.math.isFinite(factor) and factor >= 0,
@@ -2244,6 +2406,7 @@ pub fn validFigure(value: Figure) bool {
         .image => |content| {
             const image_span = content.span;
             const image = image_span.image orelse return false;
+            if (image.vertical_align != null) return false; // Block Figure media has a different alignment owner.
             if (image.static_poster != null and (value.format != .thumbnail or content.sizing != .requested_fit)) return false;
             if (!validFigureSizingContext(value.format, content.sizing, image.width_px, image.height_px)) return false;
             if (image_span.text.len != 0 or image_span.trail.len != 0 or !validInlineImage(image) or !validInlineImageAction(image_span.kind, image_span.target)) return false;
@@ -5620,4 +5783,260 @@ test "paired scroll focus preserves authored none versus native auto and closed 
         "{\"mode\":\"authored_none\",\"color\":{\"kind\":\"rgb\",\"value\":\"#3366cc\"}}", "{\"mode\":\"ua_auto\",\"mode\":\"ua_auto\"}" }) |invalid| {
         if (std.json.parseFromSlice(TableScrollFocusPaint, a, invalid, .{})) |unexpected| { unexpected.deinit(); return error.TestUnexpectedResult; } else |_| {}
     }
+}
+
+test "cell metric owner requires one complete font tuple and one size authority" {
+    const owner: InlineFontSnapshot = .{ .font_scale = 1.1, .font_scale_basis = .normal_body,
+        .bold = true, .language = "th", .font_features = .seven_on, .font_family = .sans_serif };
+    const value: CellLineHeight = .{ .strut = .{ .font_scale = 1.1, .font_scale_basis = .normal_body, .owner_font = owner }, .height = .normal };
+    try std.testing.expect(validCellLineHeight(value));
+    for ([_]FontScaleBasis{ .normal_body, .css_px }) |basis| for ([_]f32{ 0, 1, 1.1, 22 }) |size| {
+        var next = value; next.strut.?.font_scale = size; next.strut.?.font_scale_basis = basis;
+        next.strut.?.owner_font.?.font_scale = size; next.strut.?.owner_font.?.font_scale_basis = basis;
+        next.height = .{ .length = .{ .value = 0, .font_scale_basis = basis } };
+        try std.testing.expect(validCellLineHeight(next));
+    };
+    for (0..18) |mode| {
+        var bad = value; const font = &bad.strut.?.owner_font.?;
+        switch (mode) {
+            0 => font.font_scale = null,
+            1 => font.font_scale = 1.2,
+            2 => font.font_scale_basis = .css_px,
+            3 => font.font_family = null,
+            4 => font.font_features = null,
+            5 => font.language = "",
+            6 => font.language = "th\x00",
+            7 => font.language = "\xff",
+            8 => font.small = true,
+            9 => font.superscript = true,
+            10 => font.subscript = true,
+            11 => font.font_normalized = true,
+            12 => font.code = true,
+            13 => font.classes = "Hani",
+            14 => font.role = .headword,
+            15 => font.font_family = .{ .stack = .{ .names = &.{"bad\x00family"}, .fallback = .sans_serif } },
+            16 => { bad.strut.?.font_scale = std.math.nan(f32); font.font_scale = std.math.nan(f32); },
+            17 => { bad.strut.?.font_scale_basis = .context; font.font_scale_basis = .context; },
+            else => unreachable,
+        }
+        try std.testing.expect(!validCellLineHeight(bad));
+    }
+    var long = value;
+    var language: [1025]u8 = undefined; @memset(&language, 'a');
+    long.strut.?.owner_font.?.language = &language;
+    try std.testing.expect(!validCellLineHeight(long));
+}
+
+test "cell metric owner JSON preserves legacy absence and independent painted child fonts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const old: CellTextStrut = .{ .font_scale = 1, .font_scale_basis = .normal_body };
+    const old_json = try std.json.Stringify.valueAlloc(a, old, .{});
+    const old_shape = struct { font_scale: f32, font_scale_basis: FontScaleBasis }{ .font_scale = 1, .font_scale_basis = .normal_body };
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, old_shape, .{}), old_json);
+    const legacy = try std.json.parseFromSlice(CellTextStrut, a, old_json, .{}); defer legacy.deinit();
+    try std.testing.expectEqualDeep(old, legacy.value);
+    const cell: Cell = .{ .style = .{ .line_height = .{ .strut = .{ .font_scale = 1.1, .font_scale_basis = .normal_body,
+        .owner_font = .{ .font_scale = 1.1, .font_scale_basis = .normal_body, .bold = true, .language = "th",
+            .font_features = .seven_on, .font_family = .{ .stack = .{ .names = &.{"Owner Face"}, .fallback = .sans_serif } } } }, .height = .{ .multiplier = 1.25 } } },
+        .spans = &.{.{ .kind = .link, .text = "child", .target = "Kept", .trail = "s", .font_scale = 0.8,
+            .font_scale_basis = .normal_body, .italic = true, .language = "en" }} };
+    const json = try std.json.Stringify.valueAlloc(a, cell, .{});
+    const parsed = try std.json.parseFromSlice(Cell, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(cell, parsed.value);
+    try std.testing.expect(validCellStyle(parsed.value.style.?));
+    try std.testing.expect(!parsed.value.spans[0].bold and parsed.value.spans[0].font_family == null);
+    try std.testing.expectEqualStrings("Kept", parsed.value.spans[0].target);
+    const raw = try std.json.parseFromSlice(std.json.Value, a, json, .{}); defer raw.deinit();
+    const from_value = try std.json.parseFromValue(Cell, a, raw.value, .{}); defer from_value.deinit();
+    try std.testing.expectEqualDeep(cell, from_value.value);
+}
+
+
+test "Table corners keep physical px ownership uniform border and exact null JSON" {
+    const px = StyleLength{ .unit = .px, .value = 8 };
+    const corners: TableCornerRadii = .{ .top_left = px, .top_right = px,
+        .bottom_right = px, .bottom_left = .{ .unit = .px, .value = 0 } };
+    var style: TableStyle = .{ .collapse = .separate, .border = .none, .corner_radii = corners };
+    try std.testing.expect(validTableStyle(style));
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32), 16777218 }) |number| {
+        var invalid = corners; invalid.top_right.value = number;
+        try std.testing.expect(!validTableCornerRadii(invalid));
+    }
+    var wrong_unit = corners; wrong_unit.bottom_left.unit = .em;
+    try std.testing.expect(!validTableCornerRadii(wrong_unit));
+    var boundary = corners; boundary.top_left.value = 16777216;
+    try std.testing.expect(validTableCornerRadii(boundary));
+    style.collapse = .collapse; try std.testing.expect(!validTableStyle(style));
+    style.collapse = .separate; style.border = null; try std.testing.expect(!validTableStyle(style));
+    style.border = .{ .edges = StyleBorderEdges.all(.none) }; try std.testing.expect(!validTableStyle(style));
+    style.border = .none; style.display = .inline_block; try std.testing.expect(!validTableStyle(style));
+    style.display = null;
+    const a = std.testing.allocator;
+    const encoded = try std.json.Stringify.valueAlloc(a, style, .{}); defer a.free(encoded);
+    const parsed = try std.json.parseFromSlice(TableStyle, a, encoded, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(style, parsed.value);
+    const legacy = try std.json.Stringify.valueAlloc(a, TableStyle{ .border = .none }, .{}); defer a.free(legacy);
+    try std.testing.expectEqualStrings("{\"border\":{\"none\":{}}}", legacy);
+    try std.testing.expect(std.mem.indexOf(u8, legacy, "corner_radii") == null);
+    const legacy_parsed = try std.json.parseFromSlice(TableStyle, a, legacy, .{}); defer legacy_parsed.deinit();
+    try std.testing.expectEqualDeep(TableStyle{ .border = .none }, legacy_parsed.value);
+}
+
+test "explicit inline image middle is nullable strict data separate from static poster" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const old: InlineImage = .{ .file = "Map.svg", .width_px = 600 };
+    const old_json = try std.json.Stringify.valueAlloc(a, old, .{});
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "vertical_align") == null);
+    var image = old; image.vertical_align = .middle;
+    try std.testing.expect(validInlineImage(image));
+    try std.testing.expect(inlineTableSpanSupportedM(Span{ .image = old }));
+    try std.testing.expect(!inlineTableSpanSupportedM(Span{ .image = image }));
+    try std.testing.expectEqual(@as(u8, 0), @intFromEnum(InlineImageVerticalAlign.middle));
+    try std.testing.expectEqual(@as(u8, 1), @intFromEnum(InlineImageVerticalAlign.baseline));
+    var baseline = image; baseline.vertical_align = .baseline;
+    try std.testing.expect(validInlineImage(baseline));
+    const baseline_json = try std.json.Stringify.valueAlloc(a, baseline, .{});
+    const baseline_parsed = try std.json.parseFromSlice(InlineImage, a, baseline_json, .{}); defer baseline_parsed.deinit();
+    try std.testing.expectEqualDeep(baseline, baseline_parsed.value);
+    const json = try std.json.Stringify.valueAlloc(a, image, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"vertical_align\":\"middle\"") != null);
+    const parsed = try std.json.parseFromSlice(InlineImage, a, json, .{});
+    try std.testing.expectEqualDeep(image, parsed.value);
+    for ([_][]const u8{ "\"top\"", "\"MIDDLE\"", "0", "{}", "[]" }) |bad| {
+        const input = try std.fmt.allocPrint(a, "{{\"file\":\"Map.svg\",\"vertical_align\":{s}}}", .{bad});
+        if (std.json.parseFromSlice(InlineImage, a, input, .{})) |_| return error.TestUnexpectedResult else |_| {}
+        const value = try std.json.parseFromSlice(std.json.Value, a, input, .{});
+        if (std.json.parseFromValue(InlineImage, a, value.value, .{})) |_| return error.TestUnexpectedResult else |_| {}
+    }
+    var poster: InlineImage = .{ .file = "Model.stl", .width_px = 4, .height_px = 3, .vertical_align = .middle,
+        .static_poster = .{ .policy = .three_d_stl_v1, .label = "3D", .file_sha1 = "832cafd6c58519ddd441e8f7fc7d78eb14165a2e", .file_timestamp = "2020-07-25T07:26:20Z" } };
+    try std.testing.expect(!validInlineImage(poster));
+    poster.vertical_align = null; try std.testing.expect(validInlineImage(poster));
+}
+
+const IntrinsicTableViewportTest = struct {
+    fn policy() TableBlockViewport {
+        return .{ .max_viewport_width_px = 639,
+            .box_style = .{ .border = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = "#aaaaaa" } },
+                .margins = StyleEdges.all(.{ .unit = .px, .value = 0 }) },
+            .box_sizing = .border_box, .max_width = .{ .unit = .percent, .value = 100 },
+            .grid_style = .{ .collapse = .collapse }, .grid_direction = .ltr, .language = "ku",
+            .focus_paint = .{ .mode = .ua_auto }, .intrinsic_containing_direction = .rtl };
+    }
+    fn table(policy_value: *const TableBlockViewport) Table {
+        var wide = policy_value.box_style; wide.collapse = .collapse;
+        return .{ .geometry = .{ .border = 1, .cell_padding = 4, .cell_spacing = 0 }, .style = wide,
+            .block_viewport = policy_value, .rows = &.{.{ .cells = &.{.{ .spans = &.{
+                .{ .kind = .link, .text = "kept", .target = "Kept", .target_fragment = "part" },
+            } }} }} };
+    }
+};
+
+test "intrinsic nonfloating Table owns containing direction and exact narrow breakpoint" {
+    const F = IntrinsicTableViewportTest; const policy = F.policy(); const value = F.table(&policy);
+    try std.testing.expect(validTableViewportHeaders(value.geometry, value.style, value.block_viewport, value.float_viewport));
+    try std.testing.expectEqual(@as(?*const TableBlockViewport, &policy), try resolveTableBlockViewport(value, 639));
+    try std.testing.expectEqual(@as(?*const TableBlockViewport, null), try resolveTableBlockViewport(value, 639.5));
+    try std.testing.expectEqual(@as(?TableFloatViewport, null), value.float_viewport);
+    try std.testing.expectEqual(@as(?TableContainingDirection, .rtl), policy.intrinsic_containing_direction);
+    try std.testing.expectEqual(TableContainingDirection.ltr, policy.grid_direction);
+    try std.testing.expect(!validTableBlockViewport(policy));
+    try std.testing.expect(!validTableScrollViewport(policy));
+    try std.testing.expect(!validTableCornerBlockViewport(policy));
+    try std.testing.expectEqual(@as(?u16, 4), value.geometry.?.cell_padding);
+    try std.testing.expectEqualStrings("part", value.rows[0].cells[0].spans[0].target_fragment.?);
+    try std.testing.expectError(error.InvalidPresentation, resolveTableBlockViewport(value, std.math.nan(f32)));
+}
+
+test "intrinsic Table rejects missing hints float pairing fabricated widths and missing focus" {
+    const F = IntrinsicTableViewportTest;
+    for (0..12) |mode| {
+        var policy = F.policy(); var value = F.table(&policy);
+        switch (mode) {
+            0 => policy.intrinsic_containing_direction = null,
+            1 => value.geometry = null,
+            2 => value.geometry.?.border = null,
+            3 => value.geometry.?.cell_padding = null,
+            4 => value.geometry.?.cell_spacing = null,
+            5 => value.geometry.?.width = .{ .unit = .percent, .value = 100 },
+            6 => value.style.?.width = .{ .unit = .percent, .value = 100 },
+            7 => policy.box_style.width = .{ .unit = .px, .value = 100 },
+            8 => policy.focus_paint = null,
+            9 => policy.max_width.value = 90,
+            10 => value.float_viewport = .{ .max_viewport_width_px = 639, .containing_direction = .rtl, .grid_direction = .ltr, .language = "ku" },
+            11 => policy.box_style.containing_direction = .rtl,
+            else => unreachable,
+        }
+        try std.testing.expect(!validTableViewportHeaders(value.geometry, value.style, value.block_viewport, value.float_viewport));
+    }
+}
+
+test "intrinsic viewport JSON preserves null legacy bytes and rejects discriminator confusion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const policy = IntrinsicTableViewportTest.policy();
+    const json = try std.json.Stringify.valueAlloc(a, policy, .{});
+    const parsed = try std.json.parseFromSlice(TableBlockViewport, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(policy, parsed.value);
+    var legacy = policy; legacy.intrinsic_containing_direction = null;
+    const old = try std.json.Stringify.valueAlloc(a, legacy, .{});
+    try std.testing.expect(std.mem.indexOf(u8, old, "intrinsic_containing_direction") == null);
+    for ([_][]const u8{ "true", "123", "\"unknown\"" }) |bad| {
+        const forged = try std.fmt.allocPrint(a, "{s},\"intrinsic_containing_direction\":{s}}}", .{old[0..old.len - 1], bad});
+        const invalid = std.json.parseFromSlice(TableBlockViewport, a, forged, .{ .ignore_unknown_fields = true });
+        if (invalid) |accepted| { accepted.deinit(); return error.TestUnexpectedResult; } else |_| {}
+    }
+    const duplicate = try std.fmt.allocPrint(a, "{s},\"intrinsic_containing_direction\":\"ltr\"}}", .{json[0..json.len - 1]});
+    try std.testing.expectError(error.DuplicateField, std.json.parseFromSlice(TableBlockViewport, a, duplicate, .{}));
+}
+
+test "Rule clearance preserves legacy JSON and validates the original Rule context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    const style: RuleStyle = .{ .height = .{ .unit = .px, .value = 1 }, .fill = .{ .rgb = "#a2a9b1" },
+        .margins = .{ .top = zero, .right = zero, .bottom = zero, .left = zero } };
+    const legacy = try std.json.Stringify.valueAlloc(a, style, .{});
+    const old_shape = .{ .height = style.height, .fill = style.fill, .margins = style.margins };
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, old_shape, .{}), legacy);
+    const parsed = try std.json.parseFromSliceLeaky(RuleStyle, a, legacy, .{});
+    try std.testing.expectEqualDeep(style, parsed);
+    const null_json = try std.fmt.allocPrint(a, "{s},\"clear\":null}}", .{legacy[0..legacy.len - 1]});
+    for ([_][]const u8{ legacy, null_json }) |json| {
+        try std.testing.expectEqualDeep(style, try std.json.parseFromSliceLeaky(RuleStyle, a, json, .{}));
+        const tree = try std.json.parseFromSliceLeaky(std.json.Value, a, json, .{});
+        try std.testing.expectEqualDeep(style, try std.json.parseFromValueLeaky(RuleStyle, a, tree, .{}));
+    }
+    inline for (comptime std.meta.tags(FigureClear)) |clear| {
+        var explicit = style; explicit.clear = clear;
+        try std.testing.expect(validRuleStyle(explicit));
+        var block: Block = .{ .kind = .rule, .rule_style = explicit };
+        try std.testing.expect(validRuleStyleContext(block));
+        const bytes = try std.json.Stringify.valueAlloc(a, explicit, .{});
+        try std.testing.expect(std.mem.indexOf(u8, bytes, "\"clear\":") != null);
+        try std.testing.expectEqualDeep(explicit, try std.json.parseFromSliceLeaky(RuleStyle, a, bytes, .{}));
+        const tree = try std.json.parseFromSliceLeaky(std.json.Value, a, bytes, .{});
+        try std.testing.expectEqualDeep(explicit, try std.json.parseFromValueLeaky(RuleStyle, a, tree, .{}));
+        block.spans = &.{.{ .kind = .text, .text = "unowned" }};
+        try std.testing.expect(!validRuleStyleContext(block));
+        block.spans = &.{}; block.kind = .paragraph;
+        try std.testing.expect(!validRuleStyleContext(block));
+    }
+    for ([_][]const u8{ "0", "1", "2", "3", "4", "true", "false", "0.0", "1.5", "{}", "[]",
+        "\"inline-start\"", "\"RIGHT\"", "\"right \"", "\"0\"", "\"\"" }) |value| {
+        const bytes = try std.fmt.allocPrint(a, "{s},\"clear\":{s}}}", .{ legacy[0..legacy.len - 1], value });
+        const outcome = std.json.parseFromSliceLeaky(RuleStyle, a, bytes, .{});
+        if (outcome) |_| return error.TestUnexpectedResult else |_| {}
+        const tree = try std.json.parseFromSliceLeaky(std.json.Value, a, bytes, .{});
+        const from_value = std.json.parseFromValueLeaky(RuleStyle, a, tree, .{});
+        if (from_value) |_| return error.TestUnexpectedResult else |_| {}
+    }
+    const duplicate = try std.fmt.allocPrint(a, "{s},\"clear\":\"right\",\"clear\":\"left\"}}", .{legacy[0..legacy.len - 1]});
+    try std.testing.expectError(error.DuplicateField, std.json.parseFromSliceLeaky(RuleStyle, a, duplicate, .{}));
+    try std.testing.expectError(error.DuplicateField, std.json.parseFromSliceLeaky(RuleStyle, a, duplicate, .{ .duplicate_field_behavior = .use_last }));
+    // A Value object has unique keys. Its input parser must reject duplicate
+    // fields before conversion; discarded duplicate spelling cannot be recovered.
+    try std.testing.expectError(error.DuplicateField, std.json.parseFromSliceLeaky(std.json.Value, a, duplicate, .{}));
+    const unknown = try std.fmt.allocPrint(a, "{s},\"unknown_clear\":\"right\"}}", .{legacy[0..legacy.len - 1]});
+    try std.testing.expectError(error.UnknownField, std.json.parseFromSliceLeaky(RuleStyle, a, unknown, .{ .ignore_unknown_fields = true }));
+    const unknown_tree = try std.json.parseFromSliceLeaky(std.json.Value, a, unknown, .{});
+    try std.testing.expectError(error.UnknownField, std.json.parseFromValueLeaky(RuleStyle, a, unknown_tree, .{ .ignore_unknown_fields = true }));
 }

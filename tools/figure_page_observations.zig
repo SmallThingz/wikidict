@@ -80,7 +80,9 @@ fn missingHeadContext(a: A, page: RawPage) ![]const u8 {
 }
 
 fn suppliedPageHead(a: A, page: RawPage) ![]const u8 {
+    if (page.authored_head_context != null and page.missing_head_context != null) return invalid;
     if (page.missing_head_context != null) return missingHeadContext(a, page);
+    if (page.authored_head_context != null) return authoredHeadContext(a, page);
     return string(try field(try json(a, page.response), "parse"), "headhtml");
 }
 
@@ -1107,6 +1109,8 @@ pub const RawPage = struct {
     figure_block_renditions: ?RawFigureBlockRenditions = null,
     text_class_scope: bool = false,
     missing_head_context: ?RawMissingHeadContext = null,
+    authored_head_context: ?RawAuthoredHeadContext = null,
+    authored_style_operations: ?[]const AuthoredElementStyleRange = null,
     outer_context: ?RawOuterContext = null,
     missing_served_set: ?MissingServedSet = null,
     // Complete emitted and page-authored styles, independently selected from media.
@@ -1184,6 +1188,7 @@ const Page = struct {
     source_siblings: []const profile.SourceSiblingProof = &.{},
     source_root_tables: []const profile.SourceRootTableProof = &.{},
     source_root_children: []const profile.SourceRootChildProof = &.{},
+    source_div_parent_tags: []const profile.SourceDivParentTagProof = &.{},
     source_literal_divs: []const profile.SourceLiteralDivProof = &.{},
     source_root_parent_groups: []const profile.SourceRootParentProof = &.{},
     root_attributes: ?Inventory = null,
@@ -2612,15 +2617,514 @@ const PageStyleData = struct {
     figure_assets: []const compiler.FigureObservedAsset = &.{},
     block_renditions: ?FigureBlockRenditions = null,
     source_custom_elements: []const profile.SourceCustomElementProof = &.{},
+    authored_element_styles: []const AuthoredElementStyleProof = &.{},
 };
 
+const FloatingTablePageContext = struct { styles: *const profile.Profile, nodes: []const profile.ObservedStyleNode, root: u32 };
+
+const SelectedFloatingTable = struct {
+    page_contexts: []const FloatingTablePageContext,
+    opening_start: usize,
+    opening_end: usize,
+    contexts: []const profile.TableContainingDirectionContext,
+    link_contexts: []const profile.TableContainingDirectionContext = &.{},
+};
+
+const FloatingTableAnchor = struct {
+    table: Inventory,
+    cell: Inventory,
+    text: []const u8,
+    opening_start: usize = 0,
+    opening_end: usize = 0,
+    row: usize,
+    slot: usize,
+    observed_table: ?usize = null,
+};
+
+fn floatingTableLiteralText(a: A, raw: []const u8) !?[]const u8 {
+    var text: std.ArrayList(u8) = .empty;
+    var at: usize = 0;
+    var small = false;
+    while (at < raw.len) {
+        if (raw[at] != '<') { try text.append(a, raw[at]); at += 1; continue; }
+        const tag = syntax.tagAt(raw, at) orelse return null;
+        if (std.mem.trim(u8, tag.attrs, " \t\r\n/").len != 0) return null;
+        if (tag.is("br") and !tag.closing) { try text.append(a, ' '); }
+        else if (tag.is("small") and !tag.self_closing and tag.closing == small) { small = !small; }
+        else return null;
+        at = tag.end;
+    }
+    if (small) return null;
+    // Coarsen whitespace only in the all-occurrence ambiguity signature.
+    // The source and rendered cell bodies are never rewritten by this proof.
+    var normalized: std.ArrayList(u8) = .empty;
+    var space = false;
+    for (text.items) |byte| {
+        if (std.ascii.isWhitespace(byte)) { space = normalized.items.len != 0; continue; }
+        if (space) try normalized.append(a, ' ');
+        space = false; try normalized.append(a, byte);
+    }
+    return rootTableLiteralText(a, normalized.items);
+}
+
+fn floatingTableSourceAnchors(a: A, source: []const u8) ![]const FloatingTableAnchor {
+    if (source.len > 4 * 1024 * 1024) return &.{};
+    var anchors: std.ArrayList(FloatingTableAnchor) = .empty;
+    var scan: syntax.OpaqueScan = .{};
+    var table: ?struct { attrs: Inventory, start: usize, end: usize, row: usize = 0, slot: usize = 0 } = null;
+    var at: usize = 0;
+    while (at < source.len) {
+        if (scan.protectedEnd(source, at, null)) |end| { at = end; continue; }
+        if (source[at] == '<') {
+            const tag = syntax.tagAt(source, at) orelse return &.{};
+            at = tag.end; continue;
+        }
+        if (source[at] == '[' or source[at] == '{') {
+            if (!(at == 0 or source[at - 1] == '\n') or !std.mem.startsWith(u8, source[at..], "{|")) {
+                if (syntax.balanced(source, at)) |pair| { at = pair.end; continue; }
+            }
+        }
+        if (at != 0 and source[at - 1] != '\n') { at += 1; continue; }
+        const stop = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse source.len;
+        const line = std.mem.trimEnd(u8, source[at..stop], "\r");
+        const next = if (stop < source.len) stop + 1 else stop;
+        if (std.mem.startsWith(u8, line, "{|")) {
+            if (table != null) return &.{};
+            const attrs = (try rootTableAttributes(a, line[2..])) orelse { at = next; continue; };
+            table = .{ .attrs = attrs, .start = at, .end = at + line.len };
+        } else if (std.mem.startsWith(u8, line, "|}")) {
+            table = null;
+        } else if (table) |*owner| {
+            if (std.mem.startsWith(u8, line, "|-")) { owner.row += 1; owner.slot = 0; }
+            else if (line.len != 0 and (line[0] == '|' or line[0] == '!')) {
+                if (std.mem.startsWith(u8, line, "|+") or std.mem.indexOf(u8, line, "||") != null or std.mem.indexOf(u8, line, "!!") != null) { table = null; at = next; continue; }
+                const slot = owner.slot; owner.slot += 1;
+                if (line[0] == '!') { at = next; continue; }
+                const raw = line[1..];
+                const separator = std.mem.indexOfScalar(u8, raw, '|');
+                const attrs = if (separator) |bar| (try rootTableAttributes(a, raw[0..bar])) orelse { at = next; continue; }
+                    else (try rootTableAttributes(a, "")) orelse return invalid;
+                const body = if (separator) |bar| raw[bar + 1..] else raw;
+                const text = (try floatingTableLiteralText(a, body)) orelse { at = next; continue; };
+                if (text.len != 0) try anchors.append(a, .{ .table = owner.attrs, .cell = attrs, .text = text,
+                    .opening_start = owner.start, .opening_end = owner.end, .row = owner.row, .slot = slot });
+                if (anchors.items.len > 4096) return &.{};
+            }
+        }
+        at = next;
+    }
+    return anchors.toOwnedSlice(a);
+}
+
+fn floatingTableObservedAnchor(a: A, html: []const u8, nodes: []const ObservedSiblingNode, index: usize) !?FloatingTableAnchor {
+    const cell = nodes[index];
+    if (!cell.tag.is("td")) return null;
+    const row = cell.parent orelse return null;
+    if (!nodes[row].tag.is("tr")) return null;
+    var table = nodes[row].parent orelse return null;
+    if (nodes[table].tag.is("tbody")) table = nodes[table].parent orelse return null;
+    if (!nodes[table].tag.is("table")) return null;
+    const text = (try floatingTableLiteralText(a, html[cell.tag.end..cell.inner_end orelse return null])) orelse return null;
+    if (text.len == 0) return null;
+    var row_ordinal: usize = 0;
+    var previous = nodes[row].previous;
+    while (previous) |before| { if (!nodes[before].tag.is("tr")) return null; row_ordinal += 1; previous = nodes[before].previous; }
+    var slot: usize = 0; previous = cell.previous;
+    while (previous) |before| { if (!nodes[before].tag.is("td") and !nodes[before].tag.is("th")) return null; slot += 1; previous = nodes[before].previous; }
+    return .{ .table = nodes[table].attributes, .cell = cell.attributes, .text = text, .row = row_ordinal, .slot = slot, .observed_table = table };
+}
+
+fn floatingTableAnchorEqual(a: FloatingTableAnchor, b: FloatingTableAnchor) bool {
+    return sameSiblingAttributes(a.table, b.table) and sameSiblingAttributes(a.cell, b.cell) and equal(a.text, b.text);
+}
+
+fn floatingTableOrdinaryOpening(source: []const u8, opening: usize) bool {
+    var at: usize = 0; var scan: syntax.OpaqueScan = .{};
+    while (at < source.len and at <= opening) {
+        if (at == opening) return true;
+        if (scan.protectedEnd(source, at, null)) |end| { at = end; continue; }
+        if (source[at] == '<') {
+            const tag = syntax.tagAt(source, at) orelse return false;
+            at = tag.end; continue;
+        }
+        if (source[at] == '[' or source[at] == '{') {
+            if (syntax.balanced(source, at)) |pair| { at = pair.end; continue; }
+            if (std.mem.startsWith(u8, source[at..], "{{")) return false;
+        }
+        at += 1;
+    }
+    return false;
+}
+
+fn floatingTableObservedOwner(anchors: []const FloatingTableAnchor, observed: []const ?FloatingTableAnchor, anchor: FloatingTableAnchor) ?usize {
+    var owner: ?usize = null;
+    var source_matches: usize = 0; var observed_matches: usize = 0;
+    for (anchors) |other| if (floatingTableAnchorEqual(anchor, other)) {
+        source_matches += 1;
+        if (other.opening_start != anchor.opening_start) return null;
+        var matching_slots: usize = 0;
+        for (observed) |candidate| if (candidate) |known| if (floatingTableAnchorEqual(other, known) and known.row == other.row and known.slot == other.slot) { matching_slots += 1; };
+        if (matching_slots != 1) return null;
+    };
+    for (observed) |candidate| if (candidate) |known| if (floatingTableAnchorEqual(anchor, known)) {
+        observed_matches += 1;
+        const current = known.observed_table orelse return null;
+        if (owner) |prior| { if (prior != current) return null; }
+        else owner = current;
+    };
+    if (source_matches != observed_matches) return null;
+    return owner;
+}
+
+fn floatingTableExistingContexts(a: A, figures: []const SelectedFigureStyle) ![]const FloatingTablePageContext {
+    if (figures.len != 0 and figures[0].contexts.len >= 2) {
+        const result = try a.alloc(FloatingTablePageContext, 2);
+        for (result, 0..) |*out, index| { const context = figures[0].contexts[index]; out.* = .{ .styles = context.styles, .nodes = context.nodes, .root = context.root }; }
+        return result;
+    }
+    return &.{};
+}
+
+fn selectFloatingTableStyles(a: A, parent: *const profile.Profile, stored: *const PageStyleData, source: []const u8,
+    figures: []const SelectedFigureStyle) ![]const SelectedFloatingTable {
+    // Old no-operation Books have no authenticated alternate GET-head set.
+    // This optional policy declines; it cannot manufacture that authority or
+    // turn otherwise valid page-style selection into an error.
+    if (stored.figure_alternative_sources == null) return &.{};
+    const anchors = try floatingTableSourceAnchors(a, source);
+    if (anchors.len == 0) return &.{};
+    const html = try selectedStoredHtml(a, stored);
+    const observed = try a.alloc(?FloatingTableAnchor, stored.observed_nodes.len);
+    for (observed, 0..) |*out, index| out.* = try floatingTableObservedAnchor(a, html, stored.observed_nodes, index);
+    var result: std.ArrayList(SelectedFloatingTable) = .empty;
+    var page_contexts: ?[]const FloatingTablePageContext = null;
+    for (anchors) |anchor| {
+        if (!floatingTableOrdinaryOpening(source, anchor.opening_start)) continue;
+        var done = false;
+        for (result.items) |known| if (known.opening_start == anchor.opening_start) { done = true; break; };
+        if (done) continue;
+        // Census every matching source/DOM occurrence before the physical-root
+        // eligibility check. A matching nested/foreign Table cannot disappear.
+        const owner = floatingTableObservedOwner(anchors, observed, anchor) orelse continue;
+        if (stored.observed_nodes[owner].parent != 0) continue;
+        if (page_contexts == null) {
+            const existing = try floatingTableExistingContexts(a, figures);
+            if (existing.len != 0) page_contexts = existing else {
+                const complete = try a.alloc(FloatingTablePageContext, 2);
+                for (complete, 0..) |*out, arm| {
+                    const styles = try figureContextStyles(a, parent, stored, arm != 0);
+                    out.* = .{ .styles = styles, .nodes = try figureObservedGraph(a, styles, stored, arm != 0), .root = @intCast(stored.outer.ancestors.len) };
+                }
+                page_contexts = complete;
+            }
+        }
+        const root: u32 = @intCast(stored.outer.ancestors.len);
+        const contexts = try a.alloc(profile.TableContainingDirectionContext, 2);
+        const link_contexts = try a.alloc(profile.TableContainingDirectionContext, 2);
+        for (contexts, 0..) |*out, arm| {
+            const full = page_contexts.?[arm];
+            const original = full.nodes;
+            if (full.root != root or root + owner >= original.len) return invalid;
+            const nodes = try a.alloc(profile.ObservedStyleNode, root + 2);
+            @memcpy(nodes[0..root + 1], original[0..root + 1]);
+            link_contexts[arm] = .{ .styles = full.styles, .nodes = original, .root = root, .table = @intCast(root + owner) };
+            const table = original[root + owner];
+            nodes[root + 1] = .{ .tag = table.tag, .attributes = table.attributes, .parent = root,
+                .empty = table.empty, .has_text = table.has_text, .custom_environment = table.custom_environment };
+            out.* = .{ .styles = full.styles, .nodes = nodes, .root = root, .table = root + 1 };
+        }
+        try result.append(a, .{ .opening_start = anchor.opening_start, .opening_end = anchor.opening_end, .contexts = contexts, .link_contexts = link_contexts, .page_contexts = page_contexts.? });
+        if (result.items.len > 64) return invalid;
+    }
+    return result.toOwnedSlice(a);
+}
+
+fn intrinsicTableTextSignature(a: A, text: []const u8) ![]const u8 {
+    var result: std.ArrayList(u8) = .empty;
+    var space = false;
+    for (text) |byte| {
+        if (std.mem.indexOfScalar(u8, " \t\n\r\x0c", byte) != null) { space = result.items.len != 0; continue; }
+        if (space) try result.append(a, ' ');
+        space = false; try result.append(a, byte);
+    }
+    return result.toOwnedSlice(a);
+}
+
+fn intrinsicTableCapturedCellText(a: A, html: []const u8, node: ObservedSiblingNode) !?[]const u8 {
+    if (!node.tag.is("td") and !node.tag.is("th")) return null;
+    const end = node.inner_end orelse return null;
+    if (node.tag.end > end or end > html.len) return null;
+    var text: std.ArrayList(u8) = .empty;
+    var at = node.tag.end;
+    while (at < end) {
+        if (html[at] == '<') {
+            const tag = syntax.tagAt(html, at) orelse return null;
+            if (tag.end > end or tag.isOpaque()) return null;
+            if (tag.is("br") or tag.is("center")) try text.append(a, ' ');
+            at = tag.end;
+        } else {
+            const stop = @min(std.mem.indexOfScalarPos(u8, html, at, '<') orelse end, end);
+            const decoded = decodedAttribute(a, html[at..stop]) catch |err| switch (err) {
+                error.OutOfMemory => return err, else => return null,
+            };
+            try text.appendSlice(a, decoded); at = stop;
+        }
+    }
+    return try intrinsicTableTextSignature(a, text.items);
+}
+
+fn intrinsicTableDirectTextSignature(a: A, text: []const u8, leading: bool, trailing: bool) ![]const u8 {
+    const spaces = " \t\n\r\x0c";
+    var selected = text;
+    if (leading) selected = std.mem.trimStart(u8, selected, spaces);
+    if (trailing) selected = std.mem.trimEnd(u8, selected, spaces);
+    var result: std.ArrayList(u8) = .empty;
+    var space = false;
+    for (selected) |byte| {
+        const current = std.mem.indexOfScalar(u8, spaces, byte) != null;
+        if (!current or !space) try result.append(a, if (current) ' ' else byte);
+        space = current;
+    }
+    return result.toOwnedSlice(a);
+}
+
+fn intrinsicTableCapturedNodeEnd(html: []const u8, node: ObservedSiblingNode) ?usize {
+    if (node.tag.is("br") or node.tag.is("wbr")) return node.tag.end;
+    const inner_end = node.inner_end orelse return null;
+    if (inner_end < node.tag.end or inner_end >= html.len) return null;
+    const close = syntax.tagAt(html, inner_end) orelse return null;
+    if (!close.closing or !std.ascii.eqlIgnoreCase(close.name, node.tag.name)) return null;
+    return close.end;
+}
+
+fn intrinsicTableCapturedTextRunMatches(a: A, html: []const u8, nodes: []const ObservedSiblingNode,
+    root: u32, cell: u32, run: compiler.Renderer.IntrinsicTableSourceTextRun) !bool
+{
+    if (cell < root or run.subject < cell or run.subject - root >= nodes.len) return false;
+    const parent_index = run.subject - root;
+    const parent = nodes[parent_index];
+    // The witness must remain inside the particular matched real CELL.
+    var ancestor: ?usize = parent_index; var depth: usize = 0;
+    while (ancestor != cell - root) {
+        const index = ancestor orelse return false;
+        if (index >= nodes.len or depth == 16) return false;
+        const next = nodes[index].parent orelse return false;
+        if (next >= index) return false;
+        ancestor = next; depth += 1;
+    }
+    const void_node = parent.tag.is("br") or parent.tag.is("wbr");
+    const inner_end = if (void_node) parent.tag.end else parent.inner_end orelse return false;
+    if (parent.tag.end > inner_end or inner_end > html.len) return false;
+    var start = parent.tag.end;
+    var end = inner_end;
+    if (run.previous_child) |subject| {
+        if (subject <= run.subject or subject < root or subject - root >= nodes.len) return false;
+        const child = nodes[subject - root];
+        if (child.parent != parent_index or child.start < parent.tag.end) return false;
+        start = intrinsicTableCapturedNodeEnd(html, child) orelse return false;
+    }
+    if (run.next_child) |subject| {
+        if (subject <= run.subject or subject < root or subject - root >= nodes.len) return false;
+        const child = nodes[subject - root];
+        if (child.parent != parent_index or child.start < parent.tag.end) return false;
+        end = child.start;
+    }
+    if (start > end or end > inner_end or std.mem.indexOfScalar(u8, html[start..end], '<') != null) return false;
+    const decoded = decodedAttribute(a, html[start..end]) catch |err| switch (err) {
+        error.OutOfMemory => return err, else => return false,
+    };
+    // Only the outer CELL boundary may discard indentation/ending LF. A
+    // space beside an inline child stays owned by its exact direct-text gap.
+    const cell_boundary = run.subject == cell and (parent.tag.is("td") or parent.tag.is("th"));
+    const leading = cell_boundary and run.previous_child == null;
+    const trailing = cell_boundary and run.next_child == null;
+    return equal(try intrinsicTableDirectTextSignature(a, run.text, leading, trailing),
+        try intrinsicTableDirectTextSignature(a, decoded, leading, trailing));
+}
+
+fn intrinsicTableCapturedCellMatches(a: A, html: []const u8, nodes: []const ObservedSiblingNode,
+    root: u32, cell: compiler.Renderer.IntrinsicTableSourceCellIdentity) !bool
+{
+    if (cell.subject < root or cell.subject - root >= nodes.len or cell.text_runs.len == 0) return false;
+    const captured = (try intrinsicTableCapturedCellText(a, html, nodes[cell.subject - root])) orelse return false;
+    if (!equal(try intrinsicTableTextSignature(a, cell.text), captured)) return false;
+    for (cell.text_runs) |run| if (!try intrinsicTableCapturedTextRunMatches(a, html, nodes, root, cell.subject, run)) return false;
+    return true;
+}
+
+fn intrinsicTableSourceOpenings(a: A, source: []const u8) ![]const usize {
+    if (source.len > 4 * 1024 * 1024) return &.{};
+    var result: std.ArrayList(usize) = .empty;
+    var at: usize = 0; var scan: syntax.OpaqueScan = .{};
+    while (at < source.len) {
+        if (scan.protectedEnd(source, at, null)) |end| { at = end; continue; }
+        if ((at == 0 or source[at - 1] == '\n') and std.mem.startsWith(u8, source[at..], "{|")) {
+            if (result.items.len == 64) return &.{};
+            try result.append(a, at); at += 2; continue;
+        }
+        if (source[at] == '<') {
+            const tag = syntax.tagAt(source, at) orelse return &.{};
+            at = tag.end; continue;
+        }
+        if (source[at] == '[' or source[at] == '{') {
+            if (syntax.balanced(source, at)) |pair| { at = pair.end; continue; }
+            if (std.mem.startsWith(u8, source[at..], "{{")) return &.{};
+        }
+        at += 1;
+    }
+    return result.toOwnedSlice(a);
+}
+
+fn selectIntrinsicTableStyles(a: A, ns: *const namespaces.Registry, parent: *const profile.Profile,
+    stored: *const PageStyleData, source: []const u8, context: compiler.Context) ![]const SelectedFloatingTable
+{
+    if (stored.figure_alternative_sources == null) return &.{};
+    const openings = try intrinsicTableSourceOpenings(a, source);
+    if (openings.len == 0) return &.{};
+    var has_candidate = false;
+    for (stored.observed_nodes) |node| if (node.tag.is("table") and node.attributes.get("border") != null and
+        node.attributes.get("cellpadding") != null and node.attributes.get("cellspacing") != null) { has_candidate = true; break; };
+    if (!has_candidate) return &.{};
+    const html = try selectedStoredHtml(a, stored);
+    const root: u32 = @intCast(stored.outer.ancestors.len);
+    const pages = try a.alloc(FloatingTablePageContext, 2);
+    for (pages, 0..) |*out, arm| {
+        const styles = try figureContextStyles(a, parent, stored, arm != 0);
+        out.* = .{ .styles = styles, .nodes = try figureObservedGraph(a, styles, stored, arm != 0), .root = root };
+    }
+    var candidates: std.ArrayList(u32) = .empty;
+    for (stored.observed_nodes, 0..) |node, index| {
+        if (!node.tag.is("table")) continue;
+        const full: profile.TableContainingDirectionContext = .{ .intrinsic_viewport = true,
+            .styles = pages[0].styles, .nodes = pages[0].nodes, .root = root, .table = @intCast(root + index) };
+        if (profile.observedIntrinsicTableGeometry(full) == null) continue;
+        // A same-family nested/foreign owner must not vanish from the census.
+        // This first source family admits only actual parser-root children.
+        if (node.parent != 0 or candidates.items.len == 64) return &.{};
+        try candidates.append(a, @intCast(index));
+    }
+    if (candidates.items.len == 0) return &.{};
+    var compile_context = context; compile_context.namespace_catalog = ns;
+    const counts = try a.alloc(usize, candidates.items.len); @memset(counts, 0);
+    var selected: std.ArrayList(SelectedFloatingTable) = .empty;
+    for (openings) |opening| {
+        const opening_end = std.mem.indexOfScalarPos(u8, source, opening, '\n') orelse return &.{};
+        const tag: syntax.Tag = .{ .name = "table", .attrs = std.mem.trimEnd(u8, source[opening + 2 .. opening_end], "\r"),
+            .end = opening_end, .closing = false, .self_closing = false };
+        const attrs = inventory(a, tag) catch |err| switch (err) { error.OutOfMemory => return err, else => return &.{} };
+        if (profile.intrinsicTableLegacyGeometry(try figureObservedAttributes(a, attrs)) == null) continue;
+        var owner: ?usize = null;
+        for (candidates.items, 0..) |index, ordinal| {
+            var both = true;
+            for (pages) |page| {
+                const full: profile.TableContainingDirectionContext = .{ .intrinsic_viewport = true,
+                    .styles = page.styles, .nodes = page.nodes, .root = root, .table = root + index };
+                const cells = (compiler.Renderer.intrinsicTableIdentityAlloc(a, source, opening, compile_context, full)
+                    catch |err| switch (err) { error.OutOfMemory => return err, else => null }) orelse { both = false; break; };
+                for (cells) |cell| {
+                    if (!try intrinsicTableCapturedCellMatches(a, html, stored.observed_nodes, root, cell)) { both = false; break; }
+                }
+                if (!both) break;
+            }
+            if (!both) continue;
+            counts[ordinal] += 1;
+            if (owner != null) return &.{};
+            owner = ordinal;
+        }
+        const ordinal = owner orelse return &.{};
+        const captured_index = candidates.items[ordinal];
+        if (!floatingTableOrdinaryOpening(source, opening)) return &.{};
+        const contexts = try a.alloc(profile.TableContainingDirectionContext, 2);
+        const links = try a.alloc(profile.TableContainingDirectionContext, 2);
+        for (pages, 0..) |page, arm| {
+            const table = page.nodes[root + captured_index];
+            const nodes = try a.alloc(profile.ObservedStyleNode, root + 2);
+            @memcpy(nodes[0 .. root + 1], page.nodes[0 .. root + 1]);
+            nodes[root + 1] = table;
+            nodes[root + 1].known_previous_element_sibling = null;
+            nodes[root + 1].known_next_element_sibling = null;
+            nodes[root + 1].known_no_previous_element_sibling = false;
+            nodes[root + 1].known_no_next_element_sibling = false;
+            contexts[arm] = .{ .intrinsic_viewport = true, .styles = page.styles, .nodes = nodes, .root = root, .table = root + 1 };
+            links[arm] = .{ .intrinsic_viewport = true, .styles = page.styles, .nodes = page.nodes, .root = root, .table = root + captured_index };
+        }
+        const end = std.mem.indexOfScalarPos(u8, source, opening, '\n') orelse return &.{};
+        try selected.append(a, .{ .opening_start = opening, .opening_end = end,
+            .contexts = contexts, .link_contexts = links, .page_contexts = pages });
+    }
+    // Bijection, not ordinal pairing: every captured family member has one
+    // complete source body and vice versa, across both authenticated heads.
+    if (selected.items.len != candidates.items.len) return &.{};
+    for (counts) |count| if (count != 1) return &.{};
+    return selected.toOwnedSlice(a);
+}
+
 pub const SelectedPageStyles = struct {
+    intrinsic_tables: []const SelectedFloatingTable = &.{},
+    authored_element_original: []const u8 = "",
+    authored_element_styles: []const SelectedAuthoredElementStyle = &.{},
+
+    floating_tables: []const SelectedFloatingTable = &.{},
+    prefix_table: ?*const SelectedPrefixTable = null,
     styles: *const profile.Profile,
     scope: profile.BoundedTextClassScope,
     source: []const u8,
     namespace_catalog: *const namespaces.Registry,
     figure_styles: []const SelectedFigureStyle = &.{},
     figure_assets: []const compiler.FigureObservedAsset = &.{},
+    pub fn authoredElementStyle(raw: ?*const anyopaque, a: A, operation: compiler.AuthoredElementStyleOperation) A.Error!?compiler.AuthoredElementStyleObservation {
+        _ = a;
+        const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
+        if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
+            !equal(self.source, self.authored_element_original)) return null;
+        for (self.authored_element_styles) |selected| {
+            if (!equal(selected.proof.tag, "hr")) return null;
+            const range = selected.proof.range;
+            const element = self.source[range.start..range.end];
+            if (operation.element.ptr != element.ptr or operation.element.len != element.len) continue;
+            return .{ .profile = self.styles, .contexts = selected.contexts };
+        }
+        return null;
+    }
+
+    pub fn floatingTable(raw: ?*const anyopaque, a: A, source: []const u8, opening: usize) A.Error!?compiler.TableContainingDirectionObservation {
+        _ = a;
+        const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
+        return self.tableObservation(source, opening, self.floating_tables);
+    }
+
+    fn tableObservation(self: *const SelectedPageStyles, source: []const u8, opening: usize,
+        tables: []const SelectedFloatingTable) A.Error!?compiler.TableContainingDirectionObservation
+    {
+        if (source.ptr != self.source.ptr or source.len != self.source.len or !equal(source, self.authored_element_original)) return null;
+        for (tables) |known| if (opening == known.opening_start) {
+            if (known.opening_end > source.len or !std.mem.startsWith(u8, source[opening..known.opening_end], "{|")) return null;
+            var motion: ?compiler.TableStaticMotionObservation = null;
+            if (self.scope.page_static_motion) |proof| if (proof.styles == self.styles and proof.root == self.scope.page_style_root and
+                proof.source.ptr == self.source.ptr and proof.source.len == self.source.len and
+                known.page_contexts.len == known.contexts.len) {
+                var coherent = true;
+                for (known.contexts, known.page_contexts) |context, full| if (context.styles != full.styles or context.root != full.root) { coherent = false; break; };
+                if (coherent) motion = .{ .proof = proof, .contexts = known.contexts };
+            };
+            return .{ .contexts = known.contexts, .link_contexts = known.link_contexts, .parents = &.{}, .static_motion = motion };
+        };
+        return null;
+    }
+
+    pub fn intrinsicTable(raw: ?*const anyopaque, a: A, source: []const u8, opening: usize) A.Error!?compiler.TableContainingDirectionObservation {
+        _ = a;
+        const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
+        return self.tableObservation(source, opening, self.intrinsic_tables);
+    }
+    pub fn tableIntrinsicSource(self: *const SelectedPageStyles) ?compiler.TableContainingDirectionSource {
+        if (self.intrinsic_tables.len == 0) return null;
+        return .{ .intrinsic_viewport = true, .source = self.source, .context = self, .observe = intrinsicTable };
+    }
+
+    pub fn tablePrefixSource(self: *const SelectedPageStyles) ?compiler.TableContainingDirectionSource {
+        return if (self.prefix_table) |selected| selected.capability() else null;
+    }
     pub fn figureStyle(raw: ?*const anyopaque, a: A, operation: compiler.FigureStyleOperation) A.Error!?compiler.FigureStyleObservation {
         const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
         if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
@@ -2684,6 +3188,12 @@ pub const Book = struct {
                 }
             }
         }
+        if (shape == .object) if (shape.object.get("schema")) |schema_value| {
+            if (schema_value == .string and !equal(schema_value.string, "wikidict.figure-page-observations.v8"))
+                if (shape.object.get("pages")) |page_values| if (page_values == .array)
+                    for (page_values.array.items) |page_value| if (page_value == .object and
+                        (page_value.object.contains("authored_style_operations") or page_value.object.contains("authored_head_context"))) return error.UnknownField;
+        };
         const doc = try std.json.parseFromValueLeaky(Document, a, shape, .{});
         // v7 composes independent Missing and SVG-language proofs. It does not
         // manufacture a page context or authorize general stylesheets.
@@ -2741,6 +3251,13 @@ pub const Book = struct {
         for (doc.pages, pages, 0..) |page, *out, index| {
             const has_image_map_error = image_map_contract and page.image_map_no_link != null;
             if (page.image_map_no_link != null and !image_map_contract) return invalid;
+            if (page.authored_style_operations != null or page.authored_head_context != null) {
+                if (!equal(doc.schema, "wikidict.figure-page-observations.v8") or
+                    page.authored_style_operations == null or page.authored_head_context == null) return invalid;
+                // Validate the complete new role even if another head dispatcher
+                // would otherwise run first. Every record is checked eagerly.
+                _ = try authoredHeadContext(a, page);
+            }
             const has_page_styles = page_style_contract and page.page_styles != null;
             if (page.text_class_scope and !class_scope_contract) return invalid;
             if (page_style_contract and page.page_styles != null and (!page.text_class_scope or page.outer_context == null)) return invalid;
@@ -2815,8 +3332,12 @@ pub const Book = struct {
                 try observedSourceRootTables(a, ns, source_and_html.source, source_and_html.html, observed_nodes.items) else &.{};
             const source_root_children = if (has_page_styles)
                 try observedSourceRootChildren(a, source_and_html.source, source_and_html.html, observed_nodes.items) else &.{};
+            const source_div_parent_tags = if (has_page_styles)
+                try observedRepeatedDivParentTags(a, ns, source_and_html.source, source_and_html.html, observed_nodes.items) else &.{};
             const source_literal_divs = if (has_page_styles)
-                try observedLiteralDivParents(a, ns, source_and_html.source, source_and_html.html, observed_nodes.items) else &.{};
+                if (page.authored_style_operations != null)
+                    try observedLiteralDivParentsIn(a, ns, source_and_html.source, source_and_html.html, observed_nodes.items, true)
+                else try observedLiteralDivParents(a, ns, source_and_html.source, source_and_html.html, observed_nodes.items) else &.{};
             const source_root_parent_groups = if (has_page_styles)
                 try observedCommonRootParents(a, source_and_html.source, source_and_html.html, observed_nodes.items) else &.{};
             var paint_outer: ?ObservedOuterContext = null;
@@ -2833,6 +3354,9 @@ pub const Book = struct {
             if (page_styles) |selected_styles| {
                 selected_styles.observed_nodes = observed_nodes.items;
                 selected_styles.observed_html = source_and_html.html;
+                if (page.authored_style_operations) |ranges| selected_styles.authored_element_styles = try authoredElementStyleProofsWithHtml(
+                    a, ns, source_and_html.source, source_and_html.html, ranges, observed_nodes.items);
+
                 if (page.figure_block_renditions) |raw_block| selected_styles.block_renditions = try figureBlockRenditions(a, raw_block);
                 if (page.figure_style_operations) |ranges| {
                     if (selected_styles.block_renditions != null) {
@@ -2860,6 +3384,17 @@ pub const Book = struct {
                     proved_style_operation = proved_style_operation or proofs.len != 0;
                     if (page.figure_style_assets) |assets| selected_styles.figure_assets = try figureStyleAssets(a, ns, assets, selected_styles);
                     }
+                }
+                if (page.authored_style_operations == null and selected_styles.figure_styles.len != 0 and
+                    selected_styles.context_sources.len != 0 and selected_styles.figure_alternative_sources != null)
+                {
+                    // The existing Figure path has already authenticated both
+                    // complete heads. Optional HR correspondence lends only its
+                    // exact source/captured owner; native CSS remains separate.
+                    selected_styles.authored_element_styles = observedFigurePageRuleProofs(a, ns,
+                        source_and_html.source, source_and_html.html, observed_nodes.items, source_literal_divs) catch |err| switch (err) {
+                        error.OutOfMemory => return err, else => &.{},
+                    };
                 }
                 selected_styles.source_custom_elements = try observedSourceCustomElements(a, source_and_html.source, source_and_html.html, observed_nodes.items);
             }
@@ -2971,7 +3506,7 @@ pub const Book = struct {
                     .missing_content = image.missing_content, .static_poster = poster };
             }
             out.* = .{ .namespace_id = page.namespace_id, .page_id = page.page_id, .revision_id = page.revision_id, .title = page.title,
-                .raw_sha256 = page.raw_sha256, .source = source_and_html.source, .image_map_no_link = image_map_error, .occurrences = occurrences, .text_class_scope = text_scope, .source_siblings = source_siblings, .source_root_tables = source_root_tables, .page_styles = page_styles, .source_root_children = source_root_children, .source_literal_divs = source_literal_divs, .source_root_parent_groups = source_root_parent_groups,
+                .raw_sha256 = page.raw_sha256, .source = source_and_html.source, .image_map_no_link = image_map_error, .occurrences = occurrences, .text_class_scope = text_scope, .source_siblings = source_siblings, .source_root_tables = source_root_tables, .page_styles = page_styles, .source_root_children = source_root_children, .source_literal_divs = source_literal_divs, .source_div_parent_tags = source_div_parent_tags, .source_root_parent_groups = source_root_parent_groups,
                 .root_attributes = if (has_page_styles and observed_nodes.items.len != 0) observed_nodes.items[0].attributes else null };
         }
         if (poster_svg_contract) {
@@ -3109,6 +3644,8 @@ pub const Book = struct {
             scope.source_custom_elements = stored.source_custom_elements;
             scope.source_custom_elements_source = expanded;
             scope.page_style_complete_root = complete_root;
+            scope.source_div_parent_tags = page.source_div_parent_tags;
+            scope.source_div_parent_tags_source = expanded;
             scope.source_literal_divs = page.source_literal_divs;
             scope.source_literal_divs_source = expanded;
             scope.source_root_children = page.source_root_children;
@@ -3137,9 +3674,21 @@ pub const Book = struct {
                 scope.closed_missing_figures = .{ .styles = styles, .source = expanded, .root = root, .operations = selected_figures.len };
             if (completeReadyFigureCoverage(selected_figures))
                 scope.closed_ready_figures = .{ .styles = styles, .source = expanded, .root = root, .operations = selected_figures.len };
+            const selected_tables = try selectFloatingTableStyles(a, parent, stored, expanded, selected_figures);
+            const intrinsic_tables = try selectIntrinsicTableStyles(a, ns, parent, stored, expanded, context orelse .{ .title = title, .namespace_catalog = ns });
+            // Both complete retained arms already belong to this selected Table
+            // operation. No new capture, guessed state, or partial-graph proof.
+            const motion_tables = if (selected_tables.len != 0) selected_tables else intrinsic_tables;
+            if (motion_tables.len != 0) {
+                const contexts = motion_tables[0].page_contexts;
+                if (contexts.len == 2 and try profile.observedPageStaticMotion(a, contexts[0].styles, contexts[0].nodes, contexts[0].root) and
+                    try profile.observedPageStaticMotion(a, contexts[1].styles, contexts[1].nodes, contexts[1].root))
+                    scope.page_static_motion = .{ .styles = styles, .source = expanded, .root = root };
+            }
             const result = try a.create(SelectedPageStyles);
-            result.* = .{ .styles = styles, .scope = scope, .source = expanded, .namespace_catalog = ns,
-                .figure_styles = selected_figures, .figure_assets = figure_operations.figure_assets };
+            result.* = .{ .prefix_table = try selectedPrefixTableAlloc(a, ns, parent, stored, expanded), .styles = styles, .scope = scope, .source = expanded, .namespace_catalog = ns,
+                .figure_styles = selected_figures, .figure_assets = figure_operations.figure_assets,
+                .authored_element_original = expanded, .intrinsic_tables = intrinsic_tables, .floating_tables = selected_tables, .authored_element_styles = try selectAuthoredElementStyles(a, parent, stored) };
             return result;
         }
         return null;
@@ -3820,7 +4369,8 @@ fn observedPageStyleProfile(a: A, ns: *const namespaces.Registry, schema: []cons
     // Parsing the joined cascade occurs only after the selected global parent is
     // known. These slices and source identities are owned by the immutable Book.
     result.* = .{ .authored_sources = authored_sources.items, .context_sources = context_sources.items,
-        .figure_alternative_sources = if (page.figure_style_operations != null)
+        // The selected dedicated HR head was validated by missingHeadSources above.
+        .figure_alternative_sources = if (page.figure_style_operations != null or page.authored_head_context != null)
             try figureStyleGetHeadSources(a, ns, page.outer_context.?.response, served) else null,
         .page = page, .scope = text_scope.?, .outer = outer.? };
     return result;
@@ -4416,7 +4966,8 @@ fn currentLiteralFrame(page: RawPage, html: []const u8, nodes: []const ObservedS
 const Response = struct { source: []const u8, html: []const u8 };
 fn responseSource(a: A, ns: *const namespaces.Registry, page: RawPage) !Response {
     if (currentGetLiteral(page)) return currentLiteralSource(a, ns, page);
-    const rich_context = (page.text_class_scope or page.image_map_no_link != null) and page.missing_head_context == null;
+    const rich_context = (page.text_class_scope or page.image_map_no_link != null) and
+        page.missing_head_context == null and page.authored_head_context == null;
     if (page.form_body.len == 0 or page.form_body.len > 256 * 1024) return invalid;
     const request = try json(a, page.request);
     const receipt = try json(a, page.receipt);
@@ -4463,6 +5014,7 @@ fn responseSource(a: A, ns: *const namespaces.Registry, page: RawPage) !Response
     const html = try string(parsed, "text");
     if (html.len == 0 or html.len > max_response or !std.unicode.utf8ValidateSlice(html) or std.mem.indexOfScalar(u8, html, 0) != null) return invalid;
     if (page.missing_head_context != null) _ = try missingHeadContext(a, page);
+    if (page.authored_head_context != null) _ = try authoredHeadContext(a, page);
     return .{ .source = text, .html = if (selectedGetRoot(page)) try selectedGetBody(a, ns, page) else html };
 }
 
@@ -5347,6 +5899,20 @@ fn observedImagesWithServedPaintFailureMode(a: A, ns: *const namespaces.Registry
 }
 
 pub const Testing = if (@import("builtin").is_test) struct {
+    // Typed defaults for the legacy receipt branch are not fields of the
+    // observed-set protocol. Keep its exact three-field serialized shape.
+    pub fn observedSetDocumentBytes(a: A, doc: Document) ![]const u8 {
+        const encoded = try std.json.Stringify.valueAlloc(a, doc, .{ .emit_null_optional_fields = false });
+        if (doc.missing_link_styles) |styles| if (equal(styles.profile, missing_observed_set_profile)) {
+            if (styles.response.len != 0 or styles.receipt.len != 0) return invalid;
+            const shape = try json(a, encoded);
+            const value = shape.object.getPtr("missing_link_styles") orelse return invalid;
+            if (!value.object.swapRemove("response") or !value.object.swapRemove("receipt")) return invalid;
+            return std.json.Stringify.valueAlloc(a, shape, .{});
+        };
+        return encoded;
+    }
+
     pub fn document(a: A, comptime edition: []const u8) !Document {
         return std.json.parseFromSliceLeaky(Document, a,
             @embedFile("testdata/figure-page-observations/" ++ edition ++ "/figure-page-observations.json"), .{ .allocate = .alloc_always });
@@ -11085,12 +11651,95 @@ test "normal Figure operation capability retains explicit ranges and unproved Mi
 
 const AuthoredElementStyleRange = struct { start: usize, end: usize };
 
+// A WikiTable cell may spell a positive integral span without quotes. This
+// validates only a preceding cell's closed attribute boundary; the ordinary
+// table emitter still owns its geometry and the captured tree owns every edge.
+fn authoredPrefixWikiCellAttributes(a: A, raw: []const u8) !void {
+    if (std.mem.indexOfAny(u8, raw, "[]{}<>\r\n\x00") != null) return invalid;
+    var quoted: std.ArrayList(u8) = .empty;
+    defer quoted.deinit(a);
+    var emitted: usize = 0; var at: usize = 0;
+    while (at < raw.len) {
+        if (at != 0 and !std.ascii.isWhitespace(raw[at])) return invalid;
+        while (at < raw.len and std.ascii.isWhitespace(raw[at])) : (at += 1) {}
+        if (at == raw.len) break;
+        const name_start = at;
+        while (at < raw.len and attributeNameByte(raw[at])) : (at += 1) {}
+        if (at == name_start) return invalid;
+        const name = raw[name_start..at];
+        while (at < raw.len and std.ascii.isWhitespace(raw[at])) : (at += 1) {}
+        if (at == raw.len or raw[at] != '=') return invalid;
+        at += 1;
+        while (at < raw.len and std.ascii.isWhitespace(raw[at])) : (at += 1) {}
+        if (at == raw.len) return invalid;
+        if (raw[at] == '\'' or raw[at] == '"') {
+            const quote = raw[at]; at += 1;
+            while (at < raw.len and raw[at] != quote) : (at += 1) {}
+            if (at == raw.len) return invalid;
+            at += 1;
+        } else {
+            if (!std.ascii.eqlIgnoreCase(name, "colspan") and !std.ascii.eqlIgnoreCase(name, "rowspan")) return invalid;
+            const value_start = at;
+            while (at < raw.len and std.ascii.isDigit(raw[at])) : (at += 1) {}
+            if (at == value_start or (at < raw.len and !std.ascii.isWhitespace(raw[at]))) return invalid;
+            const span = std.fmt.parseInt(u16, raw[value_start..at], 10) catch return invalid;
+            if (span == 0) return invalid;
+            try quoted.appendSlice(a, raw[emitted..value_start]);
+            try quoted.append(a, '"');
+            try quoted.appendSlice(a, raw[value_start..at]);
+            try quoted.append(a, '"');
+            emitted = at;
+        }
+    }
+    try quoted.appendSlice(a, raw[emitted..]);
+    const opening = try std.fmt.allocPrint(a, "<td {s}>", .{quoted.items});
+    const tag = syntax.tagAt(opening, 0) orelse return invalid;
+    if (tag.end != opening.len) return invalid;
+    try figureStyleLiteralAttributes(a, tag);
+}
+
 fn authoredElementPrefix(a: A, ns: *const namespaces.Registry, source: []const u8, range: AuthoredElementStyleRange, existing_note: bool) !void {
+    return authoredElementPrefixWithPriorNoteLists(a, ns, source, range, existing_note, &.{});
+}
+
+fn authoredElementPrefixWithPriorNoteLists(a: A, ns: *const namespaces.Registry, source: []const u8,
+    range: AuthoredElementStyleRange, existing_note: bool, prior_notes: []const profile.SourceLiteralDivProof) !void
+{
+    return authoredElementPrefixForRole(a, ns, source, range, existing_note, prior_notes, false, null);
+}
+
+fn authoredElementPrefixForRole(a: A, ns: *const namespaces.Registry, source: []const u8,
+    range: AuthoredElementStyleRange, existing_note: bool, prior_notes: []const profile.SourceLiteralDivProof,
+    allow_rule: bool, immediate_parent: ?*?usize) !void
+{
     const WikiTable = struct { depth: usize, cell: bool = false };
     var html: [256]syntax.Tag = undefined; var depth: usize = 0;
     var tables: [64]WikiTable = undefined; var table_count: usize = 0;
     var at: usize = 0; var found = false;
     while (at < range.end) {
+        // A completed, independently matched note/list operation may restore
+        // the earlier HTML stack. Its item text/actions are still scanned by
+        // the ordinary prefix parser; only the proved raw UL opener run is
+        // absent from that stack. An active interval lends no parent to itself.
+        var restored_end: ?usize = null;
+        if (std.mem.startsWith(u8, source[at..], "<ul>")) for (prior_notes) |proof| if (proof.restored_ul) |restoration| {
+            if (proof.range.anchor_start >= proof.range.anchor_end or proof.range.anchor_end != at or
+                restoration.depth == 0 or restoration.depth > 8 or restoration.end <= at or
+                restoration.end > source.len or restoration.end - at != @as(usize, restoration.depth) * 4 or
+                restoration.body_end < restoration.end or restoration.body_end > range.start or
+                (restoration.items == 0) != (restoration.body_end == restoration.end)) continue;
+            const parent_matches = if (proof.parent_start) |parent_start|
+                depth != 0 and html[depth - 1].is("div") and
+                    @intFromPtr(html[depth - 1].name.ptr) - @intFromPtr(source.ptr) == parent_start + 1
+                else depth == 0;
+            if (!parent_matches) continue;
+            var cursor = at;
+            while (cursor < restoration.end and equal(source[cursor..][0..4], "<ul>")) : (cursor += 4) {}
+            if (cursor != restoration.end) continue;
+            if (restored_end != null) return invalid;
+            restored_end = restoration.end;
+        };
+        if (restored_end) |end| { at = end; continue; }
         if (std.mem.startsWith(u8, source[at..], "<!--")) {
             at = (std.mem.indexOfPos(u8, source, at + 4, "-->") orelse return invalid) + 3;
             continue;
@@ -11111,7 +11760,10 @@ fn authoredElementPrefix(a: A, ns: *const namespaces.Registry, source: []const u
             }
             if (tag.is("templatestyles") or tag.is("references")) { at = tag.end; continue; }
             if (at == range.start) {
-                if (tag.closing or tag.self_closing or (!tag.is("div") and !tag.is("span"))) return invalid;
+                const rule = allow_rule and tag.end == range.end and compiler.authoredRuleSourceOpening(source, tag) != null;
+                if (!rule and (tag.closing or tag.self_closing or (!tag.is("div") and !tag.is("span")))) return invalid;
+                if (immediate_parent) |parent| parent.* = if (depth == 0) null else
+                    @intFromPtr(html[depth - 1].name.ptr) - @intFromPtr(source.ptr) - 1;
                 const line_start = if (std.mem.lastIndexOfScalar(u8, source[0..at], '\n')) |line| line + 1 else 0;
                 if (source[line_start] == ' ' or source[line_start] == '\t') return invalid;
                 if (table_count != 0) {
@@ -11126,7 +11778,7 @@ fn authoredElementPrefix(a: A, ns: *const namespaces.Registry, source: []const u
                 for (html[0..depth]) |ancestor| {
                     if (ancestor.is("table")) { in_table = true; in_cell = false; }
                     if (ancestor.is("td") or ancestor.is("th")) in_cell = true;
-                    if (tag.is("div") and (ancestor.is("p") or ancestor.is("span") or ancestor.is("b") or ancestor.is("i") or ancestor.is("em") or ancestor.is("strong"))) return invalid;
+                    if ((tag.is("div") or rule) and (ancestor.is("p") or ancestor.is("span") or ancestor.is("b") or ancestor.is("i") or ancestor.is("em") or ancestor.is("strong"))) return invalid;
                     // The pre-existing line-start note family permits raw UL
                     // emission. It still lends no captured/native parent edge.
                     if ((!existing_note and ancestor.is("ul")) or ancestor.is("ol") or ancestor.is("dl") or ancestor.is("select") or ancestor.is("option")) return invalid;
@@ -11167,8 +11819,7 @@ fn authoredElementPrefix(a: A, ns: *const namespaces.Registry, source: []const u
             if (separator) |position| {
                 const prefix = std.mem.trim(u8, line[1..position], " \t");
                 if (std.mem.indexOfScalar(u8, prefix, '=') != null) {
-                    const opening = try std.fmt.allocPrint(a, "<td {s}>", .{prefix});
-                    try figureStyleLiteralAttributes(a, syntax.tagAt(opening, 0) orelse return invalid);
+                    try authoredPrefixWikiCellAttributes(a, prefix);
                     at += position + 1; continue;
                 }
             }
@@ -11189,7 +11840,8 @@ fn literalDivAttributes(a: A, tag: syntax.Tag) !?Inventory {
     const attrs = inventory(a, tag) catch |err| switch (err) { error.OutOfMemory => return err, else => return null };
     for (attrs.attributes) |attr| {
         if (attr.name.len >= 2 and std.ascii.eqlIgnoreCase(attr.name[0..2], "on")) return null;
-        if (std.mem.indexOfAny(u8, attr.value, "{}[]<>\r\n\x00") != null or std.mem.indexOf(u8, attr.value, "__") != null) return null;
+        if (std.mem.indexOfAny(u8, attr.value, "{}[]<>\r\n\x00") != null or
+            (std.mem.indexOf(u8, attr.value, "__") != null and !literalDivIdentifierUnderscores(attr.name, attr.value))) return null;
     }
     return attrs;
 }
@@ -11680,6 +12332,12 @@ fn observedLiteralDivParents(a: A, ns: *const namespaces.Registry, source: []con
     nodes: []const ObservedSiblingNode) ![]const profile.SourceLiteralDivProof
 {
     if (nodes.len == 0 or nodes[0].parent != null or !nodes[0].tag.is("div")) return invalid;
+    // Discover the existing complete note/list correspondence first. This
+    // stays local to this source/HTML invocation and creates no reusable range
+    // authority for a different source or captured graph.
+    var prior_notes: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+    defer prior_notes.deinit(a);
+    try appendObservedNoteDivParents(a, ns, source, html, nodes, &prior_notes);
     const Candidate = struct { start: usize, end: usize, tag: syntax.Tag, attrs: Inventory, observed: usize };
     var candidates: std.ArrayList(Candidate) = .empty;
     var position: usize = 0;
@@ -11691,7 +12349,7 @@ fn observedLiteralDivParents(a: A, ns: *const namespaces.Registry, source: []con
         if (pair.end <= tag.end or pair.end > source.len or std.mem.indexOfAny(u8, source[start..pair.end], "{}\x00") != null) continue;
         // The complete existing prefix grammar excludes protected/link-label
         // operations and repaired inline/table/list parents. It grants no edge.
-        authoredElementPrefix(a, ns, source, .{ .start = start, .end = pair.end }, false) catch |err| switch (err) {
+        authoredElementPrefixWithPriorNoteLists(a, ns, source, .{ .start = start, .end = pair.end }, false, prior_notes.items) catch |err| switch (err) {
             error.OutOfMemory => return err, else => continue,
         };
         var source_count: usize = 0; var scan: usize = 0;
@@ -11755,7 +12413,17 @@ fn observedLiteralDivParents(a: A, ns: *const namespaces.Registry, source: []con
             .name_start = @intFromPtr(candidate.tag.name.ptr) - @intFromPtr(source.ptr), .name_len = candidate.tag.name.len,
             .attrs_start = @intFromPtr(candidate.tag.attrs.ptr) - @intFromPtr(source.ptr), .attrs_len = candidate.tag.attrs.len }, .parent_start = source_parent });
     }
-    try appendObservedNoteDivParents(a, ns, source, html, nodes, &result);
+    // Preserve the exact existing note proofs and their parent chains. A
+    // general candidate at the same source range must agree before merging.
+    for (prior_notes.items) |note| {
+        var exists = false;
+        for (result.items) |*proof| if (proof.range.anchor_start == note.range.anchor_start) {
+            if (!std.meta.eql(proof.range, note.range) or proof.parent_start != note.parent_start) return invalid;
+            if (note.restored_ul) |restoration| proof.restored_ul = restoration;
+            exists = true; break;
+        };
+        if (!exists) try result.append(a, note);
+    }
     return try result.toOwnedSlice(a);
 }
 
@@ -11898,7 +12566,7 @@ test "literal DIV parent issuer retains genuine VI root and nested wrappers with
     for (document.pages) |page| if (equal(page.title, "barracuda")) { try std.testing.expect(selected == null); selected = page; };
     const supplied = try responseSource(a, &ns, selected.?);
     try std.testing.expectEqualStrings(@embedFile("testdata/vi-context347/01/expanded.wikitext"), supplied.source);
-    try std.testing.expect(!@hasField(RawPage, "authored_style_operations"));
+    try std.testing.expect(selected.?.authored_style_operations == null and selected.?.authored_head_context == null);
     var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
     _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
     const proofs = try observedLiteralDivParents(a, &ns, supplied.source, supplied.html, nodes.items);
@@ -14784,7 +15452,7 @@ test "v10 adds only exact genuine Missing operations to independent poster SVG p
         try std.testing.expectEqualDeep(T.ranges[index], styles.figure_styles[0].range);
         try std.testing.expect(styles.figure_styles[0].candidates.len > 0);
         try std.testing.expect(styles.figure_assets.len == 0);
-        try std.testing.expect(!@hasField(RawPage, "authored_style_operations"));
+        try std.testing.expect(captured.authored_style_operations == null and captured.authored_head_context == null);
     }
 }
 
@@ -14948,6 +15616,143 @@ test "retained MG SECTION parent capability binds complete source operation root
         try std.testing.expect((try SelectedPageStyles.figureStyle(styles, a, changed)) == null);
     }
     try std.testing.expect(digestMatches(source, "5f35f6e95736e5c164afa15efbfff1648bdfc1dc4f0be502fbd4268a128f9f5f"));
+}
+
+
+test "floating Table occurrence anchor retains closed inline text and excludes protected foreign openings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    try std.testing.expectEqualStrings("der Mai (Mai)", (try floatingTableLiteralText(a, " der Mai<br /><small>(Mai)</small>\n")).?);
+    for ([_][]const u8{ "<span>der Mai</span>", "<small style='color:red'>Mai</small>", "<small>Mai", "[[Mai]]" }) |raw|
+        try std.testing.expect(try floatingTableLiteralText(a, raw) == null);
+    const unquoted_source = "{| class=wikitable\n! head\n|-\n| der Mai<br /><small>(Mai)</small>\n|}\n";
+    try std.testing.expectEqual(@as(usize, 0), (try floatingTableSourceAnchors(a, unquoted_source)).len);
+    const source = "{| class=\"wikitable\"\n! head\n|-\n| der Mai<br /><small>(Mai)</small>\n|}\n";
+    const anchors = try floatingTableSourceAnchors(a, source);
+    try std.testing.expectEqual(@as(usize, 1), anchors.len);
+    try std.testing.expectEqual(@as(usize, 1), anchors[0].row);
+    try std.testing.expectEqual(@as(usize, 0), anchors[0].slot);
+    try std.testing.expect(floatingTableOrdinaryOpening(source, 0));
+    for ([_][]const u8{ "{{unknown|\n", "<nowiki>\n", "<!--\n" }) |prefix| {
+        const closed = if (prefix[0] == '{') "}}" else if (prefix[1] == '!') "-->" else "</nowiki>";
+        const wrapped = try std.mem.concat(a, u8, &.{prefix, source, closed});
+        try std.testing.expect(!floatingTableOrdinaryOpening(wrapped, prefix.len));
+    }
+}
+
+
+test "floating Table occurrence census refuses same-signature foreign owners and misplaced cells" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    try std.testing.expect((try rootTableAttributes(a, "class=wikitable")) == null);
+    const attrs = (try rootTableAttributes(a, "class=\"wikitable\"")).?;
+    const cell = (try rootTableAttributes(a, "")).?;
+    const source: FloatingTableAnchor = .{ .table = attrs, .cell = cell, .text = "plain anchor", .opening_start = 10, .opening_end = 30, .row = 1, .slot = 1 };
+    var first = source; first.observed_table = 8;
+    try std.testing.expectEqual(@as(?usize, 8), floatingTableObservedOwner(&.{source}, &.{first}, source));
+    var foreign = first; foreign.observed_table = 9;
+    try std.testing.expect(floatingTableObservedOwner(&.{source}, &.{first, foreign}, source) == null);
+    foreign = first; foreign.slot = 2;
+    try std.testing.expect(floatingTableObservedOwner(&.{source}, &.{foreign}, source) == null);
+    var copied = source; copied.opening_start = 40;
+    try std.testing.expect(floatingTableObservedOwner(&.{source, copied}, &.{first}, source) == null);
+    copied = source; copied.row = 2;
+    foreign = first; foreign.row = 2;
+    try std.testing.expectEqual(@as(?usize, 8), floatingTableObservedOwner(&.{source, copied}, &.{first, foreign}, source));
+    foreign.observed_table = null;
+    try std.testing.expect(floatingTableObservedOwner(&.{source, copied}, &.{first, foreign}, source) == null);
+}
+
+
+test "floating Table optional selection preserves genuine v7 no-operation styles without alternate authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const bytes = PageStylesV7Testing.original;
+    const doc = try PageStylesV7Testing.document(a, bytes);
+    try std.testing.expectEqualStrings("wikidict.figure-page-observations.v7", doc.schema);
+    try std.testing.expect(doc.pages[0].figure_style_operations == null);
+    var ns = try namespaces.Registry.init(a, @embedFile(PageStylesV7Testing.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    var files = try MaiCenteredTest.registry(a, &ns); defer files.deinit();
+    const defaults = Testing.hash(@embedFile(PageStylesV7Testing.prefix ++ "figure-siteinfo.raw.json"));
+    var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+    const source = (try responseSource(a, &ns, doc.pages[0])).source;
+    const anchors = try floatingTableSourceAnchors(a, source);
+    var actual_float = false;
+    for (anchors) |anchor| if (profile.Profile.hasClass(anchor.table.get("class") orelse "", "float-right")) { actual_float = true; break; };
+    try std.testing.expect(actual_float);
+    const stored = book.pages[0].page_styles orelse return error.TestUnexpectedResult;
+    try std.testing.expect(stored.figure_alternative_sources == null);
+    var parent = try profile.parseForTargetAlloc(a, PageStylesV7Testing.css, .screen); defer parent.deinit();
+    try std.testing.expectEqual(@as(usize, 0), (try selectFloatingTableStyles(a, &parent, stored, source, &.{})).len);
+    const selected = (try book.selectPageStyles(a, &ns, 0, 721, 10777072, "Mai", PageStylesV7Testing.raw, source, defaults, &parent)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(selected.source.ptr == source.ptr and selected.source.len == source.len);
+    try std.testing.expect(selected.styles.page_style_parent == &parent and selected.scope.page_styles == selected.styles);
+    try std.testing.expect(selected.floating_tables.len == 0 and selected.figure_styles.len == 0);
+    try std.testing.expectEqualStrings("mw-content-ltr mw-parser-output", selected.scope.page_style_root.?.classes);
+    try std.testing.expectEqualStrings(@embedFile("testdata/de-mai301/page.expanded.wikitext"), source);
+}
+
+
+fn maiViewportNormalFixture(a: A, input: []const u8) ![]const u8 {
+    const value = try std.json.parseFromSliceLeaky(std.json.Value, a, input, .{ .allocate = .alloc_always });
+    const pages = value.object.getPtr("pages") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), pages.array.items.len);
+    const page = &pages.array.items[0].object;
+    try std.testing.expect(page.orderedRemove("authored_style_operations"));
+    return std.json.Stringify.valueAlloc(a, value, .{});
+}
+
+
+test "retained Mai captured Table focus domains preserve both heads and all actual anchor identities" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_][]const u8{ @embedFile("testdata/authored-element-style/mai-original.json"), @embedFile("testdata/authored-element-style/mai-reference.json") }) |original_bytes| {
+        const bytes = try maiViewportNormalFixture(a, original_bytes);
+        var ns = try namespaces.Registry.init(a, @embedFile(PageStylesV7Testing.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+        const doc = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+        try std.testing.expectEqual(@as(usize, 1), doc.pages.len);
+        const actual = doc.pages[0];
+        var files = try MaiCenteredTest.registry(a, &ns); defer files.deinit();
+        const defaults = Testing.hash(@embedFile(PageStylesV7Testing.prefix ++ "figure-siteinfo.raw.json"));
+        var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+        var parent = try profile.parseForTargetAlloc(a, PageStylesV7Testing.css, .screen); defer parent.deinit();
+        const source = (try responseSource(a, &ns, actual)).source;
+        const selected = (try book.selectPageStyles(a, &ns, actual.namespace_id, actual.page_id, actual.revision_id, actual.title, PageStylesV7Testing.raw, source, defaults, &parent)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 2), selected.floating_tables.len);
+        const motion = selected.scope.page_static_motion orelse return error.TestUnexpectedResult;
+        try std.testing.expect(motion.styles == selected.styles and motion.root == selected.scope.page_style_root);
+        try std.testing.expect(motion.source.ptr == source.ptr and motion.source.len == source.len);
+        for (selected.floating_tables, 0..) |table, index| {
+            const observation = (try SelectedPageStyles.floatingTable(selected, a, source, table.opening_start)) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 2), observation.link_contexts.len);
+            for (observation.link_contexts, table.page_contexts, observation.contexts) |full, retained, shallow| {
+                try std.testing.expect(full.styles == retained.styles and full.root == retained.root);
+                try std.testing.expect(full.nodes.ptr == retained.nodes.ptr and full.nodes.len == retained.nodes.len);
+                try std.testing.expect(full.nodes.len > shallow.nodes.len and full.table > full.root);
+                try std.testing.expect(std.ascii.eqlIgnoreCase(full.nodes[full.table].tag, "table"));
+                try std.testing.expectEqual(@as(?u32, full.root), full.nodes[full.table].parent);
+                var links: usize = 0;
+                var actions: std.ArrayList(u32) = .empty;
+                for (full.nodes, 0..) |node, node_index| if (std.ascii.eqlIgnoreCase(node.tag, "a")) {
+                    var owner: ?u32 = @intCast(node_index); var remaining = full.nodes.len;
+                    while (owner) |id| {
+                        if (id == full.table) { links += 1; try actions.append(a, @intCast(node_index)); break; }
+                        if (id >= full.nodes.len or remaining == 0) return error.TestUnexpectedResult;
+                        remaining -= 1; owner = full.nodes[id].parent;
+                    }
+                };
+                try std.testing.expectEqual(@as(usize, if (index == 0) 12 else 14), links);
+                try std.testing.expect((try profile.observedTableLinkPaintProof(a, full, shallow, source)) == null);
+                // The retained <=639px block scroll owner is outside the old
+                // no-scroll proof. The captured path carries native-default focus
+                // paint without changing the graph or source A identities.
+                try std.testing.expect((try profile.observedTableLinkPaintProofWithSourceActions(a, full, shallow, source, actions.items)) == null);
+                const proof = (try profile.observedTableLinkPaintProofWithViewportActions(a, full, shallow, source, actions.items)) orelse return error.TestUnexpectedResult;
+                try std.testing.expect(proof.closedSourceFocus());
+        try std.testing.expect(proof.scrollFocusPaint().?.mode == .ua_auto);
+                try std.testing.expect((try profile.observedTableLinkPaintProofWithViewportActions(a, full, shallow, source, actions.items[1..])) == null);
+            }
+            const copied = try a.dupe(u8, source);
+            try std.testing.expect((try SelectedPageStyles.floatingTable(selected, a, copied, table.opening_start)) == null);
+            try std.testing.expect((try SelectedPageStyles.floatingTable(selected, a, source, table.opening_start + 1)) == null);
+        }
+    }
 }
 
 
@@ -15961,6 +16766,1196 @@ test "source parent returned HTML retains genuine quoted metadata without wideni
     }
 }
 
+pub const RawAuthoredHeadContext = RawMissingHeadContext;
+
+const AuthoredElementStyleProof = struct {
+    range: AuthoredElementStyleRange,
+    tag: []const u8,
+    attributes: Inventory,
+    candidates: []const u32 = &.{},
+    rule_anonymous_tail: ?profile.AuthoredRuleAnonymousTail = null,
+};
+
+const SelectedAuthoredElementStyle = struct {
+    proof: AuthoredElementStyleProof,
+    contexts: []const profile.AuthoredElementObservedContext,
+};
+
+fn authoredElementStyleProofs(a: A, ns: *const namespaces.Registry, source: []const u8,
+    ranges: []const AuthoredElementStyleRange, nodes: []const ObservedSiblingNode) ![]const AuthoredElementStyleProof
+{
+    return authoredElementStyleProofsWithHtml(a, ns, source, "", ranges, nodes);
+}
+fn authoredElementStyleProofsWithHtml(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
+    ranges: []const AuthoredElementStyleRange, nodes: []const ObservedSiblingNode) ![]const AuthoredElementStyleProof
+{
+    if (ranges.len == 0 or ranges.len > 64) return invalid;
+    const result = try a.alloc(AuthoredElementStyleProof, ranges.len);
+    var previous: usize = 0;
+    for (ranges, result) |range, *proof| {
+        if (range.start < previous or range.end <= range.start or range.end > source.len) return invalid;
+        previous = range.end;
+        const opening = syntax.tagAt(source, range.start) orelse return invalid;
+        // Normal v8 exposes only the authenticated Rule source capability.
+        if (!opening.is("hr")) return invalid;
+        const candidates = try authoredRuleCandidates(a, ns, source, html, nodes, range);
+        proof.* = .{ .range = range, .tag = opening.name, .attributes = try inventory(a, opening), .candidates = candidates,
+            .rule_anonymous_tail = try authoredRuleAnonymousTail(a, ns, source, html, nodes, range, candidates[0]) };
+    }
+    try authoredElementWholeSource(a, ns, source, result);
+    return result;
+}
+
+fn authoredRulePrefixWithParent(a: A, ns: *const namespaces.Registry, source: []const u8, range: AuthoredElementStyleRange,
+    existing_note: bool, immediate_parent: ?*?usize) !void
+{
+    const WikiTable = struct { depth: usize, cell: bool = false };
+    const selected = syntax.tagAt(source, range.start) orelse return invalid;
+    const inline_owner = false;
+    _ = selected;
+    var html: [256]syntax.Tag = undefined; var depth: usize = 0;
+    var tables: [64]WikiTable = undefined; var table_count: usize = 0;
+    var at: usize = 0; var found = false;
+    while (at < range.end) {
+        if (std.mem.startsWith(u8, source[at..], "<!--")) {
+            at = (std.mem.indexOfPos(u8, source, at + 4, "-->") orelse return invalid) + 3;
+            continue;
+        }
+        if (source[at] == '<') {
+            const tag = syntax.tagAt(source, at) orelse return invalid;
+            if (tag.is("ref") or tag.is("nowiki") or tag.is("pre")) {
+                if (tag.closing) return invalid;
+                at = if (tag.self_closing) tag.end else (syntax.matchingTag(source, tag) orelse return invalid).end;
+                continue;
+            }
+            if (tag.is("templatestyles")) { at = try authoredEmptyTemplateStyleEnd(a, source, tag); continue; }
+            if (tag.is("references")) { at = tag.end; continue; }
+            if (inline_owner and tag.is("ul")) {
+                // Bare raw UL markers can precede inline owners in expanded
+                // list source. This lexical placement proof supplies no list
+                // parent edge; captured candidates and native emission stay owed.
+                // Keep attributed/self-closing markers and all other stacks strict.
+                const token = std.mem.trim(u8, source[at .. tag.end - 1], " \t\r\n");
+                if (tag.attrs.len != 0 or tag.self_closing or std.mem.endsWith(u8, token, "/")) return invalid;
+                at = tag.end; continue;
+            }
+            if (at == range.start) {
+                const rule = tag.end == range.end and compiler.authoredRuleSourceOpening(source, tag) != null;
+                if (!rule and (tag.closing or tag.self_closing or (!tag.is("div") and !tag.is("span")))) return invalid;
+                if (immediate_parent) |parent| parent.* = if (depth == 0) null else
+                    @intFromPtr(html[depth - 1].name.ptr) - @intFromPtr(source.ptr) - 1;
+                const line_start = if (std.mem.lastIndexOfScalar(u8, source[0..at], '\n')) |line| line + 1 else 0;
+                if (source[line_start] == ' ' or source[line_start] == '\t') return invalid;
+                if (table_count != 0) {
+                    if (!tables[table_count - 1].cell) return invalid;
+                    const prefix = source[line_start..at];
+                    // This bounded issuer handles one cell on the selected line.
+                    // A second cell may instead contain the apparent opening in
+                    // its attributes; it must not borrow the first cell state.
+                    if (syntax.delimiter(prefix, "||", 0) != null or syntax.delimiter(prefix, "!!", 0) != null) return invalid;
+                }
+                var in_table = false; var in_cell = false;
+                for (html[0..depth]) |ancestor| {
+                    if (ancestor.is("table")) { in_table = true; in_cell = false; }
+                    if (ancestor.is("td") or ancestor.is("th")) in_cell = true;
+                    if ((tag.is("div") or tag.is("hr")) and (ancestor.is("p") or ancestor.is("span") or ancestor.is("b") or ancestor.is("i") or ancestor.is("em") or ancestor.is("strong"))) return invalid;
+                    // The pre-existing line-start note family permits raw UL
+                    // emission. It still lends no captured/native parent edge.
+                    if ((!existing_note and ancestor.is("ul")) or ancestor.is("ol") or ancestor.is("dl") or ancestor.is("select") or ancestor.is("option")) return invalid;
+                }
+                if (in_table and !in_cell) return invalid;
+                found = true;
+            }
+            if (tag.closing) {
+                if (depth == 0 or tag.attrs.len != 0 or !tag.is(html[depth - 1].name)) return invalid;
+                depth -= 1;
+            } else if (!tag.is("br") and !tag.is("hr") and !tag.is("wbr")) {
+                if (tag.self_closing or depth == html.len) return invalid;
+                html[depth] = tag; depth += 1;
+            }
+            at = tag.end; continue;
+        }
+        const line_start = at == 0 or source[at - 1] == '\n';
+        if (line_start and std.mem.startsWith(u8, source[at..], "{|")) {
+            if (table_count == tables.len or (table_count != 0 and !tables[table_count - 1].cell)) return invalid;
+            const end = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse return invalid;
+            const opening = try std.fmt.allocPrint(a, "<table {s}>", .{source[at + 2..end]});
+            try figureStyleLiteralAttributes(a, syntax.tagAt(opening, 0) orelse return invalid);
+            tables[table_count] = .{ .depth = depth }; table_count += 1; at = end; continue;
+        }
+        if (line_start and std.mem.startsWith(u8, source[at..], "|}")) {
+            if (table_count == 0 or tables[table_count - 1].depth != depth) return invalid;
+            table_count -= 1; at += 2; continue;
+        }
+        if (line_start and table_count != 0 and (source[at] == '|' or source[at] == '!')) {
+            const end = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse source.len;
+            const line = source[at..end];
+            if (std.mem.startsWith(u8, line, "|-") or std.mem.startsWith(u8, line, "|+")) {
+                tables[table_count - 1].cell = false; at = end; continue;
+            }
+            tables[table_count - 1].cell = true;
+            const separator = syntax.delimiter(line, "|", 1);
+            if (separator) |position| {
+                const prefix = std.mem.trim(u8, line[1..position], " \t");
+                if (std.mem.indexOfScalar(u8, prefix, '=') != null) {
+                    if (inline_owner) try authoredInlineWikiCellAttributes(a, prefix) else {
+                        const opening = try std.fmt.allocPrint(a, "<td {s}>", .{prefix});
+                        try figureStyleLiteralAttributes(a, syntax.tagAt(opening, 0) orelse return invalid);
+                    }
+                    at += position + 1; continue;
+                }
+            }
+            at += 1; continue;
+        }
+        if (source[at] == '[') if (try authoredElementLinkEnd(a, ns, source, at, 0)) |end| {
+            if ((range.start >= at and range.start < end) or (range.end > at and range.end < end)) {
+                if (!try authoredInlineOwnerInLink(a, ns, source, at, range, 0)) return invalid;
+                const link_line_start = if (std.mem.lastIndexOfScalar(u8, source[0..at], '\n')) |line| line + 1 else 0;
+                if (source[link_line_start] == ' ' or source[link_line_start] == '\t') return invalid;
+                if (table_count != 0 and (!tables[table_count - 1].cell or
+                    syntax.delimiter(source[link_line_start..range.start], "||", 0) != null or
+                    syntax.delimiter(source[link_line_start..range.start], "!!", 0) != null)) return invalid;
+                var in_table = false; var in_cell = false;
+                for (html[0..depth]) |ancestor| {
+                    if (ancestor.is("table")) { in_table = true; in_cell = false; }
+                    if (ancestor.is("td") or ancestor.is("th")) in_cell = true;
+                    if (ancestor.is("ul") or ancestor.is("ol") or ancestor.is("dl") or ancestor.is("select") or ancestor.is("option")) return invalid;
+                }
+                if (in_table and !in_cell) return invalid;
+                found = true; at = range.end; continue;
+            }
+            at = end; continue;
+        };
+        at += 1;
+    }
+    if (!found or at != range.end) return invalid;
+}
+
+fn authoredEmptyTemplateStyleEnd(a: A, source: []const u8, tag: syntax.Tag) !usize {
+    if (!tag.is("templatestyles") or tag.closing) return invalid;
+    try missingStyleSourceAttributes(a, tag);
+    if (tag.self_closing) return tag.end;
+    const attrs = try inventory(a, tag);
+    if (attrs.attributes.len != 1 or !equal(attrs.attributes[0].name, "src") or attrs.attributes[0].value.len == 0 or
+        std.mem.indexOfAny(u8, attrs.attributes[0].value, "{}[]<>\r\n\x00") != null) return invalid;
+    const pair = syntax.matchingTag(source, tag) orelse return invalid;
+    const close = syntax.tagAt(source, pair.inner_end) orelse return invalid;
+    if (pair.inner_end != tag.end or !close.closing or close.self_closing or !close.is("templatestyles") or
+        std.mem.trim(u8, close.attrs, " \t\r\n").len != 0 or close.end != pair.end) return invalid;
+    return pair.end;
+}
+
+fn authoredLiteralRootPrefix(a: A, source: []const u8, start: usize) !bool {
+    var cursor = if (std.mem.lastIndexOfScalar(u8, source[0..start], '\n')) |line| line + 1 else 0;
+    var count: usize = 0;
+    while (cursor < start) {
+        const tag = syntax.tagAt(source, cursor) orelse return false;
+        if (!tag.is("templatestyles") or count == 16) return false;
+        cursor = authoredEmptyTemplateStyleEnd(a, source, tag) catch |err| switch (err) {
+            error.OutOfMemory => return err, else => return false,
+        };
+        count += 1;
+    }
+    return cursor == start;
+}
+
+// Existing Figure observations already authenticate both complete heads and
+// the full returned body. This additional census binds each distinct HR to its
+// own source spelling and immediate captured DIV chain; it never uses ordinal.
+fn observedFigurePageRuleProofs(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
+    nodes: []const ObservedSiblingNode, parents: []const profile.SourceLiteralDivProof) ![]const AuthoredElementStyleProof
+{
+    if (nodes.len == 0 or !nodes[0].tag.is("div") or nodes[0].parent != null) return invalid;
+    var result: std.ArrayList(AuthoredElementStyleProof) = .empty;
+    var at: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, source, at, '<')) |start| {
+        at = start + 1;
+        const tag = syntax.tagAt(source, start) orelse continue;
+        if (!tag.is("hr")) continue;
+        const token = compiler.authoredRuleSourceOpening(source, tag) orelse return invalid;
+        if (token.ptr != source[start..].ptr or token.len != tag.end - start or result.items.len == 64) return invalid;
+        const attrs = try inventory(a, tag);
+        // A repeated spelling cannot borrow a captured occurrence, even under
+        // another parent. Protected spellings remain in this complete census.
+        for (result.items) |prior| if (sameSiblingAttributes(attrs, prior.attributes)) return invalid;
+        var parent_start: ?usize = null;
+        const range: AuthoredElementStyleRange = .{ .start = start, .end = tag.end };
+        try authoredElementPrefixForRole(a, ns, source, range, false, parents, true, &parent_start);
+        if (parent_start == null) {
+            const line_start = if (std.mem.lastIndexOfScalar(u8, source[0..start], '\n')) |line| line + 1 else 0;
+            if (line_start != start) return invalid;
+        }
+        var selected: ?u32 = null;
+        for (nodes, 0..) |node, index| if (node.tag.is("hr") and sameSiblingAttributes(attrs, node.attributes)) {
+            if (selected != null or node.tag.closing or node.first_child != null or node.inner_end != null) return invalid;
+            var captured_parent = node.parent orelse return invalid;
+            var original_parent = parent_start;
+            var depth: usize = 0;
+            while (original_parent) |owner| {
+                if (depth == 256 or captured_parent == 0 or captured_parent >= nodes.len) return invalid;
+                depth += 1;
+                var retained: ?profile.SourceLiteralDivProof = null;
+                for (parents) |proof| if (proof.range.anchor_start == owner) {
+                    if (retained != null) return invalid;
+                    retained = proof;
+                };
+                const proof = retained orelse return invalid;
+                if (proof.range.anchor_start >= start or proof.range.anchor_end <= tag.end or
+                    proof.range.anchor_end > source.len) return invalid;
+                const opening = syntax.tagAt(source, owner) orelse return invalid;
+                const pair = syntax.matchingTag(source, opening) orelse return invalid;
+                if (pair.end != proof.range.anchor_end) return invalid;
+                const parent_attrs = (try literalDivAttributes(a, opening)) orelse return invalid;
+                const captured = nodes[captured_parent];
+                if (!captured.tag.is("div") or !sameSiblingAttributes(parent_attrs, captured.attributes)) return invalid;
+                captured_parent = captured.parent orelse return invalid;
+                if (proof.parent_start) |next| if (next >= owner) return invalid;
+                original_parent = proof.parent_start;
+            }
+            if (captured_parent != 0) return invalid;
+            selected = @intCast(index);
+        };
+        const candidate = selected orelse return invalid;
+        try result.append(a, .{ .range = range, .tag = tag.name, .attributes = attrs,
+            .candidates = try a.dupe(u32, &.{candidate}) });
+    }
+    if (result.items.len == 0) return &.{};
+    var captured_count: usize = 0;
+    for (nodes) |node| if (node.tag.is("hr")) { captured_count += 1; };
+    if (captured_count != result.items.len) return invalid;
+    try authoredElementWholeSource(a, ns, source, result.items);
+    _ = html;
+    return try result.toOwnedSlice(a);
+}
+
+fn authoredRuleCandidates(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
+    nodes: []const ObservedSiblingNode, range: AuthoredElementStyleRange) ![]const u32
+{
+    if (html.len == 0 or range.end > source.len or range.start >= range.end) return invalid;
+    const opening = syntax.tagAt(source, range.start) orelse return invalid;
+    const whole = compiler.authoredRuleSourceOpening(source, opening) orelse return invalid;
+    if (whole.len != range.end - range.start) return invalid;
+    const expected = try inventory(a, opening);
+    // The initial complete-source family has one lexical HR. Protected or
+    // duplicate spellings cannot supply a different observed node.
+    var at: usize = 0; var count: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, source, at, '<')) |start| {
+        at = start + 1;
+        const tag = syntax.tagAt(source, start) orelse continue;
+        if (!tag.is("hr")) continue;
+        if (start != range.start or tag.end != range.end or compiler.authoredRuleSourceOpening(source, tag) == null) return invalid;
+        count += 1;
+    }
+    if (count != 1) return invalid;
+    var immediate: ?usize = null;
+    try authoredRulePrefixWithParent(a, ns, source, range, false, &immediate);
+    var parent_index: usize = 0;
+    if (immediate) |start| {
+        const parent_tag = syntax.tagAt(source, start) orelse return invalid;
+        if (!parent_tag.is("div")) return invalid;
+        const parents = try observedLiteralDivParentsIn(a, ns, source, html, nodes, true);
+        var proved = false;
+        for (parents) |proof| if (proof.range.anchor_start == start and proof.range.anchor_end > range.end) { proved = true; break; };
+        if (!proved) return invalid;
+        const attrs = (try literalDivAttributes(a, parent_tag)) orelse return invalid;
+        var matched: ?usize = null;
+        for (nodes, 0..) |node, index| if (node.tag.is("div") and sameSiblingAttributes(attrs, node.attributes)) {
+            if (matched != null) return invalid;
+            matched = index;
+        };
+        parent_index = matched orelse return invalid;
+    } else {
+        const line_start = if (std.mem.lastIndexOfScalar(u8, source[0..range.start], '\n')) |line| line + 1 else 0;
+        if (line_start != range.start) return invalid;
+    }
+    var selected: ?u32 = null;
+    for (nodes, 0..) |node, index| if (node.tag.is("hr") and node.parent == parent_index) {
+        if (selected != null or node.tag.closing or !sameSiblingAttributes(expected, node.attributes) or
+            node.first_child != null or node.inner_end != null) return invalid;
+        selected = @intCast(index);
+    };
+    const result = try a.alloc(u32, 1);
+    result[0] = selected orelse return invalid;
+    return result;
+}
+
+fn authoredRuleAnonymousTail(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
+    nodes: []const ObservedSiblingNode, range: AuthoredElementStyleRange, rule: u32) !?profile.AuthoredRuleAnonymousTail
+{
+    if (rule >= nodes.len or range.start >= range.end or range.end > source.len) return null;
+    var immediate: ?usize = null;
+    try authoredRulePrefixWithParent(a, ns, source, range, false, &immediate);
+    const parent_start = immediate orelse return null;
+    const opening = syntax.tagAt(source, parent_start) orelse return null;
+    const pair = syntax.matchingTag(source, opening) orelse return null;
+    const closing = syntax.tagAt(source, pair.inner_end) orelse return null;
+    if (!opening.is("div") or opening.closing or opening.self_closing or opening.end > range.start or
+        pair.inner_end < range.end or pair.end > source.len or !closing.is("div") or !closing.closing or
+        closing.self_closing or closing.end != pair.end or std.mem.trim(u8, closing.attrs, " \t").len != 0 or
+        std.mem.trim(u8, source[opening.end..range.start], " \t").len != 0) return null;
+    const tail = source[range.end..pair.inner_end];
+    const link = std.mem.trim(u8, tail, " \t");
+    if (link.len < 7 or !std.mem.startsWith(u8, link, "[[#") or !std.mem.endsWith(u8, link, "]]")) return null;
+    const pipe = std.mem.indexOfScalar(u8, link, '|') orelse return null;
+    if (pipe <= 3 or pipe + 1 >= link.len - 2) return null;
+    const href = link[2..pipe];
+    for (href[1..]) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '_' and byte != '-' and byte != '.' and byte != ':') return null;
+    const label = link[pipe + 1 .. link.len - 2];
+    if (!std.unicode.utf8ValidateSlice(label) or std.mem.trim(u8, label, " ").len == 0 or
+        std.mem.indexOfAny(u8, label, "[]{}<>|'&\"\x00\r\n\t") != null or std.mem.indexOf(u8, label, "__") != null) return null;
+    for (label) |byte| if (byte < 0x20 or byte == 0x7f) return null;
+
+    const hr = nodes[rule];
+    const parent_index = hr.parent orelse return null;
+    if (parent_index >= nodes.len) return null;
+    const parent_node = nodes[parent_index];
+    const parent_end = parent_node.inner_end orelse return null;
+    if (!hr.tag.is("hr") or !parent_node.tag.is("div") or parent_node.first_child != rule or hr.previous != null or
+        parent_node.tag.end > hr.start or hr.tag.end > parent_end or parent_end > html.len or
+        std.mem.trim(u8, html[parent_node.tag.end..hr.start], " \t\r\n").len != 0) return null;
+    const parent_attrs = (try literalDivAttributes(a, opening)) orelse return null;
+    if (!sameSiblingAttributes(parent_attrs, parent_node.attributes)) return null;
+    var anchor_index: ?usize = null;
+    var direct_count: usize = 0;
+    for (nodes, 0..) |node, index| if (node.parent == parent_index) {
+        direct_count += 1;
+        if (index == rule) continue;
+        if (anchor_index != null or !node.tag.is("a") or node.previous != rule or node.first_child != null or
+            node.tag.closing or node.tag.self_closing or node.attributes.attributes.len != 1) return null;
+        const attribute = node.attributes.attributes[0];
+        if (!equal(attribute.name, "href") or !equal(attribute.value, href)) return null;
+        anchor_index = index;
+    };
+    const anchor = anchor_index orelse return null;
+    if (direct_count != 2) return null;
+    const node = nodes[anchor];
+    const inner_end = node.inner_end orelse return null;
+    const close = syntax.tagAt(html, inner_end) orelse return null;
+    if (hr.tag.end > node.start or node.tag.end > inner_end or inner_end > parent_end or close.end > parent_end or
+        !close.is("a") or !close.closing or close.self_closing or std.mem.trim(u8, close.attrs, " \t\r\n").len != 0 or
+        std.mem.trim(u8, html[hr.tag.end..node.start], " \t\r\n").len != 0 or
+        std.mem.trim(u8, html[close.end..parent_end], " \t\r\n").len != 0 or
+        std.mem.indexOfScalar(u8, html[node.tag.end..inner_end], '<') != null) return null;
+    const text = decodedAttribute(a, html[node.tag.end..inner_end]) catch |err| switch (err) {
+        error.OutOfMemory => return err, else => return null,
+    };
+    if (!equal(text, label)) return null;
+    return .{ .parent_source = source[parent_start..pair.end], .tail_source = tail, .anchor = @intCast(anchor) };
+}
+
+fn authoredRuleParentBraceDomain(source: []const u8) bool {
+    var depth: usize = 0;
+    var at: usize = 0;
+    while (at < source.len) : (at += 1) {
+        if (source[at] == 0) return false;
+        if (source[at] != '{' and source[at] != '}') continue;
+        const start = if (std.mem.lastIndexOfScalar(u8, source[0..at], '\n')) |line| line + 1 else 0;
+        if (source[at] == '{') {
+            if (at + 1 >= source.len or source[at + 1] != '|' or depth == 64 or
+                std.mem.trim(u8, source[start..at], " \t").len != 0) return false;
+            depth += 1; at += 1;
+        } else {
+            if (depth == 0 or at == 0 or source[at - 1] != '|' or
+                std.mem.trim(u8, source[start..at - 1], " \t").len != 0 or
+                (at + 1 < source.len and !std.ascii.isWhitespace(source[at + 1]))) return false;
+            const line_end = if (std.mem.indexOfScalarPos(u8, source, at + 1, '\n')) |line| line else source.len;
+            if (std.mem.trim(u8, source[at + 1..line_end], " \t\r").len != 0) return false;
+            depth -= 1;
+        }
+    }
+    return depth == 0;
+}
+
+fn observedLiteralDivParentsIn(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
+    nodes: []const ObservedSiblingNode, rule_tables: bool) ![]const profile.SourceLiteralDivProof
+{
+    if (nodes.len == 0 or nodes[0].parent != null or !nodes[0].tag.is("div")) return invalid;
+    const Candidate = struct { start: usize, end: usize, tag: syntax.Tag, attrs: Inventory, observed: usize };
+    var candidates: std.ArrayList(Candidate) = .empty;
+    var position: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, source, position, '<')) |start| {
+        position = start + 1;
+        const tag = syntax.tagAt(source, start) orelse continue;
+        const attrs = (try literalDivAttributes(a, tag)) orelse continue;
+        const pair = syntax.matchingTag(source, tag) orelse continue;
+        if (pair.end <= tag.end or pair.end > source.len) continue;
+        const parent_source = source[start..pair.end];
+        if (rule_tables) {
+            if (!authoredRuleParentBraceDomain(parent_source)) continue;
+        } else if (std.mem.indexOfAny(u8, parent_source, "{}\x00") != null) continue;
+        // The complete existing prefix grammar excludes protected/link-label
+        // operations and repaired inline/table/list parents. It grants no edge.
+        authoredRulePrefixWithParent(a, ns, source, .{ .start = start, .end = pair.end }, false, null) catch |err| switch (err) {
+            error.OutOfMemory => return err, else => continue,
+        };
+        var source_count: usize = 0; var scan: usize = 0;
+        var source_group_empty = true;
+        while (std.mem.indexOfScalarPos(u8, source, scan, '<')) |other_start| {
+            scan = other_start + 1;
+            const other = syntax.tagAt(source, other_start) orelse continue;
+            if (!other.is("div") or other.closing) continue;
+            const other_attrs = inventory(a, other) catch |err| switch (err) { error.OutOfMemory => return err, else => return &.{} };
+            if (sameSiblingAttributes(attrs, other_attrs)) {
+                source_count += 1;
+                if (other.self_closing or other.html_pre) source_group_empty = false;
+                if (syntax.matchingTag(source, other)) |other_pair| {
+                    if (other_pair.end <= other.end or other_pair.end > source.len or other_pair.inner_end != other.end)
+                        source_group_empty = false;
+                } else source_group_empty = false;
+            }
+        }
+        const repeated_empty = source_count > 1 and source_group_empty and pair.inner_end == tag.end;
+        if (source_count != 1 and !repeated_empty) continue;
+        var selected: ?usize = null; var observed_count: usize = 0;
+        var common_root = true;
+        for (nodes, 0..) |node, index| if (node.tag.is("div") and sameSiblingAttributes(attrs, node.attributes)) {
+            observed_count += 1; selected = index;
+            if (repeated_empty and (node.parent != 0 or node.inner_end == null or
+                node.inner_end.? != node.tag.end or node.first_child != null)) common_root = false;
+        };
+        // A repeated empty group publishes only the common immediate root.
+        // Every captured candidate must have the same attributes, no content,
+        // and that exact parent; equal census never selects a DOM ordinal.
+        // Native use still validates each untouched ordinary source range.
+        if (observed_count != source_count or !common_root or selected == null or nodes[selected.?].inner_end == null) continue;
+        try candidates.append(a, .{ .start = start, .end = pair.end, .tag = tag, .attrs = attrs, .observed = selected.? });
+        if (candidates.items.len > 4096) return invalid;
+    }
+    var result: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+    // Source order places an enclosing literal DIV before its descendants.
+    for (candidates.items) |candidate| {
+        var source_parent: ?usize = null; var parent_end: usize = source.len + 1;
+        for (candidates.items) |other| if (other.start < candidate.start and other.end > candidate.end and other.end < parent_end) {
+            source_parent = other.start; parent_end = other.end;
+        };
+        const observed_parent = nodes[candidate.observed].parent orelse continue;
+        if (source_parent) |parent_start| {
+            var parent_candidate: ?Candidate = null;
+            for (candidates.items) |other| if (other.start == parent_start) { parent_candidate = other; break; };
+            const parent = parent_candidate orelse continue;
+            if (observed_parent != parent.observed) continue;
+            var closed = false;
+            for (result.items) |proof| if (proof.range.anchor_start == parent_start) { closed = true; break; };
+            if (!closed) continue;
+        } else {
+            if (observed_parent != 0) continue;
+            if (!try authoredLiteralRootPrefix(a, source, candidate.start)) continue;
+        }
+        // A different literal HTML parent omitted from the eligible candidates
+        // must not collapse to the root. The existing prefix grammar rejects
+        // inline/list parents; the observed immediate edge rejects block repairs.
+        try result.append(a, .{ .range = .{ .anchor_start = candidate.start, .anchor_end = candidate.end,
+            .name_start = @intFromPtr(candidate.tag.name.ptr) - @intFromPtr(source.ptr), .name_len = candidate.tag.name.len,
+            .attrs_start = @intFromPtr(candidate.tag.attrs.ptr) - @intFromPtr(source.ptr), .attrs_len = candidate.tag.attrs.len }, .parent_start = source_parent });
+    }
+    _ = html;
+    return try result.toOwnedSlice(a);
+}
+
+// A no-rule converter is an inline atom, not template syntax. This census
+// proves only that its complete body cannot conceal another authored owner;
+// the ordinary compiler retains conversion, body text, formatting and actions.
+fn authoredRuleRuleFreeConversionEnd(a: A, ns: *const namespaces.Registry, source: []const u8, start: usize) !usize {
+    if (start > source.len or !std.mem.startsWith(u8, source[start..], "-{")) return invalid;
+    const close = std.mem.indexOfPos(u8, source, start + 2, "}-") orelse return invalid;
+    const body = source[start + 2 .. close];
+    if (body.len == 0 or body.len > 4096 or std.mem.trim(u8, body, " ").len == 0 or
+        std.mem.indexOfAny(u8, body, "{};&\r\n\x00") != null or std.mem.indexOf(u8, body, "__") != null or
+        std.mem.indexOf(u8, body, "=>") != null) return invalid;
+    try styleSourceLabel(a, ns, body, false, 0, true);
+    var at: usize = 0;
+    while (at < body.len) {
+        if (body[at] == '[') {
+            const end = (try authoredElementLinkEnd(a, ns, body, at, 0)) orelse return invalid;
+            var iterator: encoder.document_ir.InlineIterator = .{ .input = body, .cursor = at, .renderer_boundaries = true };
+            const link = iterator.next() orelse return invalid;
+            // The ordinary/explicit anchor is emitted before conversion. Its
+            // source separator is consumed by that link parser, while variant
+            // or flag syntax cannot survive in the rendered label here.
+            if (link.kind != .link or link.link_empty_label or std.mem.indexOfAny(u8, link.text, ":|") != null or
+                (link.target.len != 0 and link.target[0] != ':' and std.mem.indexOfScalar(u8, link.target, ':') != null) or
+                (try compiler.figureObservationFileTargetAlloc(a, link.target, .{ .namespace_catalog = ns })) != null or
+                (link.target.len != 0 and link.target[0] != ':' and ns.ofTitle(link.target).id == 14)) return invalid;
+            at = end; continue;
+        }
+        if (body[at] == '<') {
+            const tag = syntax.tagAt(body, at) orelse return invalid;
+            // Attribute text is not a converter-token boundary. Admit only
+            // the already checked attribute-free inline tags used by this atom.
+            if (tag.attrs.len != 0 or tag.is("hr") or tag.isOpaque() or tag.is("nowiki")) return invalid;
+            at = tag.end; continue;
+        }
+        // Variant mappings/flags, entities and protocol-like bare text have no
+        // rule-free certificate here. Tokens within complete links stay owned
+        // by the existing source link parser above.
+        if (body[at] < 0x20 or body[at] == 0x7f or std.mem.indexOfScalar(u8, ":;|&=>", body[at]) != null) return invalid;
+        at += 1;
+    }
+    return close + 2;
+}
+
+fn authoredElementWholeSource(a: A, ns: *const namespaces.Registry, source: []const u8, proofs: []const AuthoredElementStyleProof) !void {
+    // Inspect the suffix as well: no unclosed/unknown producer or ignored
+    // matching anchor may balance the observed candidate inventory. This is
+    // deliberately not a source-to-DOM ordinal or native ancestry assertion.
+    var at: usize = 0;
+    while (at < source.len) {
+        if (std.mem.startsWith(u8, source[at..], "-{")) {
+            at = try authoredRuleRuleFreeConversionEnd(a, ns, source, at); continue;
+        }
+        if (std.mem.startsWith(u8, source[at..], "<!--")) {
+            const end = (std.mem.indexOfPos(u8, source, at + 4, "-->") orelse return invalid) + 3;
+            try authoredElementOpaqueCollision(a, source[at + 4 .. end - 3], proofs);
+            at = end; continue;
+        }
+        if (source[at] == '<') {
+            const tag = syntax.tagAt(source, at) orelse return invalid;
+            try missingStyleSourceAttributes(a, tag);
+            if (tag.is("ref") or tag.is("nowiki") or tag.is("pre")) {
+                if (tag.closing) return invalid;
+                if (tag.self_closing) { at = tag.end; continue; }
+                const matched = syntax.matchingTag(source, tag) orelse return invalid;
+                try authoredElementOpaqueCollision(a, source[tag.end..matched.end], proofs);
+                if (tag.is("ref")) {
+                    const close = std.mem.lastIndexOf(u8, source[tag.end..matched.end], "</") orelse return invalid;
+                    try authoredElementReferenceBody(a, source[tag.end .. tag.end + close]);
+                }
+                for (proofs) |proof| if (proof.range.start < matched.end and proof.range.end > at) return invalid;
+                at = matched.end; continue;
+            }
+            if (tag.is("templatestyles")) {
+                at = try authoredEmptyTemplateStyleEnd(a, source, tag); continue;
+            } else if (tag.is("references")) {
+                if (tag.closing or !tag.self_closing) return invalid;
+            } else if (missingStyleBodyTag(tag) == null and !tag.is("br") and !tag.is("hr") and !tag.is("wbr")) return invalid;
+            at = tag.end; continue;
+        }
+        if (source[at] == '[') if (try authoredElementLinkEnd(a, ns, source, at, 0)) |end| {
+            for (proofs) |proof| if (proof.range.start < end and proof.range.end > at) return invalid;
+            at = end; continue;
+        };
+        if (source[at] == '{') {
+            if ((at != 0 and source[at - 1] != '\n') or !std.mem.startsWith(u8, source[at..], "{|")) return invalid;
+        } else if (source[at] == '}') {
+            if (at == 0 or source[at - 1] != '|' or (at > 1 and source[at - 2] != '\n')) return invalid;
+        }
+        at += 1;
+    }
+}
+
+fn authoredElementOpaqueCollision(a: A, source: []const u8, proofs: []const AuthoredElementStyleProof) !void {
+    var at: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, source, at, '<')) |start| {
+        const tag = syntax.tagAt(source, start) orelse { at = start + 1; continue; };
+        at = tag.end;
+        if (tag.closing or (!tag.is("div") and !tag.is("span") and !tag.is("hr"))) continue;
+        const attributes = (try customAnchorAttributesMode(a, tag, true)) orelse continue;
+        for (proofs) |proof| if (tag.is(proof.tag) and sameSiblingAttributes(attributes, proof.attributes)) return invalid;
+    }
+}
+
+fn selectAuthoredElementStyles(a: A, parent: *const profile.Profile, stored: *const PageStyleData) ![]const SelectedAuthoredElementStyle {
+    if (stored.authored_element_styles.len == 0) return &.{};
+    const primary_styles = try figureContextStyles(a, parent, stored, false);
+    const alternative_styles = try figureContextStyles(a, parent, stored, true);
+    const primary = try figureObservedGraph(a, primary_styles, stored, false);
+    const alternative = try figureObservedGraph(a, alternative_styles, stored, true);
+    const result = try a.alloc(SelectedAuthoredElementStyle, stored.authored_element_styles.len);
+    const shift: u32 = @intCast(stored.outer.ancestors.len);
+    for (stored.authored_element_styles, result) |proof, *out| {
+        const contexts = try a.alloc(profile.AuthoredElementObservedContext, proof.candidates.len * 2);
+        for (proof.candidates, 0..) |candidate, index| for ([_][]const profile.FigureObservedNode{ primary, alternative }, 0..) |nodes, arm| {
+            contexts[index * 2 + arm] = .{ .nodes = nodes, .root = shift, .element = candidate + shift,
+                .styles = if (arm == 0) primary_styles else alternative_styles,
+                .rule_anonymous_tail = if (proof.rule_anonymous_tail) |tail| .{
+                    .parent_source = tail.parent_source, .tail_source = tail.tail_source, .anchor = tail.anchor + shift,
+                } else null };
+        };
+        out.* = .{ .proof = proof, .contexts = contexts };
+    }
+    return result;
+}
+
+fn authenticatedAuthoredRuleHeadContext(a: A, page: RawPage, value: RawAuthoredHeadContext) ![]const u8 {
+    if (value.form_body.len == 0 or value.form_body.len > 256 * 1024) return invalid;
+    const request = try json(a, value.request);
+    const receipt = try json(a, value.receipt);
+    const response = try json(a, value.response);
+    const original_request = try json(a, page.request);
+    const original = try field(try json(a, page.response), "parse");
+    if (original != .object or original.object.contains("headhtml")) return invalid;
+    const source = try string(original, "wikitext");
+    try descriptor(source, try field(original_request, "text_source"));
+    if (!equal(try string(request, "schema"), "wikidict.supplied-expanded-head-request.v1") or
+        !equal(try string(request, "method"), "POST") or
+        !equal(try string(request, "url"), try string(original_request, "url")) or
+        !equal(try string(request, "content_type"), "application/x-www-form-urlencoded; charset=utf-8") or
+        try number(request, "page_id") != page.page_id or try number(request, "requested_revision_id") != page.revision_id or
+        try number(request, "request_count") != 1 or try number(receipt, "request_count") != 1 or try number(receipt, "status") != 200) return invalid;
+    try flag(request, "controlled_single_token", false); try flag(request, "full_supplied_expanded_page", true);
+    try flag(request, "historical_transclusions", false); try flag(request, "parse_core_binding_proven", false); try flag(receipt, "accepted", true);
+    try descriptor(value.request, try field(receipt, "request")); try descriptor(value.response, try field(receipt, "response"));
+    try descriptor(value.form_body, try field(request, "form")); try descriptor(source, try field(request, "text_source"));
+    const parameters = try field(request, "parameters_except_text");
+    if (parameters != .object or parameters.object.count() != 11) return invalid;
+    for ([_][2][]const u8{ .{ "action", "parse" }, .{ "format", "json" }, .{ "formatversion", "2" }, .{ "maxlag", "5" },
+        .{ "contentmodel", "wikitext" }, .{ "parser", "legacy" }, .{ "usearticle", "1" },
+        .{ "prop", "headhtml|wikitext" }, .{ "useskin", "vector-2022" } }) |pair|
+        if (!equal(try string(parameters, pair[0]), pair[1])) return invalid;
+    const revision = std.fmt.parseInt(u64, try string(parameters, "revid"), 10) catch return invalid;
+    if (revision != page.revision_id or !equal(try string(parameters, "title"), page.title)) return invalid;
+    var pairs = std.mem.splitScalar(u8, value.form_body, '&');
+    var names: std.StringHashMapUnmanaged(void) = .empty;
+    defer names.deinit(a);
+    while (pairs.next()) |pair| {
+        const split = std.mem.indexOfScalar(u8, pair, '=') orelse return invalid;
+        const key = try formDecode(a, pair[0..split]); const text = try formDecode(a, pair[split + 1 ..]);
+        if ((try names.getOrPut(a, key)).found_existing) return invalid;
+        if (equal(key, "text")) {
+            if (!equal(text, source)) return invalid;
+        } else if (!equal(try string(parameters, key), text)) return invalid;
+    }
+    if (names.count() != 12 or !names.contains("text")) return invalid;
+    if (response != .object or response.object.contains("error") or response.object.contains("errors") or response.object.contains("warnings")) return invalid;
+    const parsed = try field(response, "parse");
+    if (parsed != .object or parsed.object.contains("text") or
+        !equal(try string(parsed, "title"), page.title) or try number(parsed, "pageid") != page.page_id or
+        !equal(try string(parsed, "wikitext"), source)) return invalid;
+    if (parsed.object.contains("revid") and try number(parsed, "revid") != page.revision_id) return invalid;
+    const head = try string(parsed, "headhtml");
+    if (head.len == 0 or head.len > max_response or !std.unicode.utf8ValidateSlice(head) or std.mem.indexOfScalar(u8, head, 0) != null) return invalid;
+    return head;
+}
+
+fn authoredHeadContext(a: A, page: RawPage) ![]const u8 {
+    const value = page.authored_head_context orelse return invalid;
+    const outer = page.outer_context orelse return invalid;
+    const current = outer.current_identity orelse return invalid;
+    if (!page.text_class_scope or page.occurrences.len != 0 or page.page_styles == null or
+        (page.authored_style_operations orelse return invalid).len == 0 or
+        !equal(current.mode, "canonical-current-v1") or current.historical or outer.selected_body != null or
+        page.missing_head_context != null or page.figure_style_operations != null or page.figure_style_assets != null or
+        page.image_map_no_link != null or page.missing_served_set != null or page.current_get_literal != null or page.figure_block_renditions != null) return invalid;
+    return authenticatedAuthoredRuleHeadContext(a, page, value);
+}
+
+fn authoredInlineOwnerInLink(a: A, ns: *const namespaces.Registry, source: []const u8, start: usize,
+    range: AuthoredElementStyleRange, depth: usize) anyerror!bool
+{
+    if (depth >= 16 or range.start >= range.end or range.end > source.len) return false;
+    const end = (try authoredElementLinkEnd(a, ns, source, start, depth)) orelse return false;
+    if (range.start <= start or range.end >= end) return false;
+    var iterator: encoder.document_ir.InlineIterator = .{ .input = source, .cursor = start, .renderer_boundaries = true };
+    const node = iterator.next() orelse return false;
+    if (node.kind != .link and node.kind != .external_link) return false;
+    if (node.kind == .link) {
+        const target = std.mem.trim(u8, node.target, " \t");
+        if (target.len == 0 or std.mem.indexOfScalar(u8, target, '&') != null or
+            (try compiler.figureObservationFileTargetAlloc(a, target, .{ .namespace_catalog = ns })) != null) return false;
+        if (target[0] != ':' and ns.ofTitle(target).id == 14) return false;
+    }
+    const label_at = std.math.sub(usize, @intFromPtr(node.text.ptr), @intFromPtr(source.ptr)) catch return false;
+    if (label_at > source.len or node.text.len > source.len - label_at or range.start < label_at or range.end > label_at + node.text.len) return false;
+    var at = label_at;
+    const limit = label_at + node.text.len;
+    while (at < limit) {
+        if (source[at] == '[') if (try authoredElementLinkEnd(a, ns, source[0..limit], at, depth + 1)) |next| {
+            if (range.start < next and range.end > at)
+                return authoredInlineOwnerInLink(a, ns, source[0..limit], at, range, depth + 1);
+            at = next; continue;
+        };
+        if (source[at] == '<') {
+            const tag = syntax.tagAt(source[0..limit], at) orelse return false;
+            if (tag.is("nowiki")) { at = try authoredLiteralNowikiEnd(source[0..limit], tag); continue; }
+            if (at == range.start) {
+                if (!authoredInlineOwnerTag(tag) or tag.closing or tag.self_closing) return false;
+                const pair = syntax.matchingTag(source[0..limit], tag) orelse return false;
+                return pair.end == range.end;
+            }
+            at = tag.end; continue;
+        }
+        at += 1;
+    }
+    return false;
+}
+
+fn authoredInlineWikiCellAttributes(a: A, attrs: []const u8) !void {
+    if (attrs.len > 65536 or std.mem.indexOfAny(u8, attrs, "[]{}<>|\r\n\x00") != null) return invalid;
+    const original = try std.fmt.allocPrint(a, "<td {s}>", .{attrs});
+    defer a.free(original);
+    const source_tag = syntax.tagAt(original, 0) orelse return invalid;
+    var normalized: std.ArrayList(u8) = .empty;
+    defer normalized.deinit(a);
+    try normalized.appendSlice(a, "<td ");
+    var at: usize = 0; var count: usize = 0;
+    while (at < attrs.len) {
+        if (count != 0 and !std.ascii.isWhitespace(attrs[at])) return invalid;
+        while (at < attrs.len and std.ascii.isWhitespace(attrs[at])) : (at += 1) {}
+        if (at == attrs.len) break;
+        if (count == 64) return invalid;
+        count += 1;
+        const name_start = at;
+        while (at < attrs.len and attributeNameByte(attrs[at])) : (at += 1) {}
+        if (at == name_start) return invalid;
+        const name = attrs[name_start..at];
+        while (at < attrs.len and std.ascii.isWhitespace(attrs[at])) : (at += 1) {}
+        if (at == attrs.len or attrs[at] != '=') return invalid;
+        at += 1;
+        while (at < attrs.len and std.ascii.isWhitespace(attrs[at])) : (at += 1) {}
+        if (at == attrs.len) return invalid;
+        try normalized.appendSlice(a, name); try normalized.append(a, '=');
+        const quoted = attrs[at] == '"' or attrs[at] == '\'';
+        const quote = attrs[at];
+        const token_start = at;
+        if (quoted) {
+            at += 1;
+            while (at < attrs.len and attrs[at] != quote) : (at += 1) {}
+            if (at == attrs.len) return invalid;
+            at += 1;
+            try normalized.appendSlice(a, attrs[token_start..at]);
+        } else {
+            while (at < attrs.len and !std.ascii.isWhitespace(attrs[at])) : (at += 1) {
+                if (attrs[at] < 0x20 or attrs[at] == 0x7f or
+                    std.mem.indexOfScalar(u8, "\"'`=</!", attrs[at]) != null) return invalid;
+            }
+            if (at == token_start) return invalid;
+            const raw = attrs[token_start..at];
+            if (std.mem.indexOf(u8, raw, "__") != null or
+                !std.mem.eql(u8, source_tag.attr(name) orelse return invalid, raw)) return invalid;
+            try normalized.append(a, '"'); try normalized.appendSlice(a, raw); try normalized.append(a, '"');
+        }
+        try normalized.append(a, ' ');
+    }
+    try normalized.append(a, '>');
+    // The ordinary validator still owns duplicate names, decoded source values
+    // and event-attribute refusal. This view grants no table geometry or ancestry.
+    try figureStyleLiteralAttributes(a, syntax.tagAt(normalized.items, 0) orelse return invalid);
+}
+
+fn customAnchorAttributesMode(a: A, tag: syntax.Tag, internal_class_separator: bool) !?Inventory {
+    // Attribute preprocessing is part of the operation. Close both raw and
+    // decoded grammars; an exact decoded signature alone is insufficient.
+    if (std.mem.indexOfAny(u8, tag.attrs, "{}[]<>|\r\n\x00") != null or
+        (!internal_class_separator and std.mem.indexOf(u8, tag.attrs, "__") != null)) return null;
+    const attributes = inventory(a, tag) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
+    for (attributes.attributes) |attribute| {
+        if (internal_class_separator and equal(attribute.name, "class")) {
+            if (!authoredElementLiteralClass(attribute.value)) return null;
+            continue;
+        }
+        if (internal_class_separator and tag.is("abbr") and equal(attribute.name, "title")) {
+            // Only the selected inline ABBR operation admits its literal title.
+            // Raw preprocessing tokens were excluded above; decoded markup,
+            // execution syntax and controls cannot borrow an observed signature.
+            const value = attribute.value;
+            if (value.len == 0 or value.len > 4096 or !std.unicode.utf8ValidateSlice(value) or
+                std.mem.indexOfAny(u8, value, "{}[]<>|\r\n\x00") != null or
+                std.mem.indexOf(u8, value, "__") != null) return null;
+            for (value) |byte| if (byte < 0x20 or byte == 0x7f) return null;
+            continue;
+        }
+        if (!equal(attribute.name, "style")) {
+            if (!siblingLiteralAttribute(attribute.name, attribute.value)) return null;
+            continue;
+        }
+        // Functions may contain only literal ASCII CSS tokens. No strings,
+        // escapes, comments, markup or wikitext execution are admitted.
+        if (internal_class_separator and std.mem.indexOf(u8, attribute.value, "__") != null) return null;
+        for (attribute.value) |byte| if (!std.ascii.isAlphanumeric(byte) and
+            std.mem.indexOfScalar(u8, " #.,%+_-:;()", byte) == null) return null;
+        var at: usize = 0;
+        while (try profile.nextDeclarationAlloc(a, attribute.value, &at)) |declaration| {
+            defer a.free(declaration);
+            if (std.mem.trim(u8, declaration, " ").len == 0) continue;
+            const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse return null;
+            if (profile.customPriority(declaration[colon + 1..]).unknown) return null;
+        }
+    }
+    return attributes;
+}
+
+fn authoredElementLiteralClass(value: []const u8) bool {
+    if (std.mem.indexOf(u8, value, "__") == null) return siblingLiteralAttribute("class", value);
+    // One internal separator cannot form a complete __name__ operation. Keep
+    // this narrower source grammar separate from existing note/sibling proofs.
+    var separators: usize = 0;
+    var names = std.mem.tokenizeScalar(u8, value, ' ');
+    while (names.next()) |token| {
+        if (!std.ascii.isAlphabetic(token[0]) and token[0] != '_') return false;
+        for (token) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '_' and byte != '-') return false;
+        if (std.mem.indexOf(u8, token, "__")) |at| {
+            if (at == 0 or at + 2 == token.len or !std.ascii.isAlphanumeric(token[at - 1]) or
+                !std.ascii.isAlphanumeric(token[at + 2]) or std.mem.indexOfPos(u8, token, at + 2, "__") != null) return false;
+            separators += 1;
+        }
+    }
+    return separators == 1;
+}
+
+fn authoredInlineOwnerTag(tag: syntax.Tag) bool {
+    return tag.is("abbr") or tag.is("sup") or tag.is("sub");
+}
+
+const AuthoredRuleTailTesting = if (@import("builtin").is_test) struct {
+    const source = "<div class=\"owner\"><hr>[[#catlinks|plain label]]</div>";
+    const html = "<div class=\"mw-content-ltr mw-parser-output\" lang=\"sr\" dir=\"ltr\"><div class=\"owner\"><hr /><a href=\"#catlinks\">plain label</a></div></div>";
+    fn proof(a: A, ns: *const namespaces.Registry, source_bytes: []const u8, html_bytes: []const u8) !?profile.AuthoredRuleAnonymousTail {
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, ns, html_bytes, &nodes);
+        const start = std.mem.indexOf(u8, source_bytes, "<hr>") orelse return invalid;
+        const range: AuthoredElementStyleRange = .{ .start = start, .end = start + 4 };
+        // Tail refusal must not erase the independently valid ordinary HR.
+        const rule = try authoredRuleCandidates(a, ns, source_bytes, html_bytes, nodes.items, range);
+        try std.testing.expectEqual(@as(usize, 1), rule.len);
+        return authoredRuleAnonymousTail(a, ns, source_bytes, html_bytes, nodes.items, range, rule[0]);
+    }
+};
+
+const AuthoredHeadTesting = if (@import("builtin").is_test) struct {
+    const prefix = "testdata/sr-authored-head/";
+    fn page(a: A) !RawPage {
+        return std.json.parseFromSliceLeaky(RawPage, a, @embedFile(prefix ++ "alexander.page.json"), .{ .allocate = .alloc_always });
+    }
+    fn changedParse(a: A, original_page: RawPage, key: []const u8, value: Value) !RawPage {
+        var result = original_page;
+        var doc = try json(a, original_page.authored_head_context.?.response);
+        var parsed = try field(doc, "parse");
+        try parsed.object.put(a, key, value); try doc.object.put(a, "parse", parsed);
+        result.authored_head_context.?.response = try std.json.Stringify.valueAlloc(a, doc, .{});
+        var receipt = try json(a, original_page.authored_head_context.?.receipt);
+        try receipt.object.put(a, "response", try TextClassTesting.descriptorValue(a, result.authored_head_context.?.response));
+        result.authored_head_context.?.receipt = try std.json.Stringify.valueAlloc(a, receipt, .{});
+        return result;
+    }
+    fn proofs(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8, range: AuthoredElementStyleRange) ![]const AuthoredElementStyleProof {
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, ns, html, &nodes);
+        return authoredElementStyleProofsWithHtml(a, ns, source, html, &.{range}, nodes.items);
+    }
+} else struct {};
+
+test "authored head binds actual Alexander full body and independent current shell without Missing grant" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const page = try AuthoredHeadTesting.page(a);
+    const original = try field(try json(a, page.response), "parse");
+    const before = Testing.hash(page.response);
+    try std.testing.expect(!original.object.contains("headhtml"));
+    const supplied = try responseSource(a, &ns, page);
+    try std.testing.expectEqualStrings(try string(original, "text"), supplied.html);
+    try std.testing.expectEqualStrings(try string(original, "wikitext"), supplied.source);
+    try std.testing.expectEqualStrings("<hr>", supplied.source[417..421]);
+    const scope = try observedTextClassScope(a, &ns, supplied.html);
+    const outer = try observedOuterContext(a, &ns, page, page.outer_context.?, scope);
+    try std.testing.expectEqual(@as(usize, 8), outer.ancestors.len);
+    try std.testing.expect(page.occurrences.len == 0 and page.missing_head_context == null and page.figure_style_operations == null);
+    try std.testing.expectError(invalid, missingHeadContext(a, page));
+    const after = Testing.hash(page.response);
+    try std.testing.expectEqualSlices(u8, &before, &after);
+}
+
+test "authored head refuses crossed rehashed source page revision and unrelated operation authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const page = try AuthoredHeadTesting.page(a);
+    for ([_]struct { key: []const u8, value: Value }{
+        .{ .key = "pageid", .value = .{ .integer = 12601 } },
+        .{ .key = "title", .value = .{ .string = "other" } },
+        .{ .key = "revid", .value = .{ .integer = 676513 } },
+        .{ .key = "wikitext", .value = .{ .string = "changed source" } },
+        .{ .key = "text", .value = .{ .string = "body replacement" } },
+    }) |change| try std.testing.expectError(invalid, authoredHeadContext(a, try AuthoredHeadTesting.changedParse(a, page, change.key, change.value)));
+    for (0..7) |mode| {
+        var changed = page;
+        switch (mode) {
+            0 => changed.text_class_scope = false,
+            1 => changed.outer_context.?.current_identity = null,
+            2 => changed.outer_context.?.current_identity.?.historical = true,
+            3 => changed.authored_style_operations = &.{},
+            4 => changed.page_styles = null,
+            5 => changed.figure_style_operations = &.{},
+            6 => changed.missing_head_context = changed.authored_head_context,
+            else => unreachable,
+        }
+        try std.testing.expectError(invalid, authoredHeadContext(a, changed));
+    }
+}
+
+test "authored Rule actual source and literal parents select both complete page style contexts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const page = try AuthoredHeadTesting.page(a); const supplied = try responseSource(a, &ns, page);
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    const scope = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
+    const outer = try observedOuterContext(a, &ns, page, page.outer_context.?, scope);
+    const proofs = try authoredElementStyleProofsWithHtml(a, &ns, supplied.source, supplied.html, page.authored_style_operations.?, nodes.items);
+    try std.testing.expectEqual(@as(usize, 1), proofs.len);
+    try std.testing.expectEqual(@as(usize, 1), proofs[0].candidates.len);
+    const index = proofs[0].candidates[0]; const node = nodes.items[index];
+    try std.testing.expectEqual(@as(usize, 3685), node.start);
+    try std.testing.expectEqualStrings("<hr />", supplied.html[node.start..node.tag.end]);
+    try std.testing.expectEqualStrings("NavContent", nodes.items[node.parent.?].attributes.get("class").?);
+    const shape = try json(a, @embedFile(AuthoredHeadTesting.prefix ++ "alexander.page.json"));
+    const stored = (try observedPageStyleProfile(a, &ns, "wikidict.figure-page-observations.v8", page, shape, supplied.html, scope, outer)) orelse return error.TestUnexpectedResult;
+    stored.observed_nodes = nodes.items; stored.observed_html = supplied.html; stored.authored_element_styles = proofs;
+    try std.testing.expect(page.figure_style_operations == null and stored.figure_styles.len == 0);
+    const served = try validateObservedStyleSet(a, page.page_styles.?, ns.wiki);
+    try std.testing.expectEqual(@as(usize, 3), stored.context_sources.len);
+    const alternative_sources = stored.figure_alternative_sources orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), alternative_sources.len);
+    // Genuine API selects source 3; GET selects source 0. Both retain gadget/site.
+    for (stored.context_sources, [_]usize{ 3, 1, 2 }) |selected_source, source_index| {
+        try std.testing.expectEqualStrings(served.responses[source_index], selected_source.css);
+        try std.testing.expectEqualStrings(served.urls[source_index], selected_source.base_url);
+    }
+    for (alternative_sources, [_]usize{ 0, 1, 2 }) |selected_source, source_index| {
+        try std.testing.expectEqualStrings(served.responses[source_index], selected_source.css);
+        try std.testing.expectEqualStrings(served.urls[source_index], selected_source.base_url);
+    }
+    const get = page.outer_context.?.response;
+    const head_end = std.mem.indexOf(u8, get, "</head>") orelse return error.TestUnexpectedResult;
+    for ([_][]const u8{
+        "<style>hr{height:7px}</style>",
+        "<link rel=\"stylesheet\" href=\"/w/load.php?lang=sr&amp;modules=foreign.styles&amp;only=styles&amp;skin=vector-2022\">",
+    }) |unbound_head| {
+        var changed = page;
+        changed.outer_context.?.response = try std.mem.concat(a, u8, &.{ get[0..head_end], unbound_head, get[head_end..] });
+        try std.testing.expectError(error.InvalidFigurePageObservations,
+            observedPageStyleProfile(a, &ns, "wikidict.figure-page-observations.v8", changed, shape, supplied.html, scope, outer));
+    }
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    stored.figure_alternative_sources = null;
+    try std.testing.expectError(error.InvalidFigurePageObservations, selectAuthoredElementStyles(a, &parent, stored));
+    stored.figure_alternative_sources = alternative_sources;
+    const choices = try selectAuthoredElementStyles(a, &parent, stored);
+    try std.testing.expectEqual(@as(usize, 2), choices[0].contexts.len);
+    const selected: SelectedPageStyles = .{ .styles = &parent, .scope = scope, .source = supplied.source,
+        .namespace_catalog = &ns, .authored_element_styles = choices, .authored_element_original = supplied.source };
+    const observation = (try SelectedPageStyles.authoredElementStyle(&selected, a,
+        .{ .source = supplied.source, .element = supplied.source[417..421] })) orelse return error.TestUnexpectedResult;
+    for (observation.contexts) |context| {
+        try std.testing.expectEqualStrings("hr", context.nodes[context.element].tag);
+        try std.testing.expect(context.nodes[context.element].parent != null);
+        const computed = (try profile.resolveObservedAuthoredRule(a, context)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualDeep(encoder.presentation_types.StyleLength{ .unit = .px, .value = 1 }, computed.style.height);
+        try std.testing.expectEqualStrings("#a2a9b1", computed.style.fill.rgb);
+        try std.testing.expectEqualDeep(encoder.presentation_types.StyleLength{ .unit = .em, .value = 0.2 }, computed.style.margins.top);
+        try std.testing.expectEqualDeep(computed.style.margins.top, computed.style.margins.bottom);
+        try std.testing.expectEqual(@as(f32, 0), computed.style.margins.left.value);
+        try std.testing.expectEqual(@as(f32, 0), computed.style.margins.right.value);
+        const tail = context.rule_anonymous_tail orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("[[#catlinks|Страна категорија]]", tail.tail_source);
+        try std.testing.expectEqualStrings("<div class=\"NavContent\" style=\"text-align:center;padding:0.5em\"><hr>[[#catlinks|Страна категорија]]</div>", tail.parent_source);
+        try std.testing.expectEqual(@intFromPtr(supplied.source[421..].ptr), @intFromPtr(tail.tail_source.ptr));
+        try std.testing.expectEqualStrings("a", context.nodes[tail.anchor].tag);
+        try std.testing.expectEqual(context.nodes[context.element].parent, context.nodes[tail.anchor].parent);
+        try std.testing.expectEqual(proofs[0].rule_anonymous_tail.?.anchor + context.root, tail.anchor);
+    }
+    const copied = try a.dupe(u8, supplied.source);
+    try std.testing.expect(try SelectedPageStyles.authoredElementStyle(&selected, a, .{ .source = copied, .element = copied[417..421] }) == null);
+    try std.testing.expect(try SelectedPageStyles.authoredElementStyle(&selected, a, .{ .source = supplied.source, .element = supplied.source[417..420] }) == null);
+}
+
+test "authored Rule source and observed parent mutations cannot borrow actual HR evidence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const page = try AuthoredHeadTesting.page(a); const supplied = try responseSource(a, &ns, page);
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
+    const range = page.authored_style_operations.?[0];
+    const good = try authoredRuleCandidates(a, &ns, supplied.source, supplied.html, nodes.items, range);
+    const index = good[0];
+    for (0..5) |mode| {
+        var changed = try a.dupe(ObservedSiblingNode, nodes.items);
+        switch (mode) {
+            0 => changed[index].parent = 0,
+            1 => changed[index].first_child = index,
+            2 => changed[index].inner_end = changed[index].tag.end,
+            3 => changed[index].attributes = .{ .attributes = &.{.{ .name = "class", .value = "foreign" }} },
+            4 => {
+                const duplicate = try a.alloc(ObservedSiblingNode, changed.len + 1);
+                @memcpy(duplicate[0..changed.len], changed); duplicate[changed.len] = changed[index]; changed = duplicate;
+            },
+            else => unreachable,
+        }
+        try std.testing.expectError(invalid, authoredRuleCandidates(a, &ns, supplied.source, supplied.html, changed, range));
+    }
+    const hidden = try std.mem.concat(a, u8, &.{ supplied.source, "<!--<hr>-->" });
+    try std.testing.expectError(invalid, authoredRuleCandidates(a, &ns, hidden, supplied.html, nodes.items, range));
+    try std.testing.expectError(invalid, authoredRuleCandidates(a, &ns, supplied.source, supplied.html, nodes.items, .{ .start = 418, .end = 421 }));
+}
+
+test "authored Rule empty TemplateStyles prefix is bounded and rejects active hidden and repaired parents" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const html = "<div class=\"mw-content-ltr mw-parser-output\" lang=\"sr\" dir=\"ltr\"><div class=\"owner\"><hr /></div></div>";
+    const body = "<div class=\"owner\"><hr></div>";
+    for ([_][]const u8{ "", "<templatestyles src=\"x\"/>", "<templatestyles src=\"x\"></templatestyles>" }) |prefix| {
+        const source = try std.mem.concat(a, u8, &.{ prefix, body });
+        const start = (std.mem.indexOf(u8, source, "<hr>") orelse unreachable);
+        try std.testing.expectEqual(@as(usize, 1), (try AuthoredHeadTesting.proofs(a, &ns, source, html, .{ .start = start, .end = start + 4 })).len);
+    }
+    for ([_][2][]const u8{
+        .{ "<templatestyles src=\"x\">hidden</templatestyles>", "" },
+        .{ "<templatestyles src=\"x\" onclick=\"run()\"></templatestyles>", "" },
+        .{ "<templatestyles src=\"x\">", "</templatestyles>" },
+        .{ "text", "" }, .{ "<span>", "</span>" }, .{ "<table>", "</table>" },
+        .{ "[[Target|", "]]" }, .{ "<nowiki>", "</nowiki>" },
+    }) |around| {
+        const source = try std.mem.concat(a, u8, &.{ around[0], body, around[1] });
+        const start = std.mem.indexOf(u8, source, "<hr>") orelse unreachable;
+        try std.testing.expectError(invalid, AuthoredHeadTesting.proofs(a, &ns, source, html, .{ .start = start, .end = start + 4 }));
+    }
+    for ([_][]const u8{ "<hr class=\"x\">", "<hr></hr>", "<br>", "<hr" }) |token| {
+        const source = try std.mem.concat(a, u8, &.{ "<div class=\"owner\">", token, "</div>" });
+        const start = "<div class=\"owner\">".len;
+        try std.testing.expectError(invalid, AuthoredHeadTesting.proofs(a, &ns, source, html, .{ .start = start, .end = start + token.len }));
+    }
+}
+
+test "authored Rule anonymous tail requires exact complete source and captured text link relationship" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const proof = (try AuthoredRuleTailTesting.proof(a, &ns, AuthoredRuleTailTesting.source, AuthoredRuleTailTesting.html)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(AuthoredRuleTailTesting.source, proof.parent_source);
+    try std.testing.expectEqualStrings("[[#catlinks|plain label]]", proof.tail_source);
+    try std.testing.expectEqual(@intFromPtr(AuthoredRuleTailTesting.source.ptr), @intFromPtr(proof.parent_source.ptr));
+    const spaced = "<div class=\"owner\"> \t<hr> \t[[#catlinks|plain label]]\t </div>";
+    const observed = "<div class=\"mw-content-ltr mw-parser-output\" lang=\"sr\" dir=\"ltr\"><div class=\"owner\">\n<hr />\n<a href=\"#catlinks\">plain&#32;label</a>\n</div></div>";
+    const other = (try AuthoredRuleTailTesting.proof(a, &ns, spaced, observed)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(spaced, other.parent_source);
+    try std.testing.expectEqualStrings(" \t[[#catlinks|plain label]]\t ", other.tail_source);
+    for ([_][]const u8{
+        "[[#elsewhere|plain label]]", "[[#catlinks|changed label]]", "[[#catlinks|]]", "[[#catlinks|   ]]",
+        "[[#catlinks|''plain label'']]", "[[#catlinks|plain &amp; label]]", "[[#catlinks|[[nested]]]]",
+        "[[#catlinks|<b>plain label</b>]]", "[[#catlinks|plain\tlabel]]",
+        "[[#catlinks|plain label]] extra", "[[#catlinks|plain label]][[#other|another]]",
+        "\n[[#catlinks|plain label]]", "[[#catlinks|plain label]]\n", "[[#bad fragment|plain label]]",
+    }) |tail| {
+        const source = try std.mem.concat(a, u8, &.{ "<div class=\"owner\"><hr>", tail, "</div>" });
+        try std.testing.expect((try AuthoredRuleTailTesting.proof(a, &ns, source, AuthoredRuleTailTesting.html)) == null);
+    }
+    // The original inner-newline mutation fails the complete ordinary parent
+    // grammar at authoredElementLinkEndIn before the tail query. Preserve its
+    // exact bytes and strict error rather than catching it as a null tail.
+    const multiline = "<div class=\"owner\"><hr>[[#catlinks|plain\nlabel]]</div>";
+    try std.testing.expectError(error.InvalidFigurePageObservations,
+        AuthoredRuleTailTesting.proof(a, &ns, multiline, AuthoredRuleTailTesting.html));
+    const before = "<div class=\"owner\">hidden<hr>[[#catlinks|plain label]]</div>";
+    try std.testing.expect((try AuthoredRuleTailTesting.proof(a, &ns, before, AuthoredRuleTailTesting.html)) == null);
+}
+
+test "authored Rule anonymous tail withholds mismatched observed siblings text attributes and wrappers only" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    for ([_][]const u8{
+        "<a href=\"#elsewhere\">plain label</a>", "<a href=\"#catlinks\">changed label</a>",
+        "<a href=\"#catlinks\" class=\"extra\">plain label</a>", "<a href=\"#catlinks\"><span>plain label</span></a>",
+        "<p><a href=\"#catlinks\">plain label</a></p>", "hidden<a href=\"#catlinks\">plain label</a>",
+        "<a href=\"#catlinks\">plain label</a>hidden", "<a href=\"#catlinks\">plain label</a><span></span>",
+        "<a href=\"#catlinks\">plain label</a><a href=\"#other\">other</a>",
+        "<a href=\"#catlinks\">plain<!--hidden--> label</a>", "<a href=\"#catlinks\">plain&nbsp;label</a>",
+        "<a href=\"#catlinks\">plain label </a>",
+    }) |tail| {
+        const html = try std.mem.concat(a, u8, &.{ "<div class=\"mw-content-ltr mw-parser-output\" lang=\"sr\" dir=\"ltr\"><div class=\"owner\"><hr />", tail, "</div></div>" });
+        try std.testing.expect((try AuthoredRuleTailTesting.proof(a, &ns, AuthoredRuleTailTesting.source, html)) == null);
+    }
+    const before = "<div class=\"mw-content-ltr mw-parser-output\" lang=\"sr\" dir=\"ltr\"><div class=\"owner\">hidden<hr /><a href=\"#catlinks\">plain label</a></div></div>";
+    try std.testing.expect((try AuthoredRuleTailTesting.proof(a, &ns, AuthoredRuleTailTesting.source, before)) == null);
+}
+
+
+const NormalAuthoredRuleTesting = struct {
+    fn book(a: A, ns: *const namespaces.Registry, files: *const sizing.Registry, document: Document) !Book {
+        return Book.init(a, try Testing.observedSetDocumentBytes(a, document), ns, files,
+            Testing.hash(@embedFile(AuthoredHeadTesting.prefix ++ "figure-siteinfo.raw.json")),
+            (ns.figure_source_defaults orelse return error.TestUnexpectedResult).default_thumbnail_width orelse return error.TestUnexpectedResult);
+    }
+};
+test "normal Rule capability admits authenticated HR preserves prior six pages and rejects generic operations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile(AuthoredHeadTesting.prefix ++ "interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile(AuthoredHeadTesting.prefix ++ "figure-siteinfo.raw.json"));
+    const seven = try std.json.parseFromSliceLeaky(Document, a, @embedFile(AuthoredHeadTesting.prefix ++ "candidate-seven01.json"), .{});
+    const six = try std.json.parseFromSliceLeaky(Document, a, @embedFile(AuthoredHeadTesting.prefix ++ "candidate-six-source01.json"), .{});
+    try std.testing.expectEqual(@as(usize, 7), seven.pages.len);
+    try std.testing.expectEqual(@as(usize, 6), six.pages.len);
+    try std.testing.expectEqualDeep(six.pages, seven.pages[0..six.pages.len]);
+    for (seven.pages[0..six.pages.len]) |old| {
+        try std.testing.expect(old.authored_style_operations == null and old.authored_head_context == null);
+    }
+    try std.testing.expectEqualStrings(six.wiki, seven.wiki);
+    try std.testing.expectEqualStrings(six.date, seven.date);
+    try std.testing.expectEqualStrings(six.namespace_sha256, seven.namespace_sha256);
+    try std.testing.expectEqualStrings(six.defaults_sha256, seven.defaults_sha256);
+    try std.testing.expectEqualDeep(six.missing_link_styles, seven.missing_link_styles);
+    const page = try AuthoredHeadTesting.page(a);
+    var only = seven; only.pages = &.{page};
+    // This selected page has no File occurrences. The empty registry supplies
+    // no image/Missing proof, and cannot grant any of the prior six pages.
+    var files: sizing.Registry = .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = &ns,
+        .records = &.{}, .file_authority = true }; defer files.deinit();
+    var book = try NormalAuthoredRuleTesting.book(a, &ns, &files, only); defer book.deinit();
+    try std.testing.expectEqual(@as(usize, 1), book.pages.len);
+    try std.testing.expect(book.pages[0].occurrences.len == 0);
+    const source = @embedFile("testdata/sr-authored-head/source.expanded.wikitext");
+    const raw = @embedFile("testdata/sr-authored-head/source.raw.wikitext");
+    try std.testing.expectEqualStrings(source, book.pages[0].source);
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const selected = (try book.selectPageStyles(a, &ns, 0, page.page_id, page.revision_id, page.title, raw, source,
+        Testing.hash(@embedFile(AuthoredHeadTesting.prefix ++ "figure-siteinfo.raw.json")), &parent)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), selected.authored_element_styles.len);
+    try std.testing.expectEqualStrings("hr", selected.authored_element_styles[0].proof.tag);
+    const operation: compiler.AuthoredElementStyleOperation = .{ .source = source, .element = source[417..421] };
+    const observed = (try SelectedPageStyles.authoredElementStyle(selected, a, operation)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(observed.profile == selected.styles and observed.contexts.len >= 2);
+    const foreign = try a.dupe(u8, source);
+    try std.testing.expect((try SelectedPageStyles.authoredElementStyle(selected, a,
+        .{ .source = foreign, .element = foreign[417..421] })) == null);
+    for ([_][]const u8{ "<div", "<span", "<b" }) |opening| {
+        const start = std.mem.indexOf(u8, source, opening) orelse return error.TestUnexpectedResult;
+        const tag = syntax.tagAt(source, start) orelse return error.TestUnexpectedResult;
+        var changed = page; changed.authored_style_operations = &.{.{ .start = start, .end = tag.end }};
+        var document = only; document.pages = &.{changed};
+        try std.testing.expectError(invalid, NormalAuthoredRuleTesting.book(a, &ns, &files, document));
+    }
+    for ([_][]const u8{ "wikidict.figure-page-observations.v5", "wikidict.figure-page-observations.v10", "wikidict.figure-page-observations.v11" }) |schema| {
+        var document = only; document.schema = schema;
+        try std.testing.expectError(error.UnknownField, NormalAuthoredRuleTesting.book(a, &ns, &files, document));
+    }
+    var duplicate = page; duplicate.authored_style_operations = &.{.{ .start = 417, .end = 421 }, .{ .start = 417, .end = 421 }};
+    var malformed = only; malformed.pages = &.{duplicate};
+    try std.testing.expectError(invalid, NormalAuthoredRuleTesting.book(a, &ns, &files, malformed));
+}
+
+
+test "normal Rule head role rejects coexistence and forged capability on a genuine valid Missing head" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile(AuthoredHeadTesting.prefix ++ "interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile(AuthoredHeadTesting.prefix ++ "figure-siteinfo.raw.json"));
+    const seven = try std.json.parseFromSliceLeaky(Document, a, @embedFile(AuthoredHeadTesting.prefix ++ "candidate-seven01.json"), .{});
+    const missing = seven.pages[1];
+    try std.testing.expect(missing.missing_head_context != null and missing.authored_head_context == null and
+        missing.authored_style_operations == null and missing.occurrences.len != 0);
+    const original = try suppliedPageHead(a, missing);
+    try std.testing.expect(original.len != 0);
+    // Both tests retain the actual valid Missing request/form/receipt/response.
+    // The new fields cannot be skipped merely because Missing dispatch is first.
+    var files: sizing.Registry = .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = &ns,
+        .records = &.{}, .file_authority = true }; defer files.deinit();
+    for (0..2) |mode| {
+        var forged = missing;
+        forged.authored_head_context = missing.missing_head_context;
+        forged.authored_style_operations = &.{.{ .start = 417, .end = 421 }};
+        if (mode == 1) forged.missing_head_context = null;
+        try std.testing.expectError(invalid, suppliedPageHead(a, forged));
+        var document = seven; document.pages = &.{forged};
+        try std.testing.expectError(invalid, NormalAuthoredRuleTesting.book(a, &ns, &files, document));
+    }
+    try std.testing.expectEqualStrings(original, try suppliedPageHead(a, missing));
+}
+
 test "retained TH repeated notes bind their complete distinct bodies and exact captured DIV parent chain" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
@@ -16138,4 +18133,945 @@ test "note UL restoration requires the exact captured sibling skeleton and compl
         const proofs = try T.issue(a, &ns, changed, captured);
         for (proofs) |proof| if (proof.range.anchor_start == T.outer.len) try std.testing.expect(proof.restored_ul == null);
     }
+}
+
+// The full observed group may have several different owners. Only a parent tag
+// common to every possible source/captured correspondence is published.
+fn observedRepeatedDivParentTags(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
+    nodes: []const ObservedSiblingNode) ![]const profile.SourceDivParentTagProof
+{
+    var result: std.ArrayList(profile.SourceDivParentTagProof) = .empty;
+    if (nodes.len == 0 or nodes[0].parent != null or !nodes[0].tag.is("div")) return result.toOwnedSlice(a);
+    var position: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, source, position, '<')) |start| {
+        position = start + 1;
+        const tag = syntax.tagAt(source, start) orelse continue;
+        const attrs = (try literalDivAttributes(a, tag)) orelse continue;
+        const pair = syntax.matchingTag(source, tag) orelse continue;
+        if (pair.end <= tag.end or pair.end > source.len) continue;
+        var count: usize = 0; var valid = true; var scan: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, source, scan, '<')) |at| {
+            scan = at + 1;
+            const other = syntax.tagAt(source, at) orelse continue;
+            if (!other.is("div") or other.closing) continue;
+            const other_attrs = inventory(a, other) catch |err| switch (err) { error.OutOfMemory => return err, else => { valid = false; break; } };
+            if (!sameSiblingAttributes(attrs, other_attrs)) continue;
+            count += 1;
+            if (count > 256 or other.self_closing or other.html_pre) { valid = false; break; }
+            const other_pair = syntax.matchingTag(source, other) orelse { valid = false; break; };
+            if (other_pair.end <= other.end or other_pair.end > source.len or
+                std.mem.indexOfAny(u8, source[at..other_pair.end], "{}\x00") != null) { valid = false; break; }
+            authoredElementPrefix(a, ns, source, .{ .start = at, .end = other_pair.end }, false) catch |err| switch (err) {
+                error.OutOfMemory => return err, else => { valid = false; break; },
+            };
+        }
+        if (!valid or count < 2) continue;
+        var observed_count: usize = 0; var parent_tag: ?[]const u8 = null;
+        for (nodes, 0..) |node, index| {
+            if (!node.tag.is("div") or !sameSiblingAttributes(attrs, node.attributes)) continue;
+            observed_count += 1;
+            const end = node.inner_end orelse { valid = false; break; };
+            const parent = node.parent orelse { valid = false; break; };
+            if (end < node.tag.end or end > html.len or parent >= index or parent >= nodes.len or
+                nodes[parent].inner_end == null or nodes[parent].tag.end > node.tag.end or nodes[parent].inner_end.? < end) { valid = false; break; }
+            const actual = nodes[parent].tag.name;
+            if (parent_tag) |known| {
+                if (!std.ascii.eqlIgnoreCase(known, actual)) { valid = false; break; }
+            } else parent_tag = actual;
+        }
+        if (!valid or observed_count != count or parent_tag == null) continue;
+        if (result.items.len == 4096) return invalid;
+        try result.append(a, .{ .range = .{ .anchor_start = start, .anchor_end = pair.end,
+            .name_start = @intFromPtr(tag.name.ptr) - @intFromPtr(source.ptr), .name_len = tag.name.len,
+            .attrs_start = @intFromPtr(tag.attrs.ptr) - @intFromPtr(source.ptr), .attrs_len = tag.attrs.len },
+            .candidate_count = @intCast(count), .parent_tag = parent_tag.? });
+    }
+    return result.toOwnedSlice(a);
+}
+
+// Attribute tokens are data; the behavior-switch matcher must not be run on
+// them. Retain complete/unresolved delimiter refusals, admitting only this
+// closed ASCII identifier case for class/id (for example uetabelle__head).
+fn literalDivIdentifierUnderscores(name: []const u8, value: []const u8) bool {
+    if (!std.ascii.eqlIgnoreCase(name, "class") and !std.ascii.eqlIgnoreCase(name, "id")) return false;
+    var tokens = std.mem.tokenizeAny(u8, value, " \t\r\n");
+    while (tokens.next()) |token| {
+        for (token) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_') return false;
+        if (std.mem.indexOf(u8, token, "__")) |at| {
+            if (at == 0 or at + 2 == token.len or std.mem.indexOfPos(u8, token, at + 1, "__") != null) return false;
+        }
+    }
+    return true;
+}
+
+test "literal DIV attribute identifiers retain internal underscores but reject complete unresolved control tokens" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_][]const u8{ "<div class='NavHead uetabelle__head'>", "<div id='entry__head'>" }) |text|
+        try std.testing.expect((try literalDivAttributes(a, syntax.tagAt(text, 0).?)) != null);
+    for ([_][]const u8{ "<div class='__NOTOC__'>", "<div class='a__UNKNOWN__b'>", "<div class='a___b'>", "<div class='__head'>", "<div title='a__b'>", "<div class='{{bad}}'>", "<div onclick='run()'>" }) |text|
+        try std.testing.expect((try literalDivAttributes(a, syntax.tagAt(text, 0).?)) == null);
+}
+
+test "repeated nonempty DIV parent tag proof retains genuine Mai group without selecting captured ordinals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/figure-page-observations/de-mai/namespace-registry.tsv")); defer ns.deinit();
+    const doc = try std.json.parseFromSliceLeaky(Document, a, @embedFile("testdata/de-mai-figure-style/original.json"), .{});
+    const supplied = try responseSource(a, &ns, doc.pages[0]);
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
+    const proofs = try observedRepeatedDivParentTags(a, &ns, supplied.source, supplied.html, nodes.items);
+    for ([_]usize{ 10555, 53856, 60297 }) |start| {
+        var matches: usize = 0;
+        for (proofs) |proof| if (proof.range.anchor_start == start) {
+            matches += 1;
+            try std.testing.expectEqual(@as(u16, 3), proof.candidate_count);
+            try std.testing.expectEqualStrings("div", proof.parent_tag);
+            try std.testing.expectEqualStrings("class=\"NavHead uetabelle__head\"", std.mem.trim(u8, supplied.source[proof.range.attrs_start..][0..proof.range.attrs_len], " "));
+        };
+        try std.testing.expectEqual(@as(usize, 1), matches);
+    }
+    try std.testing.expectEqual(@as(usize, 61787), supplied.source.len);
+}
+
+test "repeated DIV negative parent tag requires every source and observed member with one common parent tag" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(PageStylesV7Testing.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const source = "<div><div class='item__head'>one</div></div>\n<div><div class='item__head'>two</div></div>";
+    const root = "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'>";
+    const html = root ++ source ++ "</div>";
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, html, &nodes);
+    const good = try observedRepeatedDivParentTags(a, &ns, source, html, nodes.items);
+    var count: usize = 0;
+    for (good) |proof| if (proof.range.attrs_len != 0) { count += 1; try std.testing.expectEqualStrings("div", proof.parent_tag); };
+    try std.testing.expectEqual(@as(usize, 2), count);
+    for ([_][]const u8{
+        root ++ "<div><div class='item__head'>one</div></div></div>",
+        root ++ source ++ "<div class='item__head'>extra</div></div>",
+        root ++ "<div><div class='item__head'>one</div></div><table><tr><td><div class='item__head'>two</div></td></tr></table></div>",
+    }) |changed| {
+        var altered: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, &ns, changed, &altered);
+        const refused = try observedRepeatedDivParentTags(a, &ns, source, changed, altered.items);
+        for (refused) |proof| try std.testing.expect(proof.range.attrs_len == 0);
+    }
+    for ([_][]const u8{
+        "<nowiki>" ++ source ++ "</nowiki>",
+        source ++ "<div class='item__head'>extra</div>",
+        "<div><div class='item__head'>{{unknown}}</div></div>\n<div><div class='item__head'>two</div></div>",
+    }) |changed| {
+        const refused = try observedRepeatedDivParentTags(a, &ns, changed, html, nodes.items);
+        for (refused) |proof| try std.testing.expect(proof.range.attrs_len == 0);
+    }
+}
+
+fn prefixTableOpeningStart(source: []const u8) ?usize {
+    var at: usize = 0;
+    while (at < source.len) {
+        if (source[at] == '\n') { at += 1; continue; }
+        if (std.mem.startsWith(u8, source[at..], "\r\n")) { at += 2; continue; }
+        break;
+    }
+    return if (std.mem.startsWith(u8, source[at..], "{|")) at else null;
+}
+const SelectedPrefixTable = struct {
+    article_origin: []const u8,
+    source: []const u8,
+    opening_start: usize,
+    opening_end: usize,
+    contexts: []const profile.TableContainingDirectionContext,
+    fn observe(raw: ?*const anyopaque, _: A, source: []const u8, at: usize) A.Error!?compiler.TableContainingDirectionObservation {
+        const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
+        if (source.ptr != self.source.ptr or source.len != self.source.len or at != self.opening_start or
+            prefixTableOpeningStart(source) != self.opening_start or self.opening_end >= source.len or source[self.opening_end] != '\n') return null;
+        return .{ .contexts = self.contexts, .parents = &.{}, .link_contexts = self.contexts };
+    }
+    fn capability(self: *const @This()) compiler.TableContainingDirectionSource {
+        return .{ .prefix_viewport = true, .article_origin = self.article_origin, .root_only = true, .source = self.source, .context = self, .observe = observe };
+    }
+};
+
+fn prefixTableAttributesMatch(source: Inventory, captured: Inventory) bool {
+    if (source.attributes.len != 2 or source.get("class") == null or source.get("style") == null) return false;
+    for (source.attributes) |attribute| if (!equal(attribute.value, captured.get(attribute.name) orelse return false)) return false;
+    for (captured.attributes) |attribute| {
+        if (source.get(attribute.name) != null) continue;
+        if (!equal(attribute.name, "about") and !equal(attribute.name, "typeof") and
+            !equal(attribute.name, "id") and !equal(attribute.name, "data-mw")) return false;
+    }
+    return true;
+}
+
+// The captured first transclusion identifies this whole generated TABLE. Its
+// source class/style are unique across all source and captured TABLE owners;
+// metadata stays in the actual graph and grants no selector absence.
+fn prefixTableTemplateMatches(a: A, ns: *const namespaces.Registry, raw: []const u8, captured: Inventory) !bool {
+    if (!std.mem.startsWith(u8, raw, "{{") or std.mem.startsWith(u8, raw, "{{{")) return false;
+    var iterator: encoder.document_ir.InlineIterator = .{ .input = raw, .renderer_boundaries = true };
+    const token = iterator.next() orelse return false;
+    if (token.kind != .template or token.bold or token.italic or iterator.cursor == 0 or
+        std.mem.indexOfAny(u8, token.target, "{}[]<>:/=\r\n\x00") != null) return false;
+    const about = captured.get("about") orelse return false;
+    if (!std.mem.startsWith(u8, about, "#mwt") or about.len == 4) return false;
+    for (about[4..]) |byte| if (!std.ascii.isDigit(byte)) return false;
+    if (!equal(captured.get("typeof") orelse return false, "mw:Transclusion") or
+        !std.mem.startsWith(u8, captured.get("id") orelse return false, "mw")) return false;
+    const metadata = json(a, captured.get("data-mw") orelse return false) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory, else => return false,
+    };
+    if (metadata != .object or metadata.object.count() != 1) return false;
+    const parts = metadata.object.get("parts") orelse return false;
+    if (parts != .array or parts.array.items.len != 1) return false;
+    const part = parts.array.items[0];
+    if (part != .object or part.object.count() != 1) return false;
+    const template = part.object.get("template") orelse return false;
+    if (template != .object or template.object.count() != 3) return false;
+    const target = template.object.get("target") orelse return false;
+    const params = template.object.get("params") orelse return false;
+    const ordinal = template.object.get("i") orelse return false;
+    if (target != .object or target.object.count() != 2 or params != .object or ordinal != .integer or ordinal.integer != 0) return false;
+    const name = target.object.get("wt") orelse return false;
+    const href = target.object.get("href") orelse return false;
+    if (name != .string or href != .string or !equal(name.string, token.target) or
+        !std.mem.startsWith(u8, href.string, "./") or ns.ofTitle(href.string[2..]).id != 10) return false;
+    const colon = std.mem.indexOfScalar(u8, href.string[2..], ':') orelse return false;
+    if (!equal(href.string[colon + 3 ..], token.target)) return false;
+    var at = syntax.delimiter(token.text, "|", 0) orelse token.text.len;
+    var count: usize = 0;
+    while (at < token.text.len) {
+        at += 1;
+        const end = syntax.delimiter(token.text, "|", at) orelse token.text.len;
+        const value = token.text[at..end];
+        if (std.mem.indexOfAny(u8, value, "{}[]<>=\r\n\x00") != null or count == 64) return false;
+        count += 1;
+        const key = try std.fmt.allocPrint(a, "{d}", .{count});
+        const parameter = params.object.get(key) orelse return false;
+        if (parameter != .object or parameter.object.count() != 1) return false;
+        const wt = parameter.object.get("wt") orelse return false;
+        if (wt != .string or !equal(wt.string, value)) return false;
+        at = end;
+    }
+    return count != 0 and params.object.count() == count;
+}
+
+fn selectedPrefixTableAlloc(a: A, ns: *const namespaces.Registry, parent: *const profile.Profile,
+    stored: *const PageStyleData, source: []const u8) !?*const SelectedPrefixTable
+{
+    if (!currentGetLiteral(stored.page)) return null;
+    const literal = stored.page.current_get_literal orelse return null;
+    if (!equal(source, literal.expanded_source)) return null;
+    const start = prefixTableOpeningStart(source) orelse return null;
+    const end = std.mem.indexOfScalarPos(u8, source, start, '\n') orelse return null;
+    const opening = try std.mem.concat(a, u8, &.{ "<table ", source[start + 2..end], ">" });
+    const tag = syntax.tagAt(opening, 0) orelse return null;
+    figureStyleLiteralAttributes(a, tag) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
+    const attributes = try sourceInventoryWithRepeatedClass(a, tag, false);
+    if (attributes.attributes.len != 2 or attributes.get("class") == null or attributes.get("style") == null) return null;
+    // Preserve all old non-corner source paths. This only selects the new
+    // corner family; parsing/publishing its value and collapse remain separate.
+    var has_corners = false; var css_at: usize = 0;
+    while (try profile.nextDeclarationAlloc(a, attributes.get("style").?, &css_at)) |declaration| {
+        defer a.free(declaration);
+        const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse continue;
+        if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, declaration[0..colon], " \t\r\n"), "border-radius")) has_corners = true;
+    }
+    if (!has_corners) return null;
+    // Only LF/CRLF precede this opener, as proved by prefixTableOpeningStart.
+    // This is an empty source-parent path, not an ordinary paragraph boundary;
+    // the generic local-parent routine keeps its separate two-LF requirement.
+    if (source.len > 4 * 1024 * 1024 or !try tableDirectionNoSourceStyles(a, ns, source)) return null;
+    // A second source TABLE cannot disappear from the uniqueness census, even
+    // when nested or in a later section. This selected prefix family is one table.
+    var lines = std.mem.splitScalar(u8, source, '\n'); var openings: usize = 0; var closes: usize = 0;
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "{|")) openings += 1;
+        if (std.mem.startsWith(u8, line, "|}")) {
+            if (!equal(std.mem.trim(u8, line, " \t\r"), "|}")) return null;
+            closes += 1;
+        }
+    }
+    if (openings != 1 or closes != 1 or stored.observed_nodes.len == 0) return null;
+    var selected: ?usize = null;
+    for (stored.observed_nodes, 0..) |node, index| if (node.tag.is("table") and prefixTableAttributesMatch(attributes, node.attributes)) {
+        if (selected != null) return null;
+        selected = index;
+    };
+    const table_index = selected orelse return null;
+    const table = stored.observed_nodes[table_index];
+    if (!try prefixTableTemplateMatches(a, ns, literal.raw_source, table.attributes)) return null;
+    const section_index = table.parent orelse return null;
+    if (section_index >= table_index) return null;
+    const section = stored.observed_nodes[section_index];
+    if (!section.tag.is("section") or section.parent != 0 or section.previous != null or
+        section.first_child != table_index or table.previous != null or section.attributes.attributes.len != 2 or
+        !equal(section.attributes.get("data-mw-section-id") orelse "", "0") or
+        section.attributes.get("aria-labelledby") != null) return null;
+    try currentLiteralSection(section.attributes);
+    const html = try selectedStoredHtml(a, stored);
+    if (siblingGapEnd(html, stored.observed_nodes[0].tag.end) != section.start or
+        siblingGapEnd(html, section.tag.end) != table.start) return null;
+    try currentLiteralFrameRootPath(html, stored.observed_nodes, table_index);
+    const contexts = try a.alloc(profile.TableContainingDirectionContext, 2);
+    for (contexts, 0..) |*context, arm| {
+        const styles = try figureContextStyles(a, parent, stored, arm != 0);
+        const nodes = try figureObservedGraph(a, styles, stored, arm != 0);
+        const shift: u32 = @intCast(stored.outer.ancestors.len);
+        // Exact first-child + previous-null + whitespace-gap proof above.
+        // This node alone receives the actual no-previous-element fact.
+        nodes[shift + table_index].known_no_previous_element_sibling = true;
+        context.* = .{ .generated_prefix_section = @intCast(shift + section_index),
+            .styles = styles, .nodes = nodes, .root = shift, .table = @intCast(shift + table_index) };
+    }
+    if (!try profile.observedTablePrefixAncestorsNeutral(a, contexts)) return null;
+    const result = try a.create(SelectedPrefixTable);
+    result.* = .{ .article_origin = (try missingStyleOrigin(a, ns.wiki)).origin,
+        .source = source, .opening_start = start, .opening_end = end, .contexts = contexts };
+    return result;
+}
+
+
+test "actual MG prefix TABLE binds both complete heads and neutral SECTION0 without lending descendants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = CurrentGetLiteralTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    var files = try T.registry(a, &ns); defer files.deinit();
+    const shape = try T.shape(a); const original = try T.raw(a, shape);
+    const literal = original.current_get_literal.?; const source = literal.expanded_source;
+    var book = try T.book(a, &ns, &files, shape); defer book.deinit();
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const styles = (try book.selectPageStyles(a, &ns, 0, 3099, 37649537, original.title, literal.raw_source,
+        source, Testing.hash(T.defaults), &parent)) orelse return error.TestUnexpectedResult;
+    const selected = styles.prefix_table orelse return error.TestUnexpectedResult;
+    // The ordinary ancestry API still withholds its paragraph-boundary proof
+    // for this single leading LF; only the complete prefix operation admits it.
+    try std.testing.expect((try tableDirectionLocalParentsAlloc(a, &ns, source, selected.opening_start)) == null);
+    const capability = styles.tablePrefixSource() orelse return error.TestUnexpectedResult;
+    try std.testing.expect(capability.root_only and capability.source.ptr == source.ptr and capability.source.len == source.len);
+    const observed = (try capability.observe(capability.context, a, source, selected.opening_start)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), observed.contexts.len);
+    try std.testing.expectEqual(@as(usize, 0), observed.parents.len);
+    try std.testing.expect(try profile.observedTablePrefixAncestorsNeutral(a, observed.contexts));
+    for (observed.contexts) |context| {
+        try std.testing.expectEqualStrings("table", context.nodes[context.table].tag);
+        try std.testing.expect(context.nodes[context.table].known_no_previous_element_sibling);
+        const section = context.nodes[context.table].parent.?;
+        try std.testing.expectEqual(@as(?u32, section), context.generated_prefix_section);
+        var revoked = context; revoked.generated_prefix_section = null;
+        try std.testing.expect(!try profile.observedTablePrefixAncestorsNeutral(a, &.{revoked}));
+        revoked.generated_prefix_section = context.root;
+        try std.testing.expect(!try profile.observedTablePrefixAncestorsNeutral(a, &.{revoked}));
+        try std.testing.expectEqual(@as(?u32, context.root), context.nodes[section].parent);
+        try std.testing.expectEqualStrings("section", context.nodes[section].tag);
+        try std.testing.expectEqual(@as(usize, 2), context.nodes[section].attributes.len);
+        try std.testing.expect(context.nodes[context.table].attributes.len > 2);
+        // The complete real graph remains available; no inner TABLE/TD or
+        // sibling membership is manufactured from this outer-owner relation.
+        try std.testing.expect(context.nodes.len > context.table + 20);
+    }
+    const copy = try a.dupe(u8, source);
+    try std.testing.expect((try capability.observe(capability.context, a, copy, selected.opening_start)) == null);
+    try std.testing.expect((try capability.observe(capability.context, a, source, 0)) == null);
+    try std.testing.expectEqual(@as(usize, 3354), source.len);
+    try std.testing.expect(digestMatches(source, "5f35f6e95736e5c164afa15efbfff1648bdfc1dc4f0be502fbd4268a128f9f5f"));
+    try std.testing.expectEqual(@as(usize, 1), selected.opening_start);
+    try std.testing.expectEqual(selected.opening_end, std.mem.indexOfScalarPos(u8, source, selected.opening_start, '\n').?);
+    try std.testing.expect(prefixTableOpeningStart(" \n{|x") == null);
+    try std.testing.expect(prefixTableOpeningStart("text\n{|x") == null);
+    try std.testing.expectEqual(@as(?usize, 0), prefixTableOpeningStart("{|x"));
+    try std.testing.expectEqual(@as(?usize, 3), prefixTableOpeningStart("\n\r\n{|x"));
+}
+
+test "MG prefix TABLE refuses changed transclusion identity generated owner effects and foreign source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = CurrentGetLiteralTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    var files = try T.registry(a, &ns); defer files.deinit();
+    const shape = try T.shape(a); const original = try T.raw(a, shape);
+    const literal = original.current_get_literal.?; const source = literal.expanded_source;
+    var book = try T.book(a, &ns, &files, shape); defer book.deinit();
+    const stored = book.pages[0].page_styles orelse return error.TestUnexpectedResult;
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const selected = (try selectedPrefixTableAlloc(a, &ns, &parent, stored, source)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect((try selectedPrefixTableAlloc(a, &ns, &parent, stored, try std.mem.concat(a, u8, &.{ source, "x" }))) == null);
+    var table: ?Inventory = null;
+    for (stored.observed_nodes) |node| if (node.tag.is("table") and node.attributes.get("class") != null) { table = node.attributes; break; };
+    const captured = table orelse return error.TestUnexpectedResult;
+    try std.testing.expect(try prefixTableTemplateMatches(a, &ns, literal.raw_source, captured));
+    const changed_attributes = try a.dupe(Attribute, captured.attributes);
+    for (changed_attributes) |*attribute| if (equal(attribute.name, "typeof")) { attribute.value = "authored-lookalike"; };
+    try std.testing.expect(!try prefixTableTemplateMatches(a, &ns, literal.raw_source, .{ .attributes = changed_attributes }));
+    try std.testing.expect(!try prefixTableTemplateMatches(a, &ns, "{{foreign|x}}", captured));
+    for ([_][]const u8{ "section{margin-top:1px}", "section{font-size:2em}", "section::before{content:'visible'}", "section{position:relative}" }) |css| {
+        var changed = try profile.parseForTargetAlloc(a, css, .screen); defer changed.deinit();
+        try std.testing.expect((try selectedPrefixTableAlloc(a, &ns, &changed, stored, source)) == null);
+    }
+    // Independent source direction/layout/font/box computation remains a
+    // separate obligation after this exact complete source ownership proof.
+    try std.testing.expectEqual(@as(usize, 2), selected.contexts.len);
+}
+
+test "actual retained MG prefix source emits Q banner with all source body actions and independent image owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = CurrentGetLiteralTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    var files = try T.registry(a, &ns); defer files.deinit();
+    const shape = try T.shape(a); const original = try T.raw(a, shape);
+    const source = original.current_get_literal.?.expanded_source;
+    var book = try T.book(a, &ns, &files, shape); defer book.deinit();
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const styles = (try book.selectPageStyles(a, &ns, 0, 3099, 37649537, original.title, original.current_get_literal.?.raw_source,
+        source, Testing.hash(T.defaults), &parent)) orelse return error.TestUnexpectedResult;
+    const selected = styles.prefix_table orelse return error.TestUnexpectedResult;
+    // The ordinary ancestry API still withholds its paragraph-boundary proof
+    // for this single leading LF; only the complete prefix operation admits it.
+    try std.testing.expect((try tableDirectionLocalParentsAlloc(a, &ns, source, selected.opening_start)) == null);
+    const capability = styles.tablePrefixSource() orelse return error.TestUnexpectedResult;
+    try std.testing.expect(capability.prefix_viewport and capability.root_only);
+    try std.testing.expectEqualStrings("https://mg.wiktionary.org", capability.article_origin.?);
+    const observed = (try capability.observe(capability.context, a, source, 1)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), observed.contexts.len);
+    try std.testing.expect(observed.link_contexts.ptr == observed.contexts.ptr and observed.link_contexts.len == observed.contexts.len);
+    const end = (std.mem.indexOfPos(u8, source, selected.opening_end, "\n|}") orelse return error.TestUnexpectedResult) + 3;
+    const prefix = source[0..end];
+    const copies = [_]compiler.SourceElementProjection.Copy{.{ .original_start = 0, .prepared_start = 0, .len = prefix.len }};
+    const projection: compiler.SourceElementProjection = .{ .original = compiler.MissingText.untracked(source), .prepared = prefix, .copies = &copies };
+    const NoSizing = struct {
+        fn resolve(_: ?*const anyopaque, _: A, _: []const u8, _: encoder.presentation_types.FigureFormat,
+            _: ?u32, _: ?u32) A.Error!?encoder.presentation_types.FigureSizingPolicy { return null; }
+    };
+    var renderer: compiler.Renderer = .{ .a = a, .content_root = .parser_output,
+        .context = .{ .title = original.title, .language = "Unclassified", .namespace_catalog = &ns,
+            .table_styles = styles.styles, .text_paint_styles = styles.styles, .observe_source_elements = true,
+            .figure_sizing = .{ .resolve_fn = NoSizing.resolve, .table_containing_direction = capability } },
+        .table_direction_binding = .{ .projection = &projection, .owner = compiler.MissingText.untracked(prefix), .page_start = 0 } };
+    const blocks = try renderer.renderBodyWithMissing(compiler.MissingText.untracked(prefix));
+    var emitted: ?compiler.Table = null;
+    for (blocks) |block| if (block.table) |table| { try std.testing.expect(emitted == null); emitted = table; };
+    const banner = emitted orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!renderer.fallbacks.any());
+    try std.testing.expectEqual(@as(usize, 1), banner.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), banner.rows[0].cells.len);
+    try std.testing.expectEqual(@as(?u16, 2), banner.geometry.?.cell_spacing);
+    try std.testing.expectEqual(@as(?u16, 1), banner.geometry.?.cell_padding);
+    try std.testing.expectEqualStrings("#f5f4aa", banner.style.?.background.?);
+    try std.testing.expectEqual(@as(f32, 8), banner.style.?.corner_radii.?.top_left.value);
+    try std.testing.expectEqual(@as(f32, 0), banner.style.?.corner_radii.?.bottom_left.value);
+    try std.testing.expectEqual(@as(u32, 639), banner.block_viewport.?.max_viewport_width_px);
+    try std.testing.expect(banner.block_viewport.?.focus_paint != null and banner.float_viewport == null);
+    try std.testing.expectEqual(@as(f32, 100), banner.style.?.width.?.value);
+    try std.testing.expect(banner.style.?.containing_direction != null and banner.block_viewport.?.box_style.containing_direction != null);
+    var baseline: compiler.Renderer = .{ .a = a, .context = .{ .title = original.title, .namespace_catalog = &ns } };
+    const old_blocks = try baseline.renderBodyWithMissing(compiler.MissingText.untracked(prefix));
+    var old: ?compiler.Table = null;
+    for (old_blocks) |block| if (block.table) |table| { try std.testing.expect(old == null); old = table; };
+    const before = old orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(before.rows.len, banner.rows.len);
+    var images: usize = 0; var links: usize = 0;
+    for (before.rows[0].cells, banner.rows[0].cells) |old_cell, cell| {
+        try std.testing.expectEqualStrings(try compiler.plainText(a, old_cell.spans), try compiler.plainText(a, cell.spans));
+        try std.testing.expectEqual(old_cell.spans.len, cell.spans.len);
+        try std.testing.expectEqual(old_cell.colspan, cell.colspan); try std.testing.expectEqual(old_cell.rowspan, cell.rowspan);
+        const owner = cell.style.?.line_height.?.strut.?.owner_font.?;
+        try std.testing.expectEqualStrings("mg", owner.language);
+        for (old_cell.spans, cell.spans) |prior, span| {
+            try std.testing.expectEqualStrings(prior.text, span.text); try std.testing.expectEqualStrings(prior.target, span.target);
+            try std.testing.expectEqualDeep(prior.flags, span.flags);
+            if (span.image) |image| {
+                images += 1;
+                var old_image = image; old_image.vertical_align = null;
+                try std.testing.expectEqualDeep(prior.image.?, old_image);
+                try std.testing.expectEqualStrings("Arrowyellow.png", image.file);
+                try std.testing.expectEqual(@as(?u32, 30), image.width_px); try std.testing.expect(image.height_px == null);
+                try std.testing.expectEqual(encoder.presentation_types.InlineImageVerticalAlign.middle, image.vertical_align.?);
+                try std.testing.expectEqualDeep(owner.font_family, span.font_family);
+                try std.testing.expectEqual(owner.font_scale, span.font_scale);
+            } else if (span.kind == .link) { links += 1; try std.testing.expect(span.link_paint != null); }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), images); try std.testing.expectEqual(@as(usize, 10), links);
+    const codec = encoder.presentation_codec;
+    const bytes = try codec.encodeBuildAlloc(a, &[_]compiler.Span{},
+        &[_]struct { level: u8 = 0, title: []const u8 = "", blocks: []const compiler.Block }{.{ .blocks = blocks }},
+        encoder.presentation_types.Layout{}, &.{}, renderer.media.items);
+    try std.testing.expectEqualStrings("DPRQ", bytes[0..4]);
+    const stored = try codec.decodeAlloc(a, bytes, original.title, .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqualStrings("Unclassified", stored.entry.language.?);
+    try std.testing.expectEqualStrings("", stored.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.sections.len);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings("Arrowyellow.png", stored.entry.media[0].file);
+    try std.testing.expect(digestMatches(source, "5f35f6e95736e5c164afa15efbfff1648bdfc1dc4f0be502fbd4268a128f9f5f"));
+    try std.testing.expectEqual(@as(usize, 3354), source.len);
+}
+
+
+test "authored Rule whole source admits only complete rule free inline conversion atoms" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const source = @embedFile("testdata/sr-authored-head/source.expanded.wikitext");
+    var cursor: usize = 0; var count: usize = 0;
+    while (std.mem.indexOfPos(u8, source, cursor, "-{")) |opening| {
+        cursor = try authoredRuleRuleFreeConversionEnd(a, &ns, source, opening); count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), count);
+    const html = "<div class=\"mw-content-ltr mw-parser-output\" lang=\"sr\" dir=\"ltr\"><hr /></div>";
+    const admitted = "<hr>-{ Alexander }-";
+    try std.testing.expectEqual(@as(usize, 1), (try AuthoredHeadTesting.proofs(a, &ns, admitted, html, .{ .start = 0, .end = 4 })).len);
+    for ([_][]const u8{
+        "-{sr:one;sr-el:two}-", "-{R|text}-", "-{one=>two}-", "-{&colon;}-", "-{__TOC__}-",
+        "-{{nested}}-", "-{unfinished", "-{<hr>}-", "-{<span>unfinished}-", "-{[[File:Other.png]]}-",
+        "-{[[Alex|sr:one;sr-el:two]]}-", "-{[[Alex|sr:one]]}-", "-{[[Alex|R|text]]}-", "-{[[Alex|]]}-",
+        "-{<span title='sr:one;sr-el:two'>text</span>}-", "-{<span title='sr:one'>text</span>}-", "-{[[de:Alexander]]}-",
+    }) |atom| {
+        const changed = try std.mem.concat(a, u8, &.{ "<hr>", atom });
+        try std.testing.expectError(error.InvalidFigurePageObservations,
+            AuthoredHeadTesting.proofs(a, &ns, changed, html, .{ .start = 0, .end = 4 }));
+    }
+    // The atom cannot hide later template syntax or another matching HR.
+    for ([_][]const u8{ "{{foreign}}", "<hr>" }) |suffix| {
+        const changed = try std.mem.concat(a, u8, &.{ admitted, suffix });
+        try std.testing.expectError(error.InvalidFigurePageObservations,
+            AuthoredHeadTesting.proofs(a, &ns, changed, html, .{ .start = 0, .end = 4 }));
+    }
+}
+
+const PriorNotePrefixTesting = struct {
+    const T = NoteIdentityTesting;
+    const later = "<div class='later'><div style='padding:0 5px'><i>See also:</i><div style='margin-left:10px'>[[Next|kept]]</div></div></div>";
+    const later_html = "<div class='later'><div style='padding:0 5px'><i>See also:</i><div style='margin-left:10px'><a href='/wiki/Next' title='Next'>kept</a></div></div></div>";
+    const source = T.outer ++ T.source_one ++ "<ul>\n* [[Next|kept]]\n" ++ T.source_two ++ "</div>\n" ++ later;
+    const list = "<ul><li><a href='/wiki/Next' title='Next'>kept</a></li></ul>";
+    const before_html = T.outer ++ T.captured_one;
+    const after_html = T.captured_two ++ "</div>";
+    fn issue(a: A, ns: *const namespaces.Registry, source_value: []const u8, body: []const u8) ![]const profile.SourceLiteralDivProof {
+        const html = try std.mem.concat(a, u8, &.{ T.root, body, "</div>" });
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, ns, html, &nodes);
+        return observedLiteralDivParents(a, ns, source_value, html, nodes.items);
+    }
+    fn find(proofs: []const profile.SourceLiteralDivProof, start: usize) ?profile.SourceLiteralDivProof {
+        var result: ?profile.SourceLiteralDivProof = null;
+        for (proofs) |proof| if (proof.range.anchor_start == start) {
+            if (result != null) return null;
+            result = proof;
+        };
+        return result;
+    }
+};
+
+test "retained TH completed note lists preserve later category DIV parent custody without inventing an ordinal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const document = try std.json.parseFromSliceLeaky(Document, a, @embedFile("testdata/th-missing-figure-style/figure-page-observations.json"), .{ .allocate = .alloc_always });
+    const supplied = try responseSource(a, &ns, document.pages[2]);
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    try std.testing.expectEqualStrings(source, supplied.source);
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
+    const proofs = try observedLiteralDivParents(a, &ns, source, supplied.html, nodes.items);
+    for ([_]struct { start: usize, parent: ?usize, attrs: []const u8 }{
+        .{ .start = 36428, .parent = null, .attrs = " class=\"noprint floatright catlinks\" style=\"font-size: 90%; width: 270px\"" },
+        .{ .start = 36506, .parent = 36428, .attrs = " style=\"padding:0 5px\"" },
+        .{ .start = 36549, .parent = 36506, .attrs = " style=\"margin-left: 10px;\"" },
+    }) |expected| {
+        const opening = syntax.tagAt(source, expected.start) orelse return error.TestUnexpectedResult;
+        const pair = syntax.matchingTag(source, opening) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(expected.attrs, opening.attrs);
+        // The ordinary strict prefix still rejects these raw unclosed ULs.
+        try std.testing.expectError(invalid, authoredElementPrefix(a, &ns, source, .{ .start = expected.start, .end = pair.end }, false));
+        const proof = PriorNotePrefixTesting.find(proofs, expected.start) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(expected.parent, proof.parent_start);
+        try std.testing.expectEqual(pair.end, proof.range.anchor_end);
+        try std.testing.expectEqual(@intFromPtr(opening.attrs.ptr) - @intFromPtr(source.ptr), proof.range.attrs_start);
+        try std.testing.expectEqual(opening.attrs.len, proof.range.attrs_len);
+        try std.testing.expect(proof.restored_ul == null);
+    }
+    // The earlier complete note and list proofs are retained, not consumed or
+    // replaced by the later owners. Their three distinct bodies remain exact.
+    for ([_]usize{ 18077, 19048, 20243 }) |start| {
+        const proof = PriorNotePrefixTesting.find(proofs, start) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(?usize, 8544), proof.parent_start);
+        try std.testing.expect(proof.restored_ul != null);
+    }
+}
+
+test "completed note list prefix transport refuses changed captured actions styles parents and uncompleted intervals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const P = PriorNotePrefixTesting; const T = NoteIdentityTesting;
+    const start = P.source.len - P.later.len;
+    const positive = try P.issue(a, &ns, P.source, P.before_html ++ P.list ++ P.after_html ++ P.later_html);
+    try std.testing.expect(P.find(positive, start) != null);
+    const child = start + "<div class='later'>".len;
+    try std.testing.expectEqual(@as(?usize, start), (P.find(positive, child) orelse return error.TestUnexpectedResult).parent_start);
+    for ([_][]const u8{
+        "<ul><li><a href='/wiki/Other' title='Other'>kept</a></li></ul>",
+        "<ul><li><a href='/wiki/Next' title='Next'>changed</a></li></ul>",
+        "<ul><li><a href='/wiki/Next' title='Next' style='color:red'>kept</a></li></ul>",
+        "<ul class='foreign'><li><a href='/wiki/Next' title='Next'>kept</a></li></ul>",
+        "<div><ul><li><a href='/wiki/Next' title='Next'>kept</a></li></ul></div>",
+    }) |changed| {
+        const body = try std.mem.concat(a, u8, &.{ P.before_html, changed, P.after_html, P.later_html });
+        try std.testing.expect(P.find(try P.issue(a, &ns, P.source, body), start) == null);
+    }
+    // Even valid prior list custody cannot shorten the later captured parent.
+    const foreign_parent = P.before_html ++ P.list ++ P.after_html ++ "<div class='foreign'>" ++ P.later_html ++ "</div>";
+    try std.testing.expect(P.find(try P.issue(a, &ns, P.source, foreign_parent), start) == null);
+    const duplicate_later = P.before_html ++ P.list ++ P.after_html ++ P.later_html ++ P.later_html;
+    try std.testing.expect(P.find(try P.issue(a, &ns, P.source, duplicate_later), start) == null);
+    const stray = T.outer ++ T.source_one ++ "<ul>\n* [[Next|kept]]\n" ++ T.source_two ++ "</div>\n<ul>\n" ++ P.later;
+    try std.testing.expect(P.find(try P.issue(a, &ns, stray, P.before_html ++ P.list ++ P.after_html ++ P.later_html), stray.len - P.later.len) == null);
+    const active_source = T.outer ++ T.source_one ++ "<ul>\n* <span>kept</span>\n" ++ T.source_two ++ "</div>\n" ++ P.later;
+    const active_html = P.before_html ++ "<ul><li><span>kept</span></li></ul>" ++ P.after_html ++ P.later_html;
+    const active = try P.issue(a, &ns, active_source, active_html);
+    const active_start = std.mem.indexOf(u8, active_source, "<span>kept</span>").?;
+    try std.testing.expect(P.find(active, active_source.len - P.later.len) != null);
+    try std.testing.expectError(invalid, authoredElementPrefixWithPriorNoteLists(a, &ns, active_source,
+        .{ .start = active_start, .end = active_start + "<span>kept</span>".len }, false, active));
+}
+
+test "literal DIV prefix accepts only closed numeric wiki cell span attributes before a later owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const later = "<div class='later'><span>kept</span></div>";
+    const root = "<div class='mw-content-ltr mw-parser-output' lang='th' dir='ltr'>";
+    for ([_][]const u8{
+        "style=\"background-color:#D0E4F7\" colspan=2",
+        "colspan=2 style=\"text-align:left; font-size:90%\"",
+        "rowspan=2 colspan=3 class='plain'", "COLSPAN = 2", "colspan='2'",
+    }) |attrs| {
+        const source = try std.fmt.allocPrint(a, "{{| class='wikitable'\n! {s}|head\n|}}\n{s}", .{ attrs, later });
+        const start = source.len - later.len;
+        try authoredElementPrefix(a, &ns, source, .{ .start = start, .end = source.len }, false);
+        const html = root ++ "<table><tbody><tr><th>head</th></tr></tbody></table>" ++ later ++ "</div>";
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, &ns, html, &nodes);
+        const proofs = try observedLiteralDivParents(a, &ns, source, html, nodes.items);
+        try std.testing.expectEqual(@as(usize, 1), proofs.len);
+        try std.testing.expectEqual(start, proofs[0].range.anchor_start);
+        try std.testing.expectEqual(source.len, proofs[0].range.anchor_end);
+        try std.testing.expect(proofs[0].parent_start == null and proofs[0].restored_ul == null);
+    }
+    // This is source-prefix lexical closure only: no unquoted inventory is
+    // published and no captured table geometry or style is inferred from it.
+    const unquoted = "<td colspan=2>";
+    try std.testing.expectError(invalid, figureStyleLiteralAttributes(a, syntax.tagAt(unquoted, 0).?));
+    for ([_][]const u8{
+        "colspan=0", "rowspan=65536", "colspan=-2", "colspan=2x", "colspan=2/",
+        "colspan=2onclick='x'", "colspan=2 COLSPAN='3'", "rowspan=2 rowspan=2",
+        "class=plain", "style=color:red", "colspan={{Unknown}}", "colspan=&#50;",
+        "colspan=2 onclick='x'", "colspan=2 title='unclosed", "colspan=2 title='x>y'",
+    }) |attrs| {
+        const source = try std.fmt.allocPrint(a, "{{| class='wikitable'\n! {s}|head\n|}}\n{s}", .{ attrs, later });
+        const start = source.len - later.len;
+        try std.testing.expectError(invalid, authoredElementPrefix(a, &ns, source, .{ .start = start, .end = source.len }, false));
+    }
+    for ([_][]const u8{
+        "{| class='wikitable'\n! colspan=2|head\n<div class='later'><span>kept</span></div>\n|}\n",
+        "{| class='wikitable'\n! colspan=2|head\n|}\n<span><div class='later'><span>kept</span></div></span>",
+        "{| class='wikitable'\n! colspan=2|head\n|}\n[[Target|<div class='later'><span>kept</span></div>]]",
+    }) |source| {
+        const start = std.mem.indexOf(u8, source, later).?;
+        const html = root ++ "<table><tbody><tr><th>head</th></tr></tbody></table><div class='foreign'>" ++ later ++ "</div></div>";
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, &ns, html, &nodes);
+        const proofs = try observedLiteralDivParents(a, &ns, source, html, nodes.items);
+        try std.testing.expect(PriorNotePrefixTesting.find(proofs, start) == null);
+    }
+}
+
+test "retained KU full GET intrinsic Table issuer binds all ten complete source grids and both captured heads" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, MissingServedTesting.namespace); defer ns.deinit();
+    const shape = try FullGetRootTesting.shape(a);
+    const page = try FullGetRootTesting.raw(a, shape);
+    var files = try FullGetRootTesting.registry(a, &ns); defer files.deinit();
+    var book = try FullGetRootTesting.book(a, &ns, &files, shape); defer book.deinit();
+    const supplied = try responseSource(a, &ns, page);
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const doc = try MissingServedTesting.document(a);
+    const bound = (try book.selectPageStyles(a, &ns, page.namespace_id, page.page_id, page.revision_id,
+        page.title, supplied.source, supplied.source, Testing.hash(doc.missing_link_styles.?.defaults), &parent)) orelse return error.TestUnexpectedResult;
+    const capability = bound.tableIntrinsicSource() orelse return error.TestUnexpectedResult;
+    try std.testing.expect(capability.intrinsic_viewport and !capability.prefix_viewport and !capability.root_only);
+    const selected = bound.intrinsic_tables;
+    try std.testing.expectEqual(@as(usize, 10), selected.len);
+    var rows: usize = 0; var cells: usize = 0; var centers: usize = 0; var links: usize = 0;
+    for (selected, [_]usize{13,16,28,5,3,4,9,9,5,10}) |owner, expected_rows| {
+        const observed = (try capability.observe(capability.context, a, supplied.source, owner.opening_start)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(observed.contexts.ptr == owner.contexts.ptr and observed.parents.len == 0);
+        const motion = observed.static_motion orelse return error.TestUnexpectedResult;
+        try std.testing.expect(motion.contexts.ptr == owner.contexts.ptr and motion.proof.styles == bound.styles);
+        try std.testing.expect(motion.proof.source.ptr == supplied.source.ptr and motion.proof.root == bound.scope.page_style_root);
+        try std.testing.expectEqual(@as(usize, 2), owner.contexts.len);
+        try std.testing.expectEqual(@as(usize, 2), owner.link_contexts.len);
+        try std.testing.expect(std.mem.startsWith(u8, supplied.source[owner.opening_start..owner.opening_end], "{| border=\"1\" cellpadding=\"4\" cellspacing=\"0\""));
+        for (owner.contexts, owner.link_contexts) |context, full| {
+            try std.testing.expect(context.intrinsic_viewport and full.intrinsic_viewport);
+            try std.testing.expect(context.styles == full.styles and context.root == full.root);
+            try std.testing.expectEqualDeep(profile.observedIntrinsicTableGeometry(context), profile.observedIntrinsicTableGeometry(full));
+            const identity = (try compiler.Renderer.intrinsicTableIdentityAlloc(a, supplied.source, owner.opening_start,
+                .{ .title = page.title, .namespace_catalog = &ns }, full)) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(expected_rows * 14, identity.len);
+        }
+        const full = owner.link_contexts[0];
+        for (full.nodes, 0..) |node, index| {
+            var at: ?u32 = @intCast(index); var belongs = false;
+            while (at) |subject| {
+                if (subject == full.table) { belongs = true; break; }
+                at = full.nodes[subject].parent;
+            }
+            if (!belongs) continue;
+            if (equal(node.tag, "tr")) rows += 1;
+            if (equal(node.tag, "td") or equal(node.tag, "th")) cells += 1;
+            if (equal(node.tag, "center")) centers += 1;
+            if (equal(node.tag, "a")) links += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 102), rows);
+    try std.testing.expectEqual(@as(usize, 1428), cells);
+    try std.testing.expectEqual(@as(usize, 4), centers);
+    try std.testing.expectEqual(@as(usize, 678), links);
+    try std.testing.expect((try capability.observe(capability.context, a, try a.dupe(u8, supplied.source), selected[0].opening_start)) == null);
+    try std.testing.expect((try capability.observe(capability.context, a, supplied.source, selected[0].opening_start + 1)) == null);
+    var without_motion_bound = bound.*;
+    without_motion_bound.scope.page_static_motion = null;
+    const without_motion_capability = without_motion_bound.tableIntrinsicSource() orelse return error.TestUnexpectedResult;
+    const without_motion = (try without_motion_capability.observe(without_motion_capability.context, a,
+        supplied.source, selected[0].opening_start)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(without_motion.static_motion == null);
+    const retained_motion = (try capability.observe(capability.context, a, supplied.source, selected[0].opening_start)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(retained_motion.static_motion != null);
+    try std.testing.expect(digestMatches(supplied.source, "ed942971342411e72720f64881ff55ebbc3d36a3a019d96da2b5ce8f199bcb42"));
+    try std.testing.expect(digestMatches(supplied.html, "72866b7e71bb94a5ba773a06324a24d26bd2e1611134f20211a6f9894cdb0a33"));
+}
+
+test "intrinsic Table issuer refuses missing extra changed and ambiguous complete occurrence correspondence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    try std.testing.expectEqualStrings("a b", try intrinsicTableTextSignature(a, " \ta\r\n\x0cb "));
+    try std.testing.expectEqualStrings("a\x0bb", try intrinsicTableTextSignature(a, "a\x0bb"));
+    try std.testing.expectEqualStrings("a\xc2\xa0b", try intrinsicTableTextSignature(a, "a\xc2\xa0b"));
+    var ns = try namespaces.Registry.init(a, MissingServedTesting.namespace); defer ns.deinit();
+    const shape = try FullGetRootTesting.shape(a);
+    const page = try FullGetRootTesting.raw(a, shape);
+    var files = try FullGetRootTesting.registry(a, &ns); defer files.deinit();
+    var book = try FullGetRootTesting.book(a, &ns, &files, shape); defer book.deinit();
+    const supplied = try responseSource(a, &ns, page);
+    const stored = book.pages[0].page_styles orelse return error.TestUnexpectedResult;
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const openings = try intrinsicTableSourceOpenings(a, supplied.source);
+    try std.testing.expectEqual(@as(usize, 10), openings.len);
+    const first_end = std.mem.indexOfPos(u8, supplied.source, openings[0], "|}").? + 2;
+    const first = supplied.source[openings[0]..first_end];
+    for (0..4) |mode| {
+        var view = stored.*;
+        const changed = switch (mode) {
+            0 => try std.mem.concat(a, u8, &.{supplied.source[0..openings[0]], supplied.source[first_end..]}),
+            1 => try std.mem.concat(a, u8, &.{supplied.source, "\n", first}),
+            2 => try std.mem.concat(a, u8, &.{supplied.source[0..openings[1]], first, supplied.source[first_end..]}),
+            3 => supplied.source,
+            else => unreachable,
+        };
+        if (mode == 3) view.figure_alternative_sources = null;
+        try std.testing.expectEqual(@as(usize, 0), (try selectIntrinsicTableStyles(a, &ns, &parent, &view, changed,
+            .{ .title = page.title, .namespace_catalog = &ns })).len);
+    }
+    // A text difference cannot be resolved by ordinal pairing of identical openers.
+    const changed = try a.dupe(u8, supplied.source);
+    const label = std.mem.indexOf(u8, changed, "<center>-</center>") orelse return error.TestUnexpectedResult;
+    changed[label + "<center>".len] = '+';
+    try std.testing.expectEqual(@as(usize, 0), (try selectIntrinsicTableStyles(a, &ns, &parent, stored, changed,
+        .{ .title = page.title, .namespace_catalog = &ns })).len);
+}
+
+test "intrinsic Table identity preserves direct text positions across emphasis links and empty children" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, MissingServedTesting.namespace); defer ns.deinit();
+    var styles = try profile.parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    const Check = struct {
+        fn run(allocator: A, registry: *const namespaces.Registry, sheet: *const profile.Profile,
+            source_body: []const u8, captured_body: []const u8, expected: bool) !void
+        {
+            const attrs = " border=\"1\" cellpadding=\"4\" cellspacing=\"0\" style=\"border:1px solid #aaa;border-collapse:collapse\"";
+            const source = try std.mem.concat(allocator, u8, &.{ "{|", attrs, "\n|-\n|", source_body, "\n|}" });
+            const html = try std.mem.concat(allocator, u8, &.{
+                "<div class=\"mw-parser-output\" lang=\"ku\" dir=\"ltr\"><table", attrs,
+                "><tbody><tr><td>", captured_body, "</td></tr></tbody></table></div>" });
+            var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+            _ = try observedTextClassScopeWithElements(allocator, registry, html, &nodes);
+            const full = try allocator.alloc(profile.ObservedStyleNode, nodes.items.len + 2);
+            full[0] = .{ .tag = "html", .parent = null, .attributes = &.{} };
+            full[1] = .{ .tag = "body", .parent = 0, .attributes = &.{} };
+            for (nodes.items, 0..) |node, index| full[index + 2] = .{
+                .tag = node.tag.name, .parent = if (node.parent) |parent| @intCast(parent + 2) else 1,
+                .attributes = try figureObservedAttributes(allocator, node.attributes),
+                .empty = figureObservedEmpty(html, node), .has_text = figureObservedHasText(html, nodes.items, index),
+            };
+            const cells = (try compiler.Renderer.intrinsicTableIdentityAlloc(allocator, source, 0,
+                .{ .title = "Other", .namespace_catalog = registry },
+                .{ .intrinsic_viewport = true, .styles = sheet, .nodes = full, .root = 2, .table = 3 })) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 1), cells.len);
+            const cell = cells[0];
+            // These counterexamples pass the old complete-cell concatenation
+            // and structure/has_text checks. Only direct owner gaps differ.
+            const flat = (try intrinsicTableCapturedCellText(allocator, html, nodes.items[cell.subject - 2])) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(try intrinsicTableTextSignature(allocator, cell.text), flat);
+            try std.testing.expectEqual(expected, try intrinsicTableCapturedCellMatches(allocator, html, nodes.items, 2, cell));
+        }
+    };
+    try Check.run(a, &ns, &styles, "''a''bc", "<i>a</i>bc", true);
+    try Check.run(a, &ns, &styles, "''a''bc", "<i>ab</i>c", false);
+    try Check.run(a, &ns, &styles, "a[[Word|b]]c", "a<a href=\"/wiki/Word\" title=\"Word\">b</a>c", true);
+    try Check.run(a, &ns, &styles, "a[[Word|b]]c", "<a href=\"/wiki/Word\" title=\"Word\">ab</a>c", false);
+    try Check.run(a, &ns, &styles, "a<span></span>b", "a<span></span>b", true);
+    try Check.run(a, &ns, &styles, "a<span></span>b", "ab<span></span>", false);
+    try Check.run(a, &ns, &styles, "''a''b&amp;c", "<i>&#97;</i>b&#38;c\n", true);
+    try std.testing.expectEqualStrings(" a ", try intrinsicTableDirectTextSignature(a, " \ta\n ", false, false));
+    try std.testing.expectEqualStrings("a", try intrinsicTableDirectTextSignature(a, " \ta\n ", true, true));
+    try std.testing.expectEqualStrings("a\x0bb", try intrinsicTableDirectTextSignature(a, "a\x0bb", false, false));
+}
+
+test "retained TH distinct Rules use both existing Figure heads and exact source parent occurrences" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const bytes = @embedFile("testdata/th-missing-figure-style/figure-page-observations.json");
+    const document = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+    const page = document.pages[2];
+    const supplied = try responseSource(a, &ns, page);
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    try std.testing.expectEqualStrings(source, supplied.source);
+    try std.testing.expect(page.authored_style_operations == null and page.authored_head_context == null);
+    try std.testing.expect(page.outer_context.?.current_identity == null and page.figure_style_operations.?.len == 1);
+    try std.testing.expectEqual(@as(u64, 2190988), page.revision_id);
+    var files = try ThPaletteTesting.registry(a, &ns, document); defer files.deinit();
+    const defaults = Testing.hash(@embedFile(ThPaletteTesting.prefix ++ "figure-siteinfo.raw.json"));
+    var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+    var stored: ?*const PageStyleData = null;
+    for (book.pages) |item| if (item.page_id == page.page_id) { try std.testing.expect(stored == null); stored = item.page_styles; };
+    const retained = stored orelse return error.TestUnexpectedResult;
+    const proofs = retained.authored_element_styles;
+    try std.testing.expectEqual(@as(usize, 2), proofs.len);
+    try std.testing.expectEqual(@as(usize, 1), retained.figure_styles.len);
+    try std.testing.expect(retained.context_sources.len != 0 and retained.figure_alternative_sources.?.len != 0);
+    var parent = try profile.parseForTargetAlloc(a, @embedFile(ThPaletteTesting.prefix ++ "common.css"), .screen); defer parent.deinit();
+    const choices = try selectAuthoredElementStyles(a, &parent, retained);
+    const selected: SelectedPageStyles = .{ .styles = &parent, .scope = retained.scope, .source = source,
+        .namespace_catalog = &ns, .authored_element_styles = choices, .authored_element_original = supplied.source };
+    for (proofs, choices, [_]AuthoredElementStyleRange{ .{ .start = 8586, .end = 8590 }, .{ .start = 20503, .end = 20528 } }, 0..) |proof, choice, range, index| {
+        try std.testing.expectEqualDeep(range, proof.range);
+        try std.testing.expectEqual(@as(usize, 1), proof.candidates.len);
+        try std.testing.expect(proof.rule_anonymous_tail == null);
+        try std.testing.expectEqualStrings(if (index == 0) "<hr>" else "<hr style=\"clear:right;\">", source[range.start..range.end]);
+        const observation = (try SelectedPageStyles.authoredElementStyle(&selected, a,
+            .{ .source = source, .element = source[range.start..range.end] })) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 2), observation.contexts.len);
+        try std.testing.expect(choice.contexts[0].styles != choice.contexts[1].styles);
+        for (observation.contexts) |context| {
+            try std.testing.expectEqual(retained.observed_nodes.len + retained.outer.ancestors.len, context.nodes.len);
+            const own = context.nodes[context.element];
+            try std.testing.expectEqualStrings("hr", own.tag);
+            try std.testing.expectEqual(proof.attributes.attributes.len, own.attributes.len);
+            for (proof.attributes.attributes, own.attributes) |expected, actual| {
+                try std.testing.expectEqualStrings(expected.name, actual.name);
+                try std.testing.expectEqualStrings(expected.value, actual.value);
+            }
+            const immediate = own.parent orelse return error.TestUnexpectedResult;
+            if (index == 0) {
+                var parent_class: ?[]const u8 = null;
+                for (context.nodes[immediate].attributes) |attr| if (equal(attr.name, "class")) { parent_class = attr.value; };
+                try std.testing.expectEqualStrings("vsHide", parent_class orelse return error.TestUnexpectedResult);
+            } else try std.testing.expectEqual(context.root, immediate);
+        }
+        const foreign = try a.dupe(u8, source);
+        try std.testing.expect(try SelectedPageStyles.authoredElementStyle(&selected, a,
+            .{ .source = foreign, .element = foreign[range.start..range.end] }) == null);
+        try std.testing.expect(try SelectedPageStyles.authoredElementStyle(&selected, a,
+            .{ .source = source, .element = source[range.start..range.end - 1] }) == null);
+    }
+    var no_alternative = retained.*; no_alternative.figure_alternative_sources = null;
+    try std.testing.expectError(invalid, selectAuthoredElementStyles(a, &parent, &no_alternative));
+    // This source/head proof does not assert a native clear or mixed-flow box.
+    // Both existing actual source occurrences and the original Figure survive.
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, source, "<hr"));
+}
+
+const FigurePageRulesTesting = struct {
+    const source = "<div class='outer'><hr>[[Kept|body]]</div>\n<hr style='clear:right;'>\n[[Tail|action]]";
+    const body = "<div class='outer'><hr><a href='/wiki/Kept' title='Kept'>body</a></div><hr style='clear:right;'><p><a href='/wiki/Tail' title='Tail'>action</a></p>";
+    fn issue(a: A, ns: *const namespaces.Registry, source_value: []const u8, body_value: []const u8) ![]const AuthoredElementStyleProof {
+        const html = try std.mem.concat(a, u8, &.{ NoteIdentityTesting.root, body_value, "</div>" });
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, ns, html, &nodes);
+        const parents = try observedLiteralDivParents(a, ns, source_value, html, nodes.items);
+        return observedFigurePageRuleProofs(a, ns, source_value, html, nodes.items, parents);
+    }
+};
+
+test "Figure page Rule occurrence proof rejects duplicate hidden foreign and unsupported source parents" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = FigurePageRulesTesting;
+    const proofs = try T.issue(a, &ns, T.source, T.body);
+    try std.testing.expectEqual(@as(usize, 2), proofs.len);
+    try std.testing.expect(proofs[0].candidates[0] != proofs[1].candidates[0]);
+    for ([_][]const u8{
+        T.source ++ "\n<hr>", T.source ++ "<nowiki><hr></nowiki>",
+        "<nowiki><div class='outer'><hr></div></nowiki>\n<hr style='clear:right;'>",
+        "<span><div class='outer'><hr>[[Kept|body]]</div></span>\n<hr style='clear:right;'>",
+        "[[Target|<div class='outer'><hr>body</div>]]\n<hr style='clear:right;'>",
+        "<div class='outer'><hr class='unknown'>body</div>\n<hr style='clear:right;'>",
+        "<div class='outer'><hr>body</div>\n<hr style=clear:right;>",
+        T.source ++ "{{Hidden}}", T.source ++ "<script>unknown</script>",
+    }) |source| try std.testing.expectError(invalid, T.issue(a, &ns, source, T.body));
+    for ([_][]const u8{
+        T.body ++ "<hr>", "<div class='foreign'>" ++ T.body ++ "</div>",
+        "<div class='outer'><hr style='clear:right;'>body</div><hr>",
+        "<div class='outer'><hr>body</div><div><hr style='clear:right;'></div>",
+        "<div class='outer'><hr style='color:red'>body</div><hr style='clear:right;'>",
+    }) |body| try std.testing.expectError(invalid, T.issue(a, &ns, T.source, body));
+    const no_rules = try T.issue(a, &ns, "[[Kept|body]]", "<p><a href='/wiki/Kept' title='Kept'>body</a></p>");
+    try std.testing.expectEqual(@as(usize, 0), no_rules.len);
+}
+
+test "retained TH Rule queries preserve both complete heads bare inner paint and physical outer clearance" {
+    const types = encoder.presentation_types;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const bytes = @embedFile("testdata/th-missing-figure-style/figure-page-observations.json");
+    const document = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+    const page = document.pages[2];
+    const supplied = try responseSource(a, &ns, page);
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    try std.testing.expectEqualStrings(source, supplied.source);
+    try std.testing.expect(page.authored_style_operations == null and page.authored_head_context == null and page.outer_context.?.current_identity == null);
+    var files = try ThPaletteTesting.registry(a, &ns, document); defer files.deinit();
+    const defaults = Testing.hash(@embedFile(ThPaletteTesting.prefix ++ "figure-siteinfo.raw.json"));
+    var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+    var data: ?*const PageStyleData = null;
+    for (book.pages) |item| if (item.page_id == page.page_id) { try std.testing.expect(data == null); data = item.page_styles; };
+    const retained = data orelse return error.TestUnexpectedResult;
+    var parent = try profile.parseForTargetAlloc(a, @embedFile(ThPaletteTesting.prefix ++ "common.css"), .screen); defer parent.deinit();
+    const choices = try selectAuthoredElementStyles(a, &parent, retained);
+    try std.testing.expectEqual(@as(usize, 2), choices.len);
+    try std.testing.expect(retained.observed_nodes.len > 512);
+    for (choices, 0..) |choice, index| {
+        try std.testing.expectEqual(@as(usize, 2), choice.contexts.len);
+        var prior: ?types.RuleStyle = null;
+        for (choice.contexts) |context| {
+            try std.testing.expectEqual(retained.observed_nodes.len + retained.outer.ancestors.len, context.nodes.len);
+            const computed = (try profile.resolveObservedAuthoredRule(a, context)) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(?types.FigureClear, if (index == 0) null else .right), computed.style.clear);
+            try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 1 }, computed.style.height);
+            try std.testing.expect(computed.style.fill == .rgb);
+            try std.testing.expectEqualDeep(types.StyleLength{ .unit = .em, .value = 0.2 }, computed.style.margins.top);
+            try std.testing.expectEqualDeep(computed.style.margins.top, computed.style.margins.bottom);
+            try std.testing.expect(computed.style.margins.left.value == 0 and computed.style.margins.right.value == 0);
+            if (prior) |other| try std.testing.expectEqualDeep(other, computed.style) else prior = computed.style;
+        }
+    }
+    // This authentic complete-input query remains an unearned native control;
+    // it does not substitute for the subsequent mixed body/parent-flow issuer.
 }

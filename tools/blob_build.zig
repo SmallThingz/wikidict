@@ -907,8 +907,11 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
         if (direction.root_only) sizing_source.table_containing_direction = null;
     }
     sizing_source.text_class_scope = null;
+    sizing_source.table_float_source = null;
     sizing_source.figure_style_ctx = null;
     sizing_source.resolve_figure_style_fn = null;
+    sizing_source.authored_element_style_ctx = null;
+    sizing_source.resolve_authored_element_style_fn = null;
     sizing_source.page_observation_ctx = null;
     sizing_source.resolve_observed_width_fn = null;
     sizing_source.resolve_observed_svg_upright_fit_fn = null;
@@ -949,8 +952,15 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
             break :absent null;
         } else null;
     if (page_styles) |styles| if (styles.source.ptr != expanded.ptr or styles.source.len != expanded.len) return error.InvalidFigurePageObservations;
+    const prefix_table = if (page_styles) |styles| styles.tablePrefixSource() else null;
+    if (prefix_table != null and (table_root != null or sizing_source.table_containing_direction != null))
+        return error.InvalidFigurePageObservations;
     // Commit only after all selection and identity checks succeed.
-    if (table_root) |root| sizing_source.table_containing_direction = root;
+    if (table_root) |root| sizing_source.table_containing_direction = root
+    else if (prefix_table) |root| sizing_source.table_containing_direction = root;
+    if (sizing_source.table_containing_direction == null) {
+        if (page_styles) |styles| sizing_source.table_containing_direction = styles.tableIntrinsicSource();
+    }
     if (selected) |media| {
         sizing_source.text_class_scope = text_class_scope;
         sizing_source.page_observation_ctx = media;
@@ -968,9 +978,15 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
         codes.page_style_parent = codes.table_styles;
         codes.table_styles = styles.styles;
         sizing_source.text_class_scope = .{ .source = styles.source, .scope = &styles.scope };
+        if (styles.floating_tables.len != 0) sizing_source.table_float_source = .{ .source = styles.source,
+            .context = styles, .observe = figure_page_observations.SelectedPageStyles.floatingTable };
         if (styles.figure_styles.len != 0) {
             sizing_source.figure_style_ctx = styles;
             sizing_source.resolve_figure_style_fn = figure_page_observations.SelectedPageStyles.figureStyle;
+        }
+        if (styles.authored_element_styles.len != 0) {
+            sizing_source.authored_element_style_ctx = styles;
+            sizing_source.resolve_authored_element_style_fn = figure_page_observations.SelectedPageStyles.authoredElementStyle;
         }
     }
 }
@@ -65442,4 +65458,47 @@ test "KU actual full source retains 679 anchor occurrences including one d trail
     }
     try std.testing.expectEqual(@as(usize, 1), found);
     try F.hash(source, "ed942971342411e72720f64881ff55ebbc3d36a3a019d96da2b5ce8f199bcb42");
+}
+
+
+test "normal HR only Writer binding is independent of Figures and resets on absent or stale next page" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const prefix = "testdata/sr-authored-head/";
+    var ns = try namespace_registry.Registry.init(a, @embedFile(prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile(prefix ++ "interwiki-map.tsv"));
+    const site = @embedFile(prefix ++ "figure-siteinfo.raw.json");
+    try ns.attachLanguageConversion(site);
+    const source_defaults = ns.figure_source_defaults orelse return error.TestUnexpectedResult;
+    const width = source_defaults.default_thumbnail_width orelse return error.TestUnexpectedResult;
+    var defaults_sha256: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(site, &defaults_sha256, .{});
+    const page = try std.json.parseFromSliceLeaky(figure_page_observations.RawPage, a, @embedFile(prefix ++ "alexander.page.json"), .{});
+    var document = try std.json.parseFromSliceLeaky(figure_page_observations.Document, a, @embedFile(prefix ++ "candidate-seven01.json"), .{});
+    document.pages = &.{page};
+    var files: figure_sizing.Registry = .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = &ns,
+        .records = &.{}, .file_authority = true }; defer files.deinit();
+    var book = try figure_page_observations.Book.init(a, try figure_page_observations.Testing.observedSetDocumentBytes(a, document), &ns,
+        &files, defaults_sha256, width); defer book.deinit();
+    var parent = try encoder.table_style_profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    var codes: encoder.blob_builder.LanguageCodes = .{ .namespace_catalog = &ns, .table_styles = &parent,
+        .figure_sizing = .{ .ctx = &files, .resolve_fn = figure_sizing.Registry.resolve,
+            .source_context = .{ .namespace_sha256 = ns.source_sha256, .defaults = source_defaults } } };
+    const source = @embedFile(prefix ++ "source.expanded.wikitext");
+    const raw = @embedFile(prefix ++ "source.raw.wikitext");
+    try attachFigurePageObservation(a, &codes, &book, defaults_sha256, 0, page.page_id, page.revision_id, page.title, raw, source);
+    const attached = codes.figure_sizing.?;
+    try std.testing.expect(attached.figure_style_ctx == null and attached.resolve_figure_style_fn == null);
+    try std.testing.expect(attached.authored_element_style_ctx != null and
+        attached.resolve_authored_element_style_fn == figure_page_observations.SelectedPageStyles.authoredElementStyle);
+    const operation: encoder.presentation_compile.AuthoredElementStyleOperation = .{ .source = source, .element = source[417..421] };
+    const observation = (try attached.resolve_authored_element_style_fn.?(attached.authored_element_style_ctx, a, operation)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(observation.profile == codes.table_styles and observation.contexts.len >= 2);
+    try attachFigurePageObservation(a, &codes, null, defaults_sha256, 0, page.page_id, page.revision_id, page.title, raw, source);
+    try std.testing.expect(codes.figure_sizing.?.authored_element_style_ctx == null and codes.figure_sizing.?.resolve_authored_element_style_fn == null);
+    try std.testing.expect(codes.table_styles == &parent and codes.page_style_parent == null);
+    try attachFigurePageObservation(a, &codes, &book, defaults_sha256, 0, page.page_id, page.revision_id, page.title, raw, source);
+    if (attachFigurePageObservation(a, &codes, &book, defaults_sha256, 0, page.page_id, page.revision_id + 1, page.title, raw, source)) |_| {} else |err| {
+        try std.testing.expectEqual(error.InvalidFigurePageObservations, err);
+    }
+    try std.testing.expect(codes.figure_sizing.?.authored_element_style_ctx == null and codes.figure_sizing.?.resolve_authored_element_style_fn == null);
+    try std.testing.expect(codes.table_styles == &parent and codes.page_style_parent == null);
 }

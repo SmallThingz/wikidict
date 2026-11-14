@@ -56,6 +56,9 @@ pub const SourceFragment = struct {
     original_start: ?usize = null,
     source: []const u8,
     missing: ?MissingText = null,
+    // A complete namespace page still needs the ordinary body/Poem/TOC pass.
+    // This selects preparation only; source authority requires the range below.
+    whole_body: bool = false,
     pre: FragmentPreContext = .{},
     parser_output_range: ?ParserOutputRange = null,
 };
@@ -106,14 +109,45 @@ pub fn observePreScopesAlloc(a: A, title: []const u8, source: []const u8, link_t
     return observePreScopesWithTextPaintAlloc(a, title, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, null);
 }
 pub fn observePreScopesWithTextPaintAlloc(a: A, title: []const u8, source: []const u8, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: ReferenceDefinitions, poem_phase: ?*const PoemPhase, text_styles: ?*const TableStyleProfile) !PreObservation {
-    return observePreScopesSourceAlloc(a, title, source, null, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, text_styles);
+    return observePreScopesSourceAlloc(a, title, source, null, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, text_styles, null, null);
 }
 // Prepared page bytes and all their provenance channels travel together. Raw
 // callers retain the byte-only route and cannot inherit another source's proof.
 pub fn observePreScopesWithTextPaintAndMissingAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: ReferenceDefinitions, poem_phase: ?*const PoemPhase, text_styles: ?*const TableStyleProfile) !PreObservation {
-    return observePreScopesSourceAlloc(a, title, source.bytes, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, text_styles);
+    return observePreScopesSourceAlloc(a, title, source.bytes, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, text_styles, null, null);
 }
-fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, source_missing: ?MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: ReferenceDefinitions, poem_phase: ?*const PoemPhase, text_styles: ?*const TableStyleProfile) !PreObservation {
+// The normal Builder can retain the existing full-page projection at this
+// earlier scope-observation phase. Legacy callers keep their unknown root.
+// No later owner fragment or byte-equal copy can lend this relationship.
+pub fn observePreScopesWithSelectedPageAndMissingAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: ReferenceDefinitions, poem_phase: ?*const PoemPhase, text_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, source_projection: ?*const compiler.SourceElementProjection) !PreObservation {
+    return observePreScopesSourceAlloc(a, title, source.bytes, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, text_styles, figure_sizing, source_projection);
+}
+
+fn bindPreObservationSelectedPage(renderer: *compiler.Renderer, source: MissingText, styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, source_projection: ?*const compiler.SourceElementProjection) void {
+    const projection = source_projection orelse return;
+    const sizing = figure_sizing orelse return;
+    const observed = sizing.text_class_scope orelse return;
+    const selected = projection.observed_source orelse return;
+    const profile = styles orelse return;
+    const issued = observed.scope.source_literal_divs_source orelse return;
+    if (selected.scope != observed.scope or selected.source.ptr != observed.source.ptr or selected.source.len != observed.source.len or
+        projection.prepared.ptr != source.bytes.ptr or projection.prepared.len != source.bytes.len or
+        projection.original.bytes.ptr != observed.source.ptr or projection.original.bytes.len != observed.source.len or
+        issued.ptr != observed.source.ptr or issued.len != observed.source.len or observed.scope.source_literal_divs.len == 0 or
+        observed.scope.page_styles != profile or observed.scope.page_style_root == null or observed.scope.page_style_complete_root == null) return;
+    // Reuse the ordinary fragment binder with a complete current page, whose
+    // start and prepared bytes are the exact projection endpoint just checked.
+    // Its consumers still validate original ranges, copies and taint locally.
+    const fragment: SourceFragment = .{ .source = source.bytes, .original_start = 0, .missing = source,
+        .parser_output_range = .{ .page = source.bytes, .start = 0, .prepared = source.bytes,
+            .source_element_projection = projection } };
+    renderer.content_root = .parser_output;
+    renderer.context.table_styles = profile;
+    renderer.context.figure_sizing = sizing;
+    bindFragmentTextClassScope(renderer, fragment, source);
+}
+
+fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, source_missing: ?MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: ReferenceDefinitions, poem_phase: ?*const PoemPhase, text_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, source_projection: ?*const compiler.SourceElementProjection) !PreObservation {
     const observation_phase = consume_diagnostics.beginConsumePhase(.scope_observation);
     defer consume_diagnostics.endConsumePhase(observation_phase);
     const Collector = struct {
@@ -257,6 +291,11 @@ fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, sour
             errdefer if (owned_tooltip) |advice| self.a.free(advice);
             const owned_foreground = if (attributes.foreground) |color| try self.a.dupe(u8, color) else null;
             errdefer if (owned_foreground) |color| self.a.free(color);
+            const owned_family = ownFontFamily(self.a, attributes.font_family) catch |err| return switch (err) {
+                error.InvalidPresentation => error.UncompiledPresentation,
+                error.OutOfMemory => error.OutOfMemory,
+            };
+            errdefer freeFontFamily(self.a, owned_family);
             const owned_text_element = try self.ownedTextElement(attributes.text_element);
             try self.scopes.append(self.a, .{
                 .opening_start = absolute_open,
@@ -266,7 +305,7 @@ fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, sour
                 .matched = matched,
                 .kind = kind,
                 .formatting = formatting,
-                .attributes = .{ .text_element = owned_text_element, .relative_context_policy_present = attributes.relative_context_policy_present, .column_fragmentation_policy_present = attributes.column_fragmentation_policy_present, .table_collapse = attributes.table_collapse, .table_inheritance_scoped = attributes.table_inheritance_scoped, .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .captured_direction = owned_captured_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .tooltip = owned_tooltip, .tooltip_set = attributes.tooltip_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_features = attributes.font_features, .font_scale_set = attributes.font_scale_set, .font_size_unknown = attributes.font_size_unknown },
+                .attributes = .{ .text_element = owned_text_element, .relative_context_policy_present = attributes.relative_context_policy_present, .column_fragmentation_policy_present = attributes.column_fragmentation_policy_present, .table_collapse = attributes.table_collapse, .table_inheritance_scoped = attributes.table_inheritance_scoped, .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .captured_direction = owned_captured_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .tooltip = owned_tooltip, .tooltip_set = attributes.tooltip_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_features = attributes.font_features, .font_family = owned_family, .font_scale_set = attributes.font_scale_set, .font_size_unknown = attributes.font_size_unknown },
                 .target = owned_target,
                 .tag_name = hidden_tag,
                 .link_quotes = link_quotes,
@@ -287,6 +326,7 @@ fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, sour
             a.free(scope.attributes.explanation);
             if (scope.attributes.tooltip) |advice| a.free(advice);
             if (scope.attributes.foreground) |color| a.free(color);
+            freeFontFamily(a, scope.attributes.font_family);
         }
         if (collected.text_ancestry) |owned| { owned.deinit(); a.destroy(owned); }
         collected.scopes.deinit(a);
@@ -316,6 +356,7 @@ fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, sour
         },
     };
     renderer.page_reference_definitions = reference_context.items;
+    if (source_missing) |tracked| bindPreObservationSelectedPage(&renderer, tracked, text_styles, figure_sizing, source_projection);
     collected.renderer = &renderer;
     _ = try renderer.renderBodyWithPreObserver(source, .{ .ctx = &collected, .enter = Collector.enter });
     // A truncated probe cannot establish a complete page scope map.
@@ -332,6 +373,36 @@ fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, sour
     const refused_link_openings = try collected.refused_link_openings.toOwnedSlice(a);
     errdefer a.free(refused_link_openings);
     return .{ .text_ancestry = collected.text_ancestry, .scopes = try collected.scopes.toOwnedSlice(a), .refused_link_openings = refused_link_openings, .unclosed_formatting = renderer.fallbacks.unclosed_formatting };
+}
+
+fn freeFontFamily(a: A, value: ?types.ContainerFontFamily) void {
+    if (value) |family| switch (family) {
+        .sans_serif => {},
+        .stack => |stack| {
+            for (stack.names) |name| a.free(name);
+            a.free(stack.names);
+        },
+    };
+}
+fn ownFontFamily(a: A, value: ?types.ContainerFontFamily) !?types.ContainerFontFamily {
+    const family = value orelse return null;
+    if (!types.validContainerFontFamily(family)) return error.InvalidPresentation;
+    switch (family) {
+        .sans_serif => return family,
+        .stack => |stack| {
+            const names = try a.alloc([]const u8, stack.names.len);
+            var initialized: usize = 0;
+            errdefer {
+                for (names[0..initialized]) |name| a.free(name);
+                a.free(names);
+            }
+            for (stack.names, names) |source, *destination| {
+                destination.* = try a.dupe(u8, source);
+                initialized += 1;
+            }
+            return .{ .stack = .{ .names = names, .fallback = stack.fallback } };
+        },
+    }
 }
 
 pub fn parsePoemPhaseAlloc(a: A, full_output: []const u8, display_title: ?[]const u8, metadata: ?[]const u8) !?*const PoemPhase {
@@ -698,6 +769,9 @@ const CompilerWalk = struct {
     }
     fn table(self: *CompilerWalk, context: anytype, value: compiler.Table, table_depth: usize) anyerror!void {
         if (table_depth > types.max_table_depth) return error.InvalidPresentation;
+        if (!types.validTableViewportHeaders(value.geometry, value.style, value.block_viewport, value.float_viewport)) return error.InvalidPresentation;
+        var has_cells = false; for (value.rows) |row| if (row.cells.len != 0) { has_cells = true; break; };
+        if (!types.validTableFloatViewportContent(value.float_viewport, value.caption.len, value.caption_blocks != null, has_cells)) return error.InvalidPresentation;
         if (value.caption_blocks) |children| {
             if (value.caption.len != 0) return error.InvalidPresentation;
             try self.captionBlocks(context, children, table_depth);
@@ -984,13 +1058,13 @@ fn bindFragmentSourceElements(renderer: *compiler.Renderer, fragment: SourceFrag
     const range = fragment.parser_output_range.?;
     const projection = range.source_element_projection orelse return;
     const sizing = renderer.context.figure_sizing orelse return;
-    if (sizing.table_containing_direction) |direction| {
+    for ([_]?compiler.TableContainingDirectionSource{ sizing.table_containing_direction, sizing.table_float_source }) |optional| if (optional) |direction| {
         if (projection.prepared.ptr == range.page.ptr and projection.prepared.len == range.page.len and
             projection.original.bytes.ptr == direction.source.ptr and projection.original.bytes.len == direction.source.len and
             !tracked.unknown and !tracked.lost_missing_range and tracked.generated_source == null and
             std.mem.eql(u8, tracked.bytes, fragment.source))
             renderer.table_direction_binding = .{ .projection = projection, .owner = tracked, .page_start = range.start };
-    }
+    };
     const observed = sizing.text_class_scope orelse return;
     const sibling = if (observed.scope.source_siblings_source) |issued|
         observed.scope.source_siblings.len != 0 and issued.ptr == observed.source.ptr and issued.len == observed.source.len else false;
@@ -1033,10 +1107,13 @@ fn completeContentFragments(source: MissingText, fragments: []const SourceFragme
 }
 
 fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot) !Work {
+    const whole_body = for (fragments) |fragment| {
+        if (fragment.whole_body) break true;
+    } else false;
     var renderer: compiler.Renderer = .{
         .a = a,
         .literal_url_root = tracked.bytes,
-        .content_root = completeContentFragments(tracked, fragments, content_root),
+        .content_root = if (whole_body) content_root else completeContentFragments(tracked, fragments, content_root),
         .context = .{
             .title = title,
             .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv(),
@@ -1059,8 +1136,20 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
         .renderer = &renderer,
         .title = if (language.len == 0) title else language,
     };
-    if (fragments.len == 0) {
+    if (fragments.len == 0 or whole_body) {
         bindWholeTextClassScope(&renderer, tracked);
+        // Invalid custody keeps the original whole-body rendering and its
+        // refusal behavior; it never turns an arbitrary slice into ancestry.
+        if (fragments.len == 1 and whole_body and content_root == .parser_output) {
+            const fragment = fragments[0];
+            if (fragment.original_start == 0 and fragment.source.ptr == tracked.bytes.ptr and fragment.source.len == tracked.bytes.len and
+                std.meta.eql(fragment.missing orelse MissingText.untracked(fragment.source), tracked) and
+                fragmentContentRoot(fragment, tracked) == .parser_output)
+            {
+                bindFragmentRootWikiTables(&renderer, fragment, tracked);
+                bindFragmentTextClassScope(&renderer, fragment, tracked);
+            }
+        }
         try builder.renderWithMissing(tracked);
     } else try builder.renderFragments(fragments);
     return .{
@@ -13502,6 +13591,7 @@ fn genericTitleObservationAllocationControl(a: A) !void {
             if (scope.attributes.captured_direction) |value| a.free(value);
             if (scope.attributes.tooltip) |title| a.free(title);
             if (scope.attributes.foreground) |color| a.free(color);
+            freeFontFamily(a, scope.attributes.font_family);
         }
         observation.deinitTextAncestry(a);
         a.free(observation.scopes); a.free(observation.refused_link_openings);
@@ -15050,4 +15140,260 @@ test "document table direction owner binding is independent of class authority a
     renderer.context.figure_sizing = null;
     bindFragmentTextClassScope(&renderer, good, owner);
     try std.testing.expect(renderer.table_direction_binding == null);
+}
+
+test "whole body source fragment preserves ordinary numbering Missing Poem TOC and malformed body preparation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const br = "\x7fWDPOEM:0:0000000000000000000000000000000000000000000000000000000000000000\x7f";
+    const source = "__TOC__\n==Section==\n[https://example.org/one]\nISBN 97803__TOC__06406157\nfirst" ++ br ++ "second\n<pre><nowiki>[[literal]]</nowiki>\ntail";
+    const phase: PoemPhase = .{ .full_output = source, .items = &.{.{ .token = br, .kind = .br }} };
+    for (0..2) |tainted| {
+        const ranges = [_]@import("missing_dependency").Range{.{ .start = source.len - 4, .end = source.len, .occurrence = 1 }};
+        const raw: MissingText = .{ .bytes = source, .ranges = if (tainted == 1) &ranges else &.{}, .unknown = tainted == 1 };
+        const numbered = try preparePageExternalLinksWithMissingAlloc(a, raw, .{ .title = "Appendix:Parity", .poem_phase = &phase, .observe_source_elements = true });
+        defer if (numbered.source_element_projection) |proof| a.free(proof.copies);
+        var references = try referenceDefinitionsWithMissingAlloc(a, numbered.missing);
+        references.citations = numbered.citations; references.content_conversion = numbered.content_conversion;
+        var expected_report: Fallbacks = .{};
+        const expected = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "Appendix:Parity", .supplemental, null, "", numbered.missing, null,
+            .{}, null, null, null, references, &expected_report, numbered.poem_phase, &.{}, null, &.{}, null, null, null, .parser_output);
+        for (0..6) |mode| {
+            var fragment: SourceFragment = .{ .source = numbered.source, .original_start = 0, .missing = numbered.missing, .whole_body = true,
+                .parser_output_range = .{ .page = numbered.source, .start = 0, .prepared = numbered.missing.bytes,
+                    .source_element_projection = if (numbered.source_element_projection) |*proof| proof else null } };
+            switch (mode) {
+                0 => {},
+                1 => fragment.original_start = 1,
+                2 => fragment.source = try a.dupe(u8, numbered.source),
+                3 => fragment.parser_output_range.?.page = try a.dupe(u8, numbered.source),
+                4 => fragment.parser_output_range = null,
+                5 => fragment.missing.?.unknown = !numbered.missing.unknown,
+                else => unreachable,
+            }
+            var report: Fallbacks = .{};
+            const actual = try compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "Appendix:Parity", .supplemental, null, "", numbered.missing, null,
+                .{}, null, null, null, references, &report, numbered.poem_phase, &.{fragment}, null, &.{}, null, null, null, .parser_output);
+            try std.testing.expectEqualDeep(expected_report, report);
+            try std.testing.expectEqualSlices(u8, expected, actual);
+            const stored = try codec.decodeAlloc(a, actual, "Appendix:Parity", .supplemental, null);
+            try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+        }
+        const stored = try codec.decodeAlloc(a, expected, "Appendix:Parity", .supplemental, null);
+        var numbered_links: usize = 0; var isbn_links: usize = 0;
+        for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (std.mem.eql(u8, span.target, "https://example.org/one") and std.mem.eql(u8, span.text, "[1]")) numbered_links += 1;
+            if (std.mem.eql(u8, span.target, "Special:BookSources/9780306406157")) isbn_links += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), numbered_links);
+        try std.testing.expectEqual(@as(usize, 1), isbn_links);
+        try std.testing.expect(expected_report.unclosed_formatting);
+    }
+}
+
+
+test "compiler walker preserves paired Table body actions and refuses conflicting nested state" {
+    const a = std.testing.allocator;
+    const policy: types.TableBlockViewport = .{ .max_viewport_width_px = 639,
+        .box_style = .{ .margins = types.StyleEdges.all(.{ .unit = .px, .value = 0 }), .clear = .right },
+        .box_sizing = .border_box, .max_width = .{ .unit = .percent, .value = 100 },
+        .grid_style = .{ .collapse = .collapse }, .grid_direction = .ltr, .language = "de", .focus_paint = .{ .mode = .ua_auto } };
+    const body = [_]compiler.Span{.{ .kind = .link, .text = "cell action", .target = "Cell" }};
+    const table: compiler.Table = .{ .block_viewport = &policy,
+        .float_viewport = .{ .max_viewport_width_px = 639, .containing_direction = .rtl, .grid_direction = .ltr, .language = "de" },
+        .style = .{ .float_side = .right, .margins = types.StyleEdges.all(.{ .unit = .em, .value = 0.4 }) },
+        .rows = &.{.{ .cells = &.{.{ .spans = &body }} }} };
+    try validateTableSpans(a, table, null);
+    const nested: compiler.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{}, .nested_table = table }} }} };
+    try validateTableSpans(a, nested, null);
+    try std.testing.expectEqualStrings("Cell", table.rows[0].cells[0].spans[0].target);
+    var bad = table; bad.float_viewport.?.language = "fr";
+    const wrong: compiler.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{}, .nested_table = bad }} }} };
+    try std.testing.expectError(error.InvalidPresentation, validateTableSpans(a, wrong, null));
+    bad = table; bad.caption = &.{.{ .text = "caption" }};
+    try std.testing.expectError(error.InvalidPresentation, validateTableSpans(a, bad, null));
+    bad = table; bad.rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .kind = .link, .text = "uncompiled", .target = "{{uncompiled}}" }} }} }};
+    try std.testing.expectError(error.UncompiledTemplate, validateTableSpans(a, bad, null));
+}
+
+fn normalFamilyOwnershipAllocationControl(a: A) !void {
+    var first = [_]u8{'N','o','t','o'};
+    var second = [_]u8{'S','e','r','i','f',' ','P','r','o'};
+    const source: types.ContainerFontFamily = .{ .stack = .{ .names = &.{ &first, &second }, .fallback = .serif } };
+    try std.testing.expect(types.validContainerFontFamily(source));
+    const owned = try ownFontFamily(a, source); defer freeFontFamily(a, owned);
+    first[0] = 'X'; second[0] = 'Y';
+    try std.testing.expectEqualStrings("Noto", owned.?.stack.names[0]);
+    try std.testing.expectEqualStrings("Serif Pro", owned.?.stack.names[1]);
+    try std.testing.expectEqual(types.GenericFontFamily.serif, owned.?.stack.fallback);
+    try std.testing.expect((try ownFontFamily(a, null)) == null);
+    try std.testing.expectEqualDeep(@as(?types.ContainerFontFamily, .sans_serif), try ownFontFamily(a, .sans_serif));
+}
+test "normal source scope family ownership preserves copied names and unwinds every allocation" {
+    // A named generic alias is intentionally invalid even when a generic
+    // fallback follows it. Keep that original failing premise as a negative.
+    const alias: types.ContainerFontFamily = .{ .stack = .{ .names = &.{ "Noto", "Serif" }, .fallback = .serif } };
+    try std.testing.expect(!types.validContainerFontFamily(alias));
+    try std.testing.expectError(error.InvalidPresentation, ownFontFamily(std.testing.allocator, alias));
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, normalFamilyOwnershipAllocationControl, .{});
+}
+
+const SelectedPreObservationTest = struct {
+    const profile = @import("table_style_profile.zig");
+    const syntax = blobs.wikitext_syntax;
+    const note = "<div class='note'>'''Note''':\n*first ''item''</div>";
+    const css = ".note{border:1px solid #235923;padding:4px;margin:8px;background:#ffffe0;font-size:85%}";
+    const headings = "\n<b>before\n==One==\n[[Alpha|a]]\n==Two==\n[[Beta|b]]\nafter</b>\nmissing";
+    source: MissingText,
+    scope: *profile.BoundedTextClassScope,
+    projection: *compiler.SourceElementProjection,
+    proof: *profile.SourceLiteralDivProof,
+    figure: FigureSizingSource,
+    fn sizing(_: ?*const anyopaque, _: A, _: []const u8, _: types.FigureFormat, _: ?u32, _: ?u32) A.Error!?types.FigureSizingPolicy { return null; }
+    fn init(a: A, styles: *const TableStyleProfile, suffix: []const u8) !@This() {
+        const source = try std.mem.concat(a, u8, &.{ "<div class='outer' title='owned &amp; retained'>\n", note,
+            "<ul><ul>\n* [[Next#part|kept]]\n</div>", headings, suffix });
+        const root = try a.create(TextElement);
+        root.* = .{ .tag = "div", .classes = "mw-parser-output", .ancestry_complete = true, .physical_ancestry_complete = true };
+        const alternate = try a.create(TextElement); alternate.* = root.*; root.alternative_ancestry = alternate;
+        const scope = try a.create(profile.BoundedTextClassScope);
+        scope.* = .{ .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "outer note",
+            .complete_ancestor_class_superset = "mw-parser-output outer note", .complete_ancestor_id_superset = "",
+            .page_styles = styles, .page_style_root = root, .page_style_complete_root = root, .source_literal_divs_source = source };
+        const outer = syntax.tagAt(source, 0).?;
+        const own = syntax.tagAt(source, outer.end + 1).?;
+        const own_pair = syntax.matchingTag(source, own).?;
+        const proofs = try a.alloc(profile.SourceLiteralDivProof, 2);
+        for ([_]@TypeOf(outer){ outer, own }, proofs, 0..) |tag, *proof, index| {
+            const start = @intFromPtr(tag.name.ptr) - @intFromPtr(source.ptr) - 1;
+            proof.* = .{ .range = .{ .anchor_start = start, .anchor_end = syntax.matchingTag(source, tag).?.end,
+                .name_start = start + 1, .name_len = tag.name.len, .attrs_start = @intFromPtr(tag.attrs.ptr) - @intFromPtr(source.ptr), .attrs_len = tag.attrs.len },
+                .parent_start = if (index == 0) null else 0 };
+        }
+        proofs[1].restored_ul = .{ .end = own_pair.end + 8, .body_end = syntax.matchingTag(source, outer).?.inner_end, .depth = 2, .items = 1 };
+        scope.source_literal_divs = proofs;
+        const missing_start = std.mem.indexOf(u8, source, "missing").?;
+        const ranges = try a.alloc(missing_dependency.Range, 1);
+        ranges[0] = .{ .start = @intCast(missing_start), .end = @intCast(missing_start + 7), .occurrence = 1 };
+        const tracked: MissingText = .{ .bytes = source, .unknown = true, .ranges = ranges };
+        const copies = try a.alloc(compiler.SourceElementProjection.Copy, 1);
+        copies[0] = .{ .original_start = 0, .prepared_start = 0, .len = source.len };
+        const projection = try a.create(compiler.SourceElementProjection);
+        projection.* = .{ .original = tracked, .prepared = source, .copies = copies, .observed_source = .{ .source = source, .scope = scope } };
+        return .{ .source = tracked, .scope = scope, .projection = projection, .proof = &proofs[1],
+            .figure = .{ .resolve_fn = sizing, .text_class_scope = .{ .source = source, .scope = scope } } };
+    }
+    fn observe(a: A, fixture: @This(), styles: *const TableStyleProfile) !PreObservation {
+        return observePreScopesWithSelectedPageAndMissingAlloc(a, "selected observation", fixture.source,
+            .{}, null, null, null, .{}, null, styles, fixture.figure, fixture.projection);
+    }
+    fn assertOwned(observation: PreObservation) !void {
+        var title_count: usize = 0;
+        var cross_heading_count: usize = 0;
+        for (observation.scopes) |scope| {
+            if (scope.attributes.tooltip) |title| {
+                try std.testing.expectEqualStrings("owned & retained", title);
+                title_count += 1;
+            }
+            if (scope.formatting.bold and scope.matched) cross_heading_count += 1;
+            var current = scope.attributes.text_element;
+            var depth: usize = 0;
+            while (current) |node| : (depth += 1) {
+                try std.testing.expect(depth < 16);
+                // Only identity and owned ancestry may outlive the probe arena.
+                try std.testing.expect(node.page_style_root == null and node.page_style_source == null and node.page_style_anchor == null);
+                try std.testing.expect(node.source_literal_div == null and node.source_literal_div_current == null);
+                current = node.parent;
+            }
+        }
+        try std.testing.expect(title_count != 0 and cross_heading_count != 0);
+    }
+};
+
+test "selected page PreObservation restores proved lists and owns cross heading scope ancestry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try SelectedPreObservationTest.profile.parseForTargetAlloc(a, SelectedPreObservationTest.css, .screen); defer styles.deinit();
+    const fixture = try SelectedPreObservationTest.init(a, &styles, "");
+    const old = try observePreScopesWithTextPaintAndMissingAlloc(a, "selected observation", fixture.source, .{}, null, null, null, .{}, null, &styles);
+    defer old.deinitTextAncestry(a);
+    try std.testing.expect(old.unclosed_formatting);
+    const observed = try SelectedPreObservationTest.observe(a, fixture, &styles);
+    defer observed.deinitTextAncestry(a);
+    try std.testing.expect(!observed.unclosed_formatting);
+    try SelectedPreObservationTest.assertOwned(observed);
+    // Binding changes authority during the probe, never source bytes or the
+    // exact ordinary cross-heading events it returns to the Builder.
+    try std.testing.expectEqual(old.scopes.len, observed.scopes.len);
+    for (old.scopes, observed.scopes) |before, after| {
+        try std.testing.expectEqual(before.opening_start, after.opening_start);
+        try std.testing.expectEqual(before.body_start, after.body_start);
+        try std.testing.expectEqual(before.body_end, after.body_end);
+        try std.testing.expectEqual(before.resume_at, after.resume_at);
+        try std.testing.expectEqual(before.matched, after.matched);
+        try std.testing.expectEqual(before.kind, after.kind);
+        try std.testing.expectEqualDeep(before.formatting, after.formatting);
+        try std.testing.expectEqualStrings(before.target, after.target);
+    }
+    try std.testing.expectEqualSlices(usize, old.refused_link_openings, observed.refused_link_openings);
+    try std.testing.expect(fixture.source.unknown and fixture.source.ranges.len == 1);
+    try std.testing.expectEqualStrings(fixture.projection.original.bytes, fixture.source.bytes);
+}
+
+test "selected page PreObservation refuses stale phase copies missing proofs and local taint" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try SelectedPreObservationTest.profile.parseForTargetAlloc(a, SelectedPreObservationTest.css, .screen); defer styles.deinit();
+    for (0..12) |mode| {
+        var fixture = try SelectedPreObservationTest.init(a, &styles, "");
+        var selected: ?*const compiler.SourceElementProjection = fixture.projection;
+        switch (mode) {
+            0 => selected = null,
+            1 => fixture.projection.prepared = try a.dupe(u8, fixture.source.bytes),
+            2 => fixture.source.bytes = try a.dupe(u8, fixture.source.bytes),
+            3 => fixture.projection.original.bytes = try a.dupe(u8, fixture.source.bytes),
+            4 => fixture.projection.observed_source = null,
+            5 => fixture.scope.source_literal_divs_source = try a.dupe(u8, fixture.source.bytes),
+            6 => fixture.proof.restored_ul = null,
+            7 => fixture.projection.copies = &.{},
+            8 => fixture.source.lost_missing_range = true,
+            9 => fixture.projection.original.generated_source = fixture.source.bytes,
+            10 => {
+                const ranges = try a.alloc(missing_dependency.Range, 1);
+                ranges[0] = .{ .start = @intCast(fixture.proof.range.anchor_end), .end = @intCast(fixture.proof.range.anchor_end + 1), .occurrence = 2 };
+                fixture.source.ranges = ranges;
+            },
+            11 => fixture.scope.page_style_complete_root = null,
+            else => unreachable,
+        }
+        const observed = try observePreScopesWithSelectedPageAndMissingAlloc(a, "selected observation", fixture.source,
+            .{}, null, null, null, .{}, null, &styles, fixture.figure, selected);
+        defer observed.deinitTextAncestry(a);
+        try std.testing.expect(observed.unclosed_formatting);
+    }
+    // A different actual prepared endpoint cannot borrow even an equal-byte
+    // earlier observation's projection. No late projection is synthesized.
+    const fixture = try SelectedPreObservationTest.init(a, &styles, "");
+    var next = fixture; next.source.bytes = try a.dupe(u8, fixture.source.bytes);
+    var next_projection = fixture.projection.*; next_projection.prepared = next.source.bytes;
+    next.projection = &next_projection;
+    const correctly_bound = try SelectedPreObservationTest.observe(a, next, &styles);
+    defer correctly_bound.deinitTextAncestry(a);
+    try std.testing.expect(!correctly_bound.unclosed_formatting);
+    const stale = try SelectedPreObservationTest.observe(a, fixture, &styles);
+    defer stale.deinitTextAncestry(a);
+    try std.testing.expect(!stale.unclosed_formatting);
+    var mismatched = fixture; mismatched.projection = &next_projection;
+    const refused = try SelectedPreObservationTest.observe(a, mismatched, &styles);
+    defer refused.deinitTextAncestry(a);
+    try std.testing.expect(refused.unclosed_formatting);
+}
+
+test "selected page PreObservation preserves genuine unclosed formatting outside restored list" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try SelectedPreObservationTest.profile.parseForTargetAlloc(a, SelectedPreObservationTest.css, .screen); defer styles.deinit();
+    for ([_][]const u8{ "\n<i>unclosed", "\n<pre>unclosed", "\n<ul>" }) |suffix| {
+        const fixture = try SelectedPreObservationTest.init(a, &styles, suffix);
+        const observed = try SelectedPreObservationTest.observe(a, fixture, &styles);
+        defer observed.deinitTextAncestry(a);
+        try std.testing.expect(observed.unclosed_formatting);
+        try SelectedPreObservationTest.assertOwned(observed);
+    }
 }

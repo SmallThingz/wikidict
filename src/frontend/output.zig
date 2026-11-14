@@ -8416,3 +8416,123 @@ test "terminal paired responsive Table refuses geometry while preserving body ac
     const direct_after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(direct_after);
     try std.testing.expectEqualStrings(before, direct_after);
 }
+
+
+test "Q Table corners survive shared JSON and text output without losing action body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = @import("blob_encoder").presentation_types;
+    const codec = @import("blob_encoder").presentation_codec;
+    const px = T.StyleLength{ .unit = .px, .value = 8 };
+    const table: model.Table = .{ .geometry = .{ .cell_spacing = 2, .cell_padding = 1 },
+        .style = .{ .collapse = .separate, .border = .none,
+            .corner_radii = .{ .top_left = px, .top_right = px, .bottom_right = px,
+                .bottom_left = .{ .unit = .px, .value = 0 } } },
+        .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .kind = .link, .text = "KEPT_Q_BODY", .target = "Exact target" }} }} }} };
+    const source: T.Stored = .{ .entry = .{ .title = "Q output", .kind = .citations,
+        .sections = &.{.{ .level = 0, .title = "", .blocks = &.{.{ .kind = .table, .table = table }} }} } };
+    const bytes = try codec.encodeBuildAlloc(a, source.entry.display_title, source.entry.sections,
+        source.entry.organization, source.entry.references, source.entry.media);
+    try std.testing.expectEqualStrings("DPRQ", bytes[0..4]);
+    var ordinary = try model.fromRecord(a, .{ .citations = .{ .title = source.entry.title, .payload = bytes } }); defer ordinary.deinit();
+    const stored: T.Stored = .{ .entry = ordinary.entry };
+    try std.testing.expectEqualDeep(source, stored);
+    var json_out: std.Io.Writer.Allocating = .init(a); defer json_out.deinit();
+    try json(&json_out.writer, .{ .operation = .lookup, .query = "Q output", .kind = .citations,
+        .language = null, .record_count = 1, .total_matches = 1, .entries = &.{stored.entry} });
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, json_out.written(), .{}); defer parsed.deinit();
+    const emitted = parsed.value.object.get("entries").?.array.items[0];
+    const entry_json = try std.json.Stringify.valueAlloc(a, emitted, .{});
+    const entry = try std.json.parseFromSlice(model.Entry, a, entry_json, .{}); defer entry.deinit();
+    try std.testing.expectEqualDeep(stored.entry, entry.value);
+    try std.testing.expect(std.mem.indexOf(u8, json_out.written(), "corner_radii") != null);
+    var text_out: std.Io.Writer.Allocating = .init(a); defer text_out.deinit();
+    try tableText(&text_out.writer, entry.value.sections[0].blocks[0].table.?, false, null);
+    try std.testing.expect(std.mem.indexOf(u8, text_out.written(), "KEPT_Q_BODY") != null);
+    try std.testing.expectEqualStrings("Exact target", entry.value.sections[0].blocks[0].table.?.rows[0].cells[0].spans[0].target);
+}
+
+test "R intrinsic Table terminal refusal preserves complete cells actions and immutable JSON" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = @import("blob_encoder").presentation_types; const codec = @import("blob_encoder").presentation_codec;
+    const zero = T.StyleEdges.all(.{ .unit = .px, .value = 0 });
+    const policy: T.TableBlockViewport = .{ .max_viewport_width_px = 639,
+        .box_style = .{ .border = .none, .margins = zero }, .box_sizing = .border_box,
+        .max_width = .{ .unit = .percent, .value = 100 }, .grid_style = .{ .collapse = .collapse },
+        .grid_direction = .ltr, .language = "ku", .focus_paint = .{ .mode = .ua_auto },
+        .intrinsic_containing_direction = .rtl };
+    const table: T.Table = .{ .geometry = .{ .border = 1, .cell_padding = 4, .cell_spacing = 0 },
+        .style = .{ .border = .none, .collapse = .collapse, .margins = zero }, .block_viewport = &policy,
+        .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .kind = .link, .text = "R_BODY", .target = "Exact target" }} },
+            .{ .spans = &.{.{ .text = "R_TAIL" }} }} }} };
+    const source: T.Stored = .{ .entry = .{ .title = "R output", .kind = .citations,
+        .sections = &.{.{ .level = 0, .title = "", .blocks = &.{.{ .kind = .table, .table = table }} }} } };
+    const bytes = try codec.encodeAlloc(a, source); try std.testing.expectEqualStrings("DPRR", bytes[0..4]);
+    var ordinary = try model.fromRecord(a, .{ .citations = .{ .title = source.entry.title, .payload = bytes } }); defer ordinary.deinit();
+    try std.testing.expectEqualDeep(source.entry, ordinary.entry);
+    const before = try std.json.Stringify.valueAlloc(a, ordinary.entry, .{});
+    var text_out: std.Io.Writer.Allocating = .init(a); defer text_out.deinit();
+    try tableTextWidth(&text_out.writer, ordinary.entry.sections[0].blocks[0].table.?, false, null, 80);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text_out.written(), terminal_geometry_notice));
+    for ([_][]const u8{ "R_BODY", "R_TAIL" }) |body|
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text_out.written(), body));
+    try std.testing.expectEqualStrings(before, try std.json.Stringify.valueAlloc(a, ordinary.entry, .{}));
+    var bad = table; var invalid = policy; invalid.intrinsic_containing_direction = null; bad.block_viewport = &invalid;
+    var refused: std.Io.Writer.Allocating = .init(a); defer refused.deinit();
+    try std.testing.expectError(error.InvalidPresentation, tableTextWidth(&refused.writer, bad, false, null, 80));
+    try std.testing.expectEqual(@as(usize, 0), refused.written().len);
+}
+
+test "R Rule clear terminal refusal preserves explicit sides margins and adjacent actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Targets = struct {
+        internal: usize = 0,
+        external: usize = 0,
+        fn spans(self: *@This(), values: []const model.Span) !bool {
+            for (values) |span| switch (span.kind) {
+                .link => {
+                    try std.testing.expectEqualStrings("BEFORE", span.text);
+                    try std.testing.expectEqualStrings("Before", span.target);
+                    try std.testing.expectEqualStrings("kept", span.target_fragment orelse return error.TestUnexpectedResult);
+                    self.internal += 1;
+                },
+                .external_link => {
+                    try std.testing.expectEqualStrings("AFTER", span.text);
+                    try std.testing.expectEqualStrings("https://example.test/after", span.target);
+                    try std.testing.expect(span.target_fragment == null);
+                    self.external += 1;
+                },
+                else => return error.TestUnexpectedResult,
+            };
+            return false;
+        }
+    };
+    inline for (comptime std.meta.tags(ContainerTypes.FigureClear)) |clear| {
+        var rule = AuthoredRuleTerminalTest.block(1); rule.rule_style.?.clear = clear;
+        const blocks = [_]model.Block{
+            .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "BEFORE", .target = "Before", .target_fragment = "kept" }} },
+            rule,
+            .{ .kind = .paragraph, .spans = &.{.{ .kind = .external_link, .text = "AFTER", .target = "https://example.test/after" }} },
+        };
+        const entry: model.Entry = .{ .title = "clear", .kind = .supplemental,
+            .sections = &.{.{ .level = 0, .title = "", .blocks = &blocks }} };
+        const before = try std.json.Stringify.valueAlloc(a, entry, .{});
+        var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+        try std.testing.expectError(error.UnsupportedTerminalGeometry, blocksText(&frame.writer, &.{rule}, false));
+        try std.testing.expectEqual(@as(usize, 0), frame.written().len);
+        var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+        var flow: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 80 }; defer flow.events.deinit(a);
+        var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .float_flow = &flow };
+        try blocksTextProjected(&frame.writer, &blocks, false, &projection);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), terminal_geometry_notice));
+        try std.testing.expect(std.mem.indexOf(u8, frame.written(), "BEFORE").? < std.mem.indexOf(u8, frame.written(), terminal_geometry_notice).?);
+        try std.testing.expect(std.mem.indexOf(u8, frame.written(), terminal_geometry_notice).? < std.mem.indexOf(u8, frame.written(), "AFTER").?);
+        try std.testing.expect(std.mem.indexOf(u8, frame.written(), "────────────────────────") == null);
+        try std.testing.expectEqualStrings(before, try std.json.Stringify.valueAlloc(a, entry, .{}));
+        var targets: Targets = .{}; _ = try visitEntrySpanLists(entry, &targets);
+        try std.testing.expectEqual(@as(usize, 1), targets.internal); try std.testing.expectEqual(@as(usize, 1), targets.external);
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeAlloc(a, ContainerTypes.Stored{ .entry = entry });
+        try std.testing.expectEqualStrings("DPRR", bytes[0..4]);
+        try std.testing.expectEqualDeep(entry, (try codec.decodeAlloc(a, bytes, "clear", .supplemental, null)).entry);
+    }
+}

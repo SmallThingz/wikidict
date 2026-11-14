@@ -163,9 +163,9 @@ test "transient redirect metadata does not alter ordinary DPR2 bytes" {
 
 test "reader preserves unsupported presentation capability without reclassifying malformed records" {
     const a = std.testing.allocator;
-    for ([_][]const u8{ "DPRQ", "DPRZpayload" }) |bytes|
+    for ([_][]const u8{ "DPRS", "DPRZpayload" }) |bytes|
         try std.testing.expectError(error.UnsupportedPresentationVersion, fromRecord(a, .{ .citations = .{ .title = "x", .payload = bytes } }));
-    for ([_][]const u8{ "", "DPR", "XPRN", "DPR2", "DPRM", "DPRN", "DPRO" }) |bytes|
+    for ([_][]const u8{ "", "DPR", "XPRN", "DPR2", "DPRM", "DPRN", "DPRO", "DPRR" }) |bytes|
         try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .citations = .{ .title = "x", .payload = bytes } }));
     const zero: types.StyleLength = .{ .unit = .px, .value = 0 };
     const entry: Entry = .{ .title = "x", .kind = .citations, .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{
@@ -183,12 +183,15 @@ test "reader unsupported inner capability does not bypass alias envelope validat
     var alias: enc.alias_codec.Record = .{
         .source_namespace = 0, .source_kind = .language, .source_title = "B", .source_key = "B",
         .xml_target = "C", .target_title = "C", .target_namespace = 0, .target_kind = .language, .target_key = "C",
-        .fragment = "Next", .presentation = "DPRQ",
+        .fragment = "Next", .presentation = "DPRS",
     };
     const future = try enc.alias_codec.encodeAlloc(a, alias); defer a.free(future);
     try std.testing.expectError(error.UnsupportedPresentationVersion, fromRecord(a, .{ .alias = .{ .title = "1\tB", .payload = future } }));
     try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .alias = .{ .title = "1\tWrong", .payload = future } }));
     try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .alias = .{ .title = "1\tB", .payload = "DPRO" } }));
+    alias.presentation = "DPRR";
+    const malformed_r = try enc.alias_codec.encodeAlloc(a, alias); defer a.free(malformed_r);
+    try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .alias = .{ .title = "1\tB", .payload = malformed_r } }));
     alias.presentation = "DPRN";
     const malformed = try enc.alias_codec.encodeAlloc(a, alias); defer a.free(malformed);
     try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .alias = .{ .title = "1\tB", .payload = malformed } }));
@@ -203,7 +206,8 @@ test "reader preserves ordinary body data while separating known P and future Q 
     var doc = try fromRecord(a, .{ .citations = .{ .title = "body", .payload = bytes } }); defer doc.deinit();
     try std.testing.expectEqualDeep(entry, doc.entry);
     try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .citations = .{ .title = "body", .payload = "DPRP" } }));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, fromRecord(a, .{ .citations = .{ .title = "body", .payload = "DPRQ" } }));
+    try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .citations = .{ .title = "body", .payload = "DPRQ" } }));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, fromRecord(a, .{ .citations = .{ .title = "body", .payload = "DPRS" } }));
 }
 
 test "reader retains P inline family and declaring owner through the ordinary record model" {
@@ -220,4 +224,30 @@ test "reader retains P inline family and declaring owner through the ordinary re
     try std.testing.expectEqualDeep(entry, doc.entry);
     try std.testing.expectEqualStrings(" kept\xc2\xa0 ", doc.entry.sections[0].blocks[0].spans[0].text);
     try std.testing.expectEqualStrings("Kept", doc.entry.sections[0].blocks[0].spans[0].target);
+}
+
+
+
+test "ordinary record and alias model preserve explicit Q image baseline and middle with full envelope identity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_]types.InlineImageVerticalAlign{ .middle, .baseline }) |alignment| {
+        const source: types.Stored = .{ .entry = .{ .title = "B", .kind = .alias,
+            .sections = &.{.{ .level = 0, .title = "", .blocks = &.{.{ .kind = .paragraph,
+                .spans = &.{.{ .kind = .link, .target = "File:Arrow.png", .image = .{
+                    .file = "Arrow.png", .width_px = 30, .vertical_align = alignment } }} }} }},
+            .media = &.{.{ .file = "Arrow.png", .kind = .image, .caption = "" }} } };
+        const bytes = try codec.encodeAlloc(a, source);
+        try std.testing.expectEqualStrings("DPRQ", bytes[0..4]);
+        const alias: enc.alias_codec.Record = .{ .source_namespace = 0, .source_kind = .language,
+            .source_title = "B", .source_key = "B", .xml_target = "C", .target_title = "C",
+            .target_namespace = 0, .target_kind = .language, .target_key = "C", .fragment = "Next", .presentation = bytes };
+        const envelope = try enc.alias_codec.encodeAlloc(a, alias);
+        var doc = try fromRecord(a, .{ .alias = .{ .title = "1\tB", .payload = envelope } }); defer doc.deinit();
+        try std.testing.expectEqualDeep(source.entry.sections, doc.entry.sections);
+        try std.testing.expectEqualDeep(source.entry.media, doc.entry.media);
+        try std.testing.expectEqualStrings("B", doc.entry.title);
+        try std.testing.expectEqualStrings("C", doc.entry.alias.?.target_title);
+        try std.testing.expectEqualStrings("Next", doc.entry.alias.?.fragment);
+        try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .alias = .{ .title = "1\tWrong", .payload = envelope } }));
+    }
 }
