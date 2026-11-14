@@ -6685,8 +6685,6 @@ class GeneratedProjectionTests(unittest.TestCase):
         self.assertEqual((args.output / figure.ROLES['figure-sizing']).read_bytes(), original)
         self.assertEqual({p.name: p.read_bytes() for p in parent.iterdir()}, parent_bytes)
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class OfflinePolicyReprojectionTests(unittest.TestCase):
@@ -8815,3 +8813,164 @@ class FigureBatchSiteReuseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Unknown figure site registration evidence'):
             figure.file_records(source(), self.namespace.read_bytes(), self.wiki, self.date,
                 raw, has_batches=True, record_limit=50)
+
+
+class StaticWebPOptionalMediaTests(unittest.TestCase):
+    setUp = StaticWebPProfileTests.setUp
+    response = StaticWebPProfileTests.response
+    document = StaticWebPProfileTests.document
+    verify = StaticWebPProfileTests.verify
+
+    def retained_info(self):
+        raw = (Path(__file__).parent / 'testdata/en-static-webp/abc-rose-page.json').read_bytes()
+        self.assertEqual((len(raw), hashlib.sha256(raw).hexdigest()), (1027, '652b6470a978ad55afbee83aa2cbfbe6b3d9ee96074ee022f0308970c2687f37'))
+        page = json.loads(raw)
+        self.assertEqual(page['title'], 'File:ABC with rose syrup.webp')
+        info = page['imageinfo'][0]
+        self.assertEqual((info['width'], info['height']), (1080, 1920))
+        self.assertNotIn('media-metadata', {row['name']: row['value'] for row in info['metadata']})
+        return info
+
+    def controlled_response(self, info):
+        # Retain the actual metadata/axes in the established controlled page envelope.
+        response = self.response()
+        target = response['query']['pages'][0]['imageinfo'][0]
+        target.update(width=info['width'], height=info['height'], metadata=copy.deepcopy(info['metadata']))
+        return response
+
+    def test_retained_absent_and_present_media_preserve_static_profile_and_old_contracts(self):
+        info = self.retained_info(); before = copy.deepcopy(info)
+        self.assertIsNone(figure._figure_static_webp_axes(info, 1080, 1920))
+        for value in (None, [], [{'name':'Orientation', 'value':1}]):
+            for version in (2, 3):
+                with self.subTest(media=value, version=version):
+                    selected = copy.deepcopy(info)
+                    next(x for x in selected['metadata'] if x['name']=='metadata')['value'][0]['value'] = version
+                    if value is not None: selected['metadata'].append({'name':'media-metadata', 'value':value})
+                    document, raw, site = self.document(self.controlled_response(selected))
+                    self.assertEqual(document['records'][0]['state'], 'eligible')
+                    self.verify(document, raw, site)
+                    for profile in (figure.FIGURE_PROFILE_V3, figure.FIGURE_PROFILE_V4):
+                        old, original, _ = self.document(self.controlled_response(selected), profile)
+                        self.assertEqual(original, raw)
+                        self.assertEqual(old['records'][0], dict(document['records'][0], state='unsupported'))
+                        self.verify(old, raw, site)
+                        self.assertEqual(b''.join(figure.provider_chunks(old)), b''.join(figure.provider_chunks(document)))
+        self.assertEqual(info, before)
+
+    def test_present_invalid_duplicate_or_animated_media_remains_unsupported(self):
+        original = self.retained_info()
+        cases = [('null', None), ('mapping', {}), ('string', ''), ('boolean', False),
+                 ('malformed-row', [{'name':'Orientation'}]),
+                 ('extra-row-key', [{'name':'Orientation', 'value':1, 'extra':0}]),
+                 ('duplicate-orientation', [{'name':'Orientation','value':1}, {'name':'Orientation','value':1}])]
+        cases += [('error-'+key, [{'name':key, 'value':False}]) for key in ('_error','error','errors','warnings')]
+        cases += [('orientation-'+repr(value), [{'name':'Orientation','value':value}]) for value in (None, True, '1', 0, 2, 6)]
+        for name, media in cases:
+            with self.subTest(case=name):
+                info = copy.deepcopy(original); info['metadata'].append({'name':'media-metadata','value':media})
+                with self.assertRaises(ValueError): figure._figure_static_webp_axes(info, 1080, 1920)
+                document, raw, site = self.document(self.controlled_response(info))
+                self.assertEqual(document['records'][0]['state'], 'unsupported'); self.verify(document, raw, site)
+                forged = copy.deepcopy(document); forged['records'][0]['state'] = 'eligible'
+                with self.assertRaisesRegex(ValueError, 'exact batch replay'): self.verify(forged, raw, site)
+        for mode in ('duplicate-field', 'animated', 'missing-static', 'wrong-width', 'wrong-version'):
+            with self.subTest(mode=mode):
+                info = copy.deepcopy(original); rows = info['metadata']
+                if mode=='duplicate-field': rows.extend([{'name':'media-metadata','value':[]}, {'name':'media-metadata','value':[]}])
+                elif mode=='animated': next(x for x in rows if x['name']=='animated')['value'] = True
+                elif mode=='missing-static': rows[:] = [x for x in rows if x['name']!='animated']
+                elif mode=='wrong-width': next(x for x in rows if x['name']=='width')['value'] = 1079
+                else: next(x for x in rows if x['name']=='metadata')['value'][0]['value'] = 4
+                with self.assertRaises(ValueError): figure._figure_static_webp_axes(info, 1080, 1920)
+                document, raw, site = self.document(self.controlled_response(info))
+                self.assertEqual(document['records'][0]['state'], 'unsupported'); self.verify(document, raw, site)
+
+
+class StaticWebPPinnedRepairTests(unittest.TestCase):
+    def historical_parent(self):
+        owner = ExplicitProfileReprojectionTests()
+        owner.setUp(); self.addCleanup(owner.doCleanups)
+        response = owner.response
+        def absent(title='ملف:A.webp'):
+            value = response(title)
+            rows = value['query']['pages'][0]['imageinfo'][0]['metadata']
+            rows[:] = [row for row in rows if row['name'] != 'media-metadata']
+            return value
+        owner.response = absent
+        current = figure._figure_static_webp_axes
+        def legacy(info, width, height):
+            # Reproduce only the exact preserved historical absent-field bug.
+            fields = figure._figure_metadata_map(info.get('metadata'))
+            figure._figure_metadata_map(fields.get('media-metadata'))
+            return current(info, width, height)
+        with patch.object(figure, '_figure_static_webp_axes', side_effect=legacy):
+            source, _ = owner.parent()
+            parent, _, _ = owner.upgrade(source)
+        old = owner.fixture.stream_document(parent)
+        self.assertEqual(old['source_profile']['kind'], figure.FIGURE_PROFILE_V5)
+        self.assertEqual(old['replay_contract'], figure.REPLAY_CONTRACT_V4)
+        self.assertEqual(next(r for r in old['records'] if r['mime']=='image/webp')['state'], 'unsupported')
+        return owner, parent, old
+
+    def test_pinned_same_v5_repair_derives_all_raw_and_preserves_original_members(self):
+        owner, source, old = self.historical_parent()
+        before = {p.name:p.read_bytes() for p in source.iterdir()}
+        inodes = {p.name:(p.stat().st_dev,p.stat().st_ino,p.stat().st_mode) for p in source.iterdir()}
+        with self.assertRaises(ValueError): figure.verify(source)
+        output = source.with_name(source.name+'-repair')
+        observations = {}
+        with patch.object(figure.evidence, 'get_response', side_effect=AssertionError('offline repair fetched')):
+            manifest = figure.reproject_capture(source, output,
+                repair_manifest_sha256=figure.digest(before[figure.MANIFEST]), observations=observations)
+        current = owner.fixture.stream_document(output)
+        expected = copy.deepcopy(old['records'])
+        next(r for r in expected if r['mime']=='image/webp')['state']='eligible'
+        self.assertEqual(current['records'], expected)
+        self.assertEqual(current['source_profile'], old['source_profile'])
+        self.assertEqual(current['replay_contract'], old['replay_contract'])
+        self.assertEqual((output/figure.PROVIDER).read_bytes(), before[figure.PROVIDER])
+        self.assertEqual(figure.verify(output), manifest)
+        self.assertEqual(before, {p.name:p.read_bytes() for p in source.iterdir()})
+        self.assertEqual(inodes, {p.name:(p.stat().st_dev,p.stat().st_ino,p.stat().st_mode) for p in source.iterdir()})
+        self.assertTrue(observations['complete'])
+        self.assertFalse(observations['old_projection_semantically_trusted'])
+
+    def test_pinned_repair_refuses_missing_identity_or_corrupt_original_before_output(self):
+        for mode in ('absent-auth','wrong-hash','invalid-hash','manifest','raw','projection','complete','contract','profile'):
+            with self.subTest(mode=mode):
+                owner, source, _ = self.historical_parent()
+                expected = figure.digest((source/figure.MANIFEST).read_bytes())
+                options = dict(repair_manifest_sha256=expected)
+                if mode=='absent-auth': options.clear()
+                elif mode=='wrong-hash': options['repair_manifest_sha256']='0'*64
+                elif mode=='invalid-hash': options['repair_manifest_sha256']=True
+                elif mode=='contract': options['target_contract']=figure.REPLAY_CONTRACT
+                elif mode=='profile': options['target_profile']=figure.FIGURE_PROFILE_V5
+                elif mode=='complete': (source/figure.COMPLETE).unlink()
+                else:
+                    name = {'manifest':figure.MANIFEST,'raw':figure.ROLES['figure-sizing-raw'],'projection':figure.ROLES['figure-sizing']}[mode]
+                    path=source/name; raw=path.read_bytes(); path.unlink();path.write_bytes(raw+b' ')
+                output=source.with_name(source.name+'-refused')
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    figure.reproject_capture(source, output, **options)
+                self.assertFalse(output.exists())
+
+    def test_invalid_regenerated_projection_never_publishes_complete(self):
+        owner, source, _ = self.historical_parent()
+        before = {p.name:p.read_bytes() for p in source.iterdir()}
+        output=source.with_name(source.name+'-invalid')
+        writer=figure.write_projection_stream
+        def corrupt(path, document, **kwargs):
+            values=dict(document)
+            values['records']=(dict(row,state='unsupported') if row['mime']=='image/webp' else row for row in document['records'])
+            return writer(path, values, **kwargs)
+        with patch.object(figure,'write_projection_stream',side_effect=corrupt), self.assertRaises(ValueError):
+            figure.reproject_capture(source, output, repair_manifest_sha256=figure.digest(before[figure.MANIFEST]))
+        self.assertTrue(output.exists())
+        self.assertFalse((output/figure.COMPLETE).exists())
+        self.assertEqual(before, {p.name:p.read_bytes() for p in source.iterdir()})
+
+
+if __name__ == '__main__':
+    unittest.main()

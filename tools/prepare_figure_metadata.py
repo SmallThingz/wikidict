@@ -500,7 +500,11 @@ def _figure_static_webp_axes(info, width, height):
     if (set(version) != {'_MW_WEBP_VERSION'} or type(version['_MW_WEBP_VERSION']) is not int or
             version['_MW_WEBP_VERSION'] not in (2, 3)):
         raise ValueError('Unproved static WebP metadata version')
-    media = _figure_metadata_map(fields.get('media-metadata'))
+    # The qualified handler omits this field when EXIF and XMP are absent.
+    # Static/version/axes proof above remains mandatory; present values stay strict.
+    if 'media-metadata' not in fields:
+        return
+    media = _figure_metadata_map(fields['media-metadata'])
     if (any(key in media for key in ('_error', 'error', 'errors', 'warnings')) or
             ('Orientation' in media and (type(media['Orientation']) is not int or media['Orientation'] != 1))):
         raise ValueError('Unproved static WebP orientation')
@@ -1844,13 +1848,7 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
     return defaults, coverage
 
 
-def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=None, regenerate_projection=None):
-    inventory_cache = {} if inventory_cache is None else inventory_cache
-    root = Path(root)
-    if root.is_symlink() or not root.is_dir():
-        raise ValueError('Unsafe Figure capture directory')
-    if regenerate_projection is not None and (require_complete is not False or os.path.lexists(root / COMPLETE)):
-        raise ValueError('Figure projection regeneration requires an incomplete capture')
+def _figure_capture_manifest(root, require_complete=True):
     manifest_raw = small(root / MANIFEST)
     manifest = decode(manifest_raw)
     if (not isinstance(manifest, dict) or manifest.get('schema') != SCHEMA or
@@ -1860,20 +1858,10 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
     if require_complete and decode(small(root / COMPLETE)) != {
             'schema': SCHEMA, 'manifest_sha256': digest(manifest_raw)}:
         raise ValueError('Incomplete Figure capture')
-    generation = {} if regenerate_projection is None else {'regenerate_projection': regenerate_projection}
-    defaults, coverage = replay(root, manifest.get('wiki'), manifest.get('date'), retained_cache=retained_cache, inventory_cache=inventory_cache, **generation)
-    if coverage['kind'] == 'file-logical-axes':
-        inventory = inventory_document(root / INVENTORY)
-        expected_sources = [{key: row[key] for key in ('wiki', 'date', 'name', 'url', 'size', 'sha1')}
-                            for row in inventory['sources']]
-        if manifest.get('capture_format') == FILES_STREAM_SCHEMA:
-            for row in expected_sources:
-                row['url'] = 'https://dumps.wikimedia.org'+row['url']
-        if manifest.get('source_dump_files') != expected_sources:
-            raise ValueError('Figure file source selection differs from the verified inventory')
-    if (manifest.get('namespace_registry_sha256') != defaults['namespace_registry_sha256'] or
-            manifest.get('coverage') != coverage):
-        raise ValueError('Figure capture differs from source replay')
+    return manifest_raw, manifest
+
+
+def _authenticate_figure_capture_files(root, manifest, inventory_cache):
     directory_stamp = complete_capture_directory_stamp(root)
     members, member_directories = capture_member_paths(root, include_markers=True)
     before = {path: evidence.stamp(path) for path in members.values()}
@@ -1891,6 +1879,31 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
             after_directories != member_directories or
             complete_capture_directory_stamp(root) != directory_stamp):
         raise ValueError('Figure capture changed during content authentication')
+
+
+def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=None, regenerate_projection=None):
+    inventory_cache = {} if inventory_cache is None else inventory_cache
+    root = Path(root)
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError('Unsafe Figure capture directory')
+    if regenerate_projection is not None and (require_complete is not False or os.path.lexists(root / COMPLETE)):
+        raise ValueError('Figure projection regeneration requires an incomplete capture')
+    manifest_raw, manifest = _figure_capture_manifest(root, require_complete)
+    generation = {} if regenerate_projection is None else {'regenerate_projection': regenerate_projection}
+    defaults, coverage = replay(root, manifest.get('wiki'), manifest.get('date'), retained_cache=retained_cache, inventory_cache=inventory_cache, **generation)
+    if coverage['kind'] == 'file-logical-axes':
+        inventory = inventory_document(root / INVENTORY)
+        expected_sources = [{key: row[key] for key in ('wiki', 'date', 'name', 'url', 'size', 'sha1')}
+                            for row in inventory['sources']]
+        if manifest.get('capture_format') == FILES_STREAM_SCHEMA:
+            for row in expected_sources:
+                row['url'] = 'https://dumps.wikimedia.org'+row['url']
+        if manifest.get('source_dump_files') != expected_sources:
+            raise ValueError('Figure file source selection differs from the verified inventory')
+    if (manifest.get('namespace_registry_sha256') != defaults['namespace_registry_sha256'] or
+            manifest.get('coverage') != coverage):
+        raise ValueError('Figure capture differs from source replay')
+    _authenticate_figure_capture_files(root, manifest, inventory_cache)
     if regenerate_projection is not None and os.path.lexists(root / COMPLETE):
         raise ValueError('Figure capture completed during projection regeneration')
     return manifest
@@ -5314,9 +5327,11 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
 
 
 def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
-                      target_profile=None, observations=None):
+                      target_profile=None, observations=None, repair_manifest_sha256=None):
     """Advance replay or explicitly select V5 without copying immutable members.
 
+    A pinned repair_manifest_sha256 admits only a complete V5/replay.v4
+    history for fresh raw derivation, never semantic trust in its old projection.
     Explicit replay.v6 advances v3/v4 with the same source profile; V5 profile
     advancement remains a separate replay.v4 operation.
     A materialized-origin capture may advance v3 to v4 without changing any
@@ -5328,6 +5343,11 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
     """
     if target_contract not in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT):
         raise ValueError('Unsupported offline Figure reprojection contract')
+    repair = repair_manifest_sha256 is not None
+    if repair and (not isinstance(repair_manifest_sha256, str) or
+            re.fullmatch('[0-9a-f]{64}', repair_manifest_sha256) is None or
+            target_contract != REPLAY_CONTRACT_V4 or target_profile is not None):
+        raise ValueError('Invalid pinned V5 replay.v4 repair selection')
     if (target_profile not in (None, FIGURE_PROFILE_V5) or
             target_profile is not None and target_contract != REPLAY_CONTRACT_V4):
         raise ValueError('Unsupported offline Figure target profile')
@@ -5374,7 +5394,15 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
             raise ValueError('Figure reprojection source changed outside its owned hard links')
     inventory_cache = {}
     started = time.monotonic()
-    manifest = verify(source, inventory_cache=inventory_cache)
+    if repair:
+        history_raw, manifest = _figure_capture_manifest(source)
+        if digest(history_raw) != repair_manifest_sha256:
+            raise ValueError('Figure repair manifest identity differs')
+        # Authenticate every retained member as historical bytes. The complete
+        # derived output below must pass unchanged semantic replay before COMPLETE.
+        _authenticate_figure_capture_files(source, manifest, inventory_cache)
+    else:
+        manifest = verify(source, inventory_cache=inventory_cache)
     check_source()
     observations['phases']['source_verify_seconds'] = time.monotonic() - started
     manifest_raw = small(source / MANIFEST)
@@ -5390,7 +5418,10 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
     header = stream_decode(line)
     validate_stream_header(header, FILES_STREAM_SCHEMA, original[ROLES['figure-sizing']][5])
     original_profile = (header['source_profile'] or {}).get('kind', FIGURE_PROFILE_V3)
-    if target_contract == REPLAY_CONTRACT:
+    if repair:
+        if original_profile != FIGURE_PROFILE_V5 or header.get('replay_contract') != REPLAY_CONTRACT_V4:
+            raise ValueError('Pinned repair requires an existing V5 replay.v4 capture')
+    elif target_contract == REPLAY_CONTRACT:
         if header.get('replay_contract') not in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4):
             raise ValueError('Explicit replay.v6 requires an existing replay.v3 or replay.v4 capture')
     elif target_profile is None:
@@ -5406,6 +5437,8 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
             target_contract != REPLAY_CONTRACT_V4 or target_profile is not None or
             header.get('replay_contract') != REPLAY_CONTRACT_V3):
         raise ValueError('Materialized-origin reprojection requires replay.v3 to replay.v4 without a profile change')
+    if repair and plan.get('metadata_mode', 'full') != 'full':
+        raise ValueError('Pinned repair requires complete full capture authorities')
     new_plan = dict(plan, replay_contract=target_contract)
     if target_profile is not None:
         new_plan['figure_profile'] = target_profile
@@ -5505,6 +5538,9 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
     observations.update(complete=True, source_manifest_sha256=digest(manifest_raw),
         source_content_mode_inode_preserved=True, original_contract=header.get('replay_contract'),
         target_contract=target_contract, original_profile=original_profile, target_profile=selected_profile)
+    if repair:
+        observations['repair_manifest_sha256'] = repair_manifest_sha256
+        observations['old_projection_semantically_trusted'] = False
     return new_manifest
 
 

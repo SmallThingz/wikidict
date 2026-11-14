@@ -1,0 +1,50 @@
+{
+  "ns": 6,
+  "title": "File:ABC with rose syrup.webp",
+  "missing": true,
+  "known": true,
+  "imagerepository": "shared",
+  "imageinfo": [
+    {
+      "timestamp": "2022-11-25T04:34:09Z",
+      "size": 233554,
+      "width": 1080,
+      "height": 1920,
+      "canonicaltitle": "File:ABC with rose syrup.webp",
+      "sha1": "867851458e2d14f1f4a633645fbeba0fe7fa6504",
+      "metadata": [
+        {
+          "name": "compression",
+          "value": "lossy"
+        },
+        {
+          "name": "animated",
+          "value": false
+        },
+        {
+          "name": "transparency",
+          "value": false
+        },
+        {
+          "name": "width",
+          "value": 1080
+        },
+        {
+          "name": "height",
+          "value": 1920
+        },
+        {
+          "name": "metadata",
+          "value": [
+            {
+              "name": "_MW_WEBP_VERSION",
+              "value": 2
+            }
+          ]
+        }
+      ],
+      "mime": "image/webp",
+      "mediatype": "BITMAP"
+    }
+  ]
+}
