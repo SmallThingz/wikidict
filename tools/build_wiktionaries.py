@@ -1683,10 +1683,13 @@ def _prepared_figure_selection(cfg):
     return edition,paths,key
 
 
-def _prepared_figure_wire(value):
-    # The existing guard contains tuples and Path directory members. Keep the
-    # full guard, including lexical/resolved identities, in its JSON form.
-    return json.loads(json.dumps(value,default=os.fspath,sort_keys=True,separators=(',',':')))
+def _prepared_figure_guard_digest(guard):
+    # Commit to every field of the same complete guard, without copying its
+    # large lexical/resolved path inventories into the generation a second time.
+    digest=hashlib.sha256(b'wikidict.prepared-figure-guard.v2\0')
+    encoder=json.JSONEncoder(default=os.fspath,sort_keys=True,separators=(',',':'),allow_nan=False)
+    for part in encoder.iterencode(guard):digest.update(part.encode('utf-8'))
+    return digest.hexdigest()
 
 
 def prepared_figure_verdict(cfg):
@@ -1703,9 +1706,9 @@ def prepared_figure_verdict(cfg):
     result=json.loads(prior[1])
     if (set(result)!=set(paths) or any(row[0].get('wiki')!=edition or row[0].get('date')!=cfg['date']
                                      for row in result.values())):return None
-    return dict(version=1,source=cfg['source'],python_tooling=cfg.get('python_tooling'),
+    return dict(version=2,source=cfg['source'],python_tooling=cfg.get('python_tooling'),
                 edition=edition,date=cfg['date'],paths=dict(key),
-                guard=_prepared_figure_wire(guard),result=result)
+                guard_sha256=_prepared_figure_guard_digest(guard),result=result)
 
 
 def reuse_prepared_figure_verdict(cfg, verdict):
@@ -1718,12 +1721,14 @@ def reuse_prepared_figure_verdict(cfg, verdict):
     selected=_prepared_figure_selection(cfg)
     if selected is None or not isinstance(verdict,dict):return False
     edition,paths,key=selected
-    if (set(verdict)!={'version','source','python_tooling','edition','date','paths','guard','result'}
-            or type(verdict['version']) is not int or verdict['version']!=1 or verdict['source']!=cfg['source']
+    if (set(verdict)!={'version','source','python_tooling','edition','date','paths','guard_sha256','result'}
+            or type(verdict['version']) is not int or verdict['version']!=2 or verdict['source']!=cfg['source']
             or verdict['python_tooling']!=cfg.get('python_tooling')
             or verdict['edition']!=edition or verdict['date']!=cfg['date']
             or verdict['paths']!=dict(key)):
         return False
+    if (type(verdict['guard_sha256']) is not str or
+            re.fullmatch('[0-9a-f]{64}',verdict['guard_sha256']) is None):return False
     result=verdict['result']
     if (not isinstance(result,dict) or set(result)!=set(paths)
             or any(not isinstance(row,list) or len(row)!=2 or not isinstance(row[0],dict)
@@ -1747,7 +1752,7 @@ def reuse_prepared_figure_verdict(cfg, verdict):
     # Deliberately no authenticated=child_guard: the parent hashes the complete
     # helper/SQL/raw/parent readset itself before transporting semantic success.
     guard=figure_tuple_guard(helper,next(iter(paths.values())).parent)
-    if guard is None or _prepared_figure_wire(guard)!=verdict['guard']:return False
+    if guard is None or _prepared_figure_guard_digest(guard)!=verdict['guard_sha256']:return False
     source.require_python()
     if figure_tuple_guard(helper,next(iter(paths.values())).parent,authenticated=guard)!=guard:return False
     encoded=json.dumps(result,sort_keys=True,separators=(',',':'))
@@ -3489,7 +3494,8 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
         raise ValueError('Initial sealed target source/optimization flags differ')
     prefix = Path(argv[argv.index('--prefix') + 1])
     role = Path(row['artifact']['path']).name
-    allowed_roles = {'prepare-blob-tools': BLOB_TOOL_NAMES, 'prepare-bundle-driver': ('dict-bundle-build',)}
+    allowed_roles = {'prepare-blob-tools': BLOB_TOOL_NAMES, 'prepare-captured-writer': ('dict-blob-build',),
+                     'prepare-bundle-driver': ('dict-bundle-build',)}
     if role not in allowed_roles.get(target, ()):
         raise ValueError('Initial sealed target has another role')
     if Path(row['artifact']['path']) != prefix / 'bin' / role:
@@ -3603,6 +3609,10 @@ def initial_sealed_blob_successor(original, native_roles):
     references = []
     for name in BLOB_TOOL_NAMES:
         before, after = original[name], current[name]
+        if name in ('dict-blob-merge','dict-blob-verify') and after == before:
+            # These already-authenticated roles retain their original emission,
+            # source projection and artifact. They still join the ABI check below.
+            continue
         if ({k:v for k,v in before.items() if k not in allowed} !=
                 {k:v for k,v in after.items() if k not in allowed}
                 or prepared_metadata(after['previous_role_binding']) != original):
@@ -3611,7 +3621,12 @@ def initial_sealed_blob_successor(original, native_roles):
         if shared is not None and authority != shared:
             raise ValueError('Initial sealed blob tools have different emission origins')
         shared = authority
-        _, target_references = initial_sealed_target_emission(after,native_roles,target='prepare-blob-tools',full_graph=True)
+        recipe = prepared_metadata(after['compilation_recipe'])
+        commands = recipe.get('commands', [])
+        writer_only = (name == 'dict-blob-build' and len(commands) == 1
+                       and 'prepare-captured-writer' in commands[0].get('argv', []))
+        target = 'prepare-captured-writer' if writer_only else 'prepare-blob-tools'
+        _, target_references = initial_sealed_target_emission(after,native_roles,target=target,full_graph=not writer_only)
         references.extend([after['previous_role_binding'],*target_references])
         source = prepared_metadata(after['source']); inventory = source.get('files',source)
         for relative in after['source_paths']:
@@ -3754,8 +3769,10 @@ def initial_sealed_generation(reference, native_roles):
     """Read a selected closed direct preparation, without inventing old shard state."""
     selected = prepared_metadata(reference)
     if (not {'preparation_result','preparation_closure'} <= set(selected)
-            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh','file_metadata_provider_update'}):
+            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh','file_metadata_provider_update','sitelinks_provider_update'}):
         raise ValueError('Invalid initial sealed generation selection')
+    if 'file_metadata_provider_update' in selected and 'sitelinks_provider_update' in selected:
+        raise ValueError('Mixed initial Provider update families')
     result = prepared_metadata(selected['preparation_result'])
     closed = prepared_metadata(selected['preparation_closure'])
     plan = prepared_metadata(result['input_authority'])
@@ -3844,11 +3861,11 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
             or expected.get('interwiki_map_sha256') != build_identity.get('interwiki_map_sha256')):
         raise ValueError('Initial sealed generation differs from ordinary inputs or tools')
     root = selected_workspace / 'expander' / '.bundle-expander'
-    seal_reference = (selected['file_metadata_provider_update']['current_seal'] if selected.get('file_metadata_provider_update') is not None else result['completed_expander_seal'])
+    seal_reference = (selected.get('sitelinks_provider_update',selected.get('file_metadata_provider_update'))['current_seal'] if (selected.get('file_metadata_provider_update') is not None or selected.get('sitelinks_provider_update') is not None) else result['completed_expander_seal'])
     seal = prepared_metadata(seal_reference)
     context_options = {}
     expected_context = seal
-    if selected.get('file_metadata_provider_update') is not None:
+    if (selected.get('file_metadata_provider_update') is not None or selected.get('sitelinks_provider_update') is not None):
         if getattr(native_roles,'_closed_native_context',None)!=(root,Path(dump),seal_reference['sha256']):
             raise ValueError('Initial Provider update differs from its authenticated constructor')
         expected_context=getattr(native_roles,'closed_native_origin',None)
@@ -3866,7 +3883,7 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     dependencies = selected_role['dependencies']
     graph = seal['origin_graph']
     source_root = Path(selected_role['source_root'])
-    expected_provenance=('ordinary-file-metadata-provider-update' if selected.get('file_metadata_provider_update') is not None else 'ordinary-linked-expander')
+    expected_provenance=('ordinary-sitelinks-provider-update' if selected.get('sitelinks_provider_update') is not None else 'ordinary-file-metadata-provider-update' if (selected.get('file_metadata_provider_update') is not None or selected.get('sitelinks_provider_update') is not None) else 'ordinary-linked-expander')
     if (seal.get('provenance') != expected_provenance
             or not source_root.is_absolute() or source_root.resolve() != source_root
             or any(path.is_symlink() for path in (source_root, *source_root.parents))
@@ -4886,7 +4903,9 @@ class RetainedNativeToolRoles:
         selected,result,plan,workspace=initial_sealed_generation(self.initial_sealed_generation,self)
         original_reference=result['completed_expander_seal'];reference=original_reference
         root=workspace/'expander'/'.bundle-expander';deps=self.records['dict-bundle-build']['dependencies']
-        update=selected.get('file_metadata_provider_update');update_references=[]
+        sitelinks_update=selected.get('sitelinks_provider_update') is not None
+        update=selected.get('sitelinks_provider_update',selected.get('file_metadata_provider_update'));update_references=[]
+        update_kind='sitelinks' if sitelinks_update else 'file_metadata'
         if update is None:
             seal=prepared_metadata(reference);ready_seal=seal
         else:
@@ -4895,9 +4914,9 @@ class RetainedNativeToolRoles:
                 raise ValueError('Invalid closed prepared Provider update selection')
             changed=prepared_metadata(update['result']);closed=prepared_metadata(update['closure']);data=prepared_metadata(update['input_authority'])
             if (closed.get('outcome')!='PASSED-PHYSICALLY-SOURCE-CLOSED'
-                    or any(closed.get(k)is not True for k in ('source_after','source_lease_released','allocation_released','ready','file_metadata_provider_update','old_native_producer_unchanged','logical_provider_identity_changed_only_file_metadata','source_metadata_nlinks_unchanged'))
+                    or any(closed.get(k)is not True for k in ('source_after','source_lease_released','allocation_released','ready',update_kind+'_provider_update','old_native_producer_unchanged','logical_provider_identity_changed_only_'+update_kind,'source_metadata_nlinks_unchanged'))
                     or closed.get('pages_executed')!=0 or closed.get('worker_rebuilt')is not False
-                    or any(changed.get(k)is not True for k in ('passed','ready','source_after','original_native_producer_unchanged','original_source_receipt_unchanged','logical_provider_identity_changed_only_file_metadata','all_other_native_asset_stamps_unchanged_except_bound_book_ctime','source_metadata_and_nlinks_unchanged'))
+                    or any(changed.get(k)is not True for k in ('passed','ready','source_after','original_native_producer_unchanged','original_source_receipt_unchanged','logical_provider_identity_changed_only_'+update_kind,'all_other_native_asset_stamps_unchanged_except_bound_book_ctime','source_metadata_and_nlinks_unchanged'))
                     or changed.get('compiler_executed')is not False or changed.get('worker_rebuilt')is not False or changed.get('lua_pages_executed')!=0):
                 raise ValueError('Prepared Provider update is not independently closed')
             if (closed.get('restoration_result')!=update['result'] or closed.get('input_authority')!=update['input_authority'] or changed.get('input_authority')!=update['input_authority']
@@ -4927,17 +4946,23 @@ class RetainedNativeToolRoles:
                 raise ValueError('Prepared Provider update wire origin differs')
             if changed.get('current_seal_sha256')!=reference['sha256']:
                 raise ValueError('Prepared Provider update current seal digest differs')
-            source=data['selected_source'];name='file-metadata.tsv';value=[source['bytes'],source['sha256']]
+            source=data['selected_source'];name='wikibase-sitelinks.tsv' if sitelinks_update else 'file-metadata.tsv';value=[source['bytes'],source['sha256']]
             actual=self.bind_input(Path(source['path']))
             if any(actual[key]!=source[key]for key in ('path','bytes','sha256')):
                 raise ValueError('Prepared Provider update source differs')
+            if sitelinks_update:
+                old_source=baseline['runtime_stamps']['snapshot_links'][name]
+                old=self.bind_input(Path(old_source))
+                if [old['bytes'],old['sha256']]!=baseline['identity']['providers'][name]:
+                    raise ValueError('Prepared sitelinks original source differs')
+                cache._sitelinks_append(Path(old_source).read_bytes(),Path(source['path']).read_bytes(),data.get('selected_rows'))
             expected=dict(baseline);expected['identity']=dict(baseline['identity']);expected['identity']['providers']=dict(baseline['identity']['providers'])
             expected['identity']['providers'][name]=value
             expected['identity']['assets']=[[name,*value]if row[0]==name else row for row in baseline['identity']['assets']]
             expected['runtime_stamps']=dict(baseline['runtime_stamps']);expected['runtime_stamps']['assets']=dict(baseline['runtime_stamps']['assets']);expected['runtime_stamps']['snapshot_links']=dict(baseline['runtime_stamps']['snapshot_links'])
             expected['runtime_stamps']['assets'][name]=ready_seal['runtime_stamps']['assets'][name]
             expected['runtime_stamps']['snapshot_links'][name]=source['path']
-            expected['provenance']='ordinary-file-metadata-provider-update'
+            expected['provenance']='ordinary-sitelinks-provider-update' if sitelinks_update else 'ordinary-file-metadata-provider-update'
             expected['provider_update']=dict(original_seal_sha256=original_reference['sha256'],previous_seal_sha256=original_reference['sha256'],original_providers={name:seal['identity']['providers'][name]})
             if (expected!=ready_seal or changed.get('aliases')!={name:source['path']} or closed.get('aliases')!={name:source['path']}
                     or data['selected_source']['path']!=ready_seal['runtime_stamps']['snapshot_links'][name]):
@@ -5225,7 +5250,7 @@ class RetainedNativeToolRoles:
                 raise ValueError('Prepared closed whole readonly origin differs')
         else:
             selected, result, plan, workspace = initial_sealed_generation(self.initial_sealed_generation,self)
-            current_reference=(selected['file_metadata_provider_update']['current_seal'] if selected.get('file_metadata_provider_update') is not None else result['completed_expander_seal'])
+            current_reference=(selected.get('sitelinks_provider_update',selected.get('file_metadata_provider_update'))['current_seal'] if (selected.get('file_metadata_provider_update') is not None or selected.get('sitelinks_provider_update') is not None) else result['completed_expander_seal'])
             if self.initial_sealed_context!=(workspace/'expander'/'.bundle-expander',
                     Path(plan['dump']['path']),current_reference['sha256']):
                 raise ValueError('Prepared retained readonly origin differs')

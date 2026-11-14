@@ -9112,5 +9112,120 @@ class ReprojectionRecordReuseTests(unittest.TestCase):
         self.assertEqual(figure.verify(output), manifest)
 
 
+class CompleteRawIndexReuseTests(unittest.TestCase):
+    fresh = CompleteSelectionDocumentTests.fresh
+
+    def test_verified_offsets_preserve_plain_and_encoded_batches_without_index_only_decode(self):
+        for encoded in (False, True):
+            fixture, args, _, _ = self.fresh()
+            root = args.output
+            raw_path = root / figure.ROLES['figure-sizing-raw']
+            if not encoded:
+                values = list(figure.stream_values(raw_path, figure.RAW_STREAM_SCHEMA))
+                header = dict(values[0])
+                header.pop('record_encoding')
+                raw_path.write_bytes(b''.join(figure.stream_encoded(row) for row in (header, *values[1:])))
+                document = fixture.stream_document(root)
+                document.update(raw_bytes=raw_path.stat().st_size, raw_sha256=figure.digest(raw_path.read_bytes()))
+                projection = root / figure.ROLES['figure-sizing']
+                projection.unlink()
+                figure.write_projection_stream(projection, document)
+                manifest = json.loads((root / figure.MANIFEST).read_bytes())
+                manifest['artifacts'] = figure.payload(root)
+                for role in ('figure-sizing-raw', 'figure-sizing'):
+                    manifest['outputs'][role] = manifest['artifacts'][figure.ROLES[role]]['sha256']
+                manifest_raw = figure.encoded(manifest)
+                (root / figure.MANIFEST).write_bytes(manifest_raw)
+                (root / figure.COMPLETE).write_bytes(figure.encoded({
+                    'schema': figure.SCHEMA, 'manifest_sha256': figure.digest(manifest_raw)}))
+            before = {p.name:p.read_bytes() for p in root.iterdir()}
+            expected = list(figure.stream_values(raw_path, figure.RAW_STREAM_SCHEMA))[1:]
+            document = fixture.stream_document(root)
+            cache = {}
+            with self.subTest(encoded=encoded), \
+                    patch.object(figure, 'raw_record_decode', wraps=figure.raw_record_decode) as decode:
+                result = figure.read_complete_capture(root / figure.MANIFEST, cache)
+            # The semantic derivation and source-echo traversal both remain;
+            # there is no third decoding pass solely to make this index.
+            self.assertEqual(decode.call_count, 2 * len(expected))
+            self.assertEqual(result['document'], document)
+            self.assertEqual(len(result['offsets']), len(expected))
+            physical = before[figure.ROLES['figure-sizing-raw']]
+            for number, ((offset, size, sha), batch) in enumerate(zip(result['offsets'], expected, strict=True)):
+                self.assertEqual(figure.digest(physical[offset:offset+size]), sha)
+                reference = dict(kind='complete-stream', path=str(root / figure.MANIFEST),
+                                 sha256=result['manifest_sha256'], batch=number)
+                self.assertEqual(figure.complete_stream_batch(reference, cache), batch)
+            figure.check_prefix_cache(cache)
+            self.assertEqual(before, {p.name:p.read_bytes() for p in root.iterdir()})
+
+    def test_failed_or_truncated_raw_verification_publishes_no_index_or_cache_entry(self):
+        for kind in ('malformed', 'truncated', 'trailing', 'foreign-wiki', 'late-authentication'):
+            _, args, _, _ = self.fresh()
+            root = args.output
+            raw_path = root / figure.ROLES['figure-sizing-raw']
+            lines = raw_path.read_bytes().splitlines(keepends=True)
+            if kind == 'malformed':
+                lines[1] = b'{"encoding":}\n'
+            elif kind == 'truncated':
+                lines = lines[:-1]
+            elif kind == 'trailing':
+                lines.append(b'{}\n')
+            elif kind == 'foreign-wiki':
+                header = json.loads(lines[0])
+                header['wiki'] = 'enwiktionary'
+                self.assertNotEqual(header['wiki'], args.wiki)
+                lines[0] = figure.stream_encoded(header)
+            else:
+                manifest = json.loads((root / figure.MANIFEST).read_bytes())
+                manifest['artifacts'][figure.ROLES['figure-sizing-raw']]['sha256'] = '0' * 64
+                raw = figure.encoded(manifest)
+                (root / figure.MANIFEST).write_bytes(raw)
+                (root / figure.COMPLETE).write_bytes(figure.encoded({
+                    'schema': figure.SCHEMA, 'manifest_sha256': figure.digest(raw)}))
+            if kind != 'late-authentication':
+                raw_path.write_bytes(b''.join(lines))
+            output, cache = {}, {}
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                figure.verify(root, _raw_index_out=output)
+            self.assertEqual(output, {})
+            with self.assertRaises(ValueError):
+                figure.read_complete_capture(root / figure.MANIFEST, cache, include_document=False)
+            self.assertNotIn(('complete-stream', str(root / figure.MANIFEST)), cache)
+
+    def test_input_changes_during_indexing_and_after_verification_remain_refused(self):
+        for kind in ('raw-during', 'receipt-during', 'raw-after'):
+            fixture, args, _, _ = self.fresh()
+            root = args.output
+            raw_path = root / figure.ROLES['figure-sizing-raw']
+            stream, verify = figure.stream_values, figure.verify
+            mutations = []
+            def mutate():
+                if kind == 'receipt-during':
+                    receipt = next(root.glob('file-metadata.response-*.receipt.json'))
+                    receipt.write_bytes(receipt.read_bytes() + b'changed')
+                else:
+                    replacement = fixture.root / 'same-bytes-different-inode'
+                    replacement.write_bytes(raw_path.read_bytes())
+                    replacement.replace(raw_path)
+                mutations.append(kind)
+            def indexed(path, schema, **options):
+                yield from stream(path, schema, **options)
+                if Path(path) == raw_path and options.get('record_offsets') is not None:
+                    if kind != 'raw-after':
+                        mutate()
+            def completed(*args, **options):
+                result = verify(*args, **options)
+                if kind == 'raw-after':
+                    mutate()
+                return result
+            cache = {}
+            with self.subTest(kind=kind), patch.object(figure, 'stream_values', new=indexed), \
+                    patch.object(figure, 'verify', new=completed), self.assertRaises(ValueError):
+                figure.read_complete_capture(root / figure.MANIFEST, cache, include_document=False)
+            self.assertEqual(mutations, [kind])
+            self.assertNotIn(('complete-stream', str(root / figure.MANIFEST)), cache)
+
+
 if __name__ == '__main__':
     unittest.main()

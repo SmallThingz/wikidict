@@ -438,8 +438,8 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, s
         raise ValueError('Invalid Provider update validation mode')
     if provider_update:
         regular(root / '.incomplete')
-        if (recorded.get('provenance') not in ('ordinary-wikibase-provider-update', 'ordinary-derived-provider-restoration', 'ordinary-file-metadata-provider-update') or
-                (root / '.incomplete').read_bytes() != (FILE_METADATA_UPDATE_MARKER if recorded.get('provenance') == 'ordinary-file-metadata-provider-update' else PROVIDER_UPDATE_MARKER)):
+        if (recorded.get('provenance') not in ('ordinary-wikibase-provider-update', 'ordinary-derived-provider-restoration', 'ordinary-file-metadata-provider-update', 'ordinary-sitelinks-provider-update') or
+                (root / '.incomplete').read_bytes() != (FILE_METADATA_UPDATE_MARKER if recorded.get('provenance') == 'ordinary-file-metadata-provider-update' else SITELINKS_UPDATE_MARKER if recorded.get('provenance') == 'ordinary-sitelinks-provider-update' else PROVIDER_UPDATE_MARKER)):
             raise ValueError('Provider update is not ready for final verification')
     elif os.path.lexists(root / '.incomplete'):
         return None
@@ -500,6 +500,44 @@ PROVIDER_UPDATE_MARKER = b'updating Wikibase providers\n'
 
 FILE_METADATA_PROVIDER_FILES = frozenset(('file-metadata.tsv',))
 FILE_METADATA_UPDATE_MARKER = b'updating file-metadata Provider\n'
+SITELINKS_PROVIDER_FILES = frozenset(('wikibase-sitelinks.tsv',))
+SITELINKS_UPDATE_MARKER = b'updating sitelinks Provider\n'
+
+
+def _sitelinks_append(before, after, selected_rows):
+    """Preserve every old fact; an explicit empty title is an observed absence."""
+    def rows(raw):
+        if not raw.endswith(b'\n'):
+            raise ValueError('Sitelinks snapshot must end in a newline')
+        comments, result = [], {}
+        for line in raw.splitlines():
+            if line.startswith(b'#'):
+                comments.append(line)
+                continue
+            cells = line.decode('utf8').split('\t')
+            if (len(cells) != 3 or not cells[0] or not cells[1]
+                    or any(ord(ch) < 32 or ord(ch) == 127 for cell in cells for ch in cell)
+                    or (cells[1] == '*' and cells[2])):
+                raise ValueError('Invalid sitelinks Provider row')
+            key = tuple(cells[:2])
+            if key in result:
+                raise ValueError('Duplicate sitelinks Provider pair')
+            result[key] = cells[2]
+        return comments, result
+    old_comments, old = rows(before)
+    comments, current = rows(after)
+    if (not isinstance(selected_rows, list) or not selected_rows
+            or any(not isinstance(row, list) or len(row) != 3
+                   or any(not isinstance(value, str) for value in row) for row in selected_rows)
+            or selected_rows != sorted(selected_rows)
+            or len({tuple(row[:2]) for row in selected_rows}) != len(selected_rows)):
+        raise ValueError('Invalid selected sitelinks additions')
+    added = {key: value for key, value in current.items() if key not in old}
+    if (comments != old_comments or any(current.get(key) != value for key, value in old.items())
+            or added != {tuple(row[:2]): row[2] for row in selected_rows}
+            or any(tuple(row[:2]) in old for row in selected_rows)):
+        raise ValueError('Sitelinks update exceeds its selected additions')
+    return selected_rows
 
 
 def _file_metadata_audio_append(before, after, selected_titles):
@@ -542,9 +580,11 @@ def _file_metadata_audio_append(before, after, selected_titles):
 
 
 def _file_metadata_sources(proof):
-    update = proof['file_metadata_update']
+    sitelinks = 'sitelinks_update' in proof
+    update = proof['sitelinks_update' if sitelinks else 'file_metadata_update']
     if (not isinstance(update, dict) or set(update) != {'source', 'source_stamp', 'source_nlink',
-            'original_source', 'original_source_stamp', 'original_source_nlink', 'added_titles', 'native_graph_stamps', 'native_clang_locator'}):
+            'original_source', 'original_source_stamp', 'original_source_nlink',
+            ('added_rows' if sitelinks else 'added_titles'), 'native_graph_stamps', 'native_clang_locator'}):
         raise ValueError('Invalid file metadata update authority')
     graph_stamps = update['native_graph_stamps']
     if (not isinstance(graph_stamps, dict) or set(graph_stamps) != {'extractor', 'llvm', 'runtime', 'leaf', 'main_c', 'zig', 'clang'} or
@@ -573,11 +613,14 @@ def _file_metadata_sources(proof):
             raise ValueError('File metadata selected source changed')
         contents.append(raw)
     original = update['original_source']
-    if (identity['providers'].get('file-metadata.tsv') != [original['bytes'], original['sha256']] or
-            proof['record']['runtime_stamps']['snapshot_links']['file-metadata.tsv'] != original['path'] or
+    if (identity['providers'].get('wikibase-sitelinks.tsv' if sitelinks else 'file-metadata.tsv') != [original['bytes'], original['sha256']] or
+            proof['record']['runtime_stamps']['snapshot_links']['wikibase-sitelinks.tsv' if sitelinks else 'file-metadata.tsv'] != original['path'] or
             update['source']['path'] == original['path']):
         raise ValueError('File metadata original Provider authority differs')
-    _file_metadata_audio_append(*contents, update['added_titles'])
+    if sitelinks:
+        _sitelinks_append(*contents, update['added_rows'])
+    else:
+        _file_metadata_audio_append(*contents, update['added_titles'])
     return update
 
 
@@ -634,7 +677,8 @@ def _file_metadata_native_origin(record, selected_locator=None):
 
 
 def _file_metadata_publication_guard(proof):
-    update = proof['file_metadata_update']
+    sitelinks = 'sitelinks_update' in proof
+    update = proof['sitelinks_update' if sitelinks else 'file_metadata_update']
     for name, stamp_key, nlink_key in (('original_source', 'original_source_stamp', 'original_source_nlink'),
                                      ('source', 'source_stamp', 'source_nlink')):
         path = Path(update[name]['path'])
@@ -659,9 +703,10 @@ def _provider_update_provenance(record):
         return
     update = record.get('provider_update')
     restored = record.get('provenance') == 'ordinary-derived-provider-restoration'
-    expected_providers = (DERIVED_PROVIDER_FILES if restored else FILE_METADATA_PROVIDER_FILES
+    expected_providers = (DERIVED_PROVIDER_FILES if restored else SITELINKS_PROVIDER_FILES
+                          if record.get('provenance') == 'ordinary-sitelinks-provider-update' else FILE_METADATA_PROVIDER_FILES
                           if record.get('provenance') == 'ordinary-file-metadata-provider-update' else WIKIBASE_PROVIDER_FILES)
-    if (record.get('provenance') not in ('ordinary-wikibase-provider-update', 'ordinary-derived-provider-restoration', 'ordinary-file-metadata-provider-update') or
+    if (record.get('provenance') not in ('ordinary-wikibase-provider-update', 'ordinary-derived-provider-restoration', 'ordinary-file-metadata-provider-update', 'ordinary-sitelinks-provider-update') or
             not isinstance(update, dict) or
             set(update) != {'original_seal_sha256', 'previous_seal_sha256', 'original_providers'} or
             any(not isinstance(update.get(key), str) or not re.fullmatch('[0-9a-f]{64}', update[key])
@@ -675,24 +720,29 @@ def _provider_update_provenance(record):
         raise ValueError('Restored derived Provider bytes differ from their original authority')
 
 
-def prepare_wikibase_provider_update(root, dump, expected_sha, *, file_metadata_source=None, file_metadata_titles=None, snapshot_metadata_refresh=None):
+def prepare_wikibase_provider_update(root, dump, expected_sha, *, file_metadata_source=None, file_metadata_titles=None, snapshot_metadata_refresh=None, sitelinks_source=None, sitelinks_rows=None):
     """Authenticate the old native generation before its ordinary workspace reset."""
     root, dump = Path(root), Path(dump)
     record = frozen_runtime_context(root, dump, expected_sha, snapshot_metadata_refresh=snapshot_metadata_refresh)
     if record is None:
         return None
-    selected = FILE_METADATA_PROVIDER_FILES if file_metadata_source is not None else WIKIBASE_PROVIDER_FILES
+    if sitelinks_source is not None and (file_metadata_source is not None or file_metadata_titles is not None or snapshot_metadata_refresh is not None):
+        raise ValueError('Mixed singleton Provider update selections')
+    if sitelinks_source is None and sitelinks_rows is not None:
+        raise ValueError('Sitelinks rows lack selected source')
+    singleton_source = sitelinks_source if sitelinks_source is not None else file_metadata_source
+    selected = SITELINKS_PROVIDER_FILES if sitelinks_source is not None else FILE_METADATA_PROVIDER_FILES if file_metadata_source is not None else WIKIBASE_PROVIDER_FILES
     if any(not valid_digest_record(record['identity']['providers'].get(name)) for name in selected):
         return None
-    if selected == FILE_METADATA_PROVIDER_FILES:
-        if (not isinstance(file_metadata_source, dict) or set(file_metadata_source) != {'path', 'bytes', 'sha256'} or not isinstance(file_metadata_source.get('path'), str) or
-                not valid_digest_record([file_metadata_source.get('bytes'), file_metadata_source.get('sha256')])):
+    if selected in (FILE_METADATA_PROVIDER_FILES, SITELINKS_PROVIDER_FILES):
+        if (not isinstance(singleton_source, dict) or set(singleton_source) != {'path', 'bytes', 'sha256'} or not isinstance(singleton_source.get('path'), str) or
+                not valid_digest_record([singleton_source.get('bytes'), singleton_source.get('sha256')])):
             raise ValueError('Invalid file metadata selected source')
-        if record['provenance'] not in ('ordinary-linked-expander', 'ordinary-file-metadata-provider-update'):
+        if record['provenance'] not in ('ordinary-linked-expander', 'ordinary-sitelinks-provider-update' if selected == SITELINKS_PROVIDER_FILES else 'ordinary-file-metadata-provider-update'):
             raise ValueError('Mixed Provider update families are not selected')
         graph_stamps, clang_locator = _file_metadata_native_origin(record)
     else:
-        if file_metadata_titles is not None or record['provenance'] == 'ordinary-file-metadata-provider-update':
+        if file_metadata_titles is not None or record['provenance'] in ('ordinary-file-metadata-provider-update', 'ordinary-sitelinks-provider-update'):
             raise ValueError('File metadata Provider selection differs')
         producer, _ = completed_producer_identity(record['origin_graph'])
         if producer != record['identity']['producer']:
@@ -706,19 +756,20 @@ def prepare_wikibase_provider_update(root, dump, expected_sha, *, file_metadata_
             raise ValueError('Snapshot refresh is selected only for file metadata update')
         proof['snapshot_metadata_refresh'] = snapshot_metadata_refresh
         proof['original_record'] = read_marker(root / COMPLETED_EXPANDER)
-    if selected == FILE_METADATA_PROVIDER_FILES:
-        path = root / 'file-metadata.tsv'
+    if selected in (FILE_METADATA_PROVIDER_FILES, SITELINKS_PROVIDER_FILES):
+        path = root / next(iter(selected))
         if not path.is_symlink():
             raise ValueError('File metadata update requires an original external alias')
-        original = Path(os.readlink(path)); source = Path(file_metadata_source['path'])
+        original = Path(os.readlink(path)); source = Path(singleton_source['path'])
         if not original.is_absolute():
             raise ValueError('File metadata original alias must be absolute')
         value = stable_file_digest(original, snapshot=True)
-        proof['file_metadata_update'] = dict(
+        proof['sitelinks_update' if selected == SITELINKS_PROVIDER_FILES else 'file_metadata_update'] = dict(
             original_source=dict(path=str(original), bytes=value[0], sha256=value[1]),
             original_source_stamp=_full_stamp(original.stat()), original_source_nlink=original.stat().st_nlink,
-            source=file_metadata_source, source_stamp=_full_stamp(source.stat()), source_nlink=source.stat().st_nlink,
-            added_titles=file_metadata_titles, native_graph_stamps=graph_stamps, native_clang_locator=clang_locator)
+            source=singleton_source, source_stamp=_full_stamp(source.stat()), source_nlink=source.stat().st_nlink,
+            native_graph_stamps=graph_stamps, native_clang_locator=clang_locator,
+            **({'added_rows': sitelinks_rows} if selected == SITELINKS_PROVIDER_FILES else {'added_titles': file_metadata_titles}))
         _file_metadata_sources(proof)
     return proof
 
@@ -726,9 +777,13 @@ def prepare_wikibase_provider_update(root, dump, expected_sha, *, file_metadata_
 def finish_wikibase_provider_update(proof, expected_hashes):
     """Reseal only fresh Provider data; retain the actual linked native origin."""
     root, dump = Path(proof['root']), Path(proof['dump'])
-    file_update = 'file_metadata_update' in proof
-    selected = FILE_METADATA_PROVIDER_FILES if file_update else WIKIBASE_PROVIDER_FILES
-    transaction_marker = FILE_METADATA_UPDATE_MARKER if file_update else PROVIDER_UPDATE_MARKER
+    sitelinks_update = 'sitelinks_update' in proof
+    if sitelinks_update and 'file_metadata_update' in proof:
+        raise ValueError('Mixed singleton Provider proof')
+    file_update = 'file_metadata_update' in proof or sitelinks_update
+    selected = SITELINKS_PROVIDER_FILES if sitelinks_update else FILE_METADATA_PROVIDER_FILES if file_update else WIKIBASE_PROVIDER_FILES
+    provenance = 'ordinary-sitelinks-provider-update' if sitelinks_update else 'ordinary-file-metadata-provider-update'
+    transaction_marker = SITELINKS_UPDATE_MARKER if sitelinks_update else FILE_METADATA_UPDATE_MARKER if file_update else PROVIDER_UPDATE_MARKER
     if (not root.is_absolute() or str(root) != os.path.normpath(str(root)) or
             any(path.is_symlink() for path in (root, *root.parents)) or not root.is_dir()):
         raise ValueError('Invalid Provider update root')
@@ -750,11 +805,11 @@ def finish_wikibase_provider_update(proof, expected_hashes):
         if _snapshot_metadata_refresh(root, proof['original_record'], proof['seal_sha256'], proof['snapshot_metadata_refresh']) != record:
             raise ValueError('Snapshot metadata refresh differs from selected original')
     _provider_update_provenance(record)
-    if ((file_update and record['provenance'] not in ('ordinary-linked-expander', 'ordinary-file-metadata-provider-update')) or
-            (not file_update and record['provenance'] == 'ordinary-file-metadata-provider-update')):
+    if ((file_update and record['provenance'] not in ('ordinary-linked-expander', provenance)) or
+            (not file_update and record['provenance'] in ('ordinary-file-metadata-provider-update', 'ordinary-sitelinks-provider-update'))):
         raise ValueError('Mixed Provider update families are not selected')
     update = _file_metadata_sources(proof) if file_update else None
-    if file_update and expected_hashes != {'file-metadata.tsv': update['source']['sha256']}:
+    if file_update and expected_hashes != {next(iter(selected)): update['source']['sha256']}:
         raise ValueError('File metadata selected hashes differ')
     identity = record['identity']
     names = completed_asset_names(root)
@@ -842,7 +897,7 @@ def finish_wikibase_provider_update(proof, expected_hashes):
         previous_seal_sha256=proof['seal_sha256'],
         original_providers={name: previous['original_providers'][name] for name in selected} if previous else
             {name: identity['providers'][name] for name in selected})
-    successor['provenance'] = ('ordinary-file-metadata-provider-update' if file_update else 'ordinary-wikibase-provider-update')
+    successor['provenance'] = (provenance if file_update else 'ordinary-wikibase-provider-update')
     # Ready is published by the builder only after binding this exact successor
     # in ordinary state.json. A write failure leaves the incomplete marker.
     if file_update:
@@ -872,7 +927,7 @@ def _derived_provider_context(proof, *, installed):
             sha256(marker) != proof['seal_sha256'] or read_marker(marker) != proof['record']):
         raise ValueError('Original derived Provider seal changed')
     record = proof['record']; _provider_update_provenance(record)
-    if record.get('provenance') == 'ordinary-file-metadata-provider-update':
+    if record.get('provenance') in ('ordinary-file-metadata-provider-update', 'ordinary-sitelinks-provider-update'):
         raise ValueError('Mixed Provider restoration/update families are not selected')
     identity, stamps = record['identity'], record['runtime_stamps']
     if (identity.get('version') != COMPLETED_EXPANDER_VERSION or

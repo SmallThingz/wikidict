@@ -1831,7 +1831,7 @@ def payload(root):
     return result
 
 
-def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None):
+def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None):
     """Replay original source captures, retaining their exact finite scope."""
     root = Path(root)
     defaults = site_info.verify(root, embedded=True)
@@ -1850,7 +1850,8 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
     if regenerate_projection is not None or _reprojection_records is not None:
         return replay_stream_capture(root, wiki, date, defaults, namespace, general,
             retained_cache=retained_cache, inventory_cache=inventory_cache,
-            regenerate_projection=regenerate_projection, _reprojection_records=_reprojection_records)
+            regenerate_projection=regenerate_projection, _reprojection_records=_reprojection_records,
+            _raw_index_out=_raw_index_out)
     with (root / ROLES['figure-sizing']).open('rb') as source:
         first = source.readline(STREAM_HEADER_LIMIT + 1)
     try:
@@ -1858,7 +1859,8 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
     except (ValueError, UnicodeError):
         stream_header = None
     if isinstance(stream_header, dict) and stream_header.get('schema') == FILES_STREAM_SCHEMA:
-        return replay_stream_capture(root, wiki, date, defaults, namespace, general, retained_cache=retained_cache, inventory_cache=inventory_cache)
+        return replay_stream_capture(root, wiki, date, defaults, namespace, general,
+            retained_cache=retained_cache, inventory_cache=inventory_cache, _raw_index_out=_raw_index_out)
     projection_raw = small(root / ROLES['figure-sizing'])
     projection = decode(projection_raw)
     file_level = isinstance(projection, dict) and projection.get('schema') == FILES_SCHEMA
@@ -1962,7 +1964,9 @@ def _authenticate_figure_capture_files(root, manifest, inventory_cache):
         raise ValueError('Figure capture changed during content authentication')
 
 
-def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None):
+def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None):
+    if _raw_index_out is not None and (type(_raw_index_out) is not dict or _raw_index_out):
+        raise ValueError('Verified raw index output must be an empty dictionary')
     inventory_cache = {} if inventory_cache is None else inventory_cache
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
@@ -1975,6 +1979,11 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
         if require_complete is not False or regenerate_projection is not None or type(_reprojection_records) is not _ReprojectionRecords:
             raise ValueError('Invalid private reprojection verification')
         generation['_reprojection_records'] = _reprojection_records
+    # This private output carries only offsets from this verification. Publish
+    # nothing to its caller until all semantic and content checks have passed.
+    raw_index = {} if _raw_index_out is not None else None
+    if raw_index is not None:
+        generation['_raw_index_out'] = raw_index
     defaults, coverage = replay(root, manifest.get('wiki'), manifest.get('date'), retained_cache=retained_cache, inventory_cache=inventory_cache, **generation)
     if coverage['kind'] == 'file-logical-axes':
         inventory = inventory_document(root / INVENTORY)
@@ -1991,6 +2000,8 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
     _authenticate_figure_capture_files(root, manifest, inventory_cache)
     if regenerate_projection is not None and os.path.lexists(root / COMPLETE):
         raise ValueError('Figure capture completed during projection regeneration')
+    if _raw_index_out is not None:
+        _raw_index_out.update(raw_index)
     return manifest
 
 
@@ -2672,7 +2683,9 @@ def record_http_archive(root, source, batch, archived, *, origin_plan=None):
             archived[('tiff-titles', base_receipt['response'])] = request['titles']
 
 
-def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None):
+def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None):
+    if _raw_index_out is not None and (type(_raw_index_out) is not dict or _raw_index_out):
+        raise ValueError('Verified raw index output must be an empty dictionary')
     site_raw = small(root / ROLES['figure-sizing-site'], MAX_RESPONSE)
     raw_path = root / ROLES['figure-sizing-raw']
     def raw_identity():
@@ -2739,8 +2752,8 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     selected_profile = plan.get('figure_profile', FIGURE_PROFILE_V3)
     prefix_sources, light_requests, ordinary_requests, lean_requests = [], set(), set(), set()
     complete_sources = []
-    offsets = [] if materialized is not None else None
-    replay_identity = {} if materialized is not None else None
+    offsets = [] if materialized is not None or _raw_index_out is not None else None
+    replay_identity = {} if offsets is not None else None
     batches = stream_values(raw_path, RAW_STREAM_SCHEMA, identity_out=replay_identity, record_offsets=offsets)
     header = next(batches)
     sources = source_records(root / FILE_REQUESTS, header['base_batches']+header['observed_batches'])
@@ -2860,6 +2873,15 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     members,_ = capture_member_paths(root)
     if set(members) != expected:
         raise ValueError('Unexpected or incomplete streamed Figure evidence')
+    if _raw_index_out is not None:
+        if (len(offsets) != header['base_batches'] + header['observed_batches'] or
+                replay_identity != {'size': projection['raw_bytes'], 'sha256': projection['raw_sha256']} or
+                raw_identity() != raw_before):
+            raise ValueError('Verified raw index differs from its completed stream')
+        encoding = raw_record_encoding(header, allow_encoded=projection.get('replay_contract') in
+            (REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT))
+        _raw_index_out.update(header=header, offsets=offsets, encoding=encoding,
+                              identity=replay_identity, stamp=raw_before[1])
     return defaults, coverage
 
 
@@ -3235,7 +3257,9 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None, include_doc
     manifest_raw = small(path)
     cache[key] = None
     try:
-        manifest = verify(root, retained_cache=cache, inventory_cache=inventory_cache)
+        raw_index = {}
+        manifest = verify(root, retained_cache=cache, inventory_cache=inventory_cache,
+                          _raw_index_out=raw_index)
         if (manifest.get('capture_format') != FILES_STREAM_SCHEMA or
                 set(manifest['outputs']) != {*ROLES, 'file-metadata'}):
             raise ValueError('Reuse requires a complete shared Figure stream')
@@ -3246,25 +3270,19 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None, include_doc
             document = dict(header, records=list(values)) if include_document else None
         finally:
             values.close()
-        offsets = []
         raw_path = root / ROLES['figure-sizing-raw']
-        with raw_path.open('rb') as source:
-            first = source.readline(STREAM_HEADER_LIMIT + 1)
-            if len(first) > STREAM_HEADER_LIMIT:
-                raise ValueError('Complete Figure header exceeds its bound')
-            raw_header = stream_decode(first)
-            total = validate_stream_header(raw_header, RAW_STREAM_SCHEMA, before[raw_path][2] - len(first))
-            encoding = raw_record_encoding(raw_header, allow_encoded=header.get('replay_contract') in (REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT))
-            for _ in range(total):
-                offset = source.tell()
-                line = source.readline(STREAM_RAW_LINE_LIMIT + 1)
-                if len(line) > STREAM_RAW_LINE_LIMIT:
-                    raise ValueError('Complete Figure record exceeds its bound')
-                raw_record_decode(line, encoding)
-                offsets.append((offset, len(line), digest(line)))
-            if source.read(1):
-                raise ValueError('Trailing complete Figure records')
+        # The semantic source traversal already decoded every physical record,
+        # checked exact EOF and hashed these same bytes. Keep its small index,
+        # never a second decoded batch graph or another raw-file traversal.
+        if (set(raw_index) != {'header', 'offsets', 'encoding', 'identity', 'stamp'} or
+                raw_index['stamp'] != before[raw_path] or
+                raw_index['identity'] != {'size': before[raw_path][2],
+                                         'sha256': manifest['outputs']['figure-sizing-raw']}):
+            raise ValueError('Complete Figure verified raw index differs')
+        offsets, encoding = raw_index['offsets'], raw_index['encoding']
+        total = raw_index['header']['base_batches'] + raw_index['header']['observed_batches']
         if (total != header['base_batches'] + header['observed_batches'] or
+                len(offsets) != total or
                 small(path) != manifest_raw or
                 {p: evidence.stamp(p) for p in capture_member_paths(root, include_markers=True)[0].values()} != before or
                 any(complete_capture_directory_stamp(p) != stamp for p, stamp in member_directories.items()) or

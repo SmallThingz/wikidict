@@ -11311,11 +11311,12 @@ class PreparedFigureVerdictTests(unittest.TestCase):
         with self.selected() as (cfg,_),patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
             expected=self.validate();self.assertEqual(replay.call_count,1)
             verdict=b.prepared_figure_verdict(cfg);self.assertIsNotNone(verdict)
+            child_guard=next(iter(b._FIGURE_TUPLE_REPLAYS.values()))[0]
             b._FIGURE_TUPLE_REPLAYS.clear()
             with patch.object(self.figures.evidence,'fingerprint',wraps=self.figures.evidence.fingerprint) as hashes:
                 self.assertTrue(b.reuse_prepared_figure_verdict(cfg,verdict))
             paths=[Path(call.args[0]) for call in hashes.call_args_list]
-            self.assertEqual(set(map(str,paths)),set(verdict['guard'][1]))
+            self.assertEqual(set(map(str,paths)),set(child_guard[1]))
             self.assertEqual(paths.count(self.args.sql[0]),1)
             self.assertIn(self.parent/self.figures.ROLES['figure-sizing-raw'],paths)
             self.assertEqual(self.validate(),expected);self.assertEqual(replay.call_count,1)
@@ -11340,15 +11341,18 @@ class PreparedFigureVerdictTests(unittest.TestCase):
                 with self.subTest(mode=mode):
                     proof=copy.deepcopy(verdict)
                     if mode=='missing':proof=None
-                    elif mode=='version':proof['version']=2
+                    elif mode=='version':proof['version']=1
                     elif mode=='source':proof['source']['fingerprint']='b'*64
                     elif mode=='catalog':proof['python_tooling']={}
                     elif mode=='edition':proof['edition']='foreignwiktionary'
                     elif mode=='date':proof['date']='20990101'
                     elif mode=='paths':proof['paths'].pop(next(iter(proof['paths'])))
-                    elif mode=='guard':proof['guard'][1].pop(next(iter(proof['guard'][1])))
+                    elif mode=='guard':proof['guard_sha256']='0'*64
                     elif mode=='result-context':next(iter(proof['result'].values()))[0]['wiki']='foreignwiktionary'
-                    else:proof['guard'][0][0]['generator_sha256']='0'*64
+                    else:
+                        foreign=copy.deepcopy(next(iter(b._FIGURE_TUPLE_REPLAYS.values()))[0])
+                        foreign[0][0]['generator_sha256']='0'*64
+                        proof['guard_sha256']=b._prepared_figure_guard_digest(foreign)
                     b._FIGURE_TUPLE_REPLAYS.clear()
                     self.assertFalse(b.reuse_prepared_figure_verdict(cfg,proof))
                     self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
@@ -12155,29 +12159,35 @@ class InitialSealedSnapshotRefreshTests(unittest.TestCase):
 
 
 class InitialSealedProviderUpdateTests(unittest.TestCase):
-    def updated(self,f):
-        name='file-metadata.tsv';old=f.root/'old-provider.tsv';old.write_bytes(b'original provider\n')
+    def updated(self,f,*,sitelinks=False):
+        name='wikibase-sitelinks.tsv' if sitelinks else 'file-metadata.tsv';old=f.root/'old-provider.tsv';old.write_bytes(b'# source\nQ7850\tviwiki\tOld title\n' if sitelinks else b'original provider\n')
         before=_initial_sealed_reference(old);f.seal['identity']['providers'][name]=[before['bytes'],before['sha256']]
         f.seal['identity']['assets'].append([name,before['bytes'],before['sha256']])
         f.seal['runtime_stamps']=dict(assets={name:[1,2,33188,before['bytes'],4,5]},snapshot_links={name:str(old)},plans=[])
         InitialSealedGenerationTests().reseal_graph(f.f)
         original=f.f.seal_ref;archive=_initial_sealed_write(f.root/'archived-original.json',f.seal)
-        source=f.root/'updated-provider.tsv';source.write_bytes(b'original provider\nnew AUDIO\n');source_ref=_initial_sealed_reference(source)
+        source=f.root/'updated-provider.tsv';source.write_bytes(old.read_bytes()+b'Q33090\tviwiki\t\n' if sitelinks else b'original provider\nnew AUDIO\n');source_ref=_initial_sealed_reference(source)
         current=copy.deepcopy(f.seal);current['identity']['providers'][name]=[source_ref['bytes'],source_ref['sha256']]
         current['identity']['assets']=[([name,source_ref['bytes'],source_ref['sha256']]if row[0]==name else row)for row in current['identity']['assets']]
         current['runtime_stamps']['assets'][name]=[1,3,33188,source_ref['bytes'],6,7];current['runtime_stamps']['snapshot_links'][name]=str(source)
-        current['provenance']='ordinary-file-metadata-provider-update';current['provider_update']=dict(original_seal_sha256=original['sha256'],previous_seal_sha256=original['sha256'],original_providers={name:f.seal['identity']['providers'][name]})
+        current['provenance']='ordinary-sitelinks-provider-update' if sitelinks else 'ordinary-file-metadata-provider-update';current['provider_update']=dict(original_seal_sha256=original['sha256'],previous_seal_sha256=original['sha256'],original_providers={name:f.seal['identity']['providers'][name]})
         current_ref=_initial_sealed_write(Path(original['path']),current)
         selected=b.prepared_metadata(f.f.selection);helper=_initial_sealed_reference(Path(f.records['dict-bundle-build']['dependencies']['extraction_helper']['path']))
         data=dict(original_preparation=selected['preparation_result'],original_closure=selected['preparation_closure'],root=str(f.expander),dump=str(f.f.dump),original_seal=original,helper=helper,snapshot_metadata_refresh_authority=None,selected_source=source_ref,dependency={'fixture':'original external-data proof'})
+        if sitelinks:data['selected_rows']=[['Q33090','viwiki','']]
         data_ref=_initial_sealed_write(f.root/'provider-data.json',data)
         changed=dict(passed=True,ready=True,source_after=True,original_native_producer_unchanged=True,original_source_receipt_unchanged=True,logical_provider_identity_changed_only_file_metadata=True,all_other_native_asset_stamps_unchanged_except_bound_book_ctime=True,source_metadata_and_nlinks_unchanged=True,compiler_executed=False,worker_rebuilt=False,lua_pages_executed=0,input_authority=data_ref,worker=f.f.result['worker'],current_seal=current_ref,current_seal_sha256=current_ref['sha256'],original_seal_archive=archive,original_seal_sha256=original['sha256'],snapshot_metadata_refresh_authority=None,aliases={name:str(source)})
+        if sitelinks:
+            changed['logical_provider_identity_changed_only_sitelinks']=changed.pop('logical_provider_identity_changed_only_file_metadata')
         changed_ref=_initial_sealed_write(f.root/'provider-result.json',changed)
         closed=dict(outcome='PASSED-PHYSICALLY-SOURCE-CLOSED',source_after=True,source_lease_released=True,allocation_released=True,ready=True,file_metadata_provider_update=True,old_native_producer_unchanged=True,logical_provider_identity_changed_only_file_metadata=True,source_metadata_nlinks_unchanged=True,pages_executed=0,worker_rebuilt=False,restoration_result=changed_ref,input_authority=data_ref,original_worker=f.f.result['worker'],current_seal=current_ref,original_seal_archive=archive,snapshot_metadata_refresh_authority=None,aliases=changed['aliases'])
+        if sitelinks:
+            closed['sitelinks_provider_update']=closed.pop('file_metadata_provider_update')
+            closed['logical_provider_identity_changed_only_sitelinks']=closed.pop('logical_provider_identity_changed_only_file_metadata')
         closed_ref=_initial_sealed_write(f.root/'provider-closure.json',closed)
         wire=_initial_sealed_write(f.root/'provider-wire.json',dict(original_preparation=selected['preparation_result'],old_worker=f.f.result['worker'],dependency=data['dependency'],standalone_wire_equal=True,native_abi_equivalence_claimed=False))
         update=dict(result=changed_ref,closure=closed_ref,input_authority=data_ref,original_seal_archive=archive,current_seal=current_ref,helper=helper,snapshot_metadata_refresh_authority=None,wire_correspondence=wire)
-        selected['file_metadata_provider_update']=update;selection=_initial_sealed_write(f.root/'updated-selection.json',selected)
+        selected['sitelinks_provider_update' if sitelinks else 'file_metadata_provider_update']=update;selection=_initial_sealed_write(f.root/'updated-selection.json',selected)
         records=copy.deepcopy(f.records);records['dict-bundle-build']['initial_sealed_generation']=selection
         return SimpleNamespace(**locals())
 
@@ -12411,5 +12421,253 @@ class SuccessfulPreparedArtifactTests(unittest.TestCase):
                 self.republish(f)
                 with self.assertRaises((ValueError,OSError)):b.initial_sealed_role_successor(f.original,f.roles)
 
+
+class InitialSealedWriterOnlyTests(unittest.TestCase):
+    def fixture(self, root):
+        f = SuccessfulPreparedArtifactTests().fixture(root)
+        f.new_blob_rows = copy.deepcopy(f.current)
+        for name in ('dict-blob-merge','dict-blob-verify'):
+            f.current[name] = copy.deepcopy(f.original[name])
+        state = f.target_rows['dict-blob-build']
+        command = state['result']['commands'][0]
+        argv = command['argv']
+        stop = next(i for i, value in enumerate(argv[2:], 2) if value.startswith('-'))
+        command['argv'] = argv[:2] + ['prepare-captured-writer'] + argv[stop:]
+        state['stderr'].write_text('Build Summary: 3/3 steps succeeded\nprepare-captured-writer success\n+- install dict-blob-build success\n')
+        state['result']['artifacts'] = {'writer':state['result']['artifacts']['writer']}
+        state['closed']['prepared_artifacts'] = copy.deepcopy(state['result']['artifacts'])
+        self.republish(f)
+        return f
+
+    def republish(self, f):
+        row = f.current['dict-blob-build']; state = f.target_rows['dict-blob-build']
+        command = state['result']['commands'][0]
+        command['argv'] = [('-Dcaptured-source-fingerprint=' + row['producer_source'])
+            if arg.startswith('-Dcaptured-source-fingerprint=') else arg for arg in command['argv']]
+        command['stderr'] = _initial_sealed_reference(state['stderr'])
+        recipe = b.prepared_metadata(row['compilation_recipe'])
+        recipe.update(source_manifest=row['source'], commands=[dict(argv=command['argv'],cwd=command['cwd'])])
+        row['compilation_recipe'] = _initial_sealed_write(f.root/'writer-only-recipe.json', recipe)
+        state['result']['source_authority'] = row['compilation_recipe']
+        row['actual_emission_result'] = _initial_sealed_write(f.root/'writer-only-result.json', state['result'])
+        state['closed'].update(source_manifest=row['source'], result=row['actual_emission_result'],
+            commands=copy.deepcopy(state['result']['commands']),
+            owner_configuration=_initial_sealed_write(f.root/'writer-only-owner.json',
+                dict(bindings=dict(INPUT_REF=row['compilation_recipe']))))
+        row['qualification_closure'] = _initial_sealed_write(f.root/'writer-only-closure.json', state['closed'])
+
+    def test_writer_only_keeps_mixed_origins_original_records_and_noncallable_driver(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            original, selected = copy.deepcopy(f.original), copy.deepcopy(f.current)
+            seal = (f.expander/'.completed-expander.json').read_bytes()
+            for name in ('dict-blob-merge','dict-blob-verify'):
+                self.assertNotEqual(f.current[name]['source'], f.current['dict-blob-build']['source'])
+                self.assertEqual(f.current[name], f.original[name])
+            b.initial_sealed_role_successor(f.original, f.roles)
+            self.assertEqual(f.original, original); self.assertEqual(f.current, selected)
+            self.assertEqual((f.expander/'.completed-expander.json').read_bytes(), seal)
+            for call in (lambda:f.roles.install_role('dict-bundle-build',f.root/'install'),
+                         lambda:f.roles.require_command('dict-bundle-build',['dump','out','--expander-only']),
+                         lambda:f.roles.prepare(['dump','out','--expander-only'],'testwiktionary','20261001')):
+                with self.assertRaises(ValueError):call()
+
+    def test_writer_only_target_cannot_authenticate_merge_verify_or_driver(self):
+        for name in ('dict-blob-merge','dict-blob-verify','dict-bundle-build'):
+            with self.subTest(role=name), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp)); row = copy.deepcopy(f.current['dict-blob-build'])
+                row['artifact'] = copy.deepcopy(f.new_blob_rows[name]['artifact'])
+                with self.assertRaisesRegex(ValueError, 'another role'):
+                    b.initial_sealed_target_emission(row, f.roles, target='prepare-captured-writer')
+
+    def test_writer_only_refuses_changed_retained_role_payload_runtime_and_original_binding(self):
+        for mode in ('retained-merge','retained-verify','payload','runtime','original-binding','extra-target','failed-target'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp)); row = f.current['dict-blob-build']; state = f.target_rows['dict-blob-build']
+                if mode.startswith('retained-'):
+                    name = 'dict-blob-' + mode.removeprefix('retained-')
+                    # A changed role cannot be treated as an exact original;
+                    # its different complete emission must still be rejected.
+                    f.current[name] = copy.deepcopy(f.new_blob_rows[name])
+                elif mode == 'payload':
+                    row['source_payload_files'] = copy.deepcopy(row['source_payload_files'])
+                    next(iter(row['source_payload_files'].values()))['sha256'] = '0'*64
+                elif mode == 'runtime':
+                    row['dependencies'] = copy.deepcopy(row['dependencies'])
+                    row['dependencies']['worker_object']['sha256'] = '0'*64
+                elif mode == 'original-binding':row['previous_role_binding'] = row['source']
+                elif mode == 'extra-target':
+                    state['result']['commands'][0]['argv'].insert(3, 'cli')
+                    state['stderr'].write_text(state['stderr'].read_text() + 'cli success\n')
+                    self.republish(f)
+                else:
+                    state['stderr'].write_text(state['stderr'].read_text().replace('prepare-captured-writer success','prepare-captured-writer failure'))
+                    self.republish(f)
+                with self.assertRaises((ValueError,OSError)):
+                    b.initial_sealed_role_successor(f.original, f.roles)
+
+    def test_writer_only_still_requires_blob_presentation_and_expansion_abi_equality(self):
+        for relative, interface in (('src/encoder/blob_format.zig','blob-envelope'),
+                                    ('src/encoder/presentation_codec.zig','presentation-wire'),
+                                    ('src/lua/bundle_protocol.zig','expansion-wire')):
+            with self.subTest(interface=interface), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp)); row = f.current['dict-blob-build']
+                # Give the new Writer internally consistent, authenticated source
+                # and payload evidence so only the cross-role ABI join rejects it.
+                source = b.prepared_metadata(row['source'])
+                payload = f.root/'changed-interface.zig'; payload.write_text('changed ' + relative); payload.chmod(0o444)
+                identity = dict(_initial_sealed_reference(payload),mode=0o444)
+                source['files'][relative] = identity
+                row['source_payload_files'] = copy.deepcopy(row['source_payload_files'])
+                row['source_payload_files'][relative] = identity
+                row['source'] = _initial_sealed_write(f.root/'writer-interface-source.json', source)
+                row['producer_source'] = row['source']['sha256']
+                self.republish(f)
+                with self.assertRaisesRegex(ValueError, interface + ' ABI'):
+                    b.initial_sealed_role_successor(f.original, f.roles)
+
+
+class CompactPreparedFigureVerdictTests(unittest.TestCase):
+    setUp=PreparedFigureVerdictTests.setUp
+    validate=PreparedFigureVerdictTests.validate
+    selected=PreparedFigureVerdictTests.selected
+
+    def test_digest_is_canonical_domain_bound_and_covers_every_guard_component(self):
+        with self.selected() as (cfg,_):
+            self.validate()
+            guard=next(iter(b._FIGURE_TUPLE_REPLAYS.values()))[0]
+            raw=json.dumps(guard,default=os.fspath,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
+            wire=json.loads(raw)
+            expected=hashlib.sha256(b'wikidict.prepared-figure-guard.v2\0'+raw).hexdigest()
+            self.assertEqual(b._prepared_figure_guard_digest(guard),expected)
+            self.assertEqual(b._prepared_figure_guard_digest(wire),expected)
+            reordered=[wire[0],dict(reversed(list(wire[1].items()))),dict(reversed(list(wire[2].items())))]
+            self.assertEqual(b._prepared_figure_guard_digest(reordered),expected)
+            self.assertNotEqual(hashlib.sha256(raw).hexdigest(),expected)
+            self.assertNotEqual(hashlib.sha256(b'wikidict.prepared-figure-guard.v1\0'+raw).hexdigest(),expected)
+            name=next(iter(wire[1]));directory=next(iter(wire[2]))
+            for mode in ('helper','resolved','lexical-stat','target-stat','content','directory-inode','membership'):
+                with self.subTest(mode=mode):
+                    changed=copy.deepcopy(wire)
+                    if mode=='helper':changed[0][0]['generator_sha256']='0'*64
+                    elif mode=='resolved':changed[1][name][0][0]+='.other'
+                    elif mode=='lexical-stat':changed[1][name][0][1][5]+=1
+                    elif mode=='target-stat':changed[1][name][0][2][8]+=1
+                    elif mode=='content':changed[1][name][1]['sha256']='0'*64
+                    elif mode=='directory-inode':changed[2][directory][1]+=1
+                    else:changed[2][directory][2].append(directory+'/unrecorded')
+                    self.assertNotEqual(b._prepared_figure_guard_digest(changed),expected)
+            with self.assertRaises(ValueError):b._prepared_figure_guard_digest([float('nan')])
+
+    def test_digest_schema_and_unknown_versions_cannot_publish_replay_authority(self):
+        with self.selected() as (cfg,_):
+            self.validate();proof=b.prepared_figure_verdict(cfg)
+            self.assertEqual(proof['version'],2)
+            self.assertNotIn('guard',proof)
+            self.assertRegex(proof['guard_sha256'],r'^[0-9a-f]{64}$')
+            malformed=[]
+            for value in (None,True,0,'','0'*63,'0'*65,'G'*64,proof['guard_sha256'].upper()):
+                changed=copy.deepcopy(proof);changed['guard_sha256']=value;malformed.append(changed)
+            for version in (True,2.0,1,3):
+                changed=copy.deepcopy(proof);changed['version']=version;malformed.append(changed)
+            changed=copy.deepcopy(proof);changed['guard']=[];malformed.append(changed)
+            changed=copy.deepcopy(proof);del changed['guard_sha256'];malformed.append(changed)
+            b._FIGURE_TUPLE_REPLAYS.clear()
+            with patch.object(b,'figure_tuple_guard',side_effect=AssertionError('Malformed transport reached input hashing')):
+                for changed in malformed:
+                    with self.subTest(proof=changed):
+                        self.assertFalse(b.reuse_prepared_figure_verdict(cfg,changed))
+                        self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
+            with patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
+                self.validate();self.assertEqual(replay.call_count,1)
+
+    def test_historical_full_guard_verdict_uses_the_ordinary_semantic_fallback(self):
+        with self.selected() as (cfg,_):
+            expected=self.validate();proof=b.prepared_figure_verdict(cfg)
+            guard=next(iter(b._FIGURE_TUPLE_REPLAYS.values()))[0]
+            historical=copy.deepcopy(proof);historical['version']=1
+            del historical['guard_sha256']
+            historical['guard']=json.loads(json.dumps(guard,default=os.fspath))
+            b._FIGURE_TUPLE_REPLAYS.clear()
+            self.assertFalse(b.reuse_prepared_figure_verdict(cfg,historical))
+            self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
+            with patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
+                self.assertEqual(self.validate(),expected)
+                self.assertEqual(replay.call_count,1)
+
+    def test_large_guard_transport_stays_small_without_expanding_the_metadata_bound(self):
+        # Metadata-only scale contrast; no synthetic guard is accepted as a
+        # semantic verdict and no source payload or large file is copied.
+        root=str(self.fixture.root/'captured-authority')
+        names=[root+'/'+format(index,'05d')+'-'+'x'*180 for index in range(50000)]
+        fields=[0]*9
+        fingerprint=dict(size=0,sha1='0'*40,sha256='0'*64)
+        guard=[[],{name:[[name,fields,fields],fingerprint] for name in names},
+               {root:[0,0,names,[root,fields,fields]]}]
+        encoder=json.JSONEncoder(default=os.fspath,sort_keys=True,separators=(',',':'),allow_nan=False)
+        legacy_size=sum(len(part.encode()) for part in encoder.iterencode(guard))
+        base_size=32*1024*1024
+        self.assertGreater(base_size+legacy_size,64*1024*1024)
+        digest=b._prepared_figure_guard_digest(guard)
+        self.assertLess(base_size+len(json.dumps(dict(version=2,guard_sha256=digest))),64*1024*1024)
+        del guard,names
+        with self.selected() as (cfg,_):
+            self.validate();proof=b.prepared_figure_verdict(cfg)
+            path=self.fixture.root/'compact-verdict.json'
+            reference=b.write_prepared_metadata(path,proof)
+            self.assertEqual(b.prepared_metadata(reference),proof)
+            b._FIGURE_TUPLE_REPLAYS.clear()
+            self.assertTrue(b.reuse_prepared_figure_verdict(cfg,b.prepared_metadata(reference)))
+        oversized=self.fixture.root/'oversized-generation.json'
+        with oversized.open('xb') as stream:stream.truncate(64*1024*1024+1)
+        with self.assertRaisesRegex(ValueError,'existing seal bound'):
+            b.prepared_metadata(dict(path=str(oversized),bytes=64*1024*1024+1,sha256='0'*64))
+
+
+class InitialSealedSitelinksUpdateTests(unittest.TestCase):
+    def test_sitelinks_current_archive_constructor_adoption_and_dispatch(self):
+        with ReadonlyPreparedRetainedTests().fixture() as f:
+            u=InitialSealedProviderUpdateTests().updated(f,sitelinks=True)
+            raw=Path(u.archive['path']).read_bytes()
+            with patch.object(f.native_cache,'frozen_runtime_context',return_value=u.current):
+                roles=b.RetainedNativeToolRoles(u.records,zig_sha256=f.identity['zig_sha256'])
+                roles.require_unchanged();self.assertEqual(roles.closed_native_origin,u.current)
+                fresh=copy.copy(f.f);fresh.identity=copy.deepcopy(f.identity);fresh.identity['native_tool_roles']=roles.provenance()
+                fresh.expected=copy.deepcopy(f.expected)
+                for identity in (fresh.identity,fresh.expected):identity['auxiliary_snapshot_sha256']['wikibase-sitelinks']=u.source_ref['sha256']
+                fresh.destination=f.root/'sitelinks-output/viwiktionary/20261001.shards';fresh.selection=u.selection
+                self.assertEqual(InitialSealedGenerationTests().adopt(fresh,native_roles=roles),123)
+                reopened=b.RetainedNativeToolRoles.from_prepared_dispatch(roles.prepared_dispatch(),_authenticated_origin=roles)
+                self.assertEqual(reopened.closed_native_origin,u.current);reopened.require_unchanged()
+                self.assertEqual(Path(u.archive['path']).read_bytes(),raw)
+                Path(u.old).write_bytes(b'changed original provider')
+                with self.assertRaises(ValueError):roles.require_unchanged()
+
+    def test_sitelinks_update_rejects_absence_source_archive_history_and_late_custody_changes(self):
+        for change in ('unselected-absence','archive','unclosed','native','source','late'):
+            with self.subTest(change=change),ReadonlyPreparedRetainedTests().fixture() as f:
+                u=InitialSealedProviderUpdateTests().updated(f,sitelinks=True)
+                if change=='unselected-absence':
+                    u.data['selected_rows']=[['Q33090','viwiki','invented']]
+                    u.update['input_authority']=_initial_sealed_write(f.root/'provider-data.json',u.data)
+                    u.changed['input_authority']=u.update['input_authority']
+                    u.update['result']=_initial_sealed_write(f.root/'provider-result.json',u.changed)
+                    u.closed['input_authority']=u.update['input_authority'];u.closed['restoration_result']=u.update['result']
+                    u.update['closure']=_initial_sealed_write(f.root/'provider-closure.json',u.closed)
+                    u.selected['sitelinks_provider_update']=u.update
+                    u.records['dict-bundle-build']['initial_sealed_generation']=_initial_sealed_write(f.root/'updated-selection.json',u.selected)
+                elif change=='archive':Path(u.archive['path']).write_text('{}')
+                elif change=='unclosed':
+                    u.closed['source_lease_released']=False;u.update['closure']=_initial_sealed_write(f.root/'provider-closure.json',u.closed)
+                    u.records['dict-bundle-build']['initial_sealed_generation']=_initial_sealed_write(f.root/'updated-selection.json',u.selected)
+                elif change=='native':u.current['identity']['producer']['abi'][0][1]='0'*64
+                elif change=='source':Path(u.source_ref['path']).write_bytes(b'foreign provider')
+                with patch.object(f.native_cache,'frozen_runtime_context',return_value=u.current):
+                    if change=='late':
+                        roles=b.RetainedNativeToolRoles(u.records,zig_sha256=f.identity['zig_sha256'])
+                        Path(u.changed_ref['path']).write_bytes(Path(u.changed_ref['path']).read_bytes()+b' ')
+                        with self.assertRaises(ValueError):roles.require_unchanged()
+                    else:
+                        with self.assertRaises((ValueError,OSError)):b.RetainedNativeToolRoles(u.records,zig_sha256=f.identity['zig_sha256'])
 
 if __name__=='__main__':unittest.main()

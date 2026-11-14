@@ -3252,5 +3252,80 @@ class SnapshotMetadataRefreshListTests(MetadataCustodyRefreshTests):
                 else:
                     with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,seal,**kwargs)
 
+class SitelinksProviderUpdateTests(unittest.TestCase):
+    setUp = CompletedExpanderTests.setUp
+    fixture = CompletedExpanderTests.fixture
+    call = CompletedExpanderTests.call
+    binding = CompletedExpanderTests.binding
+
+    def sitelinks_fixture(self):
+        self.zig_tool['tool_sha256'] = cache.sha256(Path(self.graph['zig']))
+        self.tool['tool'] = cache.tool_identity(Path(self.graph['clang']))
+        root, dump, snapshots = self.fixture(ready=False)
+        original = self.base / ('sitelinks-origin-' + str(self.sequence))
+        original.write_bytes(b'# entity_id\tglobal_site_id\tpage_title\nQ7850\tviwiki\tOld title\n')
+        snapshots['wikibase-sitelinks.tsv'] = str(original)
+        (root / 'wikibase-sitelinks.tsv').symlink_to(original)
+        self.call('seal-expander', root, dump, snapshots)
+        cache.shutil.rmtree(root / 'llvm')
+        (root / '.incomplete').unlink(); (root.parent / '.incomplete').write_bytes(b'expander ready')
+        source = self.base / ('sitelinks-selected-' + str(self.sequence))
+        source.write_bytes(original.read_bytes() + b'Q1860\tviwiki\tEnglish\nQ33090\tviwiki\t\n')
+        descriptor = dict(path=str(source), bytes=source.stat().st_size, sha256=cache.sha256(source))
+        rows = [['Q1860', 'viwiki', 'English'], ['Q33090', 'viwiki', '']]
+        return root, dump, original, descriptor, rows
+
+    def test_sitelinks_singleton_preserves_native_origin_and_explicit_absence(self):
+        root, dump, original, source, rows = self.sitelinks_fixture()
+        old = cache.read_marker(root / cache.COMPLETED_EXPANDER)
+        old_raw = original.read_bytes(); seal = self.binding(root)
+        proof = cache.prepare_wikibase_provider_update(root, dump, seal, sitelinks_source=source, sitelinks_rows=rows)
+        (root / '.incomplete').write_bytes(cache.SITELINKS_UPDATE_MARKER)
+        alias = root / '.sitelinks-update.part'; alias.symlink_to(source['path']); alias.replace(root / 'wikibase-sitelinks.tsv')
+        current = cache.finish_wikibase_provider_update(proof, {'wikibase-sitelinks.tsv': source['sha256']})
+        self.assertIsNotNone(cache.frozen_runtime_context(root, dump, current, provider_update=True))
+        (root / '.incomplete').unlink()
+        after = cache.frozen_runtime_context(root, dump, current)
+        self.assertEqual(after['provenance'], 'ordinary-sitelinks-provider-update')
+        self.assertEqual(after['provider_update']['original_seal_sha256'], seal)
+        self.assertEqual(original.read_bytes(), old_raw)
+        for key in ('producer', 'source', 'runtime_libraries', 'plans', 'verified_input'):
+            self.assertEqual(after['identity'][key], old['identity'][key])
+        for key in ('origin_graph', 'link'):
+            self.assertEqual(after[key], old[key])
+        self.assertEqual(after['identity']['providers']['wikibase-sitelinks.tsv'], [source['bytes'], source['sha256']])
+        self.assertEqual(cache._sitelinks_append(old_raw, Path(source['path']).read_bytes(), rows), rows)
+
+    def test_sitelinks_delta_refuses_changed_old_fact_duplicate_and_unselected_absence(self):
+        before = b'# source\nQ7850\tviwiki\tOld title\n'
+        good = before + b'Q33090\tviwiki\t\n'
+        for raw, rows in ((good, []), (good, [['Q33090', 'viwiki', 'invented']]),
+                (good.replace(b'Old title', b'other'), [['Q33090', 'viwiki', '']]),
+                (good + b'Q33090\tviwiki\t\n', [['Q33090', 'viwiki', '']]),
+                (good.replace(b'# source', b'# other'), [['Q33090', 'viwiki', '']]),
+                (good, [['Q7850', 'viwiki', 'Old title'], ['Q33090', 'viwiki', '']])):
+            with self.subTest(raw=raw, rows=rows), self.assertRaises(ValueError):
+                cache._sitelinks_append(before, raw, rows)
+
+    def test_sitelinks_transaction_refuses_source_native_other_provider_and_marker_drift(self):
+        for change in ('source', 'worker', 'other-provider', 'marker', 'mixed'):
+            with self.subTest(change=change):
+                root, dump, original, source, rows = self.sitelinks_fixture()
+                proof = cache.prepare_wikibase_provider_update(root, dump, self.binding(root), sitelinks_source=source, sitelinks_rows=rows)
+                old_seal = (root / cache.COMPLETED_EXPANDER).read_bytes()
+                (root / '.incomplete').write_bytes(cache.SITELINKS_UPDATE_MARKER)
+                alias = root / '.sitelinks-update.part'; alias.symlink_to(source['path']); alias.replace(root / 'wikibase-sitelinks.tsv')
+                if change == 'source': Path(source['path']).write_bytes(b'changed source')
+                elif change == 'worker': (root / 'dict-bundle-expander').write_bytes(b'changed native worker')
+                elif change == 'other-provider':
+                    target = self.base / ('foreign-provider-' + str(self.sequence)); target.write_bytes(b'foreign')
+                    (root / 'file-metadata.tsv').symlink_to(target)
+                elif change == 'marker': (root / '.incomplete').write_bytes(cache.FILE_METADATA_UPDATE_MARKER)
+                else: proof['file_metadata_update'] = proof['sitelinks_update']
+                with self.assertRaises((ValueError, OSError)):
+                    cache.finish_wikibase_provider_update(proof, {'wikibase-sitelinks.tsv': source['sha256']})
+                self.assertEqual((root / cache.COMPLETED_EXPANDER).read_bytes(), old_seal)
+
+
 if __name__ == "__main__":
     unittest.main()
