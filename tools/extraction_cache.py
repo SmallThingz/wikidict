@@ -322,7 +322,11 @@ def _closed_metadata_custody(root, recorded, expected_sha, receipt):
     source_root = Path(operation['source_manifest']['path']).parent
     fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
     frozen_fields = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
-    successor = json.loads(json.dumps(recorded)); held = []
+    # Only refreshed asset stamps are written; all other seal data stays borrowed.
+    successor = dict(recorded)
+    successor['runtime_stamps'] = dict(recorded['runtime_stamps'])
+    successor['runtime_stamps']['assets'] = dict(recorded['runtime_stamps']['assets'])
+    held = []
     for name in receipt['names']:
         source_text = recorded['runtime_stamps']['snapshot_links'].get(name)
         if not isinstance(source_text, str):
@@ -381,10 +385,14 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, s
     if not re.fullmatch(r'[0-9a-f]{64}', expected_sha):
         raise ValueError('Missing original completed generation binding')
     before = _full_stamp(marker.stat())
-    recorded = read_marker(marker)
-    raw = marker.read_bytes()
+    regular(marker)
+    with marker.open('rb') as stream:
+        raw = stream.read(MAX_MARKER_BYTES + 1)
+    if len(raw) > MAX_MARKER_BYTES:
+        raise ValueError(f'Oversized extraction cache marker: {marker}')
     if hashlib.sha256(raw).hexdigest() != expected_sha or _full_stamp(marker.stat()) != before:
         raise ValueError('Original completed generation binding changed')
+    recorded = json.loads(raw)
     if not isinstance(recorded, dict) or 'runtime_stamps' not in recorded:
         return None
     _provider_update_provenance(recorded)

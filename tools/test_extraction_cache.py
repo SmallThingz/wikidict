@@ -2866,6 +2866,72 @@ class MetadataCustodyRefreshTests(unittest.TestCase):
                 self.assertEqual(seal, self.binding(root))
 
 
+    def test_metadata_custody_preserves_aliased_input_and_owns_changed_stamps(self):
+        import copy
+        root, dump, snapshots, receipt = self.custody_fixture(); seal = self.binding(root)
+        original = cache.read_marker(root / cache.COMPLETED_EXPANDER)
+        original['retained_stamp_alias'] = original['runtime_stamps']['assets']
+        before = copy.deepcopy(original); receipt_before = copy.deepcopy(receipt)
+        current = cache._closed_metadata_custody(root, original, seal, receipt)
+        self.assertEqual(before, original); self.assertEqual(receipt_before, receipt)
+        self.assertEqual(before['runtime_stamps']['assets'], current['retained_stamp_alias'])
+        for name in receipt['names']:
+            self.assertEqual(list(cache._full_stamp((root / name).stat())), current['runtime_stamps']['assets'][name])
+        name = receipt['names'][0]
+        current['runtime_stamps']['assets'][name][0] += 1
+        current['runtime_stamps']['assets'].pop(receipt['names'][1])
+        self.assertEqual(before, original); self.assertEqual(receipt_before, receipt)
+        self.assertEqual(seal, self.binding(root))
+
+    def test_frozen_context_parses_only_authenticated_bounded_bytes_and_checks_identity(self):
+        import io
+        for change in ('none', 'digest', 'different-first-read', 'identity', 'oversized'):
+            with self.subTest(change=change):
+                root, dump, snapshots, receipt = self.custody_fixture()
+                marker = root / cache.COMPLETED_EXPANDER; record = cache.read_marker(marker)
+                record['marker_note'] = 'trusted'; marker.write_text(json.dumps(record))
+                seal = self.binding(root); receipt['original_seal_sha256'] = seal
+                raw = marker.read_bytes(); physical = cache._full_stamp(marker.stat())
+                forged = raw.replace(b'"trusted"', b'"forged!"', 1)
+                self.assertNotEqual(raw, forged); self.assertEqual(len(raw), len(forged))
+                opened = Path.open; reads = []
+                class ChangedIdentity(io.BytesIO):
+                    def __exit__(stream, *args):
+                        result = super().__exit__(*args)
+                        info = marker.stat(); cache.os.utime(marker, ns=(info.st_atime_ns, info.st_mtime_ns + 1))
+                        return result
+                def observed(path, *args, **kwargs):
+                    if Path(path) == marker and args and args[0] == 'rb':
+                        reads.append(True)
+                        if len(reads) == 1 and change == 'different-first-read': return io.BytesIO(forged)
+                        if len(reads) == 1 and change == 'identity': return ChangedIdentity(raw)
+                    return opened(path, *args, **kwargs)
+                maximum = len(raw) - 1 if change == 'oversized' else cache.MAX_MARKER_BYTES
+                with mock.patch.object(Path, 'open', observed), mock.patch.object(cache, 'MAX_MARKER_BYTES', maximum):
+                    if change == 'none':
+                        current = cache.frozen_runtime_context(root, dump, seal, metadata_custody_refresh=receipt)
+                        self.assertEqual('trusted', current['marker_note'])
+                    else:
+                        with self.assertRaises(ValueError):
+                            cache.frozen_runtime_context(root, dump, '0' * 64 if change == 'digest' else seal, metadata_custody_refresh=receipt)
+                self.assertEqual(raw, marker.read_bytes())
+                if change != 'identity': self.assertEqual(physical, cache._full_stamp(marker.stat()))
+
+    def test_metadata_custody_rejects_same_target_alias_change_during_validation(self):
+        root, dump, snapshots, receipt = self.custody_fixture(); seal = self.binding(root)
+        name = receipt['names'][0]; source = Path(snapshots[name]); before = cache._full_stamp(source.stat())
+        alternate = source.with_name(source.name + '-alternate'); alternate.symlink_to(source)
+        original = cache.completed_source_binding
+        def change_alias(r, d):
+            result = original(r, d)
+            alias = root / name; alias.unlink(); alias.symlink_to(alternate)
+            self.assertEqual(before, cache._full_stamp(source.stat()))
+            return result
+        with mock.patch.object(cache, 'completed_source_binding', side_effect=change_alias):
+            with self.assertRaises(ValueError): cache.frozen_runtime_context(root, dump, seal, metadata_custody_refresh=receipt)
+        self.assertEqual(seal, self.binding(root))
+
+
 class FileMetadataProviderUpdateTests(unittest.TestCase):
     setUp = CompletedExpanderTests.setUp
     fixture = CompletedExpanderTests.fixture
