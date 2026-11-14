@@ -140,10 +140,13 @@ internal fun sectionInContents(section: Section, language: String?): Boolean =
     section.title.isNotBlank() && (section.title != language || section.anchor.isNotEmpty() || section.anchorFallback.isNotEmpty())
 
 internal fun sectionHeadingVisible(section: Section, language: String?): Boolean =
-    sectionInContents(section, language) || (section.title.isNotBlank() && section.blocks.any { it.kind != "blank" })
+    section.headingStyle != null || sectionInContents(section, language) ||
+        (section.title.isNotBlank() && section.blocks.any { it.kind != "blank" })
 
 /** The first typed heading may carry actions, span presentation, or explicit nesting metadata. */
 internal fun sectionHeadingCompanion(section: Section): Block? {
+    // Typed headings validate this exact companion, including a plain or whitespace-only title.
+    if (section.headingStyle != null) return section.blocks.first()
     val block = section.blocks.firstOrNull() ?: return null
     // Blank labels have no header affordance; leave their blocks in the visible body.
     if (section.title.isBlank() || block.kind != "heading" || block.level != section.level) return null
@@ -164,8 +167,10 @@ internal fun sectionHeadingCompanion(section: Section): Block? {
 /** Presentation-only rows. No source parsing: explicit semantic breaks are layout boundaries. */
 data class ReadingRow(val key: String, val heading: Section? = null, val block: Block? = null, val compact: Boolean = false, val sectionKey: String = "", val meaningSection: Boolean = false, val headingBlock: Block? = null, val etymologySection: Boolean = false)
 
-fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymologySections: Set<Int> = emptySet()): List<ReadingRow> = buildList {
+fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymologySections: Set<Int> = emptySet(),
+    bodyAdjoining: BodyAdjoiningPolicy? = null): List<ReadingRow> = buildList {
     val owners = MediaOwners(media)
+    val authoredBody = bodyAdjoining != null || sections.any { it.headingStyle != null }
     sections.forEachIndexed { sectionIndex, section ->
         val sectionKey = "heading-$sectionIndex"
         val meaningSection = section.blocks.any { it.kind == "definition" }
@@ -174,15 +179,22 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymo
             etymologySection = sectionIndex in etymologySections))
         section.blocks.forEachIndexed { blockIndex, original ->
             if (blockIndex == 0 && headingBlock != null) return@forEachIndexed
-            val block = compactBlock(original)
             val key = "block-$sectionIndex-$blockIndex"
+            if (bodyAdjoining == BodyAdjoiningPolicy.Ordinary ||
+                (authoredBody && sectionIndex == 0 && section.isAuthoredBodyPrefix()) ||
+                original.spans.hasAuthoredFontFamily()) {
+                // This owner consumes source block boundaries, including empty or unsupported ones.
+                add(ReadingRow(key, block = original, sectionKey = sectionKey, meaningSection = meaningSection))
+                return@forEachIndexed
+            }
+            val block = compactBlock(original)
             val authoredList = block.listPath.isNotEmpty() && block.kind in
                 setOf("definition", "example", "quotation", "list_item", "list_detail", "term", "indent")
             if (block.kind == "blank" || (block.style == null && block.table == null && block.figure == null && block.flow == null && block.container == null && block.kind != "rule" && block.spans.isEmpty() && !authoredList && !(block.kind == "heading" && (block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty())))) return@forEachIndexed
             // A caption owns one inline media control across all of its typed lines.
             // Splitting its paragraph would append that control to every resulting row.
             if (block.style != null || block.figure != null || block.flow != null || block.kind != "paragraph" || block.spans.size < 80 || block.spans.none { it.kind == "line_break" } || block.spans.any {
-                    it.hasClassToken("wikidict-poem") ||
+                    it.inlineStyle != null || it.hasClassToken("wikidict-poem") ||
                         owners.file(it) != null
                 }) {
                 add(ReadingRow(key, block = block, sectionKey = sectionKey, meaningSection = meaningSection))
@@ -208,8 +220,8 @@ fun visibleReadingRows(rows: List<ReadingRow>, folded: Set<String>): List<Readin
     var canFold = false
     return rows.filter { row ->
         if (row.heading != null) {
-            // Blank labels have no heading or details toggle in EntryView.
-            canFold = row.heading.title.isNotBlank()
+            // Typed headings keep their compiled label, including whitespace.
+            canFold = row.heading.headingStyle != null || row.heading.title.isNotBlank()
             hideBody = canFold && row.key in folded
             true
         } else !hideBody && !(canFold && row.meaningSection && row.block?.kind != "definition" && row.sectionKey + "-details" in folded)
@@ -220,14 +232,14 @@ fun visibleReadingRows(rows: List<ReadingRow>, folded: Set<String>): List<Readin
 /** Offer explicit access to body text when no recognized definitions guide initial folding. */
 internal fun foldedEntryTextSections(rows: List<ReadingRow>, folded: Set<String>): List<String> {
     if (rows.any { it.meaningSection }) return emptyList()
-    val namedSections = rows.filter { it.heading?.title?.isNotBlank() == true }.map { it.key }.toSet()
+    val namedSections = rows.filter { it.heading?.let { heading -> heading.headingStyle != null || heading.title.isNotBlank() } == true }.map { it.key }.toSet()
     return rows.asSequence().filter { it.block != null && it.sectionKey in namedSections && it.sectionKey in folded }
         .map { it.sectionKey }.distinct().toList()
 }
 
 fun initiallyFolded(row: ReadingRow, settings: AppSettings): Boolean {
     val section = row.heading ?: return false
-    if (section.title.isBlank()) return false
+    if (section.headingStyle == null && section.title.isBlank()) return false
     return when {
         row.etymologySection -> settings.collapseEtymology
         section.title.startsWith("Pronunciation", true) -> settings.collapsePronunciation
@@ -237,17 +249,71 @@ fun initiallyFolded(row: ReadingRow, settings: AppSettings): Boolean {
     }
 }
 
-private fun Span.hasPaintedInlineContent(): Boolean = image != null || (background != null &&
+/** Empty metric owners retain their source position without adding any logical character. */
+internal fun Span.hasAuthoredInlineMetrics(): Boolean = inlineStyle?.lineHeight != null
+internal fun Span.isEmptyInlineMetricOwner(): Boolean = hasAuthoredInlineMetrics() && image == null &&
+    text.isEmpty() && trail.isEmpty()
+internal fun Span.usesInlineDirectionIsolate(): Boolean = direction in listOf("rtl", "ltr", "auto") &&
+    !isEmptyInlineMetricOwner()
+internal fun Span.isUnsupportedAuthoredWhitespaceOwner(): Boolean = inlineStyle != null &&
+    (kind in listOf("link", "external_link") || inlineStyle?.cursor != null || inlineStyle?.lineHeight == null) &&
+    text.all { it == ' ' || it == '\t' || it == '\r' || it == '\n' }
+
+/** New family fields preserve the whole compiled inline owner, including its unstyled neighbours. */
+internal fun List<Span>.hasAuthoredFontFamily(): Boolean = any { span ->
+    span.fontFamily != null ||
+        (span.inlineStyle?.lineHeight as? InlineLineHeight.FontRelative)?.font?.fontFamily != null
+}
+
+internal fun List<Span>.hasCompiledInlineContent(): Boolean = any {
+    it.kind == "line_break" || it.text.isNotEmpty() || it.trail.isNotEmpty() ||
+        it.image != null || it.hasAuthoredInlineMetrics()
+}
+
+internal enum class LegacySpanFontFamily { Code, Egyptian }
+internal fun Span.legacyFontFamily(): LegacySpanFontFamily? = when {
+    fontFamily != null -> null
+    code -> LegacySpanFontFamily.Code
+    hasClassToken("Egyp") -> LegacySpanFontFamily.Egyptian
+    else -> null
+}
+
+internal fun Section.isAuthoredBodyPrefix(): Boolean = level == 0 && title.isEmpty() &&
+    anchor.isEmpty() && anchorFallback.isEmpty() && headingStyle == null && blocks.isNotEmpty()
+
+/** A temporary font probe only: this space is never appended to document text. */
+internal fun inlineFontSnapshotSpan(snapshot: InlineFontSnapshot): Span = Span("text", " ",
+    language = snapshot.language, classes = snapshot.classes, bold = snapshot.bold, italic = snapshot.italic,
+    code = snapshot.code, small = snapshot.small, superscript = snapshot.superscript, subscript = snapshot.subscript,
+    role = snapshot.role, fontScale = snapshot.fontScale, fontScaleBasis = snapshot.fontScaleBasis,
+    fontFeatures = snapshot.fontFeatures, fontFamily = snapshot.fontFamily,
+    inlineStyle = if (snapshot.fontNormalized) InlineTextStyle(fontNormalized = true) else null)
+
+internal fun inlineMetricOwnerSpan(span: Span): Span = span.copy(kind = "text", text = " ", target = "", trail = "",
+    direction = "", image = null, targetFragment = null, linkPaint = null, underline = false, strike = false,
+    inlineStyle = if (span.inlineStyle?.fontNormalized == true) InlineTextStyle(fontNormalized = true) else null)
+
+internal fun tableHasAuthoredInlineStyles(table: Table): Boolean {
+    var found = false
+    table.visitSpanRuns { spans, _ -> if (spans.hasAuthoredFontFamily() || spans.any { it.inlineStyle != null }) found = true }
+    return found
+}
+
+private fun Span.hasPaintedInlineContent(): Boolean = image != null || linkPaint != null || (background != null &&
     ((kind != "line_break" && text.any { it != '\n' }) || trail.any { it != '\n' }))
+private fun Span.hasRetainedInlineContent(): Boolean = hasPaintedInlineContent() || hasAuthoredInlineMetrics() ||
+    isUnsupportedAuthoredWhitespaceOwner() || (inlineStyle != null &&
+        (text + trail).any { it != ' ' && it != '\t' && it != '\r' && it != '\n' })
 
 /** Compact ordinary spacing; compiled poem and literal preformatted spacing is semantic. */
 fun compactSpans(spans: List<Span>): List<Span> {
-    val trimmed = spans.dropWhile { !it.hasClassToken("wikidict-poem") && !it.hasPaintedInlineContent() && it.text.isBlank() && it.trail.isBlank() }
-        .dropLastWhile { !it.hasClassToken("wikidict-poem") && !it.hasPaintedInlineContent() && it.text.isBlank() && it.trail.isBlank() }
+    if (spans.hasAuthoredFontFamily()) return spans
+    val trimmed = spans.dropWhile { !it.hasClassToken("wikidict-poem") && !it.hasRetainedInlineContent() && it.text.isBlank() && it.trail.isBlank() }
+        .dropLastWhile { !it.hasClassToken("wikidict-poem") && !it.hasRetainedInlineContent() && it.text.isBlank() && it.trail.isBlank() }
     val result = ArrayList<Span>(trimmed.size)
     for (span in trimmed) {
-        if (!span.hasClassToken("wikidict-poem") && !span.hasPaintedInlineContent() && span.kind == "line_break" && result.lastOrNull()?.kind == "line_break") continue
-        if (!span.hasClassToken("wikidict-poem") && !span.hasPaintedInlineContent() && span.kind != "line_break" && span.text.isBlank() && span.trail.isBlank() && result.lastOrNull()?.kind == "line_break") continue
+        if (!span.hasClassToken("wikidict-poem") && !span.hasRetainedInlineContent() && span.kind == "line_break" && result.lastOrNull()?.kind == "line_break") continue
+        if (!span.hasClassToken("wikidict-poem") && !span.hasRetainedInlineContent() && span.kind != "line_break" && span.text.isBlank() && span.trail.isBlank() && result.lastOrNull()?.kind == "line_break") continue
         result.add(span)
     }
     return if (result == spans) spans else result
@@ -265,23 +331,25 @@ private fun compactBlock(block: Block): Block {
 
 /** A styled source box is not split or given a text line just to carry its edges. */
 internal fun paragraphDisplaySpans(block: Block): List<Span> {
+    if (block.spans.hasAuthoredFontFamily()) return block.spans
     val spans = ordinaryInlineDisplaySpans(block)
     if (block.style == null) return compactSpans(spans)
-    fun collapsible(span: Span) = span.kind != "line_break" && !span.hasPaintedInlineContent() &&
+    fun collapsible(span: Span) = span.kind != "line_break" && !span.hasRetainedInlineContent() &&
         ((span.text.isEmpty() && span.trail.isEmpty()) || (!span.code && !span.hasClassToken("wikidict-poem") &&
             (span.text + span.trail).all { it == ' ' || it == '\t' || it == '\r' || it == '\n' }))
     return spans.dropWhile(::collapsible).dropLastWhile(::collapsible)
 }
 
-internal fun paragraphHasContent(block: Block): Boolean {
+internal fun paragraphHasContent(block: Block, preserveCompiledText: Boolean = false): Boolean {
+    fun inline(spans: List<Span>, owner: Block): Boolean =
+        if (preserveCompiledText || spans.hasAuthoredFontFamily()) spans.hasCompiledInlineContent()
+        else spans.any { it.kind == "line_break" } || paragraphDisplaySpans(owner).isNotEmpty()
     fun parts(values: List<FlowPart>): Boolean = values.any { part -> when (part) {
-        is FlowPart.Inline -> part.spans.any { it.kind == "line_break" } ||
-            paragraphDisplaySpans(Block("paragraph", 0, part.spans)).isNotEmpty()
+        is FlowPart.Inline -> inline(part.spans, Block("paragraph", 0, part.spans))
         is FlowPart.ImageFigure -> true
         is FlowPart.Scope -> parts(part.scope.parts)
     } }
-    return block.figure != null || (block.flow?.let(::parts) ?:
-        (block.spans.any { it.kind == "line_break" } || paragraphDisplaySpans(block).isNotEmpty()))
+    return block.figure != null || (block.flow?.let(::parts) ?: inline(block.spans, block))
 }
 
 internal data class ParagraphEdges(val top: Float = 0f, val right: Float = 0f,
@@ -307,7 +375,7 @@ internal fun paragraphLengthPixels(value: StyleLength, density: Float, normalBod
 
 /** Reader typography policy: authored margins replace this paragraph's own outside gap. */
 internal fun paragraphBox(block: Block, previous: Block?, defaultGap: Float,
-    density: Float, normalBodyFontPixels: Float): ParagraphBox? {
+    density: Float, normalBodyFontPixels: Float, preserveCompiledText: Boolean = false): ParagraphBox? {
     val style = block.style ?: return null
     require(defaultGap.isFinite() && defaultGap >= 0f)
     fun edges(value: StyleEdges?) = if (value == null) ParagraphEdges() else ParagraphEdges(
@@ -322,7 +390,7 @@ internal fun paragraphBox(block: Block, previous: Block?, defaultGap: Float,
         ?.let { paragraphLengthPixels(it, density, normalBodyFontPixels) } ?: 0f
     val before = if (style.margins != null) (margins.top - previousBottom).coerceAtLeast(0f) else 0f
     val after = if (style.margins != null) margins.bottom
-        else if (!paragraphHasContent(block)) 0f else defaultGap
+        else if (!paragraphHasContent(block, preserveCompiledText)) 0f else defaultGap
     return ParagraphBox(margins, edges(style.padding), before, after)
 }
 
@@ -340,9 +408,22 @@ internal fun blockIndentDp(block: Block): Int =
     (if (block.kind == "heading") block.depth else block.depth - 1).coerceIn(0, 8) * 7
 
 /** A nested destination is owned by one lazy row and an authored-index path, never pixels. */
+internal enum class HeadingAnchorKind { Primary, Fallback }
+internal data class HeadingAnchorSelection(val id: String, val kind: HeadingAnchorKind, val revealTop: StyleLength?)
 internal data class HeadingDestination(val rowKey: String, val path: String?, val compiledId: Boolean,
-    val referenceIndex: Int? = null)
-private data class HeadingCandidate(val destination: HeadingDestination, val anchor: String, val fallback: String, val label: String)
+    val referenceIndex: Int? = null, val anchorMatch: HeadingAnchorSelection? = null)
+private data class HeadingCandidate(val destination: HeadingDestination, val anchor: String, val fallback: String,
+    val label: String, val reveal: HeadingAnchorReveal? = null)
+
+/** Only the selected source outset participates; text zoom and UI insets are not source lengths. */
+internal fun headingRevealScrollDelta(targetTop: Float, viewportTop: Float, outset: StyleLength,
+    density: Float): Float? {
+    if (!targetTop.isFinite() || !viewportTop.isFinite() || !density.isFinite() || density <= 0f ||
+        outset.unit != StyleLengthUnit.Px) return null
+    val pixels = outset.value.toDouble() * density
+    val delta = targetTop.toDouble() - viewportTop - pixels
+    return delta.toFloat().takeIf { pixels.isFinite() && it.isFinite() }
+}
 internal fun headingDestination(entry: Entry, target: String): HeadingDestination? {
     if (!target.startsWith("#") || target.length == 1) return null
     val headings = mutableListOf<HeadingCandidate>()
@@ -366,7 +447,8 @@ internal fun headingDestination(entry: Entry, target: String): HeadingDestinatio
     }
     entry.readingRows.forEach { row ->
         row.heading?.let { heading -> headings.add(HeadingCandidate(HeadingDestination(row.key, null,
-            heading.anchor.isNotEmpty() || heading.anchorFallback.isNotEmpty()), heading.anchor, heading.anchorFallback, heading.title)) }
+            heading.anchor.isNotEmpty() || heading.anchorFallback.isNotEmpty()), heading.anchor, heading.anchorFallback,
+            heading.title, heading.headingStyle?.anchorReveal)) }
         row.block?.let { includeContent(row.key, listOf(it to row.key)) }
     }
     entry.references.forEachIndexed { index, reference ->
@@ -376,11 +458,20 @@ internal fun headingDestination(entry: Entry, target: String): HeadingDestinatio
         }
     }
     val fragment = target.substring(1)
-    fun matches(value: String) = headings.filter { (it.anchor.isNotEmpty() && it.anchor == value) || (it.fallback.isNotEmpty() && it.fallback == value) }
+    fun matches(value: String) = headings.mapNotNull { candidate ->
+        val selected = when {
+            candidate.anchor.isNotEmpty() && candidate.anchor == value -> HeadingAnchorSelection(
+                candidate.anchor, HeadingAnchorKind.Primary, candidate.reveal?.primaryTop)
+            candidate.fallback.isNotEmpty() && candidate.fallback == value -> HeadingAnchorSelection(
+                candidate.fallback, HeadingAnchorKind.Fallback, candidate.reveal?.fallbackTop)
+            else -> null
+        }
+        selected?.let { candidate.destination.copy(anchorMatch = it) }
+    }
     val exact = matches(fragment)
-    if (exact.isNotEmpty()) return exact.singleOrNull()?.destination
+    if (exact.isNotEmpty()) return exact.singleOrNull()
     val spaced = matches(fragment.replace(' ', '_'))
-    if (spaced.isNotEmpty()) return spaced.singleOrNull()?.destination
+    if (spaced.isNotEmpty()) return spaced.singleOrNull()
     return headings.filter { it.label == fragment.replace('_', ' ') }.singleOrNull()
         ?.takeIf { it.anchor.isEmpty() && it.fallback.isEmpty() }?.destination
 }

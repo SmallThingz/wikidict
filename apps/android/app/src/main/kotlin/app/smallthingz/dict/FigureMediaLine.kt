@@ -2,7 +2,7 @@ package app.smallthingz.dict
 
 import android.graphics.RectF
 
-/** Exact resolved anchor font; its authored line-height is zero, not its font size. */
+/** Exact resolved inline-owner font; line-height is supplied independently. */
 internal data class FigureMediaFont(val primary: NativePrimaryFontMetrics, val xHeight: Float) {
     init { require(xHeight.isFinite() && xHeight >= 0f) }
 }
@@ -10,9 +10,9 @@ internal data class FigureMediaLine(val height: Float, val contentTop: Float)
 
 /** Keep the real parent strut and the aligned replaced/inline-block margin box. */
 internal fun figureMediaLine(font: FigureMediaFont, alignment: InlineBoxVerticalAlign,
-    outerHeight: Float, contentBaseline: Float? = null): FigureMediaLine {
+    outerHeight: Float, contentBaseline: Float? = null, lineStrut: NativeUsedLineMetrics? = null): FigureMediaLine {
     require(outerHeight.isFinite() && outerHeight >= 0f)
-    val strut = checkNotNull(font.primary.authored(NativeLineHeightPolicy.Pixels(0f)))
+    val strut = lineStrut ?: checkNotNull(font.primary.authored(NativeLineHeightPolicy.Pixels(0f)))
     val top = when (alignment) {
         // The same native inline-image middle alignment, retaining fractional font metrics.
         InlineBoxVerticalAlign.Middle -> font.primary.baselineShift - (font.xHeight + outerHeight) / 2f

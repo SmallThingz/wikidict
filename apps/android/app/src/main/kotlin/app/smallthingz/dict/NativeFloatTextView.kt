@@ -18,6 +18,8 @@ import android.view.KeyEvent
 import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
+import android.view.InputDevice
+import android.view.PointerIcon
 import android.view.View
 import android.view.VelocityTracker
 import android.view.accessibility.AccessibilityEvent
@@ -25,6 +27,9 @@ import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeProvider
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
@@ -51,6 +56,26 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
             previous?.clearRootState(this)
             invalidate()
         }
+    private var tableCoordinateOwner: Any? = null
+    private var tableCoordinates: LayoutCoordinates? = null
+    internal fun bindTableCoordinates(owner: Any) {
+        if (tableCoordinateOwner !== owner) {
+            tableCoordinateOwner = owner
+            tableCoordinates = null
+        }
+    }
+    internal fun positionTableCoordinates(owner: Any, coordinates: LayoutCoordinates) {
+        if (tableCoordinateOwner === owner) tableCoordinates = coordinates.takeIf { it.isAttached }
+    }
+    internal fun clearTableCoordinates(owner: Any) {
+        if (tableCoordinateOwner === owner) {
+            tableCoordinates = null
+            tableCoordinateOwner = null
+        }
+    }
+    private fun liveTableCoordinates(): LayoutCoordinates? = tableCoordinates?.takeIf {
+        isAttachedToWindow && it.isAttached && it.size.width == measuredWidth && it.size.height == measuredHeight
+    }
     private fun originalOwnerAvailable(): Boolean = delegatedCellOwner?.permits(this) ?: true
     internal fun delegatedMeasurementPending() {
         invalidate()
@@ -85,6 +110,8 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
     private var dragOffsetX = 0f
     private var dragOffsetY = 0f
     private var virtualAccessibilityFocus = View.NO_ID
+    // Ordinary source-link focus underline follows actual input focus; only its outline uses modality.
+    private var ordinaryLinkFocusVisible = false
     private var virtualKeyboardFocus = View.NO_ID
         set(value) { field = value; updateMissingLinkPaint() }
     private var hoveredNode = View.NO_ID
@@ -319,6 +346,7 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
 
     private fun paintFocusState(canvas: Canvas, layout: FloatTextGeometry) {
         layout.nodes.find { it.id == virtualKeyboardFocus }?.let { node ->
+            if (node.missingLinkPaint?.sourceSpanPaint == true && !ordinaryLinkFocusVisible) return@let
             withSelectionClip(canvas, node.clipBounds) {
             val authored = node.focusPaint
             if (authored != null) {
@@ -521,7 +549,8 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
     private fun sameInputNode(before: FloatInteractionNode?, after: FloatInteractionNode?): Boolean {
         if (before == null || after == null) return before == null && after == null
         if (before.id != after.id || before.kind != after.kind || before.start != after.start || before.end != after.end ||
-            before.label?.toString() != after.label?.toString() || before.onLongClick !== after.onLongClick) return false
+            before.label?.toString() != after.label?.toString() || before.onLongClick !== after.onLongClick ||
+            before.customActions != after.customActions) return false
         val identity = before.missingLinkPaint?.actionIdentity
         val nextIdentity = after.missingLinkPaint?.actionIdentity
         return if (identity != null || nextIdentity != null)
@@ -596,6 +625,7 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
             val x = event.x - paddingLeft
             val y = event.y - paddingTop
             if (!geometry!!.containsInput(x, y) && handleAt(x, y) == 0) return false
+            ordinaryLinkFocusVisible = false
             // Include ordinary owners: an incoming replacement may acquire a fixed palette.
             // Bounds and paint are deliberately excluded so identical owners survive reflow.
             capturedPointerOwner = PointerOwner(logicalText.toString(), geometry!!.nodes.toList(), hitNode(x, y))
@@ -663,6 +693,19 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
             rejectedOwnerSequence = false
         }
         return true
+    }
+
+    override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon? {
+        if (pointerIndex in 0 until event.pointerCount && originalOwnerAvailable()) {
+            val tool = event.getToolType(pointerIndex)
+            val pointer = event.isFromSource(InputDevice.SOURCE_MOUSE) ||
+                tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER
+            val x = event.getX(pointerIndex); val y = event.getY(pointerIndex)
+            if (pointer && pointInScrollport(x, y) &&
+                currentMeasuredGeometry?.cursorAt(x - paddingLeft, y - paddingTop) == InlineCursor.Help)
+                return PointerIcon.getSystemIcon(context, PointerIcon.TYPE_HELP)
+        }
+        return super.onResolvePointerIcon(event, pointerIndex)
     }
 
     private fun pointInScrollport(x: Float, y: Float): Boolean =
@@ -815,6 +858,7 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
             return false
         }
         val layout = geometry ?: return super.onKeyDown(keyCode, event)
+        if (!ordinaryLinkFocusVisible) { ordinaryLinkFocusVisible = true; invalidate() }
         if (keyCode != KeyEvent.KEYCODE_ENTER && keyCode != KeyEvent.KEYCODE_DPAD_CENTER && pendingLinkKey != null) {
             clearPendingLinkKey("other-key"); invalidate()
         }
@@ -900,6 +944,7 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
     }
 
     override fun onDetachedFromWindow() {
+        tableCoordinates = null
         delegatedCellOwner?.clear(this)
         delegatedStateOwner?.clearRootState(this)
         cancelCapturedOwnerSequence()
@@ -913,6 +958,7 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
         if (!gainFocus) {
+            ordinaryLinkFocusVisible = false
             clearPendingLinkKey("focus-lost")
             virtualKeyboardFocus = View.NO_ID
             focusRegion = null
@@ -925,6 +971,13 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
 
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(info)
+        if (tableCoordinateOwner != null) {
+            val visible = tableVisibleScreenBounds() ?: RectF()
+            val screen = Rect().also { visible.roundOut(it) }
+            info.setBoundsInScreen(screen)
+            info.isVisibleToUser = isShown && !screen.isEmpty
+            if (liveTableCoordinates() == null) { info.setBoundsInParent(Rect()); return }
+        }
         if (!originalOwnerAvailable()) { info.isVisibleToUser = false; return }
         info.className = "android.widget.TextView"
         info.text = logicalText.toString()
@@ -944,6 +997,7 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
     }
 
     override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+        if (tableCoordinateOwner != null && liveTableCoordinates() == null) return false
         if (!originalOwnerAvailable()) return false
         when (action) {
             AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS -> {
@@ -1031,6 +1085,7 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
         event.className = when (node.kind) {
                     FloatInteractionKind.IMAGE -> "android.widget.ImageView"
                     FloatInteractionKind.CONTROL -> "android.widget.Button"
+                    FloatInteractionKind.SEPARATOR -> "android.view.View"
                     else -> "android.widget.TextView"
                 }
         if (node.label != null) event.contentDescription = node.label
@@ -1039,6 +1094,7 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
 
     private inner class Nodes : AccessibilityNodeProvider() {
         override fun createAccessibilityNodeInfo(virtualViewId: Int): AccessibilityNodeInfo? {
+            if (tableCoordinateOwner != null && liveTableCoordinates() == null) return null
             if (!originalOwnerAvailable()) return null
             if (virtualViewId == HOST_VIEW_ID) return AccessibilityNodeInfo.obtain(this@NativeFloatTextView).also {
                 this@NativeFloatTextView.onInitializeAccessibilityNodeInfo(it)
@@ -1051,9 +1107,12 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
                 className = when (node.kind) {
                     FloatInteractionKind.IMAGE -> "android.widget.ImageView"
                     FloatInteractionKind.CONTROL -> "android.widget.Button"
+                    FloatInteractionKind.SEPARATOR -> "android.view.View"
                     else -> "android.widget.TextView"
                 }
                 AccessibilityNodeInfoCompat.wrap(this).isHeading = node.kind == FloatInteractionKind.HEADING
+                if (node.kind == FloatInteractionKind.SEPARATOR)
+                    AccessibilityNodeInfoCompat.wrap(this).roleDescription = NativeRuleAccessibilityLabel
                 val label = node.label ?: logicalText.subSequence(node.start, node.end)
                 if (node.kind == FloatInteractionKind.IMAGE) contentDescription = label else text = label
                 tooltipText = node.tooltip
@@ -1066,6 +1125,9 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
                 isLongClickable = node.onLongClick != null
                 if (isClickable) addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
                 if (isLongClickable) addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_LONG_CLICK)
+                node.customActions.forEachIndexed { index, custom ->
+                    addAction(AccessibilityNodeInfo.AccessibilityAction(nativeHeadingCustomActionId(index), custom.label))
+                }
                 addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
                 addAction(if (isFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_FOCUS else AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
                 val bounds = RectF()
@@ -1081,7 +1143,8 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
                 val screen = screenRect(bounds)
                 setBoundsInScreen(screen)
                 val visible = Rect()
-                isVisibleToUser = isShown && getGlobalVisibleRect(visible) && Rect.intersects(visible, screen)
+                isVisibleToUser = if (tableCoordinateOwner != null) isShown && !screen.isEmpty
+                    else isShown && getGlobalVisibleRect(visible) && Rect.intersects(visible, screen)
             }
         }
 
@@ -1097,9 +1160,21 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
                 .mapNotNull { createAccessibilityNodeInfo(it.id) }
 
         override fun performAction(virtualViewId: Int, action: Int, arguments: Bundle?): Boolean {
+            if (tableCoordinateOwner != null && liveTableCoordinates() == null) return false
             if (!originalOwnerAvailable()) return false
             if (virtualViewId == HOST_VIEW_ID) return performAccessibilityAction(action, arguments)
             val node = geometry?.nodes?.find { it.id == virtualViewId } ?: return false
+            val custom = node.customActions.indices.firstOrNull { nativeHeadingCustomActionId(it) == action }
+            if (custom != null) {
+                if (needsGeometry || !isEnabled) return false
+                node.customActions[custom].onClick()
+                sendNodeEvent(node.id, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+                return true
+            }
+            // A virtual action can arrive after bind() but before the new owner is measured.
+            // Reject only activation; stale/disabled nodes must still be able to clear focus.
+            if ((action == AccessibilityNodeInfo.ACTION_CLICK || action == AccessibilityNodeInfo.ACTION_LONG_CLICK) &&
+                (needsGeometry || !isEnabled)) return false
             when (action) {
                 AccessibilityNodeInfo.ACTION_CLICK -> { node.onClick?.invoke() ?: return false; sendNodeEvent(node.id, AccessibilityEvent.TYPE_VIEW_CLICKED) }
                 AccessibilityNodeInfo.ACTION_LONG_CLICK -> { node.onLongClick?.invoke() ?: return false; sendNodeEvent(node.id, AccessibilityEvent.TYPE_VIEW_LONG_CLICKED) }
@@ -1120,6 +1195,7 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
                     val previous = focusRegion
                     focusRegion = nodeFocusRegion(node)
                     if (!requestFocus()) { focusRegion = previous; return false }
+                    ordinaryLinkFocusVisible = true
                     virtualKeyboardFocus = node.id
                     revealVirtualNode(node)
                     sendNodeEvent(node.id, AccessibilityEvent.TYPE_VIEW_FOCUSED)
@@ -1136,6 +1212,15 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
             val start = arguments?.getInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, -1) ?: -1
             val length = arguments?.getInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, -1) ?: -1
             if (start < 0 || length < 0 || length > 20_000 || start > logicalText.length - length) return
+            if (tableCoordinateOwner != null) {
+                val visible = tableVisibleScreenBounds() ?: RectF()
+                val rectangles = geometry?.characterRects(start, length)?.map { rect ->
+                    rect?.let { tableBoundsToScreen(it) }?.takeIf { isShown && it.intersect(visible) }
+                }?.toTypedArray() ?: return
+                check(rectangles.size == length)
+                info.extras.putParcelableArray(extraDataKey, rectangles)
+                return
+            }
             val visible = Rect()
             val shown = isShown && getGlobalVisibleRect(visible)
             val rectangles = geometry?.characterRects(start, length)?.map { rect ->
@@ -1146,7 +1231,41 @@ internal class NativeFloatTextView(context: Context, private val scrollClip: Nat
         }
     }
 
+    /** The bound surface is the real NativeSurfaceGeometry extent, not its Table allocation. */
+    private fun tableVisibleScreenBounds(): RectF? {
+        if (tableCoordinateOwner == null) return null
+        val coordinates = liveTableCoordinates() ?: return RectF()
+        val window = coordinates.boundsInWindow()
+        val screenOrigin = coordinates.localToScreen(Offset.Zero)
+        val windowOrigin = coordinates.localToWindow(Offset.Zero)
+        if (listOf(window.left, window.top, window.right, window.bottom, screenOrigin.x, screenOrigin.y,
+                windowOrigin.x, windowOrigin.y).any { !it.isFinite() }) return RectF()
+        val visible = RectF(window.left, window.top, window.right, window.bottom)
+        visible.offset(screenOrigin.x - windowOrigin.x, screenOrigin.y - windowOrigin.y)
+        scrollClip?.inScreen()?.let { if (!visible.intersect(it)) visible.setEmpty() }
+        return visible
+    }
+    private fun tableMapBounds(bounds: RectF, toScreen: Boolean): RectF? {
+        if (tableCoordinateOwner == null) return null
+        val coordinates = liveTableCoordinates() ?: return RectF()
+        if (bounds.isEmpty) return RectF()
+        val corners = arrayOf(Offset(bounds.left, bounds.top), Offset(bounds.right, bounds.top),
+            Offset(bounds.right, bounds.bottom), Offset(bounds.left, bounds.bottom)).map {
+            if (toScreen) coordinates.localToScreen(it) else coordinates.screenToLocal(it)
+        }
+        if (corners.any { !it.x.isFinite() || !it.y.isFinite() }) return RectF()
+        return RectF(corners.minOf { it.x }, corners.minOf { it.y }, corners.maxOf { it.x }, corners.maxOf { it.y })
+    }
+    internal fun tableScreenToLocal(bounds: RectF): RectF? = tableMapBounds(bounds, false)
+    private fun tableBoundsToScreen(bounds: RectF): RectF? = tableMapBounds(RectF(bounds).apply {
+        offset((paddingLeft - scrollX).toFloat(), (paddingTop - scrollY).toFloat())
+    }, true)
+
     private fun screenRect(bounds: RectF): Rect {
+        tableBoundsToScreen(bounds)?.let { screen ->
+            if (!screen.intersect(tableVisibleScreenBounds() ?: RectF())) screen.setEmpty()
+            return Rect().also { screen.roundOut(it) }
+        }
         // Build the public View transform chain, including Compose host transforms.
         // Align its origin with getLocationOnScreen to include the window offset.
         val transform = Matrix()

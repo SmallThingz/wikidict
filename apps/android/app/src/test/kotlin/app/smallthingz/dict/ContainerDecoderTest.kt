@@ -244,7 +244,11 @@ class ContainerDecoderTest {
         assertEquals(read(fixture(withContainer = false)), read(fixture(withContainer = false, version = 77)))
         assertEquals(ContainerLineHeight.Multiplier(1.5f), ContainerStyle(ownerFontScale = 0f).textContext(inherited).lineHeight)
         assertThrows(Exception::class.java) { read(styled(.9f).also { it[3] = 76 }) }
-        assertThrows(Exception::class.java) { read(styled(.9f).also { it[3] = 78 }) }
+        // N adds tails only to Rules; O adds only present inline effects. This owner has neither.
+        for (version in listOf(78, 79)) {
+            assertEquals(read(styled(.9f)), read(styled(.9f).also { it[3] = version.toByte() }))
+        }
+        assertThrows(Exception::class.java) { read(styled(.9f).also { it[3] = 81 }) }
     }
 
     @Test fun ownerFontMUsesWideMasksInNestedOwnersAndRefusesInvalidScalarsBitsAndTruncation() {

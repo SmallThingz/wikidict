@@ -44,6 +44,7 @@ internal class NativeSurfaceGeometry(val content: FloatTextGeometry,
     override fun revealOffset(offset: Int, onRevealed: () -> Unit) = content.revealOffset(offset, onRevealed)
     override fun clipForOffset(offset: Int): RectF? = content.clipForOffset(offset)
         ?.let { RectF(it).apply { offset(dx, dy) } }
+    override fun cursorAt(x: Float, y: Float): InlineCursor? = content.cursorAt(x - dx, y - dy)
     override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? =
         content.horizontalScrollTargetAt(x - dx, y - dy)
     override fun caretRect(offset: Int): RectF = RectF(content.caretRect(offset)).apply { offset(dx, dy) }

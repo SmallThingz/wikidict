@@ -48,6 +48,8 @@ internal interface FloatTextGeometry {
     /** Null is unbounded; an empty rectangle is completely clipped. Caret positions stay logical. */
     fun clipForOffset(offset: Int): RectF? = null
     fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? = null
+    /** The concrete text owner resolves source pointer policy through its actual hit layout. */
+    fun cursorAt(x: Float, y: Float): InlineCursor? = null
     /** Actual line baselines; absent for a true empty box, even if it has borders or padding. */
     val textBaselines: NativeTextBaselines? get() = null
     /** Deferred paint groups retain this owner's text and node indices; no second child graph. */
@@ -86,7 +88,7 @@ internal fun nativeBoundsOf(rectangles: List<RectF>): NativeFloatBounds? = recta
     .filter { !it.isEmpty }.map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) }
     .reduceOrNull { a, b -> a.enclosing(b) }
 
-internal enum class FloatInteractionKind { LINK, IMAGE, HEADING, CONTROL, MARKER }
+internal enum class FloatInteractionKind { LINK, IMAGE, HEADING, CONTROL, MARKER, SEPARATOR }
 
 /** IDs must remain stable across width reflow. Empty and single-space labels are authored data. */
 internal data class FloatInteractionNode(
@@ -105,6 +107,7 @@ internal data class FloatInteractionNode(
     val focusPaint: NativeNodeFocusPaint? = null,
     val onReveal: ((() -> Unit) -> Unit)? = null,
     val clipBounds: RectF? = null,
+    val customActions: List<NativeHeadingAction> = emptyList(),
 ) {
     fun contains(x: Float, y: Float): Boolean = (clipBounds?.contains(x, y) ?: true) &&
         bounds.any { it.contains(x, y) } && (hitTest?.invoke(x, y) ?: true)
@@ -167,8 +170,16 @@ internal fun nativeLinkFocusFragments(geometry: FloatTextGeometry, start: Int, e
 }
 
 internal fun figureLinkFocusPaint(policy: FigureLinkPaint, fragments: List<RectF>, density: Float,
-    bodyPixels: Float, connected: Boolean = false): NativeNodeFocusPaint {
-    val outline = policy.focusOutline ?: return NativeNodeFocusPaint.None
+    bodyPixels: Float, connected: Boolean = false): NativeNodeFocusPaint =
+    nativeLinkFocusPaint(policy.focusOutline, fragments, density, bodyPixels, connected)
+
+internal fun ordinaryLinkFocusPaint(policy: LinkPaint, fragments: List<RectF>, density: Float,
+    bodyPixels: Float): NativeNodeFocusPaint =
+    nativeLinkFocusPaint(policy.focusOutline, fragments, density, bodyPixels, false)
+
+private fun nativeLinkFocusPaint(outline: FigureFocusOutline?, fragments: List<RectF>, density: Float,
+    bodyPixels: Float, connected: Boolean): NativeNodeFocusPaint {
+    if (outline == null) return NativeNodeFocusPaint.None
     val width = figureLengthPixels(outline.width, density, bodyPixels)
     val radius = figureLengthPixels(outline.radius, density, bodyPixels)
     val offset = outline.offset.value.toDouble() * if (outline.offset.unit == StyleLengthUnit.Px) density else bodyPixels

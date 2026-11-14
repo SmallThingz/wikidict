@@ -136,7 +136,8 @@ internal fun rememberNativeSemanticMeasurement(): NativeSemanticMeasurement {
 }
 
 internal data class NativeMeasuredGeometry<G : FloatTextGeometry>(val result: Result<G>,
-    val fallbackBounds: NativeFloatBounds? = null)
+    val fallbackBounds: NativeFloatBounds? = null,
+    val fallbackGeometry: G? = null)
 
 internal class NativeGeometryMeasureInput<G : FloatTextGeometry>(ancestor: NativeSemanticMeasurement? = null,
     private val invalidateParent: () -> Unit = {}) {
@@ -207,10 +208,10 @@ internal class NativeGeometryMeasureInput<G : FloatTextGeometry>(ancestor: Nativ
     }
 
     fun publish(ticket: NativeGeometryPublication.Attempt<NativeFlowMeasureKey>, result: Result<G>,
-        fallbackBounds: NativeFloatBounds? = null): Boolean {
+        fallbackBounds: NativeFloatBounds? = null, fallbackGeometry: G? = null): Boolean {
         if (binding !== ticket.key.request.binding || measurement.value != ticket.key.request ||
             ticket.key.descendantRevision !== semantic.revision) return false
-        return publication.publish(ticket, NativeMeasuredGeometry(result, fallbackBounds))
+        return publication.publish(ticket, NativeMeasuredGeometry(result, fallbackBounds, fallbackGeometry))
     }
 
     fun measured(request: NativeFlowMeasureRequest): NativeMeasuredGeometry<G>? {

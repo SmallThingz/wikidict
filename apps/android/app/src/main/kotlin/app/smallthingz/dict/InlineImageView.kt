@@ -119,7 +119,8 @@ internal sealed interface InlineImageAssetState {
     data object Failed : InlineImageAssetState
     data object LayoutUnavailable : InlineImageAssetState
     data class Ready(val decoded: DecodedMediaBitmap, val originalWidth: Long, val originalHeight: Long,
-        val mime: String?, val source: String, val credit: String) : InlineImageAssetState
+        val mime: String?, val source: String, val credit: String,
+        val blockMediaIdentity: FigureBlockMediaIdentity? = null) : InlineImageAssetState
     data class GeometryUnavailable(val resource: Ready) : InlineImageAssetState
 }
 internal fun inlineImageFallbackText(image: InlineImage, state: InlineImageAssetState): String? =
@@ -143,6 +144,7 @@ internal class InlineImageViewOwner(
     private val media: Map<String, Media>, private val settings: AppSettings, private val edition: String,
     private val cache: MediaCache, private val scope: CoroutineScope, private val occurrences: Map<String, List<RasterImageOccurrence>>,
     private val density: Float, private val catalogueFiles: Set<String>,
+    val blockMediaLayout: FigureBlockMediaLayout? = null,
 ) {
     val states = mutableStateMapOf<String, InlineImageAssetState>()
     private val jobs = mutableMapOf<String, Job>()
@@ -165,23 +167,24 @@ internal class InlineImageViewOwner(
     private fun start(file: String, forceRefresh: Boolean) {
         val group = occurrences.getValue(file)
         val imageFile = group.first().image.file
-        val raster = group.first().image.svgLanguage?.let { SvgRasterRequest(it, density, group) }
+        val raster = if (blockMediaLayout == null) group.first().image.svgLanguage?.let { SvgRasterRequest(it, density, group) } else null
         if (!settings.allowImages) { states[file] = InlineImageAssetState.Disabled; return }
         val request = Any(); requests[file] = request
         states[file] = InlineImageAssetState.Loading
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 val poster = group.first().image.staticPoster?.let { StaticPosterRequest(density, group) }
+                val blockRequest = blockMediaLayout?.let { FigureBlockMediaRequest(it, density) }
                 cache.withFile(media.getValue(imageFile), settings.mediaCacheMb, edition, forceRefresh = forceRefresh, canonicalFile = true,
-                    rasterRequest = raster, posterRequest = poster) { resource ->
+                    rasterRequest = raster, posterRequest = poster, blockMediaRequest = blockRequest) { resource ->
                     val width = requireNotNull(resource.originalWidth) { "Image intrinsic width is unavailable" }
                     val height = requireNotNull(resource.originalHeight) { "Image intrinsic height is unavailable" }
-                    val target = if (imageFile in catalogueFiles && raster == null) 1600 else group.mapNotNull { occurrence ->
+                    val target = if (blockRequest != null || imageFile in catalogueFiles && raster == null) 1600 else group.mapNotNull { occurrence ->
                         inlineImagePixels(occurrence.image, width, height, density, resource.originalMime)
                     }.maxOfOrNull { max(it.width, it.height) }?.let { ceil(it).coerceIn(1f, 1600f).toInt() } ?: 1600
                     val decoded = decodeMediaBitmap(resource.file, target, resource.requiredRasterWidth, resource.requiredRasterHeight,
                         resource.exactRasterWidth, resource.exactRasterHeight)
-                    if (requests[file] === request) states[file] = InlineImageAssetState.Ready(decoded, width, height, resource.originalMime, resource.source, resource.credit)
+                    if (requests[file] === request) states[file] = InlineImageAssetState.Ready(decoded, width, height, resource.originalMime, resource.source, resource.credit, blockRequest?.identity)
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { if (requests[file] === request) states[file] = InlineImageAssetState.Failed }
@@ -200,12 +203,13 @@ internal class InlineImageViewOwner(
 @Composable
 internal fun rememberInlineImageViewOwner(images: List<InlineImage>, media: List<Media>, settings: AppSettings,
     edition: String, catalogueFiles: Set<String> = emptySet(),
-    rasterImages: List<RasterImageOccurrence> = images.map { RasterImageOccurrence(it) }): InlineImageViewOwner {
+    rasterImages: List<RasterImageOccurrence> = images.map { RasterImageOccurrence(it) },
+    blockMediaLayout: FigureBlockMediaLayout? = null): InlineImageViewOwner {
     val density = LocalDensity.current.density
     val cache = LocalInlineImageCache.current ?: MediaCache.get(LocalContext.current)
     val scope = rememberCoroutineScope()
-    val owner = remember(rasterImages, media, settings.allowImages, settings.mediaCacheMb, edition, density, cache, scope, catalogueFiles) {
-        InlineImageViewOwner(media.associateBy { it.file }, settings, edition, cache, scope, rasterImages.groupBy { inlineImageAssetKey(it.image) }, density, catalogueFiles)
+    val owner = remember(rasterImages, media, settings.allowImages, settings.mediaCacheMb, edition, density, cache, scope, catalogueFiles, blockMediaLayout) {
+        InlineImageViewOwner(media.associateBy { it.file }, settings, edition, cache, scope, rasterImages.groupBy { inlineImageAssetKey(it.image) }, density, catalogueFiles, blockMediaLayout)
     }
     DisposableEffect(owner) { onDispose { owner.close() } }
     return owner
@@ -228,7 +232,7 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
     val result = linkedMapOf<String, InlineTextContent>()
     var offset = 0
     spans.forEachIndexed { index, span ->
-        if (span.direction in listOf("rtl", "ltr", "auto")) offset++
+        if (span.usesInlineDirectionIsolate()) offset++
         val image = span.image
         if (image != null) key(index, image) {
             val start = offset
@@ -288,7 +292,7 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
         }
         if (image != null) offset += InlineImageReplacement.length
         offset += (if (span.kind == "line_break") 1 else span.text.length) + span.trail.length
-        if (span.direction in listOf("rtl", "ltr", "auto")) offset++
+        if (span.usesInlineDirectionIsolate()) offset++
     }
     return result
 }

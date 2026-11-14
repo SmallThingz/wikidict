@@ -35,6 +35,19 @@ internal fun resolveTableAutoMargins(values: ContainerMargins, density: Float,
     return NativeTableAutoMargins(edges, values.left == ContainerMargin.Auto, values.right == ContainerMargin.Auto)
 }
 
+/** Fixed responsive-table margins use the same proved body-em basis without pixel rounding. */
+internal fun resolveTableFixedMargins(values: StyleEdges, density: Float, normalBodyPixels: Float): FloatMargins {
+    require(density.isFinite() && density > 0f && normalBodyPixels.isFinite() && normalBodyPixels >= 0f)
+    fun pixels(value: StyleLength): Float {
+        val scale = if (value.unit == StyleLengthUnit.Px) density else normalBodyPixels
+        val pixels = value.value.toDouble() * scale
+        if (!pixels.isFinite() || pixels !in 0.0..TablePixelLimit.toDouble())
+            throw UnsupportedFloatLayout("Table margins exceed native geometry")
+        return pixels.toFloat()
+    }
+    return FloatMargins(pixels(values.top), pixels(values.right), pixels(values.bottom), pixels(values.left))
+}
+
 internal enum class NativeTableMarginFlow { Block, Floating, Inline }
 
 /** Used horizontal margins may be signed even though authored table lengths cannot be. */

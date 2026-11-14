@@ -13,7 +13,8 @@ import android.os.Build
  * There is no raster or replacement owner. The same Layout facade supplies the original
  * lines, bidi, tabs and indents; API28 retains decoration observation and conservative text.
  */
-internal class NativeDecorationBoundsCanvas(private val observeTextBounds: Boolean = false) : Canvas() {
+internal class NativeDecorationBoundsCanvas(private val observeTextBounds: Boolean = false,
+    private val ignoreTransparent: Boolean = false) : Canvas() {
     private data class Translation(val x: Float, val y: Float)
     private val saved = mutableListOf(Translation(0f, 0f))
     var bounds: NativeFloatBounds? = null
@@ -41,7 +42,7 @@ internal class NativeDecorationBoundsCanvas(private val observeTextBounds: Boole
         return true
     }
     override fun drawRect(left: Float, top: Float, right: Float, bottom: Float, paint: Paint) {
-        if (right <= left || bottom <= top) return
+        if (right <= left || bottom <= top || ignoreTransparent && paint.alpha == 0) return
         check(paint.style == Paint.Style.FILL) { "TextLine decoration must be a native fill rectangle" }
         val shift = saved.last()
         val values = listOf(left.toDouble() + shift.x, top.toDouble() + shift.y,
@@ -55,12 +56,12 @@ internal class NativeDecorationBoundsCanvas(private val observeTextBounds: Boole
     override fun drawRect(rect: Rect, paint: Paint) = drawRect(rect.left.toFloat(), rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat(), paint)
     override fun drawTextRun(text: CharArray, index: Int, count: Int, contextIndex: Int,
         contextCount: Int, x: Float, y: Float, isRtl: Boolean, paint: Paint) {
-        if (textBoundsComplete) observeRun(text.copyOfRange(contextIndex, contextIndex + contextCount),
+        if (textBoundsComplete && !(ignoreTransparent && paint.alpha == 0)) observeRun(text.copyOfRange(contextIndex, contextIndex + contextCount),
             index - contextIndex, index - contextIndex + count, x, y, isRtl, paint)
     }
     override fun drawTextRun(text: CharSequence, start: Int, end: Int, contextStart: Int,
         contextEnd: Int, x: Float, y: Float, isRtl: Boolean, paint: Paint) {
-        if (textBoundsComplete) observeRun(CharArray(contextEnd - contextStart) { text[contextStart + it] },
+        if (textBoundsComplete && !(ignoreTransparent && paint.alpha == 0)) observeRun(CharArray(contextEnd - contextStart) { text[contextStart + it] },
             start - contextStart, end - contextStart, x, y, isRtl, paint)
     }
     // NativeLinePainter's Spanned facade dispatches through TextLine.drawTextRun. An

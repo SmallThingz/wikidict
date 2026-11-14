@@ -5,6 +5,8 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.text.Layout
+import android.text.PrecomputedText
+import android.text.TextDirectionHeuristic
 import android.text.SpannableString
 import android.text.SpannableStringBuilder
 import android.text.Spanned
@@ -51,9 +53,22 @@ internal fun Modifier.preformattedWidthIntrinsics(): Modifier = then(object : La
 
 /** Real metric spans, including native glyph clusters and image boxes, participate in both widths. */
 internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Float = 0f,
-    breakWordMinimum: Boolean = false): NativeWidthRange {
+    breakWordMinimum: Boolean = false, textDirection: TextDirectionHeuristic? = null): NativeWidthRange {
     require(inset.isFinite() && inset >= 0f)
     val replacements = source.getSpans(0, source.length, ReplacementSpan::class.java)
+    val wrapPlan = NativeTextWrapPlan.create(source, paint)
+    wrapPlan?.noWrap?.let { plan ->
+        plan.requireLinePresence()
+        val direction = textDirection ?: throw UnsupportedFloatLayout("No-wrap intrinsic direction is unavailable")
+        val measured = PrecomputedText.create(source, PrecomputedText.Params.Builder(TextPaint(paint))
+            .setTextDirection(direction).setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+            .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE).build())
+        val advance = plan.maximumAdvance { start, end -> measured.getWidth(start, end) }
+        val width = advance.toDouble() + inset
+        val pixels = if (!width.isFinite() || width > TablePixelLimit) Constraints.Infinity else ceil(width).toInt()
+        return NativeWidthRange(pixels, pixels)
+    }
+    var authoredMinimum = 0f
     val breaks = BreakIterator.getLineInstance(paint.textLocale).apply { setText(source.toString()) }
     var minimum = 0f
     var maximum = 0f
@@ -63,7 +78,10 @@ internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Floa
         if (replacements.none { source.getSpanStart(it) < end && source.getSpanEnd(it) > end }) {
             var visibleEnd = end
             while (visibleEnd > start && source[visibleEnd - 1].isWhitespace()) visibleEnd--
-            minimum = maxOf(minimum, Layout.getDesiredWidth(source, start, visibleEnd, paint))
+            val wordWidth = Layout.getDesiredWidth(source, start, visibleEnd, paint)
+            minimum = maxOf(minimum, wordWidth)
+            if (wrapPlan?.ordinaryMinimum(start, visibleEnd, breakWordMinimum) == true)
+                authoredMinimum = maxOf(authoredMinimum, wordWidth)
             start = end
         }
         end = breaks.next()
@@ -76,7 +94,7 @@ internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Floa
         if (newline == source.length) break
         start = newline + 1
     }
-    if (breakWordMinimum) minimum = nativeGraphemeMinimum(source, paint, replacements, maximum)
+    if (breakWordMinimum) minimum = maxOf(authoredMinimum, nativeGraphemeMinimum(source, paint, replacements, maximum))
     fun pixels(value: Float): Int {
         val width = value.toDouble() + inset
         return if (!width.isFinite() || width > TablePixelLimit) Constraints.Infinity else ceil(width).toInt()

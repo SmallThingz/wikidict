@@ -14,6 +14,7 @@ internal fun nativeClearBottom(clear: FigureClear?, exclusions: List<NativeFloat
  * are measured once, while provisional placement can be recomputed without shaping text. */
 internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
     private val clearances = IdentityHashMap<NativeFloatContextPart, Boolean>()
+    private val bodyLeadingFlows = IdentityHashMap<NativeFloatContextPart.Flow, Boolean>()
     private val indices = IdentityHashMap<NativeFloatContextPart, Int>()
     private val children = IdentityHashMap<NativeFloatContextPart.Child, Pair<NativeBlockMeasureRequest, NativeBlockMeasure>>()
     private val containers = IdentityHashMap<NativeFloatContextPart.Container, Pair<NativeMarginCollapse, NativeFloatContextGeometry>>()
@@ -87,6 +88,23 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
     private fun profile(part: NativeFloatContextPart) =
         NativeFloatContextGeometry.adjoiningProfile(part, this)
 
+    /** The selected ordinary body owns both adjoining edges at its assigned origin. */
+    fun resolveBodyLeading(parts: List<NativeFloatContextPart>, width: Int) {
+        require(width >= 0)
+        while (true) {
+            val previous = revision
+            bodyLeadingFlows.clear()
+            leading(parts, width, emptyList(), bodyLeading = true)
+            if (previous == revision) return
+        }
+    }
+
+    /** A measured zero extent does not prove that an anonymous float owner is through-empty. */
+    fun checkBodyLeadingFlow(part: NativeFloatContextPart.Flow, normalFlowExtent: Float, exportsFloats: Boolean) {
+        if (bodyLeadingFlows.containsKey(part) && normalFlowExtent == 0f && exportsFloats)
+            throw UnsupportedFloatLayout("Ordinary body leading float flow has no structural adjoining profile")
+    }
+
     /** Each newly established clearance removes an adjacency; this is finite structural
      * progress, not repeated measurement or a width/height convergence heuristic. */
     fun resolve(group: NativeFloatContextPart.Container, incoming: List<NativeFloatExclusion>,
@@ -107,10 +125,11 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
     }
 
     private fun leading(parts: List<NativeFloatContextPart>, width: Int,
-        incoming: List<NativeFloatExclusion>): List<NativeFloatExclusion> {
+        incoming: List<NativeFloatExclusion>, bodyLeading: Boolean = false): List<NativeFloatExclusion> {
         val exclusions = incoming.toMutableList()
         val cursor = NativeMarginCursor(NativeMarginCollapse(true, true))
         for (part in parts) {
+            if (part is NativeFloatContextPart.Container && part.absolute != null) continue
             val margins = profile(part)
             if (margins == null) {
                 val normalY = tableClearanceY(cursor.floatTop, when (part) {
@@ -149,6 +168,7 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
                 exclusions += NativeFloatExclusion(side, placement)
                 continue
             }
+            if (bodyLeading && part is NativeFloatContextPart.Flow) bodyLeadingFlows[part] = true
             // A prior pass already proved this child's clearance. Its own margin stays
             // inside the group and terminates the parent's leading adjoining chain.
             if (hasClearance(part)) return exclusions.drop(incoming.size)
@@ -172,7 +192,7 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
                     it.copy(outer = it.outer.translated(-x, -top))
                 }
                 val previous = revision
-                val own = leading(part.preparedParts, part.contentWidth, carried)
+                val own = leading(part.preparedParts, part.contentWidth, carried, bodyLeading)
                 if (previous != revision) return exclusions.drop(incoming.size)
                 exclusions += own.map { it.copy(outer = it.outer.translated(x, top)) }
             }

@@ -50,7 +50,7 @@ internal fun egyptianTextRuns(spans: List<Span>): List<EgyptianTextRun> {
     val runs = mutableListOf<EgyptianTextRun>()
     var offset = 0
     for (span in spans) {
-        val isolated = span.direction in listOf("rtl", "ltr", "auto")
+        val isolated = span.usesInlineDirectionIsolate()
         if (isolated) offset++
         if (span.image != null) offset += InlineImageReplacement.length
         val text = if (span.kind == "line_break") "\n" else span.text

@@ -13,21 +13,41 @@ import android.text.style.AlignmentSpan
 import android.text.style.ReplacementSpan
 import kotlin.math.ceil
 
+/** Exact new block-media flow dimensions; integer child dimensions only allocate the native surface. */
+internal data class NativeFigureUsedBox(val width: Float, val height: Float,
+    val margins: SignedNativeContainerMargins) {
+    init {
+        figureCoordinate(width); figureCoordinate(height)
+        if (margins.top != 0f || margins.bottom != 0f)
+            throw UnsupportedFloatLayout("Figure block vertical margins need a joined margin owner")
+    }
+}
+
 /** The figure adapter owns image/caption layout and media state; this owner never remeasures a bitmap. */
 internal data class MeasuredAnonymousFigure(
     val geometry: FloatTextGeometry,
     val margins: FloatMargins,
     val frameMinimumWidens: Boolean = false,
     val normalContentLeft: Float? = null,
+    val usedBox: NativeFigureUsedBox? = null,
 ) {
     init {
         require(geometry.width >= 0 && geometry.height >= 0)
         require(normalContentLeft == null || normalContentLeft.isFinite())
         require(geometry.width.toDouble() + margins.left + margins.right <= Int.MAX_VALUE / 4)
         require(geometry.height.toDouble() + margins.top + margins.bottom <= Int.MAX_VALUE / 4)
+        usedBox?.let {
+            if (figureCoordinate(it.width) != geometry.width || figureCoordinate(it.height) != geometry.height)
+                throw UnsupportedFloatLayout("Figure block used box differs from its native allocation")
+            figureCoordinate(it.width.toDouble() + it.margins.left + it.margins.right)
+            figureCoordinate(it.height.toDouble() + it.margins.top + it.margins.bottom)
+        }
     }
-    val outerWidth: Float get() = geometry.width + margins.left + margins.right
-    val outerHeight: Float get() = geometry.height + margins.top + margins.bottom
+    val marginTop: Float get() = usedBox?.margins?.top ?: margins.top
+    val outerWidth: Float get() = usedBox?.let { it.width + it.margins.left + it.margins.right }
+        ?: (geometry.width + margins.left + margins.right)
+    val outerHeight: Float get() = usedBox?.let { it.height + it.margins.top + it.margins.bottom }
+        ?: (geometry.height + margins.top + margins.bottom)
 }
 
 internal data class PlacedAnonymousFigure(
@@ -56,8 +76,16 @@ internal class NativeAnonymousFlowGeometry private constructor(
     val textBottom: Float get() = native.textBottom
     val scrollableBounds: NativeFloatBounds by lazy {
         figures.fold(native.scrollableBounds) { bounds, figure ->
-            bounds.enclosing(NativeFloatBounds(figure.bounds.left, figure.bounds.top,
-                figure.bounds.right, figure.bounds.bottom))
+            val used = figure.measured.usedBox
+            val frame = bounds.enclosing(NativeFloatBounds(figure.bounds.left, figure.bounds.top,
+                if (used == null) figure.bounds.right else figure.bounds.left + used.width,
+                if (used == null) figure.bounds.bottom else figure.bounds.top + used.height))
+            if (figure.measured.usedBox == null) frame else {
+                val extent = figure.measured.geometry.extents
+                listOfNotNull(extent.ink, extent.interaction).fold(frame) { area, ink ->
+                    area.enclosing(ink.translated(figure.bounds.left, figure.bounds.top))
+                }
+            }
         }.let { bounds -> positionedGroups.flatMap { it.bounds }.fold(bounds) { area, box ->
             area.enclosing(NativeFloatBounds(box.left, box.top, box.right, box.bottom))
         } }
@@ -148,6 +176,18 @@ internal class NativeAnonymousFlowGeometry private constructor(
         }
         return native.clipForOffset(selection.nativeOffset(offset))
     }
+    override fun cursorAt(x: Float, y: Float): InlineCursor? {
+        val figure = figures.asReversed().firstOrNull { placed ->
+            placed.measured.geometry.positionedGroups.any { it.contains(x - placed.bounds.left, y - placed.bounds.top) }
+        } ?: figures.asReversed().firstOrNull {
+            it.measured.geometry.containsInteraction(x - it.bounds.left, y - it.bounds.top) ||
+                it.measured.geometry.containsInput(x - it.bounds.left, y - it.bounds.top)
+        }
+        // A hit figure owns even a null cursor; a lower text run cannot shine through it.
+        return if (figure != null) figure.measured.geometry.cursorAt(x - figure.bounds.left, y - figure.bounds.top)
+            else native.cursorAt(x, y)
+    }
+
     override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? {
         val figure = figures.asReversed().firstOrNull { placed ->
             placed.measured.geometry.positionedGroups.any { it.contains(x - placed.bounds.left, y - placed.bounds.top) }
@@ -166,7 +206,12 @@ internal class NativeAnonymousFlowGeometry private constructor(
             val placed = figureById.getValue(segment.anchor.event.id)
             return placed.measured.geometry.caretRect(offset - segment.start).apply { offset(placed.bounds.left, placed.bounds.top) }
         }
-        if (text.isEmpty()) return RectF(0f, 0f, 1f, 0f)
+        if (text.isEmpty()) {
+            if (!hasNativeAuthoredInlineMetrics(native.text)) return RectF(0f, 0f, 1f, 0f)
+            val caret = native.caretRect(selection.nativeOffset(offset))
+            val line = native.firstLineBand()
+            return RectF(caret.left, line.top, caret.right, line.bottom)
+        }
         return native.caretRect(selection.nativeOffset(offset))
     }
 
@@ -273,13 +318,14 @@ internal class NativeAnonymousFlowGeometry private constructor(
                 row.second.toString()
             }
             val source = SpannableString(offsets.nativeText)
-            prepared.forEachIndexed { index, (_, styled) -> if (styled.isNotEmpty()) {
+            prepared.forEachIndexed { index, (_, styled) -> if (styled.isNotEmpty() || hasNativeAuthoredInlineMetrics(styled)) {
                 val range = offsets.inlineSources[index]
                 check(styled.toString() == offsets.nativeText.substring(range.start, range.end))
                 styled.getSpans(0, styled.length, Any::class.java).forEach { span ->
                     // Alignment belongs to this full anonymous owner, not an independently shaped inline shard.
                     if (span is AlignmentSpan) return@forEach
-                    source.setSpan(span, range.start + styled.getSpanStart(span),
+                    // Each source occurrence retains its own point/range owner, even when an empty fragment is reused.
+                    source.setSpan(nativeInlineStyleSpanCopy(span), range.start + styled.getSpanStart(span),
                         range.start + styled.getSpanEnd(span), styled.getSpanFlags(span))
                 }
             } }
@@ -308,13 +354,30 @@ internal class NativeAnonymousFlowGeometry private constructor(
                     val bandWidth = kotlin.math.floor(width - insets.left - insets.right - insets.extraLeft - insets.extraRight).toInt().coerceAtLeast(0)
                     // An authored content minimum may overflow its containing block. The
                     // measured child keeps that width; the replacement still owns one block line.
-                    if (bandWidth > 0 && box.outerWidth > bandWidth && !box.frameMinimumWidens)
+                    val blockMedia = model.blockMediaLayout != null
+                    if (blockMedia && bandWidth == 0 && (measured.size != 1 || offsets.logicalText.isNotEmpty()))
+                        throw UnsupportedFloatLayout("Zero-width Figure block siblings need an explicit block line owner")
+                    if (blockMedia != (box.usedBox != null))
+                        throw UnsupportedFloatLayout("Figure block flow dimensions are unavailable")
+                    if (bandWidth > 0 && box.outerWidth > bandWidth && !box.frameMinimumWidens && !blockMedia)
                         throw UnsupportedFloatLayout("In-flow figure cannot fit its exact containing width")
                     val usedLeft = box.normalContentLeft ?: ((if (model.placement == FigurePlacement.Center)
                         (bandWidth - box.outerWidth) / 2f else 0f) + box.margins.left)
+                    val exactLeft = if (blockMedia) insets.left + insets.extraLeft + usedLeft else null
+                    val ink = if (blockMedia) box.geometry.extents.ink else null
+                    val outside = box.outerWidth > bandWidth || usedLeft < 0f || usedLeft + box.geometry.width > bandWidth ||
+                        (ink != null && (ink.left < 0f || ink.top < 0f || ink.right > box.geometry.width || ink.bottom > box.geometry.height))
                     val span = InFlowFigureSpan(box, bandWidth, model.placement == FigurePlacement.Center,
-                        paintsOutsideLineClip = box.outerWidth > bandWidth || usedLeft < 0f || usedLeft + box.geometry.width > bandWidth)
+                        paintsOutsideLineClip = blockMedia || outside, exactContentLeft = exactLeft,
+                        minimumHeight = if (blockMedia) outsideMarkerHeight else 0f)
                     source.setSpan(span, anchor.nativeOffset, anchor.nativeOffset + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    if (blockMedia) {
+                        // The real child already owns its complete source strut. This generated
+                        // replacement contributes only its exact atomic line, including height zero.
+                        source.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics(0f, 0f, 0f, 0f),
+                            NativeLineHeightPolicy.Pixels(0f), strut = true), anchor.nativeOffset,
+                            anchor.nativeOffset + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
                     inFlow[anchor] = span
                 }
             }
@@ -348,10 +411,28 @@ internal class NativeAnonymousFlowGeometry private constructor(
                 val bounds = if (float != null) RectF(float.content) else {
                     val span = inFlow.getValue(anchor)
                     val boxes = native.rectsForRange(anchor.nativeOffset, anchor.nativeOffset + 1)
-                    val left = boxes.minOfOrNull { it.left } ?: native.caretRect(anchor.nativeOffset).left
+                    // A source block's child and deferred paint share one exact containing origin.
+                    // Its CSS position is never reconstructed from quantized selection rectangles.
+                    val left = span.exactContentLeft ?: ((boxes.minOfOrNull { it.left }
+                        ?: native.caretRect(anchor.nativeOffset).left) + span.contentLeft)
                     val top = native.baselineForOffset(anchor.nativeOffset) - box.outerHeight
-                    RectF(left + span.contentLeft, top + box.margins.top,
-                        left + span.contentLeft + box.geometry.width, top + box.margins.top + box.geometry.height)
+                    if (box.usedBox != null) {
+                        val own = box.geometry.extents
+                        val ink = enclosingBounds(own.ink, own.interaction)
+                        val childLeft = left
+                        val first = childLeft + minOf(0f, ink?.left ?: 0f)
+                        val last = childLeft + maxOf(box.usedBox.width, ink?.right ?: 0f)
+                        val bottom = top + box.marginTop + maxOf(box.usedBox.height, ink?.bottom ?: 0f)
+                        // A float may already have moved the native line before this publication.
+                        // Until the child receives that exclusion, conservatively retain refusal
+                        // for earlier intersecting source footprints too, including signed overflow.
+                        if (native.exclusions.any { exclusion ->
+                            exclusion.outer.bottom > 0f && exclusion.outer.top <= bottom &&
+                                exclusion.outer.left <= last && exclusion.outer.right >= first
+                        }) throw UnsupportedFloatLayout("Figure block inherited float placement is unavailable")
+                    }
+                    RectF(left, top + box.marginTop,
+                        left + box.geometry.width, top + box.marginTop + box.geometry.height)
                 }
                 PlacedAnonymousFigure(anchor, box, bounds, inFlow[anchor]?.paintsOutsideLineClip == true)
             }
@@ -369,12 +450,14 @@ private fun drawFigure(canvas: Canvas, box: MeasuredAnonymousFigure, bounds: Rec
 
 /** Full-width object forces a visual block line without inserting a paragraph separator. */
 private class InFlowFigureSpan(val box: MeasuredAnonymousFigure, val width: Int, centered: Boolean,
-    val paintsOutsideLineClip: Boolean) : ReplacementSpan(), NativeAtomicInlineMetrics, NativeReplacementPaintBounds {
-    override val nativeUsedMetrics: NativeUsedLineMetrics get() = NativeUsedLineMetrics(-box.outerHeight, 0f)
+    val paintsOutsideLineClip: Boolean, val exactContentLeft: Float? = null, private val minimumHeight: Float = 0f) :
+    ReplacementSpan(), NativeAtomicInlineMetrics, NativeReplacementPaintBounds {
+    override val nativeUsedMetrics: NativeUsedLineMetrics get() =
+        NativeUsedLineMetrics(-maxOf(box.outerHeight, minimumHeight), 0f)
     val contentLeft = box.normalContentLeft ?: ((if (centered) (width - box.outerWidth) / 2f else 0f) + box.margins.left)
     override fun nativePaintBounds(lineTop: Float, lineBottom: Float): NativeFloatBounds? =
         if (paintsOutsideLineClip) null else box.geometry.extents.ink
-            ?.translated(contentLeft, -box.outerHeight + box.margins.top)
+            ?.translated(contentLeft, -box.outerHeight + box.marginTop)
     override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
         fm?.let { it.ascent = minOf(it.ascent, -ceil(box.outerHeight).toInt()); it.top = minOf(it.top, it.ascent) }
         return width
@@ -383,7 +466,7 @@ private class InFlowFigureSpan(val box: MeasuredAnonymousFigure, val width: Int,
         top: Int, y: Int, bottom: Int, paint: Paint) {
         if (paintsOutsideLineClip) return
         val left = x + contentLeft
-        val childTop = y - box.outerHeight + box.margins.top
+        val childTop = y - box.outerHeight + box.marginTop
         drawFigure(canvas, box, RectF(left, childTop, left + box.geometry.width, childTop + box.geometry.height))
     }
 }

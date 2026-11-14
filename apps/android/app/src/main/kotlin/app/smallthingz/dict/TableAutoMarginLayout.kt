@@ -55,6 +55,30 @@ internal class NativeTableMarginMeasureInput(val table: Table) {
     private var publishedBinding: Any? = null
     private var publishedRequest: Request? = null
     private var box: NativeTableMarginBox? = null
+    private var intrinsicQuery: Any? = null
+    private var intrinsicBinding: Any? = null
+    private var intrinsicWidths: ContainerWidths? = null
+    val blockIntrinsicQuery: Any? get() = intrinsicQuery
+    fun beginBlockIntrinsicQuery(): Any {
+        if (table.blockViewport == null || table.floatViewport == null || binding == null)
+            throw UnsupportedFloatLayout("Paired table intrinsic owner is unavailable")
+        clear()
+        request = null
+        return Any().also { intrinsicQuery = it; intrinsicBinding = binding; intrinsicWidths = null }
+    }
+    fun publishBlockIntrinsics(owner: Any, source: Table, query: Any, widths: ContainerWidths) {
+        if (owner !== binding || owner !== intrinsicBinding || source !== table || query !== intrinsicQuery ||
+                widths.maximum > TablePixelLimit)
+            throw UnsupportedFloatLayout("Paired table intrinsic ownership changed")
+        intrinsicWidths = widths
+    }
+    fun blockIntrinsicsReady(query: Any): ContainerWidths {
+        val value = intrinsicWidths
+        val valid = query === intrinsicQuery && binding != null && binding === intrinsicBinding
+        intrinsicQuery = null; intrinsicBinding = null; intrinsicWidths = null
+        return value?.takeIf { valid }
+            ?: throw UnsupportedFloatLayout("Paired table intrinsic measurement is unavailable")
+    }
     private val input = NativeLayoutInput<Any?>(null) { clear() }
     val modifier: Modifier get() = input.modifier
     val containingWidth: Int? get() = request?.containingWidth
@@ -73,7 +97,10 @@ internal class NativeTableMarginMeasureInput(val table: Table) {
         clear()
         input.update(null)
     }
-    private fun clear() { box = null; publishedBinding = null; publishedRequest = null }
+    private fun clear() {
+        box = null; publishedBinding = null; publishedRequest = null
+        intrinsicQuery = null; intrinsicBinding = null; intrinsicWidths = null
+    }
     fun refuse(owner: Any) { if (binding === owner) clear() }
     fun begin(containingWidth: Int, viewportWidth: Int, minimumWidth: Int) {
         begin(Request(containingWidth, viewportWidth, minimumWidth))
@@ -84,7 +111,8 @@ internal class NativeTableMarginMeasureInput(val table: Table) {
     }
     private fun begin(next: Request) {
         clear()
-        if (next.blockBox != null && next.blockBox.policy !== table.blockViewport)
+        if (next.blockBox != null && (next.blockBox.policy !== table.blockViewport ||
+                next.blockBox.floatPolicy !== table.floatViewport))
             throw UnsupportedFloatLayout("Table block viewport source policy changed")
         if (listOf(next.containingWidth, next.viewportWidth, next.minimumWidth).any { it !in 0..TablePixelLimit })
             throw UnsupportedFloatLayout("Table automatic margin request exceeds native geometry")
@@ -135,7 +163,7 @@ internal val LocalNativeTableMarginMeasureInput = staticCompositionLocalOf<Nativ
 internal fun TableMarginBorderBox(table: Table, captionMinimumWidth: NativeLayoutInput<Int>,
     hasCaption: Boolean, spacing: Int, scrolling: Boolean, fixedInsets: FloatMargins,
     content: @Composable () -> Unit) {
-    val direction = table.style?.containingDirection
+    val direction = table.floatViewport?.containingDirection ?: table.style?.containingDirection
     val gridDirection = LocalLayoutDirection.current
     // Unknown source direction keeps only the unavailable fallback's existing UI orientation.
     val scrollDirection = when (direction) {
@@ -144,7 +172,7 @@ internal fun TableMarginBorderBox(table: Table, captionMinimumWidth: NativeLayou
         null -> gridDirection
     }
     val input = LocalNativeTableMarginMeasureInput.current?.takeIf { it.table === table }
-    val needsInput = table.style?.let { !it.isInline && it.floatSide == null } == true
+    val needsInput = table.floatViewport != null || table.style?.let { !it.isInline && it.floatSide == null } == true
     val owner = remember(NativeDelegatedTableIdentity(table), hasCaption, spacing, scrolling, fixedInsets, gridDirection) { Any() }
     SideEffect { input?.bind(owner) }
     DisposableEffect(input, owner) { onDispose { input?.unbind(owner) } }

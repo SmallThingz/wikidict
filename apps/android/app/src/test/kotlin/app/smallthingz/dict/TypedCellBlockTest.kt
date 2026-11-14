@@ -143,7 +143,9 @@ class TypedCellBlockTest {
         assertEquals("block-0-0", destination.rowKey)
         assertEquals("block-0-0/table/cell-0/block-1", destination.path)
         assertTrue(destination.compiledId)
-        assertEquals(destination, headingDestination(value, "#Cell heading"))
+        assertEquals(HeadingAnchorSelection("reference-1", HeadingAnchorKind.Primary, null), destination.anchorMatch)
+        assertEquals(destination.copy(anchorMatch = HeadingAnchorSelection("Cell_heading", HeadingAnchorKind.Fallback, null)),
+            headingDestination(value, "#Cell heading"))
         assertEquals(destination.rowKey, headingScrollKey(value, "#Cell_heading"))
         assertNull(headingDestination(entry(grid(listOf(heading, heading))), "#reference-1"))
         val empty = heading.copy(spans = emptyList(), anchor = "empty", anchorFallback = "")

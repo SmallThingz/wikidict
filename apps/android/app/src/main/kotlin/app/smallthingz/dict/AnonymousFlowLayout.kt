@@ -30,7 +30,8 @@ import kotlin.math.roundToInt
 
 internal data class AnonymousFigureMeasureSpec(val width: Int, val margins: FloatMargins,
     val frameMinimumWidens: Boolean = false, val childMinimumFloor: Boolean = false,
-    val normalContentLeft: ((Int) -> Float?)? = null)
+    val normalContentLeft: ((Int) -> Float?)? = null,
+    val usedBox: NativeFigureUsedBox? = null)
 
 private data class AnonymousSurfaceRequest(val geometry: NativeSurfaceGeometry?, val failure: String? = null)
 
@@ -88,10 +89,15 @@ internal fun AnonymousFlowLayout(
                 unavailable(request.failure ?: "Geometry unavailable")
             }.single() else subcompose("native-anonymous-flow") {
                 if (!interactionOwner) Canvas(Modifier) { physical.paint(drawContext.canvas.nativeCanvas) }
-                else AndroidView(factory = { NativeFloatTextView(it, scrollClip) }, update = { view ->
-                    view.bind({ actualWidth -> check(actualWidth == physical.width); physical },
-                        linkColor.copy(alpha = .25f).toArgb(), linkColor.toArgb())
-                })
+                else {
+                    val coordinates = rememberNativeTableCoordinateBinding()
+                    AndroidView(modifier = coordinates?.modifier ?: Modifier,
+                        factory = { NativeFloatTextView(it, scrollClip) }, update = { view ->
+                        coordinates?.bind(view)
+                        view.bind({ actualWidth -> check(actualWidth == physical.width); physical },
+                            linkColor.copy(alpha = .25f).toArgb(), linkColor.toArgb())
+                    })
+                }
             }.single()
             val measured = surface.measure(constraints)
             layout(measured.width, measured.height) { measured.place(0, 0) }
@@ -137,7 +143,7 @@ internal fun AnonymousFlowLayout(
                 if (semantic.width != placeable.width || semantic.height != placeable.height)
                     throw UnsupportedFloatLayout("Figure selection geometry does not match its measured child")
                 MeasuredAnonymousFigure(AnonymousChildProjection(semantic), spec.margins, spec.frameMinimumWidens,
-                    spec.normalContentLeft?.invoke(placeable.width))
+                    spec.normalContentLeft?.invoke(placeable.width), spec.usedBox)
             }, insets = insets, inlineNodes = inlineNodes, inlineSemantic = inlineSemantic,
                 carriedExclusions = exclusions, decoration = decoration, outsideMarkerHeight = outsideMarkerHeight,
                 decorationBounds = decorationBounds)

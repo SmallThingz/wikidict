@@ -2,14 +2,17 @@ package app.smallthingz.dict
 
 /** Source IDs never change when the same owner's paint phase changes. */
 internal data class NativePaintOrderNode(val source: Int, val positioned: Boolean = false,
-    val children: List<NativePaintOrderNode> = emptyList())
+    val children: List<NativePaintOrderNode> = emptyList(), val absolute: Boolean = false)
 
-internal fun nativeContextPaintSequence(roots: List<NativePaintOrderNode>): List<Int> {
+internal fun nativeContextPaintSequence(roots: List<NativePaintOrderNode>, absoluteScope: Boolean = false): List<Int> {
     val ordinary = mutableListOf<Int>()
     val positioned = mutableListOf<NativePaintOrderNode>()
     val seen = mutableSetOf<Int>()
-    fun visit(nodes: List<NativePaintOrderNode>) {
+    fun visit(nodes: List<NativePaintOrderNode>, directScopeChild: Boolean = false) {
         nodes.forEach { node ->
+            require(!node.absolute || directScopeChild && node.positioned) {
+                "Absolute painting requires a direct authenticated scope owner"
+            }
             check(seen.add(node.source)) { "A paint owner must have one source identity" }
             if (node.positioned) positioned += node else {
                 ordinary += node.source
@@ -17,24 +20,25 @@ internal fun nativeContextPaintSequence(roots: List<NativePaintOrderNode>): List
             }
         }
     }
-    visit(roots)
+    visit(roots, absoluteScope)
     fun whole(node: NativePaintOrderNode) {
         ordinary += node.source
         node.children.forEach { child ->
-            require(!child.positioned) { "Nested positioned groups need their own stacking policy" }
+            require(!child.positioned && !child.absolute) { "Nested positioned groups need their own stacking policy" }
             check(seen.add(child.source))
             whole(child)
         }
     }
-    // Relative-auto owners do not create stacking contexts. They join this Entry context's
-    // positioned phase even when nested in an ordinary block; their body stays one paint group.
+    // Relative-auto owners do not create stacking contexts. Scoped absolute roots use
+    // that same phase, after the normal-flow body, in source order. Logical traversal
+    // is untouched; generic nested positioning still requires its own policy.
     positioned.forEach(::whole)
     return ordinary
 }
 
 /** A Flow's deferred media is a paint phase, never another source or measured child. */
 internal fun nativeContextMediaPaintSequence(roots: List<NativePaintOrderNode>,
-    mediaBySource: Map<Int, Int>): List<Int> {
+    mediaBySource: Map<Int, Int>, absoluteScope: Boolean = false): List<Int> {
     val found = mutableSetOf<Int>()
     fun insert(nodes: List<NativePaintOrderNode>): List<NativePaintOrderNode> = nodes.map { node ->
         val media = mediaBySource[node.source]?.let { found += node.source; NativePaintOrderNode(it, positioned = true) }
@@ -42,7 +46,7 @@ internal fun nativeContextMediaPaintSequence(roots: List<NativePaintOrderNode>,
     }
     val tree = insert(roots)
     require(found == mediaBySource.keys) { "Deferred media needs an existing source owner" }
-    return nativeContextPaintSequence(tree)
+    return nativeContextPaintSequence(tree, absoluteScope)
 }
 
 internal data class NativePaintBox(val id: Int, val rank: Int, val leaves: Set<Int>)
@@ -117,6 +121,11 @@ internal class NativeContextPaintInput(private val context: NativeFloatContextGe
     override fun containsInput(x: Float, y: Float): Boolean = when (val hit = winner(x, y)) {
         null -> context.containsInput(x, y)
         else -> hit.child == null
+    }
+
+    override fun cursorAt(x: Float, y: Float): InlineCursor? {
+        val leaf = winner(x, y, input = true)?.text ?: return null
+        return leaf.geometry.cursorAt(x - leaf.x, y - leaf.y)
     }
 
     override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? {

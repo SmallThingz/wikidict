@@ -749,4 +749,69 @@ class NativeFloatContextGeometryTest {
         }
     }
 
+    @Test fun virtualActivationRejectsPendingOrDisabledOwnersButKeepsFocusCleanupAndMeasuredRecovery() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.runOnMainSync {
+            val callbacks = mutableListOf<String>()
+            val view = NativeFloatTextView(instrumentation.targetContext)
+            val provider = view.accessibilityNodeProvider
+            val id = 71
+            fun bind(owner: String) {
+                view.bind({ width ->
+                    NativeFloatGeometry.build(SpannableString("same label"), paint, width, emptyList(),
+                        nodeFactory = { geometry -> listOf(FloatInteractionNode(id, FloatInteractionKind.LINK,
+                            0, 10, geometry.rectsForRange(0, 10), "same label", null,
+                            { callbacks += "$owner:click" }, onLongClick = { callbacks += "$owner:long" })) })
+                }, 0x6633b5e5, 0xff1686c7.toInt())
+            }
+            fun measure() {
+                view.measure(View.MeasureSpec.makeMeasureSpec(240, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+                view.layout(0, 0, view.measuredWidth, view.measuredHeight)
+                assertNotNull(view.currentMeasuredGeometry)
+            }
+            fun action(value: Int) = provider.performAction(id, value, null)
+            fun activate(owner: String) {
+                val before = callbacks.toList()
+                assertTrue(action(AccessibilityNodeInfo.ACTION_CLICK))
+                assertEquals(before + "$owner:click", callbacks)
+                assertTrue(action(AccessibilityNodeInfo.ACTION_LONG_CLICK))
+                assertEquals(before + listOf("$owner:click", "$owner:long"), callbacks)
+            }
+            fun rejectActivation() {
+                val before = callbacks.toList()
+                assertFalse(action(AccessibilityNodeInfo.ACTION_CLICK))
+                assertFalse(action(AccessibilityNodeInfo.ACTION_LONG_CLICK))
+                assertEquals(before, callbacks)
+            }
+            fun focus() {
+                assertTrue(action(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS))
+                assertTrue(action(AccessibilityNodeInfo.ACTION_FOCUS))
+            }
+            fun clearFocus() {
+                assertTrue(action(AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS))
+                assertTrue(action(AccessibilityNodeInfo.ACTION_CLEAR_FOCUS))
+            }
+            bind("old"); measure(); activate("old"); focus()
+            // Keep the same text, range and virtual ID: callback ownership still changes.
+            bind("new")
+            assertNull(view.currentMeasuredGeometry)
+            rejectActivation(); clearFocus()
+            assertEquals(listOf("old:click", "old:long"), callbacks)
+            measure(); activate("new"); focus()
+            view.isEnabled = false
+            assertFalse(checkNotNull(provider.createAccessibilityNodeInfo(id)).isEnabled)
+            rejectActivation(); clearFocus()
+            assertEquals(listOf("old:click", "old:long", "new:click", "new:long"), callbacks)
+            view.isEnabled = true
+            activate("new"); focus()
+            view.isEnabled = false
+            bind("third"); rejectActivation(); clearFocus()
+            measure(); rejectActivation()
+            view.isEnabled = true
+            activate("third")
+            assertEquals(listOf("old:click", "old:long", "new:click", "new:long",
+                "new:click", "new:long", "third:click", "third:long"), callbacks)
+        }
+    }
 }

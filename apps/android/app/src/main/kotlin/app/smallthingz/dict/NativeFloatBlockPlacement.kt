@@ -45,6 +45,8 @@ internal data class NativeBlockMeasureRequest(
     val containingWidth: Float,
     val availableWidth: Float,
     val requestedWidth: Float?,
+    /** Full float-free interval before a fixed-margin adapter removes physical edges. */
+    val assignedWidth: Float = availableWidth,
 )
 
 internal data class NativeBlockMeasure(val usedWidth: Float, val minWidth: Float, val height: Float) {
@@ -85,6 +87,7 @@ internal fun placeNativeFloatBlock(
     widthRule: NativeBlockWidth = NativeBlockWidth.Auto,
     maxPasses: Int = 64,
     pixelAligned: Boolean = false,
+    strictWidth: Boolean = false,
     measure: (NativeBlockMeasureRequest) -> NativeBlockMeasure,
 ): NativeFloatBlockPlacement {
     require(containingWidth.isFinite() && containingWidth >= 0f)
@@ -95,6 +98,7 @@ internal fun placeNativeFloatBlock(
         is NativeBlockWidth.Percent -> (containingWidth.toDouble() * widthRule.value / 100.0).toFloat()
     }
     require(requested == null || requested.isFinite()) { "Requested block width exceeds native geometry" }
+    val widthTolerance = if (strictWidth) 0f else PlacementEpsilon
     var y = startY
     val fullAvailable = if (pixelAligned) floor(containingWidth) else containingWidth
     var available = fullAvailable
@@ -125,14 +129,14 @@ internal fun placeNativeFloatBlock(
         val left = if (pixelAligned) ceil(rawLeft) else rawLeft
         val right = if (pixelAligned) floor(rawRight) else rawRight
         val free = max(0f, right - left)
-        if (overlap.isEmpty() || (size.usedWidth <= free + PlacementEpsilon &&
-                (requested != null || abs(available - free) <= PlacementEpsilon))) {
+        if (overlap.isEmpty() || (size.usedWidth <= free + widthTolerance &&
+                (requested != null || abs(available - free) <= widthTolerance))) {
             return NativeFloatBlockPlacement(NativeFloatBounds(left, y, left + size.usedWidth, bottom), size, left, right, count)
         }
         val signature = listOf(y, available, size.usedWidth, size.minWidth, size.height, left, right)
         if (!seen.add(signature)) throw UnsupportedFloatLayout("Delegated block measurement and float interval cycle")
-        if (requested == null && size.minWidth <= free + PlacementEpsilon && free > 0f &&
-            abs(available - free) > PlacementEpsilon) {
+        if (requested == null && size.minWidth <= free + widthTolerance && free > 0f &&
+            abs(available - free) > widthTolerance) {
             // Height can change after narrowing, so recompute the whole-height
             // interval before accepting this newly measured width.
             available = free
@@ -146,6 +150,47 @@ internal fun placeNativeFloatBlock(
 
 
 internal data class NativeFloatingTablePlacement(val outer: NativeFloatBounds, val content: NativeFloatBounds)
+
+/** Source-authenticated fixed margins, separate from the horizontal-auto capability. */
+internal data class NativeFixedMarginTableInput(val table: Table,
+    val containingDirection: TableContainingDirection)
+
+/** The existing allocator selects the whole-height float-free interval first.
+ * All-fixed ordinary margins resolve against that interval's containing direction. */
+internal fun placeNativeFixedMarginTable(containingWidth: Float, normalY: Float,
+    exclusions: List<NativeFloatExclusion>, margins: FloatMargins,
+    containingDirection: TableContainingDirection, widthRule: NativeBlockWidth = NativeBlockWidth.Auto,
+    clear: FigureClear? = null,
+    measure: (NativeBlockMeasureRequest) -> NativeBlockMeasure): NativeFloatingTablePlacement {
+    val horizontal = margins.left + margins.right
+    val requested = when (widthRule) {
+        NativeBlockWidth.Auto -> null
+        is NativeBlockWidth.FixedPx -> widthRule.value
+        is NativeBlockWidth.Percent -> (containingWidth.toDouble() * widthRule.value / 100.0).toFloat()
+    }
+    if (!horizontal.isFinite() || !(normalY + margins.top).isFinite() || requested?.isFinite() == false)
+        throw UnsupportedFloatLayout("Fixed table margins exceed native geometry")
+    val start = tableClearanceY(normalY + margins.top, clear, exclusions)
+    val outerRule = requested?.let { NativeBlockWidth.FixedPx(it + horizontal) } ?: NativeBlockWidth.Auto
+    var body: NativeBlockMeasure? = null
+    val placed = placeNativeFloatBlock(containingWidth, start, exclusions, outerRule, pixelAligned = false) { request ->
+        val actual = measure(NativeBlockMeasureRequest(containingWidth,
+            (request.availableWidth - horizontal).coerceAtLeast(0f), requested, request.availableWidth))
+        body = actual
+        NativeBlockMeasure(actual.usedWidth + horizontal, actual.minWidth + horizontal,
+            actual.height + margins.bottom)
+    }
+    val actual = checkNotNull(body)
+    val left = if (containingDirection == TableContainingDirection.Ltr) placed.availableLeft + margins.left
+        else placed.availableRight - margins.right - actual.usedWidth
+    val content = NativeFloatBounds(left, placed.bounds.top, left + actual.usedWidth,
+        placed.bounds.top + actual.height)
+    val outer = NativeFloatBounds(left - margins.left, placed.bounds.top - margins.top,
+        content.right + margins.right, placed.bounds.bottom)
+    if (listOf(outer.left, outer.top, outer.right, outer.bottom).any { abs(it) > TablePixelLimit })
+        throw UnsupportedFloatLayout("Placed fixed-margin table exceeds native geometry")
+    return NativeFloatingTablePlacement(outer, content)
+}
 
 /** A nonfloating table clears at its border edge. Its positive top margin does
  * not become additional clearance or participate in the body's exclusion band. */

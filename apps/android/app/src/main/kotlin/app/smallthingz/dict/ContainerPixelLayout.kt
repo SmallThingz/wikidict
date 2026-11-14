@@ -20,14 +20,15 @@ internal fun containerBoxWidth(style: ContainerStyle, containingWidth: Float, in
 
 /** Used box geometry in pixels. Flex Auto uses max-content; [containerFlexMeasure] retains the unclamped base. */
 internal fun containerBoxWidth(resolved: ContainerViewportStyle, containingWidth: Float, intrinsic: ContainerWidths,
-    density: Float, normalBodyFont: Float, flexItem: Boolean = false, rtl: Boolean = false): ContainerBoxWidth {
-    require(listOf(containingWidth, density, normalBodyFont).all { it.isFinite() && it >= 0f })
+    density: Float, normalBodyFont: Float, flexItem: Boolean = false, rtl: Boolean = false,
+    percentageReferenceWidth: Float = containingWidth): ContainerBoxWidth {
+    require(listOf(containingWidth, percentageReferenceWidth, density, normalBodyFont).all { it.isFinite() && it >= 0f })
     val style = resolved.box
     fun length(value: StyleLength): Float = value.value * if (value.unit == StyleLengthUnit.Px) density else normalBodyFont
     fun width(value: StyleWidth): Float = value.value * when (value.unit) {
         StyleWidthUnit.Px -> density
         StyleWidthUnit.Em -> normalBodyFont
-        StyleWidthUnit.Percent -> containingWidth / 100f
+        StyleWidthUnit.Percent -> percentageReferenceWidth / 100f
     }
     val padding = style.padding?.let { length(it.left) + length(it.right) } ?: 0f
     val border = style.border.physicalEdges().let { sides ->

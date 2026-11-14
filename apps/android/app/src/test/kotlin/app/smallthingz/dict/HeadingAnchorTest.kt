@@ -119,4 +119,49 @@ class HeadingAnchorTest {
         assertEquals("heading-0", headingScrollKey(companion, "#Noun_2"))
         assertEquals("heading-0", headingScrollKey(companion, "#Noun_legacy_2"))
     }
+
+    @Test fun sourceRevealKeepsTheMatchedIdentityAndOneSelectedOutsetThroughHeadingDestination() {
+        fun px(value: Float) = StyleLength(StyleLengthUnit.Px, value)
+        val zero = StyleEdges(px(0f), px(0f), px(0f), px(0f))
+        val policy = SectionHeadingStyle(ContainerStyle(margins = zero, padding = zero,
+            border = ContainerBorder.None, ownerFontScale = 1f, lineHeight = ContainerLineHeight.Normal,
+            clear = FigureClear.None, fontFamily = ContainerFontFamily.SansSerif),
+            InlineFontSnapshot(1f, FontScaleBasis.NormalBody, language = "th"), BidiResolvedDirection.Ltr,
+            anchorReveal = HeadingAnchorReveal(px(75f), px(0f)))
+        val companion = Block("heading", 0, listOf(Span("link", "Heading", "action")),
+            level = 3, anchor = "owner_id", anchorFallback = ".6Fwner")
+        val section = Section(3, "Heading", listOf(companion), "owner_id", ".6Fwner", policy)
+        val entry = Entry("word", emptyList(), "language", "Thai", "th", listOf(section), emptyList())
+        val primary = checkNotNull(headingDestination(entry, "#owner id"))
+        val fallback = checkNotNull(headingDestination(entry, "#.6Fwner"))
+        assertEquals(primary.rowKey, fallback.rowKey)
+        assertEquals(HeadingAnchorSelection("owner_id", HeadingAnchorKind.Primary, px(75f)), primary.anchorMatch)
+        assertEquals(HeadingAnchorSelection(".6Fwner", HeadingAnchorKind.Fallback, px(0f)), fallback.anchorMatch)
+        assertSame(companion, entry.readingRows.single().headingBlock)
+        assertSame(companion.spans.single(), entry.readingRows.single().headingBlock!!.spans.single())
+        assertNull(headingDestination(entry, "#%6Fwner"))
+        val duplicate = entry.copy(sections = listOf(section, Section(3, "Other", emptyList(), ".6Fwner")))
+        assertNull(headingDestination(duplicate, "#.6Fwner"))
+        val legacy = entry.copy(sections = listOf(section.copy(headingStyle = null)))
+        assertNull(headingDestination(legacy, "#owner_id")!!.anchorMatch!!.revealTop)
+        assertNull(headingDestination(legacy, "#.6Fwner")!!.anchorMatch!!.revealTop)
+        assertNull(headingDestination(entry.copy(sections = listOf(Section(3, "Heading", emptyList()))),
+            "#Heading")!!.anchorMatch)
+    }
+
+    @Test fun sourceRevealConvertsOnlyTheSelectedCssPixelsBeforeOrdinaryScrollClamping() {
+        val primary = StyleLength(StyleLengthUnit.Px, 75f)
+        val fallback = StyleLength(StyleLengthUnit.Px, 0f)
+        assertEquals(196.75f, headingRevealScrollDelta(300.5f, 10f, primary, 1.25f)!!, 0f)
+        assertEquals(290.5f, headingRevealScrollDelta(300.5f, 10f, fallback, 1.25f)!!, 0f)
+        assertEquals(-93.75f, headingRevealScrollDelta(10f, 10f, primary, 1.25f)!!, 0f)
+        assertEquals(-1_000_000f, headingRevealScrollDelta(0f, 0f,
+            StyleLength(StyleLengthUnit.Px, 1_000_000f), 1f)!!, 0f)
+        assertNull(headingRevealScrollDelta(Float.NaN, 0f, primary, 1f))
+        assertNull(headingRevealScrollDelta(0f, Float.POSITIVE_INFINITY, primary, 1f))
+        assertNull(headingRevealScrollDelta(0f, 0f, primary, 0f))
+        assertNull(headingRevealScrollDelta(0f, 0f, StyleLength(StyleLengthUnit.Em, 1f), 1f))
+        assertNull(headingRevealScrollDelta(0f, 0f, StyleLength(StyleLengthUnit.Px, Float.MAX_VALUE), 2f))
+    }
+
 }

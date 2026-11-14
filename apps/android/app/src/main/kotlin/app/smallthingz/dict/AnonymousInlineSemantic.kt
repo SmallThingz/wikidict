@@ -10,7 +10,9 @@ internal fun anonymousInlineSemantic(spans: List<Span>, nativeText: String): Lis
         offset += text.length
     }
     spans.forEach { span ->
-        val isolate = when (span.direction) { "ltr" -> '\u2066'; "rtl" -> '\u2067'; "auto" -> '\u2068'; else -> null }
+        val isolate = if (!span.usesInlineDirectionIsolate()) null else when (span.direction) {
+            "ltr" -> '\u2066'; "rtl" -> '\u2067'; "auto" -> '\u2068'; else -> null
+        }
         isolate?.let { check(nativeText.getOrNull(offset++) == it) }
         val image = span.image
         if (image != null) {

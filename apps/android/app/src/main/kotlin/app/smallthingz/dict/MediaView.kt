@@ -72,13 +72,14 @@ class MediaCache internal constructor(context:Context,
     suspend fun clear()=withContext(Dispatchers.IO){lock.withLock{cacheDirectory.listFiles()?.forEach{it.delete()};Unit}}
     suspend fun trim(mb:Int)=withContext(Dispatchers.IO){lock.withLock{trimLocked(mb.toLong()*1024*1024)}}
     private fun trimLocked(max:Long,keep:File?=null){val files=cacheDirectory.listFiles().orEmpty().filter{it.extension=="bin"};var total=files.sumOf{it.length()};for(f in files.sortedBy{it.lastModified()}){if(total<=max)break;if(f==keep)continue;total-=f.length();f.delete();File(cacheDirectory,f.nameWithoutExtension+".meta").delete()}}
-    suspend fun get(media:Media,mb:Int,edition:String=""):MediaFile=acquire(media,mb,edition,false,false,null,null) {}
+    suspend fun get(media:Media,mb:Int,edition:String=""):MediaFile=acquire(media,mb,edition,false,false,null,null,null) {}
     internal suspend fun <T> withFile(media:Media,mb:Int,edition:String="",forceRefresh:Boolean=false,canonicalFile:Boolean=false,
-        rasterRequest:SvgRasterRequest?=null,posterRequest:StaticPosterRequest?=null,action:suspend (MediaFile)->T):T {
+        rasterRequest:SvgRasterRequest?=null,posterRequest:StaticPosterRequest?=null,
+        blockMediaRequest:FigureBlockMediaRequest?=null,action:suspend (MediaFile)->T):T {
         var owned:MediaFile?=null
         var failure:Throwable?=null
         try {
-            val loaded=acquire(media,mb,edition,forceRefresh,canonicalFile,rasterRequest,posterRequest) { owned=it }
+            val loaded=acquire(media,mb,edition,forceRefresh,canonicalFile,rasterRequest,posterRequest,blockMediaRequest) { owned=it }
             return action(loaded)
         } catch(e:Throwable) { failure=e;throw e }
         finally {
@@ -90,7 +91,12 @@ class MediaCache internal constructor(context:Context,
         }
     }
     private suspend fun acquire(media:Media,mb:Int,edition:String,forceRefresh:Boolean,canonicalFile:Boolean,
-        rasterRequest:SvgRasterRequest?,posterRequest:StaticPosterRequest?,acquired:(MediaFile)->Unit):MediaFile=withContext(Dispatchers.IO){lock.withLock{
+        rasterRequest:SvgRasterRequest?,posterRequest:StaticPosterRequest?,blockMediaRequest:FigureBlockMediaRequest?,
+        acquired:(MediaFile)->Unit):MediaFile=withContext(Dispatchers.IO){lock.withLock{
+        if (blockMediaRequest != null) {
+            require(canonicalFile && media.kind == "image" && rasterRequest == null && posterRequest == null)
+            return@withLock acquireBlockMedia(media, mb, edition, forceRefresh, blockMediaRequest).also(acquired)
+        }
         require(rasterRequest == null || canonicalFile && media.kind == "image")
         require(posterRequest == null || rasterRequest == null && canonicalFile && media.kind == "image" && posterRequest.image.file == media.file)
         val key=mediaKey(media,edition) + (if (canonicalFile) "-canonical" else "") + rasterRequest?.cacheSuffix.orEmpty() + posterRequest?.cacheSuffix.orEmpty()
@@ -193,6 +199,39 @@ class MediaCache internal constructor(context:Context,
                 exactRasterWidth=poster?.width,exactRasterHeight=poster?.height).also(acquired)
         } catch(e:Exception){temp.delete();throw e}
     }}
+
+    /** The compiled block occurrence selects its exact source PNG; imageinfo cannot replace it. */
+    private suspend fun acquireBlockMedia(media: Media, mb: Int, edition: String, forceRefresh: Boolean,
+        request: FigureBlockMediaRequest): MediaFile {
+        val key = mediaKey(media, edition) + request.cacheSuffix
+        val file = File(cacheDirectory, "$key.bin")
+        if (!forceRefresh && file.isFile) {
+            val valid = try { request.verifyBody(file); true }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { false }
+            if (valid) { file.setLastModified(System.currentTimeMillis()); return request.resource(file) }
+        }
+        val temp = File.createTempFile("$key-", ".part", cacheDirectory)
+        try {
+            openMedia(request.identity.url).use { input -> temp.outputStream().use { out ->
+                val buffer = ByteArray(64 * 1024)
+                var total = 0L
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    require(total <= 50L * 1024 * 1024) { "Source Figure raster is too large" }
+                    out.write(buffer, 0, count)
+                }
+            } }
+            request.verifyBody(temp)
+            if (mb == 0 || temp.length() > mb.toLong() * 1024 * 1024) return request.resource(temp, true)
+            trimLocked(mb.toLong() * 1024 * 1024 - temp.length())
+            require(temp.renameTo(file)) { "Could not store source Figure raster" }
+            return request.resource(file)
+        } catch (failure: Exception) { temp.delete(); throw failure }
+    }
 }
 object MediaPlayback {
     private var player by mutableStateOf<MediaPlayer?>(null)

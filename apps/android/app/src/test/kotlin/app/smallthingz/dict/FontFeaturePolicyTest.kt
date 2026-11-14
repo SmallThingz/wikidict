@@ -80,7 +80,7 @@ class FontFeaturePolicyTest {
         }
         for (policy in listOf(0, 1)) {
             val wire = Wire(); val good = wire.document(policy, 12f, 2)
-            for (flag in listOf(4, 8, 255)) {
+            for (flag in listOf(8, 16, 255)) {
                 val bad = good.copyOf(); bad[wire.fieldsAt] = flag.toByte()
                 assertThrows(RuntimeException::class.java) { read(bad) }
             }

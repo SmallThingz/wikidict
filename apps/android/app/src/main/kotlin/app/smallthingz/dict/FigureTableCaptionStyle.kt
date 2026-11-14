@@ -55,6 +55,7 @@ data class FigureMediaLayout(val strut: FigureMediaStrut, val verticalAlign: Inl
     val maxWidth: AvailableWidthLimit? = null, val positioning: ContainerPositioning? = null,
     val after: FigureMediaAfter? = null, val focusOutline: FigureFocusOutline? = null) {
     init {
+        require(positioning == null || positioning == ContainerPositioning.RelativeAuto) { "Unsupported Figure media positioning" }
         require(verticalAlign in listOf(InlineBoxVerticalAlign.Baseline, InlineBoxVerticalAlign.Middle)) {
             "Unsupported Figure media alignment"
         }

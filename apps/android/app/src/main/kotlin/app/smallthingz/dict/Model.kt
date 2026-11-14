@@ -27,9 +27,17 @@ data class Span(
     val targetFragment: String? = null,
     val tooltip: String? = null,
     val fontFeatures: FontFeaturePolicy? = null,
+    val linkPaint: LinkPaint? = null,
+    val inlineStyle: InlineTextStyle? = null,
+    val fontFamily: ContainerFontFamily? = null,
 ) {
     init {
         require(tooltip == null || validPresentationString(tooltip)) { "Invalid span tooltip" }
+        require(linkPaint == null || kind in setOf("link", "external_link") && target.isNotEmpty() && image == null) {
+            "Source link paint requires an ordinary text link action"
+        }
+        require(linkPaint == null || (foreground == null || foreground == linkPaint.normal.foreground) &&
+            underline == linkPaint.normal.underline) { "Source link paint conflicts with its static normal state" }
         require(targetFragment == null || kind == "link") { "Only internal links may carry a target fragment" }
         require(targetFragment == null || validPresentationString(targetFragment)) { "Invalid link target fragment" }
         require(fontScaleBasis != FontScaleBasis.NormalBody || fontScale != null) {
@@ -45,6 +53,105 @@ data class Span(
             else -> false
         }) { "Invalid inline image action" }
         require(image == null || (text.isEmpty() && trail.isEmpty())) { "Inline image occurrences cannot also contain text" }
+        inlineStyle?.let { policy ->
+            require(image == null && when (kind) {
+                "text" -> target.isEmpty() && (text.isNotEmpty() || policy.lineHeight != null)
+                "link", "external_link" -> target.isNotEmpty() && text.isNotEmpty()
+                else -> false
+            }) { "Inline effects require an ordinary text owner or an empty line-height strut" }
+            require(policy.cursor == null || text.isNotEmpty()) { "Empty inline struts cannot own a cursor" }
+            require(policy.wrap == null || text.isNotEmpty()) { "Empty inline struts cannot own wrapping" }
+            require(fontScale == null || fontScale.isFinite() && fontScale >= 0f) { "Invalid inline owner font scale" }
+            require(!policy.fontNormalized || fontScale != null && fontScaleBasis != FontScaleBasis.Context) {
+                "Normalized inline font requires an explicit non-context scale"
+            }
+            if (policy.baselineShift != null && policy.lineHeight is InlineLineHeight.FontRelative)
+                require(policy.lineHeight.font.matches(this, policy.fontNormalized)) {
+                    "Shifted inline line-height owner differs from the run font"
+                }
+        }
+    }
+}
+
+typealias LinkState = FigureLinkState
+
+/** Ordinary links retain all eight source states independently of existing Figure paint. */
+data class LinkPaint(val normal: LinkState, val hover: LinkState, val active: LinkState,
+    val hoverActive: LinkState, val visited: LinkState, val visitedHover: LinkState,
+    val visitedActive: LinkState, val visitedHoverActive: LinkState, val underlineOnFocus: Boolean,
+    val focusOutline: FigureFocusOutline? = null) {
+    init { require(focusOutline == null || focusOutline.color is FigureColor.Rgb) {
+        "Link focus requires its source RGB color"
+    } }
+    internal fun state(visited: Boolean, hovered: Boolean, active: Boolean): LinkState = when {
+        visited && hovered && active -> visitedHoverActive
+        visited && active -> visitedActive
+        visited && hovered -> visitedHover
+        visited -> this.visited
+        hovered && active -> hoverActive
+        active -> this.active
+        hovered -> hover
+        else -> normal
+    }
+}
+
+enum class InlineUnderlineStyle { Solid, Dotted }
+data class InlineUnderline(val style: InlineUnderlineStyle, val color: String? = null,
+    val thickness: StyleLength? = null) {
+    init { require(color == null || Regex("#[0-9a-f]{6}").matches(color)) { "Invalid inline underline RGB" } }
+}
+
+/** Source-computed length; legacy table ComputedLineHeight keeps its separate domain. */
+data class InlineComputedLength(val value: Float, val fontScaleBasis: FontScaleBasis) {
+    init { require(value.isFinite() && fontScaleBasis != FontScaleBasis.Context) { "Invalid computed inline length" } }
+}
+
+data class InlineFontSnapshot(val fontScale: Float? = null,
+    val fontScaleBasis: FontScaleBasis = FontScaleBasis.Context, val small: Boolean = false,
+    val superscript: Boolean = false, val subscript: Boolean = false, val fontNormalized: Boolean = false,
+    val bold: Boolean = false, val italic: Boolean = false, val code: Boolean = false,
+    val language: String = "", val classes: String = "", val role: String = "normal",
+    val fontFeatures: FontFeaturePolicy? = null, val fontFamily: ContainerFontFamily? = null) {
+    init {
+        require(fontScale == null || fontScale.isFinite() && fontScale >= 0f) { "Invalid inline snapshot font scale" }
+        require(fontScaleBasis == FontScaleBasis.Context || fontScale != null) { "Inline snapshot basis requires a scale" }
+        require(!fontNormalized || fontScale != null && fontScaleBasis != FontScaleBasis.Context) {
+            "Normalized inline snapshot requires an explicit non-context scale"
+        }
+        require(validPresentationString(language) && '\u0000' !in language &&
+            validPresentationString(classes) && '\u0000' !in classes) { "Invalid inline snapshot language or classes" }
+        require(role in setOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")) {
+            "Unknown inline snapshot role"
+        }
+    }
+    internal fun matches(span: Span, normalized: Boolean): Boolean =
+        (if (fontScale == null) span.fontScale == null else span.fontScale?.let { fontScale.toDouble() == it.toDouble() } == true) &&
+            fontScaleBasis == span.fontScaleBasis && fontNormalized == normalized &&
+            small == span.small && superscript == span.superscript && subscript == span.subscript &&
+            bold == span.bold && italic == span.italic && code == span.code &&
+            language == span.language && classes == span.classes && role == span.role &&
+            fontFeatures == span.fontFeatures && fontFamily == span.fontFamily
+}
+
+sealed interface InlineLineHeight {
+    data class Computed(val value: InlineComputedLength) : InlineLineHeight {
+        init { require(value.value >= 0f) { "Negative inline line height" } }
+    }
+    data class FontRelative(val factor: Float, val font: InlineFontSnapshot) : InlineLineHeight {
+        init { require(factor.isFinite() && factor >= 0f) { "Invalid inline line-height factor" } }
+    }
+}
+
+enum class TextWrap { Normal, BreakWord, NoWrap }
+enum class InlineCursor { Help }
+data class InlineTextStyle(val decoration: InlineUnderline? = null, val lineHeight: InlineLineHeight? = null,
+    val baselineShift: InlineComputedLength? = null, val fontNormalized: Boolean = false,
+    val cursor: InlineCursor? = null, val wrap: TextWrap? = null) {
+    init {
+        require(wrap != TextWrap.NoWrap) { "No-wrap requires a positioned owner" }
+        require(decoration != null || lineHeight != null || baselineShift != null || fontNormalized || cursor != null || wrap != null) {
+            "Empty inline text style"
+        }
     }
 }
 
@@ -150,14 +257,14 @@ internal fun validPresentationString(value: String): Boolean {
 /** Relative to the caller's typography; legacy reduction is applied only once. */
 internal fun spanFontScale(span: Span): Float {
     require(span.fontScaleBasis != FontScaleBasis.CssPx) { "CSS pixels are not a font multiplier" }
-    return (span.fontScale ?: 1f) * if (span.small || span.superscript || span.subscript) 0.8f else 1f
+    return (span.fontScale ?: 1f) * if (span.inlineStyle?.fontNormalized != true && (span.small || span.superscript || span.subscript)) 0.8f else 1f
 }
 
 /** Native text policy: retain source pixels, then zoom nominal sp before accessibility conversion. */
 internal fun cssPixelNominalFontSp(span: Span, textZoom: Float): Float {
     require(span.fontScaleBasis == FontScaleBasis.CssPx)
     require(textZoom.isFinite() && textZoom > 0f) { "Invalid reader text zoom" }
-    val legacy = if (span.small || span.superscript || span.subscript) 0.8 else 1.0
+    val legacy = if (span.inlineStyle?.fontNormalized != true && (span.small || span.superscript || span.subscript)) 0.8 else 1.0
     return (checkNotNull(span.fontScale).toDouble() * textZoom.toDouble() * legacy)
         .coerceAtMost(Float.MAX_VALUE.toDouble()).toFloat()
 }
@@ -172,7 +279,7 @@ internal fun spanFontPixels(span: Span, contextPixels: Float, normalBodyPixels: 
     val scale = span.fontScale ?: 1f
     require(scale.isFinite() && scale >= 0f)
     val base = if (span.fontScaleBasis == FontScaleBasis.NormalBody) normalBodyPixels else contextPixels
-    val legacy = if (span.small || span.superscript || span.subscript) 0.8 else 1.0
+    val legacy = if (span.inlineStyle?.fontNormalized != true && (span.small || span.superscript || span.subscript)) 0.8 else 1.0
     return (base.toDouble() * scale.toDouble() * legacy).coerceAtMost(MaxComputedFontPixels.toDouble()).toFloat()
 }
 
@@ -189,6 +296,7 @@ data class StyleLength(override val unit: StyleLengthUnit, override val value: F
 }
 data class StyleEdges(override val top: StyleLength, override val right: StyleLength,
     override val bottom: StyleLength, override val left: StyleLength) : ContainerMarginEdges
+data class RuleStyle(val height: StyleLength, val fill: ContainerColor, val margins: StyleEdges)
 data class BlockStyle(val margins: StyleEdges? = null, val padding: StyleEdges? = null) {
     init { require(margins != null || padding != null) { "Empty block style" } }
 }
@@ -266,6 +374,7 @@ sealed interface FigureContent {
                 "external_link" -> span.target.isNotEmpty()
                 else -> false
             }) { "Invalid missing figure action" }
+            require(linkPaint == null || span.linkPaint == null) { "Missing-link paint has two owners" }
             require(linkPaint == null || span.kind in setOf("link", "external_link") && span.foreground == null) {
                 "Missing-link paint requires an action without a static foreground"
             }
@@ -275,6 +384,58 @@ sealed interface FigureContent {
         }
     }
 }
+data class FigureBlockMediaRendition(val url: String, val sha256: String) {
+    init {
+        require(url.length <= 8192 && url.startsWith("https://") &&
+            url.all { it.code in 0x21..0x7e && it != '\\' && it != '#' }) {
+            "Invalid Figure block raster URL"
+        }
+        val path = url.indexOf('/', startIndex = 8)
+        require(path > 8 && path + 1 < url.length) { "Figure block raster requires a host and path" }
+        val host = url.substring(8, path)
+        require(host.first() != '.' && host.last() != '.' && '.' in host && host.all {
+            it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '.' || it == '-'
+        }) { "Invalid Figure block raster host" }
+        require(Regex("[0-9a-f]{64}").matches(sha256)) { "Invalid Figure block raster SHA256" }
+    }
+}
+data class FigureBlockMediaState(val maxWidthPx: Long, val wrapper: ContainerStyle,
+    val media: FigureMediaLayout) {
+    init {
+        require(maxWidthPx in 0L..0xffff_ffffL) { "Invalid Figure block viewport threshold" }
+        require(validFigureBlockMediaState(wrapper, media)) { "Unsupported Figure block viewport state" }
+    }
+}
+data class FigureBlockMediaLayout(val wrapper: ContainerStyle, val media: FigureMediaLayout,
+    val preferredWidthPx: Long, val naturalWidth: Long, val naturalHeight: Long,
+    val rendition1x: FigureBlockMediaRendition, val rendition2x: FigureBlockMediaRendition,
+    val viewportStates: List<FigureBlockMediaState> = emptyList()) {
+    init {
+        require(preferredWidthPx in 1L..0xffff_ffffL && naturalWidth in 1L..0x7fff_ffffL &&
+            naturalHeight in 1L..0x7fff_ffffL) { "Invalid Figure block media axes" }
+        require(rendition1x.url != rendition2x.url && rendition1x.sha256 != rendition2x.sha256) {
+            "Figure block media requires distinct density renditions"
+        }
+        require(validFigureBlockMediaState(wrapper, media)) { "Unsupported Figure block base state" }
+        require(viewportStates.size <= 16 && viewportStates.zipWithNext().all { (a, b) ->
+            a.maxWidthPx > b.maxWidthPx
+        }) { "Figure block viewport states must be bounded and strictly descending" }
+    }
+    internal fun stateAtViewport(cssWidth: Double): FigureBlockMediaState? {
+        require(cssWidth.isFinite() && cssWidth >= 0.0) { "Invalid Figure block viewport width" }
+        return viewportStates.lastOrNull { cssWidth <= it.maxWidthPx.toDouble() }
+    }
+}
+private fun validFigureBlockMediaState(wrapper: ContainerStyle, media: FigureMediaLayout): Boolean =
+    wrapper.width == ContainerWidth.Auto && wrapper.lineHeight != null && wrapper.textAlign != null &&
+        wrapper.ownerFontScale != null && wrapper.ownerFontScale == media.strut.fontScale &&
+        (wrapper.margins != null || wrapper.marginValues != null) &&
+        wrapper == ContainerStyle(margins = wrapper.margins, width = wrapper.width,
+            lineHeight = wrapper.lineHeight, textAlign = wrapper.textAlign, ownerFontScale = wrapper.ownerFontScale,
+            marginValues = wrapper.marginValues) && media.verticalAlign == InlineBoxVerticalAlign.Middle &&
+        media.positioning == null && media.after == null && media.focusOutline == null &&
+        (media.maxWidth == null || media.maxWidth.percent == 100f && media.maxWidth.subtract.value == 0f)
+
 data class Figure(val content: FigureContent, val format: FigureFormat, val placement: FigurePlacement,
     val clear: FigureClear, val margins: StyleEdges, val imageInsets: StyleEdges, val captionPadding: StyleEdges,
     val captionFontScale: Float, val captionLineHeight: StyleLength,
@@ -283,8 +444,21 @@ data class Figure(val content: FigureContent, val format: FigureFormat, val plac
     val captionForeground: FigureColor, val captionBackground: FigureColor,
     val caption: List<Span> = emptyList(), val captionBlocks: List<Block>? = null,
     val captionTextAlign: CellTextAlign? = null, val frameMinWidth: StyleLength? = null,
-    val tableCaptionLayout: TableCaptionLayout? = null) {
+    val tableCaptionLayout: TableCaptionLayout? = null, val blockMediaLayout: FigureBlockMediaLayout? = null) {
     init {
+        if (blockMediaLayout != null) {
+            require(content is FigureContent.Image && tableCaptionLayout == null &&
+                placement == FigurePlacement.None && clear == FigureClear.None && frameMinWidth == null &&
+                frameBorder == FigureBorder.None && imageBorder == FigureBorder.None &&
+                frameBackground == FigureColor.Transparent && imageBackground == FigureColor.Transparent &&
+                captionBackground == FigureColor.Transparent && caption.isEmpty() && captionBlocks.isNullOrEmpty() &&
+                captionTextAlign == null && listOf(margins, imageInsets, captionPadding).all { edges ->
+                    listOf(edges.top, edges.right, edges.bottom, edges.left).all { it.value == 0f }
+                } && content.span.kind == "text" && content.span.target.isEmpty() &&
+                content.span.image != null && content.span.image.map == null && content.span.image.staticPoster == null) {
+                "Unsupported Figure block-media combination"
+            }
+        }
         require(tableCaptionLayout == null || frameBorder == FigureBorder.None &&
             (content as? FigureContent.Image)?.span?.image?.staticPoster == null &&
             (content as? FigureContent.Image)?.span?.image?.map == null &&
@@ -301,12 +475,13 @@ data class Figure(val content: FigureContent, val format: FigureFormat, val plac
                 content.sizing == FigureSizingPolicy.RequestedFit) { "Unsupported static poster figure mode" }
         }
         require(captionBlocks == null || caption.isEmpty()) { "Rich figure caption owns its content" }
+        captionBlocks?.let(::validatePositionedRootBlocks)
         require(captionFontScale.isFinite() && captionFontScale >= 0f) { "Invalid figure caption scale" }
         require(span.fontScale == null || span.fontScale.isFinite() && span.fontScale >= 0f) { "Invalid figure content font scale" }
         require(span.foreground == null || Regex("#[0-9a-f]{6}").matches(span.foreground)) { "Invalid figure content foreground" }
         require(span.background == null || Regex("#[0-9a-f]{6}").matches(span.background)) { "Invalid figure content background" }
         tableCaptionLayout?.missingLinkPaint?.let { policy ->
-            require(content is FigureContent.Missing && content.linkPaint == null &&
+            require(content is FigureContent.Missing && content.linkPaint == null && span.linkPaint == null &&
                 span.kind in setOf("link", "external_link") && span.target.isNotEmpty()) {
                 "Source Missing-link paint requires its sole existing label action"
             }
@@ -317,6 +492,7 @@ data class Figure(val content: FigureContent, val format: FigureFormat, val plac
         tableCaptionLayout?.captionLinkPaint?.let { policy ->
             val visitor = PresentationSpanVisitor { spans, _ ->
                 spans.filter { it.image == null && it.kind in setOf("link", "external_link") }.forEach { link ->
+                    require(link.linkPaint == null) { "Caption-link paint has two owners" }
                     require(link.foreground == null || link.foreground == policy.normal.foreground) {
                         "Source caption-link paint conflicts with its static foreground"
                     }
@@ -379,8 +555,20 @@ internal fun validateTableAutoMargins(value: ContainerMargins) {
 }
 
 /** Cell metrics have an explicit origin and admit zero; the older Table domain stays closed. */
-data class CellTextStrut(val fontScale: Float, val fontScaleBasis: FontScaleBasis) {
-    init { require(fontScale.isFinite() && fontScale >= 0f && fontScaleBasis != FontScaleBasis.Context) }
+data class CellTextStrut(val fontScale: Float, val fontScaleBasis: FontScaleBasis,
+    val ownerFont: InlineFontSnapshot? = null) {
+    init {
+        require(fontScale.isFinite() && fontScale >= 0f && fontScaleBasis != FontScaleBasis.Context)
+        ownerFont?.let { font ->
+            require(font.fontScale != null && font.fontScale == fontScale && font.fontScaleBasis == fontScaleBasis) {
+                "Cell owner font must use the strut's sole size and basis"
+            }
+            require(font.fontFamily != null && font.fontFeatures != null && font.language.isNotEmpty() &&
+                font.language.toByteArray(Charsets.UTF_8).size <= 1024 &&
+                !font.small && !font.superscript && !font.subscript && !font.fontNormalized && !font.code &&
+                font.classes.isEmpty() && font.role == "normal") { "Incomplete or unsupported cell owner font" }
+        }
+    }
 }
 data class CellFixedLineHeight(val value: Float, val fontScaleBasis: FontScaleBasis) {
     init { require(value.isFinite() && value >= 0f && fontScaleBasis != FontScaleBasis.Context) }
@@ -408,17 +596,29 @@ data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, va
     init {
         require(nestedTable == null || spans.isEmpty()) { "A nested table cell cannot also contain spans" }
         require(blocks == null || (spans.isEmpty() && nestedTable == null)) { "Ordered cell blocks cannot also contain legacy content" }
+        blocks?.let(::validatePositionedRootBlocks)
     }
 }
+/** Source TABLE focus-visible paint; it never contributes layout metrics. */
+enum class TableScrollFocusMode { AuthoredNone, UaAuto }
+data class TableScrollFocusPaint(val mode: TableScrollFocusMode, val color: FigureColor? = null) {
+    init { require(color == null || mode == TableScrollFocusMode.UaAuto) {
+        "Authored table outline none cannot request a color"
+    } }
+}
+
 /** One source block viewport around this Table's existing anonymous grid and caption. */
 data class TableBlockViewport(val maxViewportWidthPx: Long, val boxStyle: TableStyle,
     val boxSizing: ContainerBoxSizing, val maxWidth: StyleWidth, val gridStyle: TableStyle,
-    val gridDirection: TableContainingDirection, val language: String) {
+    val gridDirection: TableContainingDirection, val language: String,
+    val focusPaint: TableScrollFocusPaint? = null) {
     init {
         require(language.isNotEmpty() && validPresentationString(language)) { "Invalid table source language" }
         require(maxViewportWidthPx in 0L..0xffff_ffffL) { "Invalid table viewport threshold" }
-        require(boxStyle.width != null && boxStyle.width.value > 0f && boxStyle.marginValues != null &&
-            boxStyle.margins == null && boxStyle.floatSide == null && boxStyle.display == null &&
+        val widthAndMargins = if (focusPaint != null)
+            boxStyle.width == null && boxStyle.margins != null && boxStyle.marginValues == null && boxStyle.containingDirection == null
+        else boxStyle.width != null && boxStyle.width.value > 0f && boxStyle.marginValues != null && boxStyle.margins == null
+        require(widthAndMargins && boxStyle.floatSide == null && boxStyle.display == null &&
             boxStyle.verticalAlign == null && boxStyle.collapse == null && boxStyle.lineHeight == null) {
             "Unsupported table viewport box style"
         }
@@ -430,14 +630,41 @@ data class TableBlockViewport(val maxViewportWidthPx: Long, val boxStyle: TableS
     }
 }
 
+/** One source table changes physical float placement while retaining its existing grid. */
+data class TableFloatViewport(val maxViewportWidthPx: Long,
+    val containingDirection: TableContainingDirection, val gridDirection: TableContainingDirection,
+    val language: String, val narrowClear: FigureClear? = null) {
+    init {
+        require(maxViewportWidthPx in 1L..0xffff_ffffL) { "Invalid table float viewport threshold" }
+        require(language.isNotEmpty() && validPresentationString(language)) { "Invalid table source language" }
+    }
+}
+
 data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geometry: TableGeometry? = null,
     val style: TableStyle? = null, val captionBlocks: List<Block>? = null,
-    val blockViewport: TableBlockViewport? = null) {
+    val blockViewport: TableBlockViewport? = null, val floatViewport: TableFloatViewport? = null) {
     init {
-        require(blockViewport == null || geometry == null && style?.isInline != true && style?.floatSide == null) {
-            "Table block viewport requires nonfloating block content without legacy geometry"
+        if (blockViewport != null && floatViewport != null) {
+            require(blockViewport.focusPaint != null && floatViewport.narrowClear == null &&
+                blockViewport.maxViewportWidthPx == floatViewport.maxViewportWidthPx &&
+                blockViewport.gridDirection == floatViewport.gridDirection && blockViewport.language == floatViewport.language) {
+                "Paired table viewports require matching source owners and explicit scroll focus paint"
+            }
+        } else require(blockViewport == null || blockViewport.focusPaint == null && geometry == null &&
+            style?.isInline != true && style?.floatSide == null) {
+            "Standalone table block viewport requires nonfloating content without paired focus or legacy geometry"
+        }
+        if (floatViewport != null) {
+            require(geometry == null && caption.isEmpty() && captionBlocks == null &&
+                rows.any { it.isNotEmpty() }) { "Table float viewport requires a nonempty captionless grid without legacy geometry" }
+            require(style != null && style.floatSide == TableFloatSide.Right && style.margins != null &&
+                style.marginValues == null && style.containingDirection == null && style.width?.unit != StyleWidthUnit.Percent &&
+                style.padding == null && style.display == null && style.verticalAlign == null && style.lineHeight == null) {
+                "Unsupported table float viewport style"
+            }
         }
         require(captionBlocks == null || caption.isEmpty()) { "Rich table caption owns its content" }
+        captionBlocks?.let(::validatePositionedRootBlocks)
         require(style?.isInline != true || caption.isEmpty() && captionBlocks == null) { "Inline table cannot have a caption" }
         require(style?.isInline != true || rows.any { it.isNotEmpty() }) { "Inline table requires a cell" }
         require(style?.isInline != true || rows.all { row -> row.all(::inlineTableCellShape) }) { "Unsupported inline table cell shape" }
@@ -451,6 +678,15 @@ internal fun Table.blockViewportAt(documentViewportCssPx: Float): TableBlockView
 internal fun Table.blockViewportAt(documentViewportCssPx: Double): TableBlockViewport? {
     require(documentViewportCssPx.isFinite() && documentViewportCssPx >= 0.0) { "Invalid document CSS viewport" }
     return blockViewport?.takeIf { documentViewportCssPx <= it.maxViewportWidthPx.toDouble() }
+}
+
+/** The source table stays immutable; containing direction never mirrors the physical float. */
+internal fun Table.effectiveFloatStyle(documentViewportCssPx: Double): TableStyle? {
+    val policy = floatViewport ?: return style
+    require(documentViewportCssPx.isFinite() && documentViewportCssPx >= 0.0) { "Invalid document CSS viewport" }
+    val base = checkNotNull(style)
+    return if (documentViewportCssPx <= policy.maxViewportWidthPx.toDouble())
+        blockViewport?.boxStyle ?: base.copy(floatSide = null, clear = policy.narrowClear ?: base.clear) else base
 }
 
 /** Cells whose existing text/image layout exposes actual intrinsic widths. Wire versions gate new shapes separately. */
@@ -489,6 +725,8 @@ internal fun Block.acceptsAnonymousContent(): Boolean = kind in setOf(
 internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) -> Unit) {
     var visitFigures = true
     var onTable: (Table, Int, Int) -> Unit = { _, _, _ -> }
+    var onContainer: (Container) -> Unit = {}
+    var onFigure: (Figure) -> Unit = {}
     var visitFigureContent: ((FigureContent) -> Unit)? = null
     private var remaining = 1 shl 20
     private fun charge(count: Int) { require(count <= remaining) { "Presentation item budget exceeded" }; remaining -= count }
@@ -499,7 +737,10 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     }
     fun block(value: Block, tableDepth: Int = 0, contentDepth: Int = 0) {
         when {
-            value.container != null -> blocks(value.container.blocks, tableDepth, descend(contentDepth))
+            value.container != null -> {
+                onContainer(value.container)
+                blocks(value.container.blocks, tableDepth, descend(contentDepth))
+            }
             value.table != null -> table(value.table, tableDepth + 1, contentDepth)
             value.figure != null -> figure(value.figure, tableDepth, contentDepth)
             value.flow != null -> parts(value.flow, tableDepth, descend(contentDepth))
@@ -508,6 +749,7 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     }
     fun figure(value: Figure, tableDepth: Int, contentDepth: Int) {
         if (!visitFigures) return
+        onFigure(value)
         val contentVisitor = visitFigureContent
         if (contentVisitor == null) spans(listOf(value.content.span))
         else { charge(1); contentVisitor(value.content) }
@@ -556,8 +798,13 @@ data class Block(
     val figure: Figure? = null,
     val flow: List<FlowPart>? = null,
     val container: Container? = null,
+    val ruleStyle: RuleStyle? = null,
 ) {
     init {
+        require(ruleStyle == null || kind == "rule" && depth == 0 && level == 0 && spans.isEmpty() &&
+            listPath.isEmpty() && number.isEmpty() && anchor.isEmpty() && anchorFallback.isEmpty() &&
+            feature == null && table == null && figure == null && flow == null && container == null &&
+            style == null && textAlign == null) { "Authored rule requires its sole ordinary empty block" }
         require((kind == "container") == (container != null)) { "Container kind requires its sole content owner" }
         require(container == null || depth == 0 && spans.isEmpty() && listPath.isEmpty() && number.isEmpty() &&
             table == null && feature == null && level == 0 && anchor.isEmpty() && anchorFallback.isEmpty() &&
@@ -572,14 +819,71 @@ data class Block(
         }
     }
 }
+/** Container descendants validate their direct parent; each independent body starts without one. */
+private fun validatePositionedRootBlocks(blocks: List<Block>) {
+    require(blocks.none { it.container?.style?.positioning is ContainerPositioning.Absolute }) {
+        "Absolute text requires a direct positioned containing scope"
+    }
+}
 data class Feature(val kind: String, val language: String, val data: String, val tailKind: String, val tail: String)
-data class Section(val level: Int, val title: String, val blocks: List<Block>, val anchor: String = "", val anchorFallback: String = "")
+data class HeadingAnchorReveal(val primaryTop: StyleLength, val fallbackTop: StyleLength? = null) {
+    init { require(primaryTop.unit == StyleLengthUnit.Px &&
+        (fallbackTop == null || fallbackTop.unit == StyleLengthUnit.Px)) { "Heading reveal offsets require CSS pixels" } }
+}
+
+data class SectionHeadingStyle(val box: ContainerStyle, val font: InlineFontSnapshot,
+    val direction: BidiResolvedDirection, val titleWrap: TextWrap? = null,
+    val anchorReveal: HeadingAnchorReveal? = null) {
+    init {
+        require(titleWrap != TextWrap.NoWrap) { "Heading no-wrap is unsupported" }
+        require(box.margins != null && box.padding != null && box.border != null &&
+            box.ownerFontScale != null && box.lineHeight != null && box.fontFamily != null && box.clear != null) {
+            "Heading box requires computed margins, padding, border, font, line height and clear"
+        }
+        require((box.width == null || box.width == ContainerWidth.Auto) &&
+            (box.maxWidth == null || box.maxWidth == ContainerMaxWidth.None) &&
+            (box.layout == null || box.layout == ContainerLayout.Flow) &&
+            (box.overflow == null || box.overflow == ContainerOverflow.Visible) &&
+            box.floatSide == null && box.flexItem == null && box.alignItems == null && box.columns == null &&
+            box.positioning == null && box.screenMaxWidth == null && box.height == null &&
+            box.minHeight == null && box.marginValues == null) { "Unsupported heading box" }
+        require(font.fontScale != null && font.fontScaleBasis == FontScaleBasis.NormalBody &&
+            font.fontScale == box.ownerFontScale && font.language.isNotEmpty() &&
+            font.language.toByteArray(Charsets.UTF_8).size <= 1024 && font.role == "normal" &&
+            font.classes.isEmpty() && !font.small && !font.superscript && !font.subscript &&
+            !font.fontNormalized && !font.code &&
+            (font.fontFamily == null || font.fontFamily == box.fontFamily)) { "Invalid heading owner font" }
+    }
+}
+data class Section(val level: Int, val title: String, val blocks: List<Block>, val anchor: String = "",
+    val anchorFallback: String = "", val headingStyle: SectionHeadingStyle? = null) {
+    init {
+        validatePositionedRootBlocks(blocks)
+        if (headingStyle != null) {
+            headingStyle.anchorReveal?.let { reveal ->
+                require(anchor.isNotEmpty() && (reveal.fallbackTop != null) == anchorFallback.isNotEmpty() &&
+                    (anchorFallback.isEmpty() || anchorFallback != anchor)) { "Heading reveal requires distinct represented anchor identities" }
+            }
+            val companion = blocks.firstOrNull()
+            require(companion != null && companion.kind == "heading" && companion.depth == 0 &&
+                companion.level == level && companion.anchor == anchor && companion.anchorFallback == anchorFallback &&
+                companion.listPath.isEmpty() && companion.number.isEmpty() && companion.feature == null &&
+                companion.table == null && companion.flow == null && companion.container == null &&
+                companion.figure == null && companion.style == null && companion.ruleStyle == null &&
+                companion.textAlign == null && companion.spans.isNotEmpty() && companion.spans.all {
+                    it.kind in setOf("text", "link", "external_link") && it.text.isNotEmpty() &&
+                        it.trail.isEmpty() && it.direction.isEmpty()
+                } && companion.spans.joinToString("") { it.text } == title) { "Invalid authored heading companion" }
+        }
+    }
+}
 data class Media(val file: String, val kind: String, val caption: String)
 enum class ReferenceKind { Note, Fragment }
 data class Reference(val number: Long, val groupNumber: Long?, val group: String, val spans: List<Span>,
     val kind: ReferenceKind = ReferenceKind.Note, val blocks: List<Block>? = null) {
     init {
         require(blocks == null || spans.isEmpty()) { "Ordered reference blocks cannot also contain legacy spans" }
+        blocks?.let(::validatePositionedRootBlocks)
         require(number in 1L..0xffff_fffeL) { "Reference item identity is outside the wire range" }
         require(if (kind == ReferenceKind.Note) groupNumber != null && groupNumber in 1L..0xffff_fffeL else groupNumber == null) {
             "Only numbered notes have a valid wire group ordinal"
@@ -591,6 +895,9 @@ internal fun Reference.visitSpanRuns(visit: (List<Span>, Boolean) -> Unit) {
     if (content != null) content.forEach { it.visitSpanRuns(visit) }
     else visit(spans, false)
 }
+/** Applies to the complete semantic Section body, before References and Media. */
+enum class BodyAdjoiningPolicy { Ordinary }
+
 data class Entry(
     val title: String,
     val displayTitle: List<Span>,
@@ -610,6 +917,7 @@ data class Entry(
     val contentDictionary: String? = null,
     val etymologySections: Set<Int> = emptySet(),
     val organization: PresentationOrganization? = null,
+    val bodyAdjoining: BodyAdjoiningPolicy? = null,
 ) {
     internal val rasterImages: List<RasterImageOccurrence> = rasterImageOccurrences(this)
     internal val inlineImages: List<InlineImage> = rasterImages.map { it.image }
@@ -632,7 +940,7 @@ data class Entry(
     }
     val key: String = origin?.key ?: "$kind\u0000${language.orEmpty()}\u0000$title"
     // Constructed with the decoded entry on the import dispatcher.
-    val readingRows: List<ReadingRow> = readingRows(sections, media, etymologySections)
+    val readingRows: List<ReadingRow> = readingRows(sections, media, etymologySections, bodyAdjoining = bodyAdjoining)
     internal val legacyImageCaptions: Map<String, Set<String>> = legacyEmbeddedImageCaptions(this)
     internal val legacyImageFiles: Set<String> = legacyImageCaptions.keys
     internal val separateImageCaptionFiles: Set<String> = media.filter { distinctTypedImageCaption(this, it) }.map { it.file }.toSet()

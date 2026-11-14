@@ -14,7 +14,33 @@ enum class ContainerLayout { Flow, FlexRow }
 enum class ContainerAlignItems { Stretch, Start, Center, End }
 enum class ContainerFlexItem { None }
 enum class ContainerOverflow { Visible, Auto }
-enum class ContainerPositioning { RelativeAuto }
+sealed interface ContainerPositioning {
+    data object RelativeAuto : ContainerPositioning
+    data class Absolute(val top: StyleLength, val left: StyleLength,
+        val ownerFont: InlineFontSnapshot, val lineHeight: InlineComputedLength,
+        val textWrap: TextWrap) : ContainerPositioning {
+        init {
+            require(top.unit == StyleLengthUnit.Px && left.unit == StyleLengthUnit.Px &&
+                ownerFont.fontScale != null && ownerFont.fontScaleBasis != FontScaleBasis.Context &&
+                lineHeight.value >= 0f && textWrap == TextWrap.NoWrap) { "Unsupported absolute text position" }
+        }
+    }
+}
+enum class PositionedOverflowX { Scroll, Hidden }
+enum class PositionedOverflowY { Auto }
+data class PositionedViewportState(val minWidthPx: Long, val overflowX: PositionedOverflowX,
+    val overflowY: PositionedOverflowY) {
+    init { require(minWidthPx in 1L..0xffff_ffffL) { "Invalid positioned viewport threshold" } }
+}
+data class PositionedScope(val textWrap: TextWrap, val overflowX: PositionedOverflowX,
+    val overflowY: PositionedOverflowY, val viewportStates: List<PositionedViewportState> = emptyList()) {
+    init {
+        require(textWrap == TextWrap.NoWrap && viewportStates.size <= 16) { "Unsupported positioned scope" }
+        require(viewportStates.zipWithNext().all { (first, next) -> first.minWidthPx < next.minWidthPx }) {
+            "Positioned viewport states must be strictly ascending"
+        }
+    }
+}
 sealed interface ContainerColor {
     data object Transparent : ContainerColor
     data class Rgb(val value: String) : ContainerColor {
@@ -96,6 +122,23 @@ data class ContainerScreenMaxWidth(val maxWidthPx: Long, val width: ContainerWid
 data class ContainerColumns(val count: Int, val gap: StyleLength) {
     init { require(count in 1..65535) { "Invalid container column count" } }
 }
+enum class GenericFontFamily { SansSerif, Serif }
+sealed class ContainerFontFamily {
+    data object SansSerif : ContainerFontFamily()
+    data class Stack(val names: List<String>, val fallback: GenericFontFamily) : ContainerFontFamily() {
+        init {
+            require(names.size <= 16 && names.all { name ->
+                name.isNotEmpty() && name.length <= 128 && name.first() != ' ' && name.last() != ' ' &&
+                    name.all { it.code in 32..126 && it != '[' && it != ']' } &&
+                    name.lowercase().split(' ').filter { it.isNotEmpty() }.joinToString(" ") !in genericFontAliases
+            }) { "Invalid container font family stack" }
+        }
+    }
+}
+private val genericFontAliases = setOf("serif", "sans-serif", "sans serif", "sans", "monospace",
+    "cursive", "fantasy", "system", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace",
+    "ui-rounded", "emoji", "math", "fangsong")
+
 data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding: StyleEdges? = null,
     val width: ContainerWidth? = null, val floatSide: TableFloatSide? = null, val clear: FigureClear? = null,
     val maxWidth: ContainerMaxWidth? = null, val boxSizing: ContainerBoxSizing? = null,
@@ -106,8 +149,23 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
     val overflow: ContainerOverflow? = null, val ownerFontScale: Float? = null,
     val height: StyleLength? = null, val columns: ContainerColumns? = null,
     val positioning: ContainerPositioning? = null, val minHeight: StyleLength? = null,
-    val marginValues: ContainerMargins? = null) {
+    val marginValues: ContainerMargins? = null, val fontFamily: ContainerFontFamily? = null,
+    val positionedScope: PositionedScope? = null) {
     init {
+        if (positioning is ContainerPositioning.Absolute) {
+            require(positionedScope == null && floatSide == null && columns == null && screenMaxWidth == null &&
+                marginValues == null && overflow == null && layout != ContainerLayout.FlexRow && flexItem == null &&
+                minHeight == null && maxWidth == null && border == null && padding == null && margins == null &&
+                ownerFontScale == null && fontFamily == null && width == ContainerWidth.Length(StyleWidth(StyleWidthUnit.Percent, 100f)) &&
+                height == StyleLength(StyleLengthUnit.Px, 0f) && lineHeight == null) { "Unsupported absolute text box" }
+        }
+        if (positionedScope != null) {
+            require(positioning == ContainerPositioning.RelativeAuto && overflow == null && columns == null &&
+                floatSide == null && layout != ContainerLayout.FlexRow && flexItem == null && screenMaxWidth == null &&
+                (padding == null || padding.left.value == 0f && padding.right.value == 0f)) {
+                "Unsupported positioned containing scope"
+            }
+        }
         require(margins == null || marginValues == null) { "Conflicting container margin representations" }
         require(alignItems == null || layout == ContainerLayout.FlexRow) { "Alignment requires a flex row" }
         require(ownerFontScale == null || ownerFontScale.isFinite() && ownerFontScale >= 0f) {
@@ -115,10 +173,20 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
         }
     }
 
-    internal fun textContext(inherited: ContainerTextContext): ContainerTextContext =
-        ContainerTextContext(ownerFontScale ?: inherited.ownerFontScale, lineHeight ?: inherited.lineHeight,
-            inherited.cellText?.copy(fontPixels = if (ownerFontScale == null) inherited.cellText.fontPixels else null,
-                lineHeight = if (lineHeight == null) inherited.cellText.lineHeight else null))
+    internal fun textContext(inherited: ContainerTextContext): ContainerTextContext {
+        val previous = inherited.cellText
+        val metricFont = previous?.ownerFont?.snapshot
+        val sameScale = ownerFontScale == null || metricFont != null &&
+            metricFont.fontScaleBasis == FontScaleBasis.NormalBody && metricFont.fontScale == ownerFontScale
+        val sameFamily = fontFamily == null || metricFont != null && metricFont.fontFamily == fontFamily
+        return ContainerTextContext(ownerFontScale ?: inherited.ownerFontScale, lineHeight ?: inherited.lineHeight,
+            previous?.copy(fontPixels = if (ownerFontScale == null || metricFont != null && sameScale) previous.fontPixels else null,
+                lineHeight = if (lineHeight == null) previous.lineHeight else null,
+                // Preserve the original Cell contribution; an incomplete descendant font
+                // change cannot issue a new metric owner or silently revert to a default.
+                ownerFontInvalidated = previous.ownerFontInvalidated || metricFont != null && (!sameScale || !sameFamily)),
+            fontFamily ?: inherited.fontFamily)
+    }
 
     /** Call with the reader viewport, never a nested cell's or container's width. */
     internal fun atViewport(cssWidth: Float): ContainerViewportStyle = atViewport(cssWidth.toDouble())
@@ -147,7 +215,7 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
  * Holding this context does not create a line box in an empty Container. */
 internal data class ContainerTextContext(val ownerFontScale: Float = 1f,
     val lineHeight: ContainerLineHeight = ContainerLineHeight.Normal,
-    val cellText: NativeCellTextState? = null) {
+    val cellText: NativeCellTextState? = null, val fontFamily: ContainerFontFamily? = null) {
     init { require(ownerFontScale.isFinite() && ownerFontScale >= 0f) }
 }
 
@@ -158,7 +226,14 @@ internal data class ContainerViewportStyle(val box: ContainerStyle, val margins:
         box.layout == ContainerLayout.FlexRow || box.overflow == ContainerOverflow.Auto || box.columns != null
 }
 data class Container(val blocks: List<Block>, val style: ContainerStyle = ContainerStyle()) {
-    init { require(supportedContainerShape(this, 1)) { "Unsupported container heading or depth" } }
+    init {
+        require(supportedContainerShape(this, 1)) { "Unsupported container heading, positioning or depth" }
+        if (style.positionedScope != null) {
+            val visitor = PresentationSpanVisitor { _, _ -> }
+            visitor.onContainer = { require(it.style.positionedScope == null) { "Nested positioned scope is unsupported" } }
+            visitor.blocks(blocks)
+        }
+    }
 }
 private fun ContainerMarginEdges.hasVerticalMargin(): Boolean = top.value != 0f || bottom.value != 0f
 private fun ContainerMargin.isNonzero(): Boolean = this is ContainerMargin.Length && value.value != 0f
@@ -179,13 +254,16 @@ internal fun legacyContainerMarginsSupported(value: Container, depth: Int = 1): 
     if (depth > MaxContentDepth || value.blocks.size > (1 shl 20)) return false
     if (!value.style.ownMarginsSupported()) return false
     return value.blocks.all { block -> block.kind != "heading" && block.style?.margins?.hasVerticalMargin() != true &&
+        block.ruleStyle?.margins?.hasVerticalMargin() != true &&
         (block.container == null || legacyContainerMarginsSupported(block.container, depth + 1)) }
 }
 
 private fun supportedContainerShape(value: Container, depth: Int): Boolean {
     if (depth > MaxContentDepth || value.blocks.size > (1 shl 20)) return false
     return value.blocks.all { block -> block.kind != "heading" &&
-        (block.container == null || supportedContainerShape(block.container, depth + 1)) }
+        (block.container == null ||
+            (block.container.style.positioning !is ContainerPositioning.Absolute || value.style.positionedScope != null) &&
+                supportedContainerShape(block.container, depth + 1)) }
 }
 
 /** Real root plus child suffix. The authored tree remains the rendering owner. */

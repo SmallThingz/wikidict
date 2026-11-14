@@ -67,8 +67,12 @@ internal fun nativeTextInkBounds(layout: Layout, placements: List<NativeLinePain
         }
         if (start < end && !observed.textComplete) {
             val paints = drawPaints(source, start, end, layout.paint)
-            val minShift = paints.minOfOrNull { it.baselineShift } ?: 0
-            val maxShift = paints.maxOfOrNull { it.baselineShift } ?: 0
+            val shifts = paints.map { it.baselineShift.toFloat() } +
+                source.getSpans(start, end, NativeAuthoredBaselineShift::class.java).filter {
+                    source.getSpanStart(it) < end && source.getSpanEnd(it) > start
+                }.map { it.shift }
+            val minShift = shifts.minOrNull() ?: 0f
+            val maxShift = shifts.maxOrNull() ?: 0f
             source.getBounds(start, end, bounds)
             if (!bounds.isEmpty) include(checkedBounds(left + bounds.left - prefixBound,
                 baseline + bounds.top.toDouble() + minShift,

@@ -87,7 +87,7 @@ class NativeTableBlockHookTest {
             input.beginBlock(100, block)
             input.publishBlock(owner, source, 21, 300, 20, 20.25f)
             val actual = input.ready(140, 21)
-            val placed = placeNativeAutoMarginTable(100f, 0f, emptyList(), block.margins,
+            val placed = placeNativeAutoMarginTable(100f, 0f, emptyList(), requireNotNull(block.margins),
                 direction, NativeBlockWidth.FixedPx(actual.placementWidth)) {
                 NativeBlockMeasure(actual.placementWidth, actual.placementWidth, actual.placementHeight)
             }

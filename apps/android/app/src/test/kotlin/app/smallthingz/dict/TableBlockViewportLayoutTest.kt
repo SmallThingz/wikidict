@@ -176,4 +176,127 @@ class TableBlockViewportLayoutTest {
         assertEquals(50f, cleared.content.top, 0f)
         assertEquals(50f, cleared.content.left, 0f)
     }
+
+    private fun paired(containing: TableContainingDirection = TableContainingDirection.Ltr,
+        grid: TableContainingDirection = TableContainingDirection.Rtl,
+        cap: StyleWidth = StyleWidth(StyleWidthUnit.Percent, 75f),
+        sizing: ContainerBoxSizing = ContainerBoxSizing.BorderBox): Pair<TableBlockViewport, TableFloatViewport> {
+        val floating = TableFloatViewport(639, containing, grid, "de")
+        val block = TableBlockViewport(639, TableStyle(
+            margins = StyleEdges(px(.25f), px(6.5f), px(.75f), px(4.25f)),
+            padding = StyleEdges(px(1.5f), px(2.25f), px(.5f), px(3.5f)),
+            border = StyleBorder.Solid(px(1.25f), "#123456")), sizing, cap,
+            TableStyle(collapse = TableCollapse.Collapse), grid, "de",
+            focusPaint = TableScrollFocusPaint(TableScrollFocusMode.AuthoredNone))
+        return block to floating
+    }
+
+    @Test fun pairedFitContentUsesBothRealIntrinsicBoundsAndAssignedInterval() {
+        val (block, floating) = paired()
+        val range = ContainerWidths(120f, 220f)
+        val beside = resolvePairedTableBlockBox(block, floating, 240f, 180f, range, 1f, 16f)
+        assertEquals(161f, beside.contentWidth, 0f)
+        assertEquals(169.25f, beside.borderWidth, 0f)
+        assertEquals(4.25f, beside.usedMargins.left, 0f)
+        assertEquals(6.5f, beside.usedMargins.right, 0f)
+        assertEquals(4.75f, beside.insets.left, 0f)
+        assertEquals(3.5f, beside.insets.right, 0f)
+        assertTrue(beside.margins == null && beside.floatPolicy === floating)
+        val full = resolvePairedTableBlockBox(block, floating, 240f, 240f, range, 1f, 16f)
+        assertEquals(180f, full.borderWidth, 0f)
+        val short = resolvePairedTableBlockBox(block, floating, 240f, 180f, ContainerWidths(60f, 80f), 1f, 16f)
+        assertEquals(80f, short.contentWidth, 0f)
+        assertEquals(88.25f, short.borderWidth, 0f)
+        assertEquals(87.5f, short.usedMargins.right, 0f)
+    }
+
+    @Test fun pairedPercentageCapRetainsOriginalContainingBasisBeforeMinimumOverflow() {
+        val (block, floating) = paired()
+        val narrowInterval = resolvePairedTableBlockBox(block, floating, 240f, 100f,
+            ContainerWidths(120f, 220f), 1f, 16f)
+        // The original 240px containing block yields a 180px cap, not the interval's 75px cap.
+        assertEquals(120f, narrowInterval.contentWidth, 0f)
+        assertEquals(128.25f, narrowInterval.borderWidth, 0f)
+        assertEquals(-32.5f, narrowInterval.usedMargins.right, 0f)
+        val capped = resolvePairedTableBlockBox(block, floating, 120f, 120f,
+            ContainerWidths(120f, 220f), 1f, 16f)
+        val minimum = resolvePairedTableBlockBox(block, floating, 120f, 120f,
+            ContainerWidths(120f, 120f), 1f, 16f)
+        assertEquals(90f, capped.borderWidth, 0f)
+        assertEquals(81.75f, capped.contentWidth, 0f)
+        assertEquals(capped.borderWidth, minimum.borderWidth, 0f)
+        assertEquals(38.25f, tableBlockScrollGeometry(capped.contentWidth, 120, 39, false).overflow, 0f)
+        val contentBox = resolvePairedTableBlockBox(block.copy(boxSizing = ContainerBoxSizing.ContentBox), floating,
+            120f, 120f, ContainerWidths(120f, 220f), 1f, 16f)
+        assertEquals(90f, contentBox.contentWidth, 0f)
+        assertEquals(98.25f, contentBox.borderWidth, 0f)
+    }
+
+    @Test fun pairedFixedResidualAndLocalScrollHaveIndependentDirections() {
+        val (leftBlock, leftPolicy) = paired(grid = TableContainingDirection.Rtl)
+        val (rightBlock, rightPolicy) = paired(containing = TableContainingDirection.Rtl, grid = TableContainingDirection.Ltr)
+        val range = ContainerWidths(60f, 80f)
+        val ltr = resolvePairedTableBlockBox(leftBlock, leftPolicy, 240f, 180f, range, 1f, 16f)
+        val rtl = resolvePairedTableBlockBox(rightBlock, rightPolicy, 240f, 180f, range, 1f, 16f)
+        assertEquals(4.25f, ltr.usedMargins.left, 0f)
+        assertEquals(85.25f, rtl.usedMargins.left, 0f)
+        assertEquals(6.5f, rtl.usedMargins.right, 0f)
+        val overflow = resolvePairedTableBlockBox(leftBlock, leftPolicy, 120f, 120f,
+            ContainerWidths(120f, 220f), 1f, 16f)
+        assertEquals(-38.25f, tableBlockScrollGeometry(overflow.contentWidth, 120, 0, true).physicalTranslation, 0f)
+        assertEquals(0f, tableBlockScrollGeometry(overflow.contentWidth, 120, 0, false).physicalTranslation, 0f)
+    }
+
+    @Test fun pairedIntrinsicContributionKeepsRealMinimumPreferredAndSourceEdges() {
+        val (block, floating) = paired()
+        assertEquals(139, tableBlockIntrinsicWidth(block, 120, 1f, 16f, floating))
+        assertEquals(239, tableBlockIntrinsicWidth(block, 220, 1f, 16f, floating))
+        val capped = block.copy(maxWidth = StyleWidth(StyleWidthUnit.Px, 90f))
+        assertEquals(101, tableBlockIntrinsicWidth(capped, 120, 1f, 16f, floating))
+        assertEquals(101, tableBlockIntrinsicWidth(capped, 220, 1f, 16f, floating))
+        assertEquals(Constraints.Infinity, tableBlockIntrinsicWidth(block, Constraints.Infinity, 1f, 16f, floating))
+        val used = resolvePairedTableBlockBox(block, floating, 240f, 180f, ContainerWidths(120f, 220f), 1f, 16f)
+        assertTrue(runCatching { placeStandaloneTableBlock(used, 240f, 20f, emptyList()) }.isFailure)
+    }
+
+    @Test fun pairedFractionalEdgesAndEmBasisDoNotScaleOrClampTheGridTwice() {
+        val (source, floating) = paired(cap = StyleWidth(StyleWidthUnit.Percent, 100f))
+        val block = source.copy(boxStyle = source.boxStyle.copy(margins = source.boxStyle.margins!!.copy(
+            top = StyleLength(StyleLengthUnit.Em, .25f), bottom = StyleLength(StyleLengthUnit.Em, .5f))))
+        val result = resolvePairedTableBlockBox(block, floating, 240f, 180f,
+            ContainerWidths(120f, 220f), 1.25f, 20f)
+        assertEquals(156.25f, result.contentWidth, 0f)
+        assertEquals(166.5625f, result.borderWidth, 0f)
+        assertEquals(5f, result.fixedMargins.top, 0f)
+        assertEquals(10f, result.fixedMargins.bottom, 0f)
+        assertEquals(5.3125f, result.usedMargins.left, 0f)
+        assertEquals(8.125f, result.usedMargins.right, 0f)
+        assertEquals(Constraints.Infinity, result.contentMaxHeight(Constraints(maxWidth = 167)))
+        val legacy = resolveTableBlockBox(policy(), 200f, 1f, 16f)
+        assertEquals(140f, legacy.borderWidth, 0f)
+        assertTrue(legacy.margins != null && legacy.floatPolicy == null)
+    }
+
+    @Test fun pairedNarrowResizeClampsTheSameSavedPhysicalOffsetWithoutChangingTopology() {
+        val (block, floating) = paired()
+        val original = resolvePairedTableBlockBox(block, floating, 120f, 120f,
+            ContainerWidths(120f, 220f), 1f, 16f)
+        val resized = resolvePairedTableBlockBox(block, floating, 140f, 140f,
+            ContainerWidths(120f, 220f), 1f, 16f)
+        assertEquals(-38.25f, tableBlockScrollGeometry(original.contentWidth, 120, 39, false).physicalTranslation, 0f)
+        assertEquals(96.75f, resized.contentWidth, 0f)
+        assertEquals(-23.25f, tableBlockScrollGeometry(resized.contentWidth, 120, 39, false).physicalTranslation, 0f)
+        assertEquals(0f, tableBlockScrollGeometry(resized.contentWidth, 120, 39, true).physicalTranslation, 0f)
+        val rows = listOf(listOf(Cell(listOf(Span("text", "A")), true, 1, 1),
+            Cell(listOf(Span("text", "B")), false, 1, 1)), listOf(Cell(listOf(Span("text", "tail")), true, 2, 1)))
+        val table = Table(emptyList(), rows, style = TableStyle(floatSide = TableFloatSide.Right,
+            margins = StyleEdges(px(0f), px(0f), px(0f), px(0f))), blockViewport = block, floatViewport = floating)
+        assertTrue(table.blockViewportAt(639.0) === block)
+        assertTrue(table.blockViewportAt(639.25) == null)
+        assertTrue(table.effectiveFloatStyle(638.75) === block.boxStyle)
+        assertTrue(table.rows === rows)
+        assertEquals(1, table.rows.last().size)
+        assertEquals(2, table.rows.last().single().colspan)
+    }
+
 }

@@ -535,9 +535,9 @@ class TableBlockViewportDeviceTest {
                     }
                     val top = bands.minOf { it.first }; val bottom = bands.maxOf { it.second }
                     assertEquals(bottom - top, actual.native.textBottom, .01f)
-                    val baseline = checkNotNull(actual.native.textBaselines.first)
+                    val baseline = checkNotNull(checkNotNull(actual.native.textBaselines).first)
                     assertEquals(-top, baseline, .01f)
-                    assertEquals(baseline, checkNotNull(actual.native.textBaselines.last), .01f)
+                    assertEquals(baseline, checkNotNull(checkNotNull(actual.native.textBaselines).last), .01f)
                     val measured = checkNotNull(actual.owner.currentMeasuredGeometry)
                     val action = measured.nodes.single { it.label?.toString() == "reset" }
                     actual.owner.setSelection(action.start, action.end)

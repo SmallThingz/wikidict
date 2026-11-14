@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRM decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRP decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table", "container")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,12 +13,12 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..77) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..77) 57 else magicVersion
-        r.fontScales = magicVersion in 65..77
-        r.fontScaleBases = magicVersion in 66..77
-        r.tableStyles = magicVersion in 67..77
-        r.inlineImages = magicVersion in 67..77
+        require(magicVersion in 50..57 || magicVersion in 65..80) { "Unsupported presentation format" }
+        val version = if (magicVersion in 65..80) 57 else magicVersion
+        r.fontScales = magicVersion in 65..80
+        r.fontScaleBases = magicVersion in 66..80
+        r.tableStyles = magicVersion in 67..80
+        r.inlineImages = magicVersion in 67..80
         r.imageBorders = magicVersion >= 68
         r.blockLayouts = magicVersion >= 69
         r.targetFragments = magicVersion >= 70
@@ -29,6 +29,14 @@ object BlobDecoder {
         r.imageDarkFilters = magicVersion >= 75
         r.containers = magicVersion >= 76
         r.containerFonts = magicVersion >= 77
+        r.ruleStyles = magicVersion >= 78
+        r.inlineStyles = magicVersion >= 79
+        r.extendedFontFamilies = magicVersion == 80
+        r.tableFloatClears = magicVersion == 80
+        r.textFlow = magicVersion == 80
+        r.tableScrollPairs = magicVersion == 80
+        r.absoluteText = magicVersion == 80
+        r.cellOwnerFonts = magicVersion == 80
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
@@ -87,9 +95,34 @@ object BlobDecoder {
             Reference(number, groupNumber, group, spans, referenceKind, blocks)
         }
         val media = List(r.count(9)) { Media(r.string(), r.enum(listOf("image", "audio")), r.string()) }
+        val features = if (magicVersion == 80) r.byte().also {
+            require(it != 0) { "Unsupported body adjoining policy" }
+            // All eight P features have exact recursive payload census checks below.
+        } else 0
+        val bodyAdjoining = if (features and 1 != 0) BodyAdjoiningPolicy.Ordinary else null
+        val styledSections = if (features and 2 != 0) {
+            val count = r.count(4)
+            require(count > 0) { "Empty heading style list" }
+            val result = sections.toMutableList()
+            var previous = -1
+            repeat(count) {
+                val index = r.index(sections.size)
+                require(index > previous) { "Heading indices must be strictly ascending" }
+                result[index] = sections[index].copy(headingStyle = r.sectionHeadingStyle(features and 16 != 0))
+                previous = index
+            }
+            result
+        } else sections
+        require((features and 4 != 0) == r.hasFontFamilyFeature) { "Font family feature does not match payload" }
+        require((features and 8 != 0) == r.hasTableFloatClearFeature) { "Table float clear feature does not match payload" }
+        require((features and 16 != 0) == r.hasTextFlowFeature) { "Text flow feature does not match payload" }
+        require((features and 32 != 0) == r.hasTableScrollFeature) { "Table scroll feature does not match payload" }
+        require((features and 64 != 0) == r.hasAbsoluteTextFeature) { "Absolute text feature does not match payload" }
+        require((features and 128 != 0) == r.hasCellOwnerFontFeature) { "Cell owner font feature does not match payload" }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
-        val entry = Entry(title, display, kind, language, code, sections, references, preamble, media,
-            etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers })
+        val entry = Entry(title, display, kind, language, code, styledSections, references, preamble, media,
+            etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
+            bodyAdjoining = bodyAdjoining)
         // G uses the shared count/byte budget; C/D and E/F retain their wire limits.
         // Historical media-only entries do not acquire a typed-image catalog limit.
         require(magicVersion >= 71 || entry.inlineImages.isEmpty() || media.size <= (if (magicVersion >= 69) 256 else 128)) {
@@ -122,6 +155,23 @@ object BlobDecoder {
         var imageDarkFilters = false
         var containers = false
         var containerFonts = false
+        var ruleStyles = false
+        var inlineStyles = false
+        var extendedFontFamilies = false
+        var tableFloatClears = false
+        var textFlow = false
+        var hasTextFlowFeature = false
+        var absoluteText = false
+        var hasAbsoluteTextFeature = false
+        var cellOwnerFonts = false
+        var hasCellOwnerFontFeature = false
+        private var positionedParent = false
+        private var positionedActive = false
+        var tableScrollPairs = false
+        var hasTableScrollFeature = false
+        var hasTableFloatClearFeature = false
+        var hasFontFamilyFeature = false
+            private set
         private var remainingMapStringBytes = 32L * 1024 * 1024
         private var contentDepth = 0
         val minimumBlockBytes: Int get() = if (imageMaps) 29 else if (blockStyles) 27 else if (blockLayouts) 26 else if (anchors) 25 else 17
@@ -166,7 +216,7 @@ object BlobDecoder {
                 require(canonicalColorArgb(it) != null) { "Invalid span background" }
             } else null
             val fontFields = if (!fontScales) 0 else if (containerFonts) byte().also {
-                require(it and 0xfc == 0) { "Unknown span font fields" }
+                require(it and (if (extendedFontFamilies) 0xe0 else if (inlineStyles) 0xf0 else 0xf8) == 0) { "Unknown span font fields" }
             } else if (presence()) 1 else 0
             val rawScale = if (fontFields and 1 != 0) {
                 require(buffer.remaining() >= 4) { "Truncated span font scale" }
@@ -183,6 +233,12 @@ object BlobDecoder {
             } else FontScaleBasis.Context
             val fontFeatures = if (fontFields and 2 != 0)
                 FontFeaturePolicy.entries.getOrNull(byte()) ?: error("Unknown span font feature policy") else null
+            val linkPaint = if (fontFields and 4 != 0) {
+                require(presence()) { "Span link paint requires a present policy" }
+                ordinaryLinkPaint()
+            } else null
+            val inlineStyle = if (fontFields and 8 != 0) inlineTextStyle() else null
+            val fontFamily = if (fontFields and 16 != 0) inlineFontFamily() else null
             val fontScale = rawScale?.takeUnless { it == 1f && basis == FontScaleBasis.Context }
             val imageTag = if (inlineImages) byte() else 0
             require(imageTag in 0..1 || containerFonts && imageTag == 2) { "Unsupported inline image tag" }
@@ -203,7 +259,44 @@ object BlobDecoder {
             val tooltip = if (tooltips && presence()) string() else null
             return Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint, inlineStyle=inlineStyle, fontFamily=fontFamily)
+        }
+        private fun inlineComputedLength(): InlineComputedLength = InlineComputedLength(buffer.float, cellMetricBasis())
+        private fun inlineFontSnapshot(requireOmittedSize: Boolean = false): InlineFontSnapshot {
+            val flags = byte()
+            require(!requireOmittedSize || flags and 1 == 0) { "Cell owner font repeats its strut size" }
+            require(flags and 0xe0 == 0) { "Unknown inline snapshot flags" }
+            val rawScale = if (flags and 1 != 0) buffer.float else null
+            val basis = if (rawScale != null) FontScaleBasis.entries.getOrNull(byte())
+                ?: error("Unknown inline snapshot basis") else FontScaleBasis.Context
+            val scale = rawScale?.takeUnless { it == 1f && basis == FontScaleBasis.Context }
+            val face = byte()
+            require(face and (if (extendedFontFamilies) 0xe0 else 0xf0) == 0) { "Unknown inline snapshot face flags" }
+            val language = string(); val classes = string(); val role = enum(roles)
+            val features = if (face and 8 != 0) FontFeaturePolicy.entries.getOrNull(byte())
+                ?: error("Unknown inline snapshot font feature policy") else null
+            val family = if (face and 16 != 0) inlineFontFamily() else null
+            return InlineFontSnapshot(scale, basis, flags and 2 != 0, flags and 4 != 0,
+                flags and 8 != 0, flags and 16 != 0, face and 1 != 0, face and 2 != 0,
+                face and 4 != 0, language, classes, role, features, family)
+        }
+        private fun inlineTextStyle(): InlineTextStyle {
+            require(inlineStyles) { "Inline text effects require O" }
+            val flags = byte()
+            require(flags != 0 && flags and (if (textFlow) 0xc0 else 0xe0) == 0) { "Invalid inline text effect flags" }
+            val decoration = if (flags and 1 != 0) InlineUnderline(
+                InlineUnderlineStyle.entries.getOrNull(byte()) ?: error("Unknown inline underline style"),
+                if (presence()) string() else null, if (presence()) styleLength() else null) else null
+            val lineHeight = if (flags and 2 != 0) when (byte()) {
+                0 -> InlineLineHeight.Computed(inlineComputedLength())
+                1 -> InlineLineHeight.FontRelative(buffer.float, inlineFontSnapshot())
+                else -> error("Unknown inline line-height tag")
+            } else null
+            val baselineShift = if (flags and 4 != 0) inlineComputedLength() else null
+            val cursor = if (flags and 16 != 0) InlineCursor.entries.getOrNull(byte())
+                ?: error("Unknown inline cursor") else null
+            val wrap = if (flags and 32 != 0) textWrap().also { hasTextFlowFeature = true } else null
+            return InlineTextStyle(decoration, lineHeight, baselineShift, flags and 8 != 0, cursor, wrap)
         }
         private fun imageMapAction(): ImageMapAction {
             val kind = ImageMapActionKind.entries.getOrNull(byte()) ?: error("Unknown image map action")
@@ -239,11 +332,11 @@ object BlobDecoder {
             1 -> FigureBorder.Solid(styleLength(), figureColor())
             else -> error("Unknown figure border")
         }
-        private fun figure(tableDepth: Int): Figure? {
-            if (!imageMaps) return null
+        private fun figure(tableDepth: Int): Figure? = positionedRoot {
+            if (!imageMaps) return@positionedRoot null
             val tag = byte()
-            if (tag == 0) return null
-            require(tag == 1 || tableFlows && tag == 2 || containerFonts && tag in 5..6) { "Unknown figure content tag" }
+            if (tag == 0) return@positionedRoot null
+            require(tag == 1 || tableFlows && tag == 2 || containerFonts && tag in 5..7) { "Unknown figure content tag" }
             require(buffer.remaining() >= 123) { "Truncated figure" }
             val format = FigureFormat.entries.getOrNull(byte()) ?: error("Unknown figure format")
             val placement = FigurePlacement.entries.getOrNull(byte()) ?: error("Unknown figure placement")
@@ -264,10 +357,11 @@ object BlobDecoder {
             val content = missing ?: FigureContent.Image(contentSpan,
                 FigureSizingPolicy.entries.getOrNull(byte()) ?: error("Unknown figure sizing policy"))
             val frameMinWidth = if (presence()) styleLength() else null
-            val tableCaption = if (tag >= 5) tableCaptionLayout() else null
-            return Figure(content, format, placement, clear, margins, insets, padding, scale, lineHeight,
+            val tableCaption = if (tag == 5 || tag == 6) tableCaptionLayout() else null
+            val blockMedia = if (tag == 7) figureBlockMediaLayout() else null
+            Figure(content, format, placement, clear, margins, insets, padding, scale, lineHeight,
                 frameBackground, frameBorder, imageBackground, imageBorder, captionForeground, captionBackground,
-                caption, rich, align, frameMinWidth, tableCaption)
+                caption, rich, align, frameMinWidth, tableCaption, blockMedia)
         }
         private fun figureBorderEdge(): FigureBorderEdge = when (byte()) {
             0 -> FigureBorderEdge.None
@@ -292,8 +386,7 @@ object BlobDecoder {
                 require(buffer.remaining() >= 4) { "Truncated Figure media maximum" }
                 AvailableWidthLimit(buffer.float, styleLength())
             } else null
-            val positioning = if (presence()) ContainerPositioning.entries.getOrNull(byte())
-                ?: error("Unknown Figure media positioning") else null
+            val positioning = if (presence()) containerPositioning() else null
             val after = if (presence()) {
                 val width = styleLength(); val height = styleLength()
                 val side = TableFloatSide.entries.getOrNull(byte()) ?: error("Unknown Figure after side")
@@ -305,6 +398,17 @@ object BlobDecoder {
             val focus = if (presence()) FigureFocusOutline(styleLength(), figureColor(), styleLength(),
                 containerMarginLength()) else null
             return FigureMediaLayout(strut, align, maximum, positioning, after, focus)
+        }
+        private fun figureBlockMediaLayout(): FigureBlockMediaLayout {
+            require(containerFonts) { "Figure block-media layout requires M" }
+            val wrapper = containerStyle(); val media = figureMediaLayout()
+            val preferredWidth = u32(); val naturalWidth = u32(); val naturalHeight = u32()
+            val rendition1x = FigureBlockMediaRendition(string(), string())
+            val rendition2x = FigureBlockMediaRendition(string(), string())
+            val size = count(24).also { require(it <= 16) { "Too many Figure block viewport states" } }
+            val states = List(size) { FigureBlockMediaState(u32(), containerStyle(), figureMediaLayout()) }
+            return FigureBlockMediaLayout(wrapper, media, preferredWidth, naturalWidth, naturalHeight,
+                rendition1x, rendition2x, states)
         }
         private fun tableCaptionLayout(): TableCaptionLayout {
             require(containerFonts) { "Figure table-caption layout requires M" }
@@ -330,6 +434,15 @@ object BlobDecoder {
                 containerMarginLength()) else null
             return FigureLinkPaint(states[0], states[1], states[2], states[3], states[4], states[5],
                 mask and 0x40 != 0, focus)
+        }
+        private fun ordinaryLinkPaint(): LinkPaint {
+            val prefix = figureLinkPaint()
+            require(buffer.remaining() >= 23) { "Truncated combined link paint states" }
+            val hoverActive = string(); val visitedHoverActive = string()
+            val flags = byte().also { require(it and 0xfc == 0) { "Unknown combined link paint flags" } }
+            return LinkPaint(prefix.normal, prefix.hover, prefix.active, LinkState(hoverActive, flags and 1 != 0),
+                prefix.visited, prefix.visitedHover, prefix.visitedActive, LinkState(visitedHoverActive, flags and 2 != 0),
+                prefix.underlineOnFocus, prefix.focusOutline)
         }
         private fun <T> content(read: () -> T): T {
             require(contentDepth < MaxContentDepth) { "Content nesting is too deep" }
@@ -450,9 +563,60 @@ object BlobDecoder {
                     List(size) { containerScreen(false) }
                 } else emptyList())
         }
+        private fun textWrap(): TextWrap = TextWrap.entries.getOrNull(byte()) ?: error("Unknown text wrap policy")
+        fun sectionHeadingStyle(extensions: Boolean): SectionHeadingStyle {
+            val box = containerStyle()
+            val font = inlineFontSnapshot()
+            val direction = BidiResolvedDirection.entries.getOrNull(byte()) ?: error("Unknown heading direction")
+            val flags = if (extensions) byte().also { require(it and 0xfc == 0) { "Unknown heading text flow flags" } } else 0
+            val wrap = if (flags and 1 != 0) textWrap() else null
+            val reveal = if (flags and 2 != 0) HeadingAnchorReveal(styleLength(), if (presence()) styleLength() else null) else null
+            if (flags != 0) hasTextFlowFeature = true
+            return SectionHeadingStyle(box, font, direction, wrap, reveal)
+        }
+        private fun inlineFontFamily(): ContainerFontFamily {
+            require(extendedFontFamilies) { "Inline font families require P" }
+            return containerFontFamily().also { hasFontFamilyFeature = true }
+        }
+        private fun containerFontFamily(): ContainerFontFamily = when (byte()) {
+            0 -> ContainerFontFamily.SansSerif
+            1 -> {
+                require(extendedFontFamilies) { "Font family stacks require P" }
+                val size = count(4)
+                require(size <= 16) { "Too many named font families" }
+                ContainerFontFamily.Stack(List(size) { string() }, GenericFontFamily.entries.getOrNull(byte())
+                    ?: error("Unknown generic font family")).also { hasFontFamilyFeature = true }
+            }
+            else -> error("Unknown container font family")
+        }
+        private fun containerPositioning(): ContainerPositioning = when (byte()) {
+            0 -> ContainerPositioning.RelativeAuto
+            1 -> {
+                require(absoluteText) { "Absolute text requires P" }
+                ContainerPositioning.Absolute(styleLength(), styleLength(), inlineFontSnapshot(), inlineComputedLength(), textWrap())
+                    .also { hasAbsoluteTextFeature = true }
+            }
+            else -> error("Unknown container positioning")
+        }
+        private fun positionedScope(): PositionedScope {
+            require(absoluteText) { "Positioned scope requires P" }
+            val wrap = textWrap()
+            val x = PositionedOverflowX.entries.getOrNull(byte()) ?: error("Unknown positioned horizontal overflow")
+            val y = PositionedOverflowY.entries.getOrNull(byte()) ?: error("Unknown positioned vertical overflow")
+            val size = count(6).also { require(it <= 16) { "Too many positioned viewport states" } }
+            val states = List(size) { PositionedViewportState(u32(),
+                PositionedOverflowX.entries.getOrNull(byte()) ?: error("Unknown positioned horizontal overflow"),
+                PositionedOverflowY.entries.getOrNull(byte()) ?: error("Unknown positioned vertical overflow")) }
+            return PositionedScope(wrap, x, y, states).also { hasAbsoluteTextFeature = true }
+        }
+        private inline fun <T> positionedRoot(read: () -> T): T {
+            val previous = positionedParent
+            positionedParent = false
+            return try { read() } finally { positionedParent = previous }
+        }
         private fun containerStyle(): ContainerStyle {
             val flags = if (containerFonts) u32().also {
-                require(it and 0xffc00000L == 0L) { "Unknown container style field" }
+                require(it and (if (absoluteText) 0xff000000L else 0xff800000L) == 0L) { "Unknown container style field" }
             }.toInt() else u16()
             return ContainerStyle(if (flags and 1 != 0) containerMarginEdges() else null,
                 if (flags and 2 != 0) styleEdges() else null,
@@ -474,16 +638,27 @@ object BlobDecoder {
                 if (flags and 65536 != 0) buffer.float else null,
                 if (flags and 131072 != 0) styleLength() else null,
                 if (flags and 262144 != 0) ContainerColumns(u16(), styleLength()) else null,
-                if (flags and 524288 != 0) ContainerPositioning.entries.getOrNull(byte())
-                    ?: error("Unknown container positioning") else null,
+                if (flags and 524288 != 0) containerPositioning() else null,
                 if (flags and 1048576 != 0) styleLength() else null,
-                if (flags and 2097152 != 0) containerMargins() else null)
+                if (flags and 2097152 != 0) containerMargins() else null,
+                if (flags and 4194304 != 0) containerFontFamily() else null,
+                if (flags and 8388608 != 0) positionedScope() else null)
         }
         private fun container(tableDepth: Int): Container = content {
             val style = containerStyle()
-            Container(List(count(minimumBlockBytes)) { block(tableDepth) }, style).also {
-                require(containerFonts || legacyContainerMarginsSupported(it)) { "Adjoining container margins require M" }
+            require(style.positioning !is ContainerPositioning.Absolute || positionedParent) {
+                "Absolute text requires a direct positioned containing scope"
             }
+            require(style.positionedScope == null || !positionedActive) { "Nested positioned scope is unsupported" }
+            val previous = positionedParent
+            val previousActive = positionedActive
+            positionedParent = style.positionedScope != null
+            positionedActive = previousActive || style.positionedScope != null
+            try {
+                Container(List(count(minimumBlockBytes)) { block(tableDepth) }, style).also {
+                    require(containerFonts || legacyContainerMarginsSupported(it)) { "Adjoining container margins require M" }
+                }
+            } finally { positionedParent = previous; positionedActive = previousActive }
         }
         private fun blockStyle(): BlockStyle? {
             if (!blockStyles || !presence()) return null
@@ -534,7 +709,18 @@ object BlobDecoder {
             else -> error("Unknown cell text metric origin")
         }
         private fun cellLineHeight(): CellLineHeight {
-            val strut = if (presence()) CellTextStrut(buffer.float, cellMetricBasis()) else null
+            val marker = byte()
+            require(marker in 0..1 || cellOwnerFonts && marker == 2) { "Unknown cell strut marker" }
+            val strut = if (marker == 0) null else {
+                val scale = buffer.float
+                val basis = cellMetricBasis()
+                val owner = if (marker == 2) inlineFontSnapshot(requireOmittedSize = true).also {
+                    require(it.fontScale == null && it.fontScaleBasis == FontScaleBasis.Context) {
+                        "Cell owner font repeats its strut size"
+                    }
+                }.copy(fontScale = scale, fontScaleBasis = basis) else null
+                CellTextStrut(scale, basis, owner).also { if (owner != null) hasCellOwnerFontFeature = true }
+            }
             val height = when (byte()) {
                 0 -> CellLineHeightValue.Normal
                 1 -> CellLineHeightValue.Multiplier(buffer.float)
@@ -586,19 +772,35 @@ object BlobDecoder {
             return TableStyle(background, border, collapse, margins, floatSide, width, padding, clear, display, align,
                 lineHeight, marginValues, containingDirection)
         }
-        private fun tableBlockViewport(): TableBlockViewport {
-            require(containerFonts) { "Table block viewport requires M" }
+        private fun tableBlockViewport(paired: Boolean): TableBlockViewport {
+            require(containerFonts && (!paired || tableScrollPairs)) { "Table paired viewport requires P" }
             return TableBlockViewport(u32(), tableStyle() ?: error("Missing table viewport box style"),
                 ContainerBoxSizing.entries.getOrNull(byte()) ?: error("Unknown table viewport box sizing"),
                 StyleWidth(StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown table viewport max-width unit"), buffer.float),
                 tableStyle() ?: error("Missing anonymous table grid style"),
                 TableContainingDirection.entries.getOrNull(byte()) ?: error("Unknown anonymous table grid direction"),
-                string())
+                string(), if (paired) TableScrollFocusPaint(
+                    TableScrollFocusMode.entries.getOrNull(byte()) ?: error("Unknown table scroll focus mode"),
+                    if (presence()) figureColor() else null) else null)
         }
-        private fun table(depth: Int): Table? {
+        private fun tableFloatViewport(hasNarrowClear: Boolean): TableFloatViewport {
+            require(containerFonts) { "Table float viewport requires M" }
+            require(!hasNarrowClear || tableFloatClears) { "Table float clear override requires P" }
+            val threshold = u32()
+            val containing = TableContainingDirection.entries.getOrNull(byte()) ?: error("Unknown table float containing direction")
+            val grid = TableContainingDirection.entries.getOrNull(byte()) ?: error("Unknown table float grid direction")
+            val language = string()
+            val narrowClear = if (hasNarrowClear) {
+                FigureClear.entries.getOrNull(byte()) ?: error("Unknown table float clear override")
+            } else null
+            if (narrowClear != null) hasTableFloatClearFeature = true
+            return TableFloatViewport(threshold, containing, grid, language, narrowClear)
+        }
+        private fun table(depth: Int): Table? = positionedRoot {
             val tableFlags = byte()
-            if (tableFlags == 0) return null
-            require(tableFlags == 1 || containerFonts && tableFlags == 3) { "Invalid table presence flags" }
+            if (tableFlags == 0) return@positionedRoot null
+            require(tableFlags == 1 || containerFonts && (tableFlags == 3 || tableFlags == 5) ||
+                tableFloatClears && tableFlags == 13 || tableScrollPairs && tableFlags == 7) { "Invalid table presence flags" }
             require(depth <= MaxTableDepth) { "Table nesting is too deep" }
             val geometry = if (!nestedTables) null else {
                 val flags = byte()
@@ -627,11 +829,14 @@ object BlobDecoder {
                 Cell(content, header, cols, rowspan, background, child, blocks, cellStyle())
             } }
             val style = tableStyle(); val rich = captionBlocks(caption, depth)
-            val blockViewport = if (tableFlags and 2 != 0) tableBlockViewport() else null
+            val paired = tableFlags == 7
+            val blockViewport = if (tableFlags and 2 != 0) tableBlockViewport(paired) else null
+            if (paired) hasTableScrollFeature = true
+            val floatViewport = if (tableFlags and 4 != 0) tableFloatViewport(tableFlags and 8 != 0) else null
             require(containerFonts || style?.isInline != true || rows.all { row ->
                 row.all { cell -> cell.spans.none { it.image != null } }
             }) { "Inline table images require M" }
-            return Table(caption, rows, geometry, style, rich, blockViewport).also { tableGrid(it) }
+            Table(caption, rows, geometry, style, rich, blockViewport, floatViewport).also { tableGrid(it) }
         }
         fun block(tableDepth: Int = 0): Block {
             val kind = enum(if (containers) kinds else kinds.dropLast(1)); val depth = byte(); val level = byte()
@@ -648,8 +853,10 @@ object BlobDecoder {
             } else null
             val style = blockStyle(); val figure = figure(tableDepth); val flow = flow(tableDepth)
             val container = if (kind == "container") container(tableDepth) else null
+            val ruleStyle = if (ruleStyles && kind == "rule" && presence())
+                RuleStyle(styleLength(), containerColor(), styleEdges()) else null
             return Block(kind, depth, spans, path, number, table, feature, level, anchor, fallback, textAlign,
-                style, figure, flow, container)
+                style, figure, flow, container, ruleStyle)
         }
     }
 }

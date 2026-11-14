@@ -5,6 +5,105 @@ import org.junit.Test
 import androidx.compose.ui.unit.em
 
 class ReadingLayoutTest {
+    private fun sourceHeadingStyle(): SectionHeadingStyle {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        return SectionHeadingStyle(ContainerStyle(margins = edges, padding = edges,
+            border = ContainerBorder.None, clear = FigureClear.None, ownerFontScale = 1f,
+            lineHeight = ContainerLineHeight.Multiplier(1f), fontFamily = ContainerFontFamily.SansSerif),
+            InlineFontSnapshot(fontScale = 1f, fontScaleBasis = FontScaleBasis.NormalBody, language = "th"),
+            BidiResolvedDirection.Ltr)
+    }
+
+    @Test fun typedSectionCompanionRetainsActionsAnchorsAndOriginalIndicesOnce() {
+        val heading = Block("heading", 0, listOf(Span("link", "Owner", "title-action"), Span("text", " heading")),
+            level = 3, anchor = "owner", anchorFallback = "owner-fallback")
+        val body = Block("paragraph", 0, listOf(Span("link", "Body", "body-action")))
+        val section = Section(3, "Owner heading", listOf(heading, body), "owner", "owner-fallback", sourceHeadingStyle())
+        for (policy in listOf(null, BodyAdjoiningPolicy.Ordinary)) {
+            val entry = Entry("word", emptyList(), "language", "Japanese", "ja", listOf(section),
+                listOf(Reference(1, 1, "", listOf(Span("text", "Reference")))), bodyAdjoining = policy)
+            val rows = entry.readingRows
+            assertEquals(listOf("heading-0", "block-0-1"), rows.map { it.key })
+            assertSame(section, rows.first().heading)
+            assertSame(heading, rows.first().headingBlock)
+            assertSame(body, rows.last().block)
+            assertEquals(listOf("title-action", "body-action"), rows.flatMap {
+                (it.headingBlock ?: it.block)?.spans.orEmpty()
+            }.filter { it.kind == "link" }.map { it.target })
+            assertEquals("heading-0", headingDestination(entry, "#owner")!!.rowKey)
+            assertEquals("heading-0", headingDestination(entry, "#owner-fallback")!!.rowKey)
+            assertEquals(listOf("heading-0"), visibleEntryReadingRows(entry, setOf("heading-0")).map { it.key })
+            assertEquals(entryReadingStartIndex(entry, emptySet()) + 2, metadataReferencesStartIndex(entry, emptySet()))
+            assertEquals(listOf(heading, body), entry.sections.single().blocks)
+        }
+    }
+
+    @Test fun typedPlainAndWhitespaceHeadingBoxesStayVisibleWithoutChangingNullCompanionHeuristic() {
+        for (title in listOf("Plain", " ")) {
+            val heading = Block("heading", 0, listOf(Span("text", title)), level = 3)
+            val legacy = Section(3, title, listOf(heading))
+            val typed = legacy.copy(headingStyle = sourceHeadingStyle())
+            assertNull(sectionHeadingCompanion(legacy))
+            assertSame(heading, sectionHeadingCompanion(typed))
+            assertTrue(sectionHeadingVisible(typed, "Japanese"))
+            assertEquals(title, sectionHeadingLabel(typed, "Japanese", heading))
+            val rows = readingRows(listOf(typed))
+            assertEquals(1, rows.size)
+            assertSame(heading, rows.single().headingBlock)
+            assertTrue(rows.none { it.block != null })
+            assertEquals(if (title == " ") 1 else 2, readingRows(listOf(legacy)).size)
+            assertEquals(readingRows(listOf(legacy)), readingRows(listOf(typed.copy(headingStyle = null))))
+            assertSame(heading, typed.blocks.single())
+        }
+    }
+
+    @Test fun explicitBodyRowsKeepSourceBlocksSpansAndEmptyBoundariesWithoutDenseSplitting() {
+        val whitespace = Block("paragraph", 0, listOf(Span("text", " "), Span("text", "Body"), Span("text", " ")))
+        val dense = Block("paragraph", 0, List(90) {
+            if (it % 2 == 0) Span("text", "Word$it") else Span("line_break", "\n")
+        })
+        val blank = Block("blank", 0, emptyList())
+        val empty = Block("paragraph", 0, emptyList())
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val styledEmpty = empty.copy(style = BlockStyle(margins = StyleEdges(zero, zero, zero, zero)))
+        val table = Block("table", 0, emptyList(), table = Table(listOf(Span("text", " ")),
+            listOf(listOf(Cell(listOf(Span("text", " ")), false, 1, 1)))))
+        val source = listOf(whitespace, dense, blank, empty, styledEmpty, table)
+        val sections = listOf(Section(3, "", source))
+        val owned = readingRows(sections, bodyAdjoining = BodyAdjoiningPolicy.Ordinary)
+        assertEquals(listOf("heading-0") + source.indices.map { "block-0-$it" }, owned.map { it.key })
+        assertTrue(owned.none { it.compact })
+        owned.mapNotNull { it.block }.zip(source).forEach { (actual, original) ->
+            assertSame(original, actual)
+            assertSame(original.spans, actual.spans)
+        }
+        val legacy = readingRows(sections)
+        assertEquals(legacy, readingRows(sections, bodyAdjoining = null))
+        assertTrue(legacy.none { it.key == "block-0-2" || it.key == "block-0-3" })
+        assertTrue(legacy.count { it.key.startsWith("block-0-1-") } > 1)
+        assertEquals(listOf(Span("text", "Body")), legacy.single { it.key == "block-0-0" }.block!!.spans)
+        assertTrue(legacy.single { it.key == "block-0-5" }.block!!.table!!.caption.isEmpty())
+        assertEquals(source, sections.single().blocks)
+    }
+
+    @Test fun explicitBodyCompanionFoldAndMetadataIndicesKeepEachSourceActionOnce() {
+        val heading = Block("heading", 0, listOf(Span("link", "Notes", "heading-action")), level = 3)
+        val body = Block("paragraph", 0, listOf(Span("link", "Body", "body-action")))
+        val sections = listOf(Section(3, "Notes", listOf(heading, body)), Section(3, "Other", emptyList()))
+        val rows = readingRows(sections, bodyAdjoining = BodyAdjoiningPolicy.Ordinary)
+        assertSame(heading, rows.first().headingBlock)
+        assertTrue(rows.none { it.block === heading })
+        assertSame(body, rows.single { it.block != null }.block)
+        assertEquals(listOf("heading-action", "body-action"), rows.flatMap {
+            (it.headingBlock ?: it.block)?.spans.orEmpty()
+        }.filter { it.kind == "link" }.map { it.target })
+        val folded = visibleReadingRows(rows, setOf("heading-0"))
+        assertEquals(listOf("heading-0", "heading-1"), folded.map { it.key })
+        assertSame(heading, folded.first().headingBlock)
+        assertEquals(rows, visibleReadingRows(rows, emptySet()))
+    }
+
     @Test fun paragraphEdgesKeepLargeFiniteGeometryAndRejectOnlyUnrepresentableCoordinates() {
         val zero = StyleLength(StyleLengthUnit.Px, 0f)
         val large = StyleLength(StyleLengthUnit.Px, 50000f)

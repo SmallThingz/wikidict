@@ -120,6 +120,12 @@ internal class NativeFigureGeometry(
     override fun revealOffset(offset: Int, onRevealed: () -> Unit) = caption.revealOffset(offset, onRevealed)
     override fun clipForOffset(offset: Int): RectF? = caption.clipForOffset(offset)
         ?.let { RectF(it).apply { offset(captionX, captionY) } }
+    override fun cursorAt(x: Float, y: Float): InlineCursor? {
+        val localX = x - captionX; val localY = y - captionY
+        if (caption.positionedGroups.any { it.contains(localX, localY) }) return caption.cursorAt(localX, localY)
+        if (deferredMedia && mediaBounds().any { it.contains(x, y) }) return null
+        return if (caption.containsInput(localX, localY)) caption.cursorAt(localX, localY) else null
+    }
     override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? {
         val localX = x - captionX; val localY = y - captionY
         // Caption groups follow this Figure's own deferred media in paint order.

@@ -4,6 +4,81 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FloatFormattingContextTest {
+    @Test fun typedSectionHeadingStartsNativeSuffixAtItsRowBeforeLaterNativeBlocks() {
+        val edge = StyleLength(StyleLengthUnit.Px, 0f)
+        val zero = StyleEdges(edge, edge, edge, edge)
+        val style = SectionHeadingStyle(ContainerStyle(margins = zero, padding = zero,
+            border = ContainerBorder.None, clear = FigureClear.None, ownerFontScale = 1f,
+            lineHeight = ContainerLineHeight.Normal, fontFamily = ContainerFontFamily.SansSerif),
+            InlineFontSnapshot(fontScale = 1f, fontScaleBasis = FontScaleBasis.NormalBody, language = "th"), BidiResolvedDirection.Rtl)
+        val prefix = Section(3, "", listOf(Block("paragraph", 0, listOf(Span("text", "Prefix")))))
+        val companion = Block("heading", 0, listOf(Span("text", "Owner")), level = 3)
+        val body = Block("paragraph", 0, listOf(Span("link", "Body", "body-action")))
+        val section = Section(3, "Owner", listOf(companion, body), headingStyle = style)
+        val trailing = Section(3, "", listOf(Block("container", 0, emptyList(), container = Container(emptyList(), ContainerStyle()))))
+        val rows = readingRows(listOf(prefix, section, trailing))
+        val start = rows.indexOfFirst { it.key == "heading-1" }
+        assertEquals(listOf(start until rows.size), floatBodyRuns(rows, language = "Japanese"))
+        assertEquals(listOf(1 until rows.size), floatBodyRuns(rows, BodyAdjoiningPolicy.Ordinary, "Japanese"))
+        val folded = visibleReadingRows(rows, setOf("heading-1"))
+        val foldedStart = folded.indexOfFirst { it.key == "heading-1" }
+        assertEquals(listOf(foldedStart until folded.size), floatBodyRuns(folded, language = "Japanese"))
+        assertSame(companion, folded[foldedStart].headingBlock)
+        assertTrue(folded.none { it.key == "block-1-1" })
+        val legacy = readingRows(listOf(prefix, section.copy(headingStyle = null), trailing))
+        val nativeBlock = legacy.indexOfFirst { it.block?.container != null }
+        assertEquals(listOf(nativeBlock until legacy.size), floatBodyRuns(legacy))
+    }
+
+    @Test fun whitespaceTypedHeadingOwnsItsRealBoxAndNullHasNoNativeTrigger() {
+        val edge = StyleLength(StyleLengthUnit.Px, 0f)
+        val zero = StyleEdges(edge, edge, edge, edge)
+        val style = SectionHeadingStyle(ContainerStyle(margins = zero, padding = zero,
+            border = ContainerBorder.None, clear = FigureClear.None, ownerFontScale = 0f,
+            lineHeight = ContainerLineHeight.Multiplier(0f), fontFamily = ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif)),
+            InlineFontSnapshot(fontScale = 0f, fontScaleBasis = FontScaleBasis.NormalBody, language = "th"), BidiResolvedDirection.Ltr)
+        val companion = Block("heading", 0, listOf(Span("text", " ")), level = 3)
+        val section = Section(3, " ", listOf(companion), headingStyle = style)
+        val rows = readingRows(listOf(section))
+        assertEquals(listOf(0..0), floatBodyRuns(rows))
+        assertSame(companion, rows.single().headingBlock)
+        assertTrue(floatBodyRuns(readingRows(listOf(section.copy(headingStyle = null)))).isEmpty())
+    }
+
+    @Test fun explicitBodyStartsAtFirstVisibleHeadingOrBlockWhileNullKeepsNativeSuffix() {
+        val prefix = Block("paragraph", 0, listOf(Span("link", "Prefix", "prefix")))
+        val enrolled = Block("container", 0, emptyList(), container = Container(emptyList(), ContainerStyle()))
+        val rows = readingRows(listOf(Section(3, "First", listOf(prefix)), Section(3, "Later", listOf(enrolled))),
+            bodyAdjoining = BodyAdjoiningPolicy.Ordinary)
+        val legacyFirst = rows.indexOfFirst { it.block === enrolled }
+        assertEquals(listOf(legacyFirst until rows.size), floatBodyRuns(rows))
+        assertEquals(floatBodyRuns(rows), floatBodyRuns(rows, null, "English"))
+        assertEquals(listOf(0 until rows.size), floatBodyRuns(rows, BodyAdjoiningPolicy.Ordinary, "English"))
+        val folded = visibleReadingRows(rows, setOf("heading-0"))
+        assertEquals(listOf(0 until folded.size), floatBodyRuns(folded, BodyAdjoiningPolicy.Ordinary, "English"))
+        assertEquals(listOf("heading-0", "heading-1", "block-1-0"), folded.map { it.key })
+        assertEquals(rows.map { it.key }, visibleReadingRows(rows, emptySet()).map { it.key })
+        val invisibleHeading = readingRows(listOf(Section(3, "", listOf(prefix))),
+            bodyAdjoining = BodyAdjoiningPolicy.Ordinary)
+        assertEquals(listOf(1 until invisibleHeading.size),
+            floatBodyRuns(invisibleHeading, BodyAdjoiningPolicy.Ordinary, "English"))
+        assertTrue(floatBodyRuns(invisibleHeading).isEmpty())
+    }
+
+    @Test fun explicitBodyRetainsEmptySourceOwnersButDoesNotManufactureEmptySectionBodies() {
+        val empty = readingRows(listOf(Section(3, "", emptyList())), bodyAdjoining = BodyAdjoiningPolicy.Ordinary)
+        assertTrue(floatBodyRuns(empty, BodyAdjoiningPolicy.Ordinary).isEmpty())
+        assertTrue(floatBodyRuns(emptyList(), BodyAdjoiningPolicy.Ordinary).isEmpty())
+        val blank = Block("blank", 0, emptyList())
+        val rows = readingRows(listOf(Section(3, "", listOf(blank))), bodyAdjoining = BodyAdjoiningPolicy.Ordinary)
+        assertSame(blank, rows.last().block)
+        assertEquals(listOf(1..1), floatBodyRuns(rows, BodyAdjoiningPolicy.Ordinary))
+        assertTrue(floatBodyRuns(rows).isEmpty())
+        val headingOnly = readingRows(listOf(Section(3, "Visible", emptyList())), bodyAdjoining = BodyAdjoiningPolicy.Ordinary)
+        assertEquals(listOf(0..0), floatBodyRuns(headingOnly, BodyAdjoiningPolicy.Ordinary, "English"))
+        assertTrue(floatBodyRuns(headingOnly).isEmpty())
+    }
+
     private val images = listOf(
         InlineImage("Delegated-Mai-PNG.png", widthPx = 190L, heightPx = 248L, alt = ""),
         InlineImage("Delegated-Mai-JPEG.jpg", widthPx = 190L, heightPx = 296L, alt = ""),

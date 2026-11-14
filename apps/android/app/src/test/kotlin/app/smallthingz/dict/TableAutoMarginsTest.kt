@@ -160,4 +160,46 @@ class TableAutoMarginsTest {
         assertEquals(NativeFloatBounds(20f, 40f, 80f, 60f), value.content)
         assertEquals(65f, value.nextY, 0f)
     }
+    @Test fun fixedResponsiveMarginsKeepFractionalBodyEmAndDensityIndependent() {
+        val edges = StyleEdges(StyleLength(StyleLengthUnit.Em, .4f), StyleLength(StyleLengthUnit.Px, .25f),
+            StyleLength(StyleLengthUnit.Em, .5f), StyleLength(StyleLengthUnit.Px, 1.5f))
+        val small = resolveTableFixedMargins(edges, 2.5f, 17f)
+        val large = resolveTableFixedMargins(edges, 2.5f, 34f)
+        assertEquals(6.8f, small.top, .00001f)
+        assertEquals(8.5f, small.bottom, 0f)
+        assertEquals(13.6f, large.top, .00001f)
+        assertEquals(17f, large.bottom, 0f)
+        assertEquals(.625f, small.right, 0f)
+        assertEquals(3.75f, small.left, 0f)
+        assertEquals(small.right, large.right, 0f)
+        assertEquals(small.left, large.left, 0f)
+        assertEquals(.4f, edges.top.value, 0f)
+    }
+
+    @Test fun parentOwnedFixedMarginsLeaveGridDecorationAndBodyUnchanged() {
+        val edges = StyleEdges(StyleLength(StyleLengthUnit.Px, 2f), StyleLength(StyleLengthUnit.Px, 7f),
+            StyleLength(StyleLengthUnit.Px, 3f), StyleLength(StyleLengthUnit.Px, 11f))
+        val table = Table(emptyList(), listOf(listOf(Cell(listOf(Span("text", "same cell")), false, 1, 1,
+            style = CellStyle(minWidth = StyleLength(StyleLengthUnit.Px, 0f))))),
+            style = TableStyle(border = StyleBorder.Solid(StyleLength(StyleLengthUnit.Px, 2f), "#123456"),
+                margins = edges, floatSide = TableFloatSide.Right))
+        val legacy = requireNotNull(tableRenderMetrics(table, 1, 5, 10, 1f, containerFontPixels = 16f))
+        val owned = requireNotNull(tableRenderMetrics(table, 1, 5, 10, 1f, containerFontPixels = 16f,
+            marginsConsumed = true))
+        val legacyStyle = checkNotNull(legacy.style)
+        assertEquals(TablePixelInsets(2, 7, 3, 11), legacyStyle.margins)
+        assertEquals(legacyStyle.copy(margins = TablePixelInsets(0, 0, 0, 0)), owned.style)
+        assertEquals(legacy.width, owned.width)
+        assertEquals(table.rows.single().single().spans.single().text, "same cell")
+        assertEquals(edges, table.style!!.margins)
+    }
+
+    @Test fun excessiveFixedResponsiveMarginRefusesInsteadOfClampingToFontLimit() {
+        val large = StyleLength(StyleLengthUnit.Em, Float.MAX_VALUE)
+        val zeroLength = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(large, zeroLength, zeroLength, zeroLength)
+        assertThrows(UnsupportedFloatLayout::class.java) { resolveTableFixedMargins(edges, 1f, 16f) }
+        assertEquals(Float.MAX_VALUE, edges.top.value, 0f)
+    }
+
 }

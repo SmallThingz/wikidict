@@ -88,21 +88,35 @@ internal fun paintNativeTableBorder(canvas: Canvas, edge: TableBorderSegment, co
 /** This is the adapter for the existing prepared owner, not another measurement subtree. */
 internal fun nativeContainerSpec(id: Int, resolved: ContainerViewportStyle,
     children: List<NativeFloatContextSpec>, density: Float, normalBodyFont: Float,
-    rtl: Boolean, dark: Boolean, flexItem: Boolean): NativeFloatContextSpec.Container = try {
-    supportedNativeContainerSpec(id, resolved, children, density, normalBodyFont, rtl, dark, flexItem)
+    rtl: Boolean, dark: Boolean, flexItem: Boolean,
+    positioned: NativePositionedScrollportPolicy? = null, absolute: NativeAbsoluteTextPlacement? = null): NativeFloatContextSpec.Container = try {
+    supportedNativeContainerSpec(id, resolved, children, density, normalBodyFont, rtl, dark, flexItem, positioned, absolute)
 } catch (error: UnsupportedFloatLayout) {
     // Keep the real leaves available to the existing visible fallback. Geometry
     // limits must not discard the body by throwing out of composition.
+    val retained = if (resolved.box.positionedScope == null) children else children.map { child ->
+        // A refused scope has no admitted positioning envelope. Keep its direct real
+        // text owners in ordinary fallback flow, without a zero-height/offset claim.
+        if (child is NativeFloatContextSpec.Container && child.absolute != null)
+            child.copy(absolute = null, relativeAuto = false, fixedContentHeight = null)
+        else child
+    }
     NativeFloatContextSpec.Container(id, contentWidth = { width, _ -> width }, intrinsicWidth = { width, _ -> width },
-        preparedParts = children, unavailableReason = error.message ?: "Container geometry is unavailable", content = {})
+        preparedParts = retained, unavailableReason = error.message ?: "Container geometry is unavailable", content = {})
 }
 
 private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportStyle,
     children: List<NativeFloatContextSpec>, density: Float, normalBodyFont: Float,
-    rtl: Boolean, dark: Boolean, flexItem: Boolean): NativeFloatContextSpec.Container {
+    rtl: Boolean, dark: Boolean, flexItem: Boolean,
+    positioned: NativePositionedScrollportPolicy?, absolute: NativeAbsoluteTextPlacement?): NativeFloatContextSpec.Container {
     val style = resolved.box
-    nativeScrollportUnavailable(style, flexItem)?.let { throw UnsupportedFloatLayout(it) }
-    val scrolling = style.overflow == ContainerOverflow.Auto
+    if ((style.positionedScope != null) != (positioned != null) ||
+        (style.positioning is ContainerPositioning.Absolute) != (absolute != null))
+        throw UnsupportedFloatLayout("Positioned content requires its own direct source scope")
+    if (positioned == null) nativeScrollportUnavailable(style, flexItem)?.let { throw UnsupportedFloatLayout(it) }
+    if (positioned != null && (flexItem || style.height != null || style.minHeight != null))
+        throw UnsupportedFloatLayout("This positioned scrollport needs an ordinary auto-height owner")
+    val scrolling = style.overflow == ContainerOverflow.Auto || positioned != null
     fun length(value: StyleLength): Float {
         val result = value.value.toDouble() * if (value.unit == StyleLengthUnit.Px) density else normalBodyFont
         if (!result.isFinite() || result !in 0.0..TablePixelLimit.toDouble())
@@ -118,9 +132,11 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
     val margins: NativeContainerMargins = resolved.margins?.let {
         SignedNativeContainerMargins(margin(it.top), margin(it.right), margin(it.bottom), margin(it.left))
     } ?: FloatMargins(0f, 0f, 0f, 0f)
-    if ((flexItem || resolved.ownsFormattingContext) &&
+    if ((flexItem || resolved.ownsFormattingContext) && positioned == null &&
         listOf(margins.top, margins.right, margins.bottom, margins.left).any { it < 0f })
         throw UnsupportedFloatLayout("Signed external float, BFC or flex margins are not supported")
+    if (positioned != null && (margins.left < 0f || margins.right < 0f))
+        throw UnsupportedFloatLayout("Signed horizontal positioned-scope margins are unavailable")
     if (style.minHeight != null && (flexItem || style.layout == ContainerLayout.FlexRow || style.columns != null))
         throw UnsupportedFloatLayout("Minimum height in flex or multicolumn layout is not supported")
     val borderSides = style.border.physicalEdges()
@@ -150,9 +166,14 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
             NativeContainerPaintEdge(edgeWidths[index], ink, edge is ContainerBorderEdge.Dotted)
         }).takeIf { it.background != null || it.edges!!.any { edge -> edge.color != null && edge.width > 0f } }
     val relativeAuto = style.positioning == ContainerPositioning.RelativeAuto
-    if (relativeAuto && (flexItem || style.layout == ContainerLayout.FlexRow || style.floatSide != null ||
+    if (relativeAuto && positioned == null && (flexItem || style.layout == ContainerLayout.FlexRow || style.floatSide != null ||
             style.columns != null || children.any { it !is NativeFloatContextSpec.Text }))
         throw UnsupportedFloatLayout("Positioned groups require one ordinary plaintext owner")
+    if (positioned != null && children.any { it !is NativeFloatContextSpec.Text &&
+            (it !is NativeFloatContextSpec.Container || it.absolute == null) })
+        throw UnsupportedFloatLayout("This positioned scope needs direct text, image and absolute text owners")
+    if (absolute != null && children.any { it !is NativeFloatContextSpec.Text })
+        throw UnsupportedFloatLayout("Absolute text requires ordinary paragraph owners")
     val columns = style.columns?.let { NativeColumnPolicy(it.count, length(it.gap), rtl) }
     if (columns != null && (style.height != null || style.layout == ContainerLayout.FlexRow ||
             style.overflow == ContainerOverflow.Auto))
@@ -178,7 +199,7 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
             resolved.margins?.bottom == ContainerMargin.Auto))
     // Border/decoration stay on this ordinary owner. Its one real viewport child owns the
     // padding box and the complete original subtree, so padding and border are counted once.
-    val renderedChildren = if (!scrolling) children else {
+    val renderedChildren = if (!scrolling || positioned != null) children else {
         require(id >= 0) { "Authored Container source IDs must be nonnegative" }
         listOf(NativeFloatContextSpec.Child(-id - 1, { it }, 0f,
             requiresUnobstructedText = true, scrollport = NativeScrollportSpec(children, scrollPadding)))
@@ -193,8 +214,9 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
             if (value > TablePixelLimit) androidx.compose.ui.unit.Constraints.Infinity else ceil(value).toInt()
         }, margins = { margins }, padding = { outerPadding },
         floatSide = if (flexItem) null else style.floatSide, clear = if (flexItem) null else style.clear,
-        empty = children.isEmpty(), isolatesFloats = resolved.ownsFormattingContext || flexItem,
-        preparedParts = renderedChildren,
+        empty = children.isEmpty(), isolatesFloats = resolved.ownsFormattingContext || flexItem || positioned != null,
+        preparedParts = renderedChildren.takeIf { positioned == null },
+        innerMargins = if (positioned != null) NativeAdjoiningMargins(0f, 0f, false) else null,
         horizontal = { width, intrinsic ->
             val value = solved(width.toFloat(), intrinsic)
             val horizontal = NativeContainerHorizontal.from(value, padding.left, margins.left, margins.right)
@@ -206,13 +228,29 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
         fixedContentHeight = containerUsedHeight(style, padding.top + padding.bottom,
             density, normalBodyFont)?.content,
         minimum = containerMinimumHeight(style, padding.top + padding.bottom, density, normalBodyFont),
+        absolute = absolute,
+        scrollport = positioned?.let { NativeScrollportSpec(children, scrollPadding, it) },
         content = {})
 }
 
 internal data class NativeContainerLeaf(val block: Block, val previous: Block?, val id: Int,
     val path: String, val gridPath: String, val gap: Float, val rootIndex: Int?,
     val format: NativeContainerTextFormat?, val context: ContainerTextContext?,
-    val align: CellTextAlign?, val inContainer: Boolean, val inScrollport: Boolean = false)
+    val align: CellTextAlign?, val inContainer: Boolean, val inScrollport: Boolean = false,
+    val ownerWrap: TextWrap? = null)
+
+private data class NativePositionedParent(val paddingTop: Float)
+
+internal fun positionedOverflowAt(scope: PositionedScope, viewport: Double): PositionedOverflowX {
+    if (!viewport.isFinite() || viewport < 0.0) throw UnsupportedFloatLayout("Positioned scope needs the source viewport width")
+    return scope.viewportStates.lastOrNull { viewport >= it.minWidthPx.toDouble() }?.overflowX ?: scope.overflowX
+}
+
+private fun nativeAbsoluteParagraphs(blocks: List<Block>): Boolean = blocks.all { block ->
+    block.kind == "paragraph" && block.depth == 0 && block.container == null && block.table == null &&
+        block.figure == null && block.flow == null && block.feature == null &&
+        block.spans.all { it.image == null && !it.hasClassToken("wikidict-media") }
+}
 
 /** Project only real source owners. A logical UL/OL remains one flex item, and each
  * actual paragraph/figure/table leaf is prepared once at its original source address. */
@@ -225,13 +263,16 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
     leaf: @Composable (NativeContainerLeaf) -> List<NativeFloatContextSpec>
 ): List<NativeFloatContextSpec> {
     val bodyPixels = normalBodySize.value * density.density * density.fontScale
+    val positionedBodyPixels = with(density) { normalBodySize.toPx() }
     fun groupIndices(item: ContainerFlowItem): List<Int> = when (item) {
         is ContainerFlowItem.Block -> listOf(item.index)
         is ContainerFlowItem.ListGroup -> item.items.flatMap { listOf(it.index) + it.children.flatMap(::groupIndices) }
     }
     @Composable fun visit(values: List<Block>, paths: List<String>, grids: List<String>,
         gaps: List<Float>, context: ContainerTextContext, align: CellTextAlign?, inside: Boolean,
-        row: Boolean, roots: List<Int?>, inScrollport: Boolean): List<NativeFloatContextSpec> {
+        row: Boolean, roots: List<Int?>, inScrollport: Boolean,
+        positionedParent: NativePositionedParent? = null, ownerWrap: TextWrap? = null,
+        declaringFormat: NativeContainerTextFormat? = null): List<NativeFloatContextSpec> {
         val result = mutableListOf<NativeFloatContextSpec>()
         val groups = if (row) containerFlowItems(values) else values.indices.map { ContainerFlowItem.Block(it) }
         for (group in groups) {
@@ -241,11 +282,26 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
             val container = block.container.takeIf { group is ContainerFlowItem.Block }
             if (container != null) {
                 val resolved = container.style.atViewport(rootViewport)
+                val absolute = resolved.box.positioning as? ContainerPositioning.Absolute
+                val scope = resolved.box.positionedScope
                 val requestedContext = resolved.box.textContext(context)
+                val absoluteFormat = absolute?.let {
+                    nativeAbsoluteContainerTextFormat(it, inheritedStyle, density, context.fontFamily,
+                        hasLine = container.blocks.any { child -> nativeNoWrapSourceLineStarts(child.spans).isNotEmpty() })
+                }
+                val familyAdmission = if (absoluteFormat == null) nativeContainerFontAdmission(requestedContext.fontFamily,
+                    inheritedStyle.fontWeight ?: androidx.compose.ui.text.font.FontWeight.Normal,
+                    inheritedStyle.fontStyle ?: androidx.compose.ui.text.font.FontStyle.Normal) else null
                 var textFailure: String? = null
                 val next = try {
-                    nativeContainerTextFormat(requestedContext, normalBodySize, inheritedStyle, density)
-                    requestedContext
+                    if (absoluteFormat != null) {
+                        val format = absoluteFormat.getOrThrow()
+                        requestedContext.copy(fontFamily = format.sourceFamily, cellText = null)
+                    } else {
+                        checkNotNull(familyAdmission).getOrThrow()
+                        nativeContainerTextFormat(requestedContext, normalBodySize, inheritedStyle, density)
+                        requestedContext
+                    }
                 } catch (error: UnsupportedFloatLayout) {
                     textFailure = error.message ?: "Container text geometry is unavailable"
                     context
@@ -257,27 +313,47 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     null, ContainerColor.Transparent -> LocalAuthoredBackground.current
                 }
                 val children = mutableListOf<NativeFloatContextSpec>()
+                val paddingTop = resolved.box.padding?.top?.let {
+                    (it.value.toDouble() * if (it.unit == StyleLengthUnit.Px) density.density else positionedBodyPixels).toFloat()
+                } ?: 0f
+                val childScope = scope?.let { NativePositionedParent(paddingTop) }
+                val nextWrap = absolute?.textWrap ?: scope?.textWrap ?: ownerWrap
                 CompositionLocalProvider(LocalAuthoredBackground provides background) {
                     children += visit(container.blocks,
                         container.blocks.indices.map { "${paths[first]}/container/block-$it" },
                         container.blocks.indices.map { "${grids[first]}/container/block-$it" },
                         List(container.blocks.size) { 0f }, next, nextAlign, true,
                         resolved.box.layout == ContainerLayout.FlexRow, List(container.blocks.size) { null },
-                        inScrollport || resolved.box.overflow == ContainerOverflow.Auto)
+                        inScrollport || resolved.box.overflow == ContainerOverflow.Auto || scope != null,
+                        childScope, nextWrap, absoluteFormat?.getOrNull())
+                }
+                val placement = if (absolute == null || positionedParent == null) null else
+                    NativeAbsoluteTextPlacement(absolute.left.value * density.density,
+                        absolute.top.value * density.density - positionedParent.paddingTop)
+                val scopePolicy = try {
+                    scope?.let { NativePositionedScrollportPolicy(container, positionedOverflowAt(it, rootViewport)) }
+                } catch (error: UnsupportedFloatLayout) {
+                    textFailure = textFailure ?: error.message ?: "Positioned viewport geometry is unavailable"
+                    null
                 }
                 val prepared = nativeContainerSpec(id(paths[first]), resolved, children,
-                    density.density, bodyPixels, rtl, dark, row)
-                val failure = textFailure ?: nativeScrollportUnavailable(container.style, row) ?: when {
-                    inScrollport && (resolved.box.positioning != null || resolved.box.columns != null ||
+                    density.density, if (absolute != null || scope != null) positionedBodyPixels else bodyPixels,
+                    rtl, dark, row, scopePolicy, placement)
+                val failure = textFailure ?: (if (scope == null && absolute == null)
+                    nativeScrollportUnavailable(container.style, row) else null)
+                val domainFailure = failure ?: when {
+                    absolute != null && (positionedParent == null || !nativeAbsoluteParagraphs(container.blocks)) ->
+                        "Absolute text requires its direct scope and unreplaced ordinary paragraphs"
+                    inScrollport && positionedParent == null && scope == null && (resolved.box.positioning != null || resolved.box.columns != null ||
                         resolved.box.layout == ContainerLayout.FlexRow) ->
                         "This child layout is unavailable inside a local scrollport"
-                    resolved.needsDocumentExtent() && !fixedHeightReachable ->
+                    resolved.needsDocumentExtent() && !fixedHeightReachable && absolute == null ->
                         "Container overflow needs this owner's document extent export"
                     resolved.box.positioning != null && !positionedPaintReachable ->
                         "Positioned painting needs this owner's Entry stacking context"
                     else -> null
                 }
-                result += if (failure == null) prepared else prepared.copy(unavailableReason = failure)
+                result += if (domainFailure == null) prepared else prepared.copy(unavailableReason = domainFailure)
             } else {
                 val children = mutableListOf<NativeFloatContextSpec>()
                 for (index in indices) {
@@ -286,16 +362,25 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     // retain every LI/detail's own block edges and marker geometry.
                     val consumed = row && group is ContainerFlowItem.Block
                     val rendered = if (consumed) original.copy(style = null) else original
-                    val format = if (inside) nativeContainerTextFormat(context, normalBodySize, inheritedStyle, density) else null
-                    children += leaf(NativeContainerLeaf(rendered, if (inside) null else values.getOrNull(index - 1),
+                    val format = declaringFormat ?: if (inside) nativeContainerTextFormat(context, normalBodySize, inheritedStyle, density) else null
+                    val child = NativeContainerLeaf(rendered, if (inside) null else values.getOrNull(index - 1),
                         id(paths[index] + "/leaf"), paths[index], grids[index], if (inside) 0f else gaps[index],
-                        roots[index], format, context.takeIf { inside }, align, inside, inScrollport))
+                        roots[index], format, context.takeIf { inside }, align, inside, inScrollport, ownerWrap)
+                    if (format?.ownerFont == null) children += leaf(child) else {
+                        CompositionLocalProvider(LocalCellWeight provides null,
+                            LocalTableLineHeightPixels provides null,
+                            LocalNativeContainerTextContext provides context.copy(cellText = null, fontFamily = format.sourceFamily)) {
+                            children += leaf(child)
+                        }
+                    }
                 }
                 if (!row) result += children else {
                     val own = if (group is ContainerFlowItem.Block) ContainerStyle(margins = block.style?.margins,
                         padding = block.style?.padding) else ContainerStyle()
-                    result += nativeContainerSpec(id(paths[first] + "/logical-item"), own.atViewport(rootViewport), children,
+                    val item = nativeContainerSpec(id(paths[first] + "/logical-item"), own.atViewport(rootViewport), children,
                         density.density, bodyPixels, rtl, dark, true)
+                    result += if (group is ContainerFlowItem.Block && block.ruleStyle != null)
+                        item.copy(unavailableReason = "Authored rule flex-item margin ownership is unavailable") else item
                 }
             }
         }

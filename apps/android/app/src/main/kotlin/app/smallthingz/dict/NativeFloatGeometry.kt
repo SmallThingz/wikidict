@@ -74,26 +74,58 @@ internal class NativeFloatGeometry private constructor(
     val textBottom: Float get() = flow.bottom
     val hasResidualFloats: Boolean get() = exclusions.any { it.outer.bottom > textBottom + 0.01f }
     override val height: Int = ceil(max(flow.bottom, exclusions.maxOfOrNull { it.outer.bottom } ?: 0f)).toInt()
+    private val authoredBaselines = nativeInlineRanges(text as Spanned, NativeAuthoredBaselineShift::class.java)
+        .filter { it.start < it.end }
+    private val authoredMetrics = nativeInlineRanges(text as Spanned, NativeAuthoredInlineMetrics::class.java)
+    private val authoredCursors = nativeInlineRanges(text as Spanned, NativeAuthoredCursor::class.java)
+    private val linePainter = NativeLinePainter(layout)
     override val nodes: List<FloatInteractionNode> = nodeFactory(this)
-    override val textBaselines: NativeTextBaselines get() =
-        NativeTextBaselines(flow.baselines.first(), flow.baselines.last())
-    fun firstLineBand(): RectF = RectF(flow.left[0] + originX(0), flow.tops[0], width - flow.right[0] + originX(0), flow.bottoms[0])
+    private fun linePresent(line: Int): Boolean = flow.sourceLinePresent?.get(line) ?: true
+    override val textBaselines: NativeTextBaselines? get() {
+        if (flow.sourceLinePresent == null) return NativeTextBaselines(flow.baselines.first(), flow.baselines.last())
+        val lines = flow.baselines.indices.filter(::linePresent)
+        return NativeTextBaselines.of(lines.firstOrNull()?.let { flow.baselines[it] }, lines.lastOrNull()?.let { flow.baselines[it] })
+    }
+    fun firstLineBand(): RectF {
+        val line = flow.baselines.indices.firstOrNull(::linePresent) ?: return RectF()
+        return RectF(flow.left[line] + originX(line), flow.tops[line], width - flow.right[line] + originX(line), flow.bottoms[line])
+    }
+
+    /** The H owner's font content edge, before line-height half-leading or descendant ink. */
+    fun headingOwnerContentTop(): Float? {
+        if (text.isEmpty() || nodes.count { it.kind == FloatInteractionKind.HEADING && it.start == 0 && it.end == text.length } != 1)
+            return null
+        val source = text as Spanned
+        val owner = source.getSpans(0, text.length, NativeRunLineMetrics::class.java).singleOrNull {
+            it.strut && source.getSpanStart(it) == 0 && source.getSpanEnd(it) > 0
+        } ?: return null
+        return (flow.baselines.first().toDouble() + owner.primary.ascent + owner.primary.baselineShift)
+            .toFloat().takeIf { it.isFinite() }
+    }
 
     fun remainingExclusions(afterY: Float = textBottom): List<NativeFloatExclusion> {
         require(afterY.isFinite() && afterY >= 0f)
         return exclusions.filter { it.outer.bottom > afterY }.map { it.copy(outer = it.outer.translated(0f, -afterY)) }
     }
 
-    private val linePainter = NativeLinePainter(layout)
     private val linePaintPositions = (0 until layout.lineCount).map { line ->
         NativeLinePaintPlacement(line, flow.baselines[line],
             flow.left[line], flow.right[line], originX(line))
     }
-    private val selectableLineBounds by lazy { linePaintPositions.map(linePainter::selectableBounds) }
+    private val paintedLinePositions get() = if (flow.sourceLinePresent == null) linePaintPositions
+        else linePaintPositions.filter { linePresent(it.line) }
+    private val selectableLineBounds by lazy { linePaintPositions.map {
+        if (linePresent(it.line)) linePainter.selectableBounds(it) else null
+    } }
+    private val selectableFragments by lazy {
+        if (authoredBaselines.isEmpty()) selectableLineBounds.filterNotNull()
+        else rectsForRange(0, text.length)
+    }
 
     /** Native glyph advances use each exact authored line box, not its ceil View allocation
      * or the taller font/selection ink. Floated replacements contribute their real margin boxes. */
     val scrollableBounds: NativeFloatBounds by lazy {
+        if (flow.sourceLinePresent?.none { it } == true) return@lazy NativeFloatBounds(0f, 0f, 0f, 0f)
         var bounds = NativeFloatBounds(0f, 0f, width.toFloat(), textBottom)
         selectableLineBounds.forEachIndexed { line, rect ->
             if (rect != null) bounds = bounds.enclosing(NativeFloatBounds(rect.left, flow.tops[line],
@@ -105,24 +137,25 @@ internal class NativeFloatGeometry private constructor(
     }
 
     override val ordinaryPaintBounds: List<NativeFloatBounds> by lazy {
-        listOfNotNull(nativeTextInkBounds(layout, linePaintPositions),
-            nativeBoundsOf(floats.map { it.content }), decorationBounds(this))
+        listOfNotNull(nativeTextInkBounds(layout, paintedLinePositions),
+            nativeBoundsOf(floats.map { it.content }), if (paintedLinePositions.isNotEmpty()) decorationBounds(this) else null)
     }
     override val extents: NativeGeometryExtents by lazy {
         val ink = ordinaryPaintBounds.fold(nativeFocusInk(nodes), ::enclosingBounds)
-        val interaction = nativeBoundsOf(selectableLineBounds.filterNotNull() +
+        val interaction = nativeBoundsOf(selectableFragments +
             nodes.flatMap { it.bounds } + listOf(caretRect(0), caretRect(text.length)))
         NativeGeometryExtents(width, height.toFloat(), ink, interaction)
     }
 
     override fun containsInteraction(x: Float, y: Float): Boolean =
-        selectableLineBounds.any { it?.contains(x, y) == true } ||
+        selectableFragments.any { it.contains(x, y) } ||
             nodes.any { node -> node.bounds.any { it.contains(x, y) } }
 
     override fun paint(canvas: Canvas) {
         // Paint the complete shaped flow in one batch. A zero containing width or a short
         // line box must not clip its glyphs, and all native backgrounds precede the text.
-        linePainter.paint(canvas, linePaintPositions)
+        if (paintedLinePositions.isEmpty()) return
+        linePainter.paint(canvas, paintedLinePositions)
         floats.forEach { it.occurrence.draw(canvas, RectF(it.content)) }
         decoration(canvas, this)
     }
@@ -136,13 +169,19 @@ internal class NativeFloatGeometry private constructor(
     internal fun baselineForOffset(offset: Int): Float {
         require(offset in 0..text.length)
         val line = layout.getLineForOffset(offset)
-        return flow.baselines[line]
+        return flow.baselines[line] + (authoredBaselineAt(offset)?.value?.shift ?: 0f)
     }
 
     override fun caretRect(offset: Int): RectF {
         require(offset in 0..text.length)
         val line = layout.getLineForOffset(offset)
         val x = layout.getPrimaryHorizontal(offset) + originX(line)
+        if (!linePresent(line)) return RectF(x, flow.tops[line], x, flow.tops[line])
+        if (text.isEmpty() && hasNativeAuthoredInlineMetrics(text))
+            return RectF(x, flow.tops[line], x + 1f, flow.bottoms[line])
+        authoredSelectionMetrics(offset)?.let { own ->
+            return RectF(x, flow.baselines[line] + own.top, x + 1f, flow.baselines[line] + own.bottom)
+        }
         val shift = flow.baselines[line] - layout.getLineBaseline(line)
         return RectF(x, layout.getLineTop(line) + shift, x + 1f, layout.getLineBottom(line) + shift)
     }
@@ -161,6 +200,7 @@ internal class NativeFloatGeometry private constructor(
     override fun rectsForRange(start: Int, end: Int): List<RectF> {
         require(start in 0..text.length && end in start..text.length)
         if (start == end) return emptyList()
+        if (authoredBaselines.any { it.start < end && it.end > start }) return authoredRangeRects(start, end)
         val path = Path()
         layout.getSelectionPath(start, end, path)
         val result = mutableListOf<RectF>()
@@ -168,6 +208,7 @@ internal class NativeFloatGeometry private constructor(
         path.computeBounds(selectionBounds, true)
         val rect = Rect()
         for (line in layout.getLineForOffset(start)..layout.getLineForOffset(end - 1)) {
+            if (!linePresent(line)) continue
             val top = layout.getLineTop(line)
             val region = Region()
             // Native selection paths already describe bidi runs and overflowing glyph advances.
@@ -181,6 +222,53 @@ internal class NativeFloatGeometry private constructor(
         return result
     }
 
+    private fun authoredBaselineAt(offset: Int): NativeInlineRange<NativeAuthoredBaselineShift>? =
+        authoredBaselines.firstOrNull { offset >= it.start && offset < it.end }
+            ?: authoredBaselines.lastOrNull { offset == text.length && it.end == offset }
+
+    private fun authoredSelectionMetrics(offset: Int): NativeUsedLineMetrics? {
+        val shift = authoredBaselineAt(offset) ?: return null
+        val owner = authoredMetrics.firstOrNull { it.start <= shift.start && it.end >= shift.end &&
+            it.value.primary.baselineShift == shift.value.shift }?.value ?: return null
+        // Integer Normal displacement keeps the platform's fallback-aware selection box.
+        if (owner.policy == NativeLineHeightPolicy.Normal) return null
+        return NativeUsedLineMetrics(owner.primary.ascent + shift.value.shift,
+            owner.primary.descent + shift.value.shift)
+    }
+
+    private fun authoredRangeRects(start: Int, end: Int): List<RectF> = buildList {
+        if (start == end) return@buildList
+        for (line in layout.getLineForOffset(start)..layout.getLineForOffset(end - 1)) {
+            if (!linePresent(line)) continue
+            val first = maxOf(start, layout.getLineStart(line))
+            val last = minOf(end, layout.getLineEnd(line))
+            val cuts = (listOf(first, last) + authoredBaselines.flatMap {
+                listOf(it.start.coerceIn(first, last), it.end.coerceIn(first, last))
+            }).distinct().sorted()
+            for ((a, b) in cuts.zipWithNext()) {
+                if (a == b) continue
+                val path = linePainter.selectionPathForRange(line, a, b)
+                val bounds = RectF().also { path.computeBounds(it, true) }
+                val region = Region()
+                region.setPath(path, Region(floor(bounds.left).toInt(), layout.getLineTop(line),
+                    ceil(bounds.right).toInt(), layout.getLineBottom(line)))
+                val iterator = RegionIterator(region)
+                val rect = Rect()
+                val own = authoredSelectionMetrics(a)
+                while (iterator.next(rect)) {
+                    add(RectF(rect).apply {
+                        offset(originX(line), flow.baselines[line] - layout.getLineBaseline(line))
+                        if (own != null) {
+                            top = flow.baselines[line] + own.top
+                            bottom = flow.baselines[line] + own.bottom
+                        }
+                    })
+                }
+            }
+        }
+        floats.filter { it.occurrence.offset in start until end }.forEach { add(RectF(it.content)) }
+    }
+
     override fun characterRects(start: Int, length: Int): List<RectF?> {
         require(start in 0..text.length && length >= 0 && length <= text.length - start)
         return (start until start + length).map { offset ->
@@ -191,12 +279,31 @@ internal class NativeFloatGeometry private constructor(
         }
     }
 
-    private fun lineForPosition(x: Float, y: Float): Int {
+    override fun cursorAt(x: Float, y: Float): InlineCursor? {
+        if (authoredCursors.isEmpty() || floats.any { it.content.contains(x, y) }) return null
+        val line = exactSelectableLineAt(x, y) ?: return null
+        val start = layout.getLineStart(line)
+        val end = layout.getLineEnd(line)
+        return authoredCursors.lastOrNull { owner ->
+            val first = maxOf(start, owner.start)
+            val last = minOf(end, owner.end)
+            first < last && authoredRangeRects(first, last).any { it.contains(x, y) }
+        }?.value?.cursor
+    }
+
+    private fun exactSelectableLineAt(x: Float, y: Float): Int? {
         // Later lines own only their native selectable advance. A narrower overlapping
         // line cannot hide an earlier line's exposed range; glyph ink holes do not matter.
         for (line in layout.lineCount - 1 downTo 0) {
-            if (selectableLineBounds[line]?.contains(x, y) == true) return line
+            val hit = if (authoredBaselines.isEmpty()) selectableLineBounds[line]?.contains(x, y) == true
+                else authoredRangeRects(layout.getLineStart(line), layout.getLineEnd(line)).any { it.contains(x, y) }
+            if (hit) return line
         }
+        return null
+    }
+
+    private fun lineForPosition(x: Float, y: Float): Int {
+        exactSelectableLineAt(x, y)?.let { return it }
         if (lineOrigins != null) return (0 until layout.lineCount).minBy { line ->
             val box = selectableLineBounds[line] ?: RectF(originX(line), flow.tops[line],
                 originX(line) + width, flow.bottoms[line])
@@ -216,13 +323,13 @@ internal class NativeFloatGeometry private constructor(
 
     private fun originX(line: Int): Float = lineOrigins?.get(line) ?: 0f
     internal val hasColumnFragments: Boolean get() = lineOrigins != null
-    internal fun distanceForPosition(x: Float, y: Float): Double = (0 until layout.lineCount).minOf { line ->
+    internal fun distanceForPosition(x: Float, y: Float): Double = (0 until layout.lineCount).filter(::linePresent).minOfOrNull { line ->
         val box = selectableLineBounds[line] ?: RectF(originX(line), flow.tops[line],
             originX(line) + width, flow.bottoms[line])
         val dx = maxOf(box.left - x, 0f, x - box.right).toDouble()
         val dy = maxOf(box.top - y, 0f, y - box.bottom).toDouble()
         dx * dx + dy * dy
-    }
+    } ?: Double.POSITIVE_INFINITY
     internal val shapedLineCount: Int get() = layout.lineCount
     internal fun usedLineHeight(line: Int): Float = flow.bottoms[line] - flow.tops[line]
 
@@ -276,8 +383,14 @@ internal class NativeFloatGeometry private constructor(
                     throw UnsupportedFloatLayout("Carried float exceeds native geometry")
                 }
             }
+            validateNativeInlineStyle(source, paint)
             val original = SpannedString(source)
-            val hasRunMetrics = original.getSpans(0, original.length, NativeRunLineMetrics::class.java).isNotEmpty()
+            val wrapPlan = NativeTextWrapPlan.create(original, paint)
+            wrapPlan?.noWrap?.requireLinePresence()
+            if (wrapPlan?.noWrap != null && (occurrences.isNotEmpty() || carriedExclusions.isNotEmpty()))
+                throw UnsupportedFloatLayout("No-wrap source cannot inherit or establish float exclusions")
+            val hasRunMetrics = original.getSpans(0, original.length, NativeRunLineMetrics::class.java).isNotEmpty() ||
+                hasNativeAuthoredInlineMetrics(original)
             val native = SpannableString(original)
             val ordered = occurrences.sortedBy { it.offset }
             ordered.forEach {
@@ -301,11 +414,16 @@ internal class NativeFloatGeometry private constructor(
                     .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
                     .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
                     .setIndents(left, right).build()
-                val flow = position(nativeLayout, width, ordered, carriedExclusions, insets, usedLineMetrics)
-                if (left.contentEquals(flow.left) && right.contentEquals(flow.right)) {
+                val flow = position(nativeLayout, width, ordered, carriedExclusions, insets, usedLineMetrics,
+                    wrapPlan?.noWrap?.let { plan -> { start -> plan.hasLineAt(start) } })
+                val fit = wrapPlan?.fit(nativeLayout, measured, flow.left, flow.right, flow.constrainedByFloat)
+                val nextLeft = fit?.first ?: flow.left
+                val nextRight = fit?.second ?: flow.right
+                if (left.contentEquals(nextLeft) && right.contentEquals(nextRight)) {
+                    wrapPlan?.validateResult(nativeLayout)
                     for (line in 0 until nativeLayout.lineCount) {
                         if (flow.constrainedByFloat[line] &&
-                            nativeLayout.getLineMax(line) > width - left[line] - right[line] + 1f) {
+                            nativeLayout.getLineMax(line) > width - flow.left[line] - flow.right[line] + 1f) {
                             throw UnsupportedFloatLayout("Native text exceeds the remaining float lane")
                         }
                     }
@@ -314,8 +432,8 @@ internal class NativeFloatGeometry private constructor(
                     }
                     return NativeFloatGeometry(original, width, nativeLayout, flow, nodeFactory, decoration, decorationBounds)
                 }
-                left = flow.left
-                right = flow.right
+                left = nextLeft
+                right = nextRight
             }
             throw UnsupportedFloatLayout("Float exclusions did not converge after 64 native layouts")
         }
@@ -333,11 +451,12 @@ private data class Flow(
     val left: IntArray, val right: IntArray,
     val floats: List<PlacedNativeFloat>, val exclusions: List<NativeFloatExclusion>, val bottom: Float,
     val constrainedByFloat: BooleanArray,
+    val sourceLinePresent: BooleanArray? = null,
 )
 
 private fun position(layout: StaticLayout, width: Int, occurrences: List<NativeFloatOccurrence>,
     carriedExclusions: List<NativeFloatExclusion>, insets: NativeTextInsets,
-    usedLineMetrics: ((Int, Int) -> NativeUsedLineMetrics)?): Flow {
+    usedLineMetrics: ((Int, Int) -> NativeUsedLineMetrics)?, sourceLinePresent: ((Int) -> Boolean)? = null): Flow {
     val tops = FloatArray(layout.lineCount)
     val bottoms = FloatArray(layout.lineCount)
     val baselines = FloatArray(layout.lineCount)
@@ -345,16 +464,24 @@ private fun position(layout: StaticLayout, width: Int, occurrences: List<NativeF
     val left = IntArray(layout.lineCount + 1)
     val right = IntArray(layout.lineCount + 1)
     val constrainedByFloat = BooleanArray(layout.lineCount)
+    val present = sourceLinePresent?.let { owns -> BooleanArray(layout.lineCount) { owns(layout.getLineStart(it)) } }
     val placed = mutableListOf<PlacedNativeFloat>()
     val exclusions = carriedExclusions.toMutableList()
     val anchors = occurrences.groupBy { layout.getLineForOffset(it.offset) }
     var y = 0f
     for (line in 0 until layout.lineCount) {
+        if (present?.get(line) == false) {
+            tops[line] = y
+            bottoms[line] = y
+            baselines[line] = y
+            continue
+        }
         val nativeBaseline = layout.getLineBaseline(line)
         val natural = NativeUsedLineMetrics((layout.getLineTop(line) - nativeBaseline).toFloat(),
             (layout.getLineBottom(line) - nativeBaseline).toFloat())
         val metrics = usedLineMetrics?.invoke(layout.getLineStart(line), layout.getLineEnd(line))
-            ?: nativeRunLineMetrics(layout.text as Spanned, layout.getLineStart(line), layout.getLineEnd(line), natural)
+            ?: nativeRunLineMetrics(layout.text as Spanned, layout.getLineStart(line), layout.getLineEnd(line), natural,
+                pointOnLine = { offset -> layout.getLineForOffset(offset) == line })
             ?: natural
         val lineHeight = metrics.height
         for (occurrence in anchors[line].orEmpty()) {
@@ -416,7 +543,7 @@ private fun position(layout: StaticLayout, width: Int, occurrences: List<NativeF
         if (!y.isFinite() || y > Int.MAX_VALUE / 4) throw UnsupportedFloatLayout("Float context exceeds native geometry")
         bottoms[line] = y
     }
-    return Flow(tops, bottoms, baselines, left, right, placed, exclusions, y, constrainedByFloat)
+    return Flow(tops, bottoms, baselines, left, right, placed, exclusions, y, constrainedByFloat, present)
 }
 
 private fun nativeLineIndent(value: Float): Int {

@@ -1,14 +1,23 @@
 package app.smallthingz.dict
 
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.intl.Locale
+import androidx.compose.ui.text.intl.LocaleList
+import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 
 /** Resolved inheritance on the existing content owner; this is not serialized or a new layout. */
-internal data class NativeCellTextState(val fontPixels: Float?, val lineHeight: NativeLineHeightPolicy?) {
-    init { require(fontPixels == null || fontPixels.isFinite() && fontPixels >= 0f) }
+internal data class NativeCellTextState(val fontPixels: Float?, val lineHeight: NativeLineHeightPolicy?,
+    val ownerFont: NativeDeclaringFont? = null, val ownerFontInvalidated: Boolean = false) {
+    init {
+        require(fontPixels == null || fontPixels.isFinite() && fontPixels >= 0f)
+        require(!ownerFontInvalidated || ownerFont != null)
+    }
 }
 
 internal fun cellTextMetricPixels(value: Float, basis: FontScaleBasis, normalBodySize: TextUnit,
@@ -40,6 +49,26 @@ internal fun nativeCellLineStyle(style: TextStyle, height: NativeLineHeightPolic
         is NativeLineHeightPolicy.Pixels -> with(density) { height.value.toSp() }
     })
 
+internal const val NativeCellOwnerFontUnavailable = "Cell metric-owner font is unavailable."
+internal const val NativeCellOwnerFontChanged = "Cell metric-owner font is unavailable after a descendant font change."
+
+/** Size has already been resolved from this cell's sole strut. Header presets and painted
+ * descendants cannot supply any part of the metric owner's font tuple. */
+internal fun nativeCellOwnerFont(strut: CellTextStrut, fontPixels: Float, density: Density): NativeDeclaringFont? {
+    val font = strut.ownerFont ?: return null
+    require(fontPixels.isFinite() && fontPixels in 0f..MaxComputedFontPixels)
+    val language = nativeTableOwnerLanguageTag(font.language)
+    // Keep an unsupported source tag intact; native preparation reports its precise
+    // refusal before using the metric font, rather than borrowing a host locale.
+    return NativeDeclaringFont(font, TextStyle(fontSize = with(density) { fontPixels.toSp() },
+        fontFamily = nativeTerminalFontFamily(checkNotNull(font.fontFamily)),
+        fontWeight = if (font.bold) FontWeight.Bold else FontWeight.Normal,
+        fontStyle = if (font.italic) FontStyle.Italic else FontStyle.Normal,
+        fontFeatureSettings = checkNotNull(font.fontFeatures).nativeSettings,
+        baselineShift = BaselineShift.None,
+        localeList = language?.let { LocaleList(Locale(it)) }))
+}
+
 /** Resolve a cell before its descendants. Both ordinary grids and caption grids use this path. */
 internal fun nativeCellTextContext(cell: Cell, inherited: ContainerTextContext?, inheritedStyle: TextStyle,
     normalBodySize: TextUnit, density: Density, cssPixelTextZoom: Float,
@@ -47,7 +76,8 @@ internal fun nativeCellTextContext(cell: Cell, inherited: ContainerTextContext?,
     val own = cell.style?.lineHeight
     if (own == null && inherited?.cellText == null) return inherited
     require(inheritedStyle.fontSize.isSp)
-    val previous = inherited?.let { nativeContainerTextFormat(it, normalBodySize, inheritedStyle, density) }
+    val previous = if (own?.strut?.ownerFont != null) null else
+        inherited?.let { nativeContainerTextFormat(it, normalBodySize, inheritedStyle, density) }
     val fontPixels = own?.strut?.let {
         cellTextMetricPixels(it.fontScale, it.fontScaleBasis, normalBodySize, density, cssPixelTextZoom, fontSize = true)
     } ?: with(density) { inheritedStyle.fontSize.toPx() }
@@ -65,5 +95,6 @@ internal fun nativeCellTextContext(cell: Cell, inherited: ContainerTextContext?,
     }
     if (height is NativeLineHeightPolicy.Pixels && height.value > TablePixelLimit)
         throw UnsupportedFloatLayout("Cell line height exceeds the native range")
-    return (inherited ?: ContainerTextContext()).copy(cellText = NativeCellTextState(fontPixels, height))
+    val ownerFont = own?.strut?.let { nativeCellOwnerFont(it, fontPixels, density) }
+    return (inherited ?: ContainerTextContext()).copy(cellText = NativeCellTextState(fontPixels, height, ownerFont))
 }

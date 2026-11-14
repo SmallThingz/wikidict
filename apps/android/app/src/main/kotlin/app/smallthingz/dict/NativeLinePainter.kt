@@ -44,9 +44,12 @@ internal class NativeLinePainter private constructor(
     /** Called during geometry construction, never by draw/input. The original native
      * dispatcher supplies each run's actual soft-wrap context, resolved paint and origin. */
     fun observedPaintBounds(positions: List<NativeLinePaintPlacement>, text: Boolean = true): NativeObservedPaintBounds {
-        val observer = NativeDecorationBoundsCanvas(text)
+        val observer = NativeDecorationBoundsCanvas(text, ignoreTransparent = source.hasAuthoredPaint)
         NativeLinePainter(shaped, NativeLinePaintSource(shaped, decorationProbe = true)).paint(observer, positions)
-        return NativeObservedPaintBounds(observer.bounds, observer.textBounds, observer.textBoundsComplete)
+        val authored = authoredUnderlineFragments(positions).fold<NativeInlineDecorationFragment, NativeFloatBounds?>(null) { bounds, fragment ->
+            enclosingBounds(bounds, fragment.bounds)
+        }
+        return NativeObservedPaintBounds(enclosingBounds(observer.bounds, authored), observer.textBounds, observer.textBoundsComplete)
     }
 
     /** The complete native selectable advance, without cross-line selection filler. */
@@ -73,8 +76,40 @@ internal class NativeLinePainter private constructor(
         require(positions.all { it.line in 0 until shaped.lineCount && it.baseline.isFinite() &&
             it.leftIndent >= 0 && it.rightIndent >= 0 && it.originX.isFinite() })
         require(positions.zipWithNext().all { (left, right) -> left.line < right.line })
-        source.paintBackgrounds(canvas, getPaint(), positions)
-        for (position in positions) paintTextLine(canvas, position)
+        if (source.pass == null && source.fractionalShifts.isNotEmpty()) {
+            NativeLinePainter(shaped, NativeLinePaintSource(shaped, source.decorationProbe,
+                NativeInlinePaintPass.Base(source.fractionalShifts))).paint(canvas, positions)
+            source.fractionalShifts.forEach { range ->
+                NativeLinePainter(shaped, NativeLinePaintSource(shaped, source.decorationProbe,
+                    NativeInlinePaintPass.Shifted(range))).paint(canvas,
+                    positions.map { it.copy(baseline = it.baseline + range.value.remainder) })
+            }
+        } else {
+            source.paintBackgrounds(canvas, getPaint(), positions)
+            for (position in positions) paintTextLine(canvas, position)
+        }
+        if (source.pass == null && !source.decorationProbe)
+            authoredUnderlineFragments(positions).forEach { it.paint(canvas) }
+    }
+
+    private fun authoredUnderlineFragments(positions: List<NativeLinePaintPlacement>): List<NativeInlineDecorationFragment> {
+        if (source.underlines.isEmpty()) return emptyList()
+        return buildList {
+            source.underlines.filter { it.start < it.end && it.value.thickness != 0f }.forEach { range ->
+                val cuts = (listOf(range.start, range.end) + source.fractionalShifts.flatMap {
+                    listOf(it.start.coerceIn(range.start, range.end), it.end.coerceIn(range.start, range.end))
+                }).distinct().sorted()
+                for ((start, end) in cuts.zipWithNext()) {
+                    if (start == end) continue
+                    val remainder = source.fractionalShifts.singleOrNull { it.start <= start && it.end >= end }?.value?.remainder ?: 0f
+                    val probe = NativeInlineUnderlineCanvas(range.value)
+                    NativeLinePainter(shaped, NativeLinePaintSource(shaped, false,
+                        NativeInlinePaintPass.Underline(NativeInlineRange(start, end, range.value)))).paint(probe,
+                        positions.map { it.copy(baseline = it.baseline + remainder) })
+                    addAll(probe.fragments)
+                }
+            }
+        }
     }
 
     private fun paintTextLine(canvas: Canvas, position: NativeLinePaintPlacement) {
@@ -102,6 +137,17 @@ internal class NativeLinePainter private constructor(
         }.toFloat() + position.originX
     }
 
+    /** Keep source range fragments on this actual native line, including a soft-wrap end. */
+    internal fun selectionPathForRange(line: Int, start: Int, end: Int): Path {
+        require(line in 0 until shaped.lineCount && start >= shaped.getLineStart(line) &&
+            end >= start && end <= shaped.getLineEnd(line))
+        check(selectionEndLine == null)
+        val path = Path()
+        selectionEndLine = line
+        try { getSelectionPath(start, end, path) } finally { selectionEndLine = null }
+        return path
+    }
+
     // Native Layout still draws the original bidi runs, tabs, character styles and replacement
     // spans. Only its visible line range and the used baseline are different.
     override fun getLineForVertical(vertical: Int): Int = selectedLine
@@ -122,11 +168,18 @@ internal class NativeLinePainter private constructor(
 }
 
 /** Paragraph decorations precede StaticLayout's text indent and must keep their original origin. */
-private class NativeLinePaintSource(private val shaped: Layout, private val decorationProbe: Boolean = false) {
+private class NativeLinePaintSource(private val shaped: Layout, val decorationProbe: Boolean = false,
+    val pass: NativeInlinePaintPass? = null) {
+    val fractionalShifts = (shaped.text as? Spanned)?.let {
+        nativeInlineRanges(it, NativeAuthoredBaselineShift::class.java).filter { range -> range.start < range.end && range.value.remainder != 0f }
+    }.orEmpty()
+    val underlines = (shaped.text as? Spanned)?.let { nativeInlineRanges(it, NativeAuthoredUnderline::class.java) }.orEmpty()
+    val hasAuthoredPaint = fractionalShifts.isNotEmpty() || underlines.isNotEmpty()
+    private val paragraphPaint = pass == null || pass is NativeInlinePaintPass.Base
     var horizontalShift = 0f
     var fragmentOrigin = 0f
     private data class Background(val span: LineBackgroundSpan, val start: Int, val end: Int)
-    private val backgrounds = if (decorationProbe) emptyList() else (shaped.text as? Spanned)?.let { original ->
+    private val backgrounds = if (decorationProbe || !paragraphPaint) emptyList() else (shaped.text as? Spanned)?.let { original ->
         original.getSpans(0, original.length, LineBackgroundSpan::class.java).mapNotNull { span ->
             val start = original.getSpanStart(span)
             val end = original.getSpanEnd(span)
@@ -142,13 +195,14 @@ private class NativeLinePaintSource(private val shaped: Layout, private val deco
                     span is LineBackgroundSpan -> null
                     span is LeadingMarginSpan.LeadingMarginSpan2 -> Margin2(span)
                     span is LeadingMarginSpan -> Margin(span)
-                    decorationProbe && span is ReplacementSpan -> replacementProbe(original, span)
+                    (decorationProbe || !paragraphPaint) && span is ReplacementSpan -> replacementProbe(original, span)
                     decorationProbe && span is NativeMayUnderline && span.mayUnderline -> underlineProbe(span)
                     else -> span
                 }
                 if (wrapped != null) setSpan(wrapped, original.getSpanStart(span),
                     original.getSpanEnd(span), original.getSpanFlags(span))
             }
+            pass?.let { installNativeInlineMask(this, it) }
         }
     } ?: if (decorationProbe) SpannableString(shaped.text) else shaped.text
 
@@ -218,7 +272,7 @@ private class NativeLinePaintSource(private val shaped: Layout, private val deco
         override fun drawLeadingMargin(c: Canvas, p: Paint, x: Int, dir: Int, top: Int,
             baseline: Int, bottom: Int, text: CharSequence, start: Int, end: Int,
             first: Boolean, layout: Layout) {
-            if (!decorationProbe) atDecorationOrigin(c) {
+            if (!decorationProbe && paragraphPaint) atDecorationOrigin(c) {
                 original.drawLeadingMargin(c, p, x, dir, top, baseline, bottom, shaped.text,
                     start, end, first, shaped)
             }

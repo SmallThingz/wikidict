@@ -66,6 +66,8 @@ internal class NativeTableViewportGeometry(
         val child = content.interactionNodeAt(x - this.x, y - this.y) ?: return null
         return nodes.firstOrNull { it.id == child.id && it.contains(x, y) }
     }
+    override fun cursorAt(x: Float, y: Float): InlineCursor? =
+        if (clip.contains(x, y)) content.cursorAt(x - this.x, y - this.y) else null
     override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? {
         if (!clip.contains(x, y)) return null
         return content.horizontalScrollTargetAt(x - this.x, y - this.y) ?: placement.scrollTarget

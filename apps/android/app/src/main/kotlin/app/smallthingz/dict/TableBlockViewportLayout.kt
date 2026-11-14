@@ -5,6 +5,10 @@ import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollableDefaults
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.ScrollScope
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -24,6 +28,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.IntrinsicMeasurable
 import androidx.compose.ui.layout.IntrinsicMeasureScope
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.LayoutModifier
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasurePolicy
 import androidx.compose.ui.layout.MeasureResult
@@ -48,12 +53,16 @@ internal data class NativeTableBlockBox(
     val borderWidth: Float,
     val contentWidth: Float,
     val insets: FloatMargins,
-    val margins: NativeTableAutoMargins,
+    val margins: NativeTableAutoMargins?,
+    val fixedMargins: FloatMargins,
     val containingDirection: TableContainingDirection,
     val usedMargins: NativeTableUsedMargins,
     val decoration: NativeContainerDecoration,
+    val floatPolicy: TableFloatViewport? = null,
 ) {
     init {
+        require((margins == null) == (floatPolicy != null))
+        require(margins == null || fixedMargins == margins.fixed)
         require(listOf(borderWidth, contentWidth, insets.top, insets.right, insets.bottom, insets.left)
             .all { it.isFinite() && it in 0f..TablePixelLimit.toFloat() })
         require(kotlin.math.abs(borderWidth.toDouble() - contentWidth - insets.left - insets.right) <=
@@ -65,7 +74,8 @@ internal data class NativeTableBlockBox(
         else (constraints.maxHeight - ceil(insets.top.toDouble() + insets.bottom).toInt()).coerceAtLeast(0)
 }
 
-private fun tableBlockContainerStyle(policy: TableBlockViewport, intrinsic: Boolean = false): ContainerViewportStyle {
+private fun tableBlockContainerStyle(policy: TableBlockViewport, intrinsic: Boolean = false,
+    paired: Boolean = false): ContainerViewportStyle {
     val source = policy.boxStyle
     fun edge(value: StyleBorderEdge): ContainerBorderEdge = when (value) {
         StyleBorderEdge.None -> ContainerBorderEdge.None
@@ -78,16 +88,38 @@ private fun tableBlockContainerStyle(policy: TableBlockViewport, intrinsic: Bool
         is StyleBorder.Solid -> ContainerBorder.Solid(value.width, ContainerColor.Rgb(value.color))
         is StyleBorder.Edges -> ContainerBorder.Edges(edge(value.top), edge(value.right), edge(value.bottom), edge(value.left))
     }
-    val width = checkNotNull(source.width)
+    val width = source.width
+    val margins = if (paired) checkNotNull(source.margins).let { values -> ContainerMargins(
+        ContainerMargin.Length(values.top), ContainerMargin.Length(values.right),
+        ContainerMargin.Length(values.bottom), ContainerMargin.Length(values.left)) } else source.marginValues
     return ContainerViewportStyle(ContainerStyle(padding = source.padding,
-        width = if (intrinsic && width.unit == StyleWidthUnit.Percent) ContainerWidth.Auto else ContainerWidth.Length(width),
+        width = if (paired) ContainerWidth.FitContent else if (intrinsic && checkNotNull(width).unit == StyleWidthUnit.Percent)
+            ContainerWidth.Auto else ContainerWidth.Length(checkNotNull(width)),
         maxWidth = if (intrinsic && policy.maxWidth.unit == StyleWidthUnit.Percent) ContainerMaxWidth.None
-            else ContainerMaxWidth.Length(policy.maxWidth), boxSizing = policy.boxSizing, border = border), source.marginValues)
+            else ContainerMaxWidth.Length(policy.maxWidth), boxSizing = policy.boxSizing, border = border), margins)
 }
 
 internal fun resolveTableBlockBox(policy: TableBlockViewport, containingWidth: Float,
+    density: Float, normalBodyPixels: Float): NativeTableBlockBox =
+    resolveTableBlockBox(policy, null, containingWidth, containingWidth, ContainerWidths(0f, 0f), density, normalBodyPixels)
+
+/** Fit-content consumes the assigned interval; percentage caps retain their containing-block basis. */
+internal fun resolvePairedTableBlockBox(policy: TableBlockViewport, floatPolicy: TableFloatViewport,
+    containingWidth: Float, assignedWidth: Float, intrinsic: ContainerWidths,
+    density: Float, normalBodyPixels: Float): NativeTableBlockBox {
+    require(policy.boxStyle.width == null && policy.boxStyle.margins != null && policy.boxStyle.marginValues == null &&
+        policy.boxStyle.containingDirection == null && policy.focusPaint != null && floatPolicy.narrowClear == null &&
+        policy.maxViewportWidthPx == floatPolicy.maxViewportWidthPx && policy.gridDirection == floatPolicy.gridDirection &&
+        policy.language == floatPolicy.language) { "Paired table block policy is inconsistent" }
+    require(intrinsic.maximum <= TablePixelLimit)
+    return resolveTableBlockBox(policy, floatPolicy, containingWidth, assignedWidth, intrinsic, density, normalBodyPixels)
+}
+
+private fun resolveTableBlockBox(policy: TableBlockViewport, floatPolicy: TableFloatViewport?,
+    containingWidth: Float, assignedWidth: Float, intrinsic: ContainerWidths,
     density: Float, normalBodyPixels: Float): NativeTableBlockBox {
     require(containingWidth.isFinite() && containingWidth in 0f..TablePixelLimit.toFloat())
+    require(assignedWidth.isFinite() && assignedWidth in 0f..containingWidth)
     require(density.isFinite() && density > 0f && normalBodyPixels.isFinite() && normalBodyPixels >= 0f)
     val source = policy.boxStyle
     fun length(value: StyleLength): Float {
@@ -96,7 +128,7 @@ internal fun resolveTableBlockBox(policy: TableBlockViewport, containingWidth: F
             throw UnsupportedFloatLayout("Table block edge exceeds native geometry")
         return result.toFloat()
     }
-    val resolved = tableBlockContainerStyle(policy)
+    val resolved = tableBlockContainerStyle(policy, paired = floatPolicy != null)
     val sides = resolved.box.border.physicalEdges()
     val edges = listOf(sides.top, sides.right, sides.bottom, sides.left)
     val borderWidths = edges.map { it.usedWidth?.let(::length) ?: 0f }
@@ -105,11 +137,12 @@ internal fun resolveTableBlockBox(policy: TableBlockViewport, containingWidth: F
         (padding?.right?.let(::length) ?: 0f) + borderWidths[1],
         (padding?.bottom?.let(::length) ?: 0f) + borderWidths[2],
         (padding?.left?.let(::length) ?: 0f) + borderWidths[3])
-    val direction = checkNotNull(source.containingDirection)
-    val margins = resolveTableAutoMargins(checkNotNull(source.marginValues), density, normalBodyPixels)
-    // Reuse the normal block scalar equation; no Container owner or second body is created.
-    val used = containerBoxWidth(resolved, containingWidth, ContainerWidths(0f, 0f), density,
-        normalBodyPixels, rtl = direction == TableContainingDirection.Rtl)
+    val direction = floatPolicy?.containingDirection ?: checkNotNull(source.containingDirection)
+    val margins = if (floatPolicy == null) resolveTableAutoMargins(checkNotNull(source.marginValues), density, normalBodyPixels) else null
+    val fixed = margins?.fixed ?: resolveTableFixedMargins(checkNotNull(source.margins), density, normalBodyPixels)
+    // The same scalar owns fit-content, source edges, caps and physical residuals once.
+    val used = containerBoxWidth(resolved, assignedWidth, intrinsic, density,
+        normalBodyPixels, rtl = direction == TableContainingDirection.Rtl, percentageReferenceWidth = containingWidth)
     val paintEdges = edges.mapIndexed { index, value ->
         val color = when (value) {
             is ContainerBorderEdge.Solid -> (value.color as ContainerColor.Rgb).value
@@ -118,20 +151,20 @@ internal fun resolveTableBlockBox(policy: TableBlockViewport, containingWidth: F
         }
         NativeContainerPaintEdge(borderWidths[index], canonicalColorArgb(color)?.toInt(), value is ContainerBorderEdge.Dotted)
     }
-    return NativeTableBlockBox(policy, used.borderBox, used.content, insets, margins, direction,
-        NativeTableUsedMargins(margins.fixed.top, used.marginRight, margins.fixed.bottom, used.marginLeft),
-        NativeContainerDecoration(canonicalColorArgb(source.background)?.toInt(), null, 0f, paintEdges))
+    return NativeTableBlockBox(policy, used.borderBox, used.content, insets, margins, fixed, direction,
+        NativeTableUsedMargins(fixed.top, used.marginRight, fixed.bottom, used.marginLeft),
+        NativeContainerDecoration(canonicalColorArgb(source.background)?.toInt(), null, 0f, paintEdges), floatPolicy)
 }
 
 /** Cyclic preferred/max percentages take their initial value only for intrinsic contribution.
  * The later definite containing width still resolves the original source percentages once. */
 internal fun tableBlockIntrinsicWidth(policy: TableBlockViewport, innerWidth: Int,
-    density: Float, normalBodyPixels: Float): Int {
+    density: Float, normalBodyPixels: Float, floatPolicy: TableFloatViewport? = null): Int {
     if (innerWidth !in 0..TablePixelLimit) return Constraints.Infinity
-    val resolved = tableBlockContainerStyle(policy, intrinsic = true)
+    val resolved = tableBlockContainerStyle(policy, intrinsic = true, paired = floatPolicy != null)
     val used = containerBoxWidth(resolved, 0f, ContainerWidths(innerWidth.toFloat(), innerWidth.toFloat()),
         density, normalBodyPixels, flexItem = true,
-        rtl = policy.boxStyle.containingDirection == TableContainingDirection.Rtl)
+        rtl = (floatPolicy?.containingDirection ?: policy.boxStyle.containingDirection) == TableContainingDirection.Rtl)
     val width = used.borderBox.toDouble() + used.marginLeft + used.marginRight
     return if (!width.isFinite() || width > TablePixelLimit) Constraints.Infinity else ceil(width).toInt()
 }
@@ -139,7 +172,8 @@ internal fun tableBlockIntrinsicWidth(policy: TableBlockViewport, innerWidth: In
 internal fun placeStandaloneTableBlock(box: NativeTableBlockBox, containingWidth: Float,
     borderHeight: Float, exclusions: List<NativeFloatExclusion>): NativeAutoMarginTablePlacement {
     require(borderHeight.isFinite() && borderHeight in 0f..TablePixelLimit.toFloat())
-    return placeNativeAutoMarginTable(containingWidth, 0f, exclusions, box.margins, box.containingDirection,
+    if (box.floatPolicy != null) throw UnsupportedFloatLayout("Paired table requires its native parent allocation")
+    return placeNativeAutoMarginTable(containingWidth, 0f, exclusions, checkNotNull(box.margins), box.containingDirection,
         NativeBlockWidth.FixedPx(box.borderWidth), box.policy.boxStyle.clear) {
         NativeBlockMeasure(box.borderWidth, box.borderWidth, borderHeight)
     }
@@ -196,33 +230,50 @@ internal data class NativeTableBlockPlacement(
     val scrollTarget: NativeHorizontalScrollTarget?,
     val revealContentRect: (RectF, () -> Unit) -> Unit,
     val unavailable: Boolean = false,
+    val clipped: Boolean = true,
 )
 
 private class TableBlockScrollOwner(private val state: ScrollState, private val scope: CoroutineScope,
-    private val flingBehavior: FlingBehavior, private val invalidate: () -> Unit) : NativeHorizontalScrollTarget {
+    private val flingBehavior: FlingBehavior, private val manualRange: Boolean = false,
+    private val invalidate: () -> Unit) : NativeHorizontalScrollTarget {
     var contentWidth = 0f
     var gridWidth = 0
     var rtl = false
+    var active = true
     private var motion: Job? = null
     private var closed = false
+    private var maximum = 0
     private data class Reveal(val afterRevision: Long, val completed: () -> Unit, var appliedValue: Int? = null)
     private var reveal: Reveal? = null
     private var measuredRevision = 0L
 
+    private fun boundedDelta(delta: Float): Float = if (!manualRange) delta else
+        (state.value.toFloat() + delta).coerceIn(0f, maximum.toFloat()) - state.value
+    fun updateRange(value: Int) {
+        if (!manualRange) return
+        maximum = value
+        if (state.value > value) state.dispatchRawDelta((value - state.value).toFloat())
+    }
     override fun scrollBy(physicalDistance: Float): Float {
-        if (closed || !physicalDistance.isFinite()) return 0f
+        if (closed || !active || !physicalDistance.isFinite()) return 0f
         motion?.cancel()
         reveal = null
-        val used = state.dispatchRawDelta(if (rtl) -physicalDistance else physicalDistance)
+        val used = state.dispatchRawDelta(boundedDelta(if (rtl) -physicalDistance else physicalDistance))
         if (used != 0f) invalidate()
         return if (rtl) -used else used
     }
     override fun fling(physicalVelocity: Float) {
-        if (closed || !physicalVelocity.isFinite()) return
+        if (closed || !active || !physicalVelocity.isFinite()) return
         motion?.cancel()
         reveal = null
         motion = scope.launch {
-            state.scroll { with(flingBehavior) { performFling(if (rtl) -physicalVelocity else physicalVelocity) } }
+            state.scroll {
+                val original = this
+                val target = if (!manualRange) original else object : ScrollScope {
+                    override fun scrollBy(pixels: Float): Float = original.scrollBy(boundedDelta(pixels))
+                }
+                with(flingBehavior) { target.performFling(if (rtl) -physicalVelocity else physicalVelocity) }
+            }
         }
     }
     override fun cancel() {
@@ -232,7 +283,7 @@ private class TableBlockScrollOwner(private val state: ScrollState, private val 
         motion = scope.launch { state.scroll(MutatePriority.UserInput) {} }
     }
     fun reveal(rect: RectF, completed: () -> Unit) {
-        if (closed) { completed(); return }
+        if (closed || !active) { completed(); return }
         val target = tableBlockRevealValue(contentWidth, gridWidth, state.value, rtl, rect.left, rect.right)
         if (target == state.value) { completed(); return }
         motion?.cancel()
@@ -256,27 +307,61 @@ private class TableBlockScrollOwner(private val state: ScrollState, private val 
     fun detached() { closed = true; cancelPending() }
 }
 
-private data class TableBlockSurfaceRequest(val contentWidth: Float, val maxHeight: Int)
+/** Paired source TABLE focus owns AX/keyboard; this modifier supplies only the existing integral scroll mechanics. */
+private class PairedTableScrollLayout(private val state: ScrollState, private val owner: TableBlockScrollOwner) : LayoutModifier {
+    override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
+        if (!constraints.hasBoundedWidth) throw UnsupportedFloatLayout("Paired table scroll viewport must be bounded")
+        val child = measurable.measure(constraints.copy(maxWidth = Constraints.Infinity))
+        val width = child.width.coerceIn(constraints.minWidth, constraints.maxWidth)
+        val height = child.height.coerceIn(constraints.minHeight, constraints.maxHeight)
+        val range = (child.width - width).coerceAtLeast(0)
+        owner.updateRange(range)
+        return layout(width, height) { child.placeRelativeWithLayer(-state.value.coerceIn(0, range), 0) }
+    }
+    override fun IntrinsicMeasureScope.minIntrinsicWidth(measurable: IntrinsicMeasurable, height: Int) = measurable.minIntrinsicWidth(height)
+    override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurable: IntrinsicMeasurable, height: Int) = measurable.maxIntrinsicWidth(height)
+    override fun IntrinsicMeasureScope.minIntrinsicHeight(measurable: IntrinsicMeasurable, width: Int) = measurable.minIntrinsicHeight(width)
+    override fun IntrinsicMeasureScope.maxIntrinsicHeight(measurable: IntrinsicMeasurable, width: Int) = measurable.maxIntrinsicHeight(width)
+}
+
+private fun MeasurePolicy.withPairedHeight(enabled: Boolean,
+    height: (List<IntrinsicMeasurable>, Int) -> Int): MeasurePolicy {
+    if (!enabled) return this
+    val source = this
+    return object : MeasurePolicy by source {
+        override fun IntrinsicMeasureScope.minIntrinsicHeight(measurables: List<IntrinsicMeasurable>, width: Int) = height(measurables, width)
+        override fun IntrinsicMeasureScope.maxIntrinsicHeight(measurables: List<IntrinsicMeasurable>, width: Int) = height(measurables, width)
+    }
+}
+
+private data class TableBlockSurfaceRequest(val contentWidth: Float, val maxHeight: Int,
+    val widthReference: Int = floor(contentWidth).toInt(), val clipped: Boolean = true)
 private data class TableBlockSurfaceMeasurement(val gridWidth: Int, val gridHeight: Int,
     val captionWidth: Int, val captionHeight: Int, val gridY: Int, val height: Int,
     val extentWidth: Int, val request: TableBlockSurfaceRequest, val failure: String?)
+
+internal val LocalPairedTableIntrinsicHeight = staticCompositionLocalOf { false }
 
 internal val LocalTableBlockLayoutFailure = staticCompositionLocalOf<NativeLayoutInput<String?>?> { null }
 
 /** One real caption/grid surface inside the source Table's independently sized block box. */
 @Composable
 internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
-    captionMinimum: NativeLayoutInput<Int>, hasCaption: Boolean, spacing: Int,
+    captionMinimum: NativeLayoutInput<Int>, hasCaption: Boolean, spacing: Int, narrow: Boolean = true,
     onPlacement: ((NativeTableBlockPlacement) -> String?)? = null, onUnavailable: () -> Unit = {},
     content: @Composable () -> Unit) {
     val density = LocalDensity.current
     val normalBodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
     val input = LocalNativeTableMarginMeasureInput.current?.takeIf { it.table === table }
+    val floatPolicy = table.floatViewport
+    val focusOwner = if (floatPolicy != null) rememberNativeTableScrollFocusOwner(table) else null
+    val focusGrid = if (focusOwner != null) remember(NativeDelegatedTableIdentity(table)) { tableGrid(table) } else null
     val captionInput = LocalStaticCaptionInput.current.takeIf { input == null }
     val binding = remember(NativeDelegatedTableIdentity(table), policy, hasCaption, spacing) { Any() }
     SideEffect { input?.bind(binding) }
     DisposableEffect(input, binding) { onDispose { input?.unbind(binding) } }
     val parentClip = LocalNativeScrollClip.current
+    val parentScrollport = LocalNativeContainerScrollport.current
     val clip = remember(parentClip) { NativeScrollClip(parentClip) }
     val view = LocalView.current
     val semantic = rememberNativeSemanticMeasurement()
@@ -294,30 +379,40 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
     val scope = rememberCoroutineScope()
     val flingBehavior = ScrollableDefaults.flingBehavior()
     val scrollOwner = remember(binding, scroll, scope, flingBehavior, semantic) {
-        TableBlockScrollOwner(scroll, scope, flingBehavior) { remeasure.invalidate(); semantic.changed() }
+        TableBlockScrollOwner(scroll, scope, flingBehavior, manualRange = floatPolicy != null) { remeasure.invalidate(); semantic.changed() }
     }
     DisposableEffect(binding, scrollOwner) { onDispose { scrollOwner.detached() } }
+    SideEffect { scrollOwner.active = narrow; if (!narrow) scrollOwner.cancelPending() }
     LaunchedEffect(scroll.value) { remeasure.invalidate(); semantic.changed() }
+    val pairedScrollLayout = remember(scroll, scrollOwner) { PairedTableScrollLayout(scroll, scrollOwner) }
+    val drag = rememberDraggableState { scrollOwner.scrollBy(-it) }
     val rtl = policy.gridDirection == TableContainingDirection.Rtl
     val direction = if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr
 
+    // The source scroll axis is physical. The body provider below restores the independently
+    // compiled grid direction, including the relative placement used by its scroll surface.
+    CompositionLocalProvider(LocalLayoutDirection provides (if (floatPolicy != null) LayoutDirection.Ltr else LocalLayoutDirection.current)) {
     Layout(modifier = semantic.modifier.then(remeasure.modifier).then(input?.modifier ?: Modifier)
         .then(captionInput?.modifier ?: Modifier)
-        .then(if (input != null) Modifier.testTag("compiled-table-block-viewport") else Modifier)
+        .then(if (focusOwner != null) Modifier.nativeTableScrollFocusSemantics(focusOwner,
+            checkNotNull(focusGrid).rows, focusGrid.columns)
+            else if (input != null) Modifier.testTag("compiled-table-block-viewport") else Modifier)
         .drawWithContent {
         painted[0]?.let { (decoration, bounds) -> decoration.paint(drawContext.canvas.nativeCanvas, bounds) }
         drawContent()
     }, content = {
         CompositionLocalProvider(LocalLayoutDirection provides direction,
             LocalNativeSemanticMeasurement provides semantic,
-            LocalNativeScrollClip provides clip, LocalNativeContainerScrollport provides true,
+            LocalNativeScrollClip provides (if (narrow) clip else parentClip),
+            LocalNativeContainerScrollport provides (narrow || parentScrollport),
             LocalTableBlockLayoutFailure provides contentFailure,
-            LocalAuthoredBackground provides (policy.boxStyle.background ?: inheritedBackground),
+            LocalPairedTableIntrinsicHeight provides (floatPolicy != null),
+            LocalAuthoredBackground provides ((if (narrow) policy.boxStyle.background else table.style?.background) ?: inheritedBackground),
             LocalNativeTableMarginMeasureInput provides null, LocalFloatTableWidthReference provides widthInput,
             LocalFloatMarginsConsumed provides false, LocalNativeContextMeasureInput provides null,
             LocalNativeFlowMeasureInput provides null, LocalStaticCaptionInput provides null,
             LocalNativeContextContainAtEnd provides true) {
-            Layout(modifier = surfaceRequest.modifier.testTag("compiled-table-block-content").drawWithContent {
+            Layout(modifier = surfaceRequest.modifier.testTag("compiled-table-block-content").then(if (narrow) Modifier.drawWithContent {
                 val rect = contentClip[0]
                 if (rect != null) clipRect(0f, 0f, rect.width(), rect.height()) { this@drawWithContent.drawContent() }
             }.onGloballyPositioned { coordinates ->
@@ -325,7 +420,10 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                 val rect = contentClip[0]
                 if (rect != null) clip.update(Rect(origin.x, origin.y,
                     origin.x + rect.width(), origin.y + rect.height()), view)
-            }.horizontalScroll(scroll), content = content, measurePolicy = object : MeasurePolicy {
+            }.then(if (floatPolicy == null) Modifier.horizontalScroll(scroll) else
+                Modifier.draggable(drag, Orientation.Horizontal, startDragImmediately = scroll.isScrollInProgress,
+                    onDragStarted = { scrollOwner.cancel() }, onDragStopped = { scrollOwner.fling(-it) })
+                    .then(pairedScrollLayout)) else Modifier), content = content, measurePolicy = object : MeasurePolicy {
                 private fun intrinsic(measurables: List<IntrinsicMeasurable>, maximum: Boolean): Int {
                     val grid = measurables.getOrNull(if (hasCaption) 1 else 0) ?: return 0
                     // An ordinary table uses caption MIN as its grid floor. With no grid,
@@ -345,7 +443,7 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                     val caption = if (hasCaption) measurables.first() else null
                     val grid = measurables[if (hasCaption) 1 else 0]
                     val available = floor(request.contentWidth).toInt()
-                    widthInput.update(available)
+                    widthInput.update(request.widthReference)
                     val hasGrid = table.rows.any { it.isNotEmpty() }
                     var body: Placeable? = null
                     var heading: Placeable? = null
@@ -382,8 +480,9 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                         if (total > request.maxHeight || total > TablePixelLimit)
                             throw UnsupportedFloatLayout("Table block content exceeds native geometry")
                         height = total.toInt()
-                        scrollGeometry = tableBlockScrollGeometry(request.contentWidth,
-                            maxOf(actual.measuredWidth, heading?.measuredWidth ?: 0), scroll.value, rtl)
+                        val extent = maxOf(actual.measuredWidth, heading?.measuredWidth ?: 0)
+                        scrollGeometry = if (request.clipped) tableBlockScrollGeometry(request.contentWidth, extent, scroll.value, rtl)
+                            else NativeTableBlockScrollGeometry(extent, extent, 0f, 0f, 0f, 0f)
                         failure = contentFailure.value
                     } catch (error: UnsupportedFloatLayout) {
                         failure = error.message ?: "Table block content is unavailable"
@@ -406,7 +505,8 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                         }
                         gridY = (heading?.measuredHeight ?: 0).toLong() + if (heading != null && hasGrid) spacing.coerceAtLeast(0) else 0
                         val extent = maxOf(body?.measuredWidth ?: 0, heading?.measuredWidth ?: 0)
-                        scrollGeometry = try { tableBlockScrollGeometry(request.contentWidth, extent, scroll.value, rtl) }
+                        scrollGeometry = try { if (request.clipped) tableBlockScrollGeometry(request.contentWidth, extent, scroll.value, rtl)
+                            else NativeTableBlockScrollGeometry(extent, extent, 0f, 0f, 0f, 0f) }
                         catch (_: UnsupportedFloatLayout) { null }
                         catch (_: IllegalArgumentException) { null }
                         if (scrollGeometry == null) {
@@ -438,21 +538,47 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                         if (gridY <= Int.MAX_VALUE) body?.placeAt(gridY.toInt())
                     }
                 }
+            }.withPairedHeight(floatPolicy != null) { measurables, width ->
+                    if (hasCaption || measurables.size != 1) return@withPairedHeight Constraints.Infinity
+                    // HorizontalScroll forwards Infinity for height intrinsics. The parent-bound
+                    // candidate retains the actual source content width across that modifier.
+                    val candidate = if (narrow) input?.blockBox?.takeIf {
+                        it.policy === policy && it.floatPolicy === floatPolicy
+                    } ?: return@withPairedHeight Constraints.Infinity else null
+                    val actualWidth = candidate?.contentWidth?.let { floor(it).toInt() } ?: width
+                    if (actualWidth !in 0..TablePixelLimit) return@withPairedHeight Constraints.Infinity
+                    widthInput.update(if (narrow) actualWidth else input?.containingWidth ?: return@withPairedHeight Constraints.Infinity)
+                    return@withPairedHeight measurables.single().maxIntrinsicHeight(actualWidth).takeIf { it in 0..TablePixelLimit } ?: Constraints.Infinity
+
             })
         }
         NativeLayoutMessage(message)
+        if (focusOwner != null) NativeTableScrollFocusOverlay(focusOwner)
     }, measurePolicy = object : MeasurePolicy {
         private fun intrinsic(measurables: List<IntrinsicMeasurable>, maximum: Boolean): Int {
             val child = measurables.first()
-            val inner = if (maximum) child.maxIntrinsicWidth(Constraints.Infinity) else child.minIntrinsicWidth(Constraints.Infinity)
+            val query = input?.blockIntrinsicQuery.takeIf { floatPolicy != null && narrow }
+            val inner = if (query != null) {
+                val minimum = child.minIntrinsicWidth(Constraints.Infinity)
+                val preferred = child.maxIntrinsicWidth(Constraints.Infinity)
+                if (minimum !in 0..TablePixelLimit || preferred !in minimum..TablePixelLimit) return Constraints.Infinity
+                checkNotNull(input).publishBlockIntrinsics(binding, table, query, ContainerWidths(minimum.toFloat(), preferred.toFloat()))
+                if (maximum) preferred else minimum
+            } else if (maximum) child.maxIntrinsicWidth(Constraints.Infinity) else child.minIntrinsicWidth(Constraints.Infinity)
             if (inner > TablePixelLimit) return Constraints.Infinity
-            return tableBlockIntrinsicWidth(policy, inner, density.density, normalBodyPixels)
+            return if (narrow) tableBlockIntrinsicWidth(policy, inner, density.density, normalBodyPixels, floatPolicy) else inner
         }
         override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsic(measurables, false)
         override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsic(measurables, true)
         override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = semantic.measure measureBlock@{
             val viewport = measurables.first()
-            val warningSource = measurables.last()
+            val warningSource = measurables[1]
+            val focusSource = if (focusOwner != null) measurables[2] else null
+            var focusPlaceable: Placeable? = null
+            var focusAttempted = false
+            var focusViewport = 0f
+            var focusOffset = 0f
+            var focusOverflow = 0f
             val containing = input?.containingWidth ?: constraints.maxWidth.takeIf { constraints.hasBoundedWidth }
             var failure: String? = null
             var child: Placeable? = null
@@ -467,8 +593,37 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
             try {
                 if (containing == null || containing !in 0..TablePixelLimit)
                     throw UnsupportedFloatLayout("Table block requires a bounded containing width")
+                if (floatPolicy != null && (input == null || hasCaption))
+                    throw UnsupportedFloatLayout("Paired table requires its native captionless parent owner")
+                if (!narrow) {
+                    if (floatPolicy == null || input?.blockBox != null)
+                        throw UnsupportedFloatLayout("Wide table source allocation is inconsistent")
+                    val allocated = input?.viewportWidth ?: throw UnsupportedFloatLayout("Wide table width is unavailable")
+                    if (!constraints.hasBoundedWidth || constraints.maxWidth != allocated)
+                        throw UnsupportedFloatLayout("Wide table parent allocated a different border box")
+                    surfaceRequest.update(TableBlockSurfaceRequest(allocated.toFloat(), constraints.maxHeight, containing, clipped = false))
+                    widthInput.update(containing)
+                    contentFailure.update(null); contentFailure.invalidate()
+                    attempted = true
+                    child = viewport.measure(Constraints(maxWidth = allocated, maxHeight = constraints.maxHeight))
+                    val body = measured[0]?.takeIf { it.request == surfaceRequest.value }
+                        ?: throw UnsupportedFloatLayout("Wide table content measurement is unavailable")
+                    body.failure?.let { throw UnsupportedFloatLayout(it) }
+                    ownerWidth = body.gridWidth
+                    ownerHeight = body.height
+                    focusViewport = ownerWidth.toFloat()
+                    if (ownerWidth <= 0 || ownerHeight <= 0)
+                        throw UnsupportedFloatLayout("Zero-area table focus owner is unavailable")
+                    val bounds = RectF(0f, 0f, ownerWidth.toFloat(), ownerHeight.toFloat())
+                    contentClip[0] = bounds
+                    scrollOwner.active = false
+                    onPlacement?.invoke(NativeTableBlockPlacement(bounds, bounds, 0f, 0f, 0f,
+                        body.gridWidth, body.gridHeight, 0, 0, 0f, 0f, ownerWidth, ownerHeight, null,
+                        { _, completed -> completed() }, clipped = false))?.let { throw UnsupportedFloatLayout(it) }
+                    input.publish(binding, table, ownerWidth, ownerHeight, allocated, scrolling = false)
+                } else {
                 val box = input?.blockBox ?: resolveTableBlockBox(policy, containing.toFloat(), density.density, normalBodyPixels)
-                if (box.policy !== policy) throw UnsupportedFloatLayout("Table block policy changed during measurement")
+                if (box.policy !== policy || box.floatPolicy !== floatPolicy) throw UnsupportedFloatLayout("Table block policy changed during measurement")
                 val borderPixels = ceil(box.borderWidth).toInt()
                 if (input != null && (input.viewportWidth != borderPixels || !constraints.hasBoundedWidth ||
                     constraints.maxWidth != borderPixels))
@@ -495,6 +650,8 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                 ownerHeight = ceil((placed?.nextY ?: exactBlockHeight).toDouble()).toInt()
                 if (ownerHeight > constraints.maxHeight || ownerHeight > TablePixelLimit)
                     throw UnsupportedFloatLayout("Table block border box exceeds native geometry")
+                if (floatPolicy != null && (box.borderWidth <= 0f || exactBlockHeight <= 0f))
+                    throw UnsupportedFloatLayout("Zero-area table focus owner is unavailable")
                 viewportX = borderLeft + box.insets.left
                 viewportY = borderTop + box.insets.top
                 val borderBounds = RectF(borderLeft, borderTop, borderLeft + box.borderWidth,
@@ -502,6 +659,10 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                 val clipBounds = RectF(viewportX, viewportY, viewportX + box.contentWidth, viewportY + body.height)
                 contentClip[0] = clipBounds
                 val scrolling = tableBlockScrollGeometry(box.contentWidth, body.extentWidth, scroll.value, rtl)
+                focusViewport = box.contentWidth
+                focusOffset = (-scrolling.physicalTranslation).coerceIn(0f, scrolling.overflow)
+                focusOverflow = scrolling.overflow
+                scrollOwner.active = true
                 scrollOwner.contentWidth = box.contentWidth
                 scrollOwner.gridWidth = body.extentWidth
                 scrollOwner.rtl = rtl
@@ -514,6 +675,11 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                 onPlacement?.invoke(placement)?.let { throw UnsupportedFloatLayout(it) }
                 input?.publishBlock(binding, table, blockHeight, body.gridWidth, body.gridHeight, exactBlockHeight)
                 painted[0] = box.decoration to borderBounds
+                }
+                if (focusSource != null) {
+                    focusAttempted = true
+                    focusPlaceable = focusSource.measure(Constraints.fixed(ownerWidth, ownerHeight))
+                }
             } catch (error: UnsupportedFloatLayout) {
                 failure = error.message ?: "Table block layout is unavailable"
             } catch (error: IllegalArgumentException) {
@@ -527,11 +693,23 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                     // Run the empty warning layout so SubcomposeLayout disposes its old slot.
                     warning.place(0, 0)
                     val x = floor(viewportX).toInt(); val y = floor(viewportY).toInt()
-                    checkNotNull(child).placeWithLayer(x, y) { translationX = viewportX - x; translationY = viewportY - y }
+                    val placedChild = checkNotNull(child)
+                    val adjustX = if (!narrow) (placedChild.width - placedChild.measuredWidth) / 2 else 0
+                    val adjustY = if (!narrow) (placedChild.height - placedChild.measuredHeight) / 2 else 0
+                    placedChild.placeWithLayer(x - adjustX, y - adjustY) { translationX = viewportX - x; translationY = viewportY - y }
+                    focusPlaceable?.place(0, 0)
+                    focusOwner?.update(narrow, focusViewport, focusOffset, focusOverflow,
+                        scrollOwner.takeIf { narrow }, parentClip)
                     scrollOwner.placed(publicationRevision, publicationScroll)
                 }
             }
             input?.refuse(binding)
+            focusOwner?.unavailable()
+            if (focusSource != null && !focusAttempted) {
+                val retainedFocusSize = focusOwner?.retainedUnavailableFocusSize()
+                focusPlaceable = focusSource.measure(Constraints.fixed(
+                    retainedFocusSize?.width ?: 0, retainedFocusSize?.height ?: 0))
+            }
             if (!unavailable[0]) {
                 onUnavailable()
                 scrollOwner.cancelPending()
@@ -539,7 +717,8 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
             }
             painted[0] = null
             if (!attempted) {
-                surfaceRequest.update(TableBlockSurfaceRequest(ownerWidth.toFloat(), constraints.maxHeight))
+                surfaceRequest.update(TableBlockSurfaceRequest(ownerWidth.toFloat(), constraints.maxHeight,
+                    widthReference = containing ?: ownerWidth, clipped = narrow))
                 widthInput.update(ownerWidth)
                 contentClip[0] = RectF(0f, 0f, ownerWidth.toFloat(), constraints.maxHeight.toFloat())
                 child = try { viewport.measure(Constraints(maxWidth = ownerWidth, maxHeight = constraints.maxHeight)) }
@@ -554,7 +733,8 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
             var fallbackPublished = false
             if (retained != null) {
                 val width = retained.request.contentWidth
-                val scrollGeometry = try { tableBlockScrollGeometry(width, retained.extentWidth, scroll.value, rtl) }
+                val scrollGeometry = try { if (narrow) tableBlockScrollGeometry(width, retained.extentWidth, scroll.value, rtl)
+                    else NativeTableBlockScrollGeometry(retained.extentWidth, retained.extentWidth, 0f, 0f, 0f, 0f) }
                     catch (_: UnsupportedFloatLayout) { null }
                     catch (_: IllegalArgumentException) { null }
                 if (scrollGeometry != null) {
@@ -570,7 +750,7 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                     scrollGeometry.alignment, warning.measuredHeight.toFloat(), scrollGeometry.physicalTranslation,
                     retained.gridWidth, retained.gridHeight, retained.captionWidth, retained.captionHeight,
                     0f, retained.gridY.toFloat(), ownerWidth, height,
-                    scrollOwner.takeIf { scrollGeometry.overflow > 0f }, scrollOwner::reveal, unavailable = true))
+                    scrollOwner.takeIf { narrow && scrollGeometry.overflow > 0f }, scrollOwner::reveal, unavailable = true, clipped = narrow))
                 fallbackPublished = rejected == null
                 }
             }
@@ -580,9 +760,28 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
             }
             layout(ownerWidth, height) {
                 warning.place(0, 0)
-                child?.place(0, warning.measuredHeight)
+                child?.let { retainedChild ->
+                    if (narrow) retainedChild.place(0, warning.measuredHeight)
+                    else retainedChild.place(-(retainedChild.width - retainedChild.measuredWidth) / 2,
+                        warning.measuredHeight - (retainedChild.height - retainedChild.measuredHeight) / 2)
+                }
+                focusPlaceable?.place(0, 0)
                 if (fallbackPublished) scrollOwner.placed(publicationRevision, publicationScroll)
             }
         }
+    }.withPairedHeight(floatPolicy != null) { measurables, width ->
+            val owner = input ?: return@withPairedHeight Constraints.Infinity
+            if (hasCaption || width !in 0..TablePixelLimit) return@withPairedHeight Constraints.Infinity
+            val box = if (narrow) owner.blockBox ?: return@withPairedHeight Constraints.Infinity else null
+            if (box != null && (box.policy !== policy || box.floatPolicy !== floatPolicy || ceil(box.borderWidth).toInt() != width))
+                return@withPairedHeight Constraints.Infinity
+            if (box == null && owner.viewportWidth != width) return@withPairedHeight Constraints.Infinity
+            val contentWidth = box?.contentWidth?.let { floor(it).toInt() } ?: width
+            val inner = measurables.first().maxIntrinsicHeight(contentWidth)
+            if (inner !in 0..TablePixelLimit) return@withPairedHeight Constraints.Infinity
+            val height = inner.toDouble() + (box?.insets?.top ?: 0f) + (box?.insets?.bottom ?: 0f)
+            return@withPairedHeight if (height > TablePixelLimit) Constraints.Infinity else ceil(height).toInt()
+
     })
+    }
 }

@@ -5,9 +5,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.MeasurePolicy
 import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.Measurable
@@ -30,14 +32,20 @@ internal class CaptionCellSlot(val content: @Composable (SelectionGeometrySink) 
 @Composable
 internal fun FigureCaptionBlock(block: Block, previous: Block?, trailingGap: Boolean,
     context: AnonymousFlowContext, style: TextStyle, reader: FigureReaderContext,
-    sink: SelectionGeometrySink, gapDp: Float = 6f) {
+    sink: SelectionGeometrySink, gapDp: Float = 6f,
+    consumeVerticalMargins: Boolean = false, ruleMetrics: NativeRuleMetrics? = null) {
+    if (consumeVerticalMargins) {
+        AdjoiningCaptionBlock(block, context, style, reader, sink, ruleMetrics)
+        return
+    }
     val semanticMeasurement = rememberNativeSemanticMeasurement()
     val captionInput = LocalStaticCaptionInput.current
     val childCaptionInput = remember(captionInput) { StaticCaptionInput() }
     val density = LocalDensity.current
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
     val gap = if (trailingGap) gapDp * density.density else 0f
-    val box = if (block.style == null) null else paragraphBox(block, previous, gap, density.density, bodyPixels)
+    val preserveCompiledText = LocalNativeContainerTextContext.current?.fontFamily is ContainerFontFamily.Stack
+    val box = if (block.style == null) null else paragraphBox(block, previous, gap, density.density, bodyPixels, preserveCompiledText)
     val prefix = blockPrefix(block)
     val indent = blockIndentDp(block) * density.density
     val childContext = context.copy(textAlign = block.textAlign ?: context.textAlign)
@@ -48,7 +56,7 @@ internal fun FigureCaptionBlock(block: Block, previous: Block?, trailingGap: Boo
         else -> style
     }
     val spans = when {
-        block.kind == "preformatted" -> block.spans
+        preserveCompiledText || block.kind == "preformatted" -> block.spans
         block.style != null -> paragraphDisplaySpans(block)
         else -> ordinaryInlineDisplaySpans(block)
     }
@@ -109,6 +117,149 @@ internal fun FigureCaptionBlock(block: Block, previous: Block?, trailingGap: Boo
                 child.placeWithLayer(0, 0) { translationX = childX; translationY = top }
             }
         } catch (_: UnsupportedFloatLayout) { unavailableSelection(constraints, sink) } }
+    })
+    }
+}
+
+/** Only the admitted adjoining caption path supplies an unrounded content height. */
+internal class CaptionAdjoiningGeometry(private val source: FloatTextGeometry, val usedHeight: Float,
+    override val extents: NativeGeometryExtents) : FloatTextGeometry by source
+internal class CaptionRetainedGeometry(source: FloatTextGeometry) : FloatTextGeometry by source
+
+@Composable
+private fun AdjoiningCaptionBlock(block: Block, context: AnonymousFlowContext, style: TextStyle,
+    reader: FigureReaderContext, sink: SelectionGeometrySink, ruleMetrics: NativeRuleMetrics?) {
+    val semantic = rememberNativeSemanticMeasurement()
+    val captionInput = LocalStaticCaptionInput.current
+    val childInput = remember(block, captionInput) { StaticCaptionInput() }
+    val density = LocalDensity.current
+    val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
+    val preserveCompiledText = LocalNativeContainerTextContext.current?.fontFamily is ContainerFontFamily.Stack
+    val box = if (ruleMetrics == null) paragraphBox(block, null, 0f, density.density, bodyPixels, preserveCompiledText) else null
+    val left = box?.contentLeft ?: 0f
+    val right = box?.contentRight ?: 0f
+    val top = box?.padding?.top ?: 0f
+    val bottom = box?.padding?.bottom ?: 0f
+    val empty = ruleMetrics == null && !paragraphHasContent(block, preserveCompiledText)
+    val geometry = remember(block) { arrayOfNulls<FloatTextGeometry>(1) }
+    val fallback = remember(block) { NativeLayoutInput<String?>(null) }
+    val publish: SelectionGeometrySink = { if (geometry[0] !== it) { geometry[0] = it; semantic.changed() } }
+    DisposableEffect(block) { onDispose { geometry[0] = null; sink(null) } }
+    CompositionLocalProvider(LocalNativeSemanticMeasurement provides semantic) {
+    Layout(modifier = semantic.modifier.then(captionInput?.modifier ?: Modifier).fillMaxWidth(), content = {
+        CompositionLocalProvider(LocalStaticCaptionInput provides childInput.takeIf { captionInput != null }) {
+            when {
+                ruleMetrics != null -> AuthoredRuleSurface(ruleMetrics, sink = publish, includeVerticalMargins = false)
+                empty -> SelectionEmptyBox(sink = publish)
+                else -> AnonymousBlockView(Block("paragraph", 0,
+                    if (preserveCompiledText) block.spans else paragraphDisplaySpans(block)), Modifier,
+                    reader.onLink, reader.media, reader.settings, reader.edition,
+                    inherited = context.copy(textAlign = block.textAlign ?: context.textAlign), style = style,
+                    onGeometry = publish, interactionOwner = false,
+                    nativeLineHeight = inheritedContainerFormat()?.takeIf {
+                        LocalNativeContainerTextContext.current?.cellText != null }?.lineHeight)
+            }
+        }
+        // Only a child which could not return a retained Placeable uses a source projection.
+        SubcomposeLayout(fallback.modifier) { constraints ->
+            val reason = fallback.value
+            if (reason == null) layout(0, 0) { }
+            else {
+                val source = subcompose("source") {
+                    UnavailableAnonymousContent(block, Modifier, reason, style, reader, showWarning = false)
+                }.single().measure(constraints)
+                layout(source.width, source.height) { source.place(0, 0) }
+            }
+        }
+    }, measurePolicy = object : MeasurePolicy {
+        private fun intrinsic(child: IntrinsicMeasurable, maximum: Boolean): Int {
+            val width = (if (maximum) child.maxIntrinsicWidth(Constraints.Infinity)
+                else child.minIntrinsicWidth(Constraints.Infinity)).toDouble() + left + right
+            return if (!width.isFinite() || width > TablePixelLimit) Constraints.Infinity else kotlin.math.ceil(width).toInt()
+        }
+        override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsic(measurables.first(), false)
+        override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = intrinsic(measurables.first(), true)
+        override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult = semantic.measure {
+            var retained: androidx.compose.ui.layout.Placeable? = null
+            var current: FloatTextGeometry? = null
+            fun unavailable(reason: String): MeasureResult {
+                val child = retained
+                val exact = current
+                if (child != null && (exact == null || exact.width == child.width && exact.height == child.height)) {
+                    val width = constraints.maxWidth
+                    val height = nativeFallbackHeight(constraints, kotlin.math.ceil(top.toDouble() + child.height + bottom).toLong())
+                    val group = exact?.let { NativeSemanticGroup(width, height,
+                        listOf(PositionedSemanticChild(NoPaintGeometry(it), left, top, context.direction))) }
+                    // This marker is only for the failed column's local action overlay.
+                    sink(group?.let(::CaptionRetainedGeometry))
+                    fallback.update(null)
+                    val auxiliary = measurables.last().measure(Constraints.fixed(0, 0))
+                    return layout(width, height) {
+                        child.placeWithLayer(0, 0) { translationX = left; translationY = top }
+                        auxiliary.place(0, 0)
+                    }
+                }
+                sink(null); geometry[0] = null
+                fallback.update(reason)
+                val source = measurables.last().measure(Constraints.fitPrioritizingWidth(
+                    minWidth = 0, maxWidth = constraints.maxWidth, minHeight = 0, maxHeight = constraints.maxHeight))
+                return layout(source.width, source.height) { source.place(0, 0) }
+            }
+            try {
+                if (!constraints.hasBoundedWidth) throw UnsupportedFloatLayout("Authored caption needs its containing width")
+                val width = constraints.maxWidth
+                val available = floor(width.toDouble() - left - right)
+                if (available < 0.0 || available > TablePixelLimit)
+                    throw UnsupportedFloatLayout("Caption paragraph edges exceed its containing width")
+                val childConstraints = Constraints.fixedWidth(available.toInt())
+                captionInput?.let { childInput.update(it.exclusions, left, top) }
+                if (ruleMetrics != null && ruleMetrics.positive && captionInput != null) {
+                    val ruleLeft = ruleMetrics.margins.left
+                    val ruleWidth = ruleMetrics.contentWidth(available.toFloat())
+                    if (ruleWidth > 0f && childInput.exclusions.any { exclusion ->
+                        val outer = exclusion.outer
+                        outer.right > ruleLeft && outer.left < ruleLeft + ruleWidth &&
+                            outer.bottom > 0f && outer.top < ruleMetrics.height
+                    }) throw UnsupportedFloatLayout("Authored caption rule overlaps an existing float")
+                }
+                val child = measurables.first().measure(childConstraints)
+                retained = child
+                val exact = geometry[0]
+                current = exact
+                if (exact == null) {
+                    // The native child already returned its original-source unavailable UI.
+                    return@measure unavailable("Authored caption child geometry is unavailable")
+                }
+                if (exact.width != child.width || exact.height != child.height)
+                    throw UnsupportedFloatLayout("Authored caption child geometry differs from its measured body")
+                val contentHeight = when {
+                    ruleMetrics != null -> ruleMetrics.height
+                    empty -> 0f
+                    exact is NativeAnonymousFlowGeometry -> exact.textBottom
+                    else -> throw UnsupportedFloatLayout("Caption paragraph has no exact native content height")
+                }
+                val usedHeight = top + contentHeight + bottom
+                val height = figureCoordinate(usedHeight)
+                if (height < constraints.minHeight || height > constraints.maxHeight)
+                    throw UnsupportedFloatLayout("Authored caption exceeds its available height")
+                Constraints.fixed(width, height)
+                val group = NativeSemanticGroup(width, height,
+                    listOf(PositionedSemanticChild(NoPaintGeometry(exact), left, top, context.direction)))
+                val published = CaptionAdjoiningGeometry(group, usedHeight, NativeGeometryExtents(width, usedHeight,
+                    exact.extents.ink?.translated(left, top), exact.extents.interaction?.translated(left, top)))
+                fallback.update(null)
+                val auxiliary = measurables.last().measure(Constraints.fixed(0, 0))
+                sink(published)
+                layout(width, height) {
+                    child.placeWithLayer(0, 0) { translationX = left; translationY = top }
+                    auxiliary.place(0, 0)
+                }
+            } catch (failure: UnsupportedFloatLayout) {
+                unavailable(failure.message ?: "Authored caption is unavailable")
+            } catch (_: IllegalArgumentException) {
+                unavailable("Authored caption exceeds native measurement range")
+            }
+        }
     })
     }
 }

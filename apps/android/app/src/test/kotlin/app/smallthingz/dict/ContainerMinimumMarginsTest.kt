@@ -326,4 +326,147 @@ class ContainerMinimumMarginsTest {
         assertEquals(NativeDocumentVerticalExtent(10, 30), nativeDocumentVerticalExtent(15, -10, 20))
         assertFalse(child.copy(container = Container(emptyList(), ContainerStyle(marginValues = reset))).needsContainerDocumentExtent())
     }
+
+    @Test fun ordinaryBodyAbsorbsBothEdgesWithoutTranslatingEarlierFloats() {
+        for (after in listOf(30f, -30f)) {
+            val body = NativeMarginCursor(NativeMarginCollapse(true, true))
+            val initialFloatTop = body.floatTop
+            assertEquals(0f, initialFloatTop, 0f)
+            val ordinary = NativeAdjoiningMargins(20f, after, false)
+            val placed = body.begin(ordinary)
+            assertEquals(0f, placed.borderTop, 0f)
+            body.end(placed, 10f, ordinary)
+            assertEquals(10f, body.finish(), 0f)
+            assertEquals(40f, maxOf(body.finish(), initialFloatTop + 40f), 0f)
+            assertEquals(0f, initialFloatTop, 0f)
+
+            val legacy = NativeMarginCursor(NativeMarginCollapse(false, false))
+            val oldPlaced = legacy.begin(ordinary)
+            assertEquals(20f, oldPlaced.borderTop, 0f)
+            legacy.end(oldPlaced, 10f, ordinary)
+            assertEquals(30f + after, legacy.finish(), 0f)
+        }
+        val floatOnly = NativeMarginCursor(NativeMarginCollapse(true, true))
+        assertEquals(0f, floatOnly.finish(), 0f)
+        assertEquals(40f, maxOf(floatOnly.finish(), floatOnly.floatTop + 40f), 0f)
+    }
+
+    @Test fun ordinaryBodyEmptyChainsAndZeroHeightBarriersKeepStructuralMeaning() {
+        val body = NativeMarginCursor(NativeMarginCollapse(true, true))
+        for (margins in listOf(NativeAdjoiningMargins(20f, 30f, true),
+            NativeAdjoiningMargins(-50f, -10f, true))) {
+            val placement = body.begin(margins)
+            assertEquals(0f, placement.borderTop, 0f)
+            body.end(placement, 0f, margins)
+            assertTrue(body.adjoiningTop)
+            assertEquals(0f, body.floatTop, 0f)
+            assertEquals(0f, body.finish(), 0f)
+        }
+        val barrier = NativeAdjoiningMargins(0f, 0f, false)
+        body.end(body.begin(barrier), 0f, barrier)
+        assertFalse(body.adjoiningTop)
+        val later = NativeAdjoiningMargins(20f, 30f, false)
+        val placement = body.begin(later)
+        assertEquals(20f, placement.borderTop, 0f)
+        body.end(placement, 10f, later)
+        assertEquals(30f, body.finish(), 0f)
+    }
+
+    @Test fun ordinaryBodyBlockedTrailingClearanceRetainsPositiveAndNegativeMembers() {
+        for ((after, expected) in listOf(30f to 65f, -30f to 10f)) {
+            val first = NativeAdjoiningMargins(0f, 0f, false)
+            val trailing = NativeAdjoiningMargins(5f, after, true)
+            val body = NativeMarginCursor(NativeMarginCollapse(true, true))
+            body.end(body.begin(first), 10f, first)
+            val cleared = body.begin(trailing, clearBottom = 40f)
+            assertEquals(40f, cleared.borderTop, 0f)
+            assertEquals(25f, cleared.clearance!!, 0f)
+            body.end(cleared, 0f, trailing)
+            assertEquals(expected, body.finish(), 0f)
+
+            val withoutClearance = NativeMarginCursor(NativeMarginCollapse(true, true))
+            withoutClearance.end(withoutClearance.begin(first), 10f, first)
+            withoutClearance.end(withoutClearance.begin(trailing), 0f, trailing)
+            assertEquals(10f, withoutClearance.finish(), 0f)
+        }
+    }
+
+    @Test fun ordinaryBodyLeadingResolutionSharesFloatMeasurementsAndClearanceProof() {
+        var measures = 0
+        var measuredRequest: NativeBlockMeasureRequest? = null
+        val floating = NativeFloatContextPart.Child(81, NativeBlockWidth.FixedPx(10f), { request ->
+            measures++; measuredRequest = request
+            NativeBlockMeasure(10f, 10f, 40f)
+        }, floatSide = TableFloatSide.Left)
+        val cleared = NativeFloatContextPart.Child(82, NativeBlockWidth.FixedPx(10f),
+            { error("Leading resolution must not measure an ordinary child") },
+            margins = FloatMargins(20f, 0f, 30f, 0f), clear = FigureClear.Both)
+        val parts = listOf(floating, cleared)
+        val preparation = NativeOrdinaryPreparation(parts)
+        preparation.resolveBodyLeading(parts, 100)
+        assertEquals(1, measures)
+        assertTrue(preparation.hasClearance(cleared))
+        preparation.resolveBodyLeading(parts, 100)
+        preparation.measureChild(floating, checkNotNull(measuredRequest))
+        assertEquals(1, measures)
+        val resolved = checkNotNull(NativeFloatContextGeometry.adjoiningProfile(cleared, preparation))
+        assertFalse(resolved.beforeAdjoins)
+        val body = NativeMarginCursor(NativeMarginCollapse(true, true))
+        val placement = body.begin(resolved, 40f, resolvedClearance = preparation.hasClearance(cleared))
+        assertEquals(40f, placement.borderTop, 0f)
+        assertEquals(20f, placement.clearance!!, 0f)
+        body.end(placement, 10f, resolved)
+        assertEquals(50f, body.finish(), 0f)
+        assertFalse(NativeOrdinaryPreparation(parts).hasClearance(cleared))
+    }
+
+    @Test fun ordinaryBodyLeadingFlowRefusesOnlyItsUnprovedZeroExtentAndRecovers() {
+        fun flow(id: Int) = NativeFloatContextPart.Flow(id,
+            { _, _ -> error("A structural root pass must not measure anonymous flow") })
+        val first = flow(91)
+        val parts = listOf(first)
+        val legacy = NativeOrdinaryPreparation(parts)
+        legacy.checkBodyLeadingFlow(first, 0f, exportsFloats = true)
+        val preparation = NativeOrdinaryPreparation(parts)
+        preparation.resolveBodyLeading(parts, 100)
+        val failure = assertThrows(UnsupportedFloatLayout::class.java) {
+            preparation.checkBodyLeadingFlow(first, 0f, exportsFloats = true)
+        }
+        assertEquals("Ordinary body leading float flow has no structural adjoining profile", failure.message)
+        preparation.checkBodyLeadingFlow(first, 1f, exportsFloats = true)
+        preparation.checkBodyLeadingFlow(first, 0f, exportsFloats = false)
+
+        val nested = flow(92)
+        val wrapper = group(93, 0f, 0f, listOf(nested))
+        val nestedPreparation = NativeOrdinaryPreparation(listOf(wrapper))
+        nestedPreparation.resolveBodyLeading(listOf(wrapper), 100)
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            nestedPreparation.checkBodyLeadingFlow(nested, 0f, exportsFloats = true)
+        }
+        val barrier = NativeFloatContextPart.Child(94, NativeBlockWidth.FixedPx(10f),
+            { error("A structural barrier must not be measured") })
+        val afterBarrier = flow(95)
+        val later = listOf(barrier, afterBarrier)
+        val laterPreparation = NativeOrdinaryPreparation(later)
+        laterPreparation.resolveBodyLeading(later, 100)
+        laterPreparation.checkBodyLeadingFlow(afterBarrier, 0f, exportsFloats = true)
+    }
+
+    @Test fun ordinaryBodyRejectsIncompleteRootBoundaryBeforeNativeLayout() {
+        fun refused(adjoining: Boolean, collapse: NativeMarginCollapse, contain: Boolean,
+            incoming: List<NativeFloatExclusion> = emptyList()) {
+            val failure = assertThrows(UnsupportedFloatLayout::class.java) {
+                NativeFloatContextGeometry.build(100, emptyList(), containAtEnd = contain,
+                    carriedExclusions = incoming, adjoining = adjoining, marginCollapse = collapse,
+                    bodyAdjoining = true)
+            }
+            assertEquals("Ordinary body requires its complete root margin boundary", failure.message)
+        }
+        refused(false, NativeMarginCollapse(true, true), true)
+        refused(true, NativeMarginCollapse(false, true), true)
+        refused(true, NativeMarginCollapse(true, false), true)
+        refused(true, NativeMarginCollapse(true, true), false)
+        refused(true, NativeMarginCollapse(true, true), true,
+            listOf(NativeFloatExclusion(TableFloatSide.Left, NativeFloatBounds(0f, 0f, 10f, 40f))))
+    }
 }

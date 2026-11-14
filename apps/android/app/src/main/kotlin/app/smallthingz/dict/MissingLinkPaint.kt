@@ -30,15 +30,31 @@ internal data class NativeLinkOccurrenceIdentity(val owner: Any, val spanIndex: 
 internal data class FigureCaptionLinkScope(val policy: FigureLinkPaint, val visits: MissingLinkVisits,
     val documentTitle: String, val owner: Any, val density: Float, val bodyPixels: Float)
 internal val LocalFigureCaptionLinkScope = staticCompositionLocalOf<FigureCaptionLinkScope?> { null }
+/** A declared unavailable projection keeps body/actions without recursively retrying native paint. */
+internal val LocalOrdinaryLinkPaintNative = staticCompositionLocalOf { true }
+internal const val NativeOrdinaryLinkPaintUnavailable = "Source link interaction paint is unavailable for this action."
+internal fun ordinaryLinkPaintUnavailable(spans: List<Span>): String? {
+    if (spans.none { it.linkPaint != null }) return null
+    val supported = nativeCaptionLinkRanges(spans).map { it.index }.toSet()
+    return NativeOrdinaryLinkPaintUnavailable.takeIf {
+        spans.withIndex().any { (index, span) -> span.linkPaint != null &&
+            (span.text.isEmpty() && span.trail.isEmpty() || index !in supported) }
+    }
+}
+internal fun tableHasOrdinaryLinkPaint(table: Table): Boolean {
+    var found = false
+    table.visitSpans { spans -> if (spans.any { it.linkPaint != null }) found = true }
+    return found
+}
 internal data class NativeCaptionLinkRange(val index: Int, val span: Span, val start: Int, val end: Int)
 internal fun nativeCaptionLinkRanges(spans: List<Span>): List<NativeCaptionLinkRange> = buildList {
     var offset = 0
     spans.forEachIndexed { index, span ->
         val start = offset
-        if (span.direction in listOf("rtl", "ltr", "auto")) offset++
+        if (span.usesInlineDirectionIsolate()) offset++
         offset += if (span.image != null || span.kind == "line_break") 1 else span.text.length
         offset += span.trail.length
-        if (span.direction in listOf("rtl", "ltr", "auto")) offset++
+        if (span.usesInlineDirectionIsolate()) offset++
         if (offset > start && span.image == null && (span.hasInternalAction() || externalLinkUrl(span) != null))
             add(NativeCaptionLinkRange(index, span, start, offset))
     }
@@ -65,23 +81,36 @@ internal fun missingLinkAppearance(policy: MissingLinkPaint, dark: Boolean, visi
 /** Draw-only state shared by the existing native text span and its translated interaction node. */
 internal class NativeMissingLinkPaint private constructor(private val legacyPolicy: MissingLinkPaint?,
     val fixedPolicy: FigureLinkPaint?, val dark: Boolean, val visited: Boolean,
-    private val childUnderline: Boolean, val actionIdentity: MissingLinkActionIdentity?) {
+    private val childUnderline: Boolean, val actionIdentity: MissingLinkActionIdentity?,
+    val ordinaryPolicy: LinkPaint? = null) {
     constructor(policy: MissingLinkPaint, dark: Boolean, visited: Boolean,
         childUnderline: Boolean = false, actionIdentity: MissingLinkActionIdentity? = null) :
         this(policy, null, dark, visited, childUnderline, actionIdentity)
     constructor(policy: FigureLinkPaint, visited: Boolean,
         childUnderline: Boolean = false, actionIdentity: MissingLinkActionIdentity? = null) :
         this(null, policy, false, visited, childUnderline, actionIdentity)
+    constructor(policy: LinkPaint, visited: Boolean, actionIdentity: MissingLinkActionIdentity? = null) :
+        this(null, null, false, visited, false, actionIdentity, policy)
+    /** This explicit source occurrence uses focus-visible modality; legacy owner policies stay unchanged. */
+    val sourceSpanPaint: Boolean get() =
+        (actionIdentity?.occurrence as? NativeLinkOccurrenceIdentity)?.span?.linkPaint != null
     var hovered by mutableStateOf(false)
     var active by mutableStateOf(false)
     var focused by mutableStateOf(false)
     fun appearance(): MissingLinkAppearance {
+        val ordinary = ordinaryPolicy
         val fixed = fixedPolicy
-        val value = if (fixed == null) missingLinkAppearance(checkNotNull(legacyPolicy), dark, visited, hovered, active)
-            else fixed.state(visited, hovered, active).let {
+        val value = when {
+            ordinary != null -> ordinary.state(visited, hovered, active).let {
+                MissingLinkAppearance(0xff000000.toInt() or it.foreground.substring(1).toInt(16),
+                    it.underline || focused && ordinary.underlineOnFocus)
+            }
+            fixed != null -> fixed.state(visited, hovered, active).let {
                 MissingLinkAppearance(0xff000000.toInt() or it.foreground.substring(1).toInt(16),
                     it.underline || focused && fixed.underlineOnFocus)
             }
+            else -> missingLinkAppearance(checkNotNull(legacyPolicy), dark, visited, hovered, active)
+        }
         return value.copy(underline = childUnderline || value.underline)
     }
 }

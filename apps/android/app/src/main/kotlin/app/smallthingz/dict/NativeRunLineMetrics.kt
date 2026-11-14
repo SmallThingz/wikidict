@@ -45,7 +45,10 @@ internal data class NativePrimaryFontMetrics(val ascent: Float, val descent: Flo
 
 /** A paragraph strut or styled text run; these spans never mutate native font/paint metrics. */
 internal class NativeRunLineMetrics(val primary: NativePrimaryFontMetrics,
-    val policy: NativeLineHeightPolicy, val strut: Boolean = false)
+    val policy: NativeLineHeightPolicy, val strut: Boolean = false,
+    val includePrimaryInNormal: Boolean = false) {
+    init { require(!includePrimaryInNormal || strut) }
+}
 
 /** Real replaced boxes keep their own aligned margin box independently of text line-height. */
 internal interface NativeAtomicInlineMetrics {
@@ -66,7 +69,7 @@ internal class NativeLineGap(val pixels: Float) {
  * Original StaticLayout glyph metrics and owners remain untouched for paint, caret and selection.
  */
 internal fun nativeRunLineMetrics(source: Spanned, start: Int, end: Int,
-    natural: NativeUsedLineMetrics): NativeUsedLineMetrics? {
+    natural: NativeUsedLineMetrics, pointOnLine: ((Int) -> Boolean)? = null): NativeUsedLineMetrics? {
     require(start in 0..source.length && end in start..source.length)
     fun intersects(span: Any): Boolean {
         val first = source.getSpanStart(span)
@@ -74,17 +77,45 @@ internal fun nativeRunLineMetrics(source: Spanned, start: Int, end: Int,
         return if (start == end) first <= start && last == source.length else first < end && last > start
     }
     val runs = source.getSpans(start, end, NativeRunLineMetrics::class.java).filter(::intersects)
-    if (runs.isEmpty()) return null
+    val authored = source.getSpans(start, end, NativeAuthoredInlineMetrics::class.java).filter { run ->
+        val first = source.getSpanStart(run)
+        val last = source.getSpanEnd(run)
+        if (first == last) pointOnLine?.invoke(first) ?: nativeInlinePointInRange(source, first, start, end)
+        else first < end && last > start
+    }
+    if (runs.isEmpty() && authored.isEmpty()) return null
+    if (authored.any { it.policy != NativeLineHeightPolicy.Normal &&
+        source.getSpanStart(it) < source.getSpanEnd(it) } &&
+        (runs.any { it.policy == NativeLineHeightPolicy.Normal } ||
+            authored.any { it.policy == NativeLineHeightPolicy.Normal }))
+        throw UnsupportedFloatLayout("Authored inline height with mixed native normal owners is unavailable")
     var used: NativeUsedLineMetrics? = null
     for (run in runs) {
-        val bounds = run.primary.authored(run.policy) ?: natural
+        val bounds = run.primary.authored(run.policy) ?: if (run.includePrimaryInNormal) {
+            // A source Cell owner participates independently of the painted descendants.
+            // Keep Android's real fallback envelope as well as that owner's primary font.
+            natural.including(NativeUsedLineMetrics(run.primary.ascent + run.primary.baselineShift,
+                run.primary.descent + run.primary.baselineShift))
+        } else natural
         used = used?.including(bounds) ?: bounds
+    }
+    for (run in authored) {
+        // Normal keeps the platform's fallback-aware envelope. A fractional explicit
+        // shift with Normal is refused before shaping; no paragraph envelope is shifted.
+        val own = run.primary.authored(run.policy) ?: natural
+        used = used?.including(own) ?: own
+        run.declaringPrimary?.let { declaring ->
+            val owner = declaring.authored(run.policy) ?: NativeUsedLineMetrics(
+                declaring.ascent + declaring.baselineShift, declaring.descent + declaring.baselineShift)
+            used = used!!.including(owner)
+        }
     }
     source.getSpans(start, end, NativeAtomicInlineMetrics::class.java).filter(::intersects).forEach {
         used = used!!.including(it.nativeUsedMetrics)
     }
     // Native normal metrics already contain these legacy control and paragraph-gap spans.
-    if (runs.none { it.policy == NativeLineHeightPolicy.Normal }) {
+    if (runs.none { it.policy == NativeLineHeightPolicy.Normal } &&
+        authored.none { it.policy == NativeLineHeightPolicy.Normal }) {
         source.getSpans(start, end, NativeLineMinimum::class.java).filter(::intersects).forEach {
             used = used!!.including(it.primary.authored(NativeLineHeightPolicy.Pixels(it.pixels))!!)
         }
