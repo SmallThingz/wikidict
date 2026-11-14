@@ -12037,10 +12037,10 @@ class InitialSealedBlobTargetTests(InitialSealedSplitTargetTests):
         f.current['dict-bundle-build']['dependencies']['extraction_helper']=dict(_initial_sealed_reference(live),mode=stat.S_IMODE(live.stat().st_mode))
         source=b.prepared_metadata(f.current['dict-blob-build']['source'])
         for role in ('dict-blob-merge','dict-blob-verify'):
-            f.original[role].update(source=f.original['dict-blob-build']['source'],source_paths=f.original['dict-blob-build']['source_paths'],source_payload_files=f.original['dict-blob-build']['source_payload_files'],producer_source=f.original['dict-blob-build']['producer_source'])
+            f.original[role].update(source_root=str(root/'historical-blob-source'),source=f.original['dict-blob-build']['source'],source_paths=f.original['dict-blob-build']['source_paths'],source_payload_files=f.original['dict-blob-build']['source_payload_files'],producer_source=f.original['dict-blob-build']['producer_source'])
             f.current[role]=copy.deepcopy(f.original[role])
             target=root/'writer-install/bin'/role;target.write_bytes(('new '+role).encode());target.chmod(0o555)
-            f.current[role].update(artifact=dict(_initial_sealed_reference(target),mode=0o555),source=f.current['dict-blob-build']['source'],producer_source=f.current['dict-blob-build']['producer_source'],source_payload_files=f.current['dict-blob-build']['source_payload_files'])
+            f.current[role].update(source_root=str(root),artifact=dict(_initial_sealed_reference(target),mode=0o555),source=f.current['dict-blob-build']['source'],producer_source=f.current['dict-blob-build']['producer_source'],source_payload_files=f.current['dict-blob-build']['source_payload_files'])
         previous=_initial_sealed_write(root/'blob-original-roles.json',f.original)
         row=f.current['dict-blob-build'];state=f.target_rows['dict-blob-build']
         if 'qualified_source_handoff' in f.original['dict-blob-build']:
@@ -12080,8 +12080,21 @@ class InitialSealedBlobTargetTests(InitialSealedSplitTargetTests):
             for call in (lambda:f.roles.install_role('dict-bundle-build',f.root/'install'),lambda:f.roles.require_command('dict-bundle-build',['dump','out','--expander-only']),lambda:f.roles.prepare(['dump','out','--expander-only'],'testwiktionary','20261001')):
                 with self.assertRaises(ValueError):call()
 
+        # The actual public metadata catches projection mistakes that a wholly
+        # synthetic root cannot: old Merge/Verify came from a different tree.
+        binding=b.PROJECT/'.tmp/figure-normal-inputs01/shared-provider01/retained-bundle-driver01/binding02'
+        original=b.prepared_metadata(_initial_sealed_reference(binding/'retained-native-roles-current-mg-invoke-frontend03.json'))
+        current=b.prepared_metadata(_initial_sealed_reference(binding/'retained-native-roles-full49-mg-ordinary03.json'))
+        selected=current['dict-bundle-build'].pop('initial_sealed_generation')
+        self.assertNotEqual(original['dict-blob-verify']['source_root'],current['dict-blob-verify']['source_root'])
+        self.assertEqual(original['dict-bundle-build']['source_root'],current['dict-bundle-build']['source_root'])
+        roles=object.__new__(b.RetainedNativeToolRoles)
+        roles.records=current;roles.initial_sealed_generation=selected;roles.initial_sealed_context=None
+        roles.closed_whole_execution=None;roles.inputs={};roles.input_identities={};roles.directories={};roles.tools={};roles.compilation_payloads={}
+        b.initial_sealed_role_successor(original,roles);roles.require_unchanged()
+
     def test_prepared_blob_target_refusals_preserve_requested_source_artifact_and_driver(self):
-        for mode in ('target-failure','missing-artifact','wrong-source','failed-capture','artifact-bytes','artifact-inode','runtime','old-driver','foreign-helper','codec','missing-target','duplicate-target','late-authority'):
+        for mode in ('target-failure','missing-artifact','wrong-source','failed-capture','artifact-bytes','artifact-inode','runtime','old-driver','foreign-helper','codec','missing-target','duplicate-target','late-authority','foreign-root'):
             with self.subTest(mode=mode),tempfile.TemporaryDirectory()as tmp:
                 f=self.blob_fixture(Path(tmp));state=f.target_rows['dict-blob-build'];captured=state['closed']['production_roles']
                 if mode=='late-authority':
@@ -12102,6 +12115,7 @@ class InitialSealedBlobTargetTests(InitialSealedSplitTargetTests):
                     if mode=='artifact-inode':p.unlink();p.write_bytes(raw)
                     else:p.chmod(0o755);p.write_bytes(b'x'*len(raw))
                     p.chmod(0o555)
+                elif mode=='foreign-root':f.current['dict-blob-verify']['source_root']=str(f.root/'foreign-build')
                 elif mode=='runtime':f.current['dict-blob-verify']['dependencies']=dict(f.current['dict-blob-verify']['dependencies'],worker_object=dict(path='/foreign',bytes=1,sha256='0'*64,mode=0o555))
                 elif mode=='old-driver':f.current['dict-bundle-build']['artifact']=f.current['dict-blob-build']['artifact']
                 elif mode=='foreign-helper':f.current['dict-bundle-build']['dependencies']['extraction_helper']['path']=str(f.root/'not-imported.py')

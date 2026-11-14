@@ -3581,7 +3581,7 @@ def initial_sealed_blob_successor(original, native_roles):
             or native_roles.bind_input(Path(live['path'])) != live):
         raise ValueError('Initial sealed execution changed its original unused driver or live helper')
     allowed = {'artifact','source','producer_source','compiled_source_authority','source_payload_files',
-        'source_payload_git','compilation_recipe','actual_emission_result','qualification_closure',
+        'source_payload_git','source_root','compilation_recipe','actual_emission_result','qualification_closure',
         'qualification_scope','previous_role_binding'}
     shared = None
     references = []
