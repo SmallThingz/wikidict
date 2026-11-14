@@ -12828,4 +12828,187 @@ class InitialSealedWriterBookTests(InitialSealedGenerationTests):
             self.assertEqual(len(seen),1);args=seen[0];self.assertEqual(args[args.index('--expander-root')+1],str(f.expander));self.assertEqual(args[args.index('--figure-page-observations-snapshot')+1],str(f.book))
 
 
+
+
+
+class RetainedCompilationEnvelopeTests(unittest.TestCase):
+    def fixture(self, root):
+        f = SuccessfulPreparedArtifactTests().fixture(root)
+        row = f.current['dict-blob-build']
+        compiled = copy.deepcopy(b.prepared_metadata(row['source']))
+        compiled['head'] = 'native-head'
+        rows = []
+        qualified = []
+        for name in ('tools/build_wiktionaries.py', 'tools/test_build_wiktionaries.py'):
+            path = root / name
+            path.parent.mkdir(exist_ok=True)
+            path.write_text('original ' + name)
+            path.chmod(0o644)
+            before = dict(_initial_sealed_reference(path), mode=0o644)
+            compiled['files'][name] = {key:before[key] for key in ('path', 'bytes', 'sha256')}
+            compiled['modes'][name] = 0o644
+            path.write_text('qualified changed ' + name)
+            after = dict(_initial_sealed_reference(path), mode=0o644)
+            post = root / ('qualified-' + path.name)
+            post.write_bytes(path.read_bytes())
+            post.chmod(0o644)
+            qualified.append(dict(_initial_sealed_reference(post), mode=0o644))
+            rows.append(dict(relative=name, before=before, after=after))
+        f.compiled_ref = _initial_sealed_write(root / 'native-compilation.json', compiled)
+        owner = _initial_sealed_write(root / 'helper-qualified-owner.json', dict(source_refs=qualified))
+        f.helper_qualification = dict(outcome='PASSED-PHYSICALLY-SOURCE-CLOSED',
+            source_after=True, source_lease_released=True, reaped=True,
+            errors=0, failures=0, tests_executed=2, tests_passed=2,
+            owner_configuration=dict(owner, path=str(Path(owner['path']).relative_to(root))))
+        qualification = _initial_sealed_write(root / 'helper-qualified-closure.json', f.helper_qualification)
+        Path(qualification['path']).chmod(0o644)
+        f.application = dict(schema='qualified-owned-python-application.v1',
+            canonical_native_bytes_changed=False, diff_check_passed=True,
+            parent='native-head', head='helper-head', rows=rows, qualification=dict(qualification, mode=0o644))
+        f.application_ref = _initial_sealed_write(root / 'helper-application.json', f.application)
+        f.guard = copy.deepcopy(compiled)
+        for entry in rows:
+            f.guard['files'][entry['relative']] = {key:entry['after'][key] for key in ('path', 'bytes', 'sha256')}
+        f.guard['head'] = 'committed-head'
+        f.development = dict(parent='helper-head', head='committed-head',
+            native_source_changed_by_commit=False, all_selected_bytes_modes_exact=True)
+        f.recipe = b.prepared_metadata(row['compilation_recipe'])
+        command = f.target_rows['dict-blob-build']['result']['commands'][0]
+        argv = command['argv']
+        stop = next(i for i,value in enumerate(argv[2:],2) if value.startswith('-'))
+        command['argv'] = argv[:2] + ['prepare-blob-tools'] + argv[stop:]
+        f.target_rows['dict-blob-build']['stderr'].write_text('Build Summary: 4/4 steps succeeded\nprepare-blob-tools success\n+- install dict-blob-build success\n+- install dict-blob-merge success\n+- install dict-blob-verify success\n')
+        self.publish(f)
+        f.roles.inputs = {}
+        f.roles.input_identities = {}
+        f.roles.bind_input = lambda path, retain=True: b.RetainedNativeToolRoles.bind_input(f.roles,path,retain=retain)
+        f.roles.require_unchanged = lambda: b.RetainedNativeToolRoles.require_inputs_unchanged(f.roles)
+        return f
+
+    def publish(self, f):
+        guard = _initial_sealed_write(f.root / 'guard-source.json', f.guard)
+        f.development['inventory'] = (_initial_sealed_write(f.root / 'development-source.json', f.development_guard)
+            if hasattr(f, 'development_guard') else guard)
+        development = _initial_sealed_write(f.root / 'development-commit.json', f.development)
+        state = f.target_rows['dict-blob-build']
+        command = state['result']['commands'][0]
+        command['argv'] = [('-Dcaptured-source-fingerprint=' + f.compiled_ref['sha256'])
+            if value.startswith('-Dcaptured-source-fingerprint=') else value for value in command['argv']]
+        f.recipe.update(source_manifest=guard, source_head=f.guard['head'],
+            native_compilation_source_manifest=f.compiled_ref, compiled_projection_preserved=True,
+            python_production_bridge=f.application_ref, development_commit_authority=development,
+            commands=[dict(argv=command['argv'], cwd=command['cwd'])])
+        recipe = _initial_sealed_write(f.root / 'guard-recipe.json', f.recipe)
+        state['result']['source_authority'] = recipe
+        f.prepared_owner = _initial_sealed_write(f.root / 'guard-owner.json', dict(bindings=dict(INPUT_REF=recipe)))
+        state['closed'].update(source_manifest=guard, native_compilation_source_manifest=f.compiled_ref,
+            python_production_bridge=f.application_ref, development_commit_authority=development,
+            owner_configuration=f.prepared_owner)
+        for name in b.BLOB_TOOL_NAMES:
+            f.current[name].update(source=guard, compiled_source_authority=f.compiled_ref,
+                producer_source=f.compiled_ref['sha256'], compilation_recipe=recipe)
+        SuccessfulPreparedArtifactTests().republish(f)
+
+    def test_current_guard_and_native_fingerprint_keep_real_emission_and_original_worker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            before = (f.expander / '.completed-expander.json').read_bytes()
+            driver = copy.deepcopy(f.current['dict-bundle-build'])
+            compiled = b.retained_compilation_source(f.current['dict-blob-build'], f.roles)
+            self.assertEqual(compiled, b.prepared_metadata(f.compiled_ref))
+            b.initial_sealed_role_successor(f.original, f.roles)
+            self.assertEqual(driver, f.current['dict-bundle-build'])
+            self.assertEqual(before, (f.expander / '.completed-expander.json').read_bytes())
+            self.assertNotEqual(f.current['dict-blob-build']['source'], f.compiled_ref)
+            self.assertIn(Path(f.application_ref['path']), f.roles.inputs)
+
+    def test_full_native_membership_bytes_modes_and_unqualified_python_changes_refuse(self):
+        for change in ('native-bytes', 'native-mode', 'missing-member', 'extra-python', 'python-mode'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp))
+                name = 'src/encoder/presentation_codec.zig'
+                if change == 'native-bytes': f.guard['files'][name]['sha256'] = '0' * 64
+                elif change == 'native-mode': f.guard['modes'][name] ^= 0o111
+                elif change == 'missing-member': f.guard['files'].pop(name); f.guard['modes'].pop(name)
+                elif change == 'extra-python':
+                    f.guard['files']['tools/other.py'] = copy.deepcopy(f.guard['files']['tools/build_wiktionaries.py'])
+                    f.guard['modes']['tools/other.py'] = 0o644
+                else: f.guard['modes']['tools/build_wiktionaries.py'] = 0o755
+                self.publish(f)
+                with self.assertRaises(ValueError): b.retained_compilation_source(f.current['dict-blob-build'], f.roles)
+
+    def test_missing_forged_recipe_qualification_and_build_options_refuse(self):
+        for change in ('missing', 'wrong-native', 'wrong-closed-native', 'wrong-bridge',
+                       'unqualified', 'wrong-post', 'foreign-python', 'qualification-mode', 'owner-escape',
+                       'build-option', 'embedded-source'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp)); row = f.current['dict-blob-build']
+                if change == 'missing': row.pop('compiled_source_authority')
+                elif change == 'wrong-native': row['compiled_source_authority'] = row['source']
+                elif change in ('unqualified', 'wrong-post', 'foreign-python', 'qualification-mode', 'owner-escape'):
+                    app = copy.deepcopy(f.application)
+                    if change == 'unqualified':
+                        q = dict(f.helper_qualification, tests_passed=0)
+                        app['qualification'] = _initial_sealed_write(f.root / 'bad-helper-qualification.json', q)
+                    elif change == 'wrong-post': app['rows'][0]['after']['sha256'] = '0' * 64
+                    elif change == 'qualification-mode': app['qualification']['mode'] = 0o755
+                    elif change == 'owner-escape':
+                        q = copy.deepcopy(f.helper_qualification)
+                        q['owner_configuration']['path'] = '../foreign-owner.json'
+                        app['qualification'] = _initial_sealed_write(f.root / 'escape-qualification.json', q)
+                    else: app['rows'][0]['relative'] = 'tools/other.py'
+                    f.application_ref = _initial_sealed_write(f.root / 'bad-application.json', app)
+                    self.publish(f)
+                elif change in ('build-option', 'embedded-source'):
+                    command = f.target_rows['dict-blob-build']['result']['commands'][0]
+                    if change == 'build-option': command['argv'].append('-Dunreviewed-input=/foreign')
+                    else: command['argv'].append('-Dcaptured-source-fingerprint=foreign')
+                    self.publish(f)
+                else:
+                    state = f.target_rows['dict-blob-build']
+                    state['closed']['native_compilation_source_manifest' if change == 'wrong-closed-native' else 'python_production_bridge'] = row['source']
+                    SuccessfulPreparedArtifactTests().republish(f)
+                with self.assertRaises(ValueError): b.retained_compilation_source(row, f.roles)
+
+    def test_late_qualified_body_and_authority_replacement_still_refuse(self):
+        for change in ('post-body', 'application-inode'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp))
+                b.retained_compilation_source(f.current['dict-blob-build'], f.roles)
+                path = (f.root / 'qualified-build_wiktionaries.py') if change == 'post-body' else Path(f.application_ref['path'])
+                body = path.read_bytes()
+                if change == 'application-inode': path.unlink(); path.write_bytes(body)
+                else: path.write_bytes(body + b'changed')
+                with self.assertRaises(ValueError): f.roles.require_unchanged()
+
+    def test_subsequent_qualified_helper_pair_keeps_ordered_continuity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            f.development_guard = copy.deepcopy(f.guard)
+            rows = []
+            qualified = []
+            for entry in f.application['rows']:
+                before = copy.deepcopy(entry['after'])
+                path = Path(before['path'])
+                path.write_bytes(path.read_bytes() + b' second qualified helper change')
+                after = dict(_initial_sealed_reference(path), mode=0o644)
+                post = f.root / ('second-' + path.name)
+                post.write_bytes(path.read_bytes()); post.chmod(0o644)
+                qualified.append(dict(_initial_sealed_reference(post), mode=0o644))
+                rows.append(dict(relative=entry['relative'], before=before, after=after))
+                f.guard['files'][entry['relative']] = {key:after[key] for key in ('path','bytes','sha256')}
+            owner = _initial_sealed_write(f.root / 'second-owner.json', dict(source_refs=qualified))
+            qualification = _initial_sealed_write(f.root / 'second-closure.json', dict(f.helper_qualification, owner_configuration=owner))
+            second = dict(f.application, parent='committed-head', head='second-helper-head', rows=rows, qualification=qualification)
+            second_ref = _initial_sealed_write(f.root / 'second-application.json', second)
+            f.application_ref = [f.application_ref, second_ref]
+            f.guard['head'] = 'second-helper-head'
+            self.publish(f)
+            b.retained_compilation_source(f.current['dict-blob-build'], f.roles)
+            second['rows'][0]['before']['sha256'] = '0' * 64
+            f.application_ref[1] = _initial_sealed_write(f.root / 'broken-continuity.json', second)
+            self.publish(f)
+            with self.assertRaises(ValueError): b.retained_compilation_source(f.current['dict-blob-build'], f.roles)
+
+
 if __name__=='__main__':unittest.main()
