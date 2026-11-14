@@ -5225,6 +5225,37 @@ class ReadonlyPreparedControllerTests(unittest.TestCase):
                     mock.patch.object(controller,'edition_cli_options',return_value=[]),self.assertRaisesRegex(ValueError,'initial sealed'):
                 original_command(dict(cfg,retained_native_roles=without),'toy',4,prepared_bytecode_prefix=prefix)
 
+
+    def test_closed_whole_catalog_command_preserves_kind_and_refuses_ambiguous_history(self):
+        original_command=controller.command
+        from types import SimpleNamespace
+        with self.parent_fixture() as f:
+            spec={'modules':{'build_wiktionaries':{'path':str(f.root/'private-builder.py')}}}
+            selected=SimpleNamespace(spec=spec)
+            names=('dict-blob-build','dict-blob-merge','dict-blob-verify','dict-bundle-build')
+            __import__('sys').modules['build_wiktionaries'].RETAINED_NATIVE_ROLE_NAMES=names
+            roles={name:{} for name in names}
+            roles['dict-bundle-build']['closed_whole_execution']={'fixture':'closed'}
+            cfg=dict(f.cfg,compiler=dict(path=str(f.root/'zig')),build_timeout_seconds=5,
+                python_tooling=spec,retained_native_roles=roles,state_directory=str(f.root/'state'))
+            prefix=str(f.root/'unwritten-python-cache')
+            with mock.patch.object(controller,'selected_python_tooling',return_value=selected), \
+                    mock.patch.object(controller,'edition_cli_options',return_value=[]):
+                argv=original_command(cfg,'toy',4,prepared_bytecode_prefix=prefix)
+            for option in ('-I','-S','-B','wikidict_prepared_source=1','pycache_prefix='+prefix):
+                self.assertEqual(argv.count(option),1)
+            self.assertEqual(argv[argv.index('--python-tooling-json')+1],json.dumps(spec,sort_keys=True,separators=(',',':')))
+            self.assertEqual(json.loads(argv[argv.index('--retained-native-roles-json')+1]),roles)
+            without=dict(roles);without['dict-bundle-build']={}
+            with mock.patch.object(controller,'selected_python_tooling',return_value=selected), \
+                    mock.patch.object(controller,'edition_cli_options',return_value=[]),self.assertRaisesRegex(ValueError,'initial sealed'):
+                original_command(dict(cfg,retained_native_roles=without),'toy',4,prepared_bytecode_prefix=prefix)
+
+            both=json.loads(json.dumps(roles));both['dict-bundle-build']['initial_sealed_generation']={'fixture':'another history'}
+            with mock.patch.object(controller,'selected_python_tooling',return_value=selected), \
+                    mock.patch.object(controller,'edition_cli_options',return_value=[]),self.assertRaisesRegex(ValueError,'closed-whole selection'):
+                original_command(dict(cfg,retained_native_roles=both),'toy',4,prepared_bytecode_prefix=prefix)
+
     def test_original_git_authority_includes_exact_selected_catalog_framing(self):
         import build_wiktionaries as builder
         from types import SimpleNamespace

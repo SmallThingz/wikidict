@@ -1943,8 +1943,8 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY, *, prepared_byteco
                 and all(isinstance(row,dict) for row in roles.values()),
                 'Invalid retained native role selection')
         if cfg.get('prepared_source_custody') is True:
-            require('initial_sealed_generation' in roles.get('dict-bundle-build',{}),
-                    'Prepared retained custody requires explicit initial sealed selection')
+            require(len({'initial_sealed_generation','closed_whole_execution'} & set(roles.get('dict-bundle-build',{})))==1,
+                    'Prepared retained custody requires explicit initial sealed or closed-whole selection')
         argv += ['--retained-native-roles-json',json.dumps(roles,sort_keys=True,separators=(',',':'))]
     if cfg.get('prepared_source_custody') is True:
         require(isinstance(prepared_bytecode_prefix, str) and Path(prepared_bytecode_prefix).is_absolute(),

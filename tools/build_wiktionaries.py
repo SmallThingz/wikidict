@@ -116,6 +116,8 @@ class PreparedSourceGeneration:
                 raise ValueError('Prepared readonly generation differs from retained selection')
             expected=dict(seal_sha256=record['seal_sha256'],dump=str(self.dump),
                 build_inputs=self.identity,retained_expander_root=str(self.root))
+            if self.retained_roles.closed_whole_execution is not None:
+                expected['closed_whole_execution']=self.retained_roles.closed_whole_execution
             if record['workspace_state'].get('native_generation')!=expected:
                 raise ValueError('Prepared retained state differs from its original binding')
         self.tools = {}
@@ -487,9 +489,10 @@ class PreparedSourceRequest:
         cfg=self.configuration
         context=roles.initial_sealed_context
         selection=roles.provenance()
-        selection['dict-bundle-build']['initial_sealed_generation']=roles.initial_sealed_generation
+        kind='closed_whole_execution' if roles.closed_whole_execution is not None else 'initial_sealed_generation'
+        selection['dict-bundle-build'][kind]=getattr(roles,kind)
         if (self.generation is not None or expander_args is not None or context is None
-                or roles.initial_sealed_generation is None or cfg.get('prepared_source_custody') is not True
+                or (roles.initial_sealed_generation is None and roles.closed_whole_execution is None) or cfg.get('prepared_source_custody') is not True
                 or cfg.get('retained_native_roles')!=selection
                 or cfg.get('source',{}).get('fingerprint')!=identity['source']
                 or cfg.get('date')!=date or set(cfg.get('edition_options',{}))!={edition}
@@ -498,10 +501,10 @@ class PreparedSourceRequest:
                 or self.start.get('prepared_source_control',{}).get('configuration')!=cfg):
             raise ValueError('Pending retained preparation differs from its selected attempt')
         state=read_build_envelope(workspace/'state.json')
+        binding=dict(seal_sha256=context[2],dump=str(context[1]),build_inputs=identity,retained_expander_root=str(context[0]))
+        if roles.closed_whole_execution is not None:binding['closed_whole_execution']=roles.closed_whole_execution
         if (state.get('edition')!=edition or state.get('date')!=date
-                or state.get('now_unix')!=cfg['now_unix']
-                or state.get('native_generation')!=dict(seal_sha256=context[2],dump=str(context[1]),
-                    build_inputs=identity,retained_expander_root=str(context[0]))):
+                or state.get('now_unix')!=cfg['now_unix'] or state.get('native_generation')!=binding):
             raise ValueError('Pending retained preparation differs from its adopted state')
         roles.require_unchanged()
 
@@ -3993,7 +3996,72 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     return epoch
 
 
-def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None, *, provider_update=None, build_identity=None, dump=None, sealed_recovery=None, native_roles=None, writer_figure_transition=None, initial_generation=None, auxiliary_snapshots=None):
+def closed_whole_worker_inputs(value, *, state=False):
+    """Keep sealed worker inputs exact; Book and replay observations belong to Writer."""
+    result=writer_figure_worker_inputs(value,state=state)
+    for field in ('auxiliary_snapshot_sha256','auxiliary_capture_sha256','auxiliary_capture_artifact_sha256'):
+        result[field].pop('figure-page-observations',None)
+    if state:result.pop('raw_shards_path',None)
+    return result
+
+
+def adopt_closed_whole_workspace(workspace,expected,now_unix,build_identity,dump,reference,native_roles):
+    """Bind a fresh ordinary output to an authenticated failed-whole worker."""
+    import extraction_cache as cache
+    import copy
+    if (native_roles is None or native_roles.closed_whole_execution!=reference
+            or native_roles.initial_sealed_generation is not None
+            or native_roles.closed_native_origin is None
+            or getattr(native_roles,'_closed_whole_workspace_state',None)is None):
+        raise ValueError('Closed whole adoption lacks its original history')
+    native_roles.require_unchanged()
+    root,original_dump,seal_sha=native_roles._closed_native_context
+    original=native_roles._closed_whole_workspace_state
+    old_workspace=root.parent.parent
+    if (Path(dump)!=original_dump or workspace==old_workspace
+            or workspace.is_relative_to(old_workspace) or old_workspace.is_relative_to(workspace)
+            or build_identity is None or expected.get('source')!=build_identity.get('source')
+            or native_roles.provenance()!=build_identity.get('native_tool_roles')
+            or expected.get('edition')!=original.get('edition') or expected.get('date')!=original.get('date')
+            or now_unix!=original.get('now_unix')
+            or closed_whole_worker_inputs(expected,state=True)!=closed_whole_worker_inputs(original,state=True)
+            or closed_whole_worker_inputs(build_identity)!=closed_whole_worker_inputs(original['native_generation']['build_inputs'])):
+        raise ValueError('Closed whole adoption changed worker inputs, source, root or epoch')
+    context=cache.frozen_runtime_context(root,Path(dump),seal_sha,**native_roles._closed_native_context_options)
+    if context!=native_roles.closed_native_origin:raise ValueError('Closed whole worker is not finalized')
+    state_path=workspace/'state.json'
+    binding=dict(seal_sha256=seal_sha,dump=str(dump),build_inputs=copy.deepcopy(build_identity),
+                 retained_expander_root=str(root),closed_whole_execution=copy.deepcopy(reference))
+    desired=dict(expected,now_unix=now_unix,native_generation=binding)
+    if os.path.lexists(state_path):
+        if state_path.is_symlink() or read_build_envelope(state_path)!=desired:
+            raise ValueError('Closed whole ordinary state differs')
+    else:
+        if workspace.exists():
+            if workspace.is_symlink() or not workspace.is_dir() or any(workspace.iterdir()):
+                raise ValueError('Closed whole adoption has partial ordinary workspace')
+        else:workspace.mkdir(parents=True,mode=0o700)
+        raw_path=expected.get('raw_shards_path')
+        if raw_path is not None:
+            raw=external_raw_shards(workspace,raw_path)
+            if raw.exists() and any(path.name!=RAW_SHARD_OWNER for path in raw.iterdir()):
+                raise ValueError('Closed whole adoption has partial raw output')
+        temporary=state_path.with_suffix('.part')
+        if os.path.lexists(temporary):raise ValueError('Unexpected closed whole state transaction')
+        native_roles.require_unchanged()
+        prepared_metadata(reference)
+        if cache.frozen_runtime_context(root,Path(dump),seal_sha,**native_roles._closed_native_context_options)!=context:
+            raise ValueError('Closed whole worker changed during adoption')
+        try:
+            with temporary.open('x')as stream:stream.write(build_envelope_text(desired))
+            os.link(temporary,state_path)
+        finally:temporary.unlink(missing_ok=True)
+    native_roles.require_unchanged()
+    native_roles.initial_sealed_context=(root,Path(dump),seal_sha)
+    return now_unix
+
+
+def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=None, *, provider_update=None, build_identity=None, dump=None, sealed_recovery=None, native_roles=None, writer_figure_transition=None, initial_generation=None, auxiliary_snapshots=None, closed_whole_execution=None):
     expected=dict(expected)
     if 'raw_shards_path' in expected: raise ValueError('Raw shard path must be supplied explicitly')
     artifact_path(workspace)
@@ -4013,6 +4081,10 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
             raise ValueError('Own-cap retry requires the exact original prepared workspace and epoch')
         return generation.record['now_unix']
     if workspace.is_symlink(): raise ValueError(f'Unsafe shard workspace: {workspace}')
+    if closed_whole_execution is not None:
+        if any(value is not None for value in (initial_generation,sealed_recovery,writer_figure_transition)):
+            raise ValueError('Closed whole adoption cannot borrow another transition')
+        return adopt_closed_whole_workspace(workspace,expected,now_unix,build_identity,dump,closed_whole_execution,native_roles)
     if initial_generation is not None:
         if sealed_recovery is not None or writer_figure_transition is not None:
             raise ValueError('Initial sealed adoption cannot borrow another transition')
@@ -4560,7 +4632,8 @@ class RetainedNativeToolRoles:
             return path
         def metadata(descriptor):return json.loads(auth(descriptor).read_text())
         selected=metadata(self.closed_whole_execution)
-        if set(selected)!={'ordinary_input','roles','execution_python','live_helper_application','input_stamps'}:
+        required={'ordinary_input','roles','execution_python','live_helper_application','input_stamps'}
+        if not required<=set(selected)<=required|{'workspace_state'}:
             raise ValueError('Invalid closed whole execution selection')
         plan=metadata(selected['ordinary_input']);h=metadata(plan['normal_handoff'])
         if self.records!=metadata(selected['roles']):
@@ -4774,6 +4847,25 @@ class RetainedNativeToolRoles:
             if self.bind_input(Path(name).resolve(strict=True))['sha256']!=digest:
                 raise ValueError('Closed whole loaded library changed')
             self._closed_library_routes[name]=str(Path(name).resolve(strict=True))
+        self._closed_whole_workspace_state=None
+        if 'workspace_state'in selected:
+            state_reference=selected['workspace_state'];state=metadata(state_reference)
+            binding=state.get('native_generation',{})
+            expected_sha=(restoration['original_seal_archive']['sha256'] if restoration is not None else whole['seal']['sha256'])
+            if (state_reference['path']!=str(root.parent.parent/'state.json')
+                    or state.get('edition')!=edition or state.get('date')!=date
+                    or state.get('source')!=cfg['source'].get('fingerprint')
+                    or state.get('now_unix')!=cfg.get('now_unix')
+                    or not isinstance(binding,dict) or set(binding)!={'seal_sha256','dump','build_inputs'}
+                    or binding['dump']!=str(dump) or binding['seal_sha256']!=expected_sha
+                    or not isinstance(binding['build_inputs'],dict)
+                    or binding['build_inputs'].get('source')!=state['source']
+                    or not isinstance(binding['build_inputs'].get('auxiliary_snapshot_sha256'),dict)
+                    or any(seal['identity']['providers'].get(auxiliary_snapshot_filename(name)) is None
+                        or seal['identity']['providers'][auxiliary_snapshot_filename(name)][1]!=digest
+                        for name,digest in binding['build_inputs']['auxiliary_snapshot_sha256'].items())):
+                raise ValueError('Closed whole original workspace history differs')
+            self._closed_whole_workspace_state=state
         self._closed_native_context=(root,dump,whole['seal']['sha256'])
         return context
 
@@ -5035,11 +5127,12 @@ class RetainedNativeToolRoles:
         """Snapshot existing dispatch guards for explicit parent authorization."""
         import copy
         self.require_unchanged()
-        if (self.initial_sealed_generation is None or self.sealed_expander_recovery is not None
+        if ((self.initial_sealed_generation is None and self.closed_whole_execution is None) or self.sealed_expander_recovery is not None
                 or self.writer_figure_transition is not None or self.initial_sealed_context is None):
             raise ValueError('Prepared retained custody requires an adopted initial sealed generation')
         selection = copy.deepcopy(self.records)
-        selection['dict-bundle-build']['initial_sealed_generation'] = copy.deepcopy(self.initial_sealed_generation)
+        kind='closed_whole_execution' if self.closed_whole_execution is not None else 'initial_sealed_generation'
+        selection['dict-bundle-build'][kind]=copy.deepcopy(getattr(self,kind))
         return dict(selection=selection,
             inputs=[dict(identity=self.input_identities[path],stamp=list(stamp)) for path,stamp in self.inputs.items()],
             directories={str(path):list(value) for path,value in self.directories.items()},
@@ -5061,7 +5154,8 @@ class RetainedNativeToolRoles:
         self=object.__new__(cls)
         self.records=copy.deepcopy(binding['selection'])
         self.initial_sealed_generation=self.records['dict-bundle-build'].pop('initial_sealed_generation',None)
-        if self.initial_sealed_generation is None or set(self.records)!=set(RETAINED_NATIVE_ROLE_NAMES):
+        self.closed_whole_execution=self.records['dict-bundle-build'].pop('closed_whole_execution',None)
+        if ((self.initial_sealed_generation is None)==(self.closed_whole_execution is None) or set(self.records)!=set(RETAINED_NATIVE_ROLE_NAMES)):
             raise ValueError('Prepared retained selection differs')
         self.sealed_expander_recovery=None;self.writer_figure_transition=None
         self.inputs={};self.input_identities={};self.directories={};self.borrowed_capture_directories={}
@@ -5094,6 +5188,7 @@ class RetainedNativeToolRoles:
             derived=_authenticated_origin
             if (not isinstance(derived,cls) or derived.records!=self.records
                     or derived.initial_sealed_generation!=self.initial_sealed_generation
+                    or derived.closed_whole_execution!=self.closed_whole_execution
                     or derived.zig_sha256!=self.zig_sha256 or derived.closed_native_origin is None
                     or derived.sealed_expander_recovery is not None or derived.writer_figure_transition is not None):
                 raise ValueError('Authenticated retained origin differs from prepared dispatch')
@@ -5105,17 +5200,24 @@ class RetainedNativeToolRoles:
         self._closed_native_context=derived._closed_native_context
         self._closed_library_routes=derived._closed_library_routes
         self._closed_native_worker_stamp=derived._closed_native_worker_stamp
+        if self.closed_whole_execution is not None:
+            self._closed_whole_input_stamps=copy.deepcopy(derived._closed_whole_input_stamps)
+            self._closed_whole_workspace_state=copy.deepcopy(derived._closed_whole_workspace_state)
         for path,identity in derived.input_identities.items():
             if self.input_identities.get(path)!=identity or self.inputs.get(path)!=derived.inputs[path]:
                 raise ValueError('Prepared retained binding omitted a selected execution dependency')
         if any(self.directories.get(path)!=value for path,value in derived.directories.items()):
             raise ValueError('Prepared retained binding omitted an execution directory')
         self.require_unchanged()
-        selected, result, plan, workspace = initial_sealed_generation(self.initial_sealed_generation,self)
-        current_reference=(selected['file_metadata_provider_update']['current_seal'] if selected.get('file_metadata_provider_update') is not None else result['completed_expander_seal'])
-        if self.initial_sealed_context!=(workspace/'expander'/'.bundle-expander',
-                Path(plan['dump']['path']),current_reference['sha256']):
-            raise ValueError('Prepared retained readonly origin differs')
+        if self.closed_whole_execution is not None:
+            if self._closed_whole_workspace_state is None or self.initial_sealed_context!=self._closed_native_context:
+                raise ValueError('Prepared closed whole readonly origin differs')
+        else:
+            selected, result, plan, workspace = initial_sealed_generation(self.initial_sealed_generation,self)
+            current_reference=(selected['file_metadata_provider_update']['current_seal'] if selected.get('file_metadata_provider_update') is not None else result['completed_expander_seal'])
+            if self.initial_sealed_context!=(workspace/'expander'/'.bundle-expander',
+                    Path(plan['dump']['path']),current_reference['sha256']):
+                raise ValueError('Prepared retained readonly origin differs')
         return self
 
     def authenticate_prepared_captures(self, observed, cfg):
@@ -5174,7 +5276,8 @@ class RetainedNativeToolRoles:
     def authenticate_prepared_dispatch(self, binding, cfg=None):
         """Parent-only pre-adoption check, while original full source is leased."""
         observed=self.from_prepared_dispatch(binding,_authenticated_origin=self)
-        if self.records!=observed.records or self.initial_sealed_generation!=observed.initial_sealed_generation:
+        if (self.records!=observed.records or self.initial_sealed_generation!=observed.initial_sealed_generation
+                or self.closed_whole_execution!=observed.closed_whole_execution):
             raise ValueError('Prepared retained origin selection differs')
         for path,identity in self.input_identities.items():
             if observed.input_identities.get(path)!=identity or observed.inputs.get(path)!=self.inputs[path]:
@@ -5942,8 +6045,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         raise ValueError('Retained roles require ordinary compressed sharded execution')
     if (retained_roles is not None and (getattr(_PREPARED_SOURCE,'request',None) is not None
             or getattr(_PREPARED_SOURCE,'value',None) is not None)
-            and retained_roles.initial_sealed_generation is None):
-        raise ValueError('Prepared retained custody requires explicit initial sealed selection')
+            and retained_roles.initial_sealed_generation is None and retained_roles.closed_whole_execution is None):
+        raise ValueError('Prepared retained custody requires explicit closed execution selection')
     validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     validate_llvm_workers(llvm_workers)
     if type(compress_shards) is not bool: raise ValueError('Invalid compressed shard mode')
@@ -5962,6 +6065,11 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         raise ValueError('Invalid page expansion worker count')
     initial_reference=getattr(retained_roles, 'initial_sealed_generation', None) if retained_roles is not None else None
     retained_workspace=initial_sealed_generation(initial_reference, retained_roles)[3] if initial_reference is not None else None
+    closed_whole=getattr(retained_roles,'closed_whole_execution',None) if retained_roles is not None else None
+    if closed_whole is not None:
+        if retained_roles.initial_sealed_context!=retained_roles._closed_native_context or retained_roles._closed_whole_workspace_state is None:
+            raise ValueError('Closed whole worker has not been adopted')
+        retained_workspace=retained_roles._closed_native_context[0].parent.parent
     expander_build=(retained_workspace if retained_workspace is not None else workspace)/'expander'
     page_links_sha=sha256_file(page_links_snapshot) if page_links_snapshot is not None else None
     page_redirects_sha=sha256_file(page_redirects_snapshot) if page_redirects_snapshot is not None else None
@@ -5978,6 +6086,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     native_ready=True
     writer_transition=getattr(retained_roles, 'writer_figure_transition', None) if retained_roles is not None else None
     worker_auxiliary_hashes=auxiliary_hashes
+    if closed_whole is not None:
+        worker_auxiliary_hashes=retained_roles._closed_whole_workspace_state['native_generation']['build_inputs']['auxiliary_snapshot_sha256']
     seal_for_provider_updates=(generation is None and getattr(_PREPARED_SOURCE,'request',None) is None
                                and WIKIBASE_PROVIDER_ROLES <= set(auxiliary_hashes or {}))
     if provider_update:
@@ -5995,12 +6105,14 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         binding=read_build_envelope(state_path).get('native_generation') if state_path.is_file() else None
         if binding is not None:
             import extraction_cache as native_cache
-            expected_binding_keys=({'seal_sha256','dump','build_inputs','retained_expander_root'} if initial_reference is not None else {'seal_sha256','dump','build_inputs','writer_figure_transition'} if writer_transition is not None else {'seal_sha256','dump','build_inputs'})
+            expected_binding_keys=({'seal_sha256','dump','build_inputs','retained_expander_root','closed_whole_execution'} if closed_whole is not None else {'seal_sha256','dump','build_inputs','retained_expander_root'} if initial_reference is not None else {'seal_sha256','dump','build_inputs','writer_figure_transition'} if writer_transition is not None else {'seal_sha256','dump','build_inputs'})
             if (not isinstance(binding,dict) or set(binding)!=expected_binding_keys
                     or binding['dump']!=str(dump)):
                 raise ValueError('Bound ordinary native generation changed')
-            if initial_reference is not None and binding['retained_expander_root']!=str(expander_build/'.bundle-expander'):
+            if retained_workspace is not None and binding['retained_expander_root']!=str(expander_build/'.bundle-expander'):
                 raise ValueError('Retained initial sealed root changed')
+            if closed_whole is not None and binding['closed_whole_execution']!=closed_whole:
+                raise ValueError('Closed whole native generation history changed')
             if writer_transition is not None:
                 if binding['writer_figure_transition']!=writer_transition:
                     raise ValueError('Writer Figure transition binding changed')
@@ -6010,7 +6122,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     worker_ready=native_ready and expander_ready(expander_build,worker_auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha) if generation is None else True
     if writer_transition is not None and not worker_ready:
         raise ValueError('Selected Writer Figure transition worker changed; existing generation preserved')
-    if getattr(retained_roles, 'initial_sealed_generation', None) is not None and not worker_ready:
+    if retained_workspace is not None and not worker_ready:
         raise ValueError('Selected initial sealed worker inputs changed; existing generation preserved')
     if generation is None and not worker_ready:
         if expander_build.exists(): remove_artifact_tree(expander_build)
@@ -6048,10 +6160,12 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         reviewed_path = nonlexical.materialize(reviewed_nonlexical,dump,index_path,workspace/nonlexical.NAME)
         nonlexical.bind_identity(workspace,build_identity,reviewed_nonlexical)
     reviewed_args = ['--reviewed-nonlexical',str(reviewed_path)] if reviewed_path is not None else []
-    if writer_transition is not None:
+    if writer_transition is not None or closed_whole is not None:
         roots={Path(auxiliary_snapshots[name]).parent for name in WRITER_FIGURE_ROLES}
         if len(roots)!=1:raise ValueError('Writer Figure observations require one complete pinned root')
         reviewed_args += ['--figure-input-root',str(roots.pop())]
+        if closed_whole is not None:
+            reviewed_args += ['--figure-page-observations-snapshot',str(auxiliary_snapshots['figure-page-observations'])]
 
     if tools is None:
         tools=prepare_blob_tools(workspace,zig,edition,date,build_identity, **({'figure_inputs':figure_inputs} if figure_inputs is not None else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}))
@@ -6294,9 +6408,10 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
                 except BlockingIOError:
                     raise ValueError(f'Build already running: {parent / date}') from None
                 initial_reference = getattr(retained_roles, 'initial_sealed_generation', None) if retained_roles is not None else None
-                if initial_reference is not None:
-                    selected_workspace = initial_sealed_generation(initial_reference, retained_roles)[3]
-                    owned.enter_context(acquire_build_resource_lock(selected_workspace/'expander'/'.bundle-expander'/'.compiler-inputs.lock'))
+                if initial_reference is not None or getattr(retained_roles,'closed_whole_execution',None) is not None:
+                    root=(initial_sealed_generation(initial_reference,retained_roles)[3]/'expander'/'.bundle-expander'
+                          if initial_reference is not None else retained_roles._closed_native_context[0])
+                    owned.enter_context(acquire_build_resource_lock(root/'.compiler-inputs.lock'))
                 # An existing publication is verification-only even when input or
                 # publication checks fail before build_locked can return its mode.
                 # Legitimate producers share this edition lock; success still overrides.
@@ -6698,8 +6813,8 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         raise ValueError('Retained roles require ordinary compressed sharded execution')
     if (retained_roles is not None and (getattr(_PREPARED_SOURCE,'request',None) is not None
             or getattr(_PREPARED_SOURCE,'value',None) is not None)
-            and retained_roles.initial_sealed_generation is None):
-        raise ValueError('Prepared retained custody requires explicit initial sealed selection')
+            and retained_roles.initial_sealed_generation is None and retained_roles.closed_whole_execution is None):
+        raise ValueError('Prepared retained custody requires explicit closed execution selection')
     validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     validate_llvm_workers(llvm_workers)
     validate_now_unix(now_unix)
@@ -6747,6 +6862,8 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     target = output / edition / date
     initial_generation = getattr(retained_roles, 'initial_sealed_generation', None) if retained_roles is not None else None
     initial_workspace = initial_sealed_generation(initial_generation, retained_roles)[3] if initial_generation is not None else None
+    closed_whole=getattr(retained_roles,'closed_whole_execution',None) if retained_roles is not None else None
+    if closed_whole is not None:initial_workspace=retained_roles._closed_native_context[0].parent.parent
     if initial_workspace is not None:
         if not (target.with_name(date+'.shards')/'state.json').exists() and any(os.path.lexists(p) for p in (target, target.with_name(date + '.building'))):
             raise ValueError('Initial sealed adoption refuses existing ordinary output')
@@ -6853,9 +6970,10 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         if writer_transition is not None:
             update_args=dict(writer_figure_transition=writer_transition, native_roles=retained_roles,
                              build_identity=build_identity, dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
-        if initial_generation is not None:
-            update_args=dict(initial_generation=initial_generation, native_roles=retained_roles, auxiliary_snapshots=auxiliary_snapshots,
-                             build_identity=build_identity, dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
+        if initial_generation is not None or closed_whole is not None:
+            update_args=dict(native_roles=retained_roles,auxiliary_snapshots=auxiliary_snapshots,
+                             build_identity=build_identity,dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
+            update_args['closed_whole_execution' if closed_whole is not None else 'initial_generation']=closed_whole if closed_whole is not None else initial_generation
         now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}),**update_args)
         if reviewed is not None:nonlexical.pin_review(reviewed,workspace/'reviewed-nonlexical-source.json')
     dump=(staged_input_root/'pages.xml.zst') if staged_input_root is not None else cached_shard_dump(xml,downloads,workspace)
@@ -6865,7 +6983,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     source_pages=source_metadata['source_pages']
     with build_phase(phase_edition,phase_date,'snapshot_staging') as snapshot_outcome:
         pinned=copy_verified_snapshot(interwiki_snapshot,workspace/'interwiki-map.tsv',interwiki_sha) if interwiki_snapshot else None
-        if writer_transition is None:
+        if writer_transition is None and closed_whole is None:
             aux_pinned=pinned_auxiliary_snapshots(auxiliary_snapshots,auxiliary_hashes,workspace,
                 build_identity.get('auxiliary_capture_sha256',{}),build_identity.get('auxiliary_capture_artifact_sha256',{}),
                 phase_outcome=snapshot_outcome,
@@ -7083,8 +7201,8 @@ def parse_retained_native_roles(value, zig, *, sharded, edition_count, jobs):
             if generation.retained_roles is None:
                 raise ValueError('Prepared retry has no retained dispatch binding')
             return generation.retained_roles
-        if 'initial_sealed_generation' not in roles.get('dict-bundle-build',{}):
-            raise ValueError('Prepared retained custody requires explicit initial sealed selection')
+        if not {'initial_sealed_generation','closed_whole_execution'} & set(roles.get('dict-bundle-build',{})):
+            raise ValueError('Prepared retained custody requires explicit closed execution selection')
     compiler=shutil.which(zig)
     if compiler is None:raise ValueError('Zig compiler executable is unavailable')
     return RetainedNativeToolRoles(roles,zig_sha256=sha256_file(Path(compiler).resolve(strict=True)))

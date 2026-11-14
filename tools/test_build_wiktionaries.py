@@ -12248,4 +12248,114 @@ class ClosedWholeHelperChainTests(unittest.TestCase):
                             Path(refs[0]['path']).write_bytes(Path(refs[0]['path']).read_bytes()+b' ')
                             with self.assertRaises(ValueError):roles.require_unchanged()
 
+
+
+class ClosedWholePreparedCustodyTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory()as tmp:
+            root=Path(tmp);f=RetainedNativeRoleTests().closed_whole_fixture(root)
+            names=set(b.WRITER_FIGURE_ROLES)|{'figure-page-observations','namespace-registry','language-registry'}
+            aux={name:'b'*64 for name in names};capture={name:'c'*64 for name in names}
+            f.seal['identity']['providers']={b.auxiliary_snapshot_filename(name):[1,digest]for name,digest in aux.items()}
+            f.config['source']['fingerprint']='a'*64;f.config['now_unix']=123
+            (root/'configuration.json').write_text(json.dumps(f.config,sort_keys=True))
+            f.closed['configuration']=_initial_sealed_reference(root/'configuration.json');f.republish()
+            wire=b.prepared_metadata(b.prepared_metadata(f.selection['ordinary_input'])['closed_whole_authority']['wire_correspondence'])
+            wire['old_configuration']=f.closed['configuration'];wire_ref=_initial_sealed_write(root/'wire.json',wire)
+            ordinary=b.prepared_metadata(f.selection['ordinary_input']);ordinary['closed_whole_authority']['wire_correspondence']=wire_ref
+            f.selection['ordinary_input']=_initial_sealed_write(root/'ordinary.json',ordinary)
+            old_identity=dict(version=1,source='a'*64,files=[{'name':'original.xml','sha1':'d'*40}],zig_sha256=b.sha256_file(f.compiler),
+                native_tool_roles=b.prepared_metadata(f.selection['roles']),auxiliary_snapshot_sha256=aux,
+                auxiliary_capture_sha256=capture,auxiliary_capture_artifact_sha256=copy.deepcopy(capture),
+                interwiki_map_sha256='e'*64,expansion_timeout_ms=60000,derived_page_redirects=None)
+            old_state=dict(version=b.SHARD_STATE_VERSION,edition='testwiktionary',date='20261001',source='a'*64,production_source='a'*64,
+                files=copy.deepcopy(old_identity['files']),registry_sha256=aux['language-registry'],interwiki_map_sha256='e'*64,
+                auxiliary_snapshot_sha256=copy.deepcopy(aux),auxiliary_capture_sha256=copy.deepcopy(capture),
+                auxiliary_capture_artifact_sha256=copy.deepcopy(capture),shard_pages=b.SHARD_PAGES,now_unix=123,
+                native_generation=dict(seal_sha256=ordinary['closed_whole_authority']['seal']['sha256'],dump=str(f.dump),build_inputs=old_identity))
+            native=Path(f.worker).parent;history=_initial_sealed_write(native.parent.parent/'state.json',old_state)
+            f.selection['workspace_state']=history;selection=_initial_sealed_write(root/'selection.json',f.selection);f.roles['dict-bundle-build']['closed_whole_execution']=selection
+            with patch.dict(sys.modules,extraction_cache=f.cache),patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None),patch.object(b,'PROJECT',root):
+                roles=b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler))
+                identity=copy.deepcopy(old_identity);identity['source']='f'*64;identity['native_tool_roles']=roles.provenance()
+                expected={key:copy.deepcopy(value)for key,value in old_state.items()if key not in ('now_unix','native_generation')};expected['source']='f'*64;expected['production_source']='f'*64
+                for value in (identity,expected):
+                    for name in ('figure-sizing','figure-sizing-raw','figure-page-observations'):value['auxiliary_snapshot_sha256'][name]='1'*64
+                    for field in ('auxiliary_capture_sha256','auxiliary_capture_artifact_sha256'):
+                        for name in b.WRITER_FIGURE_ROLES:value[field][name]='2'*64
+                        value[field]['figure-page-observations']='3'*64
+                workspace=root/'fresh-output/testwiktionary/20261001.shards'
+                yield SimpleNamespace(**locals())
+
+    def adopt(self,f,**kwargs):
+        values=dict(build_identity=f.identity,dump=f.f.dump,native_roles=f.roles,closed_whole_execution=f.selection)
+        values.update(kwargs)
+        return b.prepare_shard_workspace(f.workspace,f.expected,123,**values)
+
+    def test_failed_whole_adopts_new_state_dispatches_and_keeps_original_history(self):
+        with self.fixture()as f:
+            original=Path(f.history['path']).read_bytes();seal=(f.native/'.completed-expander.json').read_bytes()
+            self.assertEqual(self.adopt(f),123);self.assertEqual(self.adopt(f),123)
+            state=b.read_build_envelope(f.workspace/'state.json')
+            self.assertEqual(state['native_generation']['closed_whole_execution'],f.selection)
+            self.assertEqual(state['native_generation']['retained_expander_root'],str(f.native))
+            self.assertIsNone(f.roles.initial_sealed_generation)
+            dispatch=f.roles.prepared_dispatch();self.assertNotIn('initial_sealed_generation',dispatch['selection']['dict-bundle-build'])
+            reopened=b.RetainedNativeToolRoles.from_prepared_dispatch(dispatch,_authenticated_origin=f.roles)
+            self.assertEqual(reopened.closed_whole_execution,f.selection);reopened.require_unchanged()
+            cfg=dict(prepared_source_custody=True,retained_native_roles=dispatch['selection'],source=dict(fingerprint=f.identity['source']),
+                     output=str(f.root/'fresh-output'),edition_options={'testwiktionary':{}},date='20261001',now_unix=123)
+            request=object.__new__(b.PreparedSourceRequest);request.generation=None;request.configuration=cfg
+            request.start=dict(prepared_source_control=dict(configuration=cfg));request.reference=_initial_sealed_write(f.root/'start.json',request.start)
+            request.require_retained_preparation(f.roles,f.workspace,f.identity,'testwiktionary','20261001',None)
+            with self.assertRaises(ValueError):f.roles.require_command('dict-bundle-build',['unused driver must not execute'])
+            self.assertEqual(Path(f.history['path']).read_bytes(),original);self.assertEqual((f.native/'.completed-expander.json').read_bytes(),seal)
+
+    def test_closed_whole_prepared_refuses_wrong_root_source_inputs_history_and_dispatch(self):
+        for change in ('wrong-dump','source','namespace','partial-output','changed-history','foreign-history','missing-history','history-source','history-provider','dispatch-root'):
+            with self.subTest(change=change),self.fixture()as f:
+                kwargs={}
+                if change=='wrong-dump':kwargs['dump']=f.root/'another.xml'
+                elif change=='source':f.identity['source']='0'*64
+                elif change=='namespace':f.identity['auxiliary_snapshot_sha256']['namespace-registry']='0'*64
+                elif change=='partial-output':f.workspace.mkdir(parents=True);(f.workspace/'foreign.blob').write_bytes(b'partial')
+                elif change=='changed-history':Path(f.history['path']).write_bytes(Path(f.history['path']).read_bytes()+b' ')
+                elif change in ('foreign-history','missing-history','history-source','history-provider'):
+                    selected=copy.deepcopy(f.f.selection)
+                    if change=='missing-history':selected.pop('workspace_state')
+                    elif change=='foreign-history':selected['workspace_state']=_initial_sealed_write(f.root/'foreign-state.json',f.old_state)
+                    else:
+                        changed=copy.deepcopy(f.old_state)
+                        if change=='history-source':changed['source']='0'*64
+                        else:changed['native_generation']['build_inputs']['auxiliary_snapshot_sha256']['namespace-registry']='0'*64
+                        selected['workspace_state']=_initial_sealed_write(Path(f.history['path']),changed)
+                    reference=_initial_sealed_write(f.root/'selection-other.json',selected);records=copy.deepcopy(f.f.roles);records['dict-bundle-build']['closed_whole_execution']=reference
+                    if change in ('foreign-history','history-source','history-provider'):
+                        with self.assertRaises(ValueError):b.RetainedNativeToolRoles(records,zig_sha256=b.sha256_file(f.f.compiler))
+                        continue
+                    roles=b.RetainedNativeToolRoles(records,zig_sha256=b.sha256_file(f.f.compiler));kwargs.update(native_roles=roles,closed_whole_execution=reference)
+                elif change=='dispatch-root':
+                    self.adopt(f);binding=f.roles.prepared_dispatch();binding['initial_context'][0]=str(f.root/'foreign-expander')
+                    with self.assertRaises(ValueError):b.RetainedNativeToolRoles.from_prepared_dispatch(binding,_authenticated_origin=f.roles)
+                    continue
+                with self.assertRaises((ValueError,OSError)):self.adopt(f,**kwargs)
+                self.assertFalse((f.workspace/'state.json').exists())
+
+    def test_closed_whole_sharded_entry_uses_retained_root_and_never_resets_or_prepares_worker(self):
+        class ReachedIndex(Exception):pass
+        with self.fixture()as f:
+            self.adopt(f)
+            request=object.__new__(b.PreparedSourceRequest)
+            with patch.object(b._PREPARED_SOURCE,'request',request,create=True),patch.object(b._PREPARED_SOURCE,'value',None,create=True), \
+                    patch.object(b,'expander_ready',return_value=True)as ready,patch.object(b,'inspect_page_index',side_effect=ReachedIndex)as index, \
+                    patch.object(b,'prepare_blob_tools')as prepare,patch.object(b,'remove_artifact_tree')as remove:
+                with self.assertRaises(ReachedIndex):
+                    b.build_sharded(f.f.dump,f.root/'staging',f.workspace,f.root/'registry','zig',1,[dict(wiki='testwiktionary',date='20261001')],123,
+                        compress_shards=True,build_identity=f.identity,auxiliary_hashes=f.identity['auxiliary_snapshot_sha256'],interwiki_sha='e'*64,retained_roles=f.roles)
+                self.assertEqual(ready.call_args.args[0],f.native.parent)
+                self.assertEqual(ready.call_args.args[1],f.old_identity['auxiliary_snapshot_sha256'])
+                self.assertEqual(index.call_args.args[0],f.native/'page-index.tsv');prepare.assert_not_called();remove.assert_not_called()
+
+
 if __name__=='__main__':unittest.main()
