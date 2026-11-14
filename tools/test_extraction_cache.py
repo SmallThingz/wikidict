@@ -3195,5 +3195,62 @@ class FileMetadataProviderUpdateTests(unittest.TestCase):
         with self.assertRaises(ValueError): cache.prepare_wikibase_provider_update(root, dump, previous)
 
 
+
+
+class SnapshotMetadataRefreshListTests(MetadataCustodyRefreshTests):
+    def refresh_fixture(self):
+        root,dump,snapshots=self.fixture(ready=False)
+        extra=self.base/('refresh-figure-site-'+str(self.sequence));extra.write_bytes(b'original figure site')
+        snapshots['figure-siteinfo.raw.json']=str(extra);(root/'figure-siteinfo.raw.json').symlink_to(extra)
+        self.call('seal-expander',root,dump,snapshots);cache.shutil.rmtree(root/'llvm')
+        (root/'.incomplete').unlink();(root.parent/'.incomplete').write_bytes(b'expander ready')
+        seal=self.binding(root);record=cache.read_marker(root/cache.COMPLETED_EXPANDER);members=[]
+        for name in ('figure-siteinfo.raw.json','namespace-registry.tsv'):
+            source=Path(snapshots[name]);cache.os.link(source,self.base/('refresh-link-'+str(self.sequence)+'-'+name))
+            members.append(dict(name=name,source=str(source),original_seal_sha256=seal,
+                old_stamp=record['runtime_stamps']['assets'][name],current_stamp=list(cache._full_stamp(source.stat())),
+                current_nlink=source.stat().st_nlink,ctime_cause='unknown',alias_stamp=list(cache._full_stamp((root/name).lstat()))))
+        return root,dump,snapshots,seal,record,dict(original_seal_sha256=seal,snapshots=members)
+
+    def test_snapshot_refresh_list_preserves_bytes_original_record_and_owned_stamp_lists(self):
+        root,dump,snapshots,seal,record,receipt=self.refresh_fixture();raw=(root/cache.COMPLETED_EXPANDER).read_bytes();original=json.loads(json.dumps(record))
+        with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,seal)
+        refreshed=cache.frozen_runtime_context(root,dump,seal,snapshot_metadata_refresh=receipt)
+        self.assertEqual(record,original);self.assertEqual(raw,(root/cache.COMPLETED_EXPANDER).read_bytes())
+        for name in ('identity','origin_graph','link'):self.assertEqual(refreshed[name],record[name])
+        direct=cache._snapshot_metadata_refresh(root,record,seal,receipt)
+        self.assertIs(direct['identity'],record['identity']);self.assertIsNot(direct['runtime_stamps']['assets'],record['runtime_stamps']['assets'])
+        selected=receipt['snapshots'][0];saved=list(direct['runtime_stamps']['assets'][selected['name']]);selected['current_stamp'][5]+=1
+        self.assertEqual(saved,direct['runtime_stamps']['assets'][selected['name']]);self.assertEqual(record,original)
+
+    def test_snapshot_refresh_list_refuses_nonmetadata_alias_and_concurrent_changes(self):
+        import stat
+        for change in ('omitted','unsorted','duplicate','unlisted','content','inode','mode','mtime','alias','same-alias','nlink','late-alias','native'):
+            with self.subTest(change=change):
+                root,dump,snapshots,seal,record,receipt=self.refresh_fixture();row=receipt['snapshots'][0];source=Path(row['source']);before=source.stat();alias=root/row['name']
+                if change=='unsorted':receipt['snapshots'].reverse()
+                elif change=='duplicate':receipt['snapshots'].append(dict(row))
+                elif change=='unlisted':row['name']='not-a-snapshot'
+                elif change=='content':
+                    source.write_bytes(b'x'*before.st_size);cache.os.utime(source,ns=(before.st_atime_ns,before.st_mtime_ns));row['current_stamp']=list(cache._full_stamp(source.stat()))
+                elif change=='inode':
+                    raw=source.read_bytes();source.unlink();source.write_bytes(raw);cache.os.utime(source,ns=(before.st_atime_ns,before.st_mtime_ns));row['current_stamp']=list(cache._full_stamp(source.stat()))
+                elif change=='mode':source.chmod(stat.S_IMODE(before.st_mode)^0o100);row['current_stamp']=list(cache._full_stamp(source.stat()))
+                elif change=='mtime':cache.os.utime(source,ns=(before.st_atime_ns,before.st_mtime_ns+1));row['current_stamp']=list(cache._full_stamp(source.stat()))
+                elif change in ('alias','same-alias'):
+                    alias.unlink();alias.symlink_to(source if change=='same-alias'else Path(snapshots['namespace-registry.tsv']))
+                elif change=='nlink':cache.os.link(source,self.base/('unrecorded-link-'+str(self.sequence)))
+                elif change=='native':(root/'dict-bundle-expander').write_bytes(b'changed native worker')
+                kwargs={}if change=='omitted'else dict(snapshot_metadata_refresh=receipt)
+                if change=='late-alias':
+                    real=cache.stable_file_digest;last=Path(receipt['snapshots'][-1]['source'])
+                    def replace_after_last(path,**options):
+                        value=real(path,**options)
+                        if Path(path)==last:alias.unlink();alias.symlink_to(source)
+                        return value
+                    with mock.patch.object(cache,'stable_file_digest',side_effect=replace_after_last),self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,seal,**kwargs)
+                else:
+                    with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,seal,**kwargs)
+
 if __name__ == "__main__":
     unittest.main()

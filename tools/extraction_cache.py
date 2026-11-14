@@ -238,34 +238,58 @@ def completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshot
 
 
 def _snapshot_metadata_refresh(root, record, expected_sha, receipt):
-    # Explicit opt-in physical custody correction; native/content origin stays exact.
-    name = 'figure-page-observations.json'
+    # Explicit current observation changes custody only, never the old seal.
     keys = {'name', 'source', 'original_seal_sha256', 'old_stamp', 'current_stamp', 'current_nlink', 'ctime_cause'}
-    if (not isinstance(receipt, dict) or set(receipt) != keys or receipt['name'] != name or
-            receipt['original_seal_sha256'] != expected_sha or receipt['ctime_cause'] != 'unknown' or
-            type(receipt['current_nlink']) is not int or receipt['current_nlink'] < 1):
-        raise ValueError('Invalid snapshot metadata refresh receipt')
-    old = receipt['old_stamp']; current = receipt['current_stamp']
-    if (not isinstance(old, list) or not isinstance(current, list) or len(old) != 6 or len(current) != 6 or
-            any(type(v) is not int for v in old + current) or old[:5] != current[:5] or old[5] == current[5] or
-            record['runtime_stamps']['assets'].get(name) != old):
-        raise ValueError('Snapshot metadata refresh is not ctime-only')
-    path = root / name; source = Path(receipt['source'])
-    if (not source.is_absolute() or str(source) != os.path.normpath(str(source)) or
-            any(p.is_symlink() for p in (source, *source.parents)) or not path.is_symlink() or
-            os.readlink(path) != str(source) or record['runtime_stamps']['snapshot_links'].get(name) != str(source)):
-        raise ValueError('Snapshot metadata refresh alias changed')
-    if _full_stamp(source.stat()) != tuple(current) or source.stat().st_nlink != receipt['current_nlink']:
-        raise ValueError('Snapshot metadata refresh source changed')
-    value = stable_file_digest(source, snapshot=True)
-    assets = [row for row in record['identity']['assets'] if row[0] == name]
-    if (len(assets) != 1 or list(value) != assets[0][1:] or
-            list(value) != record['identity']['providers'].get(name) or
-            _full_stamp(source.stat()) != tuple(current) or source.stat().st_nlink != receipt['current_nlink'] or
-            os.readlink(path) != str(source)):
-        raise ValueError('Snapshot metadata refresh content or identity changed')
-    successor = json.loads(json.dumps(record))
-    successor['runtime_stamps']['assets'][name] = current
+    multiple = isinstance(receipt,dict) and set(receipt) == {'original_seal_sha256','snapshots'}
+    if multiple:
+        members = receipt['snapshots']
+        if (receipt['original_seal_sha256'] != expected_sha or not isinstance(members,list) or not members
+                or any(not isinstance(row,dict) or set(row) != keys | {'alias_stamp'} for row in members)):
+            raise ValueError('Invalid snapshot metadata refresh list')
+        names = [row['name'] for row in members]
+        if any(not isinstance(name,str) for name in names) or names != sorted(set(names)):
+            raise ValueError('Snapshot metadata refresh names are not exact and unique')
+    else:
+        members = [receipt]
+    successor = dict(record)
+    successor['runtime_stamps'] = dict(record['runtime_stamps'])
+    successor['runtime_stamps']['assets'] = dict(record['runtime_stamps']['assets'])
+    held = []
+    for row in members:
+        if (not isinstance(row,dict) or set(row) != (keys | {'alias_stamp'} if multiple else keys)
+                or row['name'] not in EXPANDER_SNAPSHOTS or (not multiple and row['name'] != 'figure-page-observations.json')
+                or row['original_seal_sha256'] != expected_sha or row['ctime_cause'] != 'unknown'
+                or type(row['current_nlink']) is not int or row['current_nlink'] < 1):
+            raise ValueError('Invalid snapshot metadata refresh receipt')
+        name = row['name']; old = row['old_stamp']; current = row['current_stamp']
+        if (not isinstance(old,list) or not isinstance(current,list) or len(old) != 6 or len(current) != 6
+                or any(type(v) is not int for v in old + current) or old[:5] != current[:5] or old[5] == current[5]
+                or record['runtime_stamps']['assets'].get(name) != old):
+            raise ValueError('Snapshot metadata refresh is not ctime-only')
+        current = list(current); path = root / name; source = Path(row['source'])
+        if (not source.is_absolute() or str(source) != os.path.normpath(str(source))
+                or any(p.is_symlink() for p in (source,*source.parents)) or not path.is_symlink()
+                or os.readlink(path) != str(source) or record['runtime_stamps']['snapshot_links'].get(name) != str(source)):
+            raise ValueError('Snapshot metadata refresh alias changed')
+        alias = list(_full_stamp(path.lstat()))
+        if multiple and (not isinstance(row['alias_stamp'],list) or len(row['alias_stamp']) != 6
+                or any(type(v) is not int for v in row['alias_stamp']) or alias != row['alias_stamp']):
+            raise ValueError('Snapshot metadata refresh current alias changed')
+        nlink = row['current_nlink']
+        if _full_stamp(source.stat()) != tuple(current) or source.stat().st_nlink != nlink:
+            raise ValueError('Snapshot metadata refresh source changed')
+        value = stable_file_digest(source,snapshot=True)
+        assets = [asset for asset in record['identity']['assets'] if asset[0] == name]
+        if (len(assets) != 1 or list(value) != assets[0][1:] or list(value) != record['identity']['providers'].get(name)
+                or _full_stamp(source.stat()) != tuple(current) or source.stat().st_nlink != nlink
+                or not path.is_symlink() or os.readlink(path) != str(source) or list(_full_stamp(path.lstat())) != alias):
+            raise ValueError('Snapshot metadata refresh content or identity changed')
+        successor['runtime_stamps']['assets'][name] = current
+        held.append((path,source,current,nlink,alias))
+    for path,source,current,nlink,alias in held:
+        if (not path.is_symlink() or os.readlink(path) != str(source) or list(_full_stamp(path.lstat())) != alias
+                or _full_stamp(source.stat()) != tuple(current) or source.stat().st_nlink != nlink):
+            raise ValueError('Snapshot metadata refresh changed during validation')
     return successor
 
 

@@ -226,7 +226,8 @@ class PreparedSourceGeneration:
         if self.retired:
             raise ValueError('Prepared native generation has already been finalized')
         if getattr(self,'retained_roles',None) is not None:self.retained_roles.require_unchanged()
-        seal = (self.cache.frozen_runtime_context(self.root, self.dump, self.record['seal_sha256'])
+        seal = (self.cache.frozen_runtime_context(self.root, self.dump, self.record['seal_sha256'],
+                    **getattr(getattr(self,'retained_roles',None),'_closed_native_context_options',{}))
                 if full_context or self._seal is None else self._seal)
         if seal is None:
             raise ValueError('Prepared source authorization has no complete generation seal')
@@ -529,7 +530,8 @@ class PreparedSourceRequest:
         marker=root/COMPLETED_EXPANDER_PROOF
         if not marker.is_file():return None
         seal_reference=prepared_metadata_ref(marker)
-        seal=cache.frozen_runtime_context(root,dump,seal_reference['sha256'])
+        seal=cache.frozen_runtime_context(root,dump,seal_reference['sha256'],
+            **getattr(retained,'_closed_native_context_options',{}))
         if seal is None:return None
         inventory=prepared_metadata(cfg['source']['inventory'])
         if inventory['head']!=cfg['source']['head']:
@@ -3737,7 +3739,8 @@ def initial_sealed_role_successor(original, native_roles):
 def initial_sealed_generation(reference, native_roles):
     """Read a selected closed direct preparation, without inventing old shard state."""
     selected = prepared_metadata(reference)
-    if set(selected) != {'preparation_result', 'preparation_closure'}:
+    if (not {'preparation_result','preparation_closure'} <= set(selected)
+            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh'}):
         raise ValueError('Invalid initial sealed generation selection')
     result = prepared_metadata(selected['preparation_result'])
     closed = prepared_metadata(selected['preparation_closure'])
@@ -3829,6 +3832,17 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     root = selected_workspace / 'expander' / '.bundle-expander'
     seal_reference = result['completed_expander_seal']
     seal = prepared_metadata(seal_reference)
+    context_options = {}
+    expected_context = seal
+    if 'snapshot_metadata_refresh' in selected:
+        context_options = getattr(native_roles,'_closed_native_context_options',{})
+        if context_options != {'snapshot_metadata_refresh':prepared_metadata(selected['snapshot_metadata_refresh'])}:
+            raise ValueError('Initial snapshot refresh does not match its authenticated constructor')
+        expected_context = getattr(native_roles,'closed_native_origin',None)
+        if expected_context is None:
+            raise ValueError('Initial snapshot refresh lacks its closed native origin')
+    elif getattr(native_roles,'_closed_native_context_options',{}):
+        raise ValueError('Initial snapshot metadata refresh selection changed')
     selected_role = native_roles.records['dict-bundle-build']
     dependencies = selected_role['dependencies']
     graph = seal['origin_graph']
@@ -3880,7 +3894,7 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     # This existing validator authenticates native mode/toolchain/ABI provenance,
     # source/index/sidecars and physical asset inventory without rehashing payloads.
     if (os.path.lexists(root / '.incomplete')
-            or cache.frozen_runtime_context(root, dump, seal_reference['sha256']) != seal):
+            or cache.frozen_runtime_context(root, dump, seal_reference['sha256'],**context_options) != expected_context):
         raise ValueError('Initial sealed generation is not finalized')
     # A closed, ready generation cannot enter post-link finalization again.
     # Preserve the exact authenticated closed producer without recomputing
@@ -3893,7 +3907,7 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
             or (after.st_dev, after.st_ino, after.st_mode, after.st_uid) != source_identity):
         raise ValueError('Initial sealed native producer changed')
     native_roles.require_unchanged()
-    if cache.frozen_runtime_context(root, dump, seal_reference['sha256']) != seal:
+    if cache.frozen_runtime_context(root, dump, seal_reference['sha256'],**context_options) != expected_context:
         raise ValueError('Initial sealed generation is not finalized')
     assets = {name: (size, digest) for name, size, digest in seal['identity']['assets']}
     for key, name in (('worker', 'dict-bundle-expander'), ('metadata', 'lua-program.meta'),
@@ -3942,7 +3956,7 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
             raise ValueError('Initial sealed installed role bytes or mode changed')
     native_roles.require_unchanged()
     prepared_metadata(reference); prepared_metadata(selected['preparation_result']); prepared_metadata(selected['preparation_closure'])
-    if inventory() != before or cache.frozen_runtime_context(root, dump, seal_reference['sha256']) != seal:
+    if inventory() != before or cache.frozen_runtime_context(root, dump, seal_reference['sha256'],**context_options) != expected_context:
         raise ValueError('Initial sealed workspace changed during adoption')
     native_roles.initial_sealed_context = (root, Path(dump), seal_reference['sha256'])
     if os.path.lexists(state_path):
@@ -4756,9 +4770,22 @@ class RetainedNativeToolRoles:
         reference=result['completed_expander_seal'];seal=prepared_metadata(reference)
         root=workspace/'expander'/'.bundle-expander';deps=self.records['dict-bundle-build']['dependencies']
         producer=seal['identity']['producer']
-        if (seal.get('provenance')!='ordinary-linked-expander'
-                or cache.frozen_runtime_context(root,Path(plan['dump']['path']),reference['sha256'])!=seal):
+        options = {}
+        if 'snapshot_metadata_refresh' in selected:
+            refresh = prepared_metadata(selected['snapshot_metadata_refresh'])
+            options['snapshot_metadata_refresh'] = refresh
+        context = cache.frozen_runtime_context(root,Path(plan['dump']['path']),reference['sha256'],**options)
+        comparable = context
+        if context is not None and options:
+            comparable = dict(context)
+            comparable['runtime_stamps'] = dict(context['runtime_stamps'])
+            comparable['runtime_stamps']['assets'] = dict(context['runtime_stamps']['assets'])
+            for member in refresh.get('snapshots',[refresh]):
+                name = member['name']
+                comparable['runtime_stamps']['assets'][name] = seal['runtime_stamps']['assets'][name]
+        if seal.get('provenance')!='ordinary-linked-expander' or comparable != seal:
             raise ValueError('Selected closed execution origin is not finalized')
+        self._closed_native_context_options = options
         for field,dependency in (('runtime','worker_object'),('leaf','value_leaf_bc'),('main_c','worker_main_c')):
             if producer.get(field)!=[deps[dependency]['bytes'],deps[dependency]['sha256']]:
                 raise ValueError('Closed execution native ABI artifact differs')
@@ -4780,6 +4807,11 @@ class RetainedNativeToolRoles:
             actual=self.bind_input(Path(reference['path']))
             if any(actual[key]!=reference[key] for key in ('path','bytes','sha256')):
                 raise ValueError('Closed execution authority changed')
+        if 'snapshot_metadata_refresh' in selected:
+            descriptor = selected['snapshot_metadata_refresh']
+            actual = self.bind_input(Path(descriptor['path']))
+            if any(actual[key] != descriptor[key] for key in ('path','bytes','sha256')):
+                raise ValueError('Initial snapshot metadata refresh authority changed')
         worker_stamp=cache._full_stamp((root/'dict-bundle-expander').stat())
         if (cache.tool_identity(root/'dict-bundle-expander')!=seal['identity']['runtime_libraries']
                 or cache.unicode_case_identity()!=producer['unicode']):
@@ -4796,7 +4828,7 @@ class RetainedNativeToolRoles:
                 raise ValueError('Closed execution library bytes differ')
             self._closed_library_routes[name]=str(resolved)
         self._closed_native_context=(root,Path(plan['dump']['path']),result['completed_expander_seal']['sha256'])
-        return seal
+        return context
 
     def closed_execution_resolution(self, root):
         """Fresh loader paths and original stamps, not another whole ELF hash.
@@ -4997,6 +5029,7 @@ class RetainedNativeToolRoles:
             # semantics. Recheck its live readset before using those same facts.
             derived.require_unchanged()
         self.closed_native_origin=derived.closed_native_origin
+        self._closed_native_context_options=copy.deepcopy(getattr(derived,'_closed_native_context_options',{}))
         self._closed_native_context=derived._closed_native_context
         self._closed_library_routes=derived._closed_library_routes
         self._closed_native_worker_stamp=derived._closed_native_worker_stamp
@@ -5899,7 +5932,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                 if binding['writer_figure_transition']!=writer_transition:
                     raise ValueError('Writer Figure transition binding changed')
                 worker_auxiliary_hashes=binding['build_inputs']['auxiliary_snapshot_sha256']
-            native_ready=native_cache.frozen_runtime_context(expander_build/'.bundle-expander',dump,binding['seal_sha256']) is not None
+            native_ready=native_cache.frozen_runtime_context(expander_build/'.bundle-expander',dump,binding['seal_sha256'],
+                **getattr(retained_roles,'_closed_native_context_options',{})) is not None
     worker_ready=native_ready and expander_ready(expander_build,worker_auxiliary_hashes,interwiki_sha,page_links_sha,page_redirects_sha) if generation is None else True
     if writer_transition is not None and not worker_ready:
         raise ValueError('Selected Writer Figure transition worker changed; existing generation preserved')

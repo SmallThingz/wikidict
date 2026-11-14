@@ -11527,7 +11527,6 @@ class PreparedFigureVerdictTests(unittest.TestCase):
                 else:self.assertEqual(ends,[])
 
 
-if __name__=='__main__':unittest.main()
 
 
 class InitialSealedRoleSuccessorTests(unittest.TestCase):
@@ -12080,19 +12079,6 @@ class InitialSealedBlobTargetTests(InitialSealedSplitTargetTests):
             for call in (lambda:f.roles.install_role('dict-bundle-build',f.root/'install'),lambda:f.roles.require_command('dict-bundle-build',['dump','out','--expander-only']),lambda:f.roles.prepare(['dump','out','--expander-only'],'testwiktionary','20261001')):
                 with self.assertRaises(ValueError):call()
 
-        # The actual public metadata catches projection mistakes that a wholly
-        # synthetic root cannot: old Merge/Verify came from a different tree.
-        binding=b.PROJECT/'.tmp/figure-normal-inputs01/shared-provider01/retained-bundle-driver01/binding02'
-        original=b.prepared_metadata(_initial_sealed_reference(binding/'retained-native-roles-current-mg-invoke-frontend03.json'))
-        current=b.prepared_metadata(_initial_sealed_reference(binding/'retained-native-roles-full49-mg-ordinary03.json'))
-        selected=current['dict-bundle-build'].pop('initial_sealed_generation')
-        self.assertNotEqual(original['dict-blob-verify']['source_root'],current['dict-blob-verify']['source_root'])
-        self.assertEqual(original['dict-bundle-build']['source_root'],current['dict-bundle-build']['source_root'])
-        roles=object.__new__(b.RetainedNativeToolRoles)
-        roles.records=current;roles.initial_sealed_generation=selected;roles.initial_sealed_context=None
-        roles.closed_whole_execution=None;roles.inputs={};roles.input_identities={};roles.directories={};roles.tools={};roles.compilation_payloads={}
-        b.initial_sealed_role_successor(original,roles);roles.require_unchanged()
-
     def test_prepared_blob_target_refusals_preserve_requested_source_artifact_and_driver(self):
         for mode in ('target-failure','missing-artifact','wrong-source','failed-capture','artifact-bytes','artifact-inode','runtime','old-driver','foreign-helper','codec','missing-target','duplicate-target','late-authority','foreign-root'):
             with self.subTest(mode=mode),tempfile.TemporaryDirectory()as tmp:
@@ -12125,3 +12111,46 @@ class InitialSealedBlobTargetTests(InitialSealedSplitTargetTests):
                 else:state['stderr'].write_text(state['stderr'].read_text()+'prepare-blob-tools success\n')
                 self.rewrite_blob_target(f)
                 with self.assertRaises((ValueError,OSError)):b.initial_sealed_role_successor(f.original,f.roles)
+
+
+class InitialSealedSnapshotRefreshTests(unittest.TestCase):
+    def test_initial_snapshot_refresh_keeps_origin_binds_receipt_and_rechecks_every_guard(self):
+        for change in ('allowed','missing','extra-stamp','native-origin','receipt-after','stale-selection'):
+            with self.subTest(change=change),ReadonlyPreparedRetainedTests().fixture()as f:
+                f.seal['runtime_stamps']=dict(assets={'namespace-registry.tsv':[1,2,33188,3,4,5]},plans=[],snapshot_links={})
+                InitialSealedGenerationTests().reseal_graph(f.f)
+                receipt=dict(original_seal_sha256=f.f.seal_ref['sha256'],snapshots=[dict(name='namespace-registry.tsv',current_stamp=[1,2,33188,3,4,6])])
+                authority=_initial_sealed_write(f.root/'snapshot-refresh.json',receipt)
+                selection=b.prepared_metadata(f.f.selection);selection['snapshot_metadata_refresh']=authority
+                selection_ref=_initial_sealed_write(f.root/'refreshed-initial-selection.json',selection)
+                selected=copy.deepcopy(f.records);selected['dict-bundle-build']['initial_sealed_generation']=selection_ref
+                context=copy.deepcopy(f.seal);context['runtime_stamps']['assets']['namespace-registry.tsv']=receipt['snapshots'][0]['current_stamp']
+                if change=='extra-stamp':context['runtime_stamps']['assets']['foreign']=[1,2,3,4,5,6]
+                elif change=='native-origin':context['identity']['producer']['abi'][0][1]='0'*64
+                elif change=='missing':Path(authority['path']).unlink()
+                calls=[]
+                def frozen(root,dump,sha,**options):
+                    self.assertEqual(sha,receipt['original_seal_sha256']);self.assertEqual(options,dict(snapshot_metadata_refresh=receipt));calls.append(options);return copy.deepcopy(context)
+                raw=(f.expander/'.completed-expander.json').read_bytes()
+                with patch.object(f.native_cache,'frozen_runtime_context',side_effect=frozen):
+                    if change in ('missing','extra-stamp','native-origin'):
+                        with self.assertRaises((ValueError,OSError)):b.RetainedNativeToolRoles(selected,zig_sha256=f.identity['zig_sha256'])
+                    else:
+                        roles=b.RetainedNativeToolRoles(selected,zig_sha256=f.identity['zig_sha256']);roles.require_unchanged()
+                        self.assertEqual(roles.closed_native_origin,context);self.assertIn(Path(authority['path']),roles.inputs)
+                        fresh=copy.copy(f.f);fresh.identity=copy.deepcopy(f.identity);fresh.identity['native_tool_roles']=roles.provenance()
+                        fresh.destination=f.root/'refreshed-output/viwiktionary/20261001.shards'
+                        fresh.selection=selection_ref if change!='stale-selection' else f.f.selection
+                        if change=='stale-selection':
+                            with self.assertRaises(ValueError):InitialSealedGenerationTests().adopt(fresh,native_roles=roles)
+                            self.assertEqual(raw,(f.expander/'.completed-expander.json').read_bytes());continue
+                        self.assertEqual(InitialSealedGenerationTests().adopt(fresh,native_roles=roles),123)
+                        reopened=b.RetainedNativeToolRoles.from_prepared_dispatch(roles.prepared_dispatch(),_authenticated_origin=roles)
+                        self.assertEqual(reopened._closed_native_context_options,roles._closed_native_context_options);reopened.require_unchanged()
+                        if change=='receipt-after':
+                            Path(authority['path']).write_bytes(Path(authority['path']).read_bytes()+b' ')
+                            with self.assertRaises(ValueError):roles.require_unchanged()
+                        self.assertTrue(calls)
+                self.assertEqual(raw,(f.expander/'.completed-expander.json').read_bytes())
+
+if __name__=='__main__':unittest.main()
