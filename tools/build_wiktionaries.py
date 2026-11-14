@@ -3852,6 +3852,55 @@ def initial_page_language_providers(plan, expected, build_identity, snapshots, p
     return result
 
 
+def initial_sealed_worker_hashes(hashes, providers):
+    """Keep every sealed worker Provider; only an external Book is Writer-only."""
+    result = dict(hashes or {})
+    if providers.get('figure-page-observations.json') is None:
+        result.pop('figure-page-observations', None)
+    return result
+
+
+def initial_sealed_writer_book(expected, build_identity, snapshots, providers, native_roles):
+    hashes = build_identity.get('auxiliary_snapshot_sha256', {})
+    if ('figure-page-observations' not in hashes
+            or providers.get('figure-page-observations.json') is not None):
+        return dict(hashes)
+    path = Path((snapshots or {}).get('figure-page-observations', ''))
+    if not path.is_absolute():
+        raise ValueError('Initial Writer Book is not explicitly selected')
+    capture = validated_auxiliary_capture('figure-page-observations', path, expected['edition'], expected['date'])
+    if capture is None:
+        raise ValueError('Initial Writer Book lacks validated capture authority')
+    manifest, inventory = capture
+    manifest_name = auxiliary_manifest_filename('figure-page-observations', path)
+    if manifest_name not in inventory:
+        raise ValueError('Initial Writer Book lacks its capture manifest')
+    manifests, artifacts = _project_auxiliary_capture_identities({
+        'figure-page-observations': (manifest, inventory, manifest_name)})
+    for identity in (expected, build_identity):
+        if (manifest['output_sha256'] != identity.get('auxiliary_snapshot_sha256', {}).get('figure-page-observations')
+                or manifest['namespace_registry_sha256'] != identity.get('auxiliary_snapshot_sha256', {}).get('namespace-registry')
+                or identity.get('auxiliary_capture_sha256', {}).get('figure-page-observations') != manifests['figure-page-observations']
+                or identity.get('auxiliary_capture_artifact_sha256', {}).get('figure-page-observations') != artifacts['figure-page-observations']):
+            raise ValueError('Initial Writer Book capture identity differs')
+    for filename, digest in inventory.items():
+        relative = Path(filename)
+        if relative.is_absolute() or any(part in ('.', '..') for part in relative.parts):
+            raise ValueError('Initial Writer Book capture escapes its package')
+        if native_roles.bind_input(path.parent / relative)['sha256'] != digest:
+            raise ValueError('Initial Writer Book capture bytes changed')
+    observed = native_roles.bind_input(path)
+    if observed['sha256'] != hashes['figure-page-observations']:
+        raise ValueError('Initial Writer Book snapshot differs')
+    book = prepared_metadata({key: observed[key] for key in ('path', 'bytes', 'sha256')})
+    if (book.get('wiki') != expected['edition'] or book.get('date') != expected['date']
+            or book.get('namespace_sha256') != hashes.get('namespace-registry')
+            or book.get('defaults_sha256') != hashes.get('figure-siteinfo')):
+        raise ValueError('Initial Writer Book namespace or site authority differs')
+    native_roles.require_unchanged()
+    return initial_sealed_worker_hashes(hashes, providers)
+
+
 def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity, dump, reference, native_roles, auxiliary_snapshots=None):
     """Create genuine ordinary initial state for an explicitly selected sealed worker."""
     import extraction_cache as cache
@@ -3917,15 +3966,15 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
                     and native_roles.bind_input(path) != dependencies[dependency])):
             raise ValueError('Initial sealed native graph differs from selected role')
         observation_graph[field] = str(path)
-    snapshots = {auxiliary_snapshot_filename(name): digest for name, digest in
-                 build_identity.get('auxiliary_snapshot_sha256', {}).items()}
+    providers = seal['identity']['providers']
+    worker_hashes = initial_sealed_writer_book(expected, build_identity, auxiliary_snapshots, providers, native_roles)
+    snapshots = {auxiliary_snapshot_filename(name): digest for name, digest in worker_hashes.items()}
     if (plan['registry']['sha256'] != expected.get('registry_sha256')
             or plan['interwiki']['sha256'] != expected.get('interwiki_map_sha256')):
         raise ValueError('Initial sealed registry or interwiki source differs')
     snapshots.update({'interwiki-map.tsv': expected.get('interwiki_map_sha256'),
                       'wikibase-page-links.tsv': plan['page_links']['sha256'],
                       'page-redirects.tsv': plan['page_redirects']['sha256']})
-    providers = seal['identity']['providers']
     snapshots.update(initial_page_language_providers(plan,expected,build_identity,auxiliary_snapshots,providers,native_roles))
     if (any(value is not None and value[1] != snapshots.get(name) for name, value in providers.items())
             or any(name not in providers or providers[name] is None or providers[name][1] != value
@@ -6126,6 +6175,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     native_ready=True
     writer_transition=getattr(retained_roles, 'writer_figure_transition', None) if retained_roles is not None else None
     worker_auxiliary_hashes=auxiliary_hashes
+    if initial_reference is not None:
+        worker_auxiliary_hashes=initial_sealed_worker_hashes(auxiliary_hashes,retained_roles.closed_native_origin['identity']['providers'])
     if closed_whole is not None:
         worker_auxiliary_hashes=retained_roles._closed_whole_workspace_state['native_generation']['build_inputs']['auxiliary_snapshot_sha256']
     seal_for_provider_updates=(generation is None and getattr(_PREPARED_SOURCE,'request',None) is None
@@ -6204,8 +6255,9 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         roots={Path(auxiliary_snapshots[name]).parent for name in WRITER_FIGURE_ROLES}
         if len(roots)!=1:raise ValueError('Writer Figure observations require one complete pinned root')
         reviewed_args += ['--figure-input-root',str(roots.pop())]
-        if closed_whole is not None:
-            reviewed_args += ['--figure-page-observations-snapshot',str(auxiliary_snapshots['figure-page-observations'])]
+    if (closed_whole is not None or
+            (initial_reference is not None and 'figure-page-observations' in (auxiliary_snapshots or {}))):
+        reviewed_args += ['--figure-page-observations-snapshot',str(auxiliary_snapshots['figure-page-observations'])]
 
     if tools is None:
         tools=prepare_blob_tools(workspace,zig,edition,date,build_identity, **({'figure_inputs':figure_inputs} if figure_inputs is not None else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}))

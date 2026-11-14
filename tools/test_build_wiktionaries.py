@@ -12729,4 +12729,103 @@ class CategoryFormattingSingleReplayTests(unittest.TestCase):
                 self.assertEqual(replay.call_count,1)
 
 
+class InitialSealedWriterBookTests(InitialSealedGenerationTests):
+    def book_fixture(self, root):
+        f=self.fixture(root)
+        names=('behavior-switches','category-statistics-format','category-stats','category-tree','date-numbering','figure-siteinfo','figure-sizing','figure-sizing-raw','figure-sizing-site','file-metadata','image-options','interface-messages','language-fallbacks','language-names','magic-words','site-info','site-statistics-format')
+        for name in names:f.aux[name]=hashlib.sha256(name.encode()).hexdigest()
+        self.assertEqual(len(f.aux),19)
+        for name,digest in f.aux.items():f.seal['identity']['providers'][b.auxiliary_snapshot_filename(name)]=[10,digest]
+        f.seal['identity']['providers']['figure-page-observations.json']=None
+        self.reseal_graph(f)
+        f.roles.initial_sealed_generation=f.selection
+        f.book_root=root/'book';f.book_root.mkdir()
+        f.book=f.book_root/'figure-page-observations.json'
+        _initial_sealed_write(f.book,dict(wiki=f.expected['edition'],date=f.expected['date'],namespace_sha256=f.aux['namespace-registry'],defaults_sha256=f.aux['figure-siteinfo']))
+        f.proof=f.book_root/'source.json';f.proof.write_text('retained authenticated source')
+        f.manifest_name='figure-page-observations.manifest.json'
+        f.manifest=dict(output_sha256=b.sha256_file(f.book),namespace_registry_sha256=f.aux['namespace-registry'])
+        _initial_sealed_write(f.book_root/f.manifest_name,f.manifest)
+        f.inventory={p.name:b.sha256_file(p)for p in f.book_root.iterdir()}
+        f.capture=(f.manifest,f.inventory)
+        manifests,artifacts=b._project_auxiliary_capture_identities({'figure-page-observations':(*f.capture,f.manifest_name)})
+        f.worker_hashes=copy.deepcopy(f.aux)
+        f.aux['figure-page-observations']=b.sha256_file(f.book)
+        for identity in (f.expected,f.identity):
+            identity['auxiliary_capture_sha256']=copy.deepcopy(manifests)
+            identity['auxiliary_capture_artifact_sha256']=copy.deepcopy(artifacts)
+        f.roles.input_identities={}
+        f.roles.bind_input=lambda path,retain=True:b.RetainedNativeToolRoles.bind_input(f.roles,path,retain=retain)
+        f.roles.closed_native_origin=f.seal
+        f.roles._closed_native_context=None
+        f.roles.closed_execution_resolution=lambda root:None
+        f.roles.require_unchanged=lambda:b.RetainedNativeToolRoles.require_inputs_unchanged(f.roles)
+        return f
+
+    def test_initial_writer_book_adopts_same_worker_and_retains_capture_custody(self):
+        with tempfile.TemporaryDirectory()as tmp:
+            f=self.book_fixture(Path(tmp));before=(f.expander/'.completed-expander.json').read_bytes();records=copy.deepcopy(f.records)
+            with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2],patch.object(b,'validated_auxiliary_capture',return_value=f.capture):
+                self.assertEqual(self.adopt(f,auxiliary_snapshots={'figure-page-observations':f.book}),123)
+                self.assertEqual(self.adopt(f,auxiliary_snapshots={'figure-page-observations':f.book}),123)
+            self.assertEqual((f.expander/'.completed-expander.json').read_bytes(),before)
+            self.assertEqual(f.roles.records,records)
+            self.assertEqual(b.read_build_envelope(f.destination/'state.json')['auxiliary_snapshot_sha256'],f.aux)
+            for filename in f.inventory:self.assertIn(f.book.parent/filename,f.roles.inputs)
+            self.assertEqual(b.initial_sealed_worker_hashes(f.aux,f.seal['identity']['providers']),f.worker_hashes)
+
+    def test_initial_writer_book_rejects_worker_provider_drift_and_bad_capture(self):
+        modes=[('worker',name)for name in ('figure-siteinfo','figure-sizing','figure-sizing-raw','figure-sizing-site','file-metadata','interface-messages','namespace-registry','language-registry')]+[(name,None)for name in ('unselected','book-hash','manifest-hash','artifact-hash','namespace','site','source-member','symlink','sealed-book')]
+        for mode,name in modes:
+            with self.subTest(mode=mode,provider=name),tempfile.TemporaryDirectory()as tmp:
+                f=self.book_fixture(Path(tmp));snapshots={'figure-page-observations':f.book}
+                if mode=='worker':f.aux[name]='0'*64
+                elif mode=='unselected':snapshots={}
+                elif mode=='book-hash':f.aux['figure-page-observations']='0'*64
+                elif mode=='manifest-hash':f.identity['auxiliary_capture_sha256']['figure-page-observations']='0'*64
+                elif mode=='artifact-hash':f.identity['auxiliary_capture_artifact_sha256']['figure-page-observations']='0'*64
+                elif mode in ('namespace','site'):
+                    book=json.loads(f.book.read_text());book['namespace_sha256'if mode=='namespace'else'defaults_sha256']='0'*64;_initial_sealed_write(f.book,book)
+                    f.manifest['output_sha256']=b.sha256_file(f.book);_initial_sealed_write(f.book_root/f.manifest_name,f.manifest)
+                    f.inventory={p.name:b.sha256_file(p)for p in f.book_root.iterdir()};f.capture=(f.manifest,f.inventory);f.aux['figure-page-observations']=f.manifest['output_sha256']
+                    manifests,artifacts=b._project_auxiliary_capture_identities({'figure-page-observations':(*f.capture,f.manifest_name)})
+                    for identity in(f.expected,f.identity):identity['auxiliary_capture_sha256']=copy.deepcopy(manifests);identity['auxiliary_capture_artifact_sha256']=copy.deepcopy(artifacts)
+                elif mode=='source-member':f.proof.write_text('changed source')
+                elif mode=='sealed-book':
+                    original=_initial_sealed_write(f.expander/'figure-page-observations.json',dict(original=True))
+                    f.seal['identity']['providers']['figure-page-observations.json']=[original['bytes'],original['sha256']]
+                    f.seal['identity']['assets'].append(['figure-page-observations.json',original['bytes'],original['sha256']])
+                    self.reseal_graph(f);f.roles.initial_sealed_generation=f.selection
+                else:f.proof.rename(f.book_root/'saved');f.proof.symlink_to(f.book_root/'saved')
+                with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2],patch.object(b,'validated_auxiliary_capture',return_value=f.capture):
+                    with self.assertRaises((ValueError,OSError)):self.adopt(f,auxiliary_snapshots=snapshots)
+                self.assertFalse((f.destination/'state.json').exists())
+
+    def test_initial_writer_book_late_capture_change_refuses_before_state(self):
+        with tempfile.TemporaryDirectory()as tmp:
+            f=self.book_fixture(Path(tmp));mutated=[False]
+            def unchanged():
+                if f.proof in f.roles.inputs and not mutated[0]:f.proof.write_text('late source change');mutated[0]=True
+                b.RetainedNativeToolRoles.require_inputs_unchanged(f.roles)
+            f.roles.require_unchanged=unchanged
+            with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2],patch.object(b,'validated_auxiliary_capture',return_value=f.capture):
+                with self.assertRaisesRegex(ValueError,'dependency changed'):self.adopt(f,auxiliary_snapshots={'figure-page-observations':f.book})
+            self.assertTrue(mutated[0]);self.assertFalse((f.destination/'state.json').exists())
+
+    def test_initial_writer_book_sharded_entry_keeps_worker_hashes_and_forwards_exact_path(self):
+        class ReachedWriter(Exception):pass
+        with tempfile.TemporaryDirectory()as tmp:
+            f=self.book_fixture(Path(tmp));staged=f.root/'input';staged.mkdir();(staged/'.complete.json').write_text(json.dumps(dict(source_pages=1)))
+            (f.expander/'page-index.tsv').write_text('retained index')
+            seen=[]
+            def writer(tool,args,*unused):seen.append(args);raise ReachedWriter
+            with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2],patch.object(b,'validated_auxiliary_capture',return_value=f.capture):
+                self.adopt(f,auxiliary_snapshots={'figure-page-observations':f.book})
+                with patch.object(b._PREPARED_SOURCE,'request',None,create=True),patch.object(b._PREPARED_SOURCE,'value',None,create=True),patch.object(b,'expander_ready',return_value=True)as ready,patch.object(b,'inspect_page_index',return_value=dict(rows=1,sha256='0'*64,offsets={0:0})),patch.object(b,'require_index_identity'),patch.object(b,'prepare_blob_tools',return_value={name:object()for name in b.BLOB_TOOL_NAMES})as prepare,patch.object(b,'remove_artifact_tree')as remove,patch.object(b,'build_shard_with_retries',side_effect=writer):
+                    with self.assertRaises(ReachedWriter):b.build_sharded(f.dump,f.root/'staging',f.destination,f.root/'registry','zig',1,[dict(wiki=f.expected['edition'],date='20261001')],123,compress_shards=True,build_identity=f.identity,auxiliary_hashes=f.aux,auxiliary_snapshots={'figure-page-observations':f.book},interwiki_sha=f.interwiki,retained_roles=f.roles,staged_input_root=staged)
+                    self.assertEqual(ready.call_args.args[0],f.expander.parent);self.assertEqual(ready.call_args.args[1],f.worker_hashes)
+                    self.assertEqual(prepare.call_count,1);self.assertNotIn('expander_args',prepare.call_args.kwargs);remove.assert_not_called()
+            self.assertEqual(len(seen),1);args=seen[0];self.assertEqual(args[args.index('--expander-root')+1],str(f.expander));self.assertEqual(args[args.index('--figure-page-observations-snapshot')+1],str(f.book))
+
+
 if __name__=='__main__':unittest.main()
