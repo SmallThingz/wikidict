@@ -1,0 +1,528 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "♃",
+  "kind": "language",
+  "language": "Unclassified",
+  "match_mode": "exact-utf8",
+  "record_count": 1,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0,
+          1
+        ]
+      },
+      "title": "♃",
+      "display_title": [],
+      "kind": "language",
+      "language": "Unclassified",
+      "language_code": "",
+      "sections": [
+        {
+          "level": 2,
+          "title": "Caractère",
+          "anchor": "Caractère",
+          "anchor_fallback": "Caract.C3.A8re",
+          "blocks": [
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null,
+              "flow": [
+                {
+                  "kind": "figure",
+                  "spans": [],
+                  "figure": {
+                    "image_span": {
+                      "kind": "link",
+                      "text": "",
+                      "target": "File:Jupiter symbol.svg",
+                      "trail": "",
+                      "language": "",
+                      "classes": "wikidict-media wikidict-media-file-4a7570697465722073796d626f6c2e737667",
+                      "direction": "",
+                      "explanation": "",
+                      "tooltip": null,
+                      "foreground": null,
+                      "image": {
+                        "file": "Jupiter symbol.svg",
+                        "width_px": 250,
+                        "alt": ""
+                      },
+                      "bold": false,
+                      "italic": false,
+                      "code": false,
+                      "small": false,
+                      "superscript": false,
+                      "subscript": false,
+                      "strike": false,
+                      "underline": false,
+                      "role": "normal"
+                    },
+                    "caption": [
+                      {
+                        "kind": "text",
+                        "text": "Symbole de ",
+                        "target": "",
+                        "trail": "",
+                        "language": "",
+                        "classes": "",
+                        "direction": "",
+                        "explanation": "",
+                        "tooltip": null,
+                        "foreground": null,
+                        "font_scale": 0.8840000033378601,
+                        "font_scale_basis": "normal_body",
+                        "bold": false,
+                        "italic": false,
+                        "code": false,
+                        "small": false,
+                        "superscript": false,
+                        "subscript": false,
+                        "strike": false,
+                        "underline": false,
+                        "role": "normal"
+                      },
+                      {
+                        "kind": "link",
+                        "text": "Jupiter",
+                        "target": "Jupiter",
+                        "trail": "",
+                        "language": "",
+                        "classes": "",
+                        "direction": "",
+                        "explanation": "",
+                        "tooltip": null,
+                        "foreground": null,
+                        "font_scale": 0.8840000033378601,
+                        "font_scale_basis": "normal_body",
+                        "bold": false,
+                        "italic": false,
+                        "code": false,
+                        "small": false,
+                        "superscript": false,
+                        "subscript": false,
+                        "strike": false,
+                        "underline": false,
+                        "role": "normal"
+                      },
+                      {
+                        "kind": "text",
+                        "text": ".",
+                        "target": "",
+                        "trail": "",
+                        "language": "",
+                        "classes": "",
+                        "direction": "",
+                        "explanation": "",
+                        "tooltip": null,
+                        "foreground": null,
+                        "font_scale": 0.8840000033378601,
+                        "font_scale_basis": "normal_body",
+                        "bold": false,
+                        "italic": false,
+                        "code": false,
+                        "small": false,
+                        "superscript": false,
+                        "subscript": false,
+                        "strike": false,
+                        "underline": false,
+                        "role": "normal"
+                      }
+                    ],
+                    "caption_text_align": "left",
+                    "format": "thumbnail",
+                    "sizing": "requested_fit",
+                    "placement": "float_right",
+                    "clear": "right",
+                    "margins": {
+                      "top": {
+                        "unit": "em",
+                        "value": 0.5
+                      },
+                      "right": {
+                        "unit": "px",
+                        "value": 0
+                      },
+                      "bottom": {
+                        "unit": "em",
+                        "value": 1.2999999523162842
+                      },
+                      "left": {
+                        "unit": "em",
+                        "value": 1.399999976158142
+                      }
+                    },
+                    "image_insets": {
+                      "top": {
+                        "unit": "px",
+                        "value": 3
+                      },
+                      "right": {
+                        "unit": "px",
+                        "value": 3
+                      },
+                      "bottom": {
+                        "unit": "px",
+                        "value": 3
+                      },
+                      "left": {
+                        "unit": "px",
+                        "value": 3
+                      }
+                    },
+                    "caption_padding": {
+                      "top": {
+                        "unit": "px",
+                        "value": 0
+                      },
+                      "right": {
+                        "unit": "px",
+                        "value": 6
+                      },
+                      "bottom": {
+                        "unit": "px",
+                        "value": 6
+                      },
+                      "left": {
+                        "unit": "px",
+                        "value": 6
+                      }
+                    },
+                    "caption_font_scale": 0.8840000033378601,
+                    "caption_line_height": {
+                      "unit": "em",
+                      "value": 1.2375999689102173
+                    },
+                    "frame_background": {
+                      "kind": "native_theme"
+                    },
+                    "frame_border": {
+                      "kind": "solid",
+                      "width": {
+                        "unit": "px",
+                        "value": 1
+                      },
+                      "color": {
+                        "kind": "native_theme"
+                      }
+                    },
+                    "image_background": {
+                      "kind": "native_theme"
+                    },
+                    "image_border": {
+                      "kind": "solid",
+                      "width": {
+                        "unit": "px",
+                        "value": 1
+                      },
+                      "color": {
+                        "kind": "native_theme"
+                      }
+                    },
+                    "caption_foreground": {
+                      "kind": "native_theme"
+                    },
+                    "caption_background": {
+                      "kind": "native_theme"
+                    }
+                  },
+                  "scope": null
+                },
+                {
+                  "kind": "inline",
+                  "spans": [
+                    {
+                      "kind": "text",
+                      "text": " ",
+                      "target": "",
+                      "trail": "",
+                      "language": "",
+                      "classes": "",
+                      "direction": "",
+                      "explanation": "",
+                      "tooltip": null,
+                      "foreground": null,
+                      "bold": false,
+                      "italic": false,
+                      "code": false,
+                      "small": false,
+                      "superscript": false,
+                      "subscript": false,
+                      "strike": false,
+                      "underline": false,
+                      "role": "normal"
+                    },
+                    {
+                      "kind": "text",
+                      "text": "♃",
+                      "target": "",
+                      "trail": "",
+                      "language": "",
+                      "classes": "",
+                      "direction": "",
+                      "explanation": "",
+                      "tooltip": null,
+                      "foreground": null,
+                      "bold": true,
+                      "italic": false,
+                      "code": false,
+                      "small": false,
+                      "superscript": false,
+                      "subscript": false,
+                      "strike": false,
+                      "underline": false,
+                      "role": "normal"
+                    }
+                  ],
+                  "figure": null,
+                  "scope": null
+                }
+              ]
+            },
+            {
+              "kind": "definition",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "Jupiter",
+                  "target": "Jupiter",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ". ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "Unicode",
+                  "target": "Unicode",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " : U+2643.",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Références",
+          "anchor": "Références",
+          "anchor_fallback": "R.C3.A9f.C3.A9rences",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Références",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "titreref",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 3,
+              "anchor": "Références",
+              "anchor_fallback": "R.C3.A9f.C3.A9rences",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Unicode, Inc., ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "external_link",
+                  "text": "Miscellaneous Symbols",
+                  "target": "https://web.archive.org/web/20190613203257/https://www.unicode.org/charts/PDF/U2600.pdf",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ", The Unicode Standard, version 12.1, 2019",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [
+        {
+          "file": "Jupiter symbol.svg",
+          "kind": "image",
+          "caption": "Symbole de Jupiter."
+        }
+      ],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

@@ -257,7 +257,9 @@ pub const Module = struct {
             .{ .suffix = "nil", .public_name = "dict_lua_value_nil" },
             .{ .suffix = "bool", .public_name = "dict_lua_value_bool" },
             .{ .suffix = "number", .public_name = "dict_lua_value_number" },
-            .{ .suffix = "string", .public_name = "dict_lua_value_string" },
+            // Current emitted literals use the external provenance observer.
+            // Historical raw boxing is inlined only when declared by a caller.
+            .{ .suffix = "string", .public_name = "dict_lua_value_string", .required = false },
             .{ .suffix = "copy", .public_name = "dict_lua_value_copy" },
             .{ .suffix = "field_hit", .public_name = "dict_lua_value_field_hit", .required = false },
             .{ .suffix = "truthy", .public_name = "dict_lua_value_truthy" },

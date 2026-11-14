@@ -1,0 +1,55 @@
+# wikidict-namespace-registry-v1
+# wiki	frwiktionary
+# dump-date	20261001
+# content-language	fr
+-2	Média	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Spécial	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Discussion	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discuter
+2	Utilisateur	User	first-letter	1	0	0		compile_only	standard_build_input	Utilisatrice
+3	Discussion utilisateur	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Discussion Utilisateur	Discussion utilisatrice
+4	Wiktionnaire	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Discussion Wiktionnaire	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Fichier	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	Discussion fichier	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Fichier	Discussion Image	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Discussion MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Modèle	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Discussion modèle	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Modèle
+12	Aide	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Discussion aide	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Aide
+14	Catégorie	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Discussion catégorie	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Discussion Catégorie
+100	Annexe	Annexe	case-sensitive	1	1	0		supplemental	unclassified_subject_retained
+101	Discussion Annexe	Discussion Annexe	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	Transwiki	Transwiki	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	Discussion Transwiki	Discussion Transwiki	case-sensitive	1	0	0		compile_only	discussion_namespace
+104	Portail	Portail	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+105	Discussion Portail	Discussion Portail	case-sensitive	1	0	0		compile_only	discussion_namespace
+106	Thésaurus	Thésaurus	case-sensitive	1	1	0		thesaurus	verified_edition_feature
+107	Discussion Thésaurus	Discussion Thésaurus	case-sensitive	1	0	0		compile_only	discussion_namespace
+108	Projet	Projet	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+109	Discussion Projet	Discussion Projet	case-sensitive	1	0	0		compile_only	discussion_namespace
+110	Reconstruction	Reconstruction	case-sensitive	1	1	0		reconstruction	verified_edition_feature
+111	Discussion Reconstruction	Discussion Reconstruction	case-sensitive	1	0	0		compile_only	discussion_namespace
+112	Tutoriel	Tutoriel	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+113	Discussion Tutoriel	Discussion Tutoriel	case-sensitive	1	0	0		compile_only	discussion_namespace
+114	Rime	Rime	case-sensitive	1	1	0		rhymes	verified_edition_feature
+115	Discussion Rime	Discussion Rime	case-sensitive	1	0	0		compile_only	discussion_namespace
+116	Conjugaison	Conjugaison	case-sensitive	1	1	0		supplemental	unclassified_subject_retained	conj
+117	Discussion Conjugaison	Discussion Conjugaison	case-sensitive	1	0	0		compile_only	discussion_namespace
+118	Racine	Racine	case-sensitive	1	1	0		supplemental	unclassified_subject_retained
+119	Discussion Racine	Discussion Racine	case-sensitive	1	0	0		compile_only	discussion_namespace
+120	Convention	Convention	case-sensitive	0	0	0		supplemental	unclassified_subject_retained	CVT
+121	Discussion Convention	Discussion Convention	case-sensitive	0	0	0		compile_only	discussion_namespace
+122	Schème	Schème	case-sensitive	0	0	0		supplemental	unclassified_subject_retained
+123	Discussion Schème	Discussion Schème	case-sensitive	0	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Module	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Discussion module	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1198	Translations	Translations	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+1199	Translations talk	Translations talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2600	Sujet	Topic	first-letter	0	0	0	flow-board	compile_only	discussion_storage

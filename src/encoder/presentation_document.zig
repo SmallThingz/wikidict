@@ -266,7 +266,7 @@ fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, sour
                 .matched = matched,
                 .kind = kind,
                 .formatting = formatting,
-                .attributes = .{ .text_element = owned_text_element, .relative_context_policy_present = attributes.relative_context_policy_present, .column_fragmentation_policy_present = attributes.column_fragmentation_policy_present, .table_collapse = attributes.table_collapse, .table_inheritance_scoped = attributes.table_inheritance_scoped, .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .captured_direction = owned_captured_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .tooltip = owned_tooltip, .tooltip_set = attributes.tooltip_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_scale_set = attributes.font_scale_set, .font_size_unknown = attributes.font_size_unknown },
+                .attributes = .{ .text_element = owned_text_element, .relative_context_policy_present = attributes.relative_context_policy_present, .column_fragmentation_policy_present = attributes.column_fragmentation_policy_present, .table_collapse = attributes.table_collapse, .table_inheritance_scoped = attributes.table_inheritance_scoped, .text_align = attributes.text_align, .classes = owned_classes, .css_ancestor_classes = owned_css_classes, .role = attributes.role, .relation_note = attributes.relation_note, .language = owned_language, .direction = owned_direction, .captured_direction = owned_captured_direction, .explanation = owned_explanation, .explanation_set = attributes.explanation_set, .tooltip = owned_tooltip, .tooltip_set = attributes.tooltip_set, .foreground = owned_foreground, .foreground_set = attributes.foreground_set, .font_scale = attributes.font_scale, .font_scale_basis = attributes.font_scale_basis, .font_features = attributes.font_features, .font_scale_set = attributes.font_scale_set, .font_size_unknown = attributes.font_size_unknown },
                 .target = owned_target,
                 .tag_name = hidden_tag,
                 .link_quotes = link_quotes,
@@ -979,10 +979,18 @@ fn bindFragmentFigureClassSource(renderer: *compiler.Renderer) void {
 
 fn bindFragmentSourceElements(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
     renderer.source_element_binding = null;
+    renderer.table_direction_binding = null;
     if (fragmentContentRoot(fragment, tracked) != .parser_output) return;
     const range = fragment.parser_output_range.?;
     const projection = range.source_element_projection orelse return;
     const sizing = renderer.context.figure_sizing orelse return;
+    if (sizing.table_containing_direction) |direction| {
+        if (projection.prepared.ptr == range.page.ptr and projection.prepared.len == range.page.len and
+            projection.original.bytes.ptr == direction.source.ptr and projection.original.bytes.len == direction.source.len and
+            !tracked.unknown and !tracked.lost_missing_range and tracked.generated_source == null and
+            std.mem.eql(u8, tracked.bytes, fragment.source))
+            renderer.table_direction_binding = .{ .projection = projection, .owner = tracked, .page_start = range.start };
+    }
     const observed = sizing.text_class_scope orelse return;
     const sibling = if (observed.scope.source_siblings_source) |issued|
         observed.scope.source_siblings.len != 0 and issued.ptr == observed.source.ptr and issued.len == observed.source.len else false;
@@ -6807,6 +6815,8 @@ test "TE retained translation list tails preserve literal separators later headi
             switch (@typeInfo(T)) {
                 .@"struct" => |info| inline for (info.field_names) |name| try self.visit(alloc, @TypeOf(@field(value, name)), @field(value, name)),
                 .pointer => |info| {
+                    if (info.size == .one and info.child == types.TableBlockViewport)
+                        return self.visit(alloc, info.child, value.*);
                     if (info.size != .slice) @compileError("Unsupported TE witness pointer");
                     if (info.child != u8) for (value) |child| try self.visit(alloc, info.child, child);
                 },
@@ -14999,4 +15009,45 @@ test "document separately binds complete Figure context across citation projecti
     bindFragmentTextClassScope(&renderer, good, tracked);
     bindWholeTextClassScope(&renderer, tracked);
     try std.testing.expect(renderer.figure_class_source_binding == null);
+}
+
+test "document table direction owner binding is independent of class authority and resets on foreign or lost source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const source = "==English==\n\n<div>\n{|class=\"wikitable\"\n|[https://example.org]\n|}\n</div>";
+    const numbered = try compiler.preparePageExternalLinksWithMissingAlloc(a, MissingText.untracked(source), .{ .observe_source_elements = true });
+    const projection = numbered.source_element_projection orelse return error.TestUnexpectedResult;
+    const F = struct {
+        fn observe(_: ?*const anyopaque, _: A, _: []const u8, _: usize) A.Error!?compiler.TableContainingDirectionObservation { return null; }
+    };
+    const figure: FigureSizingSource = .{ .resolve_fn = ObservedTextScopeDocumentControl.sizing,
+        .table_containing_direction = .{ .source = source, .context = null, .observe = F.observe } };
+    const owner = try missing_dependency.slice(a, numbered.missing, 0, numbered.source.len);
+    const good: SourceFragment = .{ .source = numbered.source, .original_start = 0, .missing = owner,
+        .parser_output_range = .{ .page = numbered.source, .start = 0, .prepared = owner.bytes, .source_element_projection = &projection } };
+    var renderer: compiler.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .figure_sizing = figure } };
+    bindFragmentTextClassScope(&renderer, good, owner);
+    try std.testing.expect(renderer.table_direction_binding != null);
+    try std.testing.expect(renderer.source_element_binding == null and renderer.bounded_text_class_scope == null);
+    const copied = try a.dupe(u8, owner.bytes);
+    for (0..9) |which| {
+        var bad = good; var tracked = owner; var foreign = projection;
+        switch (which) {
+            0 => bad.parser_output_range.?.source_element_projection = null,
+            1 => bad.source = copied,
+            2 => tracked.bytes = copied,
+            3 => bad.original_start = 1,
+            4 => bad.pre.initial_block_pre = true,
+            5 => bad.parser_output_range = null,
+            6 => { foreign.original.bytes = try a.dupe(u8, source); bad.parser_output_range.?.source_element_projection = &foreign; },
+            7 => { foreign.prepared = copied; bad.parser_output_range.?.source_element_projection = &foreign; },
+            else => tracked.unknown = true,
+        }
+        bindFragmentTextClassScope(&renderer, bad, tracked);
+        try std.testing.expect(renderer.table_direction_binding == null);
+        bindFragmentTextClassScope(&renderer, good, owner);
+        try std.testing.expect(renderer.table_direction_binding != null);
+    }
+    renderer.context.figure_sizing = null;
+    bindFragmentTextClassScope(&renderer, good, owner);
+    try std.testing.expect(renderer.table_direction_binding == null);
 }

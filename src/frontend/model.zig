@@ -67,6 +67,7 @@ pub fn fromRecord(allocator: A, record: dec.BlobRecordView) !DecodedEntry {
         if (record == .language) record.language.metadata else null,
     ) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedPresentationVersion => return error.UnsupportedPresentationVersion,
         else => return error.InvalidPresentation,
     };
     var entry = stored.entry;
@@ -158,4 +159,65 @@ test "transient redirect metadata does not alter ordinary DPR2 bytes" {
     defer doc.deinit();
     try std.testing.expect(doc.entry.redirect == null);
     try std.testing.expect(doc.entry.alias == null);
+}
+
+test "reader preserves unsupported presentation capability without reclassifying malformed records" {
+    const a = std.testing.allocator;
+    for ([_][]const u8{ "DPRQ", "DPRZpayload" }) |bytes|
+        try std.testing.expectError(error.UnsupportedPresentationVersion, fromRecord(a, .{ .citations = .{ .title = "x", .payload = bytes } }));
+    for ([_][]const u8{ "", "DPR", "XPRN", "DPR2", "DPRM", "DPRN", "DPRO" }) |bytes|
+        try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .citations = .{ .title = "x", .payload = bytes } }));
+    const zero: types.StyleLength = .{ .unit = .px, .value = 0 };
+    const entry: Entry = .{ .title = "x", .kind = .citations, .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{
+        .{ .kind = .rule, .rule_style = .{ .height = .{ .unit = .px, .value = 1 }, .fill = .{ .rgb = "#a2a9b1" },
+            .margins = .{ .top = zero, .right = zero, .bottom = zero, .left = zero } } },
+    } }} };
+    const bytes = try codec.encodeAlloc(a, types.Stored{ .entry = entry }); defer a.free(bytes);
+    try std.testing.expectEqualStrings("DPRN", bytes[0..4]);
+    var doc = try fromRecord(a, .{ .citations = .{ .title = "x", .payload = bytes } }); defer doc.deinit();
+    try std.testing.expectEqualDeep(entry, doc.entry);
+}
+
+test "reader unsupported inner capability does not bypass alias envelope validation" {
+    const a = std.testing.allocator;
+    var alias: enc.alias_codec.Record = .{
+        .source_namespace = 0, .source_kind = .language, .source_title = "B", .source_key = "B",
+        .xml_target = "C", .target_title = "C", .target_namespace = 0, .target_kind = .language, .target_key = "C",
+        .fragment = "Next", .presentation = "DPRQ",
+    };
+    const future = try enc.alias_codec.encodeAlloc(a, alias); defer a.free(future);
+    try std.testing.expectError(error.UnsupportedPresentationVersion, fromRecord(a, .{ .alias = .{ .title = "1\tB", .payload = future } }));
+    try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .alias = .{ .title = "1\tWrong", .payload = future } }));
+    try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .alias = .{ .title = "1\tB", .payload = "DPRO" } }));
+    alias.presentation = "DPRN";
+    const malformed = try enc.alias_codec.encodeAlloc(a, alias); defer a.free(malformed);
+    try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .alias = .{ .title = "1\tB", .payload = malformed } }));
+}
+
+test "reader preserves ordinary body data while separating known P and future Q errors" {
+    const a = std.testing.allocator;
+    const entry: Entry = .{ .title = "body", .kind = .citations, .body_adjoining = .ordinary,
+        .sections = &.{.{ .level = 2, .title = "", .blocks = &.{.{ .kind = .paragraph,
+            .spans = &.{.{ .kind = .link, .text = "kept", .target = "Kept" }} }} }} };
+    const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes);
+    var doc = try fromRecord(a, .{ .citations = .{ .title = "body", .payload = bytes } }); defer doc.deinit();
+    try std.testing.expectEqualDeep(entry, doc.entry);
+    try std.testing.expectError(error.InvalidPresentation, fromRecord(a, .{ .citations = .{ .title = "body", .payload = "DPRP" } }));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, fromRecord(a, .{ .citations = .{ .title = "body", .payload = "DPRQ" } }));
+}
+
+test "reader retains P inline family and declaring owner through the ordinary record model" {
+    const a = std.testing.allocator;
+    const entry: Entry = .{ .title = "family", .kind = .citations, .sections = &.{.{ .level = 0, .title = "", .blocks = &.{
+        .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = " kept\xc2\xa0 ", .target = "Kept", .target_fragment = "part",
+            .font_family = .{ .stack = .{ .names = &.{"Georgia"}, .fallback = .serif } },
+            .inline_style = .{ .line_height = .{ .font_relative = .{ .factor = 1,
+                .font = .{ .font_family = .sans_serif } } } } }} },
+    } }} };
+    const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes);
+    try std.testing.expectEqualStrings("DPRP", bytes[0..4]);
+    var doc = try fromRecord(a, .{ .citations = .{ .title = "family", .payload = bytes } }); defer doc.deinit();
+    try std.testing.expectEqualDeep(entry, doc.entry);
+    try std.testing.expectEqualStrings(" kept\xc2\xa0 ", doc.entry.sections[0].blocks[0].spans[0].text);
+    try std.testing.expectEqualStrings("Kept", doc.entry.sections[0].blocks[0].spans[0].target);
 }

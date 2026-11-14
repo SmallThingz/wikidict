@@ -526,6 +526,7 @@ pub fn build(b: *std.Build) void {
     });
     value_leaf_test_obj.use_llvm = true;
     const value_leaf_test_bc = value_leaf_test_obj.getEmittedLlvmBc();
+    lua_tests.root_module.addAnonymousImport("value_leaf_test_bitcode", .{ .root_source_file = value_leaf_test_bc });
     const lua_core_test_options: std.Build.TestOptions = .{
         .root_module = zig_runtime_test_mod,
         .test_runner = .{ .path = test_runner, .mode = .simple },

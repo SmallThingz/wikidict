@@ -330,8 +330,9 @@ pub fn duplicate(a: A, source: Text) !Text {
     return slice(a, source, 0, source.bytes.len);
 }
 
-// An immutable page-native value. Lua conversions must use transformed(), never
-// recover this object through string pointers or matching values.
+// An immutable page-native value. Unregistered Lua strings stay transformed.
+// Only an explicit source-issued operation ledger may carry owned metadata
+// through defined copies/slices; pointer or byte equality alone is not proof.
 pub const Page = struct {
     occurrences: std.ArrayList(Occurrence) = .empty,
     metadata_unknown: bool = false,

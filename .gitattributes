@@ -566,3 +566,22 @@ tools/testdata/figure-page-observations/fr-cauannos-alias/jupiter-expanded.wikit
 tools/testdata/figure-page-observations/fr-cauannos-alias/jupiter-raw.wikitext -text -whitespace
 tools/testdata/figure-page-observations/fr-cauannos-alias/namespace-registry.tsv -text -whitespace
 tools/testdata/figure-page-observations/fr-cauannos-alias/page.raw.wikitext -text -whitespace
+tools/testdata/el-relation-style-conjunction/empty-page.raw.wikitext -text -whitespace
+src/encoder/testdata/mg-fille-boundary/raw.wikitext -text -whitespace
+src/encoder/testdata/mg-affix-form-organization/an.raw.wikitext -text -whitespace
+src/encoder/testdata/mg-affix-form-organization/lunsj.raw.wikitext -text -whitespace
+
+# Exact retained EL source and MG returned-HTML prefix: preserve trailing capture whitespace.
+src/encoder/testdata/el-feminismos-starred/expanded.wikitext whitespace=-blank-at-eol
+src/encoder/testdata/el-remaining-organization/diafanis/expanded.wikitext whitespace=-blank-at-eol
+src/encoder/testdata/el-remaining-organization/diafanis/raw.wikitext whitespace=-blank-at-eol
+src/encoder/testdata/el-remaining-organization/psaropouli/expanded.wikitext whitespace=-blank-at-eol
+tools/testdata/mg-prefix-ac/mg-prefix.candidate.html whitespace=-blank-at-eol
+tools/testdata/fr-prefix-symbol/fr-prefix.candidate.html whitespace=-blank-at-eol
+tools/testdata/hu-direct-source-context01/1153-raw.wikitext whitespace=-blank-at-eol
+tools/testdata/hu-direct-source-context01/1153-expanded.wikitext whitespace=-blank-at-eol
+tools/testdata/hu-direct-source-context01/1563-raw.wikitext whitespace=-blank-at-eol
+tools/testdata/hu-direct-source-context01/1563-expanded.wikitext whitespace=-blank-at-eol
+tools/testdata/hu-direct-source-context01/4021-raw.wikitext whitespace=-blank-at-eol
+tools/testdata/hu-direct-source-context01/4021-expanded.wikitext whitespace=-blank-at-eol
+src/encoder/testdata/ku-table-opener53658/source.wikitext whitespace=-blank-at-eol

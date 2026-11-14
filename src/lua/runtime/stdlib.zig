@@ -791,8 +791,13 @@ fn stringSub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffe
     var j = normIndex(if (args.len > 2 and args[2] != .nil) try integer(args[2]) else -1, n);
     i = @max(@as(i64, 1), i);
     j = @min(n, j);
-    if (i > j or i > n) return bufferedOne(result_buffer, .{ .string = "" });
-    return bufferedOne(result_buffer, .{ .string = s[@intCast(i - 1)..@intCast(j)] });
+    if (i > j or i > n) {
+        try rt.string_origins.sliced(@intFromPtr(ctx), s, 0, 0, "");
+        return bufferedOne(result_buffer, .{ .string = "" });
+    }
+    const result = s[@intCast(i - 1)..@intCast(j)];
+    try rt.string_origins.sliced(@intFromPtr(ctx), s, @intCast(i - 1), @intCast(j), result);
+    return bufferedOne(result_buffer, .{ .string = result });
 }
 fn stringLower(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
@@ -1039,7 +1044,18 @@ fn replacementValue(runtime: *rt.Context, replacement: Value, source: []const u8
 
 fn stringFormat(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {
     const a = ctx.allocator;
-    return bufferedOne(result_buffer, .{ .string = try lua_format.format(a, args) });
+    const result = try lua_format.format(a, args);
+    if (rt.string_origins.enabled() and args.len != 0 and args[0] == .string) {
+        var sources: std.ArrayList([]const u8) = .empty;
+        defer sources.deinit(a);
+        var strings_only = true;
+        for (args[1..]) |arg| switch (arg) {
+            .string => |text| sources.append(a, text) catch |err| return rt.string_origins.operational(err),
+            else => { strings_only = false; break; },
+        };
+        if (strings_only) try rt.string_origins.formatted(@intFromPtr(ctx), args[0].string, sources.items, result);
+    }
+    return bufferedOne(result_buffer, .{ .string = result });
 }
 
 fn stringGsub(_: ?*anyopaque, ctx: *rt.Context, args: []const Value, result_buffer: ?[]Value) ![]const Value {

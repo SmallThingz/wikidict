@@ -1,0 +1,659 @@
+== {{=oc=}} ==
+
+{{-étym-}}
+: Du suffixe adjectival latin ''[[-anus]]''.
+
+{{-suf-|oc}}
+'''-an''' {{fanononana X-SAMPA|}} {{fanononana||oc}}
+# [[-an#fr|-an]], [[-ain]], [[-en]]. Suffixe qui sert à former des [[gentilé]]s ou des [[langue]]s
+
+{{-drv-}}
+{{(}}
+*[[indonesian]]
+*[[italian]]
+{{)}}
+
+== {{=tsolyáni=}} ==
+
+{{-suf-|tsolyáni}}
+'''-an''' {{fanononana X-SAMPA|}} {{fanononana|ɑn|tsolyáni}} ''suffixe adjectival''
+# [[sert|Sert]] à [[former]] les [[adjectif]]s et [[adverbe]]s. Cette [[forme]] n’est [[utiliser|utilisée]] que pour certaines [[racine]]s [[exceptionnel]]les.
+
+{{-ortho-alt-}}
+* [[-n]]
+* [[--n]]
+* [[-in]]
+
+{{-compos-}}
+* [[mítlanan]]
+* [[mazíkan]]
+* [[kenéngan]]
+* [[kóluman]]
+* [[qadáran]]
+* [[s+hahádan]]
+
+{{clé de tri|an}}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+=={{=es=}}==
+
+{{-tovana-|es}}
+'''&#45;an''' 
+# Teny fanampin-teny [[manondro]] ny [[endrika]] [[fahatelo]] amin'ny [[endrika]] [[ploraly]] (ampiasaina [[miaraka]] amin'ny
+# Teny fanampin-teny [[manondro]] ny [[mpisolo]] [[anarana]] [[fahatelo]] amin'ny [[endrika]] [[ploraly]] amin'ny
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+=={{=phl=}}==
+
+{{-tovana-|phl}}
+'''&#45;an''' 
+# [[mpanao|Mpanao]] [[fahatelo]] amin'ny [[endrika]] [[ploraly]]
+
+{{-fanononana-}}
+* {{IPA|phl|/-an/}}
+
+{{-tsiahy-}}
+* {{Tsiahy:phl:Liljegren:Vocab}}
+* {{wikibolana|en|-an}}
+
+
+=={{=bcl=}}==
+
+{{-tovana-|bcl}}
+'''&#45;an''' 
+# [[toerana]] [[anaovana]] ny asa asehon'ny [[fotony]]
+# [[toerana]] iray izay misy [[zavatra]] [[betsaka]] amin'ny [[zavatra]] [[voatondro]] amin'ny [[fotony]], na misy azy, na misy
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+=={{=sv=}}==
+
+{{-tovana-|sv}}
+'''&#45;an''' 
+# -an, [[mamorona]] [[anarana]], [[mamaritra]] [[olona]] iray [[araka]] ny finoany na ny zom-pireneny
+# [[mamorona]] [[anarana]] avy amin'ny [[matoanteny]], [[mitovy]] amin'ny
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=en=}}==
+
+{{-tovana-|en}}
+'''&#45;an''' 
+# teny [[mifarana]] izay [[midika]] [[momba]] na [[mahakasika]] [[zavatra]] iray
+# iray avy amin'ny, an'ny, [[mifandray]] amin'ny, na [[mitovy]] amin'izany
+# [[ampiana]] amin'ny teny ho an'ny [[olona]] mba hanaovana anaram-boninahitra asa
+# [[ampiana]] amin'ny teny ho an'ny [[siramamy]] mba hamoronana rojo siramamy lava
+
+{{-fanononana-}}
+* {{IPA|en|/ən/|a=SSB}}
+
+{{-dika-mitovy-}}
+* [[-al]]
+* [[-ar]]
+* [[-ese]]
+* [[-esque]]
+* [[-ic]]
+* [[-id]]
+* [[-ish]]
+* [[-like]]
+* [[-oid]]
+* [[-ous]]
+* [[-y]]
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=az=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{trk-oat}}, avy amin'ny {{trk-pro}} ''*-gan''.
+{{-tovana-|az}}
+'''&#45;an''' 
+# [[endriky]] ny
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=ceb=}}==
+
+{{-tovana-|ceb}}
+'''&#45;an''' 
+# Teny [[mifarana]] amin'ny teny iray izay [[mampiseho]] fa [[mitranga]] any amin'ny [[toerana]] iray manokana ny [[zavatra]] iray
+# Teny [[mifarana]] [[milaza]] amin'ny [[olona]] hanao [[zavatra]] iray
+# Ny teny [[mifarana]] amin'ny [[zavatra]] [[iray dia]] [[mampiseho]] fa [[ampahany]] amin'ny zavatra iray [[ihany]] no natao
+# Teny [[mifarana]] izay [[mampiseho]] fa natao ho an'ny olon-kafa na ho an'ny [[zavatra]] hafa ny zavatra iray
+# Teny izay [[mampiseho]] fa [[zavatra]] [[iray dia]] vokatry ny zavatra hafa
+# mba hametahana [[zavatra]] amin'ny [[olona]] iray, hanomezana olona iray
+# [[toerana]] ahitana [[zavatra]] toy [[izany]], na toerana [[anaovana]] zavatra toy
+# [[manana]] [[zavatra]] be dia be
+# [[manana]] ny toetran'ny
+
+{{-fanononana-}}
+* {{fanononana|/an/|ceb}}
+
+{{-dika-mitovy-}}
+* [[-anan]]
+* [[ka- -an]]
+* [[pang-]]
+* [[-on]]
+* [[-anon]]
+
+{{-teny mifandraika-}}
+* [[ma- -an]]
+* [[mag- -an]]
+* [[tig- -an]]
+* [[pag- -an]]
+* [[paga- -an]]
+* [[ka- -an]]
+* [[kina- -an]]
+* [[gin- -an]]
+* [[-in- -an]]
+
+{{-tsiahy-}}
+* {{Tsiahy:Wolff 1972|41}}
+* {{wikibolana|en|-an}}
+=={{=chk=}}==
+
+{{-tovana-|chk}}
+'''&#45;an''' 
+# [[azy,|azy,]].
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=cs=}}==
+
+{{-tovana-|cs}}
+'''&#45;an''' 
+# [[endrika]] [[anarana]], anisan'izany ny anaran'ny [[mponina]]
+
+{{-fanononana-}}
+* {{cs-IPA}}
+
+{{-famakiana fanampiny-}}
+{{Tsiahy:cs:Slovnik afixu}}
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=da=}}==
+
+{{-etim-}}
+:Ny fiaviany voalohany dia avy amin'ny {{la}} ''-anus''.
+{{-tovana-|da}}
+'''&#45;an''' 
+# teny [[miova]] ho [[anarana]], [[milaza]] [[olona]] na [[toetra]]
+# [[famaranana]] [[ampiana]] amin'ny anaran'ny hydrocarbons izay tsy misy [[peratra]] ary feno hidrogen [[tanteraka]]
+
+{{-tsiahy-}}
+* {{Tsiahy:DDO}}
+* {{wikibolana|en|-an}}
+=={{=fi=}}==
+
+{{-tovana-|fi}}
+'''&#45;an''' 
+# Ny [[endrika]] [[ankehitriny]] amin'ny [[matoanteny]], ampiasaina tsy misy [[olona]] na isa manokana, [[ampiana]] amin'ny endrika [[fototra]] amin'ny matoanteny
+# Teny [[mifarana]] izay [[mampiseho]] [[fiovana]] ho an'ny [[endrika]] [[tokana]] izay [[mihetsika]] [[mankany]] amin'ny [[zavatra]] iray
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=fr=}}==
+
+{{-tovana-|fr}}
+'''&#45;an''' 
+# [[endrika]] hafa amin'ny -ain
+
+{{-fanononana-}}
+* {{audio|fr|LL-Q150 (fra)-Jérémy-Günther-Heinz Jähnick--an.wav|a=<<France>> (<<Somain>>)}}
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=hu=}}==
+
+{{-tovana-|hu}}
+'''&#45;an''' 
+# Teny misy feo [[ampiana]] amin'ny [[fototeny]] mba hanaovana [[matoanteny]] [[mampiseho]] [[zavatra]] [[mitranga]] avy hatrany
+
+{{-fanononana-}}
+* {{hu-IPA}}
+* {{rhymes|hu|ɒn|s=1}}
+
+{{-famakiana fanampiny-}}
+* {{sense|suffix of the adverb of number}} {{R:Rounds 2001}}, p.&nbsp;189 {{nowrap|(p. 204 in the PDF)}}
+* {{cln|hu|terms with multiple lemma etymologies|terms with multiple morpheme etymologies}}
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=ilo=}}==
+
+{{-tovana-|ilo}}
+'''&#45;an''' 
+# [[mamaritra]] ny [[fifantohana]] amin'ny [[lalana]]
+# [[mampiseho]] [[zavatra]] nataon'ilay [[mpilalao]] ho an'olon-kafa
+# Ampiasaina hanehoana [[zavatra]] [[lehibe]] [[kokoa]] na kely kokoa
+# [[indraindray]] dia [[midika]] [[olona]] [[marary]], fa tsy
+# ampiasaina hanehoana fandoavam-bola na [[fanatitra]]
+# mety hilaza fa misy [[zavatra]] azo amin'ilay zavatra atao
+# ampiasaina hanondroana ny [[fisiana]] na ny [[habeny]] tsy [[mahazatra]]
+# ampiasaina amin'ny [[fanomezana]] [[anarana]] ireo karazam-biby noho ny [[ampahany]] [[lehibe]] amin'ny [[vatany]]
+# Ampiasaina [[miaraka]] amin'ny [[matoanteny]] izay [[manana]] [[fe-potoana]] voafetra, dia [[mamorona]] matoanteny izay [[mampiseho]] [[hetsika]] [[mitohy]]
+# Teny izay [[mampiseho]] ny asa fiveloman'ny [[olona]] iray, ary [[afaka]] [[mamorona]] [[anarana]] izay mampiseho ny olona [[manao]] ny asa
+
+{{-teny mifandraika-}}
+* [[CV- -an]]
+* [[CVC- -an]]
+
+{{-tsiahy-}}
+* {{Tsiahy:Rubino 2000|page=37-38}}
+* {{wikibolana|en|-an}}
+=={{=id=}}==
+
+{{-tovana-|id}}
+'''&#45;an''' 
+# - dia,
+# [[mihazona]] na [[manana]] [[fototra]]
+# mba hanao [[araka]] ny [[voalaza]] ao amin'ny [[fototra]]
+# ny [[toerana]] misy ny toby
+# ny vidin'ny [[fototra]]
+# fijalian'ny [[fototra]]
+
+{{-fanononana-}}
+* {{id-IPA|an}}
+
+{{-dika-mitovy-}}
+* [[ber-]]
+
+{{-teny mifandraika-}}
+* [[ber- -an]]
+* [[ke- -an]]
+* [[peng- -an]]
+* [[per- -an]]
+
+{{-tsiahy-}}
+* {{cite-book|id|author=Badan Pengembangan dan Pembinaan Bahasa|title=Tata Bahasa Baku Bahasa Indonesia|trans-title=Standard Grammar of Indonesian Language|url=https://acuanbahasa.kemdikbud.go.id/book/12/5cb467d936a24|archiveurl=https://web.archive.org/web/20220613233214/https://acuanbahasa.kemdikbud.go.id/book/12/5cb467d936a24|archivedate=13 Jona 2022|edition=4|location=Jakarta|publisher=Kementerian Pendidikan dan Kebudayaan|year=2017|isbn=978-979-069-263-3|accessdate=8 Jolay 2022}}
+* {{cite-book|author=James N. Sneddon|title=Indonesian : a comprehensive grammar|year=2010|publisher=Roultedge|location=London|edition=2|isbn=978-0-415-58154-7|oclc=564132877}}
+* {{cln|id|terms inherited from Classical Malay}}
+* {{wikibolana|en|-an}}
+=={{=ga=}}==
+
+{{-etim-}}
+:Avy amin'ny {{sga}} ''-on'', {{sga}} ''-an'', {{sga}} ''-en''.
+{{-tovana-|ga}}
+'''&#45;an''' 
+# [[endriky]] ny [[anarana]] amin'ny teny
+
+{{-famakiana fanampiny-}}
+{{cite-book|title=Modern Irish: A Comprehensive Grammar |first=Nancy |last=Stenson |location=London |publisher=Routledge |year=2020 |isbn=978-1-138-23652-3 |page=117}}
+
+{{-tsiahy-}}
+* {{reflist|size=smaller}}
+* {{wikibolana|en|-an}}
+=={{=ja=}}==
+
+{{-rômanizasiona-|ja}}
+'''&#45;an''' 
+# rômanizasiôna ny teny [[あん]]
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=pam=}}==
+
+{{-tovana-|pam}}
+'''&#45;an''' 
+# [[zavatra]] [[mitarika]]: [[manao]] zavatra amin'olona na zavatra iray
+# [[zavatra]] [[miteraka]] zavatra: [[mahatonga]] zavatra ho [[tonga]], mahatonga, [[satria]], noho
+# Directional trigger: [[manao]] [[zavatra]] amin'ny [[lalana]]
+# object trigger: [[miaraka]] amin'ny teny [[fototry]] ny reduplication mba hanao [[zavatra]] [[tsindraindray]], amin'ny [[kisendrasendra]], kely, [[ankehitriny]] ary avy eo na eto sy any
+# Directional trigger: [[miaraka]] amin'ny teny [[fototry]] ny reduplication mba hanao [[zavatra]] ao amin'ny tari-dalana, [[tsindraindray]], amin'ny [[kisendrasendra]], kely, [[ankehitriny]] ary avy eo na eto sy any
+# object trigger: [[manao]] ny asan'ny [[matoanteny]] amin'ny [[zavatra]] iray
+# Teny [[manondro]] ny [[toerana]] misy [[zavatra]] manan-danja, na ny [[fambolena]] azy, na ny toerana misy azy [[matetika]]
+# Teny [[milaza]] [[fotoana]] iarahan'ny [[olona]] [[manao]] [[zavatra]]
+# Teny [[manondro]] [[fitaovana]] na [[zavatra]] ampiasaina hanaovana ny dikan'ilay teny [[fototra]]
+# Teny [[midika]] hoe miara-manao [[zavatra]] na [[miverimberina]]
+# Ampiasaina hanamboarana [[zavatra]] kely [[kokoa]], na [[hosoka]], na [[kopia]]
+# ampiasaina hanondroana [[vondrona]]
+
+{{-fanononana-}}
+* {{fanononana|/an/|pam}}
+
+{{-teny mifandraika-}}
+* [[ka- -an]]
+* [[ma- -an]]
+* [[pa- -an]]
+* [[a- -an]]
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=ms=}}==
+
+{{-tovana-|ms}}
+'''&#45;an''' 
+# ny [[zavatra noforonina]] na ny [[zavatra]] ampiharina
+# [[zavatra]] na [[fitaovana]] ampiasaina hanaovana zavatra
+# Teny ilazana vondron'olona, fitambaran'olona, na [[faritra]] [[midadasika]] misy [[zavatra]]
+# teny izay [[manome]] [[anarana]] na [[mamaritra]] [[zavatra]] [[mitovy]] [[endrika]] na mitovy [[toetra]] amin'ilay teny tany am-boalohany
+# Teny avy amin'ny teny [[anglisy]] [[mifarana]] amin'ny -ant
+
+{{-fanononana-}}
+* {{IPA|ms|[-an]|a=after consonant}}{{ref|group=n|For some speakers, when the Etymology 1 form of this suffix (along with {{m|ms|-i}}) is added to a stem that starts with any consonant except /r/, the consonant would be geminated, so that {{m|ms|tarikan||attraction}} and {{m|ms|makanan||food}} which respectively are affixations of {{m|ms|tarik||to pull}} and {{m|ms|makan||to eat}} with the {{m|ms|-an}} suffix, are pronounced as /tarikkan/ [ta.riʔ.kan] and /makannan/ [ma.kan.nan], not as /tarikan/ [ta.ri.kan] and /makanan/ [ma.ka.nan].}}
+* {{IPA|ms|[-wan]|a=after [u]}}
+* {{IPA|ms|[-jan]|a=after [i]}}
+* {{IPA|ms|[-ʔan]|a=after non-[i] or [u] vowel}}
+* {{hyph|ms|-an}}
+* {{IPA|ms|[-ən]|a=English-based}}
+* {{IPA|ms|[-an]|a=spelling-based}}
+* {{fanononana|/-an/|ms}}
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=gv=}}==
+
+{{-etim-}}
+:Avy amin'ny {{sga}} ''-án'', avy amin'ny {{pgl}} ''-ᚐᚌᚅᚔ''.
+{{-tovana-|gv}}
+'''&#45;an''' 
+# [[endrika]] hafa an'ny -ane
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=enm=}}==
+
+{{-tovana-|enm}}
+'''&#45;an''' 
+# [[endrika]] hafa amin'ny -ene
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=mkj=}}==
+
+{{-tovana-|mkj}}
+'''&#45;an''' 
+# Teny [[manampy]] amin'ny [[famadihana]] ny [[anarana]] ho [[matoanteny]] izay [[mamaritra]] toe-javatra iray fa tsy [[hetsika]] iray
+
+{{-tsiahy-}}
+* {{Tsiahy:mkj:MED|page=8}}
+* {{wikibolana|en|-an}}
+=={{=nb=}}==
+
+{{-tovana-|nb}}
+'''&#45;an''' 
+# [[famaranana]] [[ampiana]] amin'ny [[anarana]] lahy, [[matetika]] amin'ny teny nindramina avy amin'ny [[fiteny]] hafa
+# teny [[famaranana]] ampiasaina amin'ny anaran'ny alkanes, izay hydrocarbons [[tsotra]], rojo [[mahitsy]] tsy misy [[fifamatorana]] roa na telo
+# Teny [[famaranana]] [[ampiana]] amin'ny teny mba hampisehoana fa [[mitovy]] amin'ny [[fototeny]] izy ireo na [[manana]] ny toetran'ny fototeny
+
+{{-fanononana-}}
+* {{rhymes|nb|ɑːn|s=1}}
+* {{hyphenation|nb|-an}}
+* {{fanononana|/ɑːn/|nb}}
+
+{{-teny mifandraika-}}
+* [[dekan]]
+* [[median]]
+* [[membran]]
+* [[meridian]]
+* [[roman]]
+* [[sopran]]
+* [[veteran]]
+* [[metan]]
+* [[etan]]
+* [[propan]]
+* [[butan]]
+* [[pentan]]
+* [[heksan]]
+* [[heptan]]
+* [[oktan]]
+* [[nonan]]
+* [[human]]
+* [[mediterran]]
+* [[momentan]]
+* [[profan]]
+* [[simultan]]
+* [[spontan]]
+* [[urban]]
+
+{{-tsiahy-}}
+* {{Tsiahy:nb:OB|-an}}
+* {{Tsiahy:nb:NAOB|-an}}
+* [https://iupac.qmul.ac.uk/BlueBook/P1.html ''Nomenclature of Organic Chemistry: IUPAC Recommendations and Preferred Names 2013'', section P-15.1.7.1.1.]
+* {{wikibolana|en|-an}}
+=={{=oj=}}==
+
+{{-tovana-|oj}}
+'''&#45;an''' 
+# teny [[mifarana]] izay [[mampiseho]] [[olona]] [[faharoa]] ao amin'ny [[fehezanteny]]
+# teny [[mifarana]] izay [[mampiseho]] [[baiko]] ho an'ny [[olona]] iray ho an'ny [[hetsika]] iray izay misy fiantraikany amin'ny [[zavatra]] hafa
+
+{{-teny mifandraika-}}
+* [[waaban]]
+* [[aawan]]
+
+{{-tsiahy-}}
+* The Ojibwe People's Dictionary https://ojibwe.lib.umn.edu/word-part/an-final
+* {{wikibolana|en|-an}}
+=={{=ang=}}==
+
+{{-tovana-|ang}}
+'''&#45;an''' 
+# ampiasaina amin'ny [[fanaovana]] ny [[endrika]] [[fototra]] amin'ny ankamaroan'ny [[matoanteny]] [[matanjaka]], [[kilasy]] 1 [[malemy]], ary ny lasa-ankehitriny (ny matoanteny [[sasany]] dia [[maningana]] toy ny
+# [[endriky]] ny [[matoanteny]] amin'ny endriky ny ablative
+# [[endrika]] hafa amin'ny -on
+# [[fanovana]] mba hahatonga ny adjectif ho [[malemy]] [[kokoa]]
+# Ireo [[endrika]] ampiasaina amin'ny [[anarana]] lahy sy vavy [[rehefa]] izy ireo no [[zavatra]] [[mivantana]], [[mampiseho]] [[fananana]], omena, na ampiasain'ny [[olona]] iray, amin'ny [[singiolary]]
+# Neuter genitive, dative, ary ny [[singiolary]] amin'ny teny instrumental
+# [[endrika]] lahy, vavy, ary tsy [[miandany]] [[rehefa]] izy ireo no [[lohahevitra]] na [[zavatra]] ao amin'ny [[vondrona]]
+# [[endrika]] hafa amin'ny -um
+
+{{-fanononana-}}
+* {{ang-IPA|-an}}
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=non=}}==
+
+{{-tovana-|non}}
+'''&#45;an''' 
+# ampiasaina hitondrana [[anarana]] avy amin'ny [[matoanteny]] [[malemy]] [[kilasy]] 2
+# [[endriky]] ny [[matoanteny]] amin'ny endriky ny ablative
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=osx=}}==
+
+{{-etim-}}
+:Avy amin'ny {{gem-pro}} ''*-aną''.
+{{-tovana-|osx}}
+'''&#45;an''' 
+# ampiasaina amin'ny [[fanaovana]] ny [[endrika]] [[fototra]] amin'ny [[matoanteny]] [[matanjaka]] (ny matoanteny [[sasany]] dia maningana)
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=pl=}}==
+
+{{-tovana-|pl}}
+'''&#45;an''' 
+# - amin'ny alalan'ny
+
+{{-fanononana-}}
+* {{pl-IPA}}
+
+{{-famakiana fanampiny-}}
+{{Tsiahy:pl:PWN}}
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=ro=}}==
+
+{{-tovana-|ro}}
+'''&#45;an''' 
+# Teny manoritsoritra ny [[endriky]] ny [[tanàna]], [[faritra]], na [[firenena]], toy ny -an
+# Ny faran'ny teny izay [[mahatonga]] ny [[anarana]] sy ny adjectif ho [[lehibe]] [[kokoa]] na [[mahery]] kokoa
+
+{{-fanononana-}}
+* {{fanononana|/an/|ro}}
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=gd=}}==
+
+{{-tovana-|gd}}
+'''&#45;an''' 
+# Teny [[mifarana]] amin'ny [[anarana]] izay [[midika]] hoe [[zavatra]] kely [[kokoa]], [[matetika]] ampiasaina amin'ny anaran-dehilahy
+# ampiasaina amin'ny [[fanaovana]] ny [[endrika]] [[ploraly]] [[mahazatra]] amin'ny teny ho an'ny [[zavatra]] na [[olona]]
+
+{{-fanononana-}}
+* Note the difference with Etymology 2
+* Note the difference with Etymology 1
+* {{fanononana|/-an/|gd}}
+* {{fanononana|/ən/|gd}}
+
+{{-tsiahy-}}
+* {{Tsiahy:gd:Mark:2003|page=641}}
+* {{wikibolana|en|-an}}
+=={{=sk=}}==
+
+{{-tovana-|sk}}
+'''&#45;an''' 
+# teny [[mifarana]] [[ampiana]] amin'ny anaran-toerana iray mba hampisehoana fa avy amin'io [[toerana]] io ny [[olona]] iray, [[matetika]] [[lehilahy]]
+# Teny [[famaranana]] [[ampiana]] amin'ny [[matoanteny]] iray mba hanaovana [[anarana]] izay mazàna [[milaza]] ny anaran'ny [[olona]] iray [[fantatra]] amin'ny [[fitondran-tena]] [[ratsy]] na [[be loatra]]
+
+{{-fanononana-}}
+* {{sk-IPA}}
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=so=}}==
+
+{{-etim-}}
+:Ampitahao amin'ny {{rel}} ''-an''.
+{{-tovana-|so}}
+'''&#45;an''' 
+# [[endrika]] adjectif avy amin'ny [[matoanteny]] sy ny [[anarana]]
+
+{{-tsiahy-}}
+* {{Tsiahy:so:Saeed1999|page=147}}
+* {{wikibolana|en|-an}}
+=={{=tl=}}==
+
+{{-tovana-|tl}}
+'''&#45;an''' 
+# [[zavatra]] [[mitarika]]: [[manao]] zavatra amin'olona na zavatra iray
+# [[zavatra]] [[mitarika]]: [[mahatonga]] zavatra ho [[tonga]], mahatonga
+# Directional trigger: [[manao]] [[zavatra]] amin'ny [[lalana]] (ara-batana na ara-tsaina)
+# object trigger: [[miaraka]] amin'ny teny [[fototry]] ny reduplication mba hanao [[zavatra]] [[tsindraindray]], amin'ny [[kisendrasendra]], kely, [[ankehitriny]] ary avy eo na eto sy any
+# Directional trigger: [[miaraka]] amin'ny [[fototeny]] reduplication mba hanao [[zavatra]] amin'ny (ara-batana na ara-tsaina) tari-dalana, [[indraindray]], amin'ny [[kisendrasendra]], kely, [[ankehitriny]] ary avy eo na eto sy any
+# object trigger: [[manao]] ny asan'ny [[matoanteny]] amin'ny [[zavatra]] iray
+# Teny [[manondro]] [[fitaovana]] na [[zavatra]] ampiasaina hanaovana ny dikan'ilay teny [[fototra]]
+# Teny [[midika]] hoe miara-manao [[zavatra]] na [[miverimberina]]
+# Ampiasaina hanamboarana [[zavatra]] kely [[kokoa]], na [[hosoka]], na [[kopia]]
+# ampiasaina hanondroana [[vondrona]]
+
+{{-fanononana-}}
+* {{tl-IPA}}
+
+{{-teny mifandraika-}}
+* [[ka- -an]]
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=tr=}}==
+
+{{-tovana-|tr}}
+'''&#45;an''' 
+# [[mamorona]] participles sy clauses [[mifandraika]] izay
+# Ny singa [[ampitahaina]] no lohahevitry ny [[ampahany]] amin'ny [[fehezanteny]]
+# Ny tompon'ilay foto-kevitra [[lehibe]] ao amin'ilay [[fehezanteny]] no singa [[mampiseho]] ny [[fananana]]
+# Ny singa izay [[mampiseho]] ny fananan'ny [[ampahany]] hafa amin'ny [[fehezanteny]] dia ny [[tompony]], ary ny [[lohahevitra]] dia [[zavatra]] [[ankapobeny]], fa tsy zavatra manokana
+# [[mamorona]] [[anarana]] izay [[midika]] hoe "ilay ...", "ireo izay ...", "ireo izay ..." sns. [[rehefa]] misy ny iray amin'ireo [[fepetra]] [[voalaza]] etsy [[ambony]]
+
+{{-fanononana-}}
+* {{tr-suffix-forms|a=an|e=en|v=y}}
+* {{fanononana|/ˈɑn/|tr}}
+
+{{-tsiahy-}}
+* {{cite-book|isbn=9780415114943|title=Turkish: A Comprehensive Grammar|year=2005}}
+* {{wikibolana|en|-an}}
+=={{=vo=}}==
+
+{{-tovana-|vo}}
+'''&#45;an''' 
+# ampiasaina hanondroana [[olona]] iray izay na [[manao]] [[zavatra]]
+
+{{-tsiahy-}}
+{{wikibolana|en|-an}}
+=={{=cy=}}==
+
+{{-etim-}}
+:Avy amin'ny {{cel-pro}} ''*-agnos''.
+{{-tovana-|cy}}
+'''&#45;an''' 
+# [[famenoana]] kely, -let
+# [[olona]] na [[zavatra]] [[manana]] [[toetra]] [[mampiavaka]] ny [[fototeny]]
+# ampiasaina amin'ny [[fanoratana]] ny anaran'ny [[biby fiompy]]
+# [[ampiana|Ampiana]] amin'ny [[matoanteny]] ny [[farany]] mba hampisehoana fa mbola hitranga ilay [[zavatra]], ary [[olona]] [[maromaro]] no voakasik'izany
+
+{{-fanononana-}}
+* {{fanononana|/an/|cy}}
+
+{{-tsiahy-}}
+* {{Tsiahy:cy:GPC}}
+* {{wikibolana|en|-an}}

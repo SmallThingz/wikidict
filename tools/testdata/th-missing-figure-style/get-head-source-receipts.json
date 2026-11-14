@@ -1,0 +1,40 @@
+{
+  "core": null,
+  "sources": [
+    {
+      "bytes": 251771,
+      "file": "stylesheet-01.response.css",
+      "final_url": "https://th.wiktionary.org/w/load.php?lang=th&modules=ext.cite.parsoid.styles%7Cext.cite.styles%7Cext.tmh.player.styles%7Cext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediamessages.styles%7Cjquery.makeCollapsible.styles%7Cmediawiki.action.styles%7Cmediawiki.codex.messagebox.styles%7Cmediawiki.interface.helpers.linker.styles%7Cmediawiki.interface.helpers.styles%7Cmediawiki.skins.legacy%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022",
+      "headers": {
+        "accept-ranges": "bytes",
+        "access-control-allow-origin": "*",
+        "age": "0",
+        "cache-control": "public, max-age=300, s-maxage=300, stale-while-revalidate=60",
+        "connection": "close",
+        "content-type": "text/css; charset=utf-8",
+        "date": "Thu, 12 Nov 2026 13:22:39 GMT",
+        "etag": "W/\"t0qug\"",
+        "expires": "Thu, 12 Nov 2026 13:27:39 GMT",
+        "nel": "{ \"report_to\": \"wm_nel\", \"max_age\": 604800, \"failure_fraction\": 0.05, \"success_fraction\": 0.0}",
+        "report-to": "{ \"group\": \"wm_nel\", \"max_age\": 604800, \"endpoints\": [{ \"url\": \"https://intake-logging.wikimedia.org/v1/events?stream=w3c.reportingapi.network_error&schema_uri=/w3c/reportingapi/network_error/1.0.0\" }] }",
+        "server": "mw-web.eqiad.main-757bf99645-n6dvd",
+        "server-timing": "cache;desc=\"miss\", host;desc=\"cp5023\",co_id;desc=\"68327017\"",
+        "set-cookie": "WMF-Uniq=PkwYW3dS2dbexPb8GZQzIgQWAAAAAFvdgM_KCwzxstQajkkzW1UV_iR84cKLOB6O;Domain=.wiktionary.org;Path=/;HttpOnly;secure;SameSite=None;Expires=Fri, 12 Nov 2027 00:00:00 GMT",
+        "strict-transport-security": "max-age=106384710; includeSubDomains; preload",
+        "transfer-encoding": "chunked",
+        "vary": "Accept-Encoding,User-Agent",
+        "x-analytics": "",
+        "x-cache": "cp5023 miss, cp5023 miss",
+        "x-cache-status": "miss",
+        "x-client-ip": "193.116.96.94",
+        "x-content-type-options": "nosniff",
+        "x-request-id": "c5cb89da-164d-497b-a757-75470a4acd73"
+      },
+      "retrieved_utc": "2026-11-12T13:22:39.063829+00:00",
+      "sha256": "fa010c2da5011fca30446879fca4ef496951ed10732d61380d1f4fb8a1114f40",
+      "source_path": "served:TH-jian:oldid2190988:GET-head:stylesheet-01",
+      "status": 200,
+      "url": "https://th.wiktionary.org/w/load.php?lang=th&modules=ext.cite.parsoid.styles%7Cext.cite.styles%7Cext.tmh.player.styles%7Cext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediamessages.styles%7Cjquery.makeCollapsible.styles%7Cmediawiki.action.styles%7Cmediawiki.codex.messagebox.styles%7Cmediawiki.interface.helpers.linker.styles%7Cmediawiki.interface.helpers.styles%7Cmediawiki.skins.legacy%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles&only=styles&skin=vector-2022"
+    }
+  ]
+}

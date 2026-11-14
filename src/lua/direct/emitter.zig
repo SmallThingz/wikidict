@@ -365,7 +365,9 @@ const Runtime = struct {
             .value_nil = try declare(m, "dict_lua_value_nil", ty.void, &.{ty.ptr}),
             .value_bool = try declare(m, "dict_lua_value_bool", ty.void, &.{ ty.ptr, ty.i8 }),
             .value_number = try declare(m, "dict_lua_value_number", ty.void, &.{ ty.ptr, ty.double }),
-            .value_string = try declare(m, "dict_lua_value_string", ty.void, &.{ ty.ptr, ty.ptr, ty.i64 }),
+            // Only source/constant-folded StringRefs reach this explicit origin
+            // event. Historical inlined value-leaf boxing remains unobserved.
+            .value_string = try declare(m, "dict_lua_value_literal_string", ty.void, &.{ ty.ptr, ty.ptr, ty.i64 }),
             .value_copy = try declare(m, "dict_lua_value_copy", ty.void, &.{ ty.ptr, ty.ptr }),
             .value_field_hit = try declare(m, "dict_lua_value_field_hit", ty.ptr, &.{ ty.ptr, ty.ptr, ty.i64 }),
             .string_find_three = try declare(m, "dict_lua_string_find_three", ty.i32, &.{ ty.ptr, ty.ptr, ty.ptr, ty.ptr, ty.ptr, ty.ptr, ty.ptr, ty.ptr, ty.ptr }),

@@ -138,6 +138,12 @@ export fn dict_lua_value_number(out: *rt.Value, raw: f64) callconv(.c) void {
 export fn dict_lua_value_string(out: *rt.Value, ptr: [*]const u8, len: usize) callconv(.c) void {
     value_leaf.string(out, ptr, len);
 }
+// New emitter contract only: byte strings originating in a Lua source literal
+// or a statically folded constant. Keep legacy boxing/inlined leaf unchanged.
+export fn dict_lua_value_literal_string(out: *rt.Value, ptr: [*]const u8, len: usize) callconv(.c) void {
+    value_leaf.string(out, ptr, len);
+    rt.string_origins.literal(ptr[0..len]);
+}
 export fn dict_lua_value_field_hit(ctx: *const rt.Context, object: *const rt.Value, site_id: u64) callconv(.c) ?*const rt.Value {
     return value_leaf.fieldHit(ctx, object, site_id);
 }

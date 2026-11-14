@@ -1,0 +1,73 @@
+
+{| class="ανακοίνωση-δείτε noprint" style="border:1px solid #dddddd; background:#f4f4f4; padding-top:0px; margin-top:0px; margin-bottom:.1em; width:100%;"
+|-
+| align="left" | [[Αρχείο:Arrows_blue.png|80px|link=|alt=|]] ''Δείτε επίσης''&#8202;'':'' '''[[Ψαροπούλι]]''' 
+|-
+|}
+==<span title="Από το 1700 ως σήμερα">Νέα ελληνικά</span> ([[:Κατηγορία:Νέα ελληνικά|<span title="Κατηγορία:νέα ελληνικά. Από το 1700 ως σήμερα">el</span>]])==
+
+{| class="notheme"style="clear:right; float:right; margin-left:0.5em; margin-bottom:0.5em;background:#ffffff; color:#000000; border:1px solid#a1bdea; text-align:right;"rules="none" border="1" cellpadding="3" cellspacing="0"|-
+! style="background:#a1bdea; border-right:1px solid #c1d3f1; text-align:center; font-size:90%;" align="center"| &darr;&nbsp;''πτώσεις'' 
+! style="background:#a1bdea; border-right:1px solid #c1d3f1;" colspan="2" align="center"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[ενικός|<span title="ενικός αριθμός" style="color:black;">'''''ενικός'''''</span>]]&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+! style="background:#a1bdea;" colspan="2" align="center"| &nbsp;&nbsp;[[πληθυντικός|<span title="πληθυντικός αριθμός" style="color:black;">'''''πληθυντικός'''''</span>]]&nbsp;&nbsp;
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| [[ονομαστική|<span title="ονομαστική πτώση" style="color:black;">'''''ονομαστική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[το|<span style="color:#002000; font-weight:normal;">το</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #eaf0fa;" align="left" | [[ψαροπούλι|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">ψαροπούλ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ι</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[τα|<span style="color:#002000; font-weight:normal;">τα</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="left" | [[ψαροπούλια|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">ψαροπούλ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ια</span>]]
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[γενική|<span title="γενική πτώση" style="color:black;">'''''γενική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[του|<span style="color:#002000; font-weight:normal;">του</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #eaf0fa;" align="left" | [[ψαροπουλιού|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">ψαροπουλ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ιού</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[των|<span style="color:#002000; font-weight:normal;">των</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="left" | [[ψαροπουλιών|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">ψαροπουλ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ιών</span>]]
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;[[αιτιατική|<span title="αιτιατική πτώση" style="color:black;">'''''αιτιατική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[το|<span style="color:#002000; font-weight:normal;">το</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #eaf0fa;" align="left" | [[ψαροπούλι|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">ψαροπούλ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ι</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[τα|<span style="color:#002000; font-weight:normal;">τα</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="left" | [[ψαροπούλια|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">ψαροπούλ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ια</span>]]
+|-
+| style="background:#d5e2f6; text-align:right;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[κλητική|<span title="κλητική πτώση" style="color:black; font-size:90%;">'''''κλητική'''''</span>]]
+| align="center" | 
+| style="border-right:1px solid #eaf0fa;" align="left" | [[ψαροπούλι|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">ψαροπούλ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ι</span>]]
+| align="center" | 
+| align="left" | [[ψαροπούλια|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">ψαροπούλ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ια</span>]]
+|-
+| colspan="5" align="left" style="background:#eaf0fa; font-size:80%; line-height:100%;" | Οι καταλήξεις -ιού, -ια, -ιών προφέρονται με [[συνίζηση]].
+|-
+| colspan="5" align="right" style="text-align:right; background:#eaf0fa; font-size:70%; line-height:100%;" | [[:Κατηγορία:Ουσιαστικά που κλίνονται όπως το 'τραγούδι' (νέα ελληνικά)|Κατηγορία]]  όπως «[[Παράρτημα:Ουσιαστικά (νέα ελληνικά)/ουδέτερα#τραγούδι|τραγούδι]]» - [[Παράρτημα:Ουσιαστικά (νέα ελληνικά)|<span title="Παράρτημα:Ουσιαστικά">Παράρτημα:Ουσιαστικά</span>]]
+|}[[Κατηγορία:Ουσιαστικά που κλίνονται όπως το 'τραγούδι' (νέα ελληνικά)]][[Κατηγορία:Ουσιαστικά ουδέτερα (νέα ελληνικά)]]
+[[File:Flickr - coniferconifer - Kingfisher in summer plumage - crop.jpg|thumb|upright|''Ψαροπούλι]]
+===<span style="cursor:help; white-space:nowrap;" title="Προέλευση και ιστορία της λέξης">[[Αρχείο:System-search.svg|30px|alt=|link=]] Ετυμολογία </span>===
+: '''ψαροπούλι''' <  <span style="white-space:nowrap">[[ψαρο-#Νέα ελληνικά (el)|ψαρο-]]</span>[[Κατηγορία:Λέξεις με πρόθημα ψαρο- (νέα ελληνικά)]]<span style="white-space:nowrap"> + [[-πούλι#Νέα ελληνικά (el)|-πούλι]]</span>[[Κατηγορία:Λέξεις με επίθημα -πούλι (νέα ελληνικά)]]
+
+===[[File:Wikinews commentary.svg|28px|alt=|link=]] <span class="pronunciation">Προφορά</span>===
+
+:[[ΔΦΑ|<span title="ΔΦΑ - Διεθνές Φωνητικό Αλφάβητο">ΔΦΑ</span>]] : /[[Παράρτημα:Προφορά/νέα ελληνικά|<span style="white-space: nowrap; font-size:110%;padding:2pt;letter-spacing:1px;line-height:1.25em;">psa.ɾoˈpu.li</span>]]/[[Κατηγορία:Λήμματα με προφορά ΔΦΑ (νέα ελληνικά)]]
+: [[συλλαβισμός#Ουσιαστικό|<span title="ο χωρισμός γραπτής λέξης σε συλλαβές" style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000); border-bottom: 1px dashed var(--border-color-muted, #dddddd);">''τυπογραφικός συλλαβισμός''</span>]]&#8202;'':''&nbsp;Ψα&#8208;ρο&#8208;πού&#8208;λι
+
+===<span id="elουσιαστικό"></span><span style="white-space:nowrap" class="partofspeech">[[File:OOjs_UI-like_arrow_empty-ltr_progressive.svg|25px|alt=|link=]] Ουσιαστικό</span>[[Κατηγορία:Νέα ελληνικά]][[Κατηγορία:Ουσιαστικά (νέα ελληνικά)]][[Κατηγορία:Αντίστροφο λεξικό (νέα ελληνικά)|ιλυοποραψ]]===
+'''ψαροπούλι''' ''ουδέτερο''
+* ([[:Κατηγορία:Πτηνά (νέα ελληνικά)|<i>πτηνό</i>]])[[Κατηγορία:Πτηνά  (νέα ελληνικά)]][[Κατηγορία:Ζώα (νέα ελληνικά)]] πουλί του γένους ''[[Αλκυόνη]]'' (είδος ''Alcedo atthis''), θαλάσσιο αποδημητικό πτηνό
+*: <span style="font-size:120%;">&#8776;</span>&nbsp;[[συνώνυμο|<span title="Λέξεις που έχουν την ίδια περίπου σημασία με «ψαροπούλι»" style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000); border-bottom: 1px dashed var(--border-color-muted, #dddddd);">''συνώνυμα''</span>]]'':'' [[θαλασοπούλι]], [[μπιρμπίλι]] της θάλασσας
+
+====<span style="cursor:help;" title="Λέξεις της ίδιας γλώσσας με ετυμολογική συγγένεια">Συγγενικά</span>====
+* [[Ψαροπούλι]] (''τοπωνύμιο'')
+
+<div style="clear:both;"></div>
+====[[Αρχείο:Gnome-globe.svg|28px|alt=|link=]] <span class="translations">Μεταφράσεις</span>====
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" style="background:#eeeeee; color:#000000; font-weight:bold; text-align:left;" align="left">&nbsp; &nbsp; ψαροπούλι</div>
+<div class="NavContent">
+{| style="background:#ffffff; color:#000000; width:100%;" border="0" width="100%" class="translations"
+|-
+| style="background:#f8f8f8; color:#000000; text-align:left; text-valign:top; width:48%;" valign="top" width="48%" align="left" |
+<div style="width:100%; column-count:2; -webkit-column-count:2; -moz-column-count:2; column-width:50%; -webkit-column-width:50%; -moz-column-width:50%;">
+* [[γαλλικά]] : [[martin-pêcheur#Γαλλικά (fr)|martin-pêcheur]] <small><sup>[[:fr:martin-pêcheur|(fr)]]</sup></small>
+* [[γερμανικά]] : [[Eisvogel#Γερμανικά (de)|Eisvogel]] <small><sup>[[:de:Eisvogel|(de)]]</sup></small> <span style="background:#ffffff; color:#002000;">''αρσενικό''</span>
+</div>
+|}</div></div>
+
+[[Κατηγορία:Αντίστροφο λεξικό (ελληνικά)|ιλυοποραψ]]

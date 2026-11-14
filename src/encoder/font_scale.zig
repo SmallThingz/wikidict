@@ -176,3 +176,27 @@ test "relative keyword native UA table interpolates computed sizes without repea
     try std.testing.expect(relativeKeyword(" SMALLER ") == .smaller);
     try std.testing.expect(relativeKeyword("1.2") == null);
 }
+
+
+pub fn parseCssPixels(raw: []const u8) ?f32 {
+    const value = std.mem.trim(u8, raw, " \t\r\n\x0c");
+    if (value.len <= 2 or !std.ascii.eqlIgnoreCase(value[value.len - 2 ..], "px")) return null;
+    const number = value[0 .. value.len - 2];
+    if (!cssNumber(number)) return null;
+    const parsed = std.fmt.parseFloat(f64, number) catch return null;
+    if (!std.math.isFinite(parsed) or parsed < 0 or parsed > std.math.floatMax(f32) or
+        (parsed == 0 and nonzeroMantissa(number))) return null;
+    const result: f32 = @floatCast(parsed);
+    if (parsed > 0 and result == 0) return null;
+    return result;
+}
+
+test "authored pixel font parser preserves absolute units and strict CSS number tokens" {
+    try std.testing.expectEqual(@as(?f32, 12), parseCssPixels("12px"));
+    try std.testing.expectEqual(@as(?f32, 12), parseCssPixels(" +1.2e1PX "));
+    try std.testing.expectEqual(@as(?f32, 0.5), parseCssPixels(".5px"));
+    for ([_][]const u8{ "0px", "-0px", "+0.0e9px" }) |value|
+        try std.testing.expectEqual(@as(?f32, 0), parseCssPixels(value));
+    for ([_][]const u8{ "12", "12 px", "12pxsolid", "12.pt", "12pt", "-1px", "NaNpx", "Infpx", "1e999px", "1e-999px", "12.px", "calc(12px)", "var(--size)", "12\\px", "12px!important" }) |value|
+        try std.testing.expect(parseCssPixels(value) == null);
+}

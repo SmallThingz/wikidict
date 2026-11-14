@@ -4,6 +4,7 @@ const namespace_registry = @import("namespace_registry");
 const figure_sizing = @import("figure_sizing.zig");
 const figure_page_observations = @import("figure_page_observations.zig");
 const page_language = @import("page_language.zig");
+const page_source_context = @import("page_source_context.zig");
 const encoder = @import("encoder");
 const xml_decode = @import("xml_decode");
 const dump_source = @import("wikimedia_dump");
@@ -15,6 +16,7 @@ comptime {
         _ = language_registry;
         _ = source_table_styles;
         _ = page_language;
+        _ = page_source_context;
         _ = figure_sizing;
         _ = figure_page_observations;
         _ = @import("source_stylesheet_imports.zig");
@@ -49,6 +51,79 @@ const Options = struct {
     failure_receipt: ?[]const u8 = null,
     invocation_id: ?[]const u8 = null,
     reviewed_nonlexical: ?[]const u8 = null,
+    // Borrowed CLI arguments. Each output is ordinal, index offset, exact row
+    // SHA256 (including its LF), and a single output-directory component.
+    indexed_output_args: []const []const u8 = &.{},
+    shared_input_paths: []const []const u8 = &.{},
+};
+
+const IndexedOutputSelection = struct {
+    ordinal: usize,
+    offset: usize,
+    row_sha256: [32]u8,
+    name: []const u8,
+
+    fn parse(args: []const []const u8) !@This() {
+        if (args.len != 4 or args[2].len != 64 or args[3].len == 0 or args[3].len > 128 or
+            std.mem.eql(u8, args[3], ".") or std.mem.eql(u8, args[3], "..")) return error.Usage;
+        for (args[3]) |c| if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_' and c != '.') return error.Usage;
+        var digest: [32]u8 = undefined;
+        _ = std.fmt.hexToBytes(&digest, args[2]) catch return error.Usage;
+        return .{ .ordinal = std.fmt.parseInt(usize, args[0], 10) catch return error.Usage,
+            .offset = std.fmt.parseInt(usize, args[1], 10) catch return error.Usage,
+            .row_sha256 = digest, .name = args[3] };
+    }
+};
+
+fn validateIndexedOutputArguments(options: Options) !void {
+    const args = options.indexed_output_args;
+    if (args.len == 0) {
+        if (options.shared_input_paths.len != 0) return error.Usage;
+        return;
+    }
+    if (args.len % 4 != 0 or args.len / 4 > 64 or options.shared_input_paths.len == 0 or
+        options.shared_input_paths.len > 4096 or options.start_page != 0 or options.index_byte_offset != null or
+        options.limit_pages != null or options.shard_pages != null or options.audit_presentation_errors or
+        options.failure_receipt != null or options.reviewed_nonlexical != null or options.workers != 1 or
+        options.now_unix == null) return error.Usage;
+    for (options.shared_input_paths) |path| if (!std.fs.path.isAbsolute(path)) return error.Usage;
+    var previous: ?IndexedOutputSelection = null;
+    var i: usize = 0;
+    while (i < args.len) : (i += 4) {
+        const selected = try IndexedOutputSelection.parse(args[i..][0..4]);
+        if (previous) |old| if (selected.ordinal <= old.ordinal or selected.offset <= old.offset) return error.Usage;
+        var earlier: usize = 0;
+        while (earlier < i) : (earlier += 4) if (std.mem.eql(u8, args[earlier + 3], selected.name)) return error.Usage;
+        previous = selected;
+    }
+}
+
+// Check the ordinal and row offset together against the same mapped index.
+// This reads only the index prefix through the last selected row, once; it
+// neither substitutes a title-index alias nor trusts a caller's ordinal alone.
+const IndexedOutputCursor = struct {
+    next_offset: usize = 0,
+    next_ordinal: usize = 0,
+
+    fn validate(self: *@This(), bytes: []const u8, selected: IndexedOutputSelection) !void {
+        if (self.next_offset > bytes.len or selected.ordinal < self.next_ordinal) return error.InvalidIndexByteOffset;
+        var lines = std.mem.splitScalar(u8, bytes[self.next_offset..], '\n');
+        while (lines.next()) |line| {
+            const offset = @intFromPtr(line.ptr) - @intFromPtr(bytes.ptr);
+            const end = offset + line.len;
+            self.next_offset = end + @intFromBool(end < bytes.len);
+            if (line.len == 0 or line[0] == '#') continue;
+            const ordinal = self.next_ordinal;
+            self.next_ordinal += 1;
+            if (ordinal != selected.ordinal) continue;
+            if (selected.offset != (if (ordinal == 0) @as(usize, 0) else offset)) return error.InvalidIndexByteOffset;
+            var digest: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(bytes[offset..self.next_offset], &digest, .{});
+            if (!std.mem.eql(u8, &digest, &selected.row_sha256)) return error.IndexedOutputRowChanged;
+            return;
+        }
+        return error.ShortPageIndex;
+    }
 };
 
 // Standalone CLI invocation state, read only by the ordered Writer consumer.
@@ -609,6 +684,13 @@ const FigureStreamFile = struct {
 // Legacy documents retain their existing bounded mapping route. A versioned
 // stream is consumed through held descriptors and never mapped/materialized.
 fn loadStreamFigureSizing(io: std.Io, a: std.mem.Allocator, paths: [3][]const u8, namespaces: *const namespace_registry.Registry, source_site: ?FigureSite) !?figure_sizing.Registry {
+    return loadStreamFigureSizingLocated(io, a, paths, namespaces, source_site) catch |err| {
+        if (err != error.OutOfMemory) diagnostics.printLine("figure_source stage=stream_loader projection={f} raw={f} site={f} error={s}\n", .{ std.json.fmt(paths[0], .{}), std.json.fmt(paths[1], .{}), std.json.fmt(paths[2], .{}), @errorName(err) });
+        return err;
+    };
+}
+fn loadStreamFigureSizingLocated(io: std.Io, a: std.mem.Allocator, paths: [3][]const u8, namespaces: *const namespace_registry.Registry, source_site: ?FigureSite) !?figure_sizing.Registry {
+
     const projection_path = paths[0];
     var projection_file = (try FigureStreamFile.open(io, projection_path)) orelse return null;
     defer projection_file.close();
@@ -732,7 +814,9 @@ fn checkLegacyFigureCompatibility(io: std.Io, a: std.mem.Allocator, paths: []con
     defer legacy.deinit();
 }
 
-fn checkFigureCompatibility(io: std.Io, a: std.mem.Allocator, paths: []const []const u8) !void {
+fn checkFigureCompatibility(io: std.Io, a: std.mem.Allocator, arguments: []const []const u8) !void {
+    const full = arguments.len != 0 and std.mem.eql(u8, arguments[0], "--full");
+    const paths = if (full) arguments[1..] else arguments;
     if (paths.len != 5) return error.Usage;
     for (paths) |path| if (!std.fs.path.isAbsolute(path)) return error.Usage;
     const namespace_bytes = try std.Io.Dir.cwd().readFileAlloc(io, paths[0], a, .limited(1024 * 1024));
@@ -740,6 +824,9 @@ fn checkFigureCompatibility(io: std.Io, a: std.mem.Allocator, paths: []const []c
     var namespaces = try namespace_registry.Registry.init(a, namespace_bytes);
     defer namespaces.deinit();
     const source = (try loadFigureSiteAt(io, a, paths[0], paths[1], &namespaces)) orelse return error.InvalidFigureSizingSource;
+    // Use the ordinary loader, including held descriptors and complete hashes.
+    // This path does not initialize the template provider or execute a page.
+    if (full) return checkLegacyFigureCompatibility(io, a, paths, &namespaces, source);
     var projection_file = (try FigureStreamFile.open(io, paths[2])) orelse return error.InvalidFigureSizingSource;
     defer projection_file.close();
     var projection = projection_file.input();
@@ -767,7 +854,7 @@ fn checkFigureCompatibility(io: std.Io, a: std.mem.Allocator, paths: []const []c
     try figure_sizing.Registry.checkStreamCompatibility(a, &projection, &raw, site, &namespaces, source.core_revision);
 }
 
-fn loadPageLanguage(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry) !page_language.Registry {
+fn loadPageLanguage(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry) !page_source_context.Registry {
     var mapped: [3]?Mapped = .{ null, null, null };
     defer for (&mapped) |*slot| if (slot.*) |*value| value.deinit();
     inline for (.{ "page-language.json", "page-language.raw.json", "page-language.html" }, 0..) |name, i| {
@@ -780,7 +867,7 @@ fn loadPageLanguage(io: std.Io, a: std.mem.Allocator, root: []const u8, namespac
             if (mapped[i]) |value| try inputs.acceptBytes(index, value.bytes) else try inputs.checkRecord(index);
         };
     }
-    return page_language.Registry.init(a, if (mapped[0]) |v| v.bytes else null, if (mapped[1]) |v| v.bytes else null, if (mapped[2]) |v| v.bytes else null, namespaces);
+    return page_source_context.Registry.init(a, if (mapped[0]) |v| v.bytes else null, if (mapped[1]) |v| v.bytes else null, if (mapped[2]) |v| v.bytes else null, namespaces);
 }
 fn loadFigurePageObservations(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: ?*const figure_sizing.Registry, site: ?FigureSite) !?figure_page_observations.Book {
     const path = try std.fs.path.join(a, &.{ root, figure_page_observations.filename });
@@ -816,7 +903,12 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
     if (codes.page_style_parent) |parent| codes.table_styles = parent;
     codes.page_style_parent = null;
     const sizing_source = if (codes.figure_sizing) |*value| value else return;
+    if (sizing_source.table_containing_direction) |direction| {
+        if (direction.root_only) sizing_source.table_containing_direction = null;
+    }
     sizing_source.text_class_scope = null;
+    sizing_source.figure_style_ctx = null;
+    sizing_source.resolve_figure_style_fn = null;
     sizing_source.page_observation_ctx = null;
     sizing_source.resolve_observed_width_fn = null;
     sizing_source.resolve_observed_svg_upright_fit_fn = null;
@@ -831,6 +923,9 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
     const namespaces = codes.namespace_catalog orelse return;
     const defaults = sizing_source.source_context orelse return;
     const selected_defaults = defaults_sha256 orelse return;
+    const table_root = try observations.selectTableRoot(a, namespaces, namespace_id, page_id, revision_id,
+        title, raw, expanded, selected_defaults);
+    if (table_root != null and sizing_source.table_containing_direction != null) return error.InvalidFigurePageObservations;
     const selected = try observations.select(a, namespaces, namespace_id, page_id, revision_id, title, raw, expanded,
         selected_defaults, defaults.defaults.default_thumbnail_width orelse return, .{
             .title = title, .namespace_catalog = namespaces, .behavior_switches = codes.behavior_switches,
@@ -838,7 +933,11 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
             .table_styles = codes.table_styles, .figure_sizing = codes.figure_sizing,
         });
     const page_styles = if (codes.table_styles) |parent|
-        try observations.selectPageStyles(a, namespaces, namespace_id, page_id, revision_id, title, raw, expanded, selected_defaults, parent)
+        try observations.selectPageStylesForCompiler(a, namespaces, namespace_id, page_id, revision_id, title, raw, expanded, selected_defaults, parent, .{
+            .title = title, .namespace_catalog = namespaces, .behavior_switches = codes.behavior_switches,
+            .image_options = codes.image_options, .link_trail = codes.link_trail,
+            .table_styles = codes.table_styles, .figure_sizing = codes.figure_sizing,
+        })
     else null;
     const text_class_scope: ?encoder.presentation_compile.ObservedTextClassScope = if (selected) |media|
         if (media.text_class_scope) |*scope| proof: {
@@ -851,6 +950,7 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
         } else null;
     if (page_styles) |styles| if (styles.source.ptr != expanded.ptr or styles.source.len != expanded.len) return error.InvalidFigurePageObservations;
     // Commit only after all selection and identity checks succeed.
+    if (table_root) |root| sizing_source.table_containing_direction = root;
     if (selected) |media| {
         sizing_source.text_class_scope = text_class_scope;
         sizing_source.page_observation_ctx = media;
@@ -868,16 +968,20 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
         codes.page_style_parent = codes.table_styles;
         codes.table_styles = styles.styles;
         sizing_source.text_class_scope = .{ .source = styles.source, .scope = &styles.scope };
+        if (styles.figure_styles.len != 0) {
+            sizing_source.figure_style_ctx = styles;
+            sizing_source.resolve_figure_style_fn = figure_page_observations.SelectedPageStyles.figureStyle;
+        }
     }
 }
 
 fn selectedPageLanguage(value: page_language.Context) encoder.presentation_compile.FigurePageLanguageContext {
-    return .{ .namespace_sha256 = value.namespace_sha256, .title = value.title, .language = value.language, .direction = value.direction, .outer_languages = value.outer_languages };
+    return .{ .namespace_sha256 = value.namespace_sha256, .title = value.title, .language = value.language, .direction = value.direction, .outer_languages = value.outer_languages, .body_skin_responsive = value.body_skin_responsive };
 }
 
 // Captured replay requires its own expansion binding in addition to the
 // ordinary raw/page/revision metadata authority and the independent receipt.
-fn capturedPageLanguage(registry: *const page_language.Registry, page_id: u64, revision_id: u64, ns: i32, title: []const u8, raw: []const u8, expanded: []const u8, normal: page_language.NormalContext) ?encoder.presentation_compile.FigurePageLanguageContext {
+fn capturedPageLanguage(registry: anytype, page_id: u64, revision_id: u64, ns: i32, title: []const u8, raw: []const u8, expanded: []const u8, normal: page_language.NormalContext) ?encoder.presentation_compile.FigurePageLanguageContext {
     if (!registry.capturedSourceMatches(page_id, revision_id, ns, title, raw, expanded)) return null;
     return selectedPageLanguage(registry.lookup(page_id, revision_id, ns, title, raw, normal) orelse return null);
 }
@@ -947,7 +1051,8 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
         }
     }
     try loadPositionalLanguageModules(io, a, expander_root, namespaces, manifest.bytes, &out);
-    try loadSourceHeadwordRole(io, a, expander_root, namespaces, manifest.bytes, &out);
+    try loadSourceHeadwordRoleWithRows(io, a, expander_root, namespaces, manifest.bytes, &out, &template_rows);
+    try template_rows.check();
     try loadNamedLanguageModules(io, a, expander_root, namespaces, manifest.bytes, &out);
     try loadSourceSectionLanguageNames(io, a, expander_root, namespaces, manifest.bytes, &out);
     try loadSourceSectionFormatter(io, a, expander_root, namespaces, manifest.bytes, &out);
@@ -1171,24 +1276,32 @@ fn loadNamedLanguageModules(io: std.Io, a: std.mem.Allocator, root: []const u8, 
 // source chain are authenticated. It neither registers a name alias nor trusts
 // arbitrary inline headword language attributes.
 fn loadSourceHeadwordRole(io: std.Io, a: std.mem.Allocator, root: []const u8, ns: *const namespace_registry.Registry, manifest: []const u8, registry: *language_registry.Registry) !void {
+    var view: LanguageTemplateRows = .{ .io = io, .a = a, .root = root, .namespaces = ns };
+    defer view.deinit();
+    try loadSourceHeadwordRoleWithRows(io, a, root, ns, manifest, registry, &view);
+    try view.check();
+}
+
+fn loadSourceHeadwordRoleWithRows(io: std.Io, a: std.mem.Allocator, root: []const u8, ns: *const namespace_registry.Registry, manifest: []const u8, registry: *language_registry.Registry, view: *LanguageTemplateRows) !void {
+    const phase_wall = std.Io.Clock.awake.now(io).toNanoseconds();
+    const phase_cpu = std.Io.Clock.cpu_process.now(io).toNanoseconds();
+    defer {
+        view.headword_wall_ns += std.Io.Clock.awake.now(io).toNanoseconds() - phase_wall;
+        view.headword_cpu_ns += std.Io.Clock.cpu_process.now(io).toNanoseconds() - phase_cpu;
+    }
     registry.source_headword_role = false;
     registry.source_headword_static_prefix = null;
     registry.source_headword_codes.clearRetainingCapacity();
     if (ns.byId(828) == null) return;
-    const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" }); defer a.free(path);
-    var index = mmapPath(io, path) catch |err| switch (err) { error.FileNotFound => return, else => return err };
-    defer index.deinit();
+    try view.requireContext(root, ns);
+    var candidates = (try view.begin()) orelse return;
     const Role = struct { row: dump_source.IndexedPage, ordinal: u64 };
     const template_names = [_][]const u8{ "head", "Dil", "Alban əlifbası" };
     var roles: [template_names.len]?Role = @splat(null);
     var seen: [template_names.len]bool = @splat(false);
-    var lines = std.mem.splitScalar(u8, index.bytes, '\n');
-    var ordinal: u64 = 0;
-    const kind = dump_source.pageIndexKind(index.bytes);
-    while (lines.next()) |line| {
-        if (line.len == 0 or line[0] == '#') continue;
-        const row = try dump_source.parsePageIndexLine(kind, line);
-        const current = ordinal; ordinal += 1;
+    while (try candidates.next()) |entry| {
+        const row = entry.row;
+        const current = entry.ordinal;
         const title = ns.ofTitle(row.title);
         if (title.id != 10) continue;
         for (template_names, 0..) |name, i| {
@@ -1200,7 +1313,7 @@ fn loadSourceHeadwordRole(io: std.Io, a: std.mem.Allocator, root: []const u8, ns
         }
     }
     if (roles[0] == null or roles[1] == null) return;
-    var templates = (try openLanguageTemplateSource(io, a, root, index.bytes)) orelse return;
+    var templates = (try openLanguageTemplateSource(io, a, root, view.index.?.bytes)) orelse return;
     defer templates.deinit();
     var template_sources: [template_names.len]?[]u8 = @splat(null);
     defer for (template_sources) |value| if (value) |source| a.free(source);
@@ -1522,6 +1635,8 @@ const LanguageTemplateRows = struct {
     reuses: u64 = 0,
     phase_wall_ns: [3]i128 = @splat(0),
     phase_cpu_ns: [3]i128 = @splat(0),
+    headword_wall_ns: i128 = 0,
+    headword_cpu_ns: i128 = 0,
     template_session: ?TemplateSession = null,
     template_opens: u64 = 0,
     template_reuses: u64 = 0,
@@ -1693,11 +1808,12 @@ const LanguageTemplateRows = struct {
     }
 
     fn report(self: *const LanguageTemplateRows) void {
-        diagnostics.printLine("language_template_rows scans={d} completed={d} parsed_rows={d} parsed_bytes={d} retained_rows={d} reuses={d} banner_wall_ns={d} category_wall_ns={d} equivalent_wall_ns={d} banner_cpu_ns={d} category_cpu_ns={d} equivalent_cpu_ns={d} template_source_opens={d} template_source_reuses={d}\n", .{
+        diagnostics.printLine("language_template_rows scans={d} completed={d} parsed_rows={d} parsed_bytes={d} retained_rows={d} reuses={d} banner_wall_ns={d} category_wall_ns={d} equivalent_wall_ns={d} banner_cpu_ns={d} category_cpu_ns={d} equivalent_cpu_ns={d} template_source_opens={d} template_source_reuses={d} headword_wall_ns={d} headword_cpu_ns={d}\n", .{
             self.scans, self.completed_scans, self.parsed_rows, self.parsed_bytes, self.entries.items.len, self.reuses,
             self.phase_wall_ns[0], self.phase_wall_ns[1], self.phase_wall_ns[2],
             self.phase_cpu_ns[0], self.phase_cpu_ns[1], self.phase_cpu_ns[2],
             self.template_opens, self.template_reuses,
+            self.headword_wall_ns, self.headword_cpu_ns,
         });
     }
 
@@ -2671,7 +2787,7 @@ const ExpansionSlot = struct {
     job: ExpansionJob = undefined,
     expansion: ?bundle_expander.Expansion = null,
     language_codes: encoder.blob_builder.LanguageCodes = .{},
-    page_languages: ?*const page_language.Registry = null,
+    page_languages: ?*const page_source_context.Registry = null,
     page_language_core: ?[]const u8 = null,
     page_observations: ?*const figure_page_observations.Book = null,
     figure_defaults_sha256: ?[32]u8 = null,
@@ -2753,6 +2869,22 @@ const ExpansionSlot = struct {
             self.compile_failure = err;
             return;
         };
+        // Direct returned HTML provides source custody independently of API language metadata.
+        if (self.page_languages) |languages| {
+            if (std.math.cast(i32, self.job.ns.id)) |page_namespace| {
+                if (languages.lookupSourceParent(self.job.page_id, self.job.revision_id, page_namespace,
+                    self.job.title, self.job.source, expanded.source,
+                    .{ .source_core_revision = self.page_language_core, .normal_no_target = true, .interface_message = false })) |parent| {
+                    if (codes.figure_sizing) |*sizing| {
+                        sizing.table_containing_direction = figure_page_observations.bindSourceParentTextAlloc(self.arena.allocator(),
+                            parent, expanded.source, sizing.table_containing_direction) catch |err| {
+                                self.compile_failure = err;
+                                return;
+                            };
+                    }
+                }
+            }
+        }
         self.prepared.?.compileWithPhasesAndRoot(self.arena.allocator(), codes, expanded.source, self.job.source,
             expanded.display_title, expanded.poem_metadata, expanded.missing_dependency_metadata, self.job.alias_record, .parser_output) catch |err| {
             self.compile_failure = err;
@@ -3071,7 +3203,7 @@ const ExpansionPool = struct {
     page_index_bytes: []const u8 = "",
     page_title_index: ?dump_source.PageTitleIndex = null,
     page_redirects: ?*const encoder.page_redirects.Snapshot = null,
-    page_languages: ?*const page_language.Registry = null,
+    page_languages: ?*const page_source_context.Registry = null,
     page_language_core: ?[]const u8 = null,
     page_observations: ?*const figure_page_observations.Book = null,
     figure_defaults_sha256: ?[32]u8 = null,
@@ -3273,6 +3405,16 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or out.expander_root.len != 0) return error.Usage;
             out.expander_root = args[index];
+        } else if (std.mem.eql(u8, arg, "--shared-inputs")) {
+            if (out.shared_input_paths.len != 0) return error.Usage;
+            const begin = index + 1;
+            while (index + 1 < args.len and !std.mem.startsWith(u8, args[index + 1], "--")) index += 1;
+            if (index + 1 == begin) return error.Usage;
+            out.shared_input_paths = args[begin .. index + 1];
+        } else if (std.mem.eql(u8, arg, "--indexed-page-outputs")) {
+            out.indexed_output_args = args[index + 1 ..];
+            if (out.indexed_output_args.len == 0) return error.Usage;
+            break;
         } else if (out.limit_pages == null) {
             out.limit_pages = std.fmt.parseInt(usize, arg, 10) catch return error.Usage;
         } else return error.Usage;
@@ -3291,6 +3433,9 @@ fn parseOptions(args: []const []const u8) !Options {
         if (out.index_byte_offset == null or out.limit_pages == null or out.limit_pages.? == 0 or
             out.start_page % shard_pages != 0) return error.Usage;
     }
+    try validateIndexedOutputArguments(out);
+    if (out.indexed_output_args.len != 0 and (!std.fs.path.isAbsolute(args[1]) or
+        !std.fs.path.isAbsolute(args[2]) or !std.fs.path.isAbsolute(out.expander_root))) return error.Usage;
     return out;
 }
 
@@ -3903,7 +4048,10 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len > 1 and std.mem.eql(u8, args[1], "--check-figure-compatibility")) {
         try checkFigureCompatibility(init.io, std.heap.smp_allocator, args[2..]);
-        diagnostics.printLine("Figure input compatibility checked; full Writer validation remains required.\n", .{});
+        if (args.len > 2 and std.mem.eql(u8, args[2], "--full"))
+            diagnostics.printLine("Figure input full source validation checked; page and Writer semantics remain unvalidated.\n", .{})
+        else
+            diagnostics.printLine("Figure input compatibility checked; full Writer validation remains required.\n", .{});
         return;
     }
     if (args.len > 1 and std.mem.eql(u8, args[1], "--captured-page"))
@@ -3911,11 +4059,11 @@ pub fn main(init: std.process.Init) !void {
     if (args.len > 1 and std.mem.eql(u8, args[1], "--captured-pages"))
         return runCapturedWriterTransactionCli(init, args);
     if (args.len < 3) {
-        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--figure-page-observations-snapshot FILE] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]]\n", .{});
+        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--figure-page-observations-snapshot FILE] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]] [--shared-inputs FILE... --indexed-page-outputs ORD OFFSET ROW_SHA256 NAME ...]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--figure-page-observations-snapshot FILE] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]]\n", .{});
+        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--figure-page-observations-snapshot FILE] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]] [--shared-inputs FILE... --indexed-page-outputs ORD OFFSET ROW_SHA256 NAME ...]\n", .{});
         return error.Usage;
     };
     var figure_inputs: ?WriterFigureInputs = if (options.figure_input_root) |root|
@@ -3950,6 +4098,19 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, options: Options, audit: ?*PresentationAudit, figure_inputs: ?*WriterFigureInputs) !void {
+    // The outer ordinary caller retains its role, seal, source and lock checks.
+    // These target/descriptor guards additionally bracket every output while
+    // the already validated common registries are borrowed in this process.
+    var shared_inputs: CapturedWriterInputs = .{ .io = io, .a = a, .record_limit = 4098 };
+    defer shared_inputs.deinit();
+    if (options.indexed_output_args.len != 0) {
+        _ = try shared_inputs.hold(args[1], "ordinary-shared-dump");
+        for (options.shared_input_paths) |path| _ = try shared_inputs.hold(path, "ordinary-shared-input");
+        const index_path = try std.fs.path.join(a, &.{ options.expander_root, "page-index.tsv" });
+        defer a.free(index_path);
+        _ = try shared_inputs.hold(index_path, "ordinary-shared-page-index");
+        try shared_inputs.verify();
+    }
     // Invocation-local use of the existing descriptor/path/ctime guard. This
     // selects Writer data only; the sealed expander generation remains intact.
     var book_inputs: CapturedWriterInputs = .{ .io = io, .a = a };
@@ -3970,7 +4131,19 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     };
     defer if (interwiki_bytes) |bytes| a.free(bytes);
     if (interwiki_bytes) |bytes| try namespaces.attachInterwikiMap(bytes);
+    var setup_registry_started: ?ParentProfileStamp = if (profile_enabled) ParentProfileStamp.now(io) else null;
+    errdefer if (setup_registry_started) |started| {
+        var total: ParentPhaseTotals = .{};
+        total.record(started, ParentProfileStamp.now(io));
+        total.log("setup-language-registry");
+    };
     var registry = try loadLanguageRegistry(io, a, options.expander_root, &namespaces);
+    if (setup_registry_started) |started| {
+        var total: ParentPhaseTotals = .{};
+        total.record(started, ParentProfileStamp.now(io));
+        total.log("setup-language-registry");
+        setup_registry_started = null;
+    }
     defer registry.deinit();
     const behavior_path = try std.fs.path.join(a, &.{ options.expander_root, "behavior-switches.tsv" });
     defer a.free(behavior_path);
@@ -3993,7 +4166,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     std.crypto.hash.sha2.Sha256.hash(behavior_bytes orelse "", &behavior_digest, .{});
     var images: ?namespace_registry.image_options.Registry = if (image_bytes) |bytes| try namespace_registry.image_options.Registry.init(a, bytes, namespaces.wiki, namespaces.dump_date, namespaces.content_language, namespaces.source_sha256, behavior_digest) else null;
     defer if (images) |*value| value.deinit();
-    var page_languages: ?page_language.Registry = null;
+    var page_languages: ?page_source_context.Registry = null;
     defer if (page_languages) |*value| value.deinit();
     var page_observations: ?figure_page_observations.Book = null;
     defer if (page_observations) |*value| value.deinit();
@@ -4003,6 +4176,12 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     codes.behavior_switches = if (behavior) |*value| value else null;
     codes.image_options = if (images) |*value| value else null;
 
+    var setup_index_started: ?ParentProfileStamp = if (profile_enabled) ParentProfileStamp.now(io) else null;
+    errdefer if (setup_index_started) |started| {
+        var total: ParentPhaseTotals = .{};
+        total.record(started, ParentProfileStamp.now(io));
+        total.log("setup-index-common-css");
+    };
     const page_index_path = try std.fs.path.join(a, &.{ options.expander_root, "page-index.tsv" });
     defer a.free(page_index_path);
     var page_index = try mmapPath(io, page_index_path);
@@ -4057,6 +4236,12 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
         .{ authority.provenance.title, authority.provenance.page_id, authority.provenance.revision_id,
             authority.provenance.decoded_source_sha256, authority.profile.admitted_rule_numbers.len, authority.profile.has_unsupported_rules },
     );
+    if (setup_index_started) |started| {
+        var total: ParentPhaseTotals = .{};
+        total.record(started, ParentProfileStamp.now(io));
+        total.log("setup-index-common-css");
+        setup_index_started = null;
+    }
 
     // Lazy proof reads borrow the same authenticated normal input/index and
     // remain alive through Writer/worker completion. No corpus-wide preload.
@@ -4086,8 +4271,26 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     const site_mainpage = try loadSiteMainPage(io, a, options.expander_root, &namespaces);
     try loadManualAutomaticIdentity(io, a, options.expander_root, &namespaces, page_index.bytes, title_index);
     defer if (site_mainpage) |site| a.free(site.title);
+    var setup_sizing_started: ?ParentProfileStamp = if (profile_enabled) ParentProfileStamp.now(io) else null;
+    errdefer if (setup_sizing_started) |started| {
+        var total: ParentPhaseTotals = .{};
+        total.record(started, ParentProfileStamp.now(io));
+        total.log("setup-figure-sizing");
+    };
     const figure_site = try loadWriterFigureSite(io, a, options.expander_root, options.figure_input_root, &namespaces);
     sizing_authority = try loadWriterFigureSizing(io, a, options.expander_root, options.figure_input_root, &namespaces, figure_site);
+    if (setup_sizing_started) |started| {
+        var total: ParentPhaseTotals = .{};
+        total.record(started, ParentProfileStamp.now(io));
+        total.log("setup-figure-sizing");
+        setup_sizing_started = null;
+    }
+    var setup_observations_started: ?ParentProfileStamp = if (profile_enabled) ParentProfileStamp.now(io) else null;
+    errdefer if (setup_observations_started) |started| {
+        var total: ParentPhaseTotals = .{};
+        total.record(started, ParentProfileStamp.now(io));
+        total.log("setup-page-language-book");
+    };
     page_languages = try loadPageLanguage(io, a, options.expander_root, &namespaces);
     pool.page_languages = &page_languages.?;
     pool.page_language_core = if (figure_site) |site| site.core_revision else null;
@@ -4096,6 +4299,12 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
             if (sizing_authority) |*value| value else null, figure_site)
     else try loadFigurePageObservations(io, a, options.expander_root, &namespaces,
         if (sizing_authority) |*value| value else null, figure_site);
+    if (setup_observations_started) |started| {
+        var total: ParentPhaseTotals = .{};
+        total.record(started, ParentProfileStamp.now(io));
+        total.log("setup-page-language-book");
+        setup_observations_started = null;
+    }
     pool.page_observations = if (page_observations) |*value| value else null;
     pool.figure_defaults_sha256 = if (figure_site) |site| site.source_sha256 else null;
     codes.figure_sizing = if (sizing_authority) |*value| .{ .ctx = value, .resolve_fn = figure_sizing.Registry.resolve,
@@ -4127,7 +4336,30 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
         return;
     }
 
-    var writer = try encoder.blob_builder.Writer.init(io, a, if (audit) |value| value.scratch_root else args[2]);
+    if (options.indexed_output_args.len != 0) {
+        try shared_inputs.verify();
+        var index_cursor: IndexedOutputCursor = .{};
+        var index: usize = 0;
+        while (index < options.indexed_output_args.len) : (index += 4) {
+            const selected = try IndexedOutputSelection.parse(options.indexed_output_args[index..][0..4]);
+            try runIndexedOrdinaryOutput(io, a, args[2], selected, options, codes, &namespaces, &pool, &dump,
+                &page_index, page_index_kind, page_index_path, figure_inputs, &book_inputs, &shared_inputs, &index_cursor);
+        }
+        return;
+    }
+    try runOrdinaryOutput(io, a, args[2], options, codes, &namespaces, &pool, &dump,
+        &page_index, page_index_kind, page_index_path, audit, figure_inputs, &book_inputs);
+}
+
+fn runOrdinaryOutput(
+    io: std.Io, a: std.mem.Allocator, output_root: []const u8, options: Options,
+    codes: encoder.blob_builder.LanguageCodes, namespaces: *const namespace_registry.Registry,
+    pool: *ExpansionPool, dump: *dump_source.SourceReader, page_index: *const Mapped,
+    page_index_kind: dump_source.PageIndexKind, page_index_path: []const u8,
+    audit: ?*PresentationAudit, figure_inputs: ?*WriterFigureInputs, book_inputs: *CapturedWriterInputs,
+) !void {
+
+    var writer = try encoder.blob_builder.Writer.init(io, a, if (audit) |value| value.scratch_root else output_root);
     defer writer.deinit();
     const capture_scope = OrdinaryFailureCaptureScope.begin(&writer);
     defer capture_scope.deinit();
@@ -4144,7 +4376,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
         const page_ordinal = selected_page.ordinal;
         if (audit) |value| value.selected += 1;
         writer.stats.pages_seen = pages_selected;
-        try dispatchIndexedPage(&pool, &writer, &dump, page_index_kind, &namespaces, line, page_ordinal);
+        try dispatchIndexedPage(pool, &writer, dump, page_index_kind, namespaces, line, page_ordinal);
         const progress_now = std.Io.Clock.awake.now(io).toNanoseconds();
         if (pages_selected % 100_000 == 0 or progress_now >= next_progress) {
             next_progress = progress_now + 10 * std.time.ns_per_s;
@@ -4157,7 +4389,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
         }
     }
     try pool.drain(&writer);
-    try checkReviewedDump(&pool, &dump);
+    try checkReviewedDump(pool, dump);
     try book_inputs.verify();
     if (audit) |value| {
         // No finish, coverage, shard publication or normal success path in audit mode.
@@ -4180,7 +4412,7 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
         return error.PageIndexChanged;
     }
     try book_inputs.verify();
-    try writePageCoverage(io, a, args[2], coverage);
+    try writePageCoverage(io, a, output_root, coverage);
 
     diagnostics.printLine(
         "pages={d} main_pages={d} language_records={d} language_blobs={d} thesaurus={d} citations={d} reconstruction={d} rhymes={d} sign_gloss={d} supplemental={d} pages_with_diagnostics={d} alias_records={d}\n",
@@ -4199,6 +4431,97 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
             stats.alias_records,
         },
     );
+}
+
+fn writeIndexedOutputResult(io: std.Io, a: std.mem.Allocator, file: std.Io.File,
+    selected: IndexedOutputSelection, complete: bool, failure: ?anyerror) !void
+{
+    const bytes = try std.json.Stringify.valueAlloc(a, .{
+        .schema = "wikidict.ordinary-indexed-output.v1", .name = selected.name,
+        .ordinal = selected.ordinal, .index_byte_offset = selected.offset,
+        .index_row_sha256 = std.fmt.bytesToHex(selected.row_sha256, .lower),
+        .complete = complete, .error_name = if (failure) |err| @errorName(err) else @as(?[]const u8, null),
+        // One native invocation owns all selections. This is an output outcome,
+        // not another process exit or a Reader/semantic acceptance receipt.
+        .semantic_acceptance = false,
+    }, .{});
+    defer a.free(bytes);
+    try file.writeStreamingAll(io, bytes);
+    try file.sync(io);
+}
+
+fn runIndexedOrdinaryOutput(
+    io: std.Io, a: std.mem.Allocator, output_root: []const u8, selected: IndexedOutputSelection, common_options: Options,
+    codes: encoder.blob_builder.LanguageCodes, namespaces: *const namespace_registry.Registry,
+    pool: *ExpansionPool, dump: *dump_source.SourceReader, page_index: *const Mapped,
+    page_index_kind: dump_source.PageIndexKind, page_index_path: []const u8,
+    figure_inputs: ?*WriterFigureInputs, book_inputs: *CapturedWriterInputs, shared_inputs: *CapturedWriterInputs,
+    index_cursor: *IndexedOutputCursor,
+) !void {
+    const case_root = try std.fs.path.join(a, &.{ output_root, selected.name });
+    defer a.free(case_root);
+    const data_root = try std.fs.path.join(a, &.{ case_root, "data" });
+    defer a.free(data_root);
+    const result_path = try std.fs.path.join(a, &.{ case_root, "ordinary-output-result.json" });
+    defer a.free(result_path);
+    try std.Io.Dir.cwd().createDirPath(io, case_root);
+    if ((try std.Io.Dir.cwd().statFile(io, case_root, .{ .follow_symlinks = false })).kind != .directory)
+        return error.InvalidIndexedOutputRoot;
+    var result = try std.Io.Dir.cwd().createFile(io, result_path, .{ .exclusive = true });
+    defer result.close(io);
+    runIndexedOrdinaryOutputChecked(io, a, data_root, selected, common_options, codes, namespaces, pool, dump,
+        page_index, page_index_kind, page_index_path, figure_inputs, book_inputs, shared_inputs, index_cursor) catch |err| {
+        writeIndexedOutputResult(io, a, result, selected, false, err) catch {};
+        return err;
+    };
+    try writeIndexedOutputResult(io, a, result, selected, true, null);
+    diagnostics.printLine("ordinary indexed output complete name={s} ordinal={d}\n", .{ selected.name, selected.ordinal });
+}
+
+fn runIndexedOrdinaryOutputChecked(
+    io: std.Io, a: std.mem.Allocator, data_root: []const u8, selected: IndexedOutputSelection, common_options: Options,
+    codes: encoder.blob_builder.LanguageCodes, namespaces: *const namespace_registry.Registry,
+    pool: *ExpansionPool, dump: *dump_source.SourceReader, page_index: *const Mapped,
+    page_index_kind: dump_source.PageIndexKind, page_index_path: []const u8,
+    figure_inputs: ?*WriterFigureInputs, book_inputs: *CapturedWriterInputs, shared_inputs: *CapturedWriterInputs,
+    index_cursor: *IndexedOutputCursor,
+) !void {
+    if (std.Io.Dir.cwd().statFile(io, data_root, .{ .follow_symlinks = false })) |_| return error.IndexedOutputAlreadyExists else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+    try shared_inputs.verify();
+    try book_inputs.verify();
+    if (figure_inputs) |inputs| try inputs.verify();
+    if (!std.meta.eql(page_index.identity, try pathIdentity(io, page_index_path))) return error.PageIndexChanged;
+    try index_cursor.validate(page_index.bytes, selected);
+    for (pool.slots) |slot| if (slot.busy) return error.IndexedOutputStillBusy;
+
+    var options = common_options;
+    options.start_page = selected.ordinal;
+    options.index_byte_offset = selected.offset;
+    options.limit_pages = 1;
+    options.indexed_output_args = &.{};
+    options.shared_input_paths = &.{};
+    const previous_capture = first_failure_capture_context;
+    defer first_failure_capture_context = previous_capture;
+    if (first_failure_capture_context) |*capture| {
+        capture.output_root = data_root;
+        capture.input.start_page = selected.ordinal;
+        capture.input.index_byte_offset = selected.offset;
+        capture.input.requested_limit = 1;
+        capture.attempted = false;
+        capture.ordinary_writer = null;
+    }
+    diagnostics.printLine("ordinary indexed output start name={s} ordinal={d} index_offset={d}\n", .{ selected.name, selected.ordinal, selected.offset });
+    try runOrdinaryOutput(io, a, data_root, options, codes, namespaces, pool, dump, page_index,
+        page_index_kind, page_index_path, null, figure_inputs, book_inputs);
+    // runOrdinaryOutput drained the same pool before finishing this Writer.
+    // Nothing from its page arena or Writer may cross into the next output.
+    for (pool.slots) |slot| if (slot.busy) return error.IndexedOutputStillBusy;
+    try shared_inputs.verify();
+    try book_inputs.verify();
+    if (figure_inputs) |inputs| try inputs.verify();
 }
 
 test "Arabic dump local literal language evidence reaches decoded records" {
@@ -8922,6 +9245,8 @@ fn teCategoryOwnerCase(value: TeCategoryCase) !void {
             switch (@typeInfo(T)) {
                 .@"struct" => |info| inline for (info.field_names) |name| try self.visit(alloc, @TypeOf(@field(item, name)), @field(item, name)),
                 .pointer => |info| {
+                    if (info.size == .one and info.child == encoder.presentation_types.TableBlockViewport)
+                        return self.visit(alloc, info.child, item.*);
                     if (info.size != .slice) @compileError("Unsupported TE category witness pointer");
                     if (info.child != u8) for (item) |child| try self.visit(alloc, info.child, child);
                 },
@@ -16683,15 +17008,23 @@ test "normal Writer retained BG zainteresuvam preserves parenthesized literal so
     const frame_open = "<div class=\"NavFrame mw-collapsible  \">";
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, reference, frame_open));
     const inline_reference = try std.mem.replaceOwned(u8, a, reference, frame_open, "<div class=\"NavFrame mw-collapsible  \" style=\"font-size:95%;\">");
-    // This exact opening has no ID; all authored ancestor classes are known.
-    // Auto margins remain unresolved; inline width and background are proved.
+    // The exact table's automatic edges are parsed independently of their
+    // still-unbound containing direction and inherited font basis.
     const captured_table_style = try styles.resolveTableWithContext(a, 0, "translations", .{
         .ancestor_classes = "NavFrame mw-collapsible NavContent mw-collapsible-content",
         .own_id = "",
     }, null, "margin:0 auto 0.3em auto; width:100%; background: #fcfbff;");
-    try std.testing.expect(captured_table_style.unresolved);
-    try std.testing.expectEqualDeep(encoder.presentation_types.TableStyle{ .background = "#fcfbff", .width = .{ .unit = .percent, .value = 100 } },
-        captured_table_style.style orelse return error.TestUnexpectedResult);
+    try std.testing.expect(!captured_table_style.unresolved);
+    const parsed_table_style = captured_table_style.style orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(@as(T.TableStyle, .{
+        .background = "#fcfbff", .width = .{ .unit = .percent, .value = 100 },
+        .margin_values = .{ .top = .{ .length = .{ .unit = .px, .value = 0 } },
+            .right = .auto, .bottom = .{ .length = .{ .unit = .em, .value = 0.3 } }, .left = .auto },
+    }), parsed_table_style);
+    try std.testing.expect(captured_table_style.margin_basis_unresolved);
+    try std.testing.expect(parsed_table_style.containing_direction == null);
+    try std.testing.expect(T.validUnboundTableStyle(parsed_table_style));
+    try std.testing.expect(!T.validTableStyle(parsed_table_style));
     var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
     const owner = codes.resolveTrusted("Български") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("bg", owner.code);
@@ -58892,7 +59225,7 @@ const DeMaiObservedSaved = struct {
             .{ "figure-sizing.json", @embedFile(prefix ++ "figure-sizing.json") },
             .{ "figure-sizing.raw.json", @embedFile(prefix ++ "figure-sizing.raw.json") },
             .{ "figure-sizing.site.json", @embedFile(prefix ++ "figure-sizing.site.json") },
-            .{ "figure-page-observations.json", @embedFile("testdata/de-mai-page-styles/original.json") },
+            .{ "figure-page-observations.json", @embedFile("testdata/de-mai-figure-style/original.json") },
         }) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ input, file[0] }), .data = file[1] });
         var registry = try loadLanguageRegistry(io, a, input, &ns); defer registry.deinit();
         const owner_names = [_][]const u8{ "Deutsch", "Niederdeutsch", "Walisisch" };
@@ -58920,7 +59253,7 @@ const DeMaiObservedSaved = struct {
         const reference_input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/de-mai-reference-style-input", .{tmp.sub_path});
         try std.Io.Dir.cwd().createDirPath(io, reference_input);
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ reference_input, "figure-page-observations.json" }),
-            .data = @embedFile("testdata/de-mai-page-styles/reference.json") });
+            .data = @embedFile("testdata/de-mai-figure-style/reference.json") });
         var reference_book = (try loadFigurePageObservations(io, a, reference_input, &ns, &sizing, site)) orelse return error.TestUnexpectedResult;
         defer reference_book.deinit();
         try std.testing.expectEqual(@as(usize, 0), reference_book.pages[0].occurrences.len);
@@ -58934,6 +59267,14 @@ const DeMaiObservedSaved = struct {
             const selected_scope = arm_codes.figure_sizing.?.text_class_scope orelse return error.TestUnexpectedResult;
             try std.testing.expect(selected_scope.source.ptr == body.ptr and selected_scope.source.len == body.len);
             try std.testing.expect(selected_scope.scope.page_styles == arm_codes.table_styles);
+            const observed_style_source = arm_codes.figure_sizing.?;
+            try std.testing.expect(observed_style_source.resolve_figure_style_fn == figure_page_observations.SelectedPageStyles.figureStyle);
+            const observed_styles: *const figure_page_observations.SelectedPageStyles = @ptrCast(@alignCast(observed_style_source.figure_style_ctx orelse return error.TestUnexpectedResult));
+            try std.testing.expect(observed_styles.styles == arm_codes.table_styles and observed_styles.source.ptr == body.ptr and observed_styles.source.len == body.len);
+            try std.testing.expectEqual(@as(usize, 2), observed_styles.figure_styles.len);
+            try std.testing.expectEqual(@as(usize, 2), observed_styles.figure_assets.len);
+            try std.testing.expectEqual(encoder.presentation_types.FigureMediaGraphic.magnify_clip_ltr_v1, observed_styles.figure_assets[0].graphic);
+            try std.testing.expectEqual(encoder.presentation_types.FigureMediaGraphic.magnify_clip_rtl_v1, observed_styles.figure_assets[1].graphic);
             roots[arm] = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/de-mai-{d}", .{ tmp.sub_path, arm });
             var writer = try encoder.blob_builder.Writer.init(io, a, roots[arm]); defer writer.deinit();
             writer.language_codes = arm_codes; writer.stats.pages_seen += 1;
@@ -62683,7 +63024,7 @@ const ThJianRetained349 = struct {
             .data = try std.mem.concat(a, u8, &.{ original_manifest, @embedFile(prefix ++ "module-36374.jsonl") }) });
         inline for (.{ "figure-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json" }) |name|
             try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{input, name}), .data = @embedFile(prefix ++ name) });
-        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{input, figure_page_observations.filename}), .data = @embedFile("testdata/th-page-palette-current/figure-page-observations.json") });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{input, figure_page_observations.filename}), .data = @embedFile("testdata/th-missing-figure-style/figure-page-observations.json") });
         var registry = try loadLanguageRegistry(io, a, input, &ns); defer registry.deinit();
         for (headings, codes) |heading, code| try std.testing.expectEqualStrings(code, (registry.resolveTrusted(heading) orelse return error.TestUnexpectedResult).code);
         const site = (try loadFigureSite(io, a, input, &ns)) orelse return error.TestUnexpectedResult;
@@ -62711,6 +63052,13 @@ const ThJianRetained349 = struct {
         try std.testing.expect(page_codes.page_style_parent == &styles);
         const scope = page_codes.figure_sizing.?.text_class_scope orelse return error.TestUnexpectedResult;
         try std.testing.expect(scope.source.ptr == source.ptr and scope.source.len == source.len and scope.scope.page_styles == page_codes.table_styles);
+        try std.testing.expect(site.source_context.missing_media_profile == .f45897);
+        const own_style_source = page_codes.figure_sizing.?;
+        try std.testing.expect(own_style_source.resolve_figure_style_fn == figure_page_observations.SelectedPageStyles.figureStyle);
+        const own_styles: *const figure_page_observations.SelectedPageStyles = @ptrCast(@alignCast(own_style_source.figure_style_ctx orelse return error.TestUnexpectedResult));
+        try std.testing.expect(own_styles.styles == page_codes.table_styles.? and own_styles.source.ptr == source.ptr and own_styles.source.len == source.len);
+        try std.testing.expectEqual(@as(usize, 1), own_styles.figure_styles.len);
+        for (own_styles.figure_styles[0].contexts) |context| try std.testing.expectEqual(encoder.table_style_profile.FigureObservedMediaKind.missing, context.media_kind);
         const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/jian-output", .{tmp.sub_path});
         checkpoint = "ordinary full-page Writer compile";
         var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
@@ -63629,6 +63977,117 @@ test "retained MG citation colon text keeps complete Writer body actions phases 
         try std.testing.expectError(error.UncompiledPresentation, doc.compileAlloc(a, "guard", .language, "Unclassified", "", negative, null));
 }
 
+
+
+
+
+
+test "Ready Figure style attachment is independent of ordinary occurrences and clears before absent or mismatched pages" {
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/vi-dau100/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/vi-dau100/interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile("testdata/vi-dau100/namespace-siteinfo.raw.json"));
+    const behavior_bytes = @embedFile("testdata/vi-dau100/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &digest, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/vi-dau100/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, digest); defer images.deinit();
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, @embedFile("testdata/vi-dau100/common.css"), .screen); defer styles.deinit();
+    const metadata_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/vi-context347-metadata", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{metadata_root, "modules"}));
+    const metadata_files = .{
+        .{ "namespace-registry.tsv", @embedFile("testdata/vi-dau100/namespace-registry.tsv") },
+        .{ "language-registry.tsv", @embedFile("testdata/vi-dau100/language-registry.tsv") },
+        .{ "language-names.tsv", @embedFile("testdata/vi-dau100/language-names.tsv") },
+        .{ "manifest.jsonl", @embedFile("testdata/vi-wikipedia227/manifest.jsonl") },
+        .{ "modules/256178.lua", @embedFile("testdata/vi-wikipedia227/modules/256178.lua") },
+        .{ "modules/256179.lua", @embedFile("testdata/vi-wikipedia227/modules/256179.lua") },
+        .{ "modules/256182.lua", @embedFile("testdata/vi-wikipedia227/modules/256182.lua") },
+        .{ "modules/256761.lua", @embedFile("testdata/vi-wikipedia227/modules/256761.lua") },
+        .{ "modules/256762.lua", @embedFile("testdata/vi-wikipedia227/modules/256762.lua") },
+        .{ "modules/260128.lua", @embedFile("testdata/vi-wikipedia227/modules/260128.lua") },
+        .{ "modules/260849.lua", @embedFile("testdata/vi-wikipedia227/modules/260849.lua") },
+        .{ "modules/260866.lua", @embedFile("testdata/vi-wikipedia227/modules/260866.lua") },
+        .{ "modules/261253.lua", @embedFile("testdata/vi-wikipedia227/modules/261253.lua") },
+        .{ "modules/269871.lua", @embedFile("testdata/vi-wikipedia227/modules/269871.lua") },
+        .{ "modules/270567.lua", @embedFile("testdata/vi-wikipedia227/modules/270567.lua") },
+        .{ "modules/270995.lua", @embedFile("testdata/vi-wikipedia227/modules/270995.lua") },
+        .{ "modules/271066.lua", @embedFile("testdata/vi-wikipedia227/modules/271066.lua") },
+        .{ "modules/271928.lua", @embedFile("testdata/vi-wikipedia227/modules/271928.lua") },
+        .{ "modules/272279.lua", @embedFile("testdata/vi-wikipedia227/modules/272279.lua") },
+        .{ "modules/272281.lua", @embedFile("testdata/vi-wikipedia227/modules/272281.lua") },
+        .{ "modules/272283.lua", @embedFile("testdata/vi-wikipedia227/modules/272283.lua") },
+        .{ "modules/272284.lua", @embedFile("testdata/vi-wikipedia227/modules/272284.lua") },
+        .{ "modules/272285.lua", @embedFile("testdata/vi-wikipedia227/modules/272285.lua") },
+        .{ "modules/272286.lua", @embedFile("testdata/vi-wikipedia227/modules/272286.lua") },
+        .{ "modules/272287.lua", @embedFile("testdata/vi-wikipedia227/modules/272287.lua") },
+        .{ "modules/272288.lua", @embedFile("testdata/vi-wikipedia227/modules/272288.lua") },
+        .{ "modules/272289.lua", @embedFile("testdata/vi-wikipedia227/modules/272289.lua") },
+        .{ "modules/272290.lua", @embedFile("testdata/vi-wikipedia227/modules/272290.lua") },
+        .{ "modules/272291.lua", @embedFile("testdata/vi-wikipedia227/modules/272291.lua") },
+        .{ "modules/272292.lua", @embedFile("testdata/vi-wikipedia227/modules/272292.lua") },
+        .{ "modules/272293.lua", @embedFile("testdata/vi-wikipedia227/modules/272293.lua") },
+        .{ "modules/272294.lua", @embedFile("testdata/vi-wikipedia227/modules/272294.lua") },
+        .{ "modules/272295.lua", @embedFile("testdata/vi-wikipedia227/modules/272295.lua") },
+        .{ "modules/272296.lua", @embedFile("testdata/vi-wikipedia227/modules/272296.lua") },
+        .{ "modules/273923.lua", @embedFile("testdata/vi-wikipedia227/modules/273923.lua") },
+        .{ "modules/279276.lua", @embedFile("testdata/vi-wikipedia227/modules/279276.lua") },
+    };
+    inline for (metadata_files) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{metadata_root, file[0]}), .data = file[1] });
+
+    var registry = try loadLanguageRegistry(io, a, metadata_root, &ns); defer registry.deinit();
+    inline for (.{
+        .{ "figure-siteinfo.raw.json", @embedFile("testdata/figure-inputs198/vi/figure-siteinfo.raw.json") },
+        .{ "figure-sizing.json", @embedFile("testdata/vi-context347/metadata/figure-sizing.json") },
+        .{ "figure-sizing.raw.json", @embedFile("testdata/vi-context347/metadata/figure-sizing.raw.json") },
+        .{ "figure-sizing.site.json", @embedFile("testdata/vi-imidazole-fit/figure-sizing.site.json") },
+    }) |input|
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{metadata_root, input[0]}), .data = input[1] });
+    const site = (try loadFigureSite(io, a, metadata_root, &ns)) orelse return error.TestUnexpectedResult;
+    var sizing = (try loadFigureSizing(io, a, metadata_root, &ns, site)) orelse return error.TestUnexpectedResult; defer sizing.deinit();
+    var book = try figure_page_observations.Book.init(a, @embedFile("testdata/vi-context347/metadata/figure-page-observations.json"), &ns, &sizing, site.source_sha256,
+        site.source_context.defaults.default_thumbnail_width orelse return error.TestUnexpectedResult); defer book.deinit();
+    const base_codes = languageCodes(&registry, &ns);
+    const case = .{ .title = "barracuda", .page_id = @as(u64, 8409), .revision = @as(u64, 2318321),
+        .raw = @as([]const u8, @embedFile("testdata/vi-context347/01/raw.wikitext")),
+        .source = @as([]const u8, @embedFile("testdata/vi-context347/01/expanded.wikitext")) };
+    try std.testing.expectEqualStrings("barracuda", case.title);
+    var selected_page: ?usize = null;
+    for (book.pages, 0..) |page, index| {
+        if (page.namespace_id != 0 or page.page_id != case.page_id or page.revision_id != case.revision or
+            !std.mem.eql(u8, page.title, case.title)) continue;
+        try std.testing.expect(selected_page == null);
+        selected_page = index;
+    }
+    const selected_index = selected_page orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 0), book.pages[selected_index].occurrences.len);
+    var codes = base_codes; codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    codes.figure_sizing = .{ .ctx = &sizing, .resolve_fn = figure_sizing.Registry.resolve,
+        .resolve_default_tiff_page_fn = figure_sizing.Registry.resolveDefaultTiffPage,
+        .resolve_height_only_width_fn = figure_sizing.Registry.resolveHeightOnlyWidth,
+        .resolve_width_limit_fn = figure_sizing.Registry.resolveWidthLimit,
+        .resolve_height_occurrence_fn = figure_sizing.Registry.resolveHeightOccurrence,
+        .source_context = try figureSourceContext(site, null) };
+    try attachFigurePageObservation(a, &codes, &book, site.source_sha256, 0, case.page_id, case.revision, case.title, case.raw, case.source);
+    const attached = codes.figure_sizing.?;
+    try std.testing.expect(attached.page_observation_ctx == null);
+    try std.testing.expect(attached.resolve_figure_style_fn == figure_page_observations.SelectedPageStyles.figureStyle);
+    const selected: *const figure_page_observations.SelectedPageStyles = @ptrCast(@alignCast(attached.figure_style_ctx orelse return error.TestUnexpectedResult));
+    try std.testing.expect(selected.source.ptr == case.source.ptr and selected.source.len == case.source.len);
+    try std.testing.expect(selected.styles == codes.table_styles and codes.page_style_parent == &styles);
+    try std.testing.expectEqual(@as(usize, 1), selected.figure_styles.len);
+    try attachFigurePageObservation(a, &codes, null, site.source_sha256, 0, case.page_id, case.revision, case.title, case.raw, case.source);
+    try std.testing.expect(codes.figure_sizing.?.figure_style_ctx == null and codes.figure_sizing.?.resolve_figure_style_fn == null);
+    try std.testing.expect(codes.table_styles == &styles and codes.page_style_parent == null);
+    try attachFigurePageObservation(a, &codes, &book, site.source_sha256, 0, case.page_id, case.revision, case.title, case.raw, case.source);
+    if (attachFigurePageObservation(a, &codes, &book, site.source_sha256, 0, case.page_id, case.revision + 1, case.title, case.raw, case.source)) |_| {} else |err| {
+        try std.testing.expectEqual(error.InvalidFigurePageObservations, err);
+    }
+    try std.testing.expect(codes.figure_sizing.?.figure_style_ctx == null and codes.figure_sizing.?.resolve_figure_style_fn == null);
+    try std.testing.expect(codes.table_styles == &styles and codes.page_style_parent == null);
+}
+
 const SharedTemplateSessionTest = struct {
     fn writeSidecars(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
         var writer = try dump_source.TemplateSourceWriter.init(io, a, root);
@@ -64025,4 +64484,962 @@ test "normal ZH manual choice profile does not enter automatic override or Cite 
         try std.testing.expect(!profile.automatic_identity and profile.effective_override == null and profile.cite_framing == null);
         try std.testing.expectEqualDeep(@as([]const []const u8, &.{ "zh-hans", "zh-hant" }), profile.fallbacks);
     }
+}
+
+
+const KuFullGet53658Writer = struct {
+    const T = encoder.presentation_types;
+    const fixture_prefix = "testdata/figure-page-observations/ku-missing-served-set/";
+    const title = "Pêvek:Îzoglosên kurdî û arî";
+    const file = "Wêne:NW Iranian.JPG";
+    const caption = "İsoglossê Zazaki u Zıwanê İrankiyê Zımeyi: IE.: Hindo-Ewropa, Pth.: Partki, Gor.: Goranki, Az.: Azarkiyo Khan, Zaz.: Zazaki, Tal.: Talışki, Semn.: Semnanki, Casp.: Zıwanê Xezari, Bal.: Beluçki, Kd.: Kurdki, Pers.: Farski";
+    const ExpectedCell = struct { header: bool, colspan: u16, rowspan: u16, background: ?[]const u8, text: []const u8, links: []const []const u8, center: bool };
+    const Expected = struct { headings: []const []const u8, tables: []const []const []const ExpectedCell };
+    fn hash(bytes: []const u8, expected: []const u8) !void {
+        var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+        try std.testing.expectEqualStrings(expected, &std.fmt.bytesToHex(digest, .lower));
+    }
+    fn normalized(a: std.mem.Allocator, bytes: []const u8) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        var space = false;
+        for (bytes) |byte| {
+            if (std.mem.indexOfScalar(u8, " \t\r\n\x0c", byte) != null) { space = out.items.len != 0; continue; }
+            if (space) try out.append(a, ' ');
+            space = false; try out.append(a, byte);
+        }
+        return out.toOwnedSlice(a);
+    }
+    fn shape(a: std.mem.Allocator) !std.json.Value {
+        var doc = try std.json.parseFromSliceLeaky(std.json.Value, a, @embedFile(fixture_prefix ++ "figure-page-observations.json"), .{ .allocate = .alloc_always });
+        var page = try std.json.parseFromSliceLeaky(std.json.Value, a, @embedFile(fixture_prefix ++ "mismatched-53658-page.json"), .{ .allocate = .alloc_always });
+        try page.object.getPtr("outer_context").?.object.put(a, "selected_body", .{ .string = "full_get_root" });
+        try page.object.put(a, "page_styles", doc.object.get("missing_link_styles").?.object.get("served_set").?);
+        try page.object.put(a, "figure_style_operations", try std.json.parseFromSliceLeaky(std.json.Value, a,
+            "[{\"start\":25780,\"end\":26121,\"media_kind\":\"missing\"}]", .{}));
+        var pages: std.ArrayList(std.json.Value) = .empty; try pages.append(a, page);
+        try doc.object.put(a, "pages", .{ .array = pages.toManaged(a) });
+        try doc.object.put(a, "schema", .{ .string = "wikidict.figure-page-observations.v8" });
+        return doc;
+    }
+    fn payload(a: std.mem.Allocator, root: []const u8) ![]const u8 {
+        const path = try std.fs.path.join(a, &.{root, encoder.blob_catalog.featureBlobFilename(.supplemental).?});
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, a, .limited(8 * 1024 * 1024));
+        const blob = try encoder.blob_format.inspect(bytes);
+        try std.testing.expectEqual(encoder.blob_format.BlobKind.supplemental, blob.kind);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        try std.testing.expectEqual(@as(usize, 1), index.recordCount());
+        const record = (try index.find(title)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(title, record.title);
+        return a.dupe(u8, record.payload);
+    }
+    // A source/captured anchor is one occurrence. Formatting may split its
+    // painted text across adjacent Spans, but an occurrence never cuts a Span
+    // or crosses an intervening non-action or another native span owner.
+    const ActionCursor = struct {
+        items: []const T.Span,
+        adjacent: []const bool,
+        index: usize = 0,
+        occurrences: usize = 0,
+        fn consume(self: *@This(), a: std.mem.Allocator, kind: T.InlineKind,
+            target: ?[]const u8, label: []const u8) !bool
+        {
+            if (self.adjacent.len != self.items.len or self.index >= self.items.len) return false;
+            const expected = try normalized(a, label);
+            defer a.free(expected);
+            if (expected.len == 0) return false;
+            const destination = target orelse self.items[self.index].target;
+            var text: std.ArrayList(u8) = .empty;
+            defer text.deinit(a);
+            var next = self.index;
+            while (next < self.items.len) : (next += 1) {
+                const span = self.items[next];
+                if ((next != self.index and !self.adjacent[next]) or span.kind != kind or
+                    !std.mem.eql(u8, span.target, destination) or span.target_fragment != null or
+                    (span.text.len == 0 and span.trail.len == 0)) return false;
+                try text.appendSlice(a, span.text); try text.appendSlice(a, span.trail);
+                const actual = try normalized(a, text.items);
+                defer a.free(actual);
+                if (actual.len > expected.len or !std.mem.eql(u8, actual, expected[0..actual.len])) return false;
+                if (actual.len == expected.len) {
+                    self.index = next + 1;
+                    self.occurrences += 1;
+                    return true;
+                }
+            }
+            return false;
+        }
+        fn complete(self: @This()) bool { return self.index == self.items.len; }
+    };
+    const AuthoredAction = struct { start: usize, end: usize, target: []const u8, label: []const u8 };
+    const AuthoredActions = struct { items: []const AuthoredAction, files: usize, categories: usize };
+    fn authoredActions(a: std.mem.Allocator, ns: *const namespace_registry.Registry,
+        source: []const u8, link_trail: encoder.document_ir.LinkTrail) !AuthoredActions
+    {
+        var result: std.ArrayList(AuthoredAction) = .empty;
+        var files: usize = 0; var categories: usize = 0;
+        // This retained fixture has only literal unpiped internal labels. Reuse
+        // the real tokenizer and site trail policy; decline any larger grammar.
+        var iterator: encoder.document_ir.InlineIterator = .{ .input = source,
+            .renderer_boundaries = true, .link_trail = link_trail };
+        while (iterator.next()) |span| {
+            if (span.kind != .link) continue;
+            const namespace = ns.ofTitle(span.target).id;
+            if (namespace == 6) { files += 1; continue; }
+            if (namespace == 14) { categories += 1; continue; }
+            if (span.link_has_pipe or span.link_empty_label or span.target.len == 0 or
+                !std.mem.eql(u8, span.text, span.target)) return error.UnsupportedAuthoredActionFixture;
+            const offset = std.math.sub(usize, @intFromPtr(span.target.ptr), @intFromPtr(source.ptr)) catch return error.UnsupportedAuthoredActionFixture;
+            if (offset < 2 or offset > source.len or !std.mem.eql(u8, source[offset - 2..offset], "[[") or
+                iterator.cursor <= offset or iterator.cursor > source.len) return error.UnsupportedAuthoredActionFixture;
+            try result.append(a, .{ .start = offset - 2, .end = iterator.cursor,
+                .target = try ns.normalizeTitle(a, span.target, 0, .literal),
+                .label = try std.mem.concat(a, u8, &.{ span.text, span.trail }) });
+        }
+        return .{ .items = try result.toOwnedSlice(a), .files = files, .categories = categories };
+    }
+
+    const Scan = struct {
+        text: std.ArrayList(u8) = .empty,
+        actions: std.ArrayList(T.Span) = .empty,
+        action_adjacent: std.ArrayList(bool) = .empty,
+        bold: std.ArrayList([]const u8) = .empty,
+        tables: std.ArrayList(T.Table) = .empty,
+        figures: std.ArrayList(T.Figure) = .empty,
+        centers: usize = 0,
+        fn spans(self: *@This(), a: std.mem.Allocator, values: []const T.Span) !void {
+            for (values, 0..) |span, index| {
+                try self.text.appendSlice(a, span.text); try self.text.appendSlice(a, span.trail);
+                if (span.kind == .link or span.kind == .external_link) {
+                    try self.actions.append(a, span);
+                    // Never join across another Span, block/cell or span owner.
+                    try self.action_adjacent.append(a, index != 0 and values[index - 1].kind == span.kind);
+                }
+                if (span.bold and span.text.len != 0) try self.bold.append(a, span.text);
+            }
+        }
+        fn figure(self: *@This(), a: std.mem.Allocator, value: T.Figure) anyerror!void {
+            try self.figures.append(a, value);
+            if (value.content == .missing) try self.spans(a, &.{value.content.missing.label});
+            if (value.caption_blocks) |children| try self.blocks(a, children) else try self.spans(a, value.caption);
+        }
+        fn flow(self: *@This(), a: std.mem.Allocator, values: []const T.FlowPart) anyerror!void {
+            for (values) |part| switch (part.kind) {
+                .@"inline" => try self.spans(a, part.spans),
+                .figure => try self.figure(a, part.figure orelse return error.TestUnexpectedResult),
+                .scope => try self.flow(a, (part.scope orelse return error.TestUnexpectedResult).parts),
+            };
+        }
+        fn blocks(self: *@This(), a: std.mem.Allocator, values: []const T.Block) anyerror!void {
+            for (values) |block| {
+                if (block.text_align == .center) self.centers += 1;
+                try self.spans(a, block.spans);
+                if (block.table) |table| {
+                    try self.tables.append(a, table);
+                    if (table.caption_blocks) |children| try self.blocks(a, children) else try self.spans(a, table.caption);
+                    for (table.rows) |row| for (row.cells) |cell| {
+                        try std.testing.expect(cell.nested_table == null);
+                        if (cell.blocks) |children| try self.blocks(a, children) else try self.spans(a, cell.spans);
+                    };
+                }
+                if (block.figure) |figure_value| try self.figure(a, figure_value);
+                if (block.flow) |parts| try self.flow(a, parts);
+                if (block.container) |container| try self.blocks(a, container.blocks);
+            }
+        }
+    };
+};
+
+test "retained KU 53658 full GET completes supplemental Writer with all tables Missing caption actions styles and Stored codec" {
+    const F = KuFullGet53658Writer;
+    const T = encoder.presentation_types;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var checkpoint: []const u8 = "retained complete page and genuine missing batch";
+    var report: []const u8 = "";
+    var stored: ?T.Stored = null;
+    errdefer std.debug.print("KU53658_CHECKPOINT={s}\nKU53658_REPORT={s}\nKU53658_COMPLETE_STORED={f}\n", .{ checkpoint, report, std.json.fmt(stored, .{}) });
+    const shape = try F.shape(a);
+    const page = shape.object.get("pages").?.array.items[0];
+    try std.testing.expectEqualStrings(F.title, page.object.get("title").?.string);
+    try std.testing.expectEqual(@as(i64, 53658), page.object.get("page_id").?.integer);
+    try std.testing.expectEqual(@as(i64, 5884328), page.object.get("revision_id").?.integer);
+    const response = try std.json.parseFromSliceLeaky(std.json.Value, a, page.object.get("response").?.string, .{});
+    const source = response.object.get("parse").?.object.get("wikitext").?.string;
+    try F.hash(source, "ed942971342411e72720f64881ff55ebbc3d36a3a019d96da2b5ce8f199bcb42");
+    try std.testing.expectEqual(@as(usize, 26592), source.len);
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, source, "<center>-</center>"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "[[Image:NW Iranian.JPG|thumb|500px|right|"));
+    const namespace_bytes = @embedFile(F.fixture_prefix ++ "namespace-registry.tsv");
+    var ns = try namespace_registry.Registry.init(a, namespace_bytes); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/ku-malper/interwiki-map.tsv"));
+    const namespace = ns.byId(100) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(namespace.role == .supplemental);
+    const behavior_bytes = @embedFile("testdata/ku-malper/behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var behavior_sha: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &behavior_sha, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile("testdata/ku-malper/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_sha); defer images.deinit();
+    var styles = try encoder.table_style_profile.parseForTargetAlloc(a, @embedFile("testdata/ku-malper/common.css"), .screen); defer styles.deinit();
+    const input = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ku53658-input", .{tmp.sub_path});
+    try std.Io.Dir.cwd().createDirPath(io, input);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{input, "namespace-registry.tsv"}), .data = namespace_bytes });
+    inline for (.{ "figure-siteinfo.raw.json", "figure-sizing.site.json" }) |name|
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{input, name}), .data = @embedFile("testdata/ku-mer-next268/" ++ name) });
+    inline for (.{ "figure-sizing.json", "figure-sizing.raw.json" }) |name|
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{input, name}), .data = @embedFile("testdata/ku-full-get53658/" ++ name) });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{input, figure_page_observations.filename}), .data = try std.json.Stringify.valueAlloc(a, shape, .{}) });
+    const site = (try loadFigureSite(io, a, input, &ns)) orelse return error.TestUnexpectedResult;
+    try ns.attachLanguageConversion(@embedFile("testdata/ku-mer-next268/figure-siteinfo.raw.json"));
+    var sizing = (try loadFigureSizing(io, a, input, &ns, site)) orelse return error.TestUnexpectedResult; defer sizing.deinit();
+    try std.testing.expect(sizing.file_authority and sizing.missing_files.contains(F.file));
+    var book = (try loadFigurePageObservations(io, a, input, &ns, &sizing, site)) orelse return error.TestUnexpectedResult; defer book.deinit();
+    try std.testing.expectEqual(@as(usize, 1), book.pages.len);
+    const missing = book.pages[0].occurrences[0].missing_content orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 500), missing.data_width);
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    var codes = languageCodes(&registry, &ns); codes.behavior_switches = &behavior; codes.image_options = &images; codes.table_styles = &styles;
+    codes.figure_sizing = .{ .ctx = &sizing, .resolve_fn = figure_sizing.Registry.resolve,
+        .resolve_default_tiff_page_fn = figure_sizing.Registry.resolveDefaultTiffPage,
+        .resolve_height_only_width_fn = figure_sizing.Registry.resolveHeightOnlyWidth,
+        .resolve_width_limit_fn = figure_sizing.Registry.resolveWidthLimit,
+        .resolve_height_occurrence_fn = figure_sizing.Registry.resolveHeightOccurrence,
+        .source_context = try figureSourceContext(site, null) };
+    checkpoint = "normal selected full-source observation attachment";
+    try attachFigurePageObservation(a, &codes, &book, site.source_sha256, 100, 53658, 5884328, F.title, source, source);
+    const selected: *const figure_page_observations.SelectedPageStyles = @ptrCast(@alignCast(codes.figure_sizing.?.figure_style_ctx orelse return error.TestUnexpectedResult));
+    try std.testing.expect(selected.source.ptr == source.ptr and selected.source.len == source.len and selected.styles == codes.table_styles.?);
+    try std.testing.expectEqual(@as(usize, 1), selected.figure_styles.len);
+    for (selected.figure_styles[0].contexts) |context| {
+        const height = (try encoder.table_style_profile.resolveObservedFigureRootCustomValue(a, context, "--line-height-content")) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(height == .known); try std.testing.expectEqualStrings("1.5714285", height.known);
+    }
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ku53658-output", .{tmp.sub_path});
+    checkpoint = "ordinary complete supplemental Writer and finish";
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes; writer.stats.pages_seen = 1;
+    try writer.addExpandedPage(a, .{ .id = 100, .kind = .supplemental }, F.title, source, source, null);
+    const stats = try writer.finish(codes);
+    const bytes = try F.payload(a, output);
+    stored = try encoder.presentation_codec.decodeAlloc(a, bytes, F.title, .supplemental, null);
+    const entry = stored.?.entry;
+    checkpoint = "complete Stored round trip and report";
+    const encoded = try encoder.presentation_codec.encodeAlloc(a, stored.?);
+    try std.testing.expectEqualSlices(u8, bytes, encoded);
+    try std.testing.expectEqualDeep(stored.?, try encoder.presentation_codec.decodeAlloc(a, encoded, F.title, .supplemental, null));
+    report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{output, "fallback-pages.jsonl"}), a, .limited(64 * 1024));
+    try std.testing.expectEqualStrings("", report);
+    try std.testing.expectEqual(@as(usize, 1), stats.pages_seen);
+    try std.testing.expectEqual(@as(usize, 1), stats.supplemental_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+    try std.testing.expect(entry.kind == .supplemental and entry.language == null and entry.language_code.len == 0);
+    try std.testing.expectEqualStrings(F.title, entry.title);
+    const oracle = try std.json.parseFromSliceLeaky(F.Expected, a, @embedFile("testdata/ku-full-get53658/tables-from-get.json"), .{});
+    try std.testing.expectEqual(oracle.headings.len, entry.sections.len);
+    var scan: F.Scan = .{};
+    for (entry.sections, oracle.headings) |section, heading| {
+        try std.testing.expectEqualStrings(heading, section.title);
+        try scan.blocks(a, section.blocks);
+    }
+    try std.testing.expectEqual(@as(usize, 0), entry.preamble_spans.len);
+    try std.testing.expectEqual(@as(usize, 0), entry.references.len);
+    try std.testing.expectEqual(@as(usize, 10), scan.tables.items.len);
+    checkpoint = "all 102 rows 1428 cells and four genuine CENTER cells against retained GET";
+    var total_rows: usize = 0; var total_cells: usize = 0; var centers: usize = 0;
+    for (scan.tables.items, oracle.tables, 0..) |table, expected_rows, ti| {
+        errdefer std.debug.print("KU53658_TABLE={d}\n", .{ti});
+        try std.testing.expectEqual(expected_rows.len, table.rows.len); total_rows += table.rows.len;
+        for (table.rows, expected_rows, 0..) |row, expected_cells, ri| {
+            errdefer std.debug.print("KU53658_ROW={d}\n", .{ri});
+            try std.testing.expectEqual(expected_cells.len, row.cells.len); total_cells += row.cells.len;
+            for (row.cells, expected_cells, 0..) |cell, expected, ci| {
+                errdefer std.debug.print("KU53658_CELL={d}\n", .{ci});
+                try std.testing.expectEqual(expected.header, cell.header);
+                try std.testing.expectEqual(expected.colspan, cell.colspan); try std.testing.expectEqual(expected.rowspan, cell.rowspan);
+                if (expected.background) |color| try std.testing.expect(std.ascii.eqlIgnoreCase(color, cell.background orelse return error.TestUnexpectedResult)) else try std.testing.expect(cell.background == null);
+                var child: F.Scan = .{};
+                if (cell.blocks) |blocks| try child.blocks(a, blocks) else try child.spans(a, cell.spans);
+                try std.testing.expectEqualStrings(expected.text, try F.normalized(a, child.text.items));
+                var actions: F.ActionCursor = .{ .items = child.actions.items, .adjacent = child.action_adjacent.items };
+                for (expected.links) |label| try std.testing.expect(try actions.consume(a, .link, null, label));
+                try std.testing.expect(actions.complete());
+                try std.testing.expectEqual(expected.links.len, actions.occurrences);
+                if (expected.center) { try std.testing.expectEqual(@as(usize, 1), child.centers); centers += 1; }
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 102), total_rows); try std.testing.expectEqual(@as(usize, 1428), total_cells);
+    try std.testing.expectEqual(@as(usize, 4), centers);
+    checkpoint = "Missing Figure complete caption font and action witnesses";
+    try std.testing.expectEqual(@as(usize, 1), scan.figures.items.len);
+    const figure = scan.figures.items[0];
+    try std.testing.expect(figure.content == .missing and figure.format == .thumbnail and figure.placement == .float_right);
+    try std.testing.expectEqualDeep(T.StyleLength{ .unit = .px, .value = 500 }, figure.content.missing.width);
+    try std.testing.expectEqualStrings(missing.href, figure.content.missing.label.target);
+    try std.testing.expectEqualStrings(missing.label, figure.content.missing.label.text);
+    const layout = figure.table_caption_layout orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ku", layout.media.strut.language);
+    try std.testing.expect(layout.missing_link_paint != null);
+    var caption_scan: F.Scan = .{};
+    if (figure.caption_blocks) |blocks| try caption_scan.blocks(a, blocks) else try caption_scan.spans(a, figure.caption);
+    try std.testing.expectEqualStrings(F.caption, try F.normalized(a, caption_scan.text.items));
+    const abbreviations = [_][]const u8{ "IE", "Pth", "Gor", "Az", "Zaz", "Tal", "Semn", "Casp", "Bal", "Kd", "Pers" };
+    try std.testing.expectEqual(abbreviations.len, caption_scan.bold.items.len);
+    for (abbreviations, caption_scan.bold.items) |wanted, actual| try std.testing.expectEqualStrings(wanted, actual);
+    try std.testing.expectEqual(@as(usize, 0), caption_scan.actions.items.len);
+    const authored = try F.authoredActions(a, &ns, source, codes.link_trail);
+    try std.testing.expectEqual(@as(usize, 1), authored.files);
+    try std.testing.expectEqual(@as(usize, 2), authored.categories);
+    var internal_spans: std.ArrayList(T.Span) = .empty;
+    var internal_adjacent: std.ArrayList(bool) = .empty;
+    for (scan.actions.items, scan.action_adjacent.items) |action, adjacent| if (action.kind == .link) {
+        try internal_spans.append(a, action); try internal_adjacent.append(a, adjacent);
+    };
+    var actions: F.ActionCursor = .{ .items = internal_spans.items, .adjacent = internal_adjacent.items };
+    for (authored.items) |owner| try std.testing.expect(try actions.consume(a, .link, owner.target, owner.label));
+    try std.testing.expect(actions.complete());
+    try std.testing.expectEqual(authored.items.len, actions.occurrences);
+    const internal = actions.occurrences;
+    try std.testing.expectEqual(@as(usize, 679), internal);
+    const external = [_][]const u8{ missing.href,
+        "http://www.zazaki.de/englisch/articels/Paul-1998-Zaza.pdf", "http://www.etymonline.com/index.php",
+        "http://en.wiktionary.org/wiki", "http://www.ferheng.org", "http://www.ijunoon.com/balochidic/mean.asp", "http://www.nisanyansozluk.com" };
+    var external_index: usize = 0;
+    for (scan.actions.items) |action| if (action.kind == .external_link) {
+        try std.testing.expect(external_index < external.len);
+        try std.testing.expectEqualStrings(external[external_index], action.target); external_index += 1;
+    };
+    try std.testing.expectEqual(external.len, external_index);
+    const bibliography = [_][]const u8{ "Zülfü Selcan, Grammatik der Zaza-Sprache", "Paul Horn, Grundriss der persischen Etymologie",
+        "Ludwig Paul: The position of Zazaki among the westiranian languages", "http://www.etymonline.com/index.php",
+        "http://en.wiktionary.org/wiki", "http://www.ferheng.org", "http://www.ijunoon.com/balochidic/mean.asp", "http://www.nisanyansozluk.com" };
+    var item_index: usize = 0;
+    for (entry.sections[entry.sections.len - 1].blocks) |block| {
+        var item: F.Scan = .{}; try item.blocks(a, &.{block});
+        if (block.kind == .blank) { try std.testing.expectEqualStrings("", try F.normalized(a, item.text.items)); continue; }
+        try std.testing.expect(block.kind == .list_item and item_index < bibliography.len);
+        try std.testing.expectEqualStrings(bibliography[item_index], try F.normalized(a, item.text.items)); item_index += 1;
+    }
+    try std.testing.expectEqual(bibliography.len, item_index);
+    // The hash-bound source and selected operation have remained complete.
+    try F.hash(source, "ed942971342411e72720f64881ff55ebbc3d36a3a019d96da2b5ce8f199bcb42");
+}
+
+test "headword shared rows eliminate duplicate traversal and preserve normal Writer complete codec bytes" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try QuSourceBannerTest.install(io, a, root);
+    const catalog = QuSourceBannerTest.namespaces ++ "828\tModule\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n";
+    var ns = try namespace_registry.Registry.init(a, catalog); defer ns.deinit();
+    var view: LanguageTemplateRows = .{ .io = io, .a = a, .root = root, .namespaces = &ns }; defer view.deinit();
+    var expected: ?[]const u8 = null;
+    for ([_]bool{ false, true }) |shared| {
+        var registry = language_registry.Registry.empty(a); defer registry.deinit();
+        try registry.addTsv(QuSourceBannerTest.registry);
+        if (shared) {
+            try loadSourceHeadwordRoleWithRows(io, a, root, &ns, "", &registry, &view);
+            try std.testing.expect(view.complete and !registry.source_headword_role);
+            try loadSourceLanguageBannersWithRows(io, a, root, &ns, &registry, &view);
+            try loadSourceCategoryH1BannersWithRows(io, a, root, &ns, &registry, &view);
+            try loadSourceEquivalentLanguageTemplatesWithRows(io, a, root, &ns, &registry, &view);
+            try view.check();
+        } else {
+            try loadSourceHeadwordRole(io, a, root, &ns, "", &registry);
+            try loadSourceLanguageBanners(io, a, root, &ns, &registry);
+            try loadSourceCategoryH1Banners(io, a, root, &ns, &registry);
+            try loadSourceEquivalentLanguageTemplates(io, a, root, &ns, &registry);
+        }
+        try std.testing.expect(!registry.source_headword_role);
+        try std.testing.expect(registry.matchesSourceLanguageBanner("qu", QuSourceBannerTest.heading, 1));
+        try std.testing.expect(registry.resolveTrusted(QuSourceBannerTest.heading) == null);
+        const codes = languageCodes(&registry, &ns);
+        const output = try std.fs.path.join(a, &.{ root, if (shared) "shared-headword" else "standalone-headword" });
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "yaku", QuSourceBannerTest.expanded, QuSourceBannerTest.raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename("Runa Simi", &filename) })); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find("yaku")).?;
+        const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        try std.testing.expectEqualStrings("qu", stored.entry.language_code);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+        if (expected) |bytes| try std.testing.expectEqualSlices(u8, bytes, record.payload) else expected = try a.dupe(u8, record.payload);
+    }
+    try std.testing.expectEqual(@as(u64, 1), view.scans);
+    try std.testing.expectEqual(@as(u64, 1), view.completed_scans);
+    try std.testing.expectEqual(@as(u64, 1), view.parsed_rows);
+    try std.testing.expectEqual(@as(u64, 3), view.reuses);
+    try std.testing.expectEqual(view.index.?.bytes.len, view.parsed_bytes);
+}
+
+test "headword shared rows preserve wrong namespace duplicate precedence and global ordinals" {
+    for ([_]bool{ false, true }) |duplicate| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        const catalog = QuSourceBannerTest.namespaces ++ "828\tModule\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n";
+        var ns = try namespace_registry.Registry.init(a, catalog); defer ns.deinit();
+        const wrong = "0\t0\tPlantilla:head\t\t1\t2\t2026-10-01T00:00:00Z\tA\twikitext\t9\t1\t0\n";
+        const dil = "0\t0\tPlantilla:Dil\t\t3\t4\t2026-10-01T00:00:00Z\tA\twikitext\t10\t0\t0\n";
+        const body = try std.mem.concat(a, u8, &.{ "# comment\n\n", SharedTemplateRowsTest.ordinary, wrong, if (duplicate) wrong ++ "0\n" else dil });
+        _ = try SharedTemplateRowsTest.write(io, a, root, body);
+        var registry = language_registry.Registry.empty(a); defer registry.deinit();
+        var view: LanguageTemplateRows = .{ .io = io, .a = a, .root = root, .namespaces = &ns }; defer view.deinit();
+        if (duplicate) {
+            // Duplicate identity precedes the later malformed row exactly as in
+            // the original headword traversal, even when row.ns is not ten.
+            try std.testing.expectError(error.DuplicateLanguageTemplateSource, loadSourceHeadwordRoleWithRows(io, a, root, &ns, "", &registry, &view));
+            try std.testing.expect(!view.complete);
+        } else {
+            try loadSourceHeadwordRoleWithRows(io, a, root, &ns, "", &registry, &view);
+            try std.testing.expect(view.complete);
+        }
+        try std.testing.expect(!registry.source_headword_role);
+        try std.testing.expectEqual(@as(usize, 2), view.entries.items.len);
+        try std.testing.expectEqual(@as(u64, 1), view.entries.items[0].ordinal);
+        try std.testing.expectEqual(@as(u64, 2), view.entries.items[1].ordinal);
+        try std.testing.expectEqual(@as(u64, 3), view.parsed_rows);
+        try std.testing.expectEqual(@as(u32, 9), view.entries.items[0].row.ns);
+        try std.testing.expectEqual(@as(u64, 0), view.template_opens);
+    }
+}
+
+test "headword shared rows retain malformed tail ordering and absent Module namespace laziness" {
+    for ([_]bool{ false, true }) |has_module| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        _ = try SharedTemplateRowsTest.write(io, a, root, SharedTemplateRowsTest.template ++ "0\n");
+        const with_module = QuSourceBannerTest.namespaces ++ "828\tModule\tModule\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n";
+        var ns = try namespace_registry.Registry.init(a, if (has_module) with_module else QuSourceBannerTest.namespaces); defer ns.deinit();
+        var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(QuSourceBannerTest.registry);
+        var view: LanguageTemplateRows = .{ .io = io, .a = a, .root = root, .namespaces = &ns }; defer view.deinit();
+        if (has_module) {
+            try std.testing.expectError(error.InvalidPageIndex, loadSourceHeadwordRoleWithRows(io, a, root, &ns, "", &registry, &view));
+            try std.testing.expectEqual(@as(u64, 1), view.parsed_rows);
+            try std.testing.expectEqual(@as(u64, 0), view.template_opens);
+        } else {
+            try loadSourceHeadwordRoleWithRows(io, a, root, &ns, "", &registry, &view);
+            try std.testing.expect(view.index == null and view.file == null);
+            try std.testing.expectEqual(@as(u64, 0), view.scans);
+            // The existing banner's absent-sidecar first demand still returns
+            // before the malformed tail when the headword loader is inapplicable.
+            try loadSourceLanguageBannersWithRows(io, a, root, &ns, &registry, &view);
+            try std.testing.expectEqual(@as(u64, 1), view.parsed_rows);
+            try std.testing.expectEqual(@as(u64, 1), view.template_opens);
+        }
+        try std.testing.expect(!view.complete and !registry.source_headword_role);
+        try std.testing.expectEqual(@as(u64, 1), view.scans);
+    }
+}
+
+
+test "Figure full compatibility uses normal replay while headers alone do not accept records" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const parent = try std.Io.Dir.cwd().realPathFileAlloc(io, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}), a);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/figure-sizing/mg-namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/mg-tope/namespace-siteinfo.figure-defaults.raw.json"));
+    const parsed_site = try parseSiteMainPage(a, @embedFile("testdata/mg-tope/namespace-siteinfo.figure-defaults.raw.json"), &ns);
+    defer a.free(parsed_site.title);
+    const site: FigureSite = .{ .source_context = .{ .namespace_sha256 = ns.source_sha256, .defaults = ns.figure_source_defaults.? },
+        .core_revision = parsed_site.figure_core_revision.?, .source_sha256 = parsed_site.digest };
+    const V = std.json.Value;
+    const site_bytes = figureSizingTestInput("figure-sizing.site.json");
+    const registration = try std.json.parseFromSliceLeaky(V, a, site_bytes, .{ .allocate = .alloc_always });
+    var response = try std.json.parseFromSliceLeaky(V, a, figureSizingTestInput("figure-sizing.raw.json"), .{ .allocate = .alloc_always });
+    try response.object.getPtr("query").?.object.put(a, "extensions", registration.object.get("query").?.object.get("extensions").?);
+    const response_json = try std.json.Stringify.valueAlloc(a, response, .{});
+    const response_bytes = response_json;
+    try std.testing.expect(response_bytes.len < 2 * 1024 * 1024);
+    const file = "Sary:MapOfAinuLanguage-Milk.svg";
+    const batches = [_]struct { requests: []const []const u8, response: []const u8 }{.{ .requests = &.{file}, .response = response_bytes }};
+    const raw = try std.json.Stringify.valueAlloc(a, .{ .schema = "wikidict.figure-sizing-raw-batches.v1", .batches = &batches }, .{});
+    var projection = try std.json.parseFromSliceLeaky(V, a, figureSizingTestInput("figure-sizing.json"), .{ .allocate = .alloc_always });
+    _ = projection.object.swapRemove("observation_utc");
+    try projection.object.put(a, "schema", .{ .string = "wikidict.figure-sizing-files.v1" });
+    try projection.object.put(a, "generator_sha256", .{ .string = figure_sizing.file_generator_sha256 });
+    try projection.object.put(a, "raw_sha256", .{ .string = try auditHash(a, raw) });
+    projection.object.getPtr("records").?.array.items.len = 1;
+    const record = &projection.object.getPtr("records").?.array.items[0];
+    inline for (.{ "format", "width_px", "height_px", "sizing", "proof_kind" }) |key| _ = record.object.swapRemove(key);
+    try record.object.put(a, "requested_file", .{ .string = file });
+    try record.object.put(a, "state", .{ .string = "eligible" });
+    try record.object.put(a, "batch", .{ .integer = 0 });
+    try record.object.put(a, "mime", .{ .string = "image/svg+xml" });
+    try record.object.put(a, "mediatype", .{ .string = "DRAWING" });
+    const raw_header = try std.json.Stringify.valueAlloc(a, .{ .schema = "wikidict.figure-sizing-raw.stream.v1",
+        .wiki = ns.wiki, .core_revision = site.core_revision,
+        .namespace_registry_sha256 = &std.fmt.bytesToHex(ns.source_sha256, .lower),
+        .base_batches = @as(u64, 1), .observed_batches = @as(u64, 0), .records_count = @as(u64, 1) }, .{});
+    const raw_record = try std.json.Stringify.valueAlloc(a, batches[0], .{});
+    const streamed_raw = try std.mem.concat(a, u8, &.{ raw_header, "\n", raw_record, "\n" });
+    const fact = try std.json.Stringify.valueAlloc(a, record.*, .{});
+    _ = projection.object.swapRemove("records");
+    try projection.object.put(a, "schema", .{ .string = figure_sizing.stream_schema });
+    try projection.object.put(a, "raw_sha256", .{ .string = try auditHash(a, streamed_raw) });
+    try projection.object.put(a, "raw_bytes", .{ .integer = @intCast(streamed_raw.len) });
+    try projection.object.put(a, "base_batches", .{ .integer = 1 });
+    try projection.object.put(a, "observed_batches", .{ .integer = 0 });
+    try projection.object.put(a, "records_count", .{ .integer = 1 });
+    const projection_header = try std.json.Stringify.valueAlloc(a, projection, .{});
+    const streamed_projection = try std.mem.concat(a, u8, &.{ projection_header, "\n", fact, "\n" });
+    const names = .{ "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json" };
+    const values = .{ streamed_projection, streamed_raw, site_bytes };
+    inline for (names, values) |name, value| try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = try std.fs.path.join(a, &.{ parent, name }), .data = value });
+
+    var paths: [5][]const u8 = undefined;
+    paths[0] = try std.fs.path.join(a, &.{ parent, "selected-namespace" });
+    paths[1] = try std.fs.path.join(a, &.{ parent, "selected-siteinfo" });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = paths[0], .data = @embedFile("testdata/figure-sizing/mg-namespace-registry.tsv") });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = paths[1], .data = @embedFile("testdata/mg-tope/namespace-siteinfo.figure-defaults.raw.json") });
+    inline for (names, 0..) |name, index| paths[index + 2] = try std.fs.path.join(a, &.{ parent, name });
+    const full = [_][]const u8{ "--full", paths[0], paths[1], paths[2], paths[3], paths[4] };
+    try checkFigureCompatibility(io, std.testing.allocator, &paths);
+    try checkFigureCompatibility(io, std.testing.allocator, &full);
+    try std.testing.expectError(error.Usage, checkFigureCompatibility(io, a, full[0..5]));
+    var relative = full; relative[1] = "namespace-registry.tsv";
+    try std.testing.expectError(error.Usage, checkFigureCompatibility(io, a, &relative));
+    // Valid header and typed fact, but a mismatched replayed dimension.
+    const width = record.object.get("original_width").?.integer;
+    try record.object.put(a, "original_width", .{ .integer = width + 1 });
+    const bad_fact = try std.json.Stringify.valueAlloc(a, record.*, .{});
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = paths[2], .data = try std.mem.concat(a, u8, &.{ projection_header, "\n", bad_fact, "\n" }) });
+    try checkFigureCompatibility(io, std.testing.allocator, &paths);
+    try std.testing.expectError(error.InvalidFigureSizingSource, checkFigureCompatibility(io, std.testing.allocator, &full));
+    try std.testing.expectError(error.InvalidFigureSizingSource, loadFigureSizingAt(io, std.testing.allocator, .{ paths[2], paths[3], paths[4] }, &ns, site));
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = paths[2], .data = streamed_projection });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = paths[1], .data = "{}" });
+    try std.testing.expectError(error.InvalidSiteMainPage, checkFigureCompatibility(io, a, &paths));
+    try std.testing.expectError(error.InvalidSiteMainPage, checkFigureCompatibility(io, a, &full));
+}
+
+const IndexedOrdinaryOutputTesting = struct {
+    const io = std.testing.io;
+    a: std.mem.Allocator,
+    root: []const u8,
+    dump_path: []const u8,
+    index_path: []const u8,
+    guard_path: []const u8,
+    absent_path: []const u8,
+    rows: [3][]const u8,
+    offsets: [3]usize,
+    namespaces: namespace_registry.Registry,
+    redirects: encoder.page_redirects.Snapshot,
+    dump: dump_source.SourceReader,
+    page_index: Mapped,
+    pool: ExpansionPool,
+    shared: CapturedWriterInputs,
+    book: CapturedWriterInputs,
+
+    fn init(a: std.mem.Allocator, root: []const u8, bad_middle_namespace: bool) !*@This() {
+        const self = try a.create(@This());
+        self.a = a; self.root = root;
+        self.namespaces = try namespace_registry.Registry.init(a,
+            "# wikidict-namespace-registry-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\ten\n" ++
+            "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+            "10\tTemplate\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+            "14\tCategory\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+        const pairs = [_][2][]const u8{ .{ "First", "first" }, .{ "Second", "second" }, .{ "Third", "third" } };
+        var text: std.ArrayList(u8) = .empty;
+        var index: std.ArrayList(u8) = .empty;
+        for (pairs, 0..) |pair, i| {
+            const raw = try std.fmt.allocPrint(a, "#REDIRECT [[{s}]]\n", .{pair[1]});
+            const ns: u32 = if (i == 1 and bad_middle_namespace) 999 else 0;
+            self.offsets[i] = index.items.len;
+            self.rows[i] = try std.fmt.allocPrint(a,
+                "{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t2026-10-01T00:00:00Z\tUser\twikitext\t{d}\t1\t0\n",
+                .{ text.items.len, raw.len, pair[0], pair[1], i + 1, i + 11, ns });
+            try index.appendSlice(a, self.rows[i]);
+            try text.appendSlice(a, raw);
+        }
+        for (pairs, 0..) |pair, i| try index.appendSlice(a, try std.fmt.allocPrint(a,
+            "0\t0\t{s}\t\t{d}\t{d}\t2026-10-01T00:00:00Z\tUser\twikitext\t0\t1\t0\n", .{ pair[1], i + 101, i + 201 }));
+        self.dump_path = try std.fs.path.join(a, &.{ root, "pages.xml" });
+        self.index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        self.guard_path = try std.fs.path.join(a, &.{ root, "shared-provider.tsv" });
+        self.absent_path = try std.fs.path.join(a, &.{ root, "absent-provider.tsv" });
+        const title_path = try std.fs.path.join(a, &.{ root, dump_source.page_title_index_filename });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = self.dump_path, .data = text.items });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = self.index_path, .data = index.items });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = self.guard_path, .data = "immutable provider\n" });
+        try dump_source.buildPageTitleIndex(io, a, self.index_path, title_path);
+        const titles = try std.Io.Dir.cwd().readFileAlloc(io, title_path, a, .limited(4096));
+        self.page_index = try mmapPath(io, self.index_path);
+        self.dump = try dump_source.SourceReader.open(io, a, a, self.dump_path, .raw_xml, null);
+        self.redirects = try encoder.page_redirects.Snapshot.init(a,
+            "# wikidict-page-redirects-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n" ++
+            "# sql-sha256\t0000000000000000000000000000000000000000000000000000000000000000\n" ++
+            "1\t0\t6669727374\t\t\n2\t0\t7365636f6e64\t\t\n3\t0\t7468697264\t\t\n# end\t3\n", &self.namespaces);
+        // Genuine source-index/redirect dispatch. No executable or fake expanded
+        // source is available: a mistaken worker dispatch cannot succeed.
+        self.pool = .{ .io = io, .allocator = a, .completion = undefined, .slots = &.{},
+            .page_index_bytes = self.page_index.bytes, .page_title_index = try dump_source.PageTitleIndex.init(titles),
+            .page_redirects = &self.redirects };
+        self.shared = .{ .io = io, .a = a };
+        self.book = .{ .io = io, .a = a };
+        for ([_][]const u8{ self.dump_path, self.index_path, self.guard_path, self.absent_path }) |path|
+            _ = try self.shared.hold(path, "ordinary-controlled-input");
+        return self;
+    }
+    fn deinit(self: *@This()) void {
+        self.book.deinit(); self.shared.deinit(); self.redirects.deinit();
+        self.dump.deinit(); self.page_index.deinit(); self.namespaces.deinit();
+    }
+    fn selected(self: *@This(), i: usize) IndexedOutputSelection {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(self.rows[i], &digest, .{});
+        return .{ .ordinal = i, .offset = self.offsets[i], .row_sha256 = digest,
+            .name = ([_][]const u8{ "first", "second", "third" })[i] };
+    }
+    fn run(self: *@This(), output: []const u8, selection: IndexedOutputSelection, cursor: *IndexedOutputCursor) !void {
+        try runIndexedOrdinaryOutput(io, self.a, output, selection, .{ .now_unix = 1791731560 }, .{},
+            &self.namespaces, &self.pool, &self.dump, &self.page_index, .raw_xml, self.index_path,
+            null, &self.book, &self.shared, cursor);
+    }
+    fn outcome(self: *@This(), output: []const u8, name: []const u8) !std.json.Value {
+        const path = try std.fs.path.join(self.a, &.{ output, name, "ordinary-output-result.json" });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, self.a, .limited(4096));
+        return std.json.parseFromSliceLeaky(std.json.Value, self.a, bytes, .{});
+    }
+};
+
+test "ordinary indexed output arguments preserve default options and refuse mixed or ambiguous selections" {
+    const z = "0000000000000000000000000000000000000000000000000000000000000000";
+    const normal = try parseOptions(&.{ "tool", "/dump", "/out", "--expander-root", "/root" });
+    try std.testing.expect(normal.indexed_output_args.len == 0 and normal.shared_input_paths.len == 0);
+    const args = [_][]const u8{ "tool", "/dump", "/out", "--expander-root", "/root", "--now-unix", "1791731560",
+        "--shared-inputs", "/root/page-index.tsv", "/root/optional.tsv", "--indexed-page-outputs",
+        "1", "10", z, "first", "3", "30", z, "third" };
+    const selected = try parseOptions(&args);
+    try std.testing.expectEqual(@as(usize, 2), selected.shared_input_paths.len);
+    try std.testing.expectEqual(@as(usize, 8), selected.indexed_output_args.len);
+    var changed = args;
+    changed[18] = "first"; try std.testing.expectError(error.Usage, parseOptions(&changed));
+    changed = args; changed[14] = "../first"; try std.testing.expectError(error.Usage, parseOptions(&changed));
+    changed = args; changed[15] = "1"; try std.testing.expectError(error.Usage, parseOptions(&changed));
+    changed = args; changed[8] = "relative"; try std.testing.expectError(error.Usage, parseOptions(&changed));
+    var mixed = selected;
+    mixed.limit_pages = 1; try std.testing.expectError(error.Usage, validateIndexedOutputArguments(mixed));
+    mixed = selected; mixed.audit_presentation_errors = true; try std.testing.expectError(error.Usage, validateIndexedOutputArguments(mixed));
+    mixed = selected; mixed.workers = 2; try std.testing.expectError(error.Usage, validateIndexedOutputArguments(mixed));
+    mixed = selected; mixed.now_unix = null; try std.testing.expectError(error.Usage, validateIndexedOutputArguments(mixed));
+}
+
+test "ordinary indexed output cursor proves exact row bytes offset and ordinal without borrowing title aliases" {
+    const bytes = "# header\nfirst\nskipped\nthird\n";
+    var first_hash: [32]u8 = undefined; var third_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("first\n", &first_hash, .{});
+    std.crypto.hash.sha2.Sha256.hash("third\n", &third_hash, .{});
+    const first: IndexedOutputSelection = .{ .ordinal = 0, .offset = 0, .row_sha256 = first_hash, .name = "first" };
+    const third: IndexedOutputSelection = .{ .ordinal = 2, .offset = 23, .row_sha256 = third_hash, .name = "third" };
+    var cursor: IndexedOutputCursor = .{};
+    try cursor.validate(bytes, first);
+    try cursor.validate(bytes, third);
+    try std.testing.expectEqual(bytes.len, cursor.next_offset);
+    var wrong = third; wrong.ordinal = 1;
+    cursor = .{}; try std.testing.expectError(error.InvalidIndexByteOffset, cursor.validate(bytes, wrong));
+    wrong = third; wrong.offset = 22;
+    cursor = .{}; try std.testing.expectError(error.InvalidIndexByteOffset, cursor.validate(bytes, wrong));
+    wrong = third; wrong.row_sha256 = first_hash;
+    cursor = .{}; try std.testing.expectError(error.IndexedOutputRowChanged, cursor.validate(bytes, wrong));
+    wrong = third; wrong.ordinal = 3;
+    cursor = .{}; try std.testing.expectError(error.ShortPageIndex, cursor.validate(bytes, wrong));
+    try std.testing.expectError(error.InvalidIndexByteOffset, cursor.validate(bytes, first));
+}
+
+test "ordinary indexed outputs equal separate Writer blobs and coverage for noncontiguous source pages" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    const f = try IndexedOrdinaryOutputTesting.init(a, root, false); defer f.deinit();
+    const shared = try std.fs.path.join(a, &.{ root, "shared" });
+    var cursor: IndexedOutputCursor = .{};
+    for ([_]usize{ 0, 2 }) |i| {
+        const selection = f.selected(i);
+        const separate = try std.fs.path.join(a, &.{ root, "separate", selection.name, "data" });
+        try runOrdinaryOutput(io, a, separate, .{ .start_page = i, .index_byte_offset = f.offsets[i], .limit_pages = 1 },
+            .{}, &f.namespaces, &f.pool, &f.dump, &f.page_index, .raw_xml, f.index_path, null, null, &f.book);
+        try f.run(shared, selection, &cursor);
+        try FirstFailureControl.sameTree(a, separate, try std.fs.path.join(a, &.{ shared, selection.name, "data" }));
+        const outcome = try f.outcome(shared, selection.name);
+        try std.testing.expect(outcome.object.get("complete").?.bool);
+        try std.testing.expect(outcome.object.get("error_name").? == .null);
+        try std.testing.expect(outcome.object.get("process_exit_code") == null);
+    }
+    try FirstFailureControl.absent(try std.fs.path.join(a, &.{ shared, "second" }));
+}
+
+test "ordinary indexed output failure keeps earlier complete output and stops before later selections" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    const f = try IndexedOrdinaryOutputTesting.init(a, root, true); defer f.deinit();
+    const output = try std.fs.path.join(a, &.{ root, "outputs" });
+    var cursor: IndexedOutputCursor = .{};
+    var completed: usize = 0;
+    const failure = blk: {
+        for (0..3) |i| {
+            f.run(output, f.selected(i), &cursor) catch |err| break :blk err;
+            completed += 1;
+        }
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expect(failure == error.InvalidNamespace);
+    try std.testing.expectEqual(@as(usize, 1), completed);
+    try std.testing.expect((try f.outcome(output, "first")).object.get("complete").?.bool);
+    const second = try f.outcome(output, "second");
+    try std.testing.expect(!second.object.get("complete").?.bool);
+    try std.testing.expectEqualStrings("InvalidNamespace", second.object.get("error_name").?.string);
+    try FirstFailureControl.absent(try std.fs.path.join(a, &.{ output, "second", "data", "page-coverage.json" }));
+    try FirstFailureControl.absent(try std.fs.path.join(a, &.{ output, "third" }));
+}
+
+test "ordinary indexed output reuse refuses changed and newly present shared inputs before another Writer" {
+    for ([_]bool{ false, true }) |newly_present| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator(); const io = std.testing.io;
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        const f = try IndexedOrdinaryOutputTesting.init(a, root, false); defer f.deinit();
+        const output = try std.fs.path.join(a, &.{ root, "outputs" });
+        var cursor: IndexedOutputCursor = .{};
+        try f.run(output, f.selected(0), &cursor);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = if (newly_present) f.absent_path else f.guard_path, .data = "changed provider\n" });
+        if (newly_present) {
+            try std.testing.expectError(error.CapturedWriterUnexpectedDependency, f.run(output, f.selected(2), &cursor));
+        } else try std.testing.expectError(error.CapturedWriterInputsChanged, f.run(output, f.selected(2), &cursor));
+        try std.testing.expect((try f.outcome(output, "first")).object.get("complete").?.bool);
+        try std.testing.expect(!(try f.outcome(output, "third")).object.get("complete").?.bool);
+        try FirstFailureControl.absent(try std.fs.path.join(a, &.{ output, "third", "data" }));
+    }
+}
+
+const EnImageMapOwnerTesting = struct {
+    const T = encoder.presentation_types;
+    const prefix = "testdata/en-koukang-imagemap/";
+    const title = "kōukāng";
+    const heading = "Khiamniungan Naga";
+    const raw = @embedFile(prefix ++ "raw.wikitext");
+    const source = @embedFile(prefix ++ "expanded.wikitext");
+    const invalid = "<imagemap>\nimage:Map of the world by the US Gov as of 2016 no legend.svg|150x75px|\ndefault <strong class=\"selflink\">kōukāng</strong>\n</imagemap>";
+    const error_markup = "<p class=\"error\">Error: No valid link was found at the end of line 3.</p>";
+    fn code(_: ?*const anyopaque, name: []const u8) ?[]const u8 {
+        return if (std.mem.eql(u8, name, heading)) "kix" else null;
+    }
+    fn read(a: std.mem.Allocator, root: []const u8, name: []const u8) ![]const u8 {
+        return std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, name }), a, .limited(8 * 1024 * 1024));
+    }
+    fn payload(a: std.mem.Allocator, root: []const u8) ![]const u8 {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const bytes = try read(a, root, try std.fs.path.join(a, &.{ "languages", encoder.blob_catalog.languageBlobFilename(heading, &filename) }));
+        const blob = try encoder.blob_format.inspect(bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings("kix", metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        try std.testing.expectEqual(@as(usize, 1), index.recordCount());
+        return a.dupe(u8, ((try index.find(title)) orelse return error.TestUnexpectedResult).payload);
+    }
+    fn reasons(a: std.mem.Allocator, root: []const u8, observed: bool) ![]const []const u8 {
+        const bytes = try read(a, root, "fallback-pages.jsonl");
+        var result: std.ArrayList([]const u8) = .empty;
+        var found = false;
+        var lines = std.mem.tokenizeScalar(u8, bytes, '\n');
+        while (lines.next()) |line| {
+            const row = try std.json.parseFromSliceLeaky(std.json.Value, a, line, .{});
+            try std.testing.expectEqualStrings(title, row.object.get("title").?.string);
+            for (row.object.get("reasons").?.array.items) |reason| {
+                if (std.mem.eql(u8, reason.string, "rendered_extension_error")) {
+                    try std.testing.expect(!found); found = true;
+                } else try result.append(a, reason.string);
+            }
+        }
+        try std.testing.expectEqual(observed, found);
+        return result.toOwnedSlice(a);
+    }
+    // Walk the typed result, including nested cells/flows, without assuming a
+    // particular table fallback shape. The complete Stored comparison is below.
+    fn maps(value: anytype, count: *usize) anyerror!void {
+        const Value = @TypeOf(value);
+        if (Value == T.ImageMap) {
+            count.* += 1;
+            try std.testing.expectEqualDeep(T.ImageMap{ .regions = &.{.{ .shape = .rectangle,
+                .coordinates = &.{ 0, 0, 1, 1 }, .action = .{ .kind = .internal, .target = title, .label = title } }},
+                .default_action = null, .description = .bottom_right }, value);
+            return;
+        }
+        switch (@typeInfo(Value)) {
+            .@"struct" => |info| inline for (info.field_names) |name| try maps(@field(value, name), count),
+            .optional => if (value) |item| try maps(item, count),
+            .pointer => |info| if (info.size == .slice and info.child != u8) for (value) |item| { try maps(item, count); },
+            else => {},
+        }
+    }
+};
+
+test "ordinary Writer retained EN imagemap error survives language owner copying with full Stored parity" {
+    const F = EnImageMapOwnerTesting;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    try std.testing.expectEqual(@as(usize, 3577), F.source.len);
+    try std.testing.expectEqual(@as(usize, 695), F.raw.len);
+    var raw_hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(F.raw, &raw_hash, .{});
+    try std.testing.expectEqualStrings("646aff431ea3e70d1bf7f925ce7612afbafcdd080ef5fc366b44ab67b546db84", &std.fmt.bytesToHex(raw_hash, .lower));
+    var source_hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(F.source, &source_hash, .{});
+    try std.testing.expectEqualStrings("73327ef2e2e1ac5883781b66f28bcd84fbb1ed8b1ab33614bf865d6a0196b814", &std.fmt.bytesToHex(source_hash, .lower));
+    var ns = try namespace_registry.Registry.init(a, @embedFile(F.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const behavior_bytes = @embedFile(F.prefix ++ "behavior-switches.tsv");
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var behavior_hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(behavior_bytes, &behavior_hash, .{});
+    var images = try namespace_registry.image_options.Registry.init(a, @embedFile(F.prefix ++ "image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, behavior_hash); defer images.deinit();
+    inline for (.{ "namespace-registry.tsv", "figure-siteinfo.raw.json" }) |name|
+        try tmp.dir.writeFile(io, .{ .sub_path = name, .data = @embedFile(F.prefix ++ name) });
+    const site = (try loadFigureSite(io, a, root, &ns)) orelse return error.TestUnexpectedResult;
+    var files: figure_sizing.Registry = .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = &ns,
+        .records = &.{}, .file_authority = true, .image_map_no_link_policy = true };
+    defer files.deinit();
+    try files.bindImageMapMessages(a, @embedFile(F.prefix ++ "interface-messages.tsv"), @embedFile(F.prefix ++ "language-fallbacks.tsv"));
+    var book = try figure_page_observations.Book.init(a, @embedFile(F.prefix ++ "figure-page-observations.json"), &ns, &files, site.source_sha256, 250); defer book.deinit();
+    var codes: encoder.blob_builder.LanguageCodes = .{ .get_fn = F.code, .namespace_catalog = &ns,
+        .behavior_switches = &behavior, .image_options = &images,
+        .figure_sizing = .{ .ctx = &files, .resolve_fn = figure_sizing.Registry.resolve, .source_context = try figureSourceContext(site, null) } };
+    try attachFigurePageObservation(a, &codes, &book, site.source_sha256, 0, 10637514, 84991998, F.title, F.raw, F.source);
+    try std.testing.expect(codes.figure_sizing.?.resolve_image_map_no_link_fn != null);
+    try std.testing.expect(codes.figure_sizing.?.text_class_scope == null and codes.table_styles == null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.source, F.invalid));
+    const reference = try std.mem.replaceOwned(u8, a, F.source, F.invalid, F.error_markup);
+    var payloads: [2][]const u8 = undefined;
+    var reasons: [2][]const []const u8 = undefined;
+    for ([_][]const u8{ F.source, reference }, 0..) |body, arm| {
+        const output = try std.fmt.allocPrint(a, "{s}/arm-{d}", .{ root, arm });
+        var page_codes = codes;
+        if (arm == 1) page_codes.figure_sizing.?.resolve_image_map_no_link_fn = null;
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+        writer.language_codes = page_codes; writer.stats.pages_seen += 1;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, F.title, body, F.raw, null);
+        try std.testing.expectEqual(@as(usize, 1), (try writer.finish(page_codes)).language_records);
+        payloads[arm] = try F.payload(a, output);
+        reasons[arm] = try F.reasons(a, output, arm == 0);
+    }
+    try std.testing.expectEqualSlices(u8, payloads[1], payloads[0]);
+    const actual = try encoder.presentation_codec.decodeAlloc(a, payloads[0], F.title, .language, .{ .heading = F.heading, .code = "kix" });
+    const expected = try encoder.presentation_codec.decodeAlloc(a, payloads[1], F.title, .language, .{ .heading = F.heading, .code = "kix" });
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualSlices(u8, payloads[0], try encoder.presentation_codec.encodeAlloc(a, actual));
+    try std.testing.expectEqualDeep(reasons[1], reasons[0]);
+    var map_count: usize = 0; try F.maps(actual, &map_count);
+    try std.testing.expectEqual(@as(usize, 1), map_count);
+    try std.testing.expect(std.mem.indexOf(u8, payloads[0], "Error: No valid link was found at the end of line 3.") != null);
+    // The already-selected callback must not certify an unrelated equal page,
+    // absent authority, or a changed local error body after selection.
+    const foreign = try a.dupe(u8, F.source);
+    const changed = try std.mem.replaceOwned(u8, a, F.source, "150x75px", "151x75px");
+    for ([_][]const u8{ F.source, foreign, changed }, 0..) |body, mode| {
+        const output = try std.fmt.allocPrint(a, "{s}/refused-{d}", .{ root, mode });
+        var page_codes = codes;
+        if (mode == 0) page_codes.figure_sizing.?.resolve_image_map_no_link_fn = null;
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+        writer.language_codes = page_codes;
+        try std.testing.expectError(error.UncompiledPresentation,
+            writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, F.title, body, F.raw, null));
+    }
+}
+
+
+test "KU authored action occurrence comparison permits formatting fragments but never cuts or merges source anchors" {
+    const F = KuFullGet53658Writer; const T = encoder.presentation_types;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, @embedFile(F.fixture_prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const one = try F.authoredActions(a, &ns, "[[d]]a", .{});
+    try std.testing.expectEqual(@as(usize, 1), one.items.len);
+    try std.testing.expectEqualStrings("d", one.items[0].target);
+    try std.testing.expectEqualStrings("da", one.items[0].label);
+    const split = [_]T.Span{
+        .{ .kind = .link, .text = "d", .target = "d", .bold = true },
+        .{ .kind = .link, .text = "a", .target = "d", .italic = true },
+    };
+    const before = split;
+    var cursor: F.ActionCursor = .{ .items = &split, .adjacent = &.{ false, true } };
+    try std.testing.expect(try cursor.consume(a, .link, one.items[0].target, one.items[0].label));
+    try std.testing.expect(cursor.complete() and cursor.occurrences == 1);
+    try std.testing.expectEqualDeep(before, split);
+    const trailed = [_]T.Span{.{ .kind = .link, .text = "d", .trail = "a", .target = "d" }};
+    var trail_cursor: F.ActionCursor = .{ .items = &trailed, .adjacent = &.{false} };
+    try std.testing.expect(try trail_cursor.consume(a, .link, "d", "da"));
+    try std.testing.expect(trail_cursor.complete());
+    var separated: F.ActionCursor = .{ .items = &split, .adjacent = &.{ false, false } };
+    try std.testing.expect(!try separated.consume(a, .link, "d", "da"));
+    try std.testing.expect(separated.index == 0 and separated.occurrences == 0);
+    const two = try F.authoredActions(a, &ns, "[[d]][[d]]", .{});
+    try std.testing.expectEqual(@as(usize, 2), two.items.len);
+    try std.testing.expect(two.items[0].end == two.items[1].start);
+    const distinct = [_]T.Span{.{ .kind = .link, .text = "d", .target = "d" }, .{ .kind = .link, .text = "d", .target = "d" }};
+    var distinct_cursor: F.ActionCursor = .{ .items = &distinct, .adjacent = &.{ false, true } };
+    for (two.items) |owner| try std.testing.expect(try distinct_cursor.consume(a, .link, owner.target, owner.label));
+    try std.testing.expect(distinct_cursor.complete() and distinct_cursor.occurrences == 2);
+    const merged = [_]T.Span{.{ .kind = .link, .text = "dd", .target = "d" }};
+    var merged_cursor: F.ActionCursor = .{ .items = &merged, .adjacent = &.{false} };
+    try std.testing.expect(!try merged_cursor.consume(a, .link, two.items[0].target, two.items[0].label));
+    try std.testing.expect(merged_cursor.index == 0 and merged_cursor.occurrences == 0);
+    for (0..4) |mode| {
+        var bad = split;
+        switch (mode) {
+            0 => bad[1].target = "Wrong",
+            1 => bad[1].target_fragment = "part",
+            2 => bad[1].kind = .external_link,
+            3 => bad[1].text = "x",
+            else => unreachable,
+        }
+        var refused: F.ActionCursor = .{ .items = &bad, .adjacent = &.{ false, true } };
+        try std.testing.expect(!try refused.consume(a, .link, "d", "da"));
+        try std.testing.expect(refused.index == 0 and refused.occurrences == 0);
+    }
+    var extra: F.ActionCursor = .{ .items = &distinct, .adjacent = &.{ false, true } };
+    try std.testing.expect(try extra.consume(a, .link, "d", "d"));
+    try std.testing.expect(!extra.complete());
+}
+
+test "KU actual full source retains 679 anchor occurrences including one d trail and exact metadata counts" {
+    const F = KuFullGet53658Writer;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const shape = try F.shape(a);
+    const page = shape.object.get("pages").?.array.items[0];
+    const response = try std.json.parseFromSliceLeaky(std.json.Value, a, page.object.get("response").?.string, .{});
+    const source = response.object.get("parse").?.object.get("wikitext").?.string;
+    try F.hash(source, "ed942971342411e72720f64881ff55ebbc3d36a3a019d96da2b5ce8f199bcb42");
+    var ns = try namespace_registry.Registry.init(a, @embedFile(F.fixture_prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    const codes = languageCodes(&registry, &ns);
+    const owners = try F.authoredActions(a, &ns, source, codes.link_trail);
+    try std.testing.expectEqual(@as(usize, 679), owners.items.len);
+    try std.testing.expectEqual(@as(usize, 1), owners.files);
+    try std.testing.expectEqual(@as(usize, 2), owners.categories);
+    var found: usize = 0;
+    var previous: usize = 0;
+    for (owners.items) |owner| {
+        try std.testing.expect(owner.start >= previous and owner.start < owner.end and owner.end <= source.len);
+        previous = owner.end;
+        if (owner.start == 18749) {
+            found += 1;
+            try std.testing.expectEqualStrings("[[d]]a", source[owner.start..owner.end]);
+            try std.testing.expectEqualStrings("d", owner.target);
+            try std.testing.expectEqualStrings("da", owner.label);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+    try F.hash(source, "ed942971342411e72720f64881ff55ebbc3d36a3a019d96da2b5ce8f199bcb42");
 }

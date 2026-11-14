@@ -1,0 +1,115 @@
+=={{=fr=}}==
+
+{{-ana-|fr}}
+'''fille''' 
+# [[ankizivavy]]
+# zanakao vavy
+
+{{-fanononana-}}
+* {{fr-IPA}}
+* {{a|Quebec}} {{IPA|fr|[fɪj]}}
+
+{{-tsiahy-}}
+{{wikibolana|en|fille}}
+
+
+
+=={{=nb=}}==
+
+{{-ana-|nb}}
+'''fille''' 
+# [[lamba]] [[rongony]]
+
+{{-tsiahy-}}
+* {{Tsiahy:Dokpro|lang=nb}}
+* {{Tsiahy:NAOB|fille_2}}
+* {{wikibolana|en|fille}}
+=={{=ga=}}==
+
+{{-e-mat-|ga}}
+'''fille''' 
+# sobjônktiva ankehitriny ny matoanteny [[fill]]
+
+{{-tsiahy-}}
+{{wikibolana|en|fille}}
+=={{=enm=}}==
+
+{{-ana-|enm}}
+'''fille''' 
+# [[fahavokarana]], toe-javatra be dia be
+# ny habetsahan'ny [[sakafo]] ampy, ny fahavokisan'ny [[sakafo]]
+# ny habetsahan'ny [[zavatra]] [[irina]], ny fahafaham-po
+# ny servil (Anthriscus cerefolium (karazana))
+# [[zavatra]] tsy dia misy [[dikany]] [[loatra]]
+
+{{-fanononana-}}
+* {{IPA|enm|/ˈfɛl(ə)/|/ˈfil(ə)/}}
+
+{{-tsiahy-}}
+* {{Tsiahy:MED Online|fille|n.(1)|MED15969}}
+* {{wikibolana|en|fille}}
+=={{=frm=}}==
+
+{{-ana-|frm}}
+'''fille''' 
+# [[ankizivavy]]
+# [[zanaka]] vavy (zazavavy)
+
+{{-tsiahy-}}
+{{wikibolana|en|fille}}
+=={{=roa-nor=}}==
+
+{{-ana-|roa-nor}}
+'''fille''' 
+# [[ankizivavy]]
+# [[lamba]] [[rongony]]
+# zanakao vavy
+
+{{-tsiahy-}}
+* {{Tsiahy:nb:OB}}
+* {{Tsiahy:nb:NAOB|fille_2}}
+* {{wikibolana|en|fille}}
+=={{=nn=}}==
+
+{{-ana-|nn}}
+'''fille''' 
+# [[lamba]] [[rongony]]
+
+{{-tsiahy-}}
+* {{Tsiahy:nn:OB}}
+* {{wikibolana|en|fille}}
+=={{=fro=}}==
+
+{{-ana-|fro}}
+'''fille''' 
+# [[ankizivavy]]
+# [[zanaka]] vavy (zazavavy)
+
+{{-fanononana-}}
+* {{IPA|fro|/ˈfi.ʎə/}}
+
+{{-tsiahy-}}
+{{wikibolana|en|fille}}
+=={{=pdc=}}==
+
+{{-mat-|pdc}}
+'''fille''' 
+# [[mameno]]
+# [[manao]] [[vazivazy]]
+# [[miboridana]]
+
+{{-tsiahy-}}
+{{wikibolana|en|fille}}
+=={{=stq=}}==
+
+{{-mat-|stq}}
+'''fille''' 
+# [[mamitaka]]
+# [[mihosotra]]
+
+{{-fanononana-}}
+* {{IPA|stq|/ˈfɪlə/}}
+
+{{-tsiahy-}}
+* {{Tsiahy:stq:SW}}
+* {{wikibolana|en|fille}}

@@ -1,0 +1,199 @@
+{{Imagemap_Európa_hu|Europe, administrative divisions - hu - colored.svg|right|600px}}
+{{hungeo|pron=/ˈɛuroːpɒ/}}
+# Földünk második legkisebb területű kontinense [[Ausztrália]] után. 10,4 millió négyzetkilométer, 740 milliós népességgel. Lakói 160 népcsoporthoz tartoznak és kb. 60 nyelvet beszélnek.
+{{-ford-}}
+{{trans-top|kontinens}}
+*{{af}}: {{t|af|Europa}}
+*{{sq}}: {{t+|sq|Evropa}}
+*{{nds}}: {{t|nds|Europa}}, {{t|nds|Uropa}}
+*{{dsb}}: {{t|dsb|Europa}}
+*{{am}}: {{t+|am|አውሮፓ}}
+*{{en}}: {{t|en|Europe}}
+*:{{ang}}: {{t|ang|Europa}}
+*{{ar}}: {{t|ar|أُورُوبَّا|f}}
+*{{an}}: {{t-|an|Europa|f}}
+*{{arc}}: {{t|arc|ܐܘܪܝܦܝ}}
+*{{rup}}: {{t|rup|Evropa}}
+*{{ast}}: {{t|ast|Europa|f}}
+*{{as}}: {{t+|as|ইউৰূপ্}}
+*{{ay}}: {{t-|ay|Iwrupa}}
+*{{az}}: {{t+|az|Avropa}}
+*{{bm}}:  {{t+|bm|Eropa}}
+*{{bar}}: {{t|bar|Europa}}
+*{{eu}}: {{t+|eu|Europa}}
+*{{be}}: {{t-|be|Еўропа|f|tr=Jeŭrópa}}
+*{{bn}}: {{t|bn|ইউরোপ}}
+*{{br}}: {{t-|br|Europa}}
+*{{bg}}: {{t+|bg|Европа|f|tr=Evrópa}}
+*{{my}}: {{t-|my|ဥရောပ|tr=u.raw:pa.}}
+*{{ceb}}: {{t|ceb|Uropa}}
+*{{chr}}: {{t|chr|ᎡᎶᏆ}}
+*{{cs}}: {{t+|cs|Evropa|f}}
+*{{cv}}: {{t-|cv|Европа}}
+*{{da}}: {{t|da|Europa}}
+*{{se}}: {{t-|se|Eurohpá}}
+*{{iu}}: {{t-|iu|ᐃᐆᕌᑉ}}
+*{{eo}}: {{t+|eo|Eŭropo}}
+*{{et}}: {{t+|et|Euroopa}}
+*{{fo}}: {{t|fo|Evropa|n}}
+*{{hsb}}: {{t|hsb|Europa}}
+*{{fi}}: {{t+|fi|Eurooppa}}
+*{{fr}}: {{t|fr|Europe|f}}
+*{{fy}}: {{t+|fy|Jeropa}}
+*{{fur}}: {{t|fur|Europe}}
+*{{gl}}: {{t+|gl|Europa|f}}
+*{{el}}: {{t+|el|Ευρώπη|f|tr=Evrópi}}
+*:{{grc}}:  {{t+|grc|Εὐρώπη|f|tr=Eurōpē}}
+*{{kl}}: {{t+|kl|Europa}}
+*{{ka}}: {{t-|ka|ევროპა|tr=evropa}}
+*{{gu}}: {{t-|gu|યુરોપ|tr=yūropa}}
+*{{gn}}: {{t-|gn|Europa}}
+*{{ht}}:  {{t|ht|Ewòp}}
+*{{haw}}: {{t|haw|ʻEulopa}}
+*{{he}}: {{t|he|אֵירוֹפָּה|f}}
+*{{hi}}: {{t|hi|यूरोप}}
+*{{nl}}: {{t+|nl|Europa|n}}
+*{{sh}}: {{t+|sh|Europa|f}}
+*{{io}}: {{t+|io|Europa}}
+*{{ig}}: {{t+|ig|Obodo bekee}}
+*{{id}}: {{t-|id|Eropa}}
+*{{ia}}: {{t|ia|Europa}}
+*{{ga}}: {{t|ga|Eoraip|f}}
+*{{is}}: {{t|is|Evrópa|f}}
+*{{ja}}: {{t|ja|ヨーロッパ}}, {{t|ja|欧羅巴|tr=Yōroppa}}, {{t+|ja|欧州|tr=Ōshū}}
+*{{yi}}: {{t|yi|אייראָפּע|f}} 
+*{{yo}}: {{t+|yo|Europe}}
+*{{csb}}: {{t-|csb|Eùropa}}
+*{{kn}}: {{t+|kn|ಯುರೋಪ್}}
+*{{ca}}: {{t|ca|Europa|f}}
+*{{kk}}: {{t|kk|Еуропа|tr=Europa}}
+*{{qu}}: {{t-|qu|Iwrupa}}
+*{{km}}: {{t+|km|អឺរ៉ុប|tr=əɨrop}}
+*{{zh}}: {{t|zh|欧洲}},  {{t|cmn|歐洲}}
+*{{ky}}: {{t-|ky|Европа|tr=Evropa}}
+*{{ko}}: {{t|ko|유럽}}, {{t+|ko|구주|tr=Guju}} ({{t+|ko|歐洲}})
+*{{rw}}: {{t+|rw|Uburayi}}
+*{{kw}}: {{t-|kw|Europa}}
+*{{co}}: {{t-|co|Europa}}
+*{{crh}}: {{t|crh|Avropa}}
+*{{ku}}: {{t|ku|ئه‌وروپا}}, {{t+|ku|Ewropa}}
+{{trans-mid}}
+*{{lad}}: {{t|lad|Evropa}}
+*{{lo}}: {{t-|lo|ເອີລົບ|tr=œlôp}}
+*{{la}}: {{t+|la|Europa|f}}
+*{{pl}}: {{t+|pl|Europa|f}}
+*{{lv}}: {{t|lv|Eiropa|f}}
+*{{li}}: {{t+|li|Europa}}
+*{{ln}}: {{t+|ln|Erópa}}
+*{{lt}}: {{t+|lt|Europa|f}}
+*{{lmo}}: {{t|lmo|Europa}}
+*{{lb}}: {{t+|lb|Europa|f}}
+*{{mk}}: {{t-|mk|Европа|f|tr=Évropa}}
+*{{ms}}: {{t-|ms|Eropah}}
+*{{mg}}: {{t+|mg|Eoropa}}
+*{{ml}}: {{t+|ml|യൂറോപ്പ്‌}}
+*{{mt}}: {{t|mt|Ewropa|f}}
+*{{mi}}: {{t|mi|Ūropi}}
+*{{mr}}: {{t+|mr|युरोप}}
+*{{gv}}: {{t+|gv|Yn Europey}}
+*{{mn}}: {{t+|mn|Европ}}
+*{{nh}}: {{t-|nah|Eutlocpan}}
+*{{na}}: {{t|na|Iurop}}
+*{{nv}}: {{t|nv|Béésh Bichʼahníí bikéyah}}
+*{{de}}: {{t|de|Europa|n}}
+*{{ne}}: {{t+|ne|युरोप}}
+*{{no}}: {{t+|no|Europa}}
+*{{nov}}: {{t|nov|Europa}}
+*{{oc}}: {{t+|oc|Euròpa|f}}
+*{{it}}: {{t|it|Europa|f}}
+*{{ru}}: {{t|ru|Европа|f}}
+*{{om}}: {{t+|om|Europe}}
+*{{os}}: {{t+|os|Европæ}}
+*{{cu}}: {{t+|cu|Єѵрѡ́па}}
+*{{hy}}: {{t+|hy|Եվրոպա|tr=Evropa}}
+*{{pa}}: {{t+|pa|ਯੂਰੋਪ}}
+*{{ps}}: {{t+|ps|اروپا}}
+*{{fa}}: {{t+|fa|اروپا|tr=Orupâ}}, {{t-|fa|اورپا|tr=Orupâ}} 
+*{{pt}}: {{t|pt|Europa|f}}
+*{{ro}}: {{t|ro|Europa|f}}
+*{{rm}}: {{t-|rm|Europa|f}}
+*{{sco}}: {{t|sco|Europe}}
+*{{gd}}: {{t|gd|Roinn-Eòrpa|f}}
+*{{es}}: {{t|es|Europa|f}}
+*{{sv}}: {{t|sv|Europa}}
+*{{sm}}:  {{t+|sm|Europa}}
+*{{sa}}:  {{t+|sa|यूरोप}}
+*{{sc}}: {{t-|sc|Europa}}
+*{{sh}}: {{t|sh|Европа|f}}, {{t-|sh|Еуропа|f|tr=Evropa}}
+*{{scn}}: {{t|scn|Europa}}
+*{{sd}}: {{t+|sd|يورپ}}
+*{{si}}: {{t-|si|යුරෝපය|tr=yurōpaya}}
+*{{sk}}: {{t-|sk|Európa|f}}
+*{{sl}}: {{t+|sl|Evropa|f}}
+*{{so}}: {{t+|so|Yurub}}
+*{{st}}: {{t|st|Yuropo}}
+*{{sw}}: {{t|sw|Bara Uropa}}, {{t-|sw|Ulaya}}
+*{{tl}}: {{t+|tl|Europa}}
+*{{tg}}: {{t-|tg|Аврупо|tr=Avrupo}}
+*{{ta}}: {{t|ta|ஐரோப்பா|}}
+*{{te}}: {{t+|te|ఐరోపా}}
+*{{th}}: {{t-|th|ยุโรป|tr=yúrôop}}
+*{{bo}}: {{t+|bo|ཡོ་རོབ་གླིང་}}
+*{{to}}: {{t+|to|ʻEulope}}
+*{{tpi}}: {{t|tpi|Yurop}}
+*{{ts}}: {{t+|ts|Europa}}
+*{{tr}}: {{t|tr|Avrupa}}
+*{{tk}}: {{t-|tk|Ýewropa}}
+*{{udm}}: {{t|udm|Европа}}
+*{{uk}}: {{t|uk|Європа|f|tr=Jevrópa}}
+*{{ur}}: {{t|ur|یورپ}}
+*{{uz}}: {{t+|uz|Yevropa}}
+*{{wa}}: {{t-|wa|Urope}}
+*{{vec}}: {{t|vec|Eoropa}}
+*{{vi}}: {{t+|vi|Châu Âu}}  ({{t-|vi|洲歐}})
+*{{vo}}: {{t|vo|Yurop}}
+*{{wo}}: {{t+|wo|Tugal}}
+*{{cy}}: {{t+|cy|Ewrop|f}}
+{{trans-bottom}}
+
+{{-lásd-}}
+*[[európai]]
+*[[Európai Unió]]
+{{kontinens}}
+ 
+
+{{hunprop2|pron=}}
+{{trans-top|a görög mitológia szerint Agénor főníciai király leánya}}
+*{{en}}: {{t|en|Europa}}
+*{{eu}}: {{t+|eu|Europa}}
+*{{chr}}: {{t|chr|ᏳᎶᏆ}}
+*{{da}}: {{t|da|Europa}}
+*{{iu}}: {{t|iu|ᐃᐅᕉᐸ|tr=Iuruupa}}
+*{{et}}: {{t|et|Europe}}
+*{{fi}}: {{t|fi|Europa}}
+*{{fr}}: {{t|fr|Europe}}
+*{{el}}: {{t+|el|Ευρώπη|f|tr=Evrópi}}
+*{{kl}}: {{t-|kl|Europa}}
+*{{ja}}: {{t-|ja|エウローペー|tr=Eurōpē}}
+*{{ca}}: {{t|ca|Europa}}
+*{{zh}}: {{t|cmn|歐羅巴}}, {{t|cmn|欧罗巴|tr=Ōuluóbā}}
+*{{ko}}: {{t-|ko|에우로페|tr=E'urope}}
+{{trans-mid}}
+*{{pl}}: {{t+|pl|Europa|f}}
+*{{de}}: {{t|de|Europa|f}}
+*{{ru}}: {{t|ru|Европа|f}}
+*{{pt}}: {{t|pt|Europa|f}}
+*{{es}}: {{t|es|Europa|f}}
+*{{sv}}: {{t|sv|Europa}}
+*{{sl}}: {{t-|sl|Evrópa|f}}
+*{{uk}}: {{t|uk|Європа}}
+{{trans-bottom}}
+{{hunsyn}}
+#[[Európé]]
+
+
+[[kategória:hu:Görög mitológia]]
+
+[[Kategória: Görög eredetű szavak]]
+{{hunl}}
+{{Európa-város}}

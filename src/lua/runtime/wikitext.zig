@@ -1,5 +1,14 @@
 const std = @import("std");
 const dependency = @import("missing_dependency");
+const string_origin = @import("string_origin.zig");
+// Provenance allocations must remain operational even through Lua pcall/frame
+// APIs. Preserve the exact original error set and latch before returning it.
+fn originResult(result: anytype) @TypeOf(result) {
+    return result catch |err| {
+        rt.string_origins.noteFailure(err);
+        return err;
+    };
+}
 const shared_xml_decode = @import("shared_xml_decode");
 const LocalBumpArena = rt.LocalBumpArena;
 const work_stats = rt.work_stats;
@@ -247,6 +256,7 @@ pub const Expander = struct {
     dependency_page: dependency.Page = .{},
     dependency_display_title: dependency.Text = .{ .bytes = "" },
     dependency_arguments: std.ArrayList(DependencyArgument) = .empty,
+    origin_ledger: ?*string_origin.Ledger = null,
     dependency_argument_bytes: usize = 0,
     dependency_native_arguments_disabled: bool = false,
     poem_handled_empty: bool = false,
@@ -336,6 +346,7 @@ pub const Expander = struct {
         self.dependency_page = .{};
         self.dependency_display_title = .{ .bytes = "" };
         self.dependency_arguments = .empty;
+        self.origin_ledger = null;
         self.dependency_argument_bytes = 0;
         self.dependency_native_arguments_disabled = false;
         self.poem_handled_empty = false;
@@ -1340,7 +1351,16 @@ pub const Expander = struct {
             }
         }
         try self.appendPoemLiteralTracked(&out, text[pos..], prepared, protect_literal_curly, &literal_state);
-        return out.finish(self.runtime.allocator);
+        var result = try out.finish(self.runtime.allocator);
+        if (rt.string_origins.enabled()) if (self.origin_ledger) |origins| {
+            const input = try originResult(origins.read(text));
+            if (input.unknown or input.lost_missing_range or input.ranges.len != 0) {
+                result.unknown = true;
+                result.lost_missing_range = result.lost_missing_range or input.lost_missing_range or input.ranges.len != 0;
+            }
+            try originResult(origins.remember(@intFromPtr(self.runtime), result));
+        };
+        return result;
     }
 
     fn expandWikitextTracked(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!dependency.Text {
@@ -1600,6 +1620,7 @@ pub const Expander = struct {
             expanded_raw;
         try params.rawSet(self.runtime.allocator, key, .{ .string = expanded.bytes });
         try self.rememberDependencyArgument(params, key, expanded);
+        try self.rememberStringOrigin(expanded);
         return expanded;
     }
 
@@ -1611,7 +1632,12 @@ pub const Expander = struct {
             .{ .number = @floatFromInt(number) }
         else |_|
             .{ .string = key_text };
-        if (params.rawGet(key)) |value| return self.nativeDependencyArgument(params, key) orelse dependency.Text.transformed(try self.valueToWikitext(value));
+        if (params.rawGet(key)) |value| {
+            if (self.nativeDependencyArgument(params, key)) |native| return native;
+            const bytes = try self.valueToWikitext(value);
+            if (value == .string) if (self.origin_ledger) |origins| return originResult(origins.read(bytes));
+            return dependency.Text.transformed(bytes);
+        }
         if (try self.resolveLazyTemplateArgTracked(params, key)) |value| return value;
         if (split.default) |fallback| return self.expandWikitextTracked(fallback, params, host_title, depth + 1);
         return dependency.Text.untracked(try std.fmt.allocPrint(self.runtime.allocator, "{{{{{{{s}}}}}}}", .{inside}));
@@ -1625,6 +1651,22 @@ pub const Expander = struct {
         return plain.toOwnedSlice(self.runtime.allocator);
     }
 
+    fn originLedger(self: *Expander) !*string_origin.Ledger {
+        if (self.origin_ledger) |value| return value;
+        const a = self.page_allocator orelse self.runtime.allocator;
+        const value = try originResult(a.create(string_origin.Ledger));
+        value.* = string_origin.Ledger.init(a, string_origin.nextEpoch());
+        self.origin_ledger = value;
+        return value;
+    }
+    fn rememberStringOrigin(self: *Expander, value: dependency.Text) !void {
+        if (self.origin_ledger) |origins| try originResult(origins.remember(@intFromPtr(self.runtime), value));
+    }
+    fn expandInvokeTracked(self: *Expander, module: []const u8, args: []const []const u8, params: *rt.Table, title: []const u8, depth: usize) !dependency.Text {
+        const origins = try self.originLedger();
+        const bytes = try self.expandInvoke(module, args, params, title, depth);
+        return originResult(origins.read(bytes));
+    }
     fn expandParserHeadTracked(self: *Expander, head: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!?dependency.Text {
         if (raw_args.len == 0) {
             if (try self.resolveTitleMagic(head, .variable)) |name| {
@@ -1641,6 +1683,8 @@ pub const Expander = struct {
             const raw_name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
             if (try self.resolveParserFunction(try self.parserFunctionLookupName(raw_name))) |name| {
                 const first = head[colon.index + colon.len ..];
+                if (std.ascii.eqlIgnoreCase(name, "#invoke"))
+                    return try self.expandInvokeTracked(first, raw_args, params, host_title, depth + 1);
                 if (std.ascii.eqlIgnoreCase(name, "localurl"))
                     return try self.expandUrlParserTracked(first, raw_args, params, host_title, depth + 1, .local, false);
                 if (std.ascii.eqlIgnoreCase(name, "#tag"))
@@ -1813,7 +1857,9 @@ pub const Expander = struct {
         var positional: i64 = 1;
         for (raw_args) |raw| {
             if (preprocess.findTopDelimiter(raw, '=')) |eq| {
-                const key_expanded = try self.expandWikitext(raw[0..eq], caller_params, host_title, depth + 1);
+                const key_origin = try self.expandWikitextTracked(raw[0..eq], caller_params, host_title, depth + 1);
+                const key_expanded = key_origin.bytes;
+                try self.rememberStringOrigin(try originResult(self.trimDependency(key_origin, " \t\r\n")));
                 const key_text = std.mem.trim(u8, key_expanded, " \t\r\n");
                 if (key_text.len == 0) continue;
                 const key: Value = if (std.fmt.parseInt(i64, key_text, 10)) |number|
@@ -1821,10 +1867,14 @@ pub const Expander = struct {
                 else |_|
                     .{ .string = key_text };
                 // PPTemplateFrame_Hash trims named arguments after expansion.
-                const value = std.mem.trim(u8, try self.expandWikitext(raw[eq + 1 ..], caller_params, host_title, depth + 1), " \t\r\n\x00\x0b");
+                const origin = try originResult(self.trimDependency(try self.expandWikitextTracked(raw[eq + 1 ..], caller_params, host_title, depth + 1), " \t\r\n\x00\x0b"));
+                try self.rememberStringOrigin(origin);
+                const value = origin.bytes;
                 try out.rawSet(self.runtime.allocator, key, .{ .string = value });
             } else {
-                const value = try self.expandWikitext(raw, caller_params, host_title, depth + 1);
+                const origin = try self.expandWikitextTracked(raw, caller_params, host_title, depth + 1);
+                try self.rememberStringOrigin(origin);
+                const value = origin.bytes;
                 try out.rawSet(self.runtime.allocator, .{ .number = @floatFromInt(positional) }, .{ .string = value });
                 positional += 1;
             }
@@ -3109,6 +3159,15 @@ pub const Expander = struct {
         // A page-reused child can retain argument strings through memoized Lua
         // tables until rollback, so give it page-owned copies. Fresh nested
         // invoke children still borrow from their shorter-lived arena.
+        var origin_observer: rt.string_origins.Observer = undefined;
+        const saved_observer = if (self.origin_ledger) |origins| blk: {
+            origin_observer = string_origin.observer(origins);
+            break :blk rt.string_origins.enter(&origin_observer);
+        } else null;
+        defer if (self.origin_ledger != null) {
+            if (owns_stack_child) rt.string_origins.retired(@intFromPtr(child));
+            rt.string_origins.restore(saved_observer);
+        };
         const copied_invoke_args = try copyArgsTable(child, invoke_args, retain_runtime);
         const parent: ?Value = if (existing_parent) |frame|
             frame
@@ -3126,6 +3185,7 @@ pub const Expander = struct {
             cpu_scope.finish() catch |failure| {
                 quota_error = failure;
             };
+            try rt.string_origins.check();
             try outer_runtime.adoptFailure(child);
             // Resource exhaustion remains operational even if it coincides
             // with the script timer. Only the distinct quota gets markup.
@@ -3136,15 +3196,26 @@ pub const Expander = struct {
             return err;
         };
         try cpu_scope.finish();
+        try rt.string_origins.check();
         // Scribunto's #invoke hook cleans the returned wikitext, not Lua's
         // internal byte strings. Reuse the immutable namespace NFC backend.
         const catalog = child.namespace_catalog orelse return error.MissingNamespaceCatalog;
         const owned = try ustring_lib.cleanInvokeTextAlloc(page_a, catalog, text);
+        // NFC/control cleaning is mapped only when this identified operation
+        // leaves bytes unchanged; all other transformations stay unknown.
+        if (self.origin_ledger) |origins| try originResult(origins.copied(@intFromPtr(self), text, owned));
         completed = true;
         return owned;
     }
 
     fn expandInvoke(self: *Expander, module_expr: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
+        if (!self.dependency_native_arguments_disabled) if (self.origin_ledger) |origins| {
+            for (self.dependency_arguments.items) |item| {
+                const current = item.target.rawGet(item.key) orelse continue;
+                if (current == .string and current.string.ptr == item.cached_bytes.ptr and current.string.len == item.cached_bytes.len and
+                    std.mem.eql(u8, current.string, item.value.bytes)) try originResult(origins.remember(@intFromPtr(self.runtime), item.value));
+            }
+        };
         self.invalidateNativeDependencyArguments();
         if (work_stats.current()) |work| work.invokes +|= 1;
         const module_symbol = try self.callSymbol(module_expr, .module);
@@ -3183,7 +3254,18 @@ pub const Expander = struct {
         return switch (outcome) {
             // Lua values may contain registered results from explicit frame
             // APIs. Preserve those items while returned tag text stays unhooked.
-            .generated => |generated| self.expandWikitextMode(generated, params, host_title, depth + 1, false, true),
+            .generated => |generated| blk: {
+                var result = try self.expandWikitextModeTracked(generated, params, host_title, depth + 1, false, true);
+                if (self.origin_ledger) |origins| {
+                    const input = try originResult(origins.read(generated));
+                    if (input.unknown or input.lost_missing_range or input.ranges.len != 0) {
+                        result.unknown = true;
+                        result.lost_missing_range = result.lost_missing_range or input.lost_missing_range or input.ranges.len != 0;
+                    }
+                    try originResult(origins.remember(@intFromPtr(self.runtime), result));
+                }
+                break :blk result.bytes;
+            },
             .error_markup => |markup| markup,
             .export_error => |failure| blk: {
                 if (self.usage_recovery) |recovery| {
@@ -4084,6 +4166,8 @@ pub const Expander = struct {
         self.invalidateNativeDependencyArguments();
         const stripped = try preprocess.stripDecodedCommentsForParsingPreservingPoem(a, source);
         defer a.free(stripped);
+        defer if (self.origin_ledger) |origins| origins.retireInterval(stripped);
+        if (self.origin_ledger) |origins| try originResult(origins.copied(@intFromPtr(self.runtime), source, stripped));
         if (stripped.len >= 2 and stripped[0] == '=' and stripped[stripped.len - 1] == '=' and
             std.mem.indexOf(u8, stripped, nowiki_marker_prefix) != null)
         {
@@ -10492,4 +10576,135 @@ test "native generated comment normalization retains later missing coordinates a
     try std.testing.expectEqual(@as(u32, 1), phase.output().ranges[0].occurrence);
     // A retained known sibling does not grant provenance to arbitrary Lua output.
     try std.testing.expect(phase.output().unknown);
+}
+
+
+test "retained Hindi invoke order keeps later missing range while explicit literal origins differ from legacy strings" {
+    // Raw p1500036/r6013495, 199B/3ffa12cb. The real call order and
+    // later missing name are retained; controlled Lua exports exercise the new
+    // boundary, not an assertion that the real hi-IPA/audio/hi-verb are qualified.
+    const P = struct {
+        threadlocal var literal_contract = true;
+        fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            for ([_][]const u8{ ":hi-IPA", ":audio", ":hi-verb" }) |suffix|
+                if (std.mem.endsWith(u8, title, suffix)) return "{{#invoke:Test|main}}";
+            return null;
+        }
+        fn exists(_: ?*anyopaque, _: []const u8) !bool { return false; }
+        fn result(value: Value) ![]const Value {
+            const values = try std.heap.smp_allocator.alloc(Value, 1); values[0] = value; return values;
+        }
+        fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const exports = try ctx.newTable();
+            try exports.rawSet(ctx.allocator, .{ .string = "main" }, try ctx.makeFunctionKnown(1, run, &.{}));
+            return result(.{ .table = exports });
+        }
+        fn run(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const text = "Hindi<!---->";
+            const format = "%s";
+            // This is exactly the new emitter event. Returning a legacy string
+            // with identical bytes does not acquire its authority.
+            if (literal_contract) { rt.string_origins.literal(text); rt.string_origins.literal(format); }
+            const copied = try ctx.ownString(text);
+            const string = ctx.getGlobal(18);
+            const sub = try ctx.getIndex(string, .{ .string = "sub" });
+            const sliced = try ctx.callValue(sub, &.{ .{ .string = copied }, .{ .number = 1 }, .{ .number = -1 } });
+            defer rt.freeResults(sliced);
+            const joined = try ctx.concatValues(sliced);
+            const formatter = try ctx.getIndex(string, .{ .string = "format" });
+            return ctx.callValue(formatter, &.{ .{ .string = format }, joined });
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var runtime = try rt.Context.initProgram(a, 24, 1); defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{rt.stabilize(P.root)};
+    runtime.module_root_entries = &functions; runtime.configureModules(null, TestModule.lookup, TestModule.name);
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime); try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = P.get, .exists = P.exists }, .install_scribunto = installTestInvoke };
+    const source = "==印地語==\n\n===發音===\n* {{hi-IPA}}\n* {{audio|hi|LL-Q1568 (hin)-AryamanA-देखना.wav|音頻}}\n\n===動詞===\n{{hi-verb|t|ur=دیکھنا}}\n\n# [[看]]\n\n===拓展閲讀===\n* {{R:hi:Rajpal}}";
+    var expected_output: ?[]const u8 = null;
+    for ([_]bool{ true, false }) |literal_contract| {
+        P.literal_contract = literal_contract;
+        const output = try expander.expandFragment("देखना", source, 1_794_174_780);
+        if (expected_output) |expected| try std.testing.expectEqualStrings(expected, output)
+        else expected_output = try a.dupe(u8, output);
+        try std.testing.expect(std.mem.indexOf(u8, output, "<!---->") == null);
+        var phase = try dependency.decode(a, expander.missing_dependency_metadata orelse return error.MissingSerializerPhase, output, "");
+        defer phase.deinit();
+        try std.testing.expectEqual(@as(usize, 1), phase.occurrences().len);
+        try std.testing.expectEqualStrings("Template:R:hi:Rajpal", phase.occurrences()[0].title);
+        try std.testing.expectEqual(@as(usize, 1), phase.output().ranges.len);
+        const marker = "[[:Template:R:hi:Rajpal]]";
+        const start = std.mem.indexOf(u8, output, marker) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(u32, @intCast(start)), phase.output().ranges[0].start);
+        try std.testing.expectEqual(@as(u32, @intCast(start + marker.len)), phase.output().ranges[0].end);
+        try std.testing.expectEqual(!literal_contract, phase.output().unknown);
+    }
+}
+
+
+test "direct frame provenance allocation failures survive Lua pcall without changing healthy frame bytes" {
+    const P = struct {
+        const Mode = enum { preprocess, expand_template };
+        threadlocal var mode: Mode = .preprocess;
+        threadlocal var fail_metadata = false;
+        threadlocal var caught = false;
+        fn get(_: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            return if (std.mem.endsWith(u8, title, ":OriginTarget")) try a.dupe(u8, "native frame body") else null;
+        }
+        fn exists(_: ?*anyopaque, _: []const u8) !bool { return false; }
+        fn result(value: Value) ![]const Value {
+            const values = try std.heap.smp_allocator.alloc(Value, 1); values[0] = value; return values;
+        }
+        fn root(ctx: *rt.Context, _: rt.Captures, _: []const Value) ![]const Value {
+            const exports = try ctx.newTable();
+            try exports.rawSet(ctx.allocator, .{ .string = "main" }, try ctx.makeFunctionKnown(1, run, &.{}));
+            return result(.{ .table = exports });
+        }
+        fn run(ctx: *rt.Context, _: rt.Captures, args: []const Value) ![]const Value {
+            const source = "native frame body";
+            const output = "AFTER";
+            rt.string_origins.literal(source); rt.string_origins.literal(output);
+            const expander: *Expander = @ptrCast(@alignCast(host_api.get(ctx).?.ctx.?));
+            const origins = expander.origin_ledger orelse return error.MissingOriginLedger;
+            const saved_allocator = origins.a;
+            var failing = std.testing.FailingAllocator.init(saved_allocator, .{ .fail_index = 0 });
+            const spec = try ctx.newTable();
+            try spec.rawSet(ctx.allocator, .{ .string = "title" }, .{ .string = "OriginTarget" });
+            const method = try ctx.getIndex(args[0], .{ .string = if (mode == .preprocess) "preprocess" else "expandTemplate" });
+            if (fail_metadata) origins.a = failing.allocator();
+            defer origins.a = saved_allocator;
+            const protected = try ctx.callValue(ctx.getGlobal(16), &.{ method, args[0],
+                if (mode == .preprocess) .{ .string = source } else .{ .table = spec } });
+            defer rt.freeResults(protected);
+            try std.testing.expect(protected.len >= 2 and protected[0] == .boolean);
+            if (fail_metadata) {
+                try std.testing.expect(!protected[0].boolean);
+                try std.testing.expectEqualStrings("OutOfMemory", protected[1].string);
+                caught = true;
+            } else {
+                try std.testing.expect(protected[0].boolean);
+                try std.testing.expectEqualStrings(source, protected[1].string);
+            }
+            // No new literal/copy hook after the fault: only the direct frame
+            // metadata operation can have latched it across this protected call.
+            return result(.{ .string = output });
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var runtime = try rt.Context.initProgram(a, 24, 1); defer runtime.deinit();
+    const functions = [_]rt.FunctionFn{rt.stabilize(P.root)};
+    runtime.module_root_entries = &functions; runtime.configureModules(null, TestModule.lookup, TestModule.name);
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime); try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .get = P.get, .exists = P.exists }, .install_scribunto = installTestInvoke };
+    for ([_]P.Mode{ .preprocess, .expand_template }) |mode| {
+        P.mode = mode; P.caught = false; P.fail_metadata = false;
+        try std.testing.expectEqualStrings("AFTER", try expander.expandFragment("Page", "{{#invoke:Test|main}}", null));
+        try std.testing.expect(!P.caught);
+        P.fail_metadata = true;
+        try std.testing.expectError(error.OutOfMemory, expander.expandFragment("Page", "{{#invoke:Test|main}}", null));
+        try std.testing.expect(P.caught);
+    }
 }

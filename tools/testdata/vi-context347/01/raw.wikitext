@@ -1,0 +1,152 @@
+=={{langname|en}}==
+[[Image:Barracuda.JPG|thumb|a typical '''barracuda'''<br> ({{taxlink|Sphyraena sphyraena|loài}})]]
+
+==={{ĐM|etym}}===
+Được chứng thực lần đầu vào những năm 1670, có nguồn gốc từ Mỹ Latinh {{bor|en|es|barracuda}}, có lẽ bắt nguồn từ một từ {{der|en|sai-car|-}}.
+
+==={{ĐM|pron}}===
+* {{IPA4|en|/ˌbæɹəˈkuːdə/|a=UK}}
+* {{audio|en|LL-Q1860 (eng)-Vealhurl-barracuda.wav|a=Southern England}}
+* {{rhymes|en|uːdə|s=4}}
+
+===Noun===
+{{en-noun|*|s}}
+
+# [[cá nhồng|Cá nhồng]].
+# {{lb|en|figuratively}} Người sử dụng các biện pháp khắc nghiệt hoặc mang tính cạnh tranh để giành [[chiến thắng]].
+
+===={{ĐM|drv}}====
+{{col|en|barracudalike|yellowtail barracuda}}
+
+==={{ĐM|see}}===
+* {{l|en|barracouta}}
+
+==={{ĐM|ref}}===
+{{R:FVDP|db=ev}}
+
+==={{ĐM|further}}===
+* {{pedia|lang=en}}
+* {{specieslite|i=1|Sphyraena}}
+* {{R:OneLook}}
+
+{{C|en|Họ Cá thu ngừ}}
+
+=={{langname|pt}}==
+
+==={{ĐM|etym}}===
+Từ {{bor|pt|es|barracuda}}.
+
+==={{ĐM|pron}}===
+* {{rhymes|pt|udɐ|s=4}}
+{{pt-IPA}}
+
+==={{ĐM|n}}===
+{{pt-noun|f}}
+
+# [[cá nhồng|Cá nhồng]].
+
+==={{ĐM|further}}===
+* {{R:pt:Aulete}}
+* {{R:pt:Priberam}}
+
+{{C|pt|Họ Cá thu ngừ}}
+
+=={{langname|ca}}==
+
+==={{ĐM|etym}}===
+{{bor+|ca|es|barracuda}}.
+
+==={{ĐM|pron}}===
+* {{ca-IPA}}
+
+===Noun===
+{{ca-noun|f}}
+
+# [[cá nhồng|Cá nhồng]].
+
+==={{ĐM|further}}===
+* {{R:ca:IEC2}}
+
+{{C|ca|Họ Cá thu ngừ}}
+
+=={{langname|nl}}==
+
+==={{ĐM|etym}}===
+Được vay mượn từ {{bor|nl|en|barracuda}}. {{etystub|nl}}
+
+==={{ĐM|pron}}===
+* {{IPA4|nl|/ˌbɑ.raːˈky.daː/}}
+* {{audio|nl|Nl-barracuda.ogg}}
+* {{hyphenation|nl|bar|ra|cu|da}}
+
+==={{ĐM|n}}===
+{{nl-noun|f|-'s|-}}
+
+# [[cá nhồng|Cá nhồng]].
+#: {{syn|nl|zeesnoek}}
+
+=={{langname|fr}}==
+
+==={{ĐM|etym}}===
+{{bor+|fr|es|barracuda}}.
+
+==={{ĐM|pron}}===
+* {{fr-IPA|+|[u:ou]}}
+* {{audio|fr|LL-Q150 (fra)-Poslovitch-barracuda.wav|a=<<France>> (<<Vosges>>)}}
+
+==={{ĐM|n}}===
+{{fr-noun|m}}
+
+# [[cá nhồng|Cá nhồng]].
+
+==={{ĐM|ref}}===
+{{R:FVDP|db=fv}}
+
+{{C|fr|Họ Cá thu ngừ}}
+
+=={{langname|es}}==
+{{wp|lang=es}}
+
+==={{ĐM|etym}}===
+{{unknown|es}}, có lẽ bắt nguồn từ một từ thuộc vùng {{der|es|sai-car|-}}.  Theo  Watkins, từ {{der|es|ca-val|-}}/{{der|es|ca|barracó||răng khểnh}}; xem {{mention|ca|barraca}}.
+
+==={{ĐM|pron}}===
+{{es-pr}}
+
+==={{ĐM|n}}===
+{{es-noun|f}}
+
+# {{lb|es|fish}} [[cá nhồng|Cá nhồng]].
+#: {{syn|es|picuda}}
+
+===={{ĐM|desc}}====
+{{top2}}
+* {{desc|ceb|barakuda|bor=1}}
+* {{desc|en|barracuda|bor=1}}
+* {{desc|it|barracuda|bor=1}}
+* {{desc|pt|barracuda|bor=1}}
+{{bottom}}
+
+==={{ĐM|further}}===
+* {{R:es:DRAE}}
+* {{R:American_Heritage_Dictionary|barracuda}}
+
+{{C|es|Cá}}
+
+=={{langname|it}}==
+
+==={{ĐM|etym}}===
+{{bor+|it|es|barracuda}}.
+
+==={{ĐM|pron}}===
+{{it-pr|barracùda}}
+
+==={{ĐM|n}}===
+{{it-noun|m|#}}
+
+# [[cá nhồng|Cá nhồng]].
+
+==={{ĐM|further}}===
+* {{R:it:Treccani}}
+
+{{C|it|Họ Cá thu ngừ}}

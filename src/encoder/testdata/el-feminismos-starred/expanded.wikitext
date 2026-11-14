@@ -1,0 +1,110 @@
+==<span title="Από το 1700 ως σήμερα">Νέα ελληνικά</span> ([[:Κατηγορία:Νέα ελληνικά|<span title="Κατηγορία:νέα ελληνικά. Από το 1700 ως σήμερα">el</span>]])==
+
+{| class="notheme"style="clear:right; float:right; margin-left:0.5em; margin-bottom:0.5em;background:#ffffff; color:#000000; border:1px solid#a1bdea; text-align:right;"rules="none" border="1" cellpadding="3" cellspacing="0"|-
+! style="background:#a1bdea; border-right:1px solid #c1d3f1; text-align:center; font-size:90%;" align="center"| &darr;&nbsp;''πτώσεις'' 
+! style="background:#a1bdea; border-right:1px solid #c1d3f1;" colspan="2" align="center"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[ενικός|<span title="ενικός αριθμός" style="color:black;">'''''ενικός'''''</span>]]&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+! style="background:#a1bdea;" colspan="2" align="center"| &nbsp;&nbsp;[[πληθυντικός|<span title="πληθυντικός αριθμός" style="color:black;">'''''πληθυντικός'''''</span>]]&nbsp;&nbsp;
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| [[ονομαστική|<span title="ονομαστική πτώση" style="color:black;">'''''ονομαστική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[ο|<span style="color:#002000; font-weight:normal;">ο</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #eaf0fa;" align="left" | [[φεμινισμός|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">φεμινισμ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ός</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[οι|<span style="color:#002000; font-weight:normal;">οι</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="left" | [[φεμινισμοί|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">φεμινισμ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">οί</span>]]
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[γενική|<span title="γενική πτώση" style="color:black;">'''''γενική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[του|<span style="color:#002000; font-weight:normal;">του</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #eaf0fa;" align="left" | [[φεμινισμού|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">φεμινισμ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ού</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[των|<span style="color:#002000; font-weight:normal;">των</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="left" | [[φεμινισμών|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">φεμινισμ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ών</span>]]
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;[[αιτιατική|<span title="αιτιατική πτώση" style="color:black;">'''''αιτιατική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[τον|<span style="color:#002000; font-weight:normal;">τον</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #eaf0fa;" align="left" | [[φεμινισμό|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">φεμινισμ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ό</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[τους|<span style="color:#002000; font-weight:normal;">τους</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="left" | [[φεμινισμούς|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">φεμινισμ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">ούς</span>]]
+|-
+| style="background:#d5e2f6; text-align:right;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[κλητική|<span title="κλητική πτώση" style="color:black; font-size:90%;">'''''κλητική'''''</span>]]
+| align="center" | 
+| style="border-right:1px solid #eaf0fa;" align="left" | [[φεμινισμέ|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">φεμινισμ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">έ</span>]]
+| align="center" | 
+| align="left" | [[φεμινισμοί|<span class="skin-nightmode-reset-color" style="color:#002000; font-weight:normal;">φεμινισμ</span><span class="skin-nightmode-reset-color" style="color:#EB0000; font-weight:normal;">οί</span>]]
+|-
+| colspan="5" align="right" style="text-align:right; background:#eaf0fa; font-size:70%; line-height:100%;" | [[:Κατηγορία:Ουσιαστικά που κλίνονται όπως το 'ναός' (νέα ελληνικά)|Κατηγορία]]  όπως «[[Παράρτημα:Ουσιαστικά (νέα ελληνικά)/αρσενικά#ναός|ναός]]» - [[Παράρτημα:Ουσιαστικά (νέα ελληνικά)|<span title="Παράρτημα:Ουσιαστικά">Παράρτημα:Ουσιαστικά</span>]]
+|}[[Κατηγορία:Ουσιαστικά που κλίνονται όπως το 'ναός' (νέα ελληνικά)]][[Κατηγορία:Ουσιαστικά αρσενικά (νέα ελληνικά)]]
+[[Αρχείο:pink Venus symbol.svg|thumb|το σύμβολο του γυναικείου [[φύλο|φύλου]]]]
+===<span style="cursor:help; white-space:nowrap;" title="Προέλευση και ιστορία της λέξης">[[Αρχείο:System-search.svg|30px|alt=|link=]] Ετυμολογία </span>===
+: '''φεμινισμός''' < [[λόγιο ενδογενές δάνειο]]:[[Κατηγορία:Λόγια ενδογενή δάνεια (νέα ελληνικά)]] ([[δάνειο|άμεσο δάνειο]]) [[γαλλικά|<span style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000); border-bottom: 1px dashed var(--border-color-muted, #dddddd); font-style:italic;">γαλλική</span>]] [[Κατηγορία:Δάνεια από τα γαλλικά (νέα ελληνικά)]][[Κατηγορία:Προέλευση λέξεων από τα γαλλικά (νέα ελληνικά)]] [[féminisme#Γαλλικά (fr)|féminisme]] < [[λατινικά|<span style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000); border-bottom: 1px dashed var(--border-color-muted, #dddddd); font-style:italic;">λατινική</span>]] [[Κατηγορία:Προέλευση λέξεων από τα λατινικά (νέα ελληνικά)]] [[femininus#Λατινικά (la)|femininus]] < [[femina]] < ''[[πρωτοϊταλική]]'' *''fēmanā'' < [[πρωτοϊνδοευρωπαϊκή|<span style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000); border-bottom: 1px dashed var(--border-color-muted, #dddddd); font-style:italic;">πρωτοϊνδοευρωπαϊκή</span>]] [[Κατηγορία:Προέλευση λέξεων από την πρωτοϊνδοευρωπαϊκή (νέα ελληνικά)]] *''dʰeh₁-m̥h₁n-éh₂'' < *dʰeh₁(y)- ([[γαλουχώ]], [[θηλάζω]], [[βυζαίνω]])
+:: Η λέξη μαρτυρείται από το 1897.
+
+===[[File:Wikinews commentary.svg|28px|alt=|link=]] <span class="pronunciation">Προφορά</span>===
+
+:[[ΔΦΑ|<span title="ΔΦΑ - Διεθνές Φωνητικό Αλφάβητο">ΔΦΑ</span>]] : /[[Παράρτημα:Προφορά/νέα ελληνικά|<span style="white-space: nowrap; font-size:110%;padding:2pt;letter-spacing:1px;line-height:1.25em;">fe.mi.niˈzmos</span>]]/[[Κατηγορία:Λήμματα με προφορά ΔΦΑ (νέα ελληνικά)]]
+:[[συλλαβισμός#Ουσιαστικό|<span title="ο χωρισμός γραπτής λέξης σε συλλαβές" style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000); border-bottom: 1px dashed var(--border-color-muted, #dddddd);">''τυπογραφικός συλλαβισμός''</span>]]&#8202;'':''&nbsp;φε&#8208;μι&#8208;νι&#8208;σμός
+
+===<span id="elουσιαστικό"></span><span style="white-space:nowrap" class="partofspeech">[[File:OOjs_UI-like_arrow_empty-ltr_progressive.svg|25px|alt=|link=]] Ουσιαστικό</span>[[Κατηγορία:Νέα ελληνικά]][[Κατηγορία:Ουσιαστικά (νέα ελληνικά)]][[Κατηγορία:Αντίστροφο λεξικό (νέα ελληνικά)|σομσινιμεφ]]===
+'''φεμινισμός''' <span style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000);">''αρσενικό, μόνο στον ενικό''</span>
+* κοινωνική και πολιτική [[αντίληψη]] και [[κίνημα]] που στοχεύει στην [[ισότητα]] μεταξύ [[άνδρας|άνδρα]] και [[γυναίκα]]ς και τη [[διεύρυνση]] του γυναικείου ρόλου στην [[κοινωνία]]
+
+====<span style="cursor:help;" title="Λέξεις της ίδιας γλώσσας με ετυμολογική συγγένεια">Συγγενικά</span>====
+* [[αντιφεμινισμός]]
+* [[αντιφεμινιστής]]
+* [[αντιφεμινιστικά]]
+* [[αντιφεμινιστικός]]
+* [[αντιφεμινίστρια]]
+* [[φεμινιστής]]
+* [[φεμινιστικά]]
+* [[φεμινιστικός]]
+* [[φεμινίστρια]]
+
+====<span class="seealso">Δείτε επίσης</span>====
+
+*<span style="background:var(--background-color-neutral-subtle, #f7f7f7); color:var(--color-base);">[[w:φεμινισμός|
+φεμινισμός]]  στη <span style="white-space:nowrap">[[w:Κύρια_Σελίδα|<span title="Λήμμα στη Βικιπαίδεια" style="color:var(--color-emphasized, #000);"> Βικιπαίδεια&nbsp;</span>]][[File:Wikipedia-logo-v2.svg|15px|link=w:Κύρια_Σελίδα|Λήμμα στη Βικιπαίδεια]]</span></span>
+<div style="clear:both;"></div>
+====[[Αρχείο:Gnome-globe.svg|28px|alt=|link=]] <span class="translations">Μεταφράσεις</span>====
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" style="background:#eeeeee; color:#000000; font-weight:bold; text-align:left;" align="left">&nbsp; &nbsp; φεμινισμός</div>
+<div class="NavContent">
+{| style="background:#ffffff; color:#000000; width:100%;" border="0" width="100%" class="translations"
+|-
+| style="background:#f8f8f8; color:#000000; text-align:left; text-valign:top; width:48%;" valign="top" width="48%" align="left" |
+<div style="width:100%; column-count:2; -webkit-column-count:2; -moz-column-count:2; column-width:50%; -webkit-column-width:50%; -moz-column-width:50%;">
+* [[αγγλικά]] : [[feminism#Αγγλικά (en)|feminism]] <small><sup>[[:en:feminism|(en)]]</sup></small>
+* [[αραβικά]] : [[أنثوية#Αραβικά (ar)|<span style="font-size:140%; line-height:1em;">أنثوية</span>]] <small><sup>[[:ar:أنثوية|(ar)]]</sup></small>
+* [[βασκικά]] : [[feminismo#Βασκικά (eu)|feminismo]] <small><sup>[[:eu:feminismo|(eu)]]</sup></small>
+* [[βουλγαρικά]] : [[феминизъм#Βουλγαρικά (bg)|феминизъм]] <small><sup>[[:bg:феминизъм|(bg)]]</sup></small>
+* [[γαλλικά]] : [[féminisme#Γαλλικά (fr)|féminisme]] <small><sup>[[:fr:féminisme|(fr)]]</sup></small>
+* [[γερμανικά]] : [[Feminismus#Γερμανικά (de)|Feminismus]] <small><sup>[[:de:Feminismus|(de)]]</sup></small>
+* [[δανικά]] : [[feminisme#Δανικά (da)|feminisme]] <small><sup>[[:da:feminisme|(da)]]</sup></small>
+* [[εβραϊκά]] : [[פמיניזם#Εβραϊκά (he)|פמיניזם]] <small><sup>[[:he:פמיניזם|(he)]]</sup></small>
+* [[εσθονικά]] : [[feminism#Εσθονικά (et)|feminism]] <small><sup>[[:et:feminism|(et)]]</sup></small>
+* [[εσπεράντο]] : [[feminismo#Εσπεράντο (eo)|feminismo]] <small><sup>[[:eo:feminismo|(eo)]]</sup></small>
+* [[ιαπωνικά]] : [[フェミニズム#Ιαπωνικά (ja)|<span style="font-size:115%; line-height:1em;">フェミニズム</span>]] <small><sup>[[:ja:フェミニズム|(ja)]]</sup></small>
+* [[ιντερλίνγκουα]] : [[feminismo#Ιντερλίνγκουα (ia)|feminismo]] <small><sup>[[:ia:feminismo|(ia)]]</sup></small>
+* [[ισπανικά]] : [[feminismo#Ισπανικά (es)|feminismo]] <small><sup>[[:es:feminismo|(es)]]</sup></small>
+* [[ιταλικά]] : [[femminismo#Ιταλικά (it)|femminismo]] <small><sup>[[:it:femminismo|(it)]]</sup></small>
+* [[καταλανικά]] : [[feminisme#Καταλανικά (ca)|feminisme]] <small><sup>[[:ca:feminisme|(ca)]]</sup></small>
+* [[κινεζικά]] : [[女性主義#Κινεζικά (zh)|<span style="font-size:115%; line-height:1em;">女性主義</span>]] <small><sup>[[:zh:女性主義|(zh)]]</sup></small>
+* [[κορεατικά]] : [[페미니즘#Κορεατικά (ko)|페미니즘]] <small><sup>[[:ko:페미니즘|(ko)]]</sup></small>
+* [[κροατικά]] : [[feminizam#Κροατικά (hr)|feminizam]] <small><sup>[[:hr:feminizam|(hr)]]</sup></small>
+* [[λιθουανικά]] : [[feminizmas#Λιθουανικά (lt)|feminizmas]] <small><sup>[[:lt:feminizmas|(lt)]]</sup></small>
+* [[νορβηγικά]] : [[feminisme#Νορβηγικά (no)|feminisme]] <small><sup>[[:no:feminisme|(no)]]</sup></small>
+* [[ολλανδικά]] : [[feminisme#Ολλανδικά (nl)|feminisme]] <small><sup>[[:nl:feminisme|(nl)]]</sup></small>
+* [[ουκρανικά]] : [[фемінізм#Ουκρανικά (uk)|фемінізм]] <small><sup>[[:uk:фемінізм|(uk)]]</sup></small>
+* [[περσικά]] : [[فمینیسم#Περσικά (fa)|<span style="font-size:140%; line-height:1em;">فمینیسم</span>]] <small><sup>[[:fa:فمینیسم|(fa)]]</sup></small>
+* [[πολωνικά]] : [[feminizm#Πολωνικά (pl)|feminizm]] <small><sup>[[:pl:feminizm|(pl)]]</sup></small>
+* [[πορτογαλικά]] : [[feminismo#Πορτογαλικά (pt)|feminismo]] <small><sup>[[:pt:feminismo|(pt)]]</sup></small>
+* [[ρουμανικά]] : [[feminism#Ρουμανικά (ro)|feminism]] <small><sup>[[:ro:feminism|(ro)]]</sup></small>
+* [[ρωσικά]] : [[феминизм#Ρωσικά (ru)|феминизм]] <small><sup>[[:ru:феминизм|(ru)]]</sup></small>
+* [[σερβικά]] : [[феминизам#Σερβικά (sr)|феминизам]] <small><sup>[[:sr:феминизам|(sr)]]</sup></small>
+* [[σλοβακικά]] : [[feminizmus#Σλοβακικά (sk)|feminizmus]] <small><sup>[[:sk:feminizmus|(sk)]]</sup></small>
+* [[σλοβενικά]] : [[feminizem#Σλοβενικά (sl)|feminizem]] <small><sup>[[:sl:feminizem|(sl)]]</sup></small>
+* [[σουηδικά]] : [[feminism#Σουηδικά (sv)|feminism]] <small><sup>[[:sv:feminism|(sv)]]</sup></small>
+* [[τουρκικά]] : [[feminizm#Τουρκικά (tr)|feminizm]] <small><sup>[[:tr:feminizm|(tr)]]</sup></small>
+* [[τσεχικά]] : [[feminismus#Τσεχικά (cs)|feminismus]] <small><sup>[[:cs:feminismus|(cs)]]</sup></small>
+* [[φινλανδικά]] : [[feminismi#Φινλανδικά (fi)|feminismi]] <small><sup>[[:fi:feminismi|(fi)]]</sup></small>
+* [[χίντι]] : [[नारीवाद#Χίντι (hi)|नारीवाद]] <small><sup>[[:hi:नारीवाद|(hi)]]</sup></small>
+</div>
+|}</div></div>
+
+[[Κατηγορία:Αντίστροφο λεξικό (ελληνικά)|σομσινιμεφ]]

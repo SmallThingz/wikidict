@@ -1,0 +1,132 @@
+{{Infobox Kontinent
+|Karte              = Africa on the globe (white-red).svg
+|Karte-Imagemap     = AfrikaGlobus2}}
+{{Imagemap Afrika1hu|Africa, administrative divisions - hu - colored.svg|600px|right}}
+{{hungeo}}
+# Az Európától délre található [[földrész]]. A Föld harmadik legnagyobb területű kontinense, az összes szárazföld 1/5 része, területe 30 millió km<small>2</small>, lakossága kb. 1 milliárd.
+{{-der-}}
+* [[afrikai]]
+{{-ford-}}
+{{trans-top|földrész}}
+*{{af}}: {{t+|af|Afrika}}
+*{{sq}} : {{t|sq|Afrika}}
+*{{am}} : {{t|am|አፍሪቃ}}
+*{{en}}: {{t|en|Africa}}
+*:{{ang}}: {{t|ang|Africa}}
+*{{ar}}: {{t|ar|إِفْرِيقِيَا}}
+*{{an}}: {{t-|an|Africa}}
+*{{ast}}: {{t|ast|África}}
+*{{az}}: {{t+|az|Afrika}}
+*{{bm}}: [[Afrika]]
+*{{eu}}: {{t+|eu|Afrika}}
+*{{be}}: {{t-|be|Афрыка|f|tr=Áfryka}}
+*{{bn}}: {{t+|bn|আফ্রিকা|tr=aphrika}}
+*{{br}}: {{t+|br|Afrika|f}}
+*{{bg}}: {{t+|bg|Африка|f|tr=Áfrika}}
+*{{sh}}: {{t|sh|Afrika}}
+*{{my}}: {{t-|my|အာဖရိက|tr=ahpări.ka.}}
+*{{chr}}: {{t|chr|ᎬᎿᎨᏍᏛ}}
+*{{rom}}: {{t|rom|Afrika}}
+*{{cs}}: {{t|cs|Africa|f}}
+*{{da}}: {{t|da|Afrika}}
+*{{se}}: {{t-|se|Afrihkká}}
+*{{iu}}: {{t-|iu|ᐊᑉᕆᖄ}}
+*{{eo}}: {{t|eo|Afriko}} 
+*{{et}}: {{t-|et|Aafrika}}
+*{{fo}}: {{t-|fo|Afrika|f|n}}
+*{{fi}}: {{t|fi|Afrikka}}
+*{{fr}}: l'{{t|fr|Afrique|f}}
+*{{fy}}: {{t+|fy|Afrika}}
+*{{gl}}: {{t+|gl|África|f}}
+*{{el}}: {{t+|el|Αφρική|f}}
+*{{kl}}: {{t-|kl|Afrika}}
+*{{ka}}: {{t|ka|აფრიკა|tr=ap'rika}}
+*{{gu}}: {{t-|gu|આફ્રિકા}}
+*{{ht}}: {{t-|ht|Afrik}}
+*{{haw}}: {{t|haw|ʻApelika}}
+*{{he}}: {{t|he|אפריקה|n}} 
+*{{hi}}: {{t|hi|अफ़्रिका}}, {{t-|hi|कालद्वीप|tr=kāladvīpa}}
+*{{nl}}: {{t|nl|Afrika}}
+*{{sh}}: {{t|sh|Africa}}
+*{{io}}: {{t|io|Afrika}}
+*{{id}}: {{t+|id|Afrika}}
+*{{ia}}: {{t-|ia|Africa}}
+*{{ga}}: {{t-|ga|Afraic|f|alt=an Afraic}}
+*{{is}}: {{t+|is|Afríka|f}}
+*{{ja}}: {{t+|ja|アフリカ|tr=Afurika}}
+*{{jv}}: {{t-|jv|Afrika}}
+*{{yi}}: {{t-|yi|אַפֿריקע|tr=afrike}} 
+*{{kn}}: {{t|kn|ಆಫ್ರಿಕಾ}}
+*{{csb}}: {{t|csb|Afrika|f}}
+*{{ca}}: {{t|ca|Àfrica|f}}
+*{{km}}: {{t-|km|អាហ្វ្រិក|tr='āfrika}}
+*{{zh}}: {{t|zh|非洲|tr=fei1 zau1}} ([[非洲]], fēi zhōu)
+*{{kg}}: {{t|kg|Afelika}}, {{t|kg|Afrika}}, {{t|kg|Katiopa}}
+*{{ko}}: {{t|ko|아프리카}}
+*{{kw}}: {{t-|kw|Afrika}}
+*{{ku}}: {{t+|ku|Efrîqa}}
+{{trans-mid}}
+*{{lo}}: {{t+|lo|ອາຟຣິກກາ|tr=āflikkā}}
+*{{la}}: {{t+|la|Africa|f}}, {{t-|la|Libya|f}}
+*{{pl}}: {{t+|pl|Afryka|f}}
+*{{lv}}: {{t-|lv|Āfrika|f}}
+*{{li}}: {{t+|li|Afrika}}
+*{{lt}}: {{t+|lt|Afrika}}
+*{{lb}}: {{t+|lb|Afrika}}
+*{{mk}}: {{t|mk|Африка|f|tr=Áfrika}}
+*{{mg}}: {{t+|mg|Afrika}}
+*{{ms}}: {{t+|ms|Afrika}}
+*{{mt}}: {{t-|mt|Afrika}}
+*{{gv}}: {{t-|gv|Affrick|f|alt=Yn Affrick}}
+*{{mn}}: {{t+|mn|Африк|tr=Áfrik}}
+*{{nv}}: {{t|nv|Naakaii Łizhiní Bikéyah}}
+*{{de}}: {{t|de|Afrika|n}}
+*{{nov}}: {{t|nov|Afrika}}
+*{{oc}}: {{t+|oc|Africa}}
+*{{it}}: {{t|it|Africa|f}}
+*{{or}}: {{t-|or|ଆଫ୍ରିକା|tr=āphrikā}}
+*{{ru}}: {{t+|ru|Африка|f}}
+*{{hy}}: {{t|hy|Աֆրիկա}}
+*{{fa}}: {{t-|fa|افریقا|tr=Afriqâ}}
+*{{pt}}: {{t+|pt|África|f}}
+*{{ro}}: {{t+|ro|Africa|f}}
+*{{gd}}: {{t|gd|Afraga|m}} 
+*{{es}}: {{t|es|África|f}}
+*{{sv}}: {{t|sv|Afrika}}
+*{{nds}}: {{t|nds|Afrika}}
+*{{sm}}: {{t-|sm|Aferika}}
+*{{sa}}: {{t-|sa|अफ्रीका|tr=aphrīkā}}
+*{{sh}}: {{t-|sh|Африка|f}}
+*{{scn}}: {{t|scn|Àfrica}}
+*{{si}}: {{t-|si|අප්‍රිකාව|tr=aprikāva}}
+*{{sk}}: {{t|sk|Afrika|f}}
+*{{sl}}: {{t+|sl|Afrika|f}}
+*{{st}}: {{t+|st|Afrika}}
+*{{dsb}}: {{t|dsb|Afrika|f}}
+*{{hsb}}: {{t|hsb|Afrika|f}}
+*{{su}}: {{t-|su|Afrika}}
+*{{sw}}: {{t|sw|afrika}}
+*{{tl}}: {{t+|tl|Aprika}}
+*{{ta}}: {{t+|ta|ஆப்பிரிக்கா}}
+*{{te}}: {{t+|te|ఆఫ్రికా|tr=āphrikā}}
+*{{th}}: {{t-|th|แอฟริกา|tr=àefrígaa}}, {{t+|th|ทวีปแอฟริกา|tr=táwêep àefrígaa}}
+*{{to}}: {{t-|to|Aferika}}
+*{{tr}}: {{t+|tr|Afrika}}
+*{{tk}}: {{t-|tk|Afrika}}
+*{{ts}}: {{t-|ts|Afrika}}
+*{{uk}}: {{t-|uk|Африка|f|tr=Áfryka}}
+*{{ur}}: {{t-|ur|افریقہ|tr=afrīkā}}
+*{{uz}}: {{t+|uz|Afrika}}
+*{{vi}}: {{t-|vi|Châu Phi}} ({{t-|vi|洲非}}), {{t-|vi|Phi Châu}} ({{t-|vi|非洲}})
+*{{vo}}: {{t|vo|Frikop}}, {{t-|vo|Fikop}}
+*{{vro}}: {{t|vro|Afriga}}
+*{{cy}}: {{t+|cy|Affrica}}
+{{trans-bottom}}
+{{kontinens}}
+{{hunl}}
+----
+{{dgeo|Afrika}}
+----
+{{swegeo}}
+#Afrika
+{{swel}}

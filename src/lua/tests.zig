@@ -2458,3 +2458,68 @@ test "nil and nan local keys retain the checked dynamic linear store path" {
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_set_struct_index("));
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call i32 @dict_lua_set_typed_array_index("));
 }
+
+
+test "source literal origin uses an explicit emitter event without upgrading historical leaf boxing" {
+    const source = "local s='Hindi'; return s .. ' Rajpal'";
+    var chunk = try llvm_parser.parse(std.testing.allocator, source); defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(std.testing.allocator); defer globals.deinit();
+    var module = try llvm_analysis.analyze(std.testing.allocator, &globals, &chunk, 0); defer module.deinit();
+    var generated = try llvm_emitter.generate(std.testing.allocator, &globals, &module, .{}); defer generated.deinit();
+    const ir = try generated.toText(std.testing.allocator); defer std.testing.allocator.free(ir);
+    try std.testing.expect(std.mem.count(u8, ir, "call void @dict_lua_value_literal_string(") != 0);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, ir, "call void @dict_lua_value_string("));
+}
+
+
+test "real value leaf import preserves literal origin and validates optional historical string wrappers" {
+    const a = std.testing.allocator;
+    const llvm = @import("direct/llvm.zig");
+    const leaf = @embedFile("value_leaf_test_bitcode");
+    var chunk = try llvm_parser.parse(a, "local s='Hindi'; return s .. ' Rajpal'");
+    defer chunk.deinit();
+    var globals = try llvm_analysis.Globals.init(a);
+    defer globals.deinit();
+    var analyzed = try llvm_analysis.analyze(a, &globals, &chunk, 0);
+    defer analyzed.deinit();
+    var generated = try llvm_emitter.generate(a, &globals, &analyzed, .{});
+    defer generated.deinit();
+    try std.testing.expect(generated.module.getFunction("dict_lua_value_string") == null);
+    try generated.module.importValueLeafBitcode(a, leaf);
+    try generated.module.verify(a);
+    const ir = try generated.toText(a);
+    defer a.free(ir);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "call void @dict_lua_value_literal_string(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ir, "declare void @dict_lua_value_literal_string(") != null);
+    try std.testing.expect(generated.module.getFunction("dict_lua_value_string") == null);
+
+    // A historical raw declaration is still supported, with exactly the same
+    // ABI and already-defined-body refusals as every imported wrapper.
+    for (0..3) |mode| {
+        var batch = try llvm_emitter.Batch.init();
+        defer batch.deinit();
+        const ty = batch.module.types;
+        const parameters: []const llvm.TypeRef = if (mode == 1) &.{ty.ptr} else &.{ ty.ptr, ty.ptr, ty.i64 };
+        const raw_type = try batch.module.functionType(ty.void, parameters);
+        const raw = try batch.module.addFunction("dict_lua_value_string", raw_type);
+        if (mode == 2) {
+            const block = try llvm.appendBlock(batch.module.context, raw, "existing_body");
+            const builder = try llvm.createBuilder(batch.module.context);
+            defer llvm.disposeBuilder(builder);
+            llvm.position(builder, block);
+            try llvm.br(builder, block);
+        }
+        if (mode == 1) {
+            try std.testing.expectError(error.LeafSignatureMismatch, batch.importValueLeafBitcode(a, leaf));
+        } else if (mode == 2) {
+            try std.testing.expectError(error.LeafWrapperAlreadyDefined, batch.importValueLeafBitcode(a, leaf));
+        } else {
+            try batch.importValueLeafBitcode(a, leaf);
+            try batch.module.verify(a);
+            const legacy_ir = try batch.module.toText(a);
+            defer a.free(legacy_ir);
+            try std.testing.expect(std.mem.indexOf(u8, legacy_ir, "define available_externally void @dict_lua_value_string(") != null);
+            try std.testing.expect(std.mem.indexOf(u8, legacy_ir, "declare void @dict_lua_value_literal_string(") != null);
+        }
+    }
+}

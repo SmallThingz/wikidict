@@ -1,0 +1,141 @@
+==<span title="Από το 1700 ως σήμερα">Νέα ελληνικά</span> ([[:Κατηγορία:Νέα ελληνικά|<span title="Κατηγορία:νέα ελληνικά. Από το 1700 ως σήμερα">el</span>]])==
+
+{| style="clear:right; float:right; margin-left:0.5em; margin-bottom:0.5em;background:#ffffff; color:#000000; border:1px solid#a1bdea; text-align:right;"rules="none" border="1" cellpadding="3" cellspacing="0"|-
+! style="background:#a1bdea; border-right:1px solid #c1d3f1; text-align:center; font-size:90%;" align="center"| &darr;&nbsp;''πτώσεις'' 
+! style="background:#a1bdea; border-right:1px solid #a1bdea; font-size:90%;" align="center" colspan="6" | &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[ενικός|<span title="ενικός αριθμός" style="color:black;">'''''ενικός'''''</span>]]&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+|-
+| style="background:#c1d3f1; border-right:1px solid #a1bdea; text-align:center; font-size:70%; line-height:100%;" align="center"| ''γένη''&nbsp;&rarr; 
+| style="background:#c1d3f1; border-right:1px solid #a1bdea; font-size:70%; font-style:italic; line-height:100%;" colspan="2" align="center"| [[αρσενικό|<span style="color:#000000; font-weight:normal;">αρσενικό</span>]]
+| style="background:#c1d3f1; border-right:1px solid #a1bdea; font-size:70%; font-style:italic; line-height:100%;" colspan="2" align="center"| [[θηλυκό|<span style="color:#000000; font-weight:normal;">θηλυκό</span>]]
+| style="background:#c1d3f1; border-right:1px solid #a1bdea; font-size:70%; font-style:italic; line-height:100%;" colspan="2" align="center"| [[ουδέτερο|<span style="color:#000000; font-weight:normal;">ουδέτερο</span>]]
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| [[ονομαστική|<span title="ονομαστική πτώση" style="color:black;">'''''ονομαστική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[ο#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">ο</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανής#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ής</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[η#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">η</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανής#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ής</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[το#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">το</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανές#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ές</span>]]
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[γενική|<span title="γενική πτώση" style="color:black;">'''''γενική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[του#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">του</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανούς#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ούς</span>]]*
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[της#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">της</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανούς#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ούς</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[του#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">του</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανούς#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ούς</span>]]
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;[[αιτιατική|<span title="αιτιατική πτώση" style="color:black;">'''''αιτιατική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[τον#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">τον</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανή#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ή</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[την#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">τη</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανή#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ή</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[το#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">το</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανές#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ές</span>]]
+|-
+| style="background:#d5e2f6; text-align:right;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[κλητική|<span title="κλητική πτώση" style="color:black; font-size:90%;">'''''κλητική'''''</span>]]
+| align="center" | 
+| style="border-right:1px solid #a1bdea;" align="left" | <span style="white-space:nowrap;">[[διαφανή#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#EB0000; font-weight:normal;">ή</span>]]([[διαφανής#Νέα ελληνικά (el)|<span style="color:#EB0000; font-weight:normal;">ς</span>]])</span>
+| align="center" | 
+| style="border-right:1px solid #a1bdea;" align="left" | [[διαφανής#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ής</span>]]
+| align="center" | 
+| style="border-right:1px solid #a1bdea;" align="left" | [[διαφανές#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ές</span>]]
+|-
+
+
+
+! style="background:#a1bdea; border-right:1px solid #c1d3f1; text-align:center; font-size:90%;" align="center"| &darr;&nbsp;''πτώσεις'' 
+! style="background:#a1bdea; font-size:90%;" align="center" colspan="6"| &nbsp;&nbsp;[[πληθυντικός|<span title="πληθυντικός αριθμός" style="color:black;">'''''πληθυντικός'''''</span>]]&nbsp;&nbsp;
+|-
+| style="background:#c1d3f1; border-right:1px solid #a1bdea; text-align:center; font-size:70%; line-height:100%;" align="center"| ''γένη''&nbsp;&rarr; 
+| style="background:#c1d3f1; border-right:1px solid #a1bdea; font-size:70%; font-style:italic; line-height:100%;" colspan="2" align="center"| [[αρσενικό|<span style="color:#000000; font-weight:normal;">αρσενικό</span>]]
+| style="background:#c1d3f1; border-right:1px solid #a1bdea; font-size:70%; font-style:italic; line-height:100%;" colspan="2" align="center"| [[θηλυκό|<span style="color:#000000; font-weight:normal;">θηλυκό</span>]]
+| style="background:#c1d3f1; border-right:1px solid #a1bdea; font-size:70%; font-style:italic; line-height:100%;" colspan="2" align="center"| [[ουδέτερο|<span style="color:#000000; font-weight:normal;">ουδέτερο</span>]]
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| [[ονομαστική|<span title="ονομαστική πτώση" style="color:black;">'''''ονομαστική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[οι#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">οι</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανείς#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">είς</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[οι#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">οι</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανείς#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">είς</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[τα#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">τα</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανή#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ή</span>]]
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[γενική|<span title="γενική πτώση" style="color:black;">'''''γενική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[των#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">των</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανών#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ών</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[των#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">των</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανών#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ών</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[των#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">των</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανών#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ών</span>]]
+|-
+| style="background:#d5e2f6; border-bottom:1px solid #eaf0fa; text-align:right; font-size:90%;"| &nbsp;&nbsp;&nbsp;&nbsp;[[αιτιατική|<span title="αιτιατική πτώση" style="color:black;">'''''αιτιατική'''''</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[τους#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">τους</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανείς#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">είς</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[τις#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">τις</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανείς#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">είς</span>]]
+| style="border-bottom:1px solid #eaf0fa;" align="center" | [[τα#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">τα</span>]]
+| style="border-bottom:1px solid #eaf0fa; border-right:1px solid #a1bdea;" align="left" | [[διαφανή#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ή</span>]]
+|-
+| style="background:#d5e2f6; text-align:right;"| &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[κλητική|<span title="κλητική πτώση" style="color:black; font-size:90%;">'''''κλητική'''''</span>]]
+| align="center" | 
+| style="border-right:1px solid #a1bdea;" align="left" | [[διαφανείς#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">είς</span>]]
+| align="center" | 
+| style="border-right:1px solid #a1bdea;" align="left" | [[διαφανείς#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">είς</span>]]
+| align="center" | 
+| style="border-right:1px solid #a1bdea;" align="left" | [[διαφανή#Νέα ελληνικά (el)|<span style="color:#002000; font-weight:normal;">διαφαν</span><span style="color:#eb0000; font-weight:normal;">ή</span>]]
+|-
+| colspan="7" align="left" style="background:#eaf0fa; font-size:80%; line-height:100%;" | * Και προφορικός τύπος σε -ή στη γενική ενικού αρσενικού, ή και θηλυκού
+|-
+| colspan="7" align="right" style="text-align:right; background:#eaf0fa; font-size:70%; line-height:100%;" | [[:Κατηγορία:Επίθετα που κλίνονται όπως το 'συνεχής' (νέα ελληνικά)|Κατηγορία]] όπως «[[Παράρτημα:Επίθετα και μετοχές (νέα ελληνικά)#συνεχής|συνεχής]]» - [[Παράρτημα:Επίθετα και μετοχές (νέα ελληνικά)|<span title="Παράρτημα:Επίθετα & Μετοχές">Παράρτημα:Επίθετα & Μετοχές</span>]]
+|}[[Κατηγορία:Επίθετα που κλίνονται όπως το 'συνεχής' (νέα ελληνικά)]]
+===<span style="cursor:help; white-space:nowrap;" title="Προέλευση και ιστορία της λέξης">[[Αρχείο:System-search.svg|30px|alt=|link=]] Ετυμολογία </span>===
+: '''διαφανής''' < ([[λόγιο διαχρονικό δάνειο|διαχρονικό&nbsp;δάνειο]]) [[αρχαία ελληνικά|<span style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000); border-bottom: 1px dashed var(--border-color-muted, #dddddd); font-style:italic;">αρχαία ελληνική</span>]] [[Κατηγορία:Λόγια διαχρονικά δάνεια από τα αρχαία ελληνικά (νέα ελληνικά)]][[Κατηγορία:Προέλευση λέξεων από τα αρχαία ελληνικά (νέα ελληνικά)]] [[διαφανής#Αρχαία ελληνικά (grc)|διαφανής]]<ref>[http://www.greek-language.gr/greekLang/el/modern_greek/tools/lexica/triantafyllides/search.html?lq=%CE%B4%CE%B9%CE%B1%CF%86%CE%B1%CE%BD%CE%AE%CF%82 διαφανής]&nbsp;-&nbsp;''[[w:Λεξικό Τριανταφυλλίδη|<span class="notheme" style="background:#f7f7f7;" title="Λεξικό Τριανταφυλλίδη στη  Βικιπαίδεια">Λεξικό της Κοινής Νεοελληνικής</span>]]'' (1998) του [[w:Ινστιτούτο Νεοελληνικών Σπουδών|<span class="notheme" style="background:#f7f7f7;" title="Ινστιτούτο Νεοελληνικών Σπουδών στη  Βικιπαίδεια">Ιδρύματος Μανόλη Τριανταφυλλίδη</span>]] (<small>[https://www.greek-language.gr/greekLang/modern_greek/tools/lexica/triantafyllides/abbreviation.html συντομογραφίες]-[https://www.greek-language.gr/greekLang/modern_greek/tools/lexica/triantafyllides/symbols.html σύμβολα]. [https://www.greek-language.gr/greekLang/modern_greek/tools/lexica/triantafyllides/etymology.html Ετυμολογίες]: Ευάγγελος Πετρούνιας</small>). ''Η Πύλη για την ελληνική γλώσσα'', [https://www.greek-language.gr Κέντρο Ελληνικής Γλώσσας]</ref> < ([[διά#Αρχαία ελληνικά (grc)|διά]]) <span style="white-space:nowrap">[[δια-#Νέα ελληνικά (el)|δια-]]</span>[[Κατηγορία:Λέξεις με πρόθημα δια-&nbsp;(νέα ελληνικά)]] + <span style="white-space:nowrap">[[-φανής#Νέα ελληνικά (el)|-φανής]]</span>[[Κατηγορία:Λέξεις με επίθημα -φανής&nbsp;(νέα ελληνικά)]] ([[φαίνω#Αρχαία ελληνικά (grc)|φαίνω]])
+
+[[Αρχείο:Προφοραα|μικρογραφία]]
+===[[File:Wikinews commentary.svg|28px|alt=|link=]] <span class="pronunciation">Προφορά</span>===
+
+:[[ΔΦΑ|<span title="ΔΦΑ - Διεθνές Φωνητικό Αλφάβητο">ΔΦΑ</span>]] : /[[Παράρτημα:Προφορά/νέα ελληνικά|<span style="white-space: nowrap; font-size:110%;padding:2pt;letter-spacing:1px;line-height:1.25em;">ði.a.faˈnis</span>]]/[[Κατηγορία:Λήμματα με προφορά ΔΦΑ (νέα ελληνικά)]]
+: [[συλλαβισμός#Ουσιαστικό|<span title="ο χωρισμός γραπτής λέξης σε συλλαβές" style="background:var(--background-color-base, #ffffff); color:var(--color-emphasized, #002000); border-bottom: 1px dashed var(--border-color-muted, #dddddd);">''τυπογραφικός συλλαβισμός''</span>]]&#8202;'':''&nbsp;δι&#8208;α&#8208;φα&#8208;νής
+
+===<span id="elεπίθετο"></span><span style="white-space:nowrap" class="partofspeech">[[File:OOjs_UI-like_arrow_empty-ltr_progressive.svg|25px|alt=|link=]] Επίθετο</span>[[Κατηγορία:Νέα ελληνικά]][[Κατηγορία:Επίθετα (νέα ελληνικά)]][[Κατηγορία:Αντίστροφο λεξικό (νέα ελληνικά)|σηναφαιδ]]===
+'''διαφανής -ής - ές''' 
+# που επιτρέπει το φως να περάσει από μέσα του
+#: <span style="cursor:help;">[[File:Bootstrap arrow-return-right.svg|16x16px|link=|παράδειγμα]]</span>&nbsp; ''το γυαλί είναι '''διαφανές''' υλικό''
+# που δεν θέλει ή δεν μπορεί να αποκρύψει τίποτα, ο εύκολα [[κατανοητός]], ο [[ξεκάθαρος]]
+#: <span style="cursor:help;">[[File:Bootstrap arrow-return-right.svg|16x16px|link=|παράδειγμα]]</span>&nbsp; ''oι προθέσεις του είναι '''διαφανείς'''''
+# ([[:Κατηγορία:Πληροφορική (νέα ελληνικά)|<i>πληροφορική</i>]])[[Κατηγορία:Πληροφορική  (νέα ελληνικά)]] [[transparent]]: μία λειτουργία που γίνεται αυτόματα από τον [[υπολογιστής|υπολογιστή]] ή το [[πρόγραμμα]] και δεν γίνεται αντιληπτή (γιατί είναι «'''διαφανής'''») από τον χρήστη <ref>([[αγγλικά]]) [https://stackoverflow.com/questions/17384020/what-do-transparent-and-opaque-mean-when-applied-to-programming-concepts What do “transparent” and “opaque” mean when applied to programming concepts?], από stackoverflow.com. [https://web.archive.org/web/20150418140414/https://stackoverflow.com/questions/17384020/what-do-transparent-and-opaque-mean-when-applied-to-programming-concepts Αρχειοθέτηση] 2015-04-18. Πρόσβαση 2020-11-20.</ref><ref name="comp">([[αγγλικά]]) [https://www.computerhope.com/jargon/t/transpar.htm Transparent]. [https://web.archive.org/web/20200406032101/https://www.computerhope.com/jargon/t/transpar.htm Αρχειοθέτηση] 2020-04-06. Πρόσβαση 2020-11-20.</ref>
+# ([[:Κατηγορία:Υλικό υπολογιστή (νέα ελληνικά)|<i>υλικό υπολογιστή</i>]])[[Κατηγορία:Υλικό υπολογιστή  (νέα ελληνικά)]] [[transparent]]: [[υλισμικό|συσκευή]] (hardware) που δεν ελέγχει, ούτε επεξεργάζεται τα δεδομένα που περνούν από αυτήν, όπως η [[πλήμνη]] (hub) στα δίκτυα <ref name="comp" />
+
+====<span class="seealso">Άλλες μορφές</span>====
+* [[διάφανος]]
+
+====<span style="cursor:help;" title="Τα αντίθετα. Που έχουν αντίθετη έννοια με «διαφανής»">Αντώνυμα</span>====
+* [[αδιαφανής]]
+
+====<span style="cursor:help;" title="Λέξεις της ίδιας γλώσσας με ετυμολογική συγγένεια">Συγγενικά</span>====
+* [[διαφάνεια]]
+* [[διαφανώς]]
+
+====<span style="cursor:help;" title="Για τις σύνθετες λέξεις «διαφανής»">Σύνθετα</span>====
+* [[ημιδιαφανής]]
+<div style="clear:both;"></div>
+====[[Αρχείο:Gnome-globe.svg|28px|alt=|link=]] <span class="translations">Μεταφράσεις</span>====
+<div class="NavFrame" style="clear:both;">
+<div class="NavHead" style="background:#eeeeee; color:#000000; font-weight:bold; text-align:left;" align="left">&nbsp; &nbsp; διαφανής</div>
+<div class="NavContent">
+{| style="background:#ffffff; color:#000000; width:100%;" border="0" width="100%" class="translations"
+|-
+| style="background:#f8f8f8; color:#000000; text-align:left; text-valign:top; width:48%;" valign="top" width="48%" align="left" |
+<div style="width:100%; column-count:2; -webkit-column-count:2; -moz-column-count:2; column-width:50%; -webkit-column-width:50%; -moz-column-width:50%;">
+* [[αγγλικά]] : [[diaphanous#Αγγλικά (en)|diaphanous]] <small><sup>[[:en:diaphanous|(en)]]</sup></small>, [[transparent#Αγγλικά (en)|transparent]] <small><sup>[[:en:transparent|(en)]]</sup></small>
+* [[γαλλικά]] : [[transparent#Γαλλικά (fr)|transparent]] <small><sup>[[:fr:transparent|(fr)]]</sup></small>
+* [[ιταλικά]] : [[trasparente#Ιταλικά (it)|trasparente]] <small><sup>[[:it:trasparente|(it)]]</sup></small>
+* [[πολωνικά]] : [[przezroczysty#Πολωνικά (pl)|przezroczysty]] <small><sup>[[:pl:przezroczysty|(pl)]]</sup></small>
+* [[πορτογαλικά]] : [[trasparente#Πορτογαλικά (pt)|trasparente]] <small><sup>[[:pt:trasparente|(pt)]]</sup></small>
+</div>
+|}</div></div>
+
+====<span style="cursor:help;">[[Αρχείο:Open book icon.png|30px|alt=|link=]] <span title="παραπομπές σε πηγές">Αναφορές</span></span>====
+<references/>
+
+[[Κατηγορία:Αντίστροφο λεξικό (ελληνικά)|σηναφαιδ]]

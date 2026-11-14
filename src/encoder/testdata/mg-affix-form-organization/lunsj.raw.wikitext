@@ -1,0 +1,91 @@
+=={{=nb=}}==
+
+{{-e-mat-|nb}}
+'''lunsj''' 
+# filaza mandidy ny matoanteny [[lunsje]]
+
+{{-fanononana-}}
+* {{rhymes|nb|œnʃ|s=1}}
+* {{hyphenation|nb|lunsj}}
+* {{audio|LL-Q9043 (nor)-Telaneo-lunsj.wav|lunsj}}
+* {{fanononana|/lœnʃ/|nb}}
+* {{fanononana|[lœnʃ]|nb}}
+
+{{-tsiahy-}}
+* {{Tsiahy:nb:OB|lunsj}}
+* {{Tsiahy:nb:NAOB|lunsj}}
+* {{cite-web|date=21 November 2024|author=Arnt Steffensen|title=lunsj|site=Store norske leksikon|url=https://snl.no/lunsj}}
+* {{cite-web|date=1 January 2024|title=Lunch, lunsj eller lønsj?|site=Språkrådet|url=https://sprakradet.no/spraksporsmal-og-svar/lunch-lunsj-eller-lonsj/}}
+* {{wikibolana|en|lunsj}}
+
+{{-ana-|nb}}
+'''lunsj''' 
+# [[sakafo]] [[antoandro]], sakafo [[mihinana]] eo anelanelan'ny sakafo [[maraina]] sy ny sakafo [[hariva]], mazàna eo anelanelan'ny [[andro]] [[fiasana]] na [[fianarana]]
+#* ''spise varm lunsj''
+#* '''''være (ute) til lunsj''' — to be away from one's workplace eating lunch''
+#* ''det var gagedag idag, og da tager jeg mig gjerne en liden '''lunch''' med Markus Olivarius – Trætte Mænd, 1891''
+#* ''nå drakk han '''lunsj''' – Skjult mønster, 1950''
+#* ''den tidligere stavemåten [av lunch før 1959-normalen] lunsj (og lunsje) var … fonetisk meningsløs; skulle skriftbildet motsvare uttalen, måtte det jo være lønsj (og lønsje) – Sproget som ikke vil dø, 1964''
+#* ''plutselig spurte Katta om jeg ville bli med henne hjem til ’'''lunch'''’. Jeg ante ikke hva lunch var, men svarte ja – Klassereise, 2000''
+#* ''jeg hadde en lang og ubehagelig '''lunsj''' med en av de ansatte i dag – Herman Willis, St. Olav, 2004''
+#* ''man arbeidet hele dagen, bare avbrutt av en varm '''lunsj''' og obligatorisk siesta i ett-tiden – Mandel, 2005''
+#* ''hun forsvant noen minutter for å kjøpe '''lunsj''' til oss alle tre – Hodet ved døra, 2010''
+# [[fialan-tsasatra]] amin'ny [[sakafo]] atoandro, ny [[fotoana]] [[fihinanana]] sakafo atoandro [[mandritra]] ny [[andro]] [[fiasana]] na [[fianarana]]
+#* ''i '''lunsjen''' gikk jeg til gullsmeden vis-à-vis Sushi & Coffee – Hodejegerne, 2008''
+#* ''skal vi ses her på benken i '''lunsjen''' da? – La stå, 2015''
+
+{{-fanononana-}}
+* {{rhymes|nb|œnʃ|s=1}}
+* {{hyphenation|nb|lunsj}}
+* {{audio|LL-Q9043 (nor)-Telaneo-lunsj.wav|lunsj}}
+* {{fanononana|/lœnʃ/|nb}}
+* {{fanononana|[lœnʃ]|nb}}
+
+{{-dika-mitovy-}}
+* [[formiddagsmat]]
+
+{{-teny mifandraika-}}
+* [[arbeidslunsj]]
+* [[forretningslunsj]]
+* [[lunsjbar]]
+* [[lunsjbord]]
+* [[lunsjbuffé]]
+* [[lunsje]]
+* [[lunsjing]]
+* [[lunsjmøte]]
+* [[lunsjpause]]
+* [[lunsjrestaurant]]
+* [[lunsjrett]]
+* [[lunsjtid]]
+* [[lunsjvogn]]
+
+{{-tsiahy-}}
+* {{Tsiahy:nb:OB|lunsj}}
+* {{Tsiahy:nb:NAOB|lunsj}}
+* {{cite-web|date=21 November 2024|author=Arnt Steffensen|title=lunsj|site=Store norske leksikon|url=https://snl.no/lunsj}}
+* {{cite-web|date=1 January 2024|title=Lunch, lunsj eller lønsj?|site=Språkrådet|url=https://sprakradet.no/spraksporsmal-og-svar/lunch-lunsj-eller-lonsj/}}
+* {{wikibolana|en|lunsj}}
+
+=={{=nn=}}==
+
+{{-etim-}}
+:Nindramina avy amin'ny {{en}} ''lunch''.
+{{-ana-|nn}}
+'''lunsj''' 
+# [[sakafo]] atoandro
+
+{{-fanononana-}}
+* {{audio|no|LL-Q9043 (nor)-Telaneo-lunsj.wav}}
+* {{fanononana|/lœnʂ/|nn}}
+
+{{-dika-mitovy-}}
+* [[bisk]]
+* [[dugurd]]
+
+{{-teny mifandraika-}}
+* [[lunsjpause]]
+* [[lunsjtid]]
+
+{{-tsiahy-}}
+* {{Tsiahy:nn:OB}}
+* {{wikibolana|en|lunsj}}

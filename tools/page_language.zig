@@ -1,6 +1,7 @@
 const std = @import("std");
 const namespaces = @import("namespace_registry");
 const prefix_parser = @import("page_language_prefix.zig");
+const direct_source_get = @import("direct_source_get.zig");
 const A = std.mem.Allocator;
 const V = std.json.Value;
 const invalid = error.InvalidPageLanguageSource;
@@ -18,6 +19,7 @@ pub const Context = struct {
     observed_utc: []const u8,
     outer_languages: ?[]const []const u8 = null,
     prefix_observed_utc: ?[]const u8 = null,
+    body_skin_responsive: ?bool = null,
 };
 pub const NormalContext = struct {
     source_core_revision: ?[]const u8 = null,
@@ -51,12 +53,29 @@ const Record = struct {
 const Packet = struct {
     schema: []const u8,
     wiki: []const u8,
-    core_revision: []const u8,
+    core_revision: ?[]const u8,
     namespace_registry_sha256: []const u8,
     historical_page_language_proven: bool,
     source_profile: V,
     responses: []const ResponseRange,
     records: []const Record,
+    direct_get_contexts: []const DirectGetContext = &.{},
+};
+const DirectStyles = struct { responses: []const []const u8, receipt: []const u8 };
+pub const DirectGetContext = direct_source_get.Context(DirectStyles);
+const directPageValid = direct_source_get.validPage;
+const canonicalCurrentUrl = direct_source_get.canonicalCurrentUrl;
+const directGetTransport = direct_source_get.validateTransport;
+// This owned capsule is transport evidence only. It has no Profile/Compiler or
+// source-parent authority; the Writer eagerly constructs every parent first.
+pub const SourceParentCapsule = struct {
+    page: Page,
+    prefix: []const u8,
+    response: []const u8,
+    document_url: []const u8,
+    styles: DirectStyles,
+    response_sha256: [64]u8,
+    body_skin_responsive: ?bool,
 };
 const Prefix = struct {
     offset: u64,
@@ -256,11 +275,11 @@ fn responsePages(a: A, raw: []const u8, source: ResponseRange, doc: Packet, ns: 
     const general = try field(query, "general");
     const response_core = try str(general, "git-hash");
     const generator = try str(general, "generator");
-    const exact_epoch = eq(response_core, doc.core_revision) and eq(generator, "MediaWiki 1.48.0-wmf.3");
+    const exact_epoch = eq(response_core, (doc.core_revision orelse return invalid)) and eq(generator, "MediaWiki 1.48.0-wmf.3");
     // All eleven complete v1 source bodies at this observed WMF4 revision
     // equal the selected f458 source profile. Preserve the response's actual
     // epoch; the generic v2 language-mapping chain has no such proof here.
-    const compatible_ru_epoch = eq(doc.core_revision, current_core) and
+    const compatible_ru_epoch = eq(doc.core_revision orelse return invalid, current_core) and
         eq(try str(doc.source_profile, "kind"), "normal-wikitext-trivial-language-v1") and
         eq(response_core, "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c") and
         eq(generator, "MediaWiki 1.48.0-wmf.4");
@@ -320,6 +339,8 @@ pub const Registry = struct {
     // Already sorted and immutable. No per-page maps or duplicated API trees.
     entries: []const Entry = &.{},
     core_revision: ?[]const u8 = null,
+    direct_entries: []const DirectEntry = &.{},
+    const DirectEntry = struct { page: Page, capsule: *const SourceParentCapsule };
 
     pub fn init(backing: A, packet_bytes: ?[]const u8, response_bytes: ?[]const u8, prefix_bytes: ?[]const u8, ns: *const namespaces.Registry) !Registry {
         var arena = std.heap.ArenaAllocator.init(backing);
@@ -336,11 +357,18 @@ pub const Registry = struct {
             else => return invalid,
         };
         const raw = response_bytes orelse return invalid;
-        if (raw.len == 0 or raw.len > max_payload_bytes or (if (prefix_bytes) |p| p.len == 0 or p.len > max_payload_bytes else false) or
+        const has_api = doc.records.len != 0;
+        const has_direct = doc.direct_get_contexts.len != 0;
+        if (raw.len > max_payload_bytes or (if (prefix_bytes) |p| p.len == 0 or p.len > max_payload_bytes else false) or
             !eq(doc.schema, "wikidict.page-language-index.v1") or !eq(doc.wiki, ns.wiki) or
             !eq(doc.namespace_registry_sha256, &std.fmt.bytesToHex(ns.source_sha256, .lower)) or doc.historical_page_language_proven or
-            doc.records.len == 0 or doc.records.len > max_records or doc.responses.len == 0 or doc.responses.len > max_responses) return invalid;
-        const selected_profile = try profile(doc.source_profile, doc.core_revision);
+            (!has_api and !has_direct) or doc.records.len > max_records or doc.responses.len > max_responses or
+            doc.direct_get_contexts.len > 256 or
+            (has_api and (raw.len == 0 or doc.responses.len == 0)) or
+            (!has_api and (raw.len != 0 or doc.responses.len != 0 or prefix_bytes != null or
+                doc.core_revision != null or doc.source_profile != .null))) return invalid;
+        const selected_profile: Profile = if (has_api) try profile(doc.source_profile, doc.core_revision orelse return invalid)
+            else .{ .core = "", .generic_trivial = false };
         var previous_id: u64 = 0;
         for (doc.records) |record| {
             const page = record.page;
@@ -388,10 +416,38 @@ pub const Registry = struct {
             const parsed = try observedPrefix(a, bytes, p, record.page, doc.wiki, entries[record_index].context.language);
             prefix_end += p.slice_bytes;
             entries[record_index].context.outer_languages = parsed.outer_languages;
+            entries[record_index].context.body_skin_responsive = parsed.body_skin_responsive;
             entries[record_index].context.prefix_observed_utc = try a.dupe(u8, p.observed_utc);
         };
         if (prefix_end != (if (prefix_bytes) |p| p.len else 0)) return invalid;
-        return .{ .arena = arena, .entries = entries, .core_revision = selected_profile.core };
+        const direct_entries = try a.alloc(DirectEntry, doc.direct_get_contexts.len);
+        var previous_direct: u64 = 0;
+        for (doc.direct_get_contexts, direct_entries, 0..) |record, *entry, direct_index| {
+            if (!directPageValid(record.page) or record.page.id <= previous_direct) return invalid;
+            previous_direct = record.page.id;
+            for (doc.records) |api| if (api.page.id == record.page.id) return invalid;
+            for (doc.direct_get_contexts[0..direct_index]) |previous|
+                if (eq(previous.page.title, record.page.title)) return invalid;
+            var temporary = std.heap.ArenaAllocator.init(backing); defer temporary.deinit();
+            const url = directGetTransport(temporary.allocator(), ns, record) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory, else => return invalid,
+            };
+            const owned: Page = .{ .id = record.page.id, .revision = record.page.revision, .namespace = record.page.namespace,
+                .model = "wikitext", .title = try a.dupe(u8, record.page.title), .raw_sha256 = try a.dupe(u8, record.page.raw_sha256),
+                .expanded_sha256 = try a.dupe(u8, record.page.expanded_sha256.?) };
+            const bodies = try a.alloc([]const u8, record.styles.responses.len);
+            for (record.styles.responses, bodies) |body, *copy| copy.* = try a.dupe(u8, body);
+            const html = try a.dupe(u8, record.response);
+            const prefix = try a.dupe(u8, record.prefix);
+            const observed = try prefix_parser.parseCurrentAlloc(a, prefix, owned.id, owned.revision, owned.title);
+            const capsule = try a.create(SourceParentCapsule);
+            capsule.* = .{ .page = owned, .prefix = prefix, .response = html, .document_url = try a.dupe(u8, url),
+                .styles = .{ .responses = bodies, .receipt = try a.dupe(u8, record.styles.receipt) },
+                .response_sha256 = digest(html), .body_skin_responsive = observed.body_skin_responsive };
+            entry.* = .{ .page = owned, .capsule = capsule };
+        }
+        return .{ .arena = arena, .entries = entries, .direct_entries = direct_entries,
+            .core_revision = if (has_api) selected_profile.core else null };
     }
     pub fn deinit(self: *Registry) void { self.arena.deinit(); self.* = undefined; }
     fn selected(self: *const Registry, page_id: u64, revision_id: u64, ns: i32, title: []const u8, raw: []const u8) ?*const Entry {
@@ -413,6 +469,24 @@ pub const Registry = struct {
         if (!normal.normal_no_target or normal.interface_message == null or normal.interface_message.? or normal.target_language_override != null or normal.variant_override != null or
             !eq(normal.source_core_revision orelse return null, self.core_revision orelse return null)) return null;
         return (self.selected(page_id, revision_id, ns, title, raw) orelse return null).context;
+    }
+    pub fn lookupSourceCapsule(self: *const Registry, page_id: u64, revision_id: u64, ns: i32,
+        title: []const u8, raw: []const u8, expanded: []const u8, normal: NormalContext) ?*const SourceParentCapsule
+    {
+        if (!normal.normal_no_target or normal.interface_message == null or normal.interface_message.? or
+            normal.target_language_override != null or normal.variant_override != null) return null;
+        var low: usize = 0;
+        var high = self.direct_entries.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (self.direct_entries[mid].page.id < page_id) low = mid + 1 else high = mid;
+        }
+        if (low == self.direct_entries.len) return null;
+        const entry = &self.direct_entries[low];
+        if (entry.page.id != page_id or entry.page.revision != revision_id or entry.page.namespace != ns or
+            !eq(entry.page.title, title) or !matches(raw, entry.page.raw_sha256) or
+            !matches(expanded, entry.page.expanded_sha256.?)) return null;
+        return entry.capsule;
     }
     pub fn capturedSourceMatches(self: *const Registry, page_id: u64, revision_id: u64, ns: i32, title: []const u8, raw: []const u8, expanded: []const u8) bool {
         const entry = self.selected(page_id, revision_id, ns, title, raw) orelse return false;
@@ -1205,3 +1279,31 @@ test "RU WMF4 compatible response keeps generator profile language and exact pre
         try std.testing.expectError(invalid, Registry.init(a, encoded, raw_store, RuObserved93Fixture.prefix, &ns));
     }
 }
+
+const DirectGetFixture = if (@import("builtin").is_test) struct {
+    const packet = @embedFile("testdata/hu-direct-source-context01/candidate.json");
+    const namespace_bytes = @embedFile("testdata/hu-direct-source-context01/namespace-registry.tsv");
+    const pages = .{
+        .{ @as(u64, 1153), @as(u64, 3369675), "Európa", @embedFile("testdata/hu-direct-source-context01/1153-raw.wikitext"), @embedFile("testdata/hu-direct-source-context01/1153-expanded.wikitext") },
+        .{ @as(u64, 1563), @as(u64, 3350271), "Afrika", @embedFile("testdata/hu-direct-source-context01/1563-raw.wikitext"), @embedFile("testdata/hu-direct-source-context01/1563-expanded.wikitext") },
+        .{ @as(u64, 4021), @as(u64, 3399765), "Oroszország", @embedFile("testdata/hu-direct-source-context01/4021-raw.wikitext"), @embedFile("testdata/hu-direct-source-context01/4021-expanded.wikitext") },
+    };
+    const normal: NormalContext = .{ .normal_no_target = true, .interface_message = false };
+} else struct {};
+
+
+
+pub const SourceTesting = if (@import("builtin").is_test) struct {
+    pub const packet = DirectGetFixture.packet;
+    pub const namespace_bytes = DirectGetFixture.namespace_bytes;
+    pub const pages = DirectGetFixture.pages;
+    pub const normal = DirectGetFixture.normal;
+    pub const parse_limited = parseLimited;
+    pub const parse_value = parse;
+    pub const string_field = str;
+    pub const digest_bytes = digest;
+    pub const matches_digest = matches;
+    pub const transport = directGetTransport;
+    pub const data_only_encoder = !@hasDecl(@import("encoder"), "table_style_profile") and
+        !@hasDecl(@import("encoder"), "presentation_compile");
+} else struct {};

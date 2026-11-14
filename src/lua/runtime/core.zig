@@ -1,3 +1,4 @@
+pub const string_origins = @import("string_origin_hooks.zig");
 pub const RequestPool = @import("request_pool.zig").RequestPool;
 const std = @import("std");
 pub const namespace_registry = @import("namespace_registry");
@@ -2464,6 +2465,7 @@ pub const Context = struct {
     }
 
     pub fn deinit(self: *Context) void {
+        string_origins.retired(@intFromPtr(self));
         self.invoke_cell_baselines.deinit(self.allocator);
         self.module_template_clone_tables.deinit(self.allocator);
         self.module_template_clone_cells.deinit(self.allocator);
@@ -5414,7 +5416,9 @@ pub const Context = struct {
         return error.CompareType;
     }
     pub fn ownString(self: *Context, text: []const u8) ![]const u8 {
-        return self.stringAllocator().dupe(u8, text);
+        const result = try self.stringAllocator().dupe(u8, text);
+        try string_origins.copied(@intFromPtr(self), text, result);
+        return result;
     }
 
     pub fn concatValues(self: *Context, values: []const Value) anyerror!Value {
@@ -5431,7 +5435,18 @@ pub const Context = struct {
             },
             else => return error.ConcatType,
         };
-        return .{ .string = try self.ownString(out.items) };
+        const result = try self.ownString(out.items);
+        if (string_origins.enabled()) {
+            var sources: std.ArrayList([]const u8) = .empty;
+            defer sources.deinit(allocator);
+            var strings_only = true;
+            for (values) |value| switch (value) {
+                .string => |text| sources.append(allocator, text) catch |err| return string_origins.operational(err),
+                else => { strings_only = false; break; },
+            };
+            if (strings_only) try string_origins.concatenated(@intFromPtr(self), sources.items, result);
+        }
+        return .{ .string = result };
     }
 };
 

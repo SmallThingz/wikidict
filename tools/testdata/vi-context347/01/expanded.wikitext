@@ -1,0 +1,170 @@
+==Tiếng Anh==
+[[Image:Barracuda.JPG|thumb|a typical '''barracuda'''<br> (<span class="biota">[[Wikispecies:Sphyraena sphyraena|''Sphyraena sphyraena'']][[Thể loại:Mục từ có danh pháp phân loại chưa được tạo bài (loài)|Sphyraena sphyraena]]</span>)]]
+
+===Từ nguyên===
+Được chứng thực lần đầu vào những năm 1670, có nguồn gốc từ Mỹ Latinh <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q1321 site=viwiki</span></strong>, có lẽ bắt nguồn từ một từ <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q33090 site=viwiki</span></strong>.
+
+===Cách phát âm===
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:United Kingdom|Anh]]</span></span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Anh|ghi chú]])</sup>:&#32;<span class="IPA">/ˌbæɹəˈkuːdə/</span>[[Category:Từ 4 âm tiết tiếng Anh|BARRACUDA]][[Category:Mục từ có cách phát âm IPA tiếng Anh|BARRACUDA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Âm thanh <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:Tiếng Anh tại Nam Anh|miền Nam nước Anh]]</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:LL-Q1860 (eng)-Vealhurl-barracuda.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q1860 (eng)-Vealhurl-barracuda.wav|tập tin]])</td></tr></table>[[Category:Mục từ có liên kết âm thanh tiếng Anh|BARRACUDA]]
+* Vần: [[Vần:Tiếng Anh/uːdə|<span class="IPA">-uːdə</span>]][[Category:Vần:Tiếng Anh/uːdə|BARRACUDA]][[Category:Vần:Tiếng Anh/uːdə/4 âm tiết|BARRACUDA]]
+
+===Noun===
+<span class="headword-line"><strong class="Latn headword" lang="en">barracuda</strong> (<i>số nhiều</i> <b class="Latn form-of lang-en p-form-of" lang="en"><strong class="selflink">barracuda</strong></b> <i>hoặc</i> <b class="Latn form-of lang-en p-form-of" lang="en">[[:barracudas#Tiếng&#95;Anh|barracudas]]</b>)</span>[[Category:Mục từ tiếng Anh|BARRACUDA]][[Category:Danh từ tiếng Anh|BARRACUDA]][[Category:Danh từ đếm được tiếng Anh|BARRACUDA]][[Category:Danh từ có số nhiều bất quy tắc tiếng Anh|BARRACUDA]][[Category:Danh từ không biến cách tiếng Anh|BARRACUDA]][[Category:Trang có đề mục ngôn ngữ|BARRACUDA]][[Category:Trang có 7 đề mục ngôn ngữ|BARRACUDA]]
+
+# [[cá nhồng|Cá nhồng]].
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[Phụ lục:Từ điển thuật ngữ#nghĩa bóng|nghĩa bóng]]</span><span class="ib-brac label-brac">)</span></span> Người sử dụng các biện pháp khắc nghiệt hoặc mang tính cạnh tranh để giành [[chiến thắng]].
+
+====Từ phái sinh====
+<div class="list-switcher-wrapper"><div class="term-list columns-bg"><ul><li><span class="Latn" lang="en">[[:barracudalike#Tiếng&#95;Anh|barracudalike]]</span></li><li><span class="Latn" lang="en">[[:yellowtail barracuda#Tiếng&#95;Anh|yellowtail barracuda]]</span></li></ul></div></div>
+
+===Xem thêm===
+* <span class="Latn" lang="en">[[:barracouta#Tiếng&#95;Anh|barracouta]]</span>
+
+===Tham khảo===
+* <span class="citation-whole"><span class="cited-source">Hồ Ngọc Đức (biên tập) (1 tháng 7 2004), “barracuda”, trong <cite>Anh–Việt</cite>&lrm;<sup>[https://web.archive.org/web/20241112042242/https://www.informatik.uni-leipzig.de/~duc/Dict/AnhViet.zip]</sup> ([[:en:DICT|DICT]]), Leipzig&#58; [https://web.archive.org/web/20250122074846/http://www.informatik.uni-leipzig.de/~duc/Dict/ Dự án Từ điển tiếng Việt miễn phí] ([[:Wiktionary&#58;Nguồn gốc&#47;FVDP|chi tiết]])</span></span>
+
+===Đọc thêm===
+* [[Image:Wikipedia-logo.svg|15px|link=w:en:barracuda]] <b class="Latn" lang="en">[[:w&#58;en&#58;barracuda|barracuda]]</b> trên Wikipedia tiếng Anh.
+* [[Image:Wikispecies-logo.svg|20px]] '''[[wikispecies:Sphyraena|Sphyraena]]''' trên Wikispecies.
+
+* [https://www.onelook.com/?w=barracuda&ls=a barracuda], ''OneLook Dictionary Search''
+
+[[Category:en:Họ Cá thu ngừ|BARRACUDA]]
+
+==Tiếng Bồ Đào Nha==
+
+===Từ nguyên===
+Từ <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q1321 site=viwiki</span></strong>.
+
+===Cách phát âm===
+* Vần: [[Vần:Tiếng Bồ Đào Nha/udɐ|<span class="IPA">-udɐ</span>]][[Category:Vần:Tiếng Bồ Đào Nha/udɐ|BARRACUDA]][[Category:Vần:Tiếng Bồ Đào Nha/udɐ/4 âm tiết|BARRACUDA]]
+<div class="vsSwitcher" data-toggle-category="cách phát âm" style="width: 60em; max-width:100%;"><span class="vsToggleElement" style="float: right;">&nbsp;</span>
+<div class="vsShow" style="display:none">
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Tiếng Bồ Đào Nha Brasil|Brasil]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Bồ Đào Nha|ghi chú]])</sup>:&#32;<span class="IPA">/ba.ʁaˈku.dɐ/</span> <span class="IPA">[ba.haˈku.dɐ]</span>[[Category:Từ 4 âm tiết tiếng Bồ Đào Nha|BARRACUDA]][[Category:Mục từ có cách phát âm IPA tiếng Bồ Đào Nha|BARRACUDA]]</div>
+<div class="vsHide">
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Tiếng Bồ Đào Nha Brasil|Brasil]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Bồ Đào Nha|ghi chú]])</sup>:&#32;<span class="IPA">/ba.ʁaˈku.dɐ/</span> <span class="IPA">[ba.haˈku.dɐ]</span>[[Category:Từ 4 âm tiết tiếng Bồ Đào Nha|BARRACUDA]][[Category:Mục từ có cách phát âm IPA tiếng Bồ Đào Nha|BARRACUDA]]
+** <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Carioca#Phương ngữ xã hội|Rio de Janeiro]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Bồ Đào Nha|ghi chú]])</sup>:&#32;<span class="IPA">/ba.ʁaˈku.dɐ/</span> <span class="IPA">[ba.χaˈku.dɐ]</span>[[Category:Từ 4 âm tiết tiếng Bồ Đào Nha|BARRACUDA]][[Category:Mục từ có cách phát âm IPA tiếng Bồ Đào Nha|BARRACUDA]]
+** <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">Miền Nam Brasil</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Bồ Đào Nha|ghi chú]])</sup>:&#32;<span class="IPA">/ba.ʁaˈku.da/</span> <span class="IPA">[ba.haˈku.da]</span>[[Category:Từ 4 âm tiết tiếng Bồ Đào Nha|BARRACUDA]][[Category:Mục từ có cách phát âm IPA tiếng Bồ Đào Nha|BARRACUDA]]</div></div>
+<div>
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Tiếng Bồ Đào Nha châu Âu|Bồ Đào Nha]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Bồ Đào Nha|ghi chú]])</sup>:&#32;<span class="IPA">/bɐ.ʁɐˈku.dɐ/</span> <span class="IPA">[bɐ.ʁɐˈku.ðɐ]</span>[[Category:Từ 4 âm tiết tiếng Bồ Đào Nha|BARRACUDA]][[Category:Mục từ có cách phát âm IPA tiếng Bồ Đào Nha|BARRACUDA]]</div>
+<span></span>
+
+===Danh từ===
+<span class="headword-line"><strong class="Latn headword" lang="pt">barracuda</strong>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span> (<i>số nhiều</i> <b class="Latn form-of lang-pt p-form-of" lang="pt">[[:barracudas#Tiếng&#95;Bồ&#95;Đào&#95;Nha|barracudas]]</b>)</span>[[Category:Mục từ tiếng Bồ Đào Nha|BARRACUDA]][[Category:Danh từ tiếng Bồ Đào Nha|BARRACUDA]][[Category:Danh từ đếm được tiếng Bồ Đào Nha|BARRACUDA]][[Category:Danh từ giống cái tiếng Bồ Đào Nha|BARRACUDA]][[Category:Trang có đề mục ngôn ngữ|BARRACUDA]][[Category:Trang có 7 đề mục ngôn ngữ|BARRACUDA]][[Category:Danh từ tiếng Bồ Đào Nha  có liên kết đỏ trong dòng tiêu đề|BARRACUDA]]
+
+# [[cá nhồng|Cá nhồng]].
+
+===Đọc thêm===
+* <span class="citation-whole"><span class="cited-source">“[https://www.aulete.com.br/barracuda barracuda]”, trong <cite>[[:w&#58;pt&#58;Dicionário Aulete Digital|Dicionário Aulete Digital]]</cite> (bằng tiếng Bồ Đào Nha), Rio de Janeiro&#58; Lexikon Editora Digital, 2008–<span class="None" lang="und">2026</span></span></span>
+* <span class="citation-whole"><span class="cited-source">“[https://dicionario.priberam.org/barracuda barracuda]”, trong <cite>[[:w&#58;pt&#58;Priberam|Dicionário Priberam da Língua Portuguesa]]</cite> (bằng tiếng Bồ Đào Nha), Lisbon&#58; Priberam, 2008–<span class="None" lang="und">2026</span></span></span>
+
+[[Category:pt:Họ Cá thu ngừ|BARRACUDA]]
+
+==Tiếng Catalan==
+
+===Từ nguyên===
+<strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q1321 site=viwiki</span></strong>.
+
+===Cách phát âm===
+* [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Catalan|ghi chú]])</sup>:&#32;<span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:Tiếng Catalunya miền Trung|miền Trung]]<span class="ib-comma label-comma">,</span>&#32;[[w:Tiếng Baleares|Baleares]]</span></span><span class="ib-brac qualifier-brac">)</span> <span class="IPA">[bə.rəˈku.ðə]</span>[[Category:Mục từ có cách phát âm IPA tiếng Catalan|BARRACUDA]]
+* [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Catalan|ghi chú]])</sup>:&#32;<span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:Tiếng Valencia|Valencia]]</span></span><span class="ib-brac qualifier-brac">)</span> <span class="IPA">[ba.raˈku.ða]</span>[[Category:Mục từ có cách phát âm IPA tiếng Catalan|BARRACUDA]]
+
+===Noun===
+<span class="headword-line"><strong class="Latn headword" lang="ca">barracuda</strong>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span> (<i>số nhiều</i> <b class="Latn form-of lang-ca p-form-of" lang="ca">[[:barracudes#Tiếng&#95;Catalan|barracudes]]</b>)</span>[[Category:Mục từ tiếng Catalan|BARRACUDA]][[Category:Danh từ tiếng Catalan|BARRACUDA]][[Category:Danh từ đếm được tiếng Catalan|BARRACUDA]][[Category:Danh từ có liên kết đỏ trong dòng tên mục từ tiếng Catalan|BARRACUDA]][[Category:Danh từ giống cái tiếng Catalan|BARRACUDA]][[Category:Trang có đề mục ngôn ngữ|BARRACUDA]][[Category:Trang có 7 đề mục ngôn ngữ|BARRACUDA]]
+
+# [[cá nhồng|Cá nhồng]].
+
+===Đọc thêm===
+* <span class="citation-whole"><span class="cited-source">“[https://dlc.iec.cat/Results?EntradaText=barracuda&AccentSen=True barracuda]”, trong <cite>[[:w&#58;Diccionari de la llengua catalana|Diccionari de la llengua catalana]]</cite> &#91;<cite><span class="e-translation">Từ điển tiếng Catalan</span></cite>&#93; (bằng tiếng Catalan), ấn bản 2, Institut d'Estudis Catalans, tháng 4 2007</span></span>
+
+[[Category:ca:Họ Cá thu ngừ|BARRACUDA]]
+
+==Tiếng Hà Lan==
+
+===Từ nguyên===
+Được vay mượn từ <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q1860 site=viwiki</span></strong>. <span class="maintenance-line"><i>[[Wiktionary:Từ nguyên|Từ nguyên]] cho mục từ này chưa đầy đủ. Bạn có thể giúp Wiktionary mở rộng và hoàn thiện nó. </i></span>[[Category:Yêu cầu mở rộng từ nguyên tiếng Hà Lan|BARRACUDA]]
+
+===Cách phát âm===
+* [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Hà Lan|ghi chú]])</sup>:&#32;<span class="IPA">/ˌbɑ.raːˈky.daː/</span>[[Category:Mục từ có cách phát âm IPA tiếng Hà Lan|BARRACUDA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Âm thanh<span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:Nl-barracuda.ogg|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:Nl-barracuda.ogg|tập tin]])</td></tr></table>[[Category:Mục từ có liên kết âm thanh tiếng Hà Lan|BARRACUDA]]
+* Tách âm: <span class="Latn" lang="nl">bar‧ra‧cu‧da</span>
+
+===Danh từ===
+<span class="headword-line"><strong class="Latn headword" lang="nl">barracuda</strong>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span> (<i>số nhiều</i> <b class="Latn form-of lang-nl p-form-of" lang="nl">[[:barracuda's#Tiếng&#95;Hà&#95;Lan|barracuda's]]</b>, <i>không giảm nhẹ nghĩa</i>)</span>[[Category:Mục từ tiếng Hà Lan|BARRACUDA]][[Category:Danh từ tiếng Hà Lan|BARRACUDA]][[Category:Danh từ với số nhiều kết thúc bằng -s tiếng Hà Lan|BARRACUDA]][[Category:Danh từ có liên kết đỏ trong dòng tên mục từ tiếng Hà Lan|BARRACUDA]][[Category:Danh từ giống cái tiếng Hà Lan|BARRACUDA]][[Category:Trang có đề mục ngôn ngữ|BARRACUDA]][[Category:Trang có 7 đề mục ngôn ngữ|BARRACUDA]]
+
+# [[cá nhồng|Cá nhồng]].
+#: <span class="nyms đồng-nghĩa"><span style="font-size: smaller">Đồng nghĩa:</span> <span class="Latn" lang="nl">[[:zeesnoek#Tiếng&#95;Hà&#95;Lan|zeesnoek]]</span></span>
+
+==Tiếng Pháp==
+
+===Từ nguyên===
+<strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q1321 site=viwiki</span></strong>.
+
+===Cách phát âm===
+* [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Pháp|ghi chú]])</sup>:&#32;<span class="IPA">/ba.ʁa.ky.da/</span>, <span class="IPA">/ba.ʁa.ku.da/</span>[[Category:Từ 4 âm tiết tiếng Pháp|BARRACUDA]][[Category:Từ 4 âm tiết tiếng Pháp|BARRACUDA]][[Category:Mục từ có cách phát âm IPA tiếng Pháp|BARRACUDA]]
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Âm thanh <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">[[w:France|France]] (Vosges)</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:LL-Q150 (fra)-Poslovitch-barracuda.wav|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q150 (fra)-Poslovitch-barracuda.wav|tập tin]])</td></tr></table>[[Category:Mục từ có liên kết âm thanh tiếng Pháp|BARRACUDA]]
+
+===Danh từ===
+<span class="headword-line"><strong class="Latn headword" lang="fr">barracuda</strong>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span> (<i>số nhiều</i> <b class="Latn form-of lang-fr p-form-of" lang="fr">[[:barracudas#Tiếng&#95;Pháp|barracudas]]</b>)</span>[[Category:Mục từ tiếng Pháp|BARRACUDA]][[Category:Danh từ tiếng Pháp|BARRACUDA]][[Category:Danh từ đếm được tiếng Pháp|BARRACUDA]][[Category:Danh từ giống đực tiếng Pháp|BARRACUDA]][[Category:Trang có đề mục ngôn ngữ|BARRACUDA]][[Category:Trang có 7 đề mục ngôn ngữ|BARRACUDA]]
+
+# [[cá nhồng|Cá nhồng]].
+
+===Tham khảo===
+* <span class="citation-whole"><span class="cited-source">Hồ Ngọc Đức (biên tập) (<span class="None" lang="und">2003</span>), “barracuda”, trong <cite>Pháp–Việt</cite>&lrm;<sup>[https://web.archive.org/web/20241112031712/https://www.informatik.uni-leipzig.de/~duc/Dict/PhapViet.zip]</sup> ([[:en:DICT|DICT]]), Leipzig&#58; [https://web.archive.org/web/20250122074846/http://www.informatik.uni-leipzig.de/~duc/Dict/ Dự án Từ điển tiếng Việt miễn phí] ([[:Wiktionary&#58;Nguồn gốc&#47;FVDP|chi tiết]])</span></span>
+
+[[Category:fr:Họ Cá thu ngừ|BARRACUDA]]
+
+==Tiếng Tây Ban Nha==
+<div class="interproject-box sister-wikipedia sister-project noprint floatright"><div style="float: left;" class="interproject-box-logo">[[File:Wikipedia-logo-v2.svg|x40px|none|link=|alt=]]</div><div style="margin-left: 60px;">[[Wikipedia]] tiếng Tây Ban Nha có một bài viết về:<div style="margin-left: 10px;"><b class="Latn" lang="es">[[:w&#58;es&#58;barracuda|barracuda]]</b></div></div></div><templatestyles src="Module:interproject/style.css"></templatestyles>
+
+===Từ nguyên===
+Không rõ[[Category:Từ không rõ từ nguyên tiếng Tây Ban Nha|BARRACUDA]], có lẽ bắt nguồn từ một từ thuộc vùng <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q33090 site=viwiki</span></strong>.  Theo  Watkins, từ <strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q32641 site=viwiki</span></strong>/<strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q7026 site=viwiki</span></strong>; xem <i class="Latn mention" lang="ca">[[:barraca#Tiếng&#95;Catalan|barraca]]</i>.
+
+===Cách phát âm===
+
+* [[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Tây Ban Nha|ghi chú]])</sup>:&#32;<span class="IPA">/baraˈkuda/</span> <span class="IPA">[ba.raˈku.ð̞a]</span>[[Category:Từ 4 âm tiết tiếng Tây Ban Nha|BARRACUDA]][[Category:Mục từ có cách phát âm IPA tiếng Tây Ban Nha|BARRACUDA]]
+* Vần: [[Vần:Tiếng Tây Ban Nha/uda|<span class="IPA">-uda</span>]][[Category:Vần:Tiếng Tây Ban Nha/uda|BARRACUDA]][[Category:Vần:Tiếng Tây Ban Nha/uda/4 âm tiết|BARRACUDA]]
+* Tách âm: <span class="Latn" lang="es">ba‧rra‧cu‧da</span>[[Category:Từ 4 âm tiết tiếng Tây Ban Nha|BARRACUDA]]
+
+===Danh từ===
+<span class="headword-line"><strong class="Latn headword" lang="es">barracuda</strong>&nbsp;<span class="gender"><abbr title="giống cái">gc</abbr></span> (<i>số nhiều</i> <b class="Latn form-of lang-es p-form-of" lang="es">[[:barracudas#Tiếng&#95;Tây&#95;Ban&#95;Nha|barracudas]]</b>)</span>[[Category:Mục từ tiếng Tây Ban Nha|BARRACUDA]][[Category:Danh từ tiếng Tây Ban Nha|BARRACUDA]][[Category:Danh từ đếm được tiếng Tây Ban Nha|BARRACUDA]][[Category:Danh từ giống cái tiếng Tây Ban Nha|BARRACUDA]][[Category:Trang có đề mục ngôn ngữ|BARRACUDA]][[Category:Trang có 7 đề mục ngôn ngữ|BARRACUDA]][[Category:Danh từ tiếng Tây Ban Nha  có liên kết đỏ trong dòng tiêu đề|BARRACUDA]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[zoology]][[Category:es:Fish|BARRACUDA]]</span><span class="ib-brac label-brac">)</span></span> [[cá nhồng|Cá nhồng]].
+#: <span class="nyms đồng-nghĩa"><span style="font-size: smaller">Đồng nghĩa:</span> <span class="Latn" lang="es">[[:picuda#Tiếng&#95;Tây&#95;Ban&#95;Nha|picuda]]</span></span>
+
+====Hậu duệ====
+<div class="columns-bg ul-column-count" data-column-count="2">
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Cebu: <span class="Latn" lang="ceb">[[:barakuda#Tiếng&#95;Cebu|barakuda]]</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Anh: <span class="Latn" lang="en">[[:barracuda#Tiếng&#95;Anh|barracuda]]</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Ý: <span class="Latn" lang="it">[[:barracuda#Tiếng&#95;Ý|barracuda]]</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="vay mượn">→</span> Tiếng Bồ Đào Nha: <span class="Latn" lang="pt">[[:barracuda#Tiếng&#95;Bồ&#95;Đào&#95;Nha|barracuda]]</span><templatestyles src="Module:etymology/style.css"/>
+
+</div>
+
+===Đọc thêm===
+* <span class="citation-whole"><span class="cited-source">“[https://dle.rae.es/barracuda barracuda]”, trong <cite>[[:w&#58;Diccionario de la lengua española|Diccionario de la lengua española]]</cite> &#91;<cite><span class="e-translation">Từ điển tiếng Tây Ban Nha</span></cite>&#93; (bằng tiếng Tây Ban Nha), phiên bản trực tuyến 23.8.1, Real Academia Española, 15 tháng 12 2025</span></span>
+* [[:Bản mẫu:R:American Heritage Dictionary]]
+
+[[Category:es:Cá|BARRACUDA]]
+
+==Tiếng Ý==
+
+===Từ nguyên===
+<strong class="error"><span class="scribunto-error">Lua error in Mô đun:etymology/templates: Wikibase sitelink snapshot missing entity=Q1321 site=viwiki</span></strong>.
+
+===Cách phát âm===
+
+*[[Wiktionary:IPA|IPA]]<sup>([[Phụ lục:Cách phát âm tiếng Ý|ghi chú]])</sup>:&#32;<span class="IPA">/bar.raˈku.da/</span>[[Category:Từ 4 âm tiết tiếng Ý|BARRACUDA]][[Category:Mục từ có cách phát âm IPA tiếng Ý|BARRACUDA]]
+* Vần: [[Vần:Tiếng Ý/uda|<span class="IPA">-uda</span>]][[Category:Vần:Tiếng Ý/uda|BARRACUDA]][[Category:Vần:Tiếng Ý/uda/4 âm tiết|BARRACUDA]]
+* Tách âm: <span class="Latn" lang="it">bar‧ra‧cù‧da</span>
+
+===Danh từ===
+<span class="headword-line"><strong class="Latn headword" lang="it">barracuda</strong>&nbsp;<span class="gender"><abbr title="giống đực">gđ</abbr></span> (<i>[[Phụ lục:Từ điển thuật ngữ#bất biến|bất biến]]</i>)</span>[[Category:Mục từ tiếng Ý|BARRACUDA]][[Category:Danh từ tiếng Ý|BARRACUDA]][[Category:Danh từ tiếng Ý không biến cách |BARRACUDA]][[Category:Danh từ đếm được tiếng Ý|BARRACUDA]][[Category:Danh từ tiếng Ý có giống bất quy tắc|BARRACUDA]][[Category:Danh từ giống đực tiếng Ý|BARRACUDA]][[Category:Trang có đề mục ngôn ngữ|BARRACUDA]][[Category:Trang có 7 đề mục ngôn ngữ|BARRACUDA]]
+
+# [[cá nhồng|Cá nhồng]].
+
+===Đọc thêm===
+* [https://www.treccani.it/vocabolario/barracuda barracuda<sup></sup>], Treccani.it – ''Vocabolario Treccani on line'', Istituto dell'Enciclopedia Italiana
+
+[[Category:it:Họ Cá thu ngừ|BARRACUDA]]

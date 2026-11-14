@@ -48,6 +48,7 @@ const Options = struct {
     parse_workers: usize = 4,
     expander_only: bool = false,
     seal_prepared_source: bool = false,
+    sealed_frontend_reference: ?[]const u8 = null,
     reviewed_nonlexical: ?[]const u8 = null,
     extraction_cache_root: ?[]const u8 = null,
     verified_dump_sha256: ?[]const u8 = null,
@@ -198,6 +199,11 @@ fn parseOptions(args: []const []const u8) !Options {
             if (index >= args.len) return error.Usage;
             options.parse_workers = std.fmt.parseInt(usize, args[index], 10) catch return error.Usage;
             if (options.parse_workers == 0 or options.parse_workers > max_parallel_workers) return error.Usage;
+        } else if (std.mem.eql(u8, args[index], "--sealed-frontend-reference")) {
+            index += 1;
+            if (index >= args.len or options.sealed_frontend_reference != null or args[index].len == 0 or
+                std.mem.startsWith(u8, args[index], "--")) return error.Usage;
+            options.sealed_frontend_reference = args[index];
         } else if (std.mem.eql(u8, args[index], "--seal-prepared-source")) {
             if (options.seal_prepared_source) return error.Usage;
             options.seal_prepared_source = true;
@@ -251,6 +257,7 @@ fn parseOptions(args: []const []const u8) !Options {
     // Refuse to accept approval input that an expander-only build cannot use.
     if (options.expander_only and options.reviewed_nonlexical != null) return error.Usage;
     if (options.seal_prepared_source and (!options.expander_only or options.extraction_cache_root == null)) return error.Usage;
+    if (options.sealed_frontend_reference != null and !options.seal_prepared_source) return error.Usage;
     // The projection and its raw/site/default authority travel together.
     const figure_count = @as(u8, @intFromBool(options.figure_siteinfo_snapshot != null)) +
         @as(u8, @intFromBool(options.figure_sizing_snapshot != null)) +
@@ -394,6 +401,24 @@ fn extractionCacheCommand(
     if (term == .exited and term.exited == 0) return true;
     if (std.mem.eql(u8, action, "probe") and term == .exited and term.exited == 3) return false;
     return error.PipelineStageFailed;
+}
+
+
+// This mode still runs the unchanged ordinary extraction probe. A missing cache
+// entry or stale source/ABI/reference is fatal; it never selects an old worker.
+fn probeSealedFrontend(io: std.Io, a: std.mem.Allocator, marker: []const u8, options: Options, root: []const u8) !bool {
+    const helper = try std.fs.path.join(a, &.{ paths.project_root, "tools", "extraction_cache.py" });
+    const graph = try std.json.Stringify.valueAlloc(a, .{
+        .project_root = paths.project_root, .extractor = paths.modules, .llvm = paths.llvm,
+        .runtime = paths.worker_object, .leaf = paths.value_leaf_bc, .main_c = paths.worker_main_c,
+        .zig = paths.zig, .clang = paths.clang,
+    }, .{});
+    try stage(io, marker, "ordinary extraction probe and sealed frontend verification", &.{
+        "python3", "-I", "-S", "-B", helper, "probe-sealed-frontend", options.extraction_cache_root.?,
+        paths.modules, options.verified_dump_sha256.?, options.verified_index_sha256.?, root,
+        options.dump, graph, options.sealed_frontend_reference.?,
+    });
+    return true;
 }
 
 fn objectCacheCommand(
@@ -769,6 +794,7 @@ fn compileBitcodeModules(
     llvm_dir: []const u8,
     llvm_workers: usize,
     use_object_cache: bool,
+    sealed_frontend: bool,
 ) !std.ArrayList([]const u8) {
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = marker,
@@ -783,7 +809,7 @@ fn compileBitcodeModules(
         defer a.free(hits_path);
         const bytes = try std.Io.Dir.cwd().readFileAlloc(io, hits_path, a, .limited(100_002));
         errdefer a.free(bytes);
-        try validateObjectHits(bytes, plans.len + 1);
+        if (sealed_frontend) try validateSealedFrontendHits(bytes, plans.len + 1) else try validateObjectHits(bytes, plans.len + 1);
         break :blk bytes;
     } else null;
     defer if (cache_hits) |hits| a.free(hits);
@@ -802,7 +828,10 @@ fn compileBitcodeModules(
         // hardlink must never be passed to Clang as a writable output.
         if (cache_hits) |hits| {
             if (hits[batch_index] == '1') {
-                try std.Io.Dir.cwd().deleteFile(io, source);
+                std.Io.Dir.cwd().deleteFile(io, source) catch |err| switch (err) {
+                    error.FileNotFound => if (!sealed_frontend) return err,
+                    else => return err,
+                };
                 continue;
             }
         }
@@ -831,6 +860,11 @@ fn compileBitcodeModules(
         else => return err,
     };
     return objects;
+}
+
+fn validateSealedFrontendHits(bytes: []const u8, object_count: usize) !void {
+    try validateObjectHits(bytes, object_count);
+    if (std.mem.indexOfScalar(u8, bytes, '0') != null) return error.SealedFrontendObjectMissing;
 }
 
 fn validateObjectHits(bytes: []const u8, object_count: usize) !void {
@@ -970,10 +1004,14 @@ fn sealPreparedSource(io: std.Io, a: std.mem.Allocator, options: Options, root: 
         .@"file-metadata.tsv" = options.file_metadata_snapshot,
         .@"transclusion-redirects.tsv" = options.transclusion_redirects_snapshot,
     }, .{});
-    var child = try std.process.spawn(io, .{ .argv = &.{
+    const argv: []const []const u8 = if (options.sealed_frontend_reference) |reference| &.{
+        "python3", "-I", "-S", "-B", helper, "seal-expander", root, options.dump, options.verified_dump_sha256.?,
+        options.verified_index_sha256.?, graph, snapshots, reference,
+    } else &.{
         "python3", "-I", "-S", "-B", helper, "seal-expander", root, options.dump, options.verified_dump_sha256.?,
         options.verified_index_sha256.?, graph, snapshots,
-    }, .stdin = .ignore });
+    };
+    var child = try std.process.spawn(io, .{ .argv = argv, .stdin = .ignore });
     defer child.kill(io);
     const term = try child.wait(io);
     if (term == .exited and term.exited == 0) return;
@@ -991,8 +1029,10 @@ fn compileNativeWorker(
     worker: []const u8,
     options: Options,
 ) !void {
-    if (object_cache_root) |cache|
-        _ = try objectCacheCommand(io, a, "probe-objects", cache, llvm_dir);
+    if (options.sealed_frontend_reference == null) {
+        if (object_cache_root) |cache|
+            _ = try objectCacheCommand(io, a, "probe-objects", cache, llvm_dir);
+    }
     const lua_objects = try compileBitcodeModules(
         io,
         a,
@@ -1000,6 +1040,7 @@ fn compileNativeWorker(
         llvm_dir,
         llvm_workers,
         object_cache_root != null,
+        options.sealed_frontend_reference != null,
     );
     if (object_cache_root) |cache|
         _ = try objectCacheCommand(io, a, "publish-objects", cache, llvm_dir);
@@ -1263,16 +1304,18 @@ pub fn main(init: std.process.Init) !void {
     const llvm_dir = try std.fs.path.join(a, &.{ expander_root, "llvm" });
     try std.Io.Dir.cwd().createDirPath(init.io, llvm_dir);
     const leaf_bc = try installCachedLeafBitcode(init.io, a, llvm_dir);
-    const cache_hit = if (options.extraction_cache_root) |cache|
+    const cache_hit = if (options.sealed_frontend_reference != null)
+        try probeSealedFrontend(init.io, a, marker, options, expander_root)
+    else if (options.extraction_cache_root) |cache|
         try extractionCacheCommand(init.io, a, "probe", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root)
     else
         false;
-    if (cache_hit) {
+    if (cache_hit and options.sealed_frontend_reference == null) {
         const manifest = try std.fs.path.join(a, &.{ expander_root, "manifest.jsonl" });
         const parse_workers = boundedParseWorkers(options.parse_workers, cpu_limit, false);
         const worker_text = try std.fmt.allocPrint(a, "{d}", .{parse_workers});
         try stage(init.io, marker, "parse/analyze Lua from verified extraction cache", &.{ paths.llvm, manifest, expander_root, llvm_dir, "--parse-workers", worker_text, "--value-leaf-bc", leaf_bc });
-    } else {
+    } else if (!cache_hit) {
         try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers, cpu_limit, leaf_bc);
         // compiler-inputs.ready follows indexed transclusion closure. Publish
         // only after the extractor has exited successfully.
@@ -1578,4 +1621,28 @@ test "Figure snapshot installation preserves all five selected role payloads" {
         const bytes = try std.Io.Dir.cwd().readFileAlloc(io, installed, a, .limited(128)); defer a.free(bytes);
         try std.testing.expectEqualStrings(name, bytes);
     }
+}
+
+
+test "sealed frontend option requires explicit ordinary sealing and refuses duplicate or absent reference" {
+    const base = [_][]const u8{ "dump", "out", "--expander-only", "--seal-prepared-source",
+        "--extraction-cache-root", "cache", "--verified-dump-sha256", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--verified-index-sha256", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" };
+    const selected = try parseOptions(&(base ++ .{ "--sealed-frontend-reference", "{reference}" }));
+    try std.testing.expectEqualStrings("{reference}", selected.sealed_frontend_reference.?);
+    try std.testing.expectError(error.Usage, parseOptions(&(base ++ .{ "--sealed-frontend-reference" })));
+    try std.testing.expectError(error.Usage, parseOptions(&(base ++ .{ "--sealed-frontend-reference", "" })));
+    try std.testing.expectError(error.Usage, parseOptions(&(base ++ .{ "--sealed-frontend-reference", "--unknown" })));
+    try std.testing.expectError(error.Usage, parseOptions(&(base ++ .{ "--sealed-frontend-reference", "one", "--sealed-frontend-reference", "two" })));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "dump", "out", "--sealed-frontend-reference", "one" }));
+}
+
+test "sealed frontend bitmap permits only exact fully verified native object hits" {
+    try validateSealedFrontendHits("111\n", 3);
+    try std.testing.expectError(error.SealedFrontendObjectMissing, validateSealedFrontendHits("101\n", 3));
+    try std.testing.expectError(error.SealedFrontendObjectMissing, validateSealedFrontendHits("110\n", 3));
+    try std.testing.expectError(error.InvalidObjectCacheHits, validateSealedFrontendHits("11\n", 3));
+    try std.testing.expectError(error.InvalidObjectCacheHits, validateSealedFrontendHits("11x\n", 3));
+    // Ordinary cache misses retain their original protocol.
+    try validateObjectHits("101\n", 3);
 }

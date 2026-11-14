@@ -1,0 +1,585 @@
+==*z, *s==
+<div style="clear:both"></div>
+{| border="1" cellpadding="4" cellspacing="0" style="border:1px solid #aaa; border-collapse:collapse" 
+|- bgcolor="#ADD8E6"
+![[proto-hindûewropî]]
+![[avestayî]]
+![[parsî]] 
+![[goranî]] 
+![[azerî]] 
+![[zazakî]]
+![[talîî]] 
+![[Semnanî]] 
+![[sengîserkî]] 
+![[mazenderanî]] 
+![[belûçî]] 
+![[kurmancî]]
+!style="background:#000000"|
+![[Farski]]
+|--
+|- bgcolor="#EAEAEA"
+!'''*k/*g'''
+!'''z'''
+!'''z'''
+!'''z''' 
+!'''z'''
+!'''z'''
+!'''z'''
+!'''z''' 
+!'''z''' 
+!'''z''' 
+!'''z'''
+!'''z'''
+!style="background:#000000"| 
+!'''d'''
+|--
+|style="background:#F7F7F6"| *'''[[k]]'''erd-||style="background:#F7F7F6"| '''[[z]]'''erdeye-  ||'''[[z]]'''ırd ||'''[[z]]'''ıl  ||  || '''[[z]]'''erri || || ||'''d'''êl || || '''d'''ıl || '''d'''il || style="background:#000000"| || '''[[d]]'''êl
+|--
+|style="background:#F7F7F6"| *'''[[gh]]'''ol-||style="background:#F7F7F6"| '''[[z]]'''aranya- || || ||  || '''[[z]]'''erd || || || ||  || '''[[z]]'''ar || '''[[z]]'''êr|| style="background:#000000"| || '''z'''er*
+|--
+|style="background:#F7F7F6"| *'''[[g]]'''no-||style="background:#F7F7F6"| '''[[z]]'''an- || || ||  || '''[[z]]'''an- || || || '''[[z]]'''un-||  || '''[[z]]'''an- || '''[[z]]'''an- || style="background:#000000"| || '''[[d]]'''an-
+|--
+|style="background:#F7F7F6"| *'''[[g]]'''eme- ||style="background:#F7F7F6"| '''[[z]]'''amat- || || '''[[z]]'''ema||  || '''[[z]]'''ama || || || '''[[z]]'''ume || || '''[[z]]'''amad|| '''[[z]]'''ava || style="background:#000000"| ||'''[[d]]'''amad
+|--
+|style="background:#F7F7F6"| *'''[[gh]]'''es-to- ||style="background:#F7F7F6"| '''[[z]]'''est- || || || ||'''d'''est || || || || '''d'''est || '''d'''est ||'''d'''est|| style="background:#000000"| ||'''[[d]]'''est
+|--
+|style="background:#F7F7F6"| *e'''[[g]]'''om ||style="background:#F7F7F6"| e'''[[z]]'''ēm ||e'''[[z]]''' ||<center>-</center> ||  ||e'''[[z]]'''||e'''[[z]]''' || || <center>-</center> || ||<center>-</center>||e'''[[z]]'''|| style="background:#000000"| || e'''[[d]]'''ēm*
+|--
+|style="background:#F7F7F6"| *bhr'''[[gh]]'''- ||style="background:#F7F7F6"| bere'''[[z]]'''- || ||ber'''[[z]]'''  ||ber'''[[z]]''' || ber'''[[z]]''' ||ber'''[[z]]'''  ||bilen'''d''' || bilın'''d'''  || bilen'''d''' || bur'''[[z]]''' || bilin'''d''' ||style="background:#000000"| || bolan'''[[d]]'''
+|--
+|- bgcolor="#EAEAEA"
+!'''*k/*g'''
+!'''-s-'''
+!'''-s-'''
+!'''-s-''' 
+!'''-s-'''
+!'''-s-'''
+!'''-s-'''
+!'''-s-''' 
+!'''-s-''' 
+!'''-s-''' 
+!'''-s-'''
+!'''-s-'''
+!style="background:#000000"| 
+!'''-h-'''
+|--
+|style="background:#F7F7F6"| *de'''[[k]]'''m||style="background:#F7F7F6"|  de'''[[s]]'''e|| || de'''[[s]]'''|| ||de'''[[s]]''' || ||da'''[[s]]''' || de'''[[s]]''' ||  || de'''h''' || de'''h''' || style="background:#000000"| || de'''[[h]]'''
+|--
+|style="background:#F7F7F6"| *pis'''[[k]]'''os||style="background:#F7F7F6"| ma'''[[s]]'''ya  || || || ||ma'''[[s]]'''e || || || mā'''h'''i|| || || ma'''[[s]]'''î || style="background:#000000"| || mā'''[[h]]'''i
+|--
+|style="background:#F7F7F6"|  ||style="background:#F7F7F6"|  || || || ||a'''[[s]]'''ın || ||ō'''[[s]]'''ūn  || ā'''h'''en || || ā'''[[s]]'''en ||a'''[[s]]'''in, he'''s'''in|| style="background:#000000"| || ā'''[[h]]'''an
+|--
+|}
+-*edēm: Yew çekuy Faskiyê Khano. Farskiyê Newi de biya vini u çekuy "mın" cayê "edēm" grewt. 
+<br />
+-*zer: Faskiyê Khano de "daraniya-" bıb. labela Farskiyê Newi de biya vini.
+
+==*c, *ç==
+<div style="clear:both"></div>
+{| border="1" cellpadding="4" cellspacing="0" style="border:1px solid #aaa; border-collapse:collapse" 
+|- bgcolor="#ADD8E6"
+![[Hind-Ewropa]]
+![[Ewıstki]]
+![[Partki]] 
+![[Goranki]] 
+![[Azarki]] 
+![[Zazaki]]
+![[Talişki]] 
+![[Semnanki]] 
+![[Sengiserki]] 
+![[Mazenderanki]] 
+![[Beluçki]] 
+![[Kurmancî]]
+!style="background:#000000"|
+![[Farski]]
+|--
+|- bgcolor="#EAEAEA"
+!'''*g(u)(h)pal'''
+!'''ĵ'''
+!'''ž'''
+!'''ž''' 
+!'''ž (y-)'''
+!'''ĵ'''
+!'''ž'''
+!'''ĵ, ž''' 
+!'''ĵ, ž''' 
+!'''ĵ, (z-)'''
+!'''ĵ'''
+!'''ž'''
+!style="background:#000000"| 
+!'''z'''
+|--
+|style="background:#F7F7F6"| *'''[[gw]]'''en-||style="background:#F7F7F6"| '''[[c]]'''eini- ||'''[[j]]'''ena || '''[[j]]'''eni || || '''[[c]]'''eni ||'''[[j]]'''en ||'''[[c]]'''eniya ||'''[[j]]'''en ||'''z'''ena ||'''[[c]]'''en || '''[[j]]'''ın ||  style="background:#000000"| || '''[[z]]'''en
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"| '''[[c]]'''en- || || || ||'''[[c]]'''ın- || || || '''[[j]]'''en-|| || ||'''[[j]]'''en- ||  style="background:#000000"| ||'''[[z]]'''en- 
+|--
+|style="background:#F7F7F6"| *'''[[gw]]'''ei- ||style="background:#F7F7F6"| '''[[c]]'''īv-|| ||'''[[j]]'''iway || ||'''[[c]]'''ıwiyayış ||'''[[j]]'''iye || ||  || ||'''[[c]]'''iag || '''[[j]]'''ıyan ||  style="background:#000000"| || '''[[z]]'''isten
+|--
+|style="background:#F7F7F6"| *'''[[gw]]'''ei- ||style="background:#F7F7F6"| '''[[c]]'''īv- || || || ||'''[[c]]'''ınde || ||  ||'''z'''ende || '''z'''endu || ||'''z'''ındi ||  style="background:#000000"| ||'''[[z]]'''ende 
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"| || || || ||'''[[c]]'''or || || ||'''[[j]]'''ar || || || '''[[j]]'''or ||  style="background:#000000"| || '''[[z]]'''eber
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|  || ||'''[[ç]]'''ir || ||'''[[c]]'''êr || ||'''[[j]]'''ir ||'''[[j]]'''ir || ||'''[[ç]]'''êr|| '''[[j]]'''êr ||  style="background:#000000"| || '''[[z]]'''ir
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|  ||e'''[[j]]''' || || ||'''[[c]]'''ı|| || || || '''[[j]]'''e || || '''[[j]]'''ı ||  style="background:#000000"| || a'''[[z]]'''
+|--
+|- bgcolor="#EAEAEA"
+!'''*k(u)pal'''
+!'''ĵ'''
+!'''-ž-'''
+!'''-ž-''' 
+!'''-ž-'''
+!'''-ĵ-'''
+!'''-ž-'''
+!'''ĵ, ž''' 
+!'''ĵ, ž''' 
+!'''-ĵ-'''
+!'''-ĵ-'''
+!'''-ž-'''
+!style="background:#000000"|
+!'''-z-'''
+|--
+|style="background:#F7F7F6"| *leu'''[[k]]'''||style="background:#F7F7F6"|  reo'''[[c]]'''-|| ||ro'''[[ç]]''' || ||ro'''[[c]]'''|| || || ru'''[[j]]''' || reo'''z'''||ro'''[[ç]]''' || ro'''[[j]]''' || style="background:#000000"| || ru'''[[z]]'''
+|--
+|style="background:#F7F7F6"|  *we'''[[k]]'''-|| style="background:#F7F7F6"| va'''[[c]]'''||va'''[[j]]''' ||wa'''[[ç]]''' || ||va'''[[c]]'''|| || ||vaw'''[[j]]''' || || || bê'''[[j]]''' || style="background:#000000"| || ava'''[[z]]'''
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"| are'''[[c]]'''ah  ||er'''[[j]]'''an || || ||er'''[[c]]'''an || || ||er'''z'''un  ||er'''z'''un || || er'''z'''an ||  style="background:#000000"| || ar'''[[z]]'''an
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|  || || wi'''[[ç]]'''-  || ||vi'''[[c]]'''- || || || vi'''[[j]]'''- || || || bê'''z'''- ||  style="background:#000000"| || bi'''[[z]]'''-
+|--
+|style="background:#F7F7F6"| *pe'''[[k]]'''w- || style="background:#F7F7F6"| pe'''[[c]]'''- || || || ||pew'''[[c]]'''- || || || pe'''[[j]]'''- || || || pē'''[[j]]'''- ||  style="background:#000000"| || pe'''[[z]]'''-
+|--
+|style="background:#F7F7F6"|  ||style="background:#F7F7F6"| -'''[[c]]'''it|| -i'''[[j]]''' || || ||'''z'''i || || || || || || '''[[j]]'''i||  style="background:#000000"| ||
+|}
+
+* Zazaki '''zi''' Farskiyê Miyanêni ra gırewto
+
+==*v==
+Veng "v", zıwananê Farski, Kurdki, u Beluçki de vuriyo venganê "b" u "g". 
+
+<div style="clear:both"></div>
+{| border="1" cellpadding="4" cellspacing="0" style="border:1px solid #aaa; border-collapse:collapse" 
+|- bgcolor="#ADD8E6"
+![[Hind-Ewropa]]
+![[Ewıstki]]
+![[Partki]] 
+![[Goranki]] 
+![[Azarki]] 
+![[Zazaki]]
+![[Talişki]] 
+![[Semnanki]] 
+![[Sengiserki]] 
+![[Mazenderanki]] 
+!style="background:#000000"|
+![[Beluçki]] 
+![[Kurdki]]
+![[Farski]]
+|--
+|- bgcolor="#EAEAEA"
+!'''*w'''
+!'''v'''
+!'''v'''
+!'''w''' 
+!'''v'''
+!'''v'''
+!'''v'''
+!'''v''' 
+!'''v''' 
+!'''v''' 
+!style="background:#000000"|  
+!'''b, g'''
+!'''b, g'''
+!'''b, g'''
+|--
+|style="background:#F7F7F6"| *'''[[w]]'''endh ||style="background:#F7F7F6"| '''[[v]]'''āt- ||'''[[v]]'''ād ||'''[[w]]'''a ||  || '''[[v]]'''a ||'''[[v]]'''a ||'''[[v]]'''a || '''[[v]]'''e ||'''[[v]]'''a ||style="background:#000000"| ||'''[[g]]'''vat|| '''[[b]]'''a || '''[[b]]'''ād
+|--
+|style="background:#F7F7F6"| *'''[[w]]'''edor||style="background:#F7F7F6"| '''[[v]]'''ār-|| || '''[[w]]'''aran ||  || '''[[v]]'''aran || || ||'''[[v]]'''awran ||'''[[v]]'''ariş ||style="background:#000000"| ||  ||'''[[b]]'''aran || '''[[b]]'''ārān
+|--
+|style="background:#F7F7F6"| *'''[[w]]'''ek-||style="background:#F7F7F6"|'''[[v]]'''āç-  ||'''[[v]]'''aj||'''[[w]]'''aç  ||  || '''[[v]]'''ac || || ||'''[[v]]'''awj || ||style="background:#000000"| || || '''[[b]]'''êj || a'''v'''az*
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|'''[[v]]'''az-  || || ||  || '''[[v]]'''ez- || || ||'''[[v]]'''oz- || ||style="background:#000000"| || ||'''[[b]]'''ez-||'''[[g]]'''uriz-
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"| ||  ||'''g'''ela ||  || '''[[v]]'''elg || ||'''[[v]]'''elg ||'''[[v]]'''elg || ||style="background:#000000"| || ||'''[[b]]'''elg || '''[[b]]'''erg
+|--
+|style="background:#F7F7F6"| *'''[[w]]'''ek-||style="background:#F7F7F6"|'''[[v]]'''ānk-   || ||'''d'''eng  ||  ||'''[[v]]'''eng || || ||'''[[v]]'''ung ||  ||style="background:#000000"| ||'''[[g]]'''vang ||'''[[b]]'''ang, '''d'''eng ||'''[[b]]'''ang
+|--
+|style="background:#F7F7F6"| *'''[[w]]'''esr-||style="background:#F7F7F6"| '''[[v]]'''anhar || || || || || || ||'''[[w]]'''ehar  ||'''[[w]]'''ehar ||style="background:#000000"| || '''[[b]]'''ahar ||''' [[b]]'''ehar || '''[[b]]'''ehar 
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|  || ||  ||   || <center>-</center> || || || '''b'''ed|| ||style="background:#000000"| || '''[[g]]'''vad||''' [[b]]'''ed ||'''[[b]]'''ed
+|--
+|style="background:#F7F7F6"| *'''[[w]]'''er- ||style="background:#F7F7F6"| '''[[v]]'''ar- || ||'''[[w]]'''er || ||'''[[v]]'''er|| || ||'''[[v]]'''er  || ||style="background:#000000"| || ||'''[[b]]'''er||'''[[b]]'''er
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"| ||  || ||  ||'''[[v]]'''erek || || '''[[v]]'''ere ||'''[[v]]'''erre  || ||style="background:#000000"| || '''[[g]]'''verek||'''[[b]]'''erx||'''[[b]]'''erre
+|--
+|style="background:#F7F7F6"|  ||style="background:#F7F7F6"| '''[[v]]'''afr- || || '''[[w]]'''erwe ||  ||'''[[v]]'''ewr||'''[[v]]'''ar ||'''[[v]]'''ere ||'''[[v]]'''erf ||'''[[v]]'''erf ||style="background:#000000"| ||'''[[b]]'''erp ||''' [[b]]'''erf ||'''[[b]]'''erf
+|--
+|style="background:#F7F7F6"| *'''[[w]]'''eid-||style="background:#F7F7F6"| '''[[v]]'''aēn- || ||'''[[w]]'''in-  ||  ||'''[[v]]'''ên, '''[[v]]'''in ||'''[[v]]'''in- || ||'''[[v]]'''in- ||'''[[v]]'''in- ||style="background:#000000"| ||'''[[g]]'''vin- ||'''[[b]]'''in- ||'''[[b]]'''in-
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"| '''[[v]]'''ir- || ||'''[[w]]'''ir ||  ||'''[[v]]'''ir || || ||'''[[v]]'''ir || ||style="background:#000000"| || '''[[g]]'''ir ||'''[[b]]'''ir ||'''[[b]]'''ir 
+|--
+|style="background:#F7F7F6"|  ||style="background:#F7F7F6"| '''[[v]]'''isait- || ||'''[[w]]'''is ||  ||'''[[v]]'''ist ||'''[[v]]'''ist ||'''[[v]]'''ist ||'''[[v]]'''ist || ||style="background:#000000"| ||'''[[b]]'''ist||'''[[b]]'''ist ||'''[[b]]'''ist
+|--
+|style="background:#F7F7F6"| *'''[[w]]'''idhewo||style="background:#F7F7F6"|  || ||  ||  ||'''[[v]]'''iya || || || '''b'''ivek|| ||style="background:#000000"| || ||'''[[b]]'''i ||'''[[b]]'''ive
+|--
+|style="background:#F7F7F6"| *'''[[w]]'''el-||style="background:#F7F7F6"|  || ||  ||  ||'''[[v]]'''iyal || ||'''[[v]]'''iye ||'''[[v]]'''i  || ||style="background:#000000"| || ||'''[[b]]'''i ||'''[[b]]'''id
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|  || ||'''[[w]]'''ehami ||  ||'''[[v]]'''am || || ||'''[[v]]'''em  || ||style="background:#000000"| || || '''[[b]]'''ehıv||'''[[b]]'''adam
+|--
+|style="background:#F7F7F6"| *'''[[w]]'''adh ||style="background:#F7F7F6"| '''[[v]]'''ad || '''[[w]]'''ad || ||  ||'''[[v]]'''eyv|| || || || ||style="background:#000000"| || || '''[[b]]'''ûk|| '''[[b]]'''ayo
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"| '''[[v]]'''aic-  || ||'''[[w]]'''iç-  ||  ||'''[[v]]'''ic- || || ||'''[[v]]'''ij- || ||style="background:#000000"| || ||'''[[b]]'''êz-||'''[[b]]'''iz-
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|  ||  ||'''g'''iyau ||  || '''[[v]]'''aş ||'''[[v]]'''aş ||'''[[v]]'''aş || '''[[v]]'''awş || ||style="background:#000000"| ||'''[[g]]'''ah || '''[[g]]'''iya || '''[[g]]'''iyah
+|--
+|style="background:#F7F7F6"| *'''[[w]]'''rdho- ||style="background:#F7F7F6"| '''[[v]]'''ard- || '''[[w]]'''ar|| '''[[w]]'''ıli || ||'''[[v]]'''ıl  ||'''[[v]]'''ele || '''[[v]]'''ale ||'''g'''ol || ||style="background:#000000"| ||'''[[b]]'''ul ||'''[[g]]'''ul ||'''[[g]]'''ol
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|  || ||'''[[w]]'''ılk  ||   ||'''[[v]]'''elık || || ||'''[[v]]'''akku || ||style="background:#000000"| || ||'''[[g]]'''urçık ||'''[[g]]'''orda
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|'''[[v]]'''arşni- ||  | ||'''b'''eran ||  ||'''[[v]]'''eşn || || || || ||style="background:#000000"| || ||'''[[b]]'''eran ||'''[[g]]'''oşn
+|--
+|style="background:#F7F7F6"| *'''[[w]]'''lkwos||style="background:#F7F7F6"| '''[[v]]'''ehrk- ||  || '''[[w]]'''erg ||  ||'''[[v]]'''erg || '''[[v]]'''erg  || '''[[v]]'''erg ||'''[[v]]'''erg ||'''[[v]]'''erk|| style="background:#000000"| ||'''[[g]]'''verk ||'''[[g]]'''urg ||'''[[g]]'''org
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|  || ||  ||  ||'''[[v]]'''urayen|| || ||'''[[v]]'''egerden || ||style="background:#000000"| || ||'''[[g]]'''uherin||'''[[g]]'''erdiden
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|  || ||  ||  ||'''[[v]]'''eyşan|| ||'''[[v]]'''eşun ||'''[[v]]'''eşun ||'''[[v]]'''eyşna ||style="background:#000000"| || ||'''[[b]]'''ırsi||'''[[g]]'''orosne
+|--
+|}
+
+-*avaz: [[Farski]] de yew çekuyo ğeribo. Beno ke (muxtemelen) yew zıwanê İrankiyê Zımeyi ra kewto Farski.
+
+==*d==
+<div style="clear:both"></div>
+{| border="1" cellpadding="4" cellspacing="0" style="border:1px solid #aaa; border-collapse:collapse" 
+|- bgcolor="#ADD8E6"
+![[Hind-Ewropa]]
+![[Ewıstki]]
+![[Partki]] 
+![[Goranki]] 
+![[Azarki]] 
+![[Zazaki]]
+![[Talişki]] 
+![[Semnanki]] 
+![[Sengiserki]] 
+![[Mazenderanki]] 
+!style="background:#000000"|
+![[Beluçki]] 
+![[Kurdki]]
+![[Farski]]
+|--
+|- bgcolor="#EAEAEA"
+!'''*dhw'''
+!'''dv'''
+!'''b'''
+!'''b''' 
+!'''b'''
+!'''b'''
+!'''b'''
+!'''b''' 
+!'''b''' 
+!'''b''' 
+!style="background:#000000"|  
+!'''d'''
+!'''d'''
+!'''d'''
+|--
+|style="background:#F7F7F6"| *'''[[dhw]]'''er-||style="background:#F7F7F6"| '''[[dv]]'''er-||'''[[b]]'''er|| || ||'''[[b]]'''er || || || '''[[b]]'''er || ||style="background:#000000"| || '''[[d]]'''er || '''[[d]]'''eri|| '''[[d]]'''er
+|--
+| style="background:#F7F7F6"| ||style="background:#F7F7F6"| *'''[[dv]]'''ıtiyem kerem || '''[[b]]'''ıd |||| ||'''[[b]]'''in || || || || '''d'''ige || style="background:#000000"| ||'''[[d]]'''iger || '''[[d]]'''ın|| '''[[d]]'''igar
+|--
+|style="background:#F7F7F6"| *'''[[d]]'''ek- ||style="background:#F7F7F6"|'''[[d]]'''uma || || || ||'''[[b]]'''oçık || || || || || style="background:#000000"| || || '''[[d]]'''oç||'''[[d]]'''om
+|--
+|}
+
+==*kw==
+<div style="clear:both"></div>
+{| border="1" cellpadding="4" cellspacing="0" style="border:1px solid #aaa; border-collapse:collapse" 
+|- bgcolor="#ADD8E6"
+![[Hind-Ewropa]]
+![[Ewıstki]]
+![[Partki]] 
+![[Goranki]] 
+![[Azarki]] 
+![[Zazaki]]
+![[Talişki]] 
+![[Semnanki]] 
+![[Sengiserki]] 
+!style="background:#000000"|
+![[Mazenderanki]] 
+![[Beluçki]] 
+![[Kurdki]]
+![[Farski]]
+|--
+|- bgcolor="#EAEAEA"
+!'''*kw'''
+!
+!'''?'''
+!'''sip''' 
+!'''isb'''
+!'''esp'''
+!'''asb'''
+!'''esp''' 
+!'''esp''' 
+!style="background:#000000"|
+!'''s''' 
+!?
+!'''s'''
+!'''s'''
+|--
+|style="background:#F7F7F6"| *'''[[kw]]'''ntós ||style="background:#F7F7F6"|  || || ||  || '''[[esp]]'''e || || '''[[esp]]'''e || '''[[esp]]'''e||style="background:#000000"| ||'''[[s]]'''eg || || '''[[s]]'''e || '''[[s]]'''ag
+|--
+|}
+
+==*tr/*tl==
+<div style="clear:both"></div>
+{| border="1" cellpadding="4" cellspacing="0" style="border:1px solid #aaa; border-collapse:collapse" 
+|- bgcolor="#ADD8E6"
+![[Hind-Ewropa]]
+![[Ewıstki]]
+![[Partki]] 
+![[Goranki]] 
+![[Azarki]] 
+![[Zazaki]]
+![[Talişki]] 
+![[Semnanki]] 
+!style="background:#000000"|
+![[Sengiserki]] 
+![[Mazenderanki]] 
+![[Beluçki]] 
+![[Kurdki]]
+![[Farski]]
+|--
+|- bgcolor="#EAEAEA"
+!'''*tr/*tl'''
+!'''θr'''
+!'''hr'''
+!'''(ya)r''' 
+!'''h(r)'''
+!'''hi(r)'''
+!'''h(*r)'''
+!'''h(r)''' 
+!style="background:#000000"|
+!'''s'''  
+!'''s''' 
+!'''s''' 
+!'''s'''
+!'''s'''
+|--
+|style="background:#F7F7F6"| *'''[[tr]]'''ejes||style="background:#F7F7F6"|  '''[[θr]]'''itiie- || '''[[hr]]'''ē || '''[[yar]]'''e || '''[[hr]]'''e || '''[[hīr]]'''ē || '''[[hīr]]'''ē || '''[[hr]]'''ā|| style="background:#000000"| ||'''[[ş]]'''e  || '''[[s]]'''e ||'''[[s]]'''e || '''[[s]]'''e || '''[[s]]'''e
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|  || || || || '''[[h]]'''irıs || '''[[h]]'''irıs || ||style="background:#000000"| || '''[[s]]'''i || '''[[s]]'''i ||'''[[s]]'''ie || '''[[s]]'''i || '''[[s]]'''i
+|--
+|}
+
+==*rd/*rz==
+<div style="clear:both"></div>
+{| border="1" cellpadding="4" cellspacing="0" style="border:1px solid #aaa; border-collapse:collapse" 
+|- bgcolor="#ADD8E6"
+![[Hind-Ewropa]]
+![[Ewıstki]]
+![[Partki]] 
+![[Goranki]] 
+![[Azarki]] 
+![[Zazaki]]
+![[Talişki]] 
+!style="background:#000000"|
+![[Semnanki]] 
+![[Sengiserki]] 
+![[Mazenderanki]] 
+![[Beluçki]] 
+![[Kurdki]]
+![[Farski]]
+|--
+|- bgcolor="#EAEAEA"
+!-
+!'''rd/rz'''
+!'''r(o)/rz'''
+!'''l, r/rz''' 
+!'''r/rz'''
+!'''r/rz'''
+!'''r/rz'''
+!style="background:#000000"|
+!'''l/I (rz)''' 
+!'''l/I (rz)''' 
+!'''l/I''' 
+!'''l/I'''
+!'''l/i'''          
+!'''l/i'''
+|--
+|style="background:#F7F7F6"| *bh'''[[r]][[g]]'''h- ||style="background:#F7F7F6"| be'''[[r]]'''e'''[[z]]'''- || ||be'''[[rz]]'''  ||be'''[[rz]]''' || be'''[[rz]]''' ||be'''[[rz]]''' ||style="background:#000000"| ||bi'''[[l]]'''end ||  bi'''[[l]]'''ınd || bi'''[[l]]'''end || bu'''rz''' || bı'''[[l]]'''ınd || bo'''[[l]]'''and
+|--
+|style="background:#F7F7F6"| ||style="background:#F7F7F6"|he'''[[r]]'''e'''[[z]]'''- ||hı'''[[rz]]''' ||a'''[[z]]''' ||he'''[[rz]]''' ||e'''[[rz]]''' || ||style="background:#000000"| ||hı'''[[l]]''' || || || hı'''[[l]]'''|| hı'''[[l]]''' || hê'''[[l]]'''
+|--
+|style="background:#F7F7F6"| *sple'''[[g]]'''h-|| style="background:#F7F7F6"| spē'''[[r]]'''ē'''[[z]]'''- || ||sıpı'''l''' || ||se'''[[r]]'''pe'''[[z]]''' ||sıpe'''[[rz]]''' ||style="background:#000000"| ||sepe'''rz''' || || || ||sıpı'''[[l]]''' ||sepo'''rz'''
+|--
+|style="background:#F7F7F6"| *sa'''[[r]][[d]]a'''-|| style="background:#F7F7F6"| ya'''[[r]]'''e ||sā'''[[r]]''' ||sa'''l''' ||so'''[[r]]''' ||se'''[[r]]''' ||so'''[[r]]''' ||style="background:#000000"| ||sa'''[[l]]''' || || || sa'''[[l]]''' || sa'''[[l]]''' || sa'''[[l]]'''
+|--
+|style="background:#F7F7F6"| *ke'''[[rd]]'''-|| style="background:#F7F7F6"| ze'''[[rd]]'''- ||zı'''[[rd]]''' ||zı'''l''' ||dê'''l''' ||ze'''[[r]][[r]]'''i ||dê'''l''' ||style="background:#000000"| ||dê'''[[l]]''' || de'''[[l]]'''|| || dı'''[[l]]''' || dı'''[[l]]''' || dê'''[[l]]'''
+|--
+|style="background:#F7F7F6"| - || style="background:#F7F7F6"| - || || || ||wu'''[[r]][[z]]-''' || ||style="background:#000000"| || || || ||  || '''[[l]]'''iz || a'''[[l]]'''ez
+|--
+|style="background:#F7F7F6"| *w'''[[rd]]'''ho- || style="background:#F7F7F6"| ve'''[[rd]]'''- || wa'''[[r]]''' || wı'''l'''i || ||vı'''l''' || ve'''l'''e ||style="background:#000000"|  || va'''[[l]]'''e|| go'''[[l]]''' ||  || bu'''[[l]]''' || gu'''[[l]]''' || go'''[[l]]'''
+|}
+
+==*hv==
+<div style="clear:both"></div>
+{| border="1" cellpadding="4" cellspacing="0" style="border:1px solid #aaa; border-collapse:collapse" 
+|- bgcolor="#ADD8E6"
+![[Hind-Ewropa]]
+![[Ewıstki]]
+![[Partki]] 
+![[Goranki]] 
+![[Azarki]] 
+![[Zazaki]]
+![[Talişki]] 
+!style="background:#000000"|
+![[Semnanki]] 
+![[Sengiserki]] 
+![[Mazenderanki]] 
+![[Beluçki]] 
+![[Kurdki]]
+![[Farski]]
+|--
+|- bgcolor="#EAEAEA"
+!'''*sw'''
+!'''hv'''
+!'''wx'''
+!'''w''' 
+!'''h'''
+!'''w, h'''
+!'''h, x'''
+!style="background:#000000"|
+!'''x(u)''' 
+!'''x(u)''' 
+!'''x(u), f v''' 
+!'''v, w, gw'''
+!'''x(w)'''
+!'''x(u)'''
+|--
+| style="background:#F7F7F6"| *'''[[sw]]'''epn-|| style="background:#F7F7F6"| '''[[hv]]'''efne-|| '''[[wx]]'''sp||'''[[w]]'''erm || ||'''[[h]]'''ewn ||'''x'''av || style="background:#000000"| || ||'''[[x]]'''ow || '''[[x]]'''uw || || '''[[x]]'''ew|| '''[[x]]'''ab
+|--
+| style="background:#F7F7F6"| *'''[[sw]]'''e-|| style="background:#F7F7F6"| '''[[hv]]'''et|| ||'''[[w]]'''e|| ||'''[[h]]'''o|| ||style="background:#000000"| || '''[[x]]'''u || || || '''[[w]]'''et || '''[[xw]]'''e|| '''[[x]]'''od
+|--
+| style="background:#F7F7F6"| *'''[[sw]]'''esor|| style="background:#F7F7F6"| '''[[hv]]'''eher||'''[[wx]]'''ar ||'''[[w]]'''ali || ||'''[[w]]'''a||'''x'''oar ||style="background:#000000"| || ||'''[[x]]'''ak || '''[[x]]'''axer || '''[[gw]]'''aher || '''[[xw]]'''eh|| '''[[x]]'''aher
+|--
+| style="background:#F7F7F6"| *'''[[sw]]'''ad|| style="background:#F7F7F6"| '''[[hv]]'''eş-||'''[[wx]]'''eş||'''[[w]]'''eş|| ||'''[[w]]'''eş || ||style="background:#000000"| || || '''[[x]]'''are || '''[[x]]'''eş ||'''[[w]]'''eş || '''[[xw]]'''eş|| '''[[x]]'''oş
+|--
+| style="background:#F7F7F6"| *'''[[sw]]'''enh-|| style="background:#F7F7F6"| '''[[hv]]'''en-|| '''[[xw]]'''n||'''[[w]]'''and-|| ||'''[[w]]'''end- ||'''x'''und- || style="background:#000000"| || ||'''[[x]]'''uond- || ||'''[[w]]'''an-|| '''[[xw]]'''end-|| '''[[x]]'''and-
+|--
+| style="background:#F7F7F6"| *'''[[w]]'''el-  || style="background:#F7F7F6"| '''[[v]]'''as- ||'''[[wx]]'''aşt-||'''[[w]]'''ast-|| ||'''[[w]]'''aşt-||'''x'''ast-  ||style="background:#000000"| || || '''[[x]]'''aste- ||  ||  || '''[[xw]]'''ast-|| '''[[x]]'''ast-
+|--
+| style="background:#F7F7F6"| *'''[[sw]]'''er- || style="background:#F7F7F6"| '''[[hv]]'''er-|| '''[[wx]]'''erd-||'''[[w]]'''erd-|| ||'''[[w]]'''erd-||'''[[h]]'''erd- ||style="background:#000000"| || ||'''[[x]]'''ort- || ||'''[[v]]'''er- || '''[[xw]]'''ard-|| '''[[x]]'''ord-
+|--
+|}
+
+==*tw==
+<div style="clear:both"></div>
+{| border="1" cellpadding="4" cellspacing="0" style="border:1px solid #aaa; border-collapse:collapse" 
+|- bgcolor="#ADD8E6"
+![[Hind-Ewropa]]
+![[Ewıstki]]
+![[Partki]] 
+![[Goranki]] 
+![[Azarki]] 
+![[Zazaki]]
+!style="background:#000000"|
+![[Talişki]] 
+![[Semnanki]] 
+![[Sengiserki]] 
+![[Mazenderanki]] 
+![[Beluçki]] 
+![[Kurdki]]
+![[Farski]]
+|--
+|- bgcolor="#EAEAEA"
+!'''*tw'''
+!
+!'''f'''
+!'''u''' 
+!'''u'''
+!'''w'''
+!style="background:#000000"|
+!'''h'''
+!'''h''' 
+!'''h''' 
+!'''h''' 
+!'''h'''
+!'''h'''
+!'''h'''
+|--
+|style="background:#F7F7F6"| *ne'''[[w]]'''n || style="background:#F7F7F6"|  || |||| ||ne'''[[w]]'''||style="background:#000000"| || || || ne'''[[h]]'''|| neo'''w''' || no'''[[h]]''' || ne'''[[h]]''' || no'''[[h]]'''
+|--
+| style="background:#F7F7F6"| *kʷe'''[[tw]]'''ores|| style="background:#F7F7F6"|  ||çe'''[[f]]'''erst || || ||çe'''[[w]]'''res  ||style="background:#000000"| || || || çel || çel || çel || çı'''[[h]]'''ıl || çe'''[[h]]'''el
+|--
+| style="background:#F7F7F6"| *ne'''[[w]]'''os|| style="background:#F7F7F6"|  || || || ||ne'''[[w]]'''e ||style="background:#000000"| || || || || || || nû'''[[h]]'''|| no
+|--
+|}
+
+==*y==
+
+<div style="clear:both"></div>
+{| border="1" cellpadding="4" cellspacing="0" style="border:1px solid #aaa; border-collapse:collapse" 
+|- bgcolor="#ADD8E6"
+![[Hind-Ewropa]]
+![[Ewıstki]]
+![[Partki]] 
+![[Goranki]] 
+![[Azarki]] 
+!style="background:#000000"|
+![[Zazaki]]
+![[Talişki]] 
+![[Semnanki]] 
+![[Sengiserki]] 
+![[Mazenderanki]] 
+![[Beluçki]] 
+![[Kurdki]]
+![[Farski]]
+|--
+|- bgcolor="#EAEAEA"
+!'''*y'''
+!'''y '''
+!'''y'''
+!'''y''' 
+!'''y'''
+!style="background:#000000"|
+!'''ĵ'''
+!'''ĵ'''
+!'''ĵ''' 
+!'''ĵ''' 
+!'''ĵ (y)'''
+!'''ĵ'''
+!'''ĵ'''
+!'''ĵ'''
+|--
+| style="background:#F7F7F6"| || style="background:#F7F7F6"| '''[[y]]'''eng ||  || || ||style="background:#000000"| ||'''[[c]]'''eng|| || || '''[[c]]'''eng || || ||'''[[c]]'''eng || '''[[c]]'''eng 
+|--
+| style="background:#F7F7F6"| || style="background:#F7F7F6"|'''[[y]]'''ada  ||'''[[y]]'''ud || || ||style="background:#000000"| ||'''[[c]]'''iya|| || || || || ||'''[[c]]'''uda || '''[[c]]'''oda
+|--
+| style="background:#F7F7F6"| || style="background:#F7F7F6"| '''[[y]]'''aoşti- || || || ||style="background:#000000"| ||'''[[c]]'''oş|| || || || || ||'''[[c]]'''oş || '''[[c]]'''oş
+|--
+| style="background:#F7F7F6"|*'''[[y]]'''ewos || style="background:#F7F7F6"| '''[[y]]'''eūe- || || || ||style="background:#000000"| ||'''[[c]]'''ew|| || || || || ||'''[[c]]'''e ||'''[[c]]'''u 
+|--
+| style="background:#F7F7F6"| *'''[[y]]'''uwen || style="background:#F7F7F6"| '''[[y]]'''awān || '''[[y]]'''uwan || || ||style="background:#000000"| ||'''[[c]]'''ıwamêrd, '''[[c]]'''ıwan || || ||'''[[c]]'''ıwunmêrd, '''[[c]]'''ewun || || ||'''[[c]]'''amêrd, '''[[c]]'''ıwan ||'''[[c]]'''ōmerd, '''[[c]]'''evan
+|--
+| style="background:#F7F7F6"| *'''[[y]]'''equr || style="background:#F7F7F6"|'''[[y]]'''āker || || || ||style="background:#000000"| ||'''[[c]]'''iger|| || ||'''[[c]]'''iğer|| || ||'''[[c]]'''iger ||'''[[c]]'''iger
+|--
+| style="background:#F7F7F6"|  || style="background:#F7F7F6"|'''[[y]]'''āme- || || || ||style="background:#000000"| ||'''[[c]]'''ām|| || || || || ||'''[[c]]'''ām ||'''[[c]]'''ām
+|--
+| style="background:#F7F7F6"|  || style="background:#F7F7F6"|'''[[y]]'''ātu- || || || ||style="background:#000000"| ||'''[[c]]'''āju|| || || '''[[c]]'''ādu|| || ||'''[[c]]'''āzū ||'''[[c]]'''ādū
+|--
+|}
+
+==İzoglosê Zazaki u Zıwananê İrankiyê Zımey u Farski==
+[[Image:NW Iranian.JPG|thumb|500px|right|İsoglossê Zazaki u Zıwanê İrankiyê Zımeyi: '''IE'''.: Hindo-Ewropa, '''Pth'''.: Partki, '''Gor'''.: Goranki, '''Az'''.: Azarkiyo Khan, '''Zaz'''.: Zazaki, '''Tal'''.: Talışki, '''Semn'''.: Semnanki, '''Casp'''.: Zıwanê Xezari, '''Bal'''.: Beluçki, '''Kd'''.: Kurdki, '''Pers'''.: Farski]]
+
+==Çavkanî==
+* Zülfü Selcan, Grammatik der Zaza-Sprache
+* Paul Horn, Grundriss der persischen Etymologie
+* [http://www.zazaki.de/englisch/articels/Paul-1998-Zaza.pdf Ludwig Paul: The position of Zazaki among the westiranian languages]
+* http://www.etymonline.com/index.php
+* http://en.wiktionary.org/wiki
+* http://www.ferheng.org
+* http://www.ijunoon.com/balochidic/mean.asp
+* http://www.nisanyansozluk.com
+
+[[Kategorî:Pêvek]]
+[[Kategorî:Rêziman bi kurmancî|*]]

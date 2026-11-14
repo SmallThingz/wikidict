@@ -1,0 +1,202 @@
+{{also|Oro$zország}}
+{{Infobox Staat
+|BILD-LAGE                  = Russia on the globe (Russia centered).svg
+|BILD-LAGE-IMAGEMAP         = RusslandGlobus1hu
+}}
+{{hungeo}}
+# Az [[Oroszországi Föderáció]] (oroszul: {{rul|Российская Федерация}}) vagy röviden Oroszország ({{rul|Россия}}) Európa keleti részétől Észak-Ázsia (Szibéria) keleti partjáig, a Csendes-óceánig, valamint a Távol-Keletre is kiterjedő, tagköztársaságokból álló ország. A Föld legnagyobb területű állama, a lakható szárazföldi területek egynyolcadát foglalja el; területe tizenegy időzónára terjed ki és tizennégy országgal van közös határa. Az ország nyugati része sokkal sűrűbben lakott, mint a keleti része; a lakosság mintegy háromnegyede Európában él. Fővárosa és politikai központja [[Moszkva]], Európa legnépesebb és a világ egyik legnagyobb városa.
+{{-kapcs-}}
+* [[Szibéria]]
+{{-ford-}}
+{{trans-top|Oroszország}}
+*{{ab}}: {{t|ab|Урыстәыла}}
+*{{ace}}: {{t|ace|Rusia}}
+*{{ady}}: {{t|ady|Урысый}}
+*{{af}}: {{t|af|Rusland}}
+*{{sq}}: {{t|sq|Rusia|f}}, {{t|sq|Rusi|f}} 
+*{{am}}: {{t|am|ሩሲያ}}, {{t|am|ሩስያ}}
+*{{en}}: {{t|en|Russia}}
+*:{{ang}}: {{t|ang|Russland}}
+*{{ar}}: {{t|ar|رُوسِيَا|f}}
+*{{an}}: {{t|an|Rusia|f}} 
+*{{arc}}: {{t|arc|ܪܘܣܝܐ}}
+*{{rup}}: {{t|rup|Rusii|f}}, {{t|rup|Arusia|f}} 
+*{{ast}}: {{t|ast|Rusia|f}} 
+*{{av}}: {{t|av|Россия}}
+*{{az}}: {{t|az|Rusiya}}
+*{{bm}}: {{t|bm|Risila}}
+*{{ba}}: {{t|ba|Рәсәй}}
+*{{bar}}: {{t|bar|Russland}}
+*{{eu}}: {{t|eu|Errusia}}
+*{{be}}: {{t|be|Расія|f}}, {{t|be|Расея|f}} 
+*{{bn}}: {{t|bn|রাশিয়া}}
+*{{bi}}: {{t|bi|Rusia}}
+*{{bg}}: {{t|bg|Русия|f}}
+*{{sh}}: {{t|sh|Rusija}}
+*{{br}}: {{t|br|Rusia}}
+*{{my}}: {{t|my|ရုရှားနိုင်ငံ}}, {{t|my|ရုရှား}}
+*{{ceb}}: {{t|ceb|Rusya}}
+*{{ce}}: {{t|ce|Оьрсий}}
+*{{chr}}: {{t|chr|ᎶᏏᏴ}}, {{t|chr|ᏲᏂᏱ}}
+*{{cs}}: {{t|cs|Rusko|n}}
+*{{cv}}: {{t|cv|Раççей Патшалăхě}}, {{t|cv|Раҫҫей Патшалӑхӗ}}
+*{{da}}: {{t|da|Rusland|n}}
+*{{dz}}: {{t|dz|ར་ཤི་ཡཱན་ཕེ་ཌི་རེ་ཤཱན}}
+*{{se}}: {{t|se|Ruošša}}
+*{{iu}}: {{t|iu|ᐅᓛᓴ}}
+*{{myv}}: {{t|myv|Россия}}
+*{{eo}}: {{t|eo|Rusio}}, {{t|eo|Rusujo}}, {{t|eo|Ruslando}}
+*{{et}}: {{t|et|Venemaa}}
+*{{ee}}: {{t|ee|Russia}}
+*{{fo}}: {{t|fo|Russland|n}}
+*{{fi}}: {{t|fi|Venäjä}}
+*{{fr}}: {{t|fr|Russie|f}}
+*{{fy}}: {{t|fy|Ruslân|n}}
+*{{fur}}: {{t|fur|Russie|f}} 
+*{{gl}}: {{t|gl|Rusia|f}} 
+*{{el}}: {{t|el|Ρωσία|f}}
+*{{kl}}: {{t|kl|Ruslandi}}
+*{{ka}}: {{t|ka|რუსეთი}}
+*{{gn}}: {{t|gn|Rrusia}}
+*{{gu}}: {{t|gu|રશિયા}}
+*{{ht}}: {{t|ht|Risi}}
+*{{ha}}: {{t|ha|Rāshà|f}} 
+*{{haw}}: {{t|haw|Lūkia}}
+*{{he}}: {{t|he|רוסיה|f}}
+*{{hi}}: {{t|hi|rusa|m}}, {{t|hi|rashiyaa|m}}
+*{{nl}}: {{t|nl|Rusland|n}}
+*{{sh}}: {{t|sh|Rusija}}
+*{{ig}}: {{t|ig|Mpaghara Russia}}
+*{{id}}: {{t|id|Rusia}}
+*{{ik}}: {{t|ik|Russia}}
+*{{ga}}: {{t|ga|An Rúis|f}}, {{t|ga|Rúis|f}} 
+*{{is}}: {{t|is|Rússland|n}} 
+*{{sah}}: {{t|sah|Россия}}, {{t|sah|Арассыыйа}}
+*{{ja}}: {{t|ja|ロシア}}, {{t|ja|露西亜}}, {{t|ja|露国}} ([[ろこく]], Rokoku)
+*{{yi}}: {{t|yi|רוסלאנד|n}}
+*{{yo}}: {{t|yo|Rọ́síà}}
+*{{pam}}: {{t|pam|Rusia}}, {{t|pam|Russia}}
+*{{kn}}: {{t|kn|ರಷ್ಯಾ}}
+*{{ks}}: {{t|ks|roosa}}
+*{{csb}}: {{t|csb|Ruskô|n}} 
+*{{ca}}: {{t|ca|Rússia|f}}
+*{{kk}}: {{t|kk|Ресей}}
+*{{qu}}: {{t|qu|Rusiya}}
+*{{km}}: {{t|km|រុស្ស៊ី}}, {{t|km|ប្រទេសរុស្ស៊ី}}
+*{{zh}}: {{t|zh|俄國}} (Éguo): {{t|zh|俄國}}, {{t|zh|俄国}} (Éguó); {{t|zh|俄羅斯}}, {{t|zh|俄罗斯}} (Éluósī); {{t|zh|露西亞}}, {{t|zh|露西亚}} 
+*{{ky}}: {{t|ky|Орусия}}, {{t|ky|Россия}}
+*{{kg}}: {{t|kg|Rusia}}
+*{{kpv}}: {{t|kpv|Рочму}}
+*{{ko}}:  {{t|ko|러시아}}, {{t|ko|로씨야}} 
+*{{kw}}: {{t|kw|Russi}}
+*{{co}}: {{t|co|Russia|f}} 
+*{{crh}}: {{t|crh|Rusiye}}
+*{{kum}}: {{t|kum|Россия}}
+*{{ku}}: {{t|ku|رووسیا}}, {{t|ku|Rûsya}}, {{t|ku|ئوورس}}, {{t|ku|Ûris}}, {{t|ku|ئوورستان}}, {{t|ku|Ûristan}}
+{{trans-mid}}
+*{{lad}}: {{t|lad|Rusia}}
+*{{lo}}: {{t|lo|ປະເທດລັດເຊັຽ}}, {{t|lo|ລັດເຊັຽ}}
+*{{pl}}: {{t|pl|Rosja|f}}
+*{{lij}}: {{t|lij|Ruscia|f}} 
+*{{li}}: {{t|li|Rösland}}
+*{{ln}}: {{t|ln|Rusí}}
+*{{lv}}: {{t|lv|Krievija|f}}
+*{{lt}}: {{t|lt|Rusija|f}}
+*{{lb}}: {{t|lb|Russland}}
+*{{mk}}: {{t|mk|Русија|f}}
+*{{ms}}: {{t|ms|Rusia}}
+*{{ml}}: {{t|ml|റഷ്യ}} (ṟaṣya)
+*{{dv}}: {{t|dv|ރޫސީވިލާތް}}, {{t|dv|ރަށިއާ}}
+*{{gv}}: {{t|gv|Yn Roosh}}, {{t|gv|Roosh}}
+*{{mg}}: {{t|mg|Rosia}}
+*{{mt}}: ir-{{t|mt|Russja|f}} 
+*{{mi}}: {{t|mi|Rūhia}}
+*{{mr}}: {{t|mr|rashiyaa}}
+*{{mn}}: {{t|mn|Орос улс}}, {{t|mn|Орос}}
+*{{nh}}: {{t|nah|Rusianenāhuatīliztli}}, {{t|nah|Rusia}}
+*{{nap}}: {{t|nap|Russia|f}}
+*{{na}}: {{t|na|Russia}}
+*{{nv}}: {{t|nv|Biʼééʼ Łichííʼí bikéyah}}
+*{{de}}: {{t|de|Russland|n}}, {{t|de|Rußland|n}} 
+*{{ne}}: {{t|ne|roosa}}, {{t|ne|rasiyaa}}
+*{{no}}: {{t|no|Russland}}
+*{{nov}}: {{t|nov|Rusia}}
+*{{oc}}: {{t|oc|Russia|f}}
+*{{it}}: {{t|it|Russia|f}}
+*{{ru}}: {{t|ru|Россия|f}}, {{t|ru|Русь|f}} 
+*{{or}}: {{t|or|ରୁଷିଆ}}
+*{{om}}: {{t|om|Raashiyaa}}
+*{{os}}: {{t|os|Уӕрӕсе}}
+*{{cu}}: {{t|cu|Рѡсїꙗ|f}} 
+*{{hy}}: {{t|hy|Ռուսաստան}}
+*{{pa}}: {{t|pa|ਰੂਸ}}
+*{{ps}}: {{t|ps|روسيه}}
+*{{fa}}: {{t|fa|روسیه}}
+*{{pt}}: {{t|pt|Rússia|f}}
+*{{ro}}: {{t|ro|Rusia|n}}
+*{{rm}}: {{t|rm|Russia|f}} 
+*{{rw}}: {{t|rw|Uburusiya}}
+*{{sco}}: {{t|sco|Roushie}}
+*{{sn}}: {{t|sn|Russian Federation}}
+*{{gd}}: {{t|gd|an Ruis|f}}
+*{{es}}: {{t|es|Rusia|f}}
+*{{sv}}: {{t|sv|Ryssland|n}}
+*{{nds}}: {{t|nds|Russland}}
+*{{sm}}: {{t|sm|Lusia}}
+*{{sa}}: {{t|sa|rashiyaa}}
+*{{sc}}: {{t|sc|Rùssia|f}} 
+*{{sh}}: {{t|sh|Русија}}
+*{{scn}}: {{t|scn|Russia|f}} 
+*{{szl}}: {{t|szl|Rusyjo|f}} 
+*{{sd}}: {{t|sd|روس}}
+*{{si}}: {{t|si|රුසියාව}}
+*{{sk}}: {{t|sk|Rusko|n}}
+*{{sl}}: {{t|sl|Rusija|f}}
+*{{so}}: {{t|so|Ruush}}
+*{{dsb}}: {{t|dsb|Rusojska|f}} 
+*{{hsb}}: {{t|hsb|Ruska|f}} 
+*{{su}}: {{t|su|Rusia}}
+*{{sw}}: {{t|sw|Urusi}}
+*{{tl}}: {{t|tl|Rusya}}
+*{{tg}}: {{t|tg|Русия}}
+*{{ty}}: {{t|ty|Rūtia}}
+*{{ta}}: {{t|ta|ரஷ்யா}}, {{t|ta|உருசியா}}
+*{{tt}}: {{t|tt|Русия}}, {{t|tt|Рәсәй}}, {{t|tt|Россия}}
+*{{te}}: {{t|te|రష్యా}}
+*{{tet}}: {{t|tet|Rúsia}}
+*{{th}}: {{t|th|ประเทศรัสเซีย}}, {{t|th|รัสเซีย}}
+*{{bo}}: {{t|bo|ཨུ་རུ་སུ}}, {{t|bo|རྒྱ་སེར}}
+*{{ti}}: {{t|ti|ራሻ}}
+*{{tpi}}: {{t|tpi|Rasia}}
+*{{to}}: {{t|to|Lūsia}}
+*{{ts}}: {{t|ts|Russia}} 
+*{{tr}}: {{t|tr|Rusya}}
+*{{tk}}: {{t|tk|Russiýa}}
+*{{tyv}}: {{t|tyv|Россия}}
+*{{udm}}: {{t|udm|Россия}}
+*{{uk}}: {{t|uk|Росія|f}}
+*{{ug}}: {{t|ug|روسىيە}}
+*{{ur}}: {{t|ur|روس|m}} 
+*{{uz}}: {{t|uz|Rossiya}}, {{t|uz|Oʻrusiya}}
+*{{wa}}: {{t|wa|Rûsseye}}
+*{{ve}}: {{t|ve|Rashia}}
+*{{vec}}: {{t|vec|Rusia|f}} 
+*{{vi}}: {{t|vi|Nga}} ([[俄]]), {{t|vi|nước Nga}}, {{t|vi|Nga La Tư}}
+*{{vo}}: {{t|vo|Rusän}}
+*{{vro}}: {{t|vro|Vinnemaa}}
+*{{wo}}: {{t|wo|Riisi}}
+*{{cy}}: {{t|cy|Rwsia|f}}
+*{{xh}}: {{t|xh|IRashiya}}
+*{{zu}}: {{t|zu|iRashiya}}
+{{trans-bottom}}
+{{-rago-}}
+{{hu-fn-ok|Oroszorszá|g|ot}}{{hu-birt-otok|Oroszország||ai}}
+{{-der-}}
+*[[oroszországi]]
+{{-etim-}}
+{{összeetim|orosz|ország|magyar}}
+{{Europa}}
+{{azsia}}
+{{hunl}}
+{{Oroszország térképe}}
+{{Imagemap_Oroszországi_Föderáció_alanyai|Russia, administrative divisions - Nmbrs (federal subjects) (geosort) - colored.svg|mini|left|1600px}}

@@ -1,0 +1,2194 @@
+{
+  "caption": [],
+  "rows": [
+    {
+      "cells": [
+        {
+          "spans": [
+            {
+              "kind": "text",
+              "text": "↓",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": "πτώσεις",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": true,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": true,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#a1bdea",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#c1d3f1"
+                  }
+                },
+                "bottom": {
+                  "none": {}
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "center"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "link",
+              "text": "ενικός",
+              "target": "ενικός",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": "ενικός αριθμός",
+              "foreground": "#000000",
+              "bold": true,
+              "italic": true,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": true,
+          "colspan": 2,
+          "rowspan": 1,
+          "background": "#a1bdea",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#c1d3f1"
+                  }
+                },
+                "bottom": {
+                  "none": {}
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "center"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "link",
+              "text": "πληθυντικός",
+              "target": "πληθυντικός",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": "πληθυντικός αριθμός",
+              "foreground": "#000000",
+              "bold": true,
+              "italic": true,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": true,
+          "colspan": 2,
+          "rowspan": 1,
+          "background": "#a1bdea",
+          "style": {
+            "text_align": "center"
+          }
+        }
+      ]
+    },
+    {
+      "cells": [
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "ονομαστική",
+              "target": "ονομαστική",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": "ονομαστική πτώση",
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": true,
+              "italic": true,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#d5e2f6",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "none": {}
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "right"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "η",
+              "target": "η",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "none": {}
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "center"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "text",
+              "text": "λεκάν",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "mw-selflink selflink skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": "η",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "mw-selflink selflink skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#eb0000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "left"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "οι",
+              "target": "οι",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "none": {}
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "center"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "λεκάν",
+              "target": "λεκάνες",
+              "trail": "",
+              "language": "",
+              "classes": "skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "link",
+              "text": "ες",
+              "target": "λεκάνες",
+              "trail": "",
+              "language": "",
+              "classes": "skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#eb0000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "none": {}
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "left"
+          }
+        }
+      ]
+    },
+    {
+      "cells": [
+        {
+          "spans": [
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "link",
+              "text": "γενική",
+              "target": "γενική",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": "γενική πτώση",
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": true,
+              "italic": true,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#d5e2f6",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "none": {}
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "right"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "της",
+              "target": "της",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "none": {}
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "center"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "λεκάν",
+              "target": "λεκάνης",
+              "trail": "",
+              "language": "",
+              "classes": "skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "link",
+              "text": "ης",
+              "target": "λεκάνης",
+              "trail": "",
+              "language": "",
+              "classes": "skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#eb0000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "left"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "των",
+              "target": "των",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "none": {}
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "center"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "λεκαν",
+              "target": "λεκανών",
+              "trail": "",
+              "language": "",
+              "classes": "skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "link",
+              "text": "ών",
+              "target": "λεκανών",
+              "trail": "",
+              "language": "",
+              "classes": "skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#eb0000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "none": {}
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "left"
+          }
+        }
+      ]
+    },
+    {
+      "cells": [
+        {
+          "spans": [
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "link",
+              "text": "αιτιατική",
+              "target": "αιτιατική",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": "αιτιατική πτώση",
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": true,
+              "italic": true,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#d5e2f6",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "none": {}
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "right"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "τη",
+              "target": "την",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "none": {}
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "center"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "text",
+              "text": "λεκάν",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "mw-selflink selflink skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": "η",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "mw-selflink selflink skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#eb0000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "left"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "τις",
+              "target": "τις",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "none": {}
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "center"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "λεκάν",
+              "target": "λεκάνες",
+              "trail": "",
+              "language": "",
+              "classes": "skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "link",
+              "text": "ες",
+              "target": "λεκάνες",
+              "trail": "",
+              "language": "",
+              "classes": "skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#eb0000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "none": {}
+                },
+                "bottom": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "left"
+          }
+        }
+      ]
+    },
+    {
+      "cells": [
+        {
+          "spans": [
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "link",
+              "text": "κλητική",
+              "target": "κλητική",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": "κλητική πτώση",
+              "foreground": "#000000",
+              "font_scale": 0.8999999761581421,
+              "font_scale_basis": "normal_body",
+              "bold": true,
+              "italic": true,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#d5e2f6",
+          "style": {
+            "text_align": "right"
+          }
+        },
+        {
+          "spans": [],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "text_align": "center"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "text",
+              "text": "λεκάν",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "mw-selflink selflink skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": "η",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "mw-selflink selflink skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#eb0000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "border": {
+              "edges": {
+                "top": {
+                  "none": {}
+                },
+                "right": {
+                  "solid": {
+                    "width": {
+                      "unit": "px",
+                      "value": 1
+                    },
+                    "color": "#eaf0fa"
+                  }
+                },
+                "bottom": {
+                  "none": {}
+                },
+                "left": {
+                  "none": {}
+                }
+              }
+            },
+            "text_align": "left"
+          }
+        },
+        {
+          "spans": [],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "text_align": "center"
+          }
+        },
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "λεκάν",
+              "target": "λεκάνες",
+              "trail": "",
+              "language": "",
+              "classes": "skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#002000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "link",
+              "text": "ες",
+              "target": "λεκάνες",
+              "trail": "",
+              "language": "",
+              "classes": "skin-nightmode-reset-color",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#eb0000",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 1,
+          "rowspan": 1,
+          "background": "#ffffff",
+          "style": {
+            "text_align": "left"
+          }
+        }
+      ]
+    },
+    {
+      "cells": [
+        {
+          "spans": [
+            {
+              "kind": "link",
+              "text": "Κατηγορία",
+              "target": "Κατηγορία:Ουσιαστικά που κλίνονται όπως το 'νίκη' (νέα ελληνικά)",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.699999988079071,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": "  όπως «",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.699999988079071,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "link",
+              "text": "νίκη",
+              "target": "Παράρτημα:Ουσιαστικά (νέα ελληνικά)/θηλυκά#νίκη",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.699999988079071,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "text",
+              "text": "» - ",
+              "target": "",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": null,
+              "foreground": "#000000",
+              "font_scale": 0.699999988079071,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            },
+            {
+              "kind": "link",
+              "text": "Παράρτημα:Ουσιαστικά",
+              "target": "Παράρτημα:Ουσιαστικά (νέα ελληνικά)",
+              "trail": "",
+              "language": "",
+              "classes": "",
+              "direction": "",
+              "explanation": "",
+              "tooltip": "Παράρτημα:Ουσιαστικά",
+              "foreground": "#000000",
+              "font_scale": 0.699999988079071,
+              "font_scale_basis": "normal_body",
+              "bold": false,
+              "italic": false,
+              "code": false,
+              "small": false,
+              "superscript": false,
+              "subscript": false,
+              "strike": false,
+              "underline": false,
+              "role": "normal"
+            }
+          ],
+          "header": false,
+          "colspan": 5,
+          "rowspan": 1,
+          "background": "#eaf0fa",
+          "style": {
+            "text_align": "right"
+          }
+        }
+      ]
+    }
+  ],
+  "geometry": {
+    "border": 1,
+    "cell_spacing": 0,
+    "cell_padding": 3,
+    "width": null
+  },
+  "style": {
+    "background": "#ffffff",
+    "border": {
+      "solid": {
+        "width": {
+          "unit": "px",
+          "value": 1
+        },
+        "color": "#a1bdea"
+      }
+    },
+    "margins": {
+      "top": {
+        "unit": "px",
+        "value": 0
+      },
+      "right": {
+        "unit": "px",
+        "value": 0
+      },
+      "bottom": {
+        "unit": "em",
+        "value": 0.5
+      },
+      "left": {
+        "unit": "em",
+        "value": 0.5
+      }
+    },
+    "float_side": "right",
+    "clear": "right"
+  }
+}

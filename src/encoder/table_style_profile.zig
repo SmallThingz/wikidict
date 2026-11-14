@@ -22,6 +22,7 @@ pub const ElementContext = struct {
     custom_environment: ?CustomEnvironment = null,
     // Producer has applied this same element/profile text-color cascade.
     text_color_consumed: bool = false,
+    absent_own_attribute: ?[]const u8 = null,
     computed_border_collapse: ?BorderCollapseState = null,
     // Own HTML presentational hint, lower priority than all author CSS.
     legacy_vertical_align: ?[]const u8 = null,
@@ -32,6 +33,10 @@ pub const ElementContext = struct {
     // Null means unknown ancestry. A nonnull list overapproximates all IDs
     // through an independently proved original content root; build-only.
     complete_font_ancestor_ids: ?[]const []const u8 = null,
+    // Complete original DOM ancestry, issued by a source-bound Table callback.
+    complete_table_ancestor_ids: ?[]const []const u8 = null,
+    // Union across every selected head: negative evidence only.
+    complete_table_ancestor_classes: ?[]const u8 = null,
     // Complete original ancestor tag inventory; null retains uncertainty.
     complete_font_ancestor_tags: ?[]const []const u8 = null,
 };
@@ -47,6 +52,8 @@ const Value = union(enum) {
     border: types.StyleBorder,
     collapse: types.BorderCollapse,
     edges: types.StyleEdges,
+    margin_values: types.ContainerMargins,
+    margin_edge: types.ContainerMargin,
     align_value: types.CellTextAlign,
     float_value: types.TableFloatSide,
     no_float,
@@ -65,6 +72,7 @@ const Value = union(enum) {
 };
 const Declaration = struct { border_update: ?BorderUpdate = null, border_raw: ?struct { name: []const u8, value: []const u8 } = null, property: Property, value: Value, important: bool, order: u32, affects_font_basis: bool = false, may_name_min_width: bool = false, custom_paint: ?[]const u8 = null };
 const Selector = struct {
+    complete_own_attribute: ?[]const u8 = null,
     target: Target,
     mask: Scope,
     ancestor_mask: Scope = 0,
@@ -73,6 +81,7 @@ const Selector = struct {
     own_ids: []const []const u8 = &.{},
     own_tag: ?[]const u8 = null,
     necessary_classes: []const []const u8 = &.{},
+    necessary_ancestor_ids: []const []const u8 = &.{},
     specificity: u64,
     unsupported: bool,
 };
@@ -147,9 +156,9 @@ const Winners = struct {
 fn marginEdge(property: Property) ?usize {
     return switch (property) { .margin_top => 0, .margin_right => 1, .margin_bottom => 2, .margin_left => 3, else => null };
 }
-const MarginResolution = struct { value: ?types.StyleEdges = null, unresolved: bool = false };
+const MarginResolution = struct { value: ?types.StyleEdges = null, automatic: ?types.ContainerMargins = null, unresolved: bool = false };
 fn resolvedMargins(winners: Winners) MarginResolution {
-    var values: [4]types.StyleLength = @splat(.{ .unit = .px, .value = 0 });
+    var values: [4]types.ContainerMargin = @splat(.{ .length = .{ .unit = .px, .value = 0 } });
     var seen = false;
     inline for (.{ Property.margin_top, Property.margin_right, Property.margin_bottom, Property.margin_left }, 0..) |property, index| {
         var selected = winners.slots[@backingInt(Property.margins)];
@@ -162,13 +171,20 @@ fn resolvedMargins(winners: Winners) MarginResolution {
         if (selected) |winner| {
             seen = true;
             switch (winner.value) {
-                .length_value => |value| values[index] = value,
-                .edges => |edges_value| values[index] = switch (index) { 0 => edges_value.top, 1 => edges_value.right, 2 => edges_value.bottom, 3 => edges_value.left, else => unreachable },
+                .length_value => |value| values[index] = .{ .length = value },
+                .margin_edge => |value| values[index] = value,
+                .margin_values => |edges_value| values[index] = switch (index) { 0 => edges_value.top, 1 => edges_value.right, 2 => edges_value.bottom, 3 => edges_value.left, else => unreachable },
+                .edges => |edges_value| values[index] = .{ .length = switch (index) { 0 => edges_value.top, 1 => edges_value.right, 2 => edges_value.bottom, 3 => edges_value.left, else => unreachable } },
                 else => return .{ .unresolved = true },
             }
         }
     }
-    return .{ .value = if (seen) .{ .top = values[0], .right = values[1], .bottom = values[2], .left = values[3] } else null };
+    if (!seen) return .{};
+    const selected: types.ContainerMargins = .{ .top = values[0], .right = values[1], .bottom = values[2], .left = values[3] };
+    if (values[0] == .auto or values[1] == .auto or values[2] == .auto or values[3] == .auto)
+        return if (types.validTableMarginValues(selected)) .{ .automatic = selected } else .{ .unresolved = true };
+    return .{ .value = .{ .top = values[0].length, .right = values[1].length,
+        .bottom = values[2].length, .left = values[3].length } };
 }
 
 // Build-only computed inheritance. Null is unobserved, not a guessed initial
@@ -288,7 +304,7 @@ pub fn resolveInlineTableWithCollapseAlloc(a: std.mem.Allocator, css: []const u8
     var winners = try profile.cascade(a, .table, 0, 0, "", .{ .ancestor_classes = "", .own_id = "" }, null, null, css);
     computedTableCollapse(&winners, collapse);
     const margins = resolvedMargins(winners);
-    var style: types.TableStyle = .{ .margins = margins.value };
+    var style: types.TableStyle = .{ .margins = margins.value, .margin_values = margins.automatic };
     var unresolved = margins.unresolved;
     if (winners.value(.float_side)) |value| {
         if (value == .float_value) style.float_side = value.float_value;
@@ -299,7 +315,7 @@ pub fn resolveInlineTableWithCollapseAlloc(a: std.mem.Allocator, css: []const u8
         unresolved = unresolved or value == .unsupported;
     };
     const flow_conflict = tableFlowFloatConflict(&style);
-    return .{ .style = if (types.validTableStyle(style)) style else null, .scope = 0, .unresolved = unresolved or flow_conflict, .margin_basis_unresolved = winners.font_basis_unresolved, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
+    return .{ .style = if (types.validUnboundTableStyle(style)) style else null, .scope = 0, .unresolved = unresolved or flow_conflict, .margin_basis_unresolved = winners.font_basis_unresolved, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
 }
 fn addCellWidthHint(winners: *Winners, raw: ?[]const u8) void {
     const value = raw orelse return;
@@ -388,15 +404,47 @@ pub const FontSizeValue = union(enum) {
     unknown,
 };
 
+pub const ObservedFontSizeValue = union(enum) {
+    inherit,
+    absolute: f32,
+    css_px: f32,
+    root_relative: f32,
+    relative: f32,
+    step: @import("font_scale.zig").RelativeKeyword,
+    unknown,
+};
+
 fn fontSizeValue(property: []const u8, raw: []const u8) ?FontSizeValue {
+    return fontSizeValueIn(false, property, raw);
+}
+
+fn fontSizeValueIn(comptime observed_lengths: bool, property: []const u8, raw: []const u8) ?(if (observed_lengths) ObservedFontSizeValue else FontSizeValue) {
     const value = trim(raw);
     if (std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "unset")) return .inherit;
     if (std.ascii.eqlIgnoreCase(value, "initial")) return .{ .absolute = 1 };
     if (!std.ascii.eqlIgnoreCase(property, "font-size")) return if (value.len != 0) .unknown else null;
     const font = @import("font_scale.zig");
+    if (observed_lengths) {
+        if (font.parseCssPixels(value)) |pixels| return .{ .css_px = pixels };
+    }
     if (font.absoluteKeyword(value)) |size| return .{ .absolute = size };
     if (font.relativeKeyword(value)) |step| return .{ .step = step };
     if (font.parseRelative(value)) |factor| return .{ .relative = factor };
+    if (observed_lengths) {
+        if (value.len > 3 and std.ascii.endsWithIgnoreCase(value, "rem")) {
+            const number = value[0 .. value.len - 3];
+            if (widthNumberSyntax(number)) {
+                if (widthNumberIsZero(number)) return .{ .root_relative = 0 };
+                if (number[0] == '-') return null;
+                const parsed = std.fmt.parseFloat(f64, number) catch return .unknown;
+                if (parsed < 0) return null;
+                if (!std.math.isFinite(parsed) or parsed == 0 or parsed > std.math.floatMax(f32)) return .unknown;
+                const factor: f32 = @floatCast(parsed);
+                if (factor == 0) return .unknown;
+                return .{ .root_relative = factor };
+            }
+        }
+    }
     if (std.ascii.eqlIgnoreCase(value, "revert") or std.ascii.eqlIgnoreCase(value, "revert-layer") or
         std.mem.indexOfScalar(u8, value, '(') != null or std.mem.indexOfScalar(u8, value, '\\') != null) return .unknown;
     // Valid but unsupported lengths must invalidate parent authority. Invalid
@@ -404,6 +452,8 @@ fn fontSizeValue(property: []const u8, raw: []const u8) ?FontSizeValue {
     for ([_][]const u8{ "px", "pt", "pc", "in", "cm", "mm", "q", "rem", "ex", "ch", "cap", "ic", "lh", "rlh", "vw", "vh", "vi", "vb", "vmin", "vmax", "svw", "svh", "lvw", "lvh", "dvw", "dvh" }) |unit| {
         if (value.len > unit.len and std.ascii.eqlIgnoreCase(value[value.len - unit.len ..], unit)) {
             const number = value[0 .. value.len - unit.len];
+            if (observed_lengths and std.ascii.eqlIgnoreCase(unit, "px") and widthNumberSyntax(number) and
+                (number.len == 0 or number[0] != '-')) return .unknown;
             const size = std.fmt.parseFloat(f64, number) catch continue;
             if (std.math.isFinite(size) and size >= 0) return .unknown;
         }
@@ -448,7 +498,41 @@ pub const SourceRootTableProof = struct { opening_start: usize, opening_end: usi
 // physical parent, ordinal, or sibling fact.
 pub const SourceCustomElementProof = struct { range: SourceRootChildProof, candidate_count: u32 };
 
+pub const ClosedReadyFigureProof = struct {
+    styles: *const Profile,
+    source: []const u8,
+    root: *const TextElement,
+    operations: usize,
+};
+pub const ClosedMissingFigureProof = struct {
+    styles: *const Profile,
+    source: []const u8,
+    root: *const TextElement,
+    operations: usize,
+};
+
+pub const EmptyMissingCaptionOperation = struct { start: usize, end: usize };
+
+pub const EmptyMissingFigureCaptionProof = struct {
+    styles: *const Profile,
+    source: []const u8,
+    root: *const TextElement,
+    operations: []const EmptyMissingCaptionOperation,
+};
+
+pub const RowColorOwner = struct { attrs_start: usize, attrs_end: usize };
+pub const ClosedRowColorProof = struct {
+    styles: *const Profile, source: []const u8, root: *const TextElement,
+    attribute: []const u8, owners: []const RowColorOwner,
+};
+
 pub const BoundedTextClassScope = struct {
+    closed_row_colors: ?ClosedRowColorProof = null,
+    closed_missing_figures: ?ClosedMissingFigureProof = null,
+    empty_missing_figure_captions: ?EmptyMissingFigureCaptionProof = null,
+    closed_ready_figures: ?ClosedReadyFigureProof = null,
+    source_literal_divs: []const SourceLiteralDivProof = &.{},
+    source_literal_divs_source: ?[]const u8 = null,
     source_root_tables: []const SourceRootTableProof = &.{},
     source_root_tables_source: ?[]const u8 = null,
     // Separate positive capability issued only after exact complete-page selection.
@@ -471,6 +555,8 @@ pub const BoundedTextClassScope = struct {
     root_classes: []const u8,
     subtree_classes: []const u8,
     complete_ancestor_class_superset: ?[]const u8 = null,
+    // Complete selected source and both captured outer paths; absence only.
+    complete_ancestor_id_superset: ?[]const u8 = null,
 };
 
 // Visibility is resolved only during production; no CSS enters a reader record.
@@ -495,7 +581,13 @@ pub const SourceRootParentProof = struct {
     anchor: SourceRootChildProof,
     candidate_count: u16,
 };
+pub const SourceLiteralDivProof = struct {
+    range: SourceRootChildProof,
+    parent_start: ?usize,
+};
 pub const TextElement = struct {
+    source_literal_div: ?*const SourceLiteralDivProof = null,
+    source_literal_div_current: ?[]const u8 = null,
     // Independently retained actual ancestry alternative, never a class union.
     // The alternative node has no alternative itself. Page queries preserve
     // unknown whenever the two actual states differ in selector applicability.
@@ -536,6 +628,7 @@ pub const TextElement = struct {
     // wrappers and the selected outer domain. Null leaves that domain unknown.
     // Refusal-only: this cannot establish selector order, adjacency or matching.
     complete_ancestor_classes: ?[]const u8 = null,
+    complete_ancestor_ids: ?[]const u8 = null,
     // Provenance is cache identity only; it grants no matching knowledge.
     ancestor_class_scope: ?*const BoundedTextClassScope = null,
     ancestor_class_source: ?[]const u8 = null,
@@ -584,9 +677,13 @@ fn languageRefutes(range: []const u8, element: ?*const TextElement, root_languag
     return if (root_language) |value| languageValueRefutes(range, value) else false;
 }
 fn languageValueRefutes(range: []const u8, value: []const u8) bool {
-    if (!simpleLanguage(value)) return false;
-    return !(value.len >= range.len and std.ascii.eqlIgnoreCase(value[0..range.len], range) and
-        (value.len == range.len or value[range.len] == '-'));
+    const range_primary = languageRefutationPrimary(range) orelse return false;
+    const value_primary = languageRefutationPrimary(value) orelse return false;
+    var uncertain = std.mem.tokenizeScalar(u8, languagePrimaryUncertain, ' ');
+    while (uncertain.next()) |primary| {
+        if (std.ascii.eqlIgnoreCase(primary, range_primary) or std.ascii.eqlIgnoreCase(primary, value_primary)) return false;
+    }
+    return !std.ascii.eqlIgnoreCase(range_primary, value_primary);
 }
 const TextSelector = struct {
     // A known nonmatch can refuse this candidate; a match remains uncertain.
@@ -601,12 +698,32 @@ const TextSelector = struct {
     caption_class_guard_requires_complete: bool = false,
     // Necessary terminal type from a separately bounded complete chain.
     caption_subject_tag: ?[]const u8 = null,
+    // Exact terminal ::-moz-focus-inner has only button/input subjects. This
+    // is a necessary domain, never an attribute-value or selector match proof.
+    figure_control_pseudo: bool = false,
     chain: []const TextCompound,
     specificity: u64,
     uncertain: bool,
     required_own_attribute: ?[]const u8 = null,
+    own_attribute_complete: bool = false,
     necessary_ancestor_classes: []const []const u8 = &.{},
+    necessary_ancestor_ids: []const []const u8 = &.{},
     direct_children: bool = false,
+    fn ancestorClassesRefute(self: TextSelector, element: *const TextElement) bool {
+        const classes = element.complete_ancestor_classes orelse return false;
+        for (self.necessary_ancestor_classes) |required| if (!Profile.hasClass(classes, required)) return true;
+        // An exact chain's positive ancestor compounds are necessary too.
+        // Do not inspect uncertain grammar or the subject's own classes.
+        if (!self.uncertain and self.chain.len > 1) for (self.chain[0 .. self.chain.len - 1]) |part| {
+            for (part.classes) |required| if (!Profile.hasClass(classes, required)) return true;
+        };
+        return false;
+    }
+    fn ancestorIdsRefute(self: TextSelector, element: *const TextElement) bool {
+        const ids = element.complete_ancestor_ids orelse return false;
+        for (self.necessary_ancestor_ids) |required| if (!Profile.hasClass(ids, required)) return true;
+        return false;
+    }
     fn matchIn(self: TextSelector, element: *const TextElement, page_scoped: bool) ContainerSelectorMatch {
         if (page_scoped) if (element.alternative_ancestry) |alternative| {
             if (alternative.alternative_ancestry != null) return .unknown;
@@ -615,10 +732,17 @@ const TextSelector = struct {
             const right = self.matchIn(alternative, true);
             return if (left == right) left else .unknown;
         };
-        if (!page_scoped) return if (self.matches(element)) .known else .no;
-        if (element.complete_ancestor_classes) |classes| {
-            for (self.necessary_ancestor_classes) |required| if (!Profile.hasClass(classes, required)) return .no;
+        if (self.ancestorClassesRefute(element) or self.ancestorIdsRefute(element)) return .no;
+        if (self.own_attribute_complete) {
+            const name = self.required_own_attribute orelse return .unknown;
+            const attributes = element.attribute_presence orelse return .unknown;
+            switch (attributes.get(attributes.ctx, name)) {
+                .absent => return .no,
+                .unknown => return .unknown,
+                .present => return if (self.uncertain) .unknown else .known,
+            }
         }
+        if (!page_scoped) return if (self.matches(element)) .known else .no;
         if (self.language_range) |range| if (languageRefutes(range, element, null)) return .no;
         if (self.required_own_attribute) |name| if (element.attribute_presence) |attributes| {
             if (attributes.get(attributes.ctx, name) == .absent) return .no;
@@ -650,11 +774,10 @@ const TextSelector = struct {
         return if (self.uncertain) .unknown else .known;
     }
     fn matches(self: TextSelector, element: *const TextElement) bool {
-        if (element.complete_ancestor_classes) |classes| {
-            for (self.necessary_ancestor_classes) |required| {
-                if (!Profile.hasClass(classes, required)) return false;
-            }
-        }
+        if (self.own_attribute_complete) if (self.required_own_attribute) |name| if (element.attribute_presence) |attributes| {
+            if (attributes.get(attributes.ctx, name) == .absent) return false;
+        };
+        if (self.ancestorClassesRefute(element) or self.ancestorIdsRefute(element)) return false;
         if (self.language_range) |range| if (languageRefutes(range, element, null)) return false;
         if (self.root_subject_excluded and element.ancestry_complete and element.parent == null and
             element.source_key == 0 and std.ascii.eqlIgnoreCase(element.tag, "div") and Profile.hasClass(element.classes, "mw-parser-output")) return false;
@@ -678,6 +801,5037 @@ const TextSelector = struct {
         return true;
     }
 };
+pub const FigureObservedAttribute = struct { name: []const u8, value: []const u8 };
+pub const FigureObservedNode = struct {
+    tag: []const u8,
+    attributes: []const FigureObservedAttribute,
+    parent: ?u32,
+    empty: ?bool = null,
+    has_text: ?bool = null,
+    custom_environment: ?CustomEnvironment = null,
+    // Source-issued selected Figure edge; null never proves absence.
+    known_next_element_sibling: ?u32 = null,
+    // Separate source-issued first-child fact; false means unknown.
+    known_no_previous_element_sibling: bool = false,
+    // Source-issued closed direct Missing-caption A/text chain only.
+    known_caption_link_siblings: bool = false,
+    // Separate source-issued complete Ready inline caption tree.
+    known_caption_inline_siblings: bool = false,
+    known_previous_element_sibling: ?u32 = null,
+    known_no_next_element_sibling: bool = false,
+};
+pub const ObservedStyleNode = FigureObservedNode;
+pub const FigureObservedMediaKind = enum { image, missing };
+// Build-time source capability: only the current-literal issuer binds the
+// retained generated SECTION path to this exact operation and native root.
+pub const FigureGeneratedSectionSource = struct {
+    source: []const u8,
+    token: []const u8,
+    root: *const TextElement,
+};
+pub const FigureObservedLayoutKind = enum { table_caption, block_media };
+pub const FigureObservedContext = struct {
+    styles: *const Profile,
+    media_kind: FigureObservedMediaKind = .image,
+    layout_kind: FigureObservedLayoutKind = .table_caption,
+    nodes: []const FigureObservedNode,
+    root: u32,
+    frame: u32,
+    anchor: u32,
+    media: u32,
+    caption: u32,
+    generated_section_source: ?FigureGeneratedSectionSource = null,
+};
+const ObservedAttributeOperator = enum { present, equals, includes, dash, prefix, suffix, substring };
+const ObservedAttributeSelector = struct {
+    name: []const u8,
+    operator: ObservedAttributeOperator,
+    value: []const u8 = "",
+    insensitive: bool = false,
+    case_known: bool = true,
+    fn equal(self: @This(), left: []const u8, right: []const u8) bool {
+        return if (self.insensitive) std.ascii.eqlIgnoreCase(left, right) else std.mem.eql(u8, left, right);
+    }
+    fn matchesCase(self: @This(), node: FigureObservedNode) bool {
+        const value = observedFigureAttribute(node, self.name) orelse return false;
+        return switch (self.operator) {
+            .present => true,
+            .equals => self.equal(value, self.value),
+            .includes => blk: {
+                if (self.value.len == 0 or std.mem.indexOfAny(u8, self.value, " \t\r\n\x0c") != null) break :blk false;
+                var words = std.mem.tokenizeAny(u8, value, " \t\r\n\x0c");
+                while (words.next()) |word| if (self.equal(word, self.value)) break :blk true;
+                break :blk false;
+            },
+            .dash => self.equal(value, self.value) or (value.len > self.value.len and value[self.value.len] == '-' and self.equal(value[0..self.value.len], self.value)),
+            .prefix => self.value.len != 0 and value.len >= self.value.len and self.equal(value[0..self.value.len], self.value),
+            .suffix => self.value.len != 0 and value.len >= self.value.len and self.equal(value[value.len - self.value.len ..], self.value),
+            .substring => blk: {
+                if (self.value.len == 0 or self.value.len > value.len) break :blk false;
+                for (0..value.len - self.value.len + 1) |at| if (self.equal(value[at .. at + self.value.len], self.value)) break :blk true;
+                break :blk false;
+            },
+        };
+    }
+    fn matches(self: @This(), node: FigureObservedNode) ContainerSelectorMatch {
+        if (observedFigureAttribute(node, self.name) == null) return .no;
+        if (self.case_known or self.operator == .present) return if (self.matchesCase(node)) .known else .no;
+        var exact = self; exact.insensitive = false;
+        var folded = self; folded.insensitive = true;
+        const left = exact.matchesCase(node); const right = folded.matchesCase(node);
+        return if (left != right) .unknown else if (left) .known else .no;
+    }
+};
+fn observedAttributeDefaultSensitive(name: []const u8) bool {
+    // Known case-sensitive HTML values. Other unflagged values are evaluated
+    // under both exact and ASCII-folded semantics and require agreement.
+    for ([_][]const u8{ "class", "id", "style", "href", "typeof", "width", "height" }) |known|
+        if (std.ascii.eqlIgnoreCase(name, known)) return true;
+    return std.ascii.startsWithIgnoreCase(name, "data-") or std.ascii.startsWithIgnoreCase(name, "aria-");
+}
+const GeneratedFigurePseudo = enum { before, after, other };
+const ObservedDynamicPseudo = enum { link, any_link, visited, hover, active, focus, focus_visible, focus_within };
+const ObservedFigureLinkState = struct {
+    visited: ?bool = null,
+    hover: ?bool = null,
+    active: ?bool = null,
+    focus: ?bool = null,
+    focus_visible: ?bool = null,
+    focus_within: ?bool = null,
+};
+const ObservedFigureFocusMode = enum { unfocused, focused, focus_visible };
+const ObservedFigureLinkPaintSample = struct {
+    visited: bool, hover: bool, active: bool, focus: ObservedFigureFocusMode,
+    paint: types.FigureLinkState,
+};
+
+// A six-state payload is valid only if every simultaneous source state folds
+// to that exact contract. Source computation supplies the samples; this step
+// cannot infer a missing combination from isolated hover or focus queries.
+fn observedFigureLinkPaintSamples(samples: []const ObservedFigureLinkPaintSample) ?types.FigureLinkPaint {
+    if (samples.len != 24) return null;
+    var seen: [24]bool = @splat(false);
+    var buckets: [6]?types.FigureLinkState = @splat(null);
+    for (samples) |sample| {
+        const focus: usize = @intFromEnum(sample.focus);
+        const identity: usize = @as(usize, @intFromBool(sample.visited)) * 12 +
+            @as(usize, @intFromBool(sample.hover)) * 6 + @as(usize, @intFromBool(sample.active)) * 3 + focus;
+        if (seen[identity]) return null;
+        seen[identity] = true;
+        if (sample.focus != .unfocused) continue;
+        const bucket: usize = @as(usize, @intFromBool(sample.visited)) * 3 +
+            @as(usize, if (sample.active) 2 else if (sample.hover) 1 else 0);
+        if (buckets[bucket]) |prior| {
+            if (prior.underline != sample.paint.underline or !std.mem.eql(u8, prior.foreground, sample.paint.foreground)) return null;
+        } else buckets[bucket] = sample.paint;
+    }
+    for (seen) |present| if (!present) return null;
+    for (buckets) |bucket| if (bucket == null) return null;
+    var focus_preserves = true;
+    var focus_underlines = true;
+    for (samples) |sample| {
+        if (sample.focus == .unfocused) continue;
+        const bucket: usize = @as(usize, @intFromBool(sample.visited)) * 3 +
+            @as(usize, if (sample.active) 2 else if (sample.hover) 1 else 0);
+        const ordinary = buckets[bucket].?;
+        if (!std.mem.eql(u8, ordinary.foreground, sample.paint.foreground)) return null;
+        focus_preserves = focus_preserves and ordinary.underline == sample.paint.underline;
+        focus_underlines = focus_underlines and sample.paint.underline;
+    }
+    if (!focus_preserves and !focus_underlines) return null;
+    const result: types.FigureLinkPaint = .{ .normal = buckets[0].?, .hover = buckets[1].?, .active = buckets[2].?,
+        .visited = buckets[3].?, .visited_hover = buckets[4].?, .visited_active = buckets[5].?,
+        .underline_on_focus = !focus_preserves };
+    // Focus geometry is independently computed from the actual A boxes and
+    // attached only after its complete-state proof; it is not supplied here.
+    return if (types.validFigureLinkPaint(result)) result else null;
+}
+const GeneratedFigureCompoundGroup = struct { alternatives: []const GeneratedFigureCompound };
+const ObservedFigureRule = struct {
+    focus_inner_control_host: bool = false,
+    raw_selector: []const u8,
+    selector: ?GeneratedFigureSelector,
+    weak_selector: ?GeneratedFigureSelector,
+    list_uncertain: bool,
+    css: []const u8,
+    conditions: []const []const u8,
+    conditional: bool,
+    rank_unknown: bool,
+    order: u32,
+    source_index: usize,
+    source_byte_start: usize,
+};
+const GeneratedFigureCompound = struct {
+    positive: TextCompound,
+    excluded_tags: []const []const u8 = &.{},
+    excluded_classes: []const []const u8 = &.{},
+    attributes: []const ObservedAttributeSelector = &.{},
+    any_groups: []const GeneratedFigureCompoundGroup = &.{},
+    none_groups: []const GeneratedFigureCompoundGroup = &.{},
+    root_only: bool = false,
+    dynamic_pseudos: []const ObservedDynamicPseudo = &.{},
+    requires_empty: bool = false,
+
+    fn ownMatch(self: @This(), element: *const TextElement, empty: ?bool) ContainerSelectorMatch {
+        if (!self.positive.matches(element)) return .no;
+        if (self.positive.typeof_token != null and element.typeof_tokens == null) return .unknown;
+        for (self.excluded_tags) |tag| if (std.ascii.eqlIgnoreCase(tag, element.tag)) return .no;
+        for (self.excluded_classes) |name| if (Profile.hasClass(element.classes, name)) return .no;
+        if (self.attributes.len != 0 or self.any_groups.len != 0 or self.none_groups.len != 0 or self.root_only or self.dynamic_pseudos.len != 0) return .unknown;
+        if (self.requires_empty) return if (empty) |value| (if (value) .known else .no) else .unknown;
+        return .known;
+    }
+};
+const GeneratedFigureSelector = struct {
+    chain: []const GeneratedFigureCompound,
+    // The item at i describes the edge from chain[i] to chain[i-1].
+    // Index zero has no incoming edge. A descendant is not a physical edge.
+    direct_parent: []const bool,
+    pseudo: ?GeneratedFigurePseudo = null,
+    specificity: u64,
+    syntax_known: bool = true,
+    // Refutation-only positive facts about the complete document HTML root.
+    // They are independent of any unsupported sibling edge in the selector.
+    necessary_html_root: ?GeneratedFigureCompound = null,
+    // Necessary shared ancestors preceding one terminal sibling relation.
+    // Their absence may refute; their presence never proves the sibling edge.
+    necessary_sibling_ancestors: []const GeneratedFigureCompound = &.{},
+    // Necessary first adjacent target of one closed terminal :has().
+    // Its presence is never a positive selector match.
+    necessary_has_next: ?GeneratedFigureCompound = null,
+    // Only the terminal subject's incoming +/~ edge, never an ancestor edge.
+    necessary_previous_sibling: bool = false,
+    // Immediate left operand of a terminal +, never an earlier ~ witness.
+    necessary_previous_adjacent: ?GeneratedFigureCompound = null,
+};
+fn borderColorInContextAlloc(a: std.mem.Allocator, raw: []const u8, environment: ?CustomEnvironment,
+    comptime observed: bool) std.mem.Allocator.Error!?types.ContainerColor
+{
+    if (!observed) return containerColorWithCustomAlloc(a, raw, environment, false);
+    const value = trim(raw);
+    if (!std.mem.startsWith(u8, value, "var(")) return containerColorAlloc(a, value);
+    const selected = environment orelse return null;
+    if (!selected.complete) return null;
+    // A captured cascade can prove absence and therefore a var() fallback.
+    // The legacy finite paint route still requires its explicit known binding.
+    return switch (try customColorValue(a, selected, value)) {
+        .known => |resolved| containerColorAlloc(a, resolved),
+        .invalid, .unknown => null,
+    };
+}
+fn borderUpdateInContextAlloc(a: std.mem.Allocator, property: []const u8, raw: []const u8, environment: ?CustomEnvironment,
+    comptime observed: bool) std.mem.Allocator.Error!BorderUpdate
+{
+    const value = trim(raw);
+    var side: ?usize = null; var component: ?usize = null; var recognized = std.ascii.eqlIgnoreCase(property, "border");
+    inline for (.{ "width", "style", "color" }, 0..) |part, index|
+        if (std.ascii.eqlIgnoreCase(property, "border-" ++ part)) { component = index; recognized = true; };
+    inline for (.{ "top", "right", "bottom", "left" }, 0..) |edge, index| {
+        if (std.ascii.eqlIgnoreCase(property, "border-" ++ edge)) { side = index; recognized = true; }
+        inline for (.{ "width", "style", "color" }, 0..) |part, atom_index|
+            if (std.ascii.eqlIgnoreCase(property, "border-" ++ edge ++ "-" ++ part)) { side = index; component = atom_index; recognized = true; };
+    }
+    if (!recognized) return .{ .unsafe = true };
+    const reset = std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset");
+    if (std.ascii.eqlIgnoreCase(value, "inherit") or std.ascii.eqlIgnoreCase(value, "revert") or std.ascii.eqlIgnoreCase(value, "revert-layer")) return borderUnknownUpdate(side, component);
+    var tokens: [4][]const u8 = undefined;
+    const count = borderTokens(value, &tokens) orelse return borderUnknownUpdate(side, component);
+    var result: BorderUpdate = .{};
+    if (component) |part| {
+        if (side != null and count != 1) return borderUnknownUpdate(side, component);
+        var atoms: [4]BorderAtom = undefined;
+        for (tokens[0..count], 0..) |token, index| atoms[index] = switch (part) {
+            0 => if (reset) .unknown else borderWidthAtom(token) orelse .unknown,
+            1 => if (reset) .{ .line_style = .none } else borderStyleAtom(token) orelse .unknown,
+            2 => if (reset) .unknown else if (try borderColorInContextAlloc(a, token, environment, observed)) |color| .{ .color = color } else .unknown,
+            else => unreachable,
+        };
+        const positions: [4]usize = switch (count) { 1 => .{0,0,0,0}, 2 => .{0,1,0,1}, 3 => .{0,1,2,1}, 4 => .{0,1,2,3}, else => unreachable };
+        for (positions, 0..) |at, edge| if (side == null or side.? == edge) { result.atoms[edge * 3 + part] = atoms[if (side != null) 0 else at]; };
+        return result;
+    }
+    var width: ?BorderAtom = null; var line: ?BorderAtom = null; var color: ?BorderAtom = null;
+    if (!reset) for (tokens[0..count]) |token| {
+        if (borderStyleAtom(token)) |known| { if (line != null) return borderUnknownUpdate(side, null); line = known; }
+        else if (try borderColorInContextAlloc(a, token, environment, observed)) |known| { if (color != null) return borderUnknownUpdate(side, null); color = .{ .color = known }; }
+        else if (std.mem.indexOfAny(u8, token, "(%") != null) return borderUnknownUpdate(side, null)
+        else if (borderWidthAtom(token)) |known| { if (width != null) return borderUnknownUpdate(side, null); width = known; }
+        else return borderUnknownUpdate(side, null);
+    };
+    for (0..4) |edge| if (side == null or side.? == edge) {
+        result.atoms[edge * 3] = width orelse .unknown;
+        result.atoms[edge * 3 + 1] = line orelse .{ .line_style = .none };
+        result.atoms[edge * 3 + 2] = color orelse .unknown;
+    };
+    return result;
+}
+fn observedFigureAttribute(node: FigureObservedNode, name: []const u8) ?[]const u8 {
+    for (node.attributes) |attribute| if (std.ascii.eqlIgnoreCase(attribute.name, name)) return attribute.value;
+    return null;
+}
+fn observedFigureNameByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '-' or byte == '_' or byte == ':';
+}
+
+// Structural validation does not issue the source-operation proof. The issuer
+// must separately bind the complete supplied source and every matching candidate.
+fn observedStyleGraphValid(styles: *const Profile, nodes: []const ObservedStyleNode, root_index: u32) bool {
+    if (styles.reading_target != .screen) return false;
+    if (nodes.len == 0 or nodes.len > 65_536 or root_index >= nodes.len or root_index == 0) return false;
+    if (!std.ascii.eqlIgnoreCase(nodes[0].tag, "html") or nodes[0].parent != null) return false;
+    for (nodes, 0..) |node, index| {
+        if (node.tag.len == 0 or !std.ascii.isAlphabetic(node.tag[0]) or node.attributes.len > 64) return false;
+        if (node.empty == true and node.has_text == true) return false;
+        for (node.tag) |byte| if (!observedFigureNameByte(byte)) return false;
+        if (index != 0) {
+            const parent = node.parent orelse return false;
+            if (parent >= index or nodes[parent].empty == true) return false;
+        }
+        for (node.attributes, 0..) |attribute, attribute_index| {
+            if (attribute.name.len == 0 or !std.unicode.utf8ValidateSlice(attribute.value) or std.mem.indexOfScalar(u8, attribute.value, 0) != null) return false;
+            for (attribute.name) |byte| if (!observedFigureNameByte(byte)) return false;
+            for (node.attributes[0..attribute_index]) |prior|
+                if (std.ascii.eqlIgnoreCase(prior.name, attribute.name)) return false;
+        }
+    }
+    const root = nodes[root_index];
+    return std.ascii.eqlIgnoreCase(root.tag, "div") and
+        Profile.hasClass(observedFigureAttribute(root, "class") orelse "", "mw-parser-output");
+}
+pub const TableContainingDirectionContext = struct {
+    styles: *const Profile,
+    nodes: []const ObservedStyleNode,
+    root: u32,
+    table: u32,
+};
+/// A conservative inventory of the actual DOM ancestors across every selected
+/// context. It proves absence only; it grants no CSS, font or direction value.
+pub const TableAncestorDomain = struct {
+    classes: []const u8,
+    ids: []const []const u8,
+    tags: []const []const u8,
+};
+pub fn tableAncestorDomainAlloc(a: std.mem.Allocator, contexts: []const TableContainingDirectionContext) !?TableAncestorDomain {
+    if (contexts.len == 0 or contexts.len > 128) return null;
+    var classes: std.ArrayList(u8) = .empty;
+    var ids: std.ArrayList([]const u8) = .empty;
+    var tags: std.ArrayList([]const u8) = .empty;
+    defer classes.deinit(a);
+    defer ids.deinit(a);
+    defer tags.deinit(a);
+    for (contexts) |context| {
+        if (!observedStyleGraphValid(context.styles, context.nodes, context.root) or
+            context.table >= context.nodes.len or !std.ascii.eqlIgnoreCase(context.nodes[context.table].tag, "table")) return null;
+        var next = context.nodes[context.table].parent;
+        var count: usize = 0;
+        var root_seen = false;
+        var outer_seen = false;
+        while (next) |index| {
+            if (index >= context.nodes.len or count == 512) return null;
+            count += 1;
+            const node = context.nodes[index];
+            root_seen = root_seen or index == context.root;
+            outer_seen = outer_seen or index == 0;
+            try tags.append(a, node.tag);
+            if (observedFigureAttribute(node, "id")) |id| try ids.append(a, id);
+            if (observedFigureAttribute(node, "class")) |names| {
+                if (classes.items.len >= max_css_bytes or names.len > max_css_bytes - classes.items.len - 1) return null;
+                try classes.appendSlice(a, names);
+                try classes.append(a, ' ');
+            }
+            next = node.parent;
+        }
+        if (!root_seen or !outer_seen) return null;
+    }
+    const names = try classes.toOwnedSlice(a);
+    errdefer a.free(names);
+    const owned_ids = try ids.toOwnedSlice(a);
+    errdefer a.free(owned_ids);
+    return .{ .classes = names, .ids = owned_ids, .tags = try tags.toOwnedSlice(a) };
+}
+const TableDirectionBoxState = struct { display: []const u8, position: []const u8 };
+pub const TableContainingDirectionResult = struct {
+    direction: types.TableContainingDirection,
+    // This checks the responsive display/overflow/width policy only. It is not
+    // a replacement for the constructor's other style/font/geometry guards.
+    responsive_geometry_accounted: bool,
+};
+const table_direction_displays = [_][]const u8{ "none", "contents", "block", "flow-root", "inline", "inline-block", "flex", "inline-flex", "grid", "inline-grid", "table", "inline-table", "list-item" };
+const table_direction_positions = [_][]const u8{ "static", "relative", "absolute", "fixed", "sticky" };
+// Remote ancestors need a non-hidden proof, not one invariant layout mode.
+// Exact values are retained separately for explicit inheritance and for the
+// actual nearest containing parent. Null here never becomes a guessed value.
+const TableDirectionVisibleAncestor = struct { display: ?[]const u8, position: ?[]const u8 };
+fn tableDirectionVisibleAncestor(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, parent: ?TableDirectionVisibleAncestor) !?TableDirectionVisibleAncestor
+{
+    const display = try observedFigureKeyword(a, declarations, "display", &.{}, environment,
+        &table_direction_displays, "inline", if (parent) |value| value.display else null, false, "block");
+    const position = try observedFigureKeyword(a, declarations, "position", &.{}, environment,
+        &table_direction_positions, "static", if (parent) |value| value.position else null, false, "static");
+    const candidates = try observedFigurePropertyCandidates(a, declarations, "display", &.{});
+    defer a.free(candidates);
+    for (candidates) |candidate| {
+        // A nonexact parent has already proved all of its display alternatives
+        // non-none. A block representative is valid only for this Boolean
+        // projection; it is never stored as the computed display above.
+        const visible = try observedFigureKeywordValue(a, candidate, "display", environment,
+            &table_direction_displays, "inline", if (parent) |value| value.display orelse "block" else null, false);
+        if (visible.unresolved or visible.value == null or std.mem.eql(u8, visible.value.?, "none")) return null;
+    }
+    return .{
+        .display = if (display.unresolved) null else display.value,
+        .position = if (position.unresolved) null else position.value,
+    };
+}
+fn tableDirectionBoxState(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, parent: ?TableDirectionBoxState, hint: []const u8) !?TableDirectionBoxState
+{
+    const display = try observedFigureKeyword(a, declarations, "display", &.{}, environment,
+        &table_direction_displays,
+        "inline", if (parent) |value| value.display else null, false, hint);
+    const position = try observedFigureKeyword(a, declarations, "position", &.{}, environment,
+        &table_direction_positions, "static",
+        if (parent) |value| value.position else null, false, "static");
+    if (display.unresolved or position.unresolved or display.value == null or position.value == null or
+        std.mem.eql(u8, display.value.?, "none")) return null;
+    return .{ .display = display.value.?, .position = position.value.? };
+}
+fn tableDirectionPrincipalBox(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, parent: TableDirectionBoxState) !bool
+{
+    const candidates = try observedFigurePropertyCandidates(a, declarations, "display", &.{});
+    defer a.free(candidates);
+    for (candidates) |candidate| {
+        const value = try observedFigureKeywordValue(a, candidate, "display", environment,
+            &table_direction_displays, "inline", parent.display, false);
+        if (value.unresolved or value.value == null) return false;
+        if (!std.mem.eql(u8, value.value.?, "table") and !std.mem.eql(u8, value.value.?, "block") and
+            !std.mem.eql(u8, value.value.?, "flow-root")) return false;
+    }
+    const position = try observedFigureKeyword(a, declarations, "position", &.{}, environment,
+        &table_direction_positions, "static", parent.position, false, "static");
+    return !position.unresolved and position.value != null and std.mem.eql(u8, position.value.?, "static");
+}
+// A plain authored aligned DIV carries no independent font/box style. Captured
+// metadata remains in the selector graph; a matching rule may refute this narrow
+// native correspondence but cannot silently add an unrepresented parent effect.
+fn tableDirectionPlainLocalParent(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment) !bool
+{
+    for (declarations) |declaration| {
+        if (declaration.syntax_unknown) return false;
+        var supported = false;
+        for ([_][]const u8{ "direction", "display", "position", "text-align", "box-sizing" }) |name|
+            if (std.ascii.eqlIgnoreCase(declaration.name, name)) { supported = true; break; };
+        if (!supported and !pageStaticMotionProperty(declaration.name)) return false;
+    }
+    // Timing-only reduced-motion rules do not animate an element whose actual
+    // animation name is none; transitions and scrolling must still be static.
+    if (!try observedFigureStaticMotion(a, declarations, environment)) return false;
+    const display = try observedFigureKeyword(a, declarations, "display", &.{}, environment,
+        &.{"block"}, "inline", null, false, "block");
+    const position = try observedFigureKeyword(a, declarations, "position", &.{}, environment,
+        &.{"static"}, "static", null, false, "static");
+    const alignment = try observedFigureKeyword(a, declarations, "text-align", &.{}, environment,
+        &.{"center"}, "start", null, true, "center");
+    const sizing = try observedFigureKeyword(a, declarations, "box-sizing", &.{}, environment,
+        &.{ "content-box", "border-box" }, "content-box", null, false, "content-box");
+    return !display.unresolved and display.value != null and std.mem.eql(u8, display.value.?, "block") and
+        !position.unresolved and position.value != null and std.mem.eql(u8, position.value.?, "static") and
+        !alignment.unresolved and alignment.value != null and std.mem.eql(u8, alignment.value.?, "center") and
+        !sizing.unresolved and sizing.value != null;
+}
+
+fn tableDirectionGeneratedSection(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment) !bool
+{
+    // These local boxes are not represented as native Containers. Their actual
+    // cascade must prove a plain block; metadata alone grants no neutrality.
+    for (declarations) |declaration| {
+        if (declaration.syntax_unknown) return false;
+        var supported = false;
+        for ([_][]const u8{ "direction", "display", "position", "box-sizing" }) |name|
+            if (std.ascii.eqlIgnoreCase(declaration.name, name)) { supported = true; break; };
+        if (!supported and !pageStaticMotionProperty(declaration.name)) return false;
+    }
+    // Timing-only reduced-motion rules do not animate an element whose actual
+    // animation name is none; transitions and scrolling must still be static.
+    if (!try observedFigureStaticMotion(a, declarations, environment)) return false;
+    const display = try observedFigureKeyword(a, declarations, "display", &.{}, environment,
+        &.{"block"}, "inline", null, false, "block");
+    const position = try observedFigureKeyword(a, declarations, "position", &.{}, environment,
+        &.{"static"}, "static", null, false, "static");
+    const sizing = try observedFigureKeyword(a, declarations, "box-sizing", &.{}, environment,
+        &.{ "content-box", "border-box" }, "content-box", null, false, "content-box");
+    return !display.unresolved and display.value != null and std.mem.eql(u8, display.value.?, "block") and
+        !position.unresolved and position.value != null and std.mem.eql(u8, position.value.?, "static") and
+        !sizing.unresolved and sizing.value != null;
+}
+
+fn tableDirectionExistingGeometry(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, parent: TableDirectionBoxState, expected: types.TableStyle) !bool
+{
+    const box = (try tableDirectionBoxState(a, declarations, environment, parent, "table")) orelse return false;
+    if (!std.mem.eql(u8, box.display, "table") or !std.mem.eql(u8, box.position, "static") or
+        (expected.display != null and expected.display.? != .table)) return false;
+    inline for (.{ "overflow", "overflow-x", "overflow-y", "max-width" }) |property| {
+        const neutral: []const u8 = if (std.mem.eql(u8, property, "max-width")) "none" else "visible";
+        const value = try observedFigureKeyword(a, declarations, property, &.{}, environment,
+            &.{neutral}, neutral, null, false, neutral);
+        if (value.unresolved or value.value == null or !std.mem.eql(u8, value.value.?, neutral)) return false;
+    }
+    const widths = try observedFigurePropertyCandidates(a, declarations, "width", &.{});
+    defer a.free(widths);
+    var definite = false;
+    for (widths) |candidate| definite = definite or !candidate.uncertain;
+    if (!definite and expected.width != null) return false;
+    for (widths) |candidate| {
+        if (candidate.syntax_unknown) return false;
+        const computed = try customColorValue(a, environment, candidate.raw);
+        const raw = switch (computed) { .unknown => return false, .invalid => "auto", .known => |value| trim(value) };
+        if (std.ascii.eqlIgnoreCase(raw, "auto") or std.ascii.eqlIgnoreCase(raw, "initial") or std.ascii.eqlIgnoreCase(raw, "unset")) {
+            if (expected.width != null) return false;
+        } else {
+            const value = styleWidth(raw) orelse return false;
+            const actual = expected.width orelse return false;
+            if (!std.meta.eql(value, actual)) return false;
+        }
+    }
+    return true;
+}
+/// Consumes only a source-issued complete graph for the selected original table.
+/// The caller retains source/operation/candidate custody; this issues no parent
+/// identity, geometry, table grid or default native-direction certificate.
+pub fn resolveObservedTableContainingDirection(a: std.mem.Allocator,
+    contexts: []const TableContainingDirectionContext, native_parent: ?types.TableContainingDirection) !?types.TableContainingDirection
+{
+    const result = (try resolveObservedTableContainingDirectionWithStyle(a, contexts, native_parent, null, null)) orelse return null;
+    return result.direction;
+}
+pub fn resolveObservedTableContainingDirectionForStyle(a: std.mem.Allocator,
+    contexts: []const TableContainingDirectionContext, native_parent: ?types.TableContainingDirection,
+    expected: types.TableStyle) !?TableContainingDirectionResult
+{
+    if (!types.validUnboundTableStyle(expected)) return null;
+    return resolveObservedTableContainingDirectionWithStyle(a, contexts, native_parent, expected, null);
+}
+
+fn resolveObservedTableContainingDirectionWithStyle(a: std.mem.Allocator,
+    contexts: []const TableContainingDirectionContext, native_parent: ?types.TableContainingDirection,
+    expected: ?types.TableStyle, root_parent: ?bool) !?TableContainingDirectionResult
+{
+    const plain_local_parent = root_parent orelse false;
+    if (contexts.len == 0 or contexts.len > 128) return null;
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    var agreed: ?types.TableContainingDirection = null;
+    var geometry_accounted = expected != null;
+    for (contexts) |context| {
+        _ = scratch.reset(.retain_capacity); const alloc = scratch.allocator();
+        if (context.styles.reading_target != .screen or
+            !observedStyleGraphValid(context.styles, context.nodes, context.root) or context.table >= context.nodes.len or
+            !std.ascii.eqlIgnoreCase(context.nodes[context.table].tag, "table")) return null;
+        for (context.nodes[1..]) |node| if (std.ascii.eqlIgnoreCase(node.tag, "html")) return null;
+        var path: [512]u32 = undefined; var count: usize = 0;
+        if (plain_local_parent) {
+            const parent_index = context.nodes[context.table].parent orelse return null;
+            if (parent_index >= context.nodes.len or parent_index == context.root or
+                !std.ascii.eqlIgnoreCase(context.nodes[parent_index].tag, "div")) return null;
+            const authored_align = observedFigureAttribute(context.nodes[parent_index], "align") orelse return null;
+            if (!std.mem.eql(u8, authored_align, "center")) return null;
+        }
+        if (plain_local_parent) {
+            var local = context.nodes[context.nodes[context.table].parent.?].parent orelse return null;
+            var local_count: usize = 0;
+            while (local != context.root) {
+                if (local >= context.nodes.len or local_count == 32 or
+                    !std.ascii.eqlIgnoreCase(context.nodes[local].tag, "section")) return null;
+                local_count += 1;
+                local = context.nodes[local].parent orelse return null;
+            }
+        }
+        var next = context.nodes[context.table].parent;
+        var root_seen = false;
+        while (next) |index| : (next = context.nodes[index].parent) {
+            if (count == path.len) return null;
+            path[count] = index; count += 1; root_seen = root_seen or index == context.root;
+        }
+        if (count == 0 or !root_seen or path[count - 1] != 0) return null;
+        // CSS direction's property initial is ltr, used only after validating
+        // the complete actual HTML-to-containing-parent path and all its rules.
+        var root_focus: ?TableSourceFocusDomain = if (root_parent != null) try tableRootSourceFocusDomain(alloc, context) else null;
+        var inherited: []const u8 = "ltr";
+        var environment: CustomEnvironment = .{ .complete = true };
+        var parent_box: ?TableDirectionVisibleAncestor = null;
+        var inside_root = false;
+        while (count != 0) {
+            count -= 1; const index = path[count]; const node = context.nodes[index];
+            // These are the complete HTML outer-prefix and closed local DIV
+            // families issued by the producer. Their UA display hint is block.
+            var block_tag = false;
+            for ([_][]const u8{ "html", "body", "div", "main", "section", "article" }) |tag|
+                if (std.ascii.eqlIgnoreCase(node.tag, tag)) { block_tag = true; break; };
+            if (!block_tag) return null;
+            var hint = inherited;
+            if (observedFigureAttribute(node, "dir")) |raw| {
+                if (std.ascii.eqlIgnoreCase(raw, "ltr")) hint = "ltr"
+                else if (std.ascii.eqlIgnoreCase(raw, "rtl")) hint = "rtl"
+                else return null; // auto/empty/invalid is an unproved boundary.
+            }
+            const declarations = (try observedStyleNodeDeclarationsWithLanguage(alloc, context.styles, context.nodes,
+                index, null, null, .{ .table_focus = if (root_focus) |*domain| domain else null }, true)) orelse return null;
+            environment = try observedFigureCustomEnvironment(alloc, declarations.items, environment, !context.styles.globally_unresolved);
+            if (node.custom_environment) |issued| for (issued.values) |binding| {
+                if (binding.value != .unknown and !sameObservedCustomValue(binding.value, environment.get(binding.name))) return null;
+            };
+            // Possible inherited CSS focus/editing effects withhold this proof
+            // using the same declaration guard as the existing Table domain.
+            if (root_focus != null and !tableSourceStaticFocusDeclarations(declarations.items)) root_focus = null;
+            if (inside_root and root_parent != null and std.ascii.eqlIgnoreCase(node.tag, "section") and
+                !try tableDirectionGeneratedSection(alloc, declarations.items, environment)) return null;
+            if (index == context.root) inside_root = true;
+            if (plain_local_parent and index == context.nodes[context.table].parent.?)
+                if (!try tableDirectionPlainLocalParent(alloc, declarations.items, environment)) return null;
+            parent_box = (try tableDirectionVisibleAncestor(alloc, declarations.items, environment, parent_box)) orelse return null;
+            // CSS all explicitly excludes direction. Do not reset it through
+            // that shorthand; escaped/unknown property syntax remains retained.
+            var direction_declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+            for (declarations.items) |declaration| {
+                if (!declaration.syntax_unknown and std.ascii.eqlIgnoreCase(declaration.name, "all")) continue;
+                try direction_declarations.append(alloc, declaration);
+            }
+            if (!try observedFigureStaticMotion(alloc, direction_declarations.items, environment)) return null;
+            const value = try observedFigureKeyword(alloc, direction_declarations.items, "direction", &.{}, environment,
+                &.{ "ltr", "rtl" }, "ltr", inherited, true, hint);
+            if (value.unresolved or value.value == null) return null;
+            inherited = value.value.?;
+        }
+        const nearest = parent_box orelse return null;
+        const containing: TableDirectionBoxState = .{ .display = nearest.display orelse return null,
+            .position = nearest.position orelse return null };
+        // A logical tag edge is not a containing-block certificate. The first
+        // supported domain keeps a principal block parent and in-flow TABLE.
+        if ((!std.mem.eql(u8, containing.display, "block") and !std.mem.eql(u8, containing.display, "flow-root")) or
+            (!std.mem.eql(u8, containing.position, "static") and !std.mem.eql(u8, containing.position, "relative"))) return null;
+        const own = (try observedStyleNodeDeclarationsWithLanguage(alloc, context.styles, context.nodes,
+            context.table, null, null, .{}, true)) orelse return null;
+        const own_environment = try observedFigureCustomEnvironment(alloc, own.items, environment, !context.styles.globally_unresolved);
+        if (!try tableDirectionPrincipalBox(alloc, own.items, own_environment, containing) or
+            !try observedFigureStaticMotion(alloc, own.items, own_environment)) return null;
+        if (expected) |style| geometry_accounted = geometry_accounted and
+            try tableDirectionExistingGeometry(alloc, own.items, own_environment, containing, style);
+        if (root_parent != null) if (expected) |style| if (style.margin_values) |pending| {
+            geometry_accounted = geometry_accounted and try tableRootMarginsAgree(alloc, own.items, own_environment, pending);
+        };
+        const current: types.TableContainingDirection = if (std.ascii.eqlIgnoreCase(inherited, "ltr")) .ltr
+            else if (std.ascii.eqlIgnoreCase(inherited, "rtl")) .rtl else return null;
+        if (native_parent) |known| if (known != current) return null;
+        if (agreed) |prior| { if (prior != current) return null; } else agreed = current;
+    }
+    return if (agreed) |direction| .{ .direction = direction, .responsive_geometry_accounted = geometry_accounted } else null;
+}
+
+pub fn figureObservedContextValid(context: FigureObservedContext) bool {
+    const nodes = context.nodes;
+    if (!observedStyleGraphValid(context.styles, nodes, context.root) or context.frame >= nodes.len or
+        context.anchor >= nodes.len or context.media >= nodes.len or context.caption >= nodes.len) return false;
+    const root = nodes[context.root];
+    const frame = nodes[context.frame];
+    if (!std.ascii.eqlIgnoreCase(root.tag, "div") or !Profile.hasClass(observedFigureAttribute(root, "class") orelse "", "mw-parser-output") or
+        !std.ascii.eqlIgnoreCase(frame.tag, "figure") or
+        !std.ascii.eqlIgnoreCase(nodes[context.caption].tag, "figcaption")) return false;
+    const file_type = observedFigureAttribute(frame, "typeof") orelse return false;
+    switch (context.layout_kind) {
+        .table_caption => if (!std.ascii.eqlIgnoreCase(nodes[context.anchor].tag, "a") or
+            (!Profile.hasClass(file_type, "mw:File/Thumb") and !Profile.hasClass(file_type, "mw:File/Frame"))) return false,
+        .block_media => {
+            // The media wrapper really is SPAN; it never borrows an A role.
+            // Its complete source correspondence is issued separately by Book.
+            if (context.media_kind != .image or !std.mem.eql(u8, file_type, "mw:File") or
+                !std.ascii.eqlIgnoreCase(nodes[context.anchor].tag, "span") or
+                nodes[context.anchor].attributes.len != 0 or nodes[context.caption].attributes.len != 0 or
+                frame.has_text != false or nodes[context.anchor].has_text != false or
+                nodes[context.media].has_text != false or nodes[context.caption].has_text != false or
+                nodes[context.caption].empty != true or nodes[context.caption].known_caption_inline_siblings or
+                nodes[context.caption].known_caption_link_siblings) return false;
+            for (nodes) |node| if (node.parent == context.caption) return false;
+        },
+    }
+    const media = nodes[context.media];
+    switch (context.media_kind) {
+        .image => {
+            if (!std.ascii.eqlIgnoreCase(media.tag, "img") or Profile.hasClass(file_type, "mw:Error") or
+                Profile.hasClass(observedFigureAttribute(media, "class") orelse "", "mw-broken-media")) return false;
+        },
+        .missing => {
+            if (!std.ascii.eqlIgnoreCase(media.tag, "span") or !Profile.hasClass(file_type, "mw:Error") or
+                !Profile.hasClass(file_type, "mw:File/Thumb") or
+                !Profile.hasClass(observedFigureAttribute(nodes[context.anchor], "class") orelse "", "new") or
+                !Profile.hasClass(observedFigureAttribute(media, "class") orelse "", "mw-file-element") or
+                !Profile.hasClass(observedFigureAttribute(media, "class") orelse "", "mw-broken-media") or
+                media.has_text != true) return false;
+        },
+    }
+    if (nodes[context.anchor].parent != context.frame or nodes[context.media].parent != context.anchor or
+        nodes[context.caption].parent != context.frame or context.anchor == context.caption) return false;
+    var frame_children: usize = 0;
+    var anchor_children: usize = 0;
+    // Only this context's selected anchor may consume its first-child fact.
+    // Do not rescan every other candidate's prefix in the shared page graph.
+    if (nodes[context.anchor].known_no_previous_element_sibling) {
+        for (nodes[0..context.anchor]) |before| if (before.parent == context.frame) return false;
+    }
+    for (nodes, 0..) |node, index| if (node.known_next_element_sibling) |next| {
+        if (next <= index or next >= nodes.len or node.parent == null or nodes[next].parent != node.parent) return false;
+        for (nodes[index + 1 .. next]) |between| if (between.parent == node.parent) return false;
+    };
+    for (nodes, 0..) |node, index| {
+        if (node.parent == context.frame) {
+            if (index != context.anchor and index != context.caption) return false;
+            frame_children += 1;
+        }
+        if (node.parent == context.anchor) {
+            if (index != context.media) return false;
+            anchor_children += 1;
+        }
+        if (node.parent == context.media) return false;
+    }
+    if (frame_children != 2 or anchor_children != 1 or !figureObservedCaptionSiblingsValid(context) or
+        !figureObservedCaptionInlineSiblingsValid(context)) return false;
+    var ancestor = frame.parent;
+    while (ancestor) |index| : (ancestor = nodes[index].parent) {
+        if (index == context.root) return true;
+    }
+    return false;
+}
+
+// A complete, bounded inline caption is a distinct certificate from the
+// Missing direct-A chain. Neither a logical parent nor an arbitrary graph gap
+// can issue it. The source issuer validates every opening, closing and sibling.
+fn figureCaptionInlineDescendant(nodes: []const ObservedStyleNode, caption: u32, child: u32) bool {
+    if (caption >= nodes.len or child <= caption or child >= nodes.len) return false;
+    var cursor = child; var depth: usize = 0;
+    while (nodes[cursor].parent) |parent| {
+        if (parent >= cursor or depth == 16) return false;
+        if (parent == caption) return true;
+        if (parent < caption) return false;
+        cursor = parent; depth += 1;
+    }
+    return false;
+}
+fn figureObservedCaptionInlineSiblingsValid(context: FigureObservedContext) bool {
+    const nodes = context.nodes;
+    if (!nodes[context.caption].known_caption_inline_siblings) return true;
+    if (context.media_kind != .image) return false;
+    var selected: [64]u32 = undefined; var count: usize = 0;
+    for (nodes, 0..) |node, index| if (figureCaptionInlineDescendant(nodes, context.caption, @intCast(index))) {
+        if (count == selected.len or node.has_text == null or node.empty == null) return false;
+        if (!std.ascii.eqlIgnoreCase(node.tag, "b") and !std.ascii.eqlIgnoreCase(node.tag, "i") and
+            !std.ascii.eqlIgnoreCase(node.tag, "br") and !std.ascii.eqlIgnoreCase(node.tag, "span") and
+            !std.ascii.eqlIgnoreCase(node.tag, "a")) return false;
+        if (std.ascii.eqlIgnoreCase(node.tag, "br") and (node.empty != true or node.has_text != false)) return false;
+        var parent = node.parent;
+        while (parent) |owner| : (parent = nodes[owner].parent) {
+            if (owner == context.caption) break;
+            if (std.ascii.eqlIgnoreCase(nodes[owner].tag, "br") or
+                (std.ascii.eqlIgnoreCase(node.tag, "a") and std.ascii.eqlIgnoreCase(nodes[owner].tag, "a"))) return false;
+        }
+        selected[count] = @intCast(index); count += 1;
+    };
+    if (count == 0) return false;
+    for (selected[0..count]) |index| {
+        const node = nodes[index]; var previous: ?u32 = null; var next: ?u32 = null;
+        for (selected[0..count]) |other| if (nodes[other].parent == node.parent) {
+            if (other < index) previous = other;
+            if (other > index and next == null) next = other;
+        };
+        if (node.known_previous_element_sibling != previous or node.known_next_element_sibling != next or
+            node.known_no_previous_element_sibling != (previous == null) or node.known_no_next_element_sibling != (next == null)) return false;
+    }
+    return true;
+}
+fn figureObservedCaptionSiblingLink(nodes: []const ObservedStyleNode, caption: u32, subject: u32) bool {
+    if (caption >= nodes.len or subject >= nodes.len or !std.ascii.eqlIgnoreCase(nodes[subject].tag, "a")) return false;
+    return (nodes[caption].known_caption_link_siblings and nodes[subject].parent == caption) or
+        (nodes[caption].known_caption_inline_siblings and figureCaptionInlineDescendant(nodes, caption, subject));
+}
+
+// The issuer supplies each complete physical path separately. No logical
+// compiler parent or distant-root shortcut participates in this match.
+fn figureObservedCaptionSiblingsValid(context: FigureObservedContext) bool {
+    const nodes = context.nodes;
+    if (!nodes[context.caption].known_caption_link_siblings) return true;
+    if (context.media_kind != .missing) return false;
+    var children: [64]u32 = undefined; var count: usize = 0;
+    for (nodes, 0..) |node, index| {
+        if (node.parent == context.caption) {
+            if (count == children.len or !std.ascii.eqlIgnoreCase(node.tag, "a") or node.has_text != true) return false;
+            children[count] = @intCast(index); count += 1;
+        }
+        if (node.parent) |parent| if (parent < nodes.len and nodes[parent].parent == context.caption) return false;
+    }
+    if (count == 0) return false;
+    for (children[0..count], 0..) |index, ordinal| {
+        const node = nodes[index];
+        if (node.known_previous_element_sibling != (if (ordinal == 0) @as(?u32, null) else children[ordinal - 1])
+            or node.known_no_previous_element_sibling != (ordinal == 0)
+            or node.known_next_element_sibling != (if (ordinal + 1 == count) @as(?u32, null) else children[ordinal + 1])
+            or node.known_no_next_element_sibling != (ordinal + 1 == count)) return false;
+    }
+    return true;
+}
+fn observedFigureCompoundMatchIn(compound: GeneratedFigureCompound, node: FigureObservedNode, is_root: ?bool, budget: *usize, style_written: bool, link_state: ?ObservedFigureLinkState) ContainerSelectorMatch {
+    if (budget.* == 0) return .unknown;
+    budget.* -= 1;
+    var ordinary = compound;
+    ordinary.attributes = &.{}; ordinary.any_groups = &.{}; ordinary.none_groups = &.{};
+    ordinary.root_only = false; ordinary.dynamic_pseudos = &.{};
+    const element: TextElement = .{ .tag = node.tag,
+        .classes = observedFigureAttribute(node, "class") orelse "", .id = observedFigureAttribute(node, "id") orelse "",
+        .typeof_tokens = observedFigureAttribute(node, "typeof") orelse "" };
+    var result = ordinary.ownMatch(&element, node.empty);
+    if (result == .no) return .no;
+    for (compound.attributes) |attribute| switch (if (style_written and std.ascii.eqlIgnoreCase(attribute.name, "style"))
+        (if (attribute.operator == .present) ContainerSelectorMatch.known else ContainerSelectorMatch.unknown) else attribute.matches(node)) {
+        .no => return .no, .unknown => result = .unknown, .known => {},
+    };
+    if (compound.root_only) {
+        if (is_root) |root| { if (!root) return .no; } else result = .unknown;
+    }
+    for (compound.dynamic_pseudos) |pseudo| {
+        const linked = std.ascii.eqlIgnoreCase(node.tag, "a") and observedFigureAttribute(node, "href") != null;
+        const state: ?bool = switch (pseudo) {
+            .any_link => linked,
+            .link, .visited => if (!linked) false else if (link_state) |value| if (value.visited) |visited|
+                (if (pseudo == .visited) visited else !visited) else null else null,
+            .hover => if (link_state) |value| value.hover else null,
+            .active => if (link_state) |value| value.active else null,
+            .focus => if (link_state) |value| value.focus else null,
+            .focus_visible => if (link_state) |value| value.focus_visible else null,
+            .focus_within => if (link_state) |value| value.focus_within else null,
+        };
+        if (state) |present| { if (!present) return .no; } else result = .unknown;
+    }
+    for (compound.any_groups) |group| {
+        var any = false; var uncertain = false;
+        for (group.alternatives) |alternative| switch (observedFigureCompoundMatchIn(alternative, node, is_root, budget, style_written, link_state)) {
+            .known => { any = true; break; }, .unknown => uncertain = true, .no => {},
+        };
+        if (!any and !uncertain) return .no;
+        if (!any) result = .unknown;
+    }
+    for (compound.none_groups) |group| {
+        var uncertain = false;
+        for (group.alternatives) |alternative| switch (observedFigureCompoundMatchIn(alternative, node, is_root, budget, style_written, link_state)) {
+            .known => return .no, .unknown => uncertain = true, .no => {},
+        };
+        if (uncertain) result = .unknown;
+    }
+    return result;
+}
+fn observedFigureCompoundMatch(compound: GeneratedFigureCompound, node: FigureObservedNode) ContainerSelectorMatch {
+    var budget: usize = 4096;
+    return observedFigureCompoundMatchIn(compound, node, null, &budget, false, null);
+}
+fn observedStyleMatchAt(selector: GeneratedFigureSelector, nodes: []const ObservedStyleNode, missing_media: ?u32,
+    node_index: u32, compound_index: usize, budget: *usize, evaluation: ObservedFigureEvaluation) ContainerSelectorMatch
+{
+    if (budget.* == 0) return .unknown;
+    budget.* -= 1;
+    const own = observedFigureCompoundMatchIn(selector.chain[compound_index], nodes[node_index], node_index == 0, budget,
+        evaluation.missing_width != null and missing_media == node_index, observedFigureStateAt(nodes, node_index, evaluation));
+    if (own == .no or compound_index == 0) return own;
+    var ancestor = nodes[node_index].parent;
+    if (selector.direct_parent[compound_index]) {
+        const parent = ancestor orelse return .no;
+        const result = observedStyleMatchAt(selector, nodes, missing_media, parent, compound_index - 1, budget, evaluation);
+        return if (result == .no) .no else if (own == .unknown or result == .unknown) .unknown else .known;
+    }
+    var uncertain = false;
+    while (ancestor) |parent| : (ancestor = nodes[parent].parent) {
+        const result = observedStyleMatchAt(selector, nodes, missing_media, parent, compound_index - 1, budget, evaluation);
+        if (result == .known) return if (own == .known) .known else .unknown;
+        uncertain = uncertain or result == .unknown;
+        if (budget.* == 0) return .unknown;
+    }
+    return if (uncertain) .unknown else .no;
+}
+fn observedFigureSelectorMatch(selector: GeneratedFigureSelector, context: FigureObservedContext, subject: u32, pseudo: ?GeneratedFigurePseudo) ContainerSelectorMatch {
+    if (!figureObservedContextValid(context)) return .unknown;
+    return observedFigureSelectorMatchValidated(selector, context, subject, pseudo);
+}
+fn observedFigureSelectorMatchValidated(selector: GeneratedFigureSelector, context: FigureObservedContext, subject: u32, pseudo: ?GeneratedFigurePseudo) ContainerSelectorMatch {
+    return observedFigureSelectorMatchWithEffects(selector, context, subject, pseudo, .{});
+}
+fn observedFigureSelectorMatchWithEffects(selector: GeneratedFigureSelector, context: FigureObservedContext, subject: u32, pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation) ContainerSelectorMatch {
+    var selected = evaluation;
+    selected.ready_sibling = null;
+    const selected_caption = figureObservedCaptionSiblingLink(context.nodes, context.caption, subject);
+    if ((selector.necessary_has_next != null or selector.necessary_previous_sibling)
+        and (subject == context.anchor or selected_caption) and selector.pseudo == pseudo
+        and figureObservedContextValid(context))
+        selected = observedFigureSiblingEvaluationValidated(context, evaluation);
+    return observedStyleSelectorMatchValidated(selector, context.nodes, context.media, subject, pseudo, selected);
+}
+fn observedStyleSelectorMatchValidated(selector: GeneratedFigureSelector, nodes: []const ObservedStyleNode, missing_media: ?u32,
+    subject: u32, pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation) ContainerSelectorMatch
+{
+    if (subject >= nodes.len or selector.chain.len == 0 or selector.chain.len > 16 or selector.chain.len != selector.direct_parent.len) return .unknown;
+    if (selector.pseudo != pseudo) return .no;
+    if (evaluation.ready_sibling) |issued| {
+        const caption_link = figureObservedCaptionSiblingLink(nodes, issued.caption, subject);
+        if (issued.nodes.ptr == nodes.ptr and issued.nodes.len == nodes.len and (subject == issued.anchor or caption_link)) {
+            if (selector.necessary_previous_sibling and nodes[subject].known_no_previous_element_sibling) return .no;
+            if (caption_link) if (selector.necessary_previous_adjacent) |required|
+                if (nodes[subject].known_previous_element_sibling) |previous| {
+                    var previous_budget: usize = 4096;
+                    if (previous < subject and nodes[previous].parent == nodes[subject].parent
+                        and observedFigureCompoundMatchIn(required, nodes[previous], false, &previous_budget, false, null) == .no) return .no;
+                };
+            if (selector.necessary_has_next) |required| {
+                if (caption_link and nodes[subject].known_no_next_element_sibling) return .no;
+                if (nodes[subject].known_next_element_sibling) |next|
+                    if (next > subject and next < nodes.len and nodes[subject].parent != null
+                        and nodes[next].parent == nodes[subject].parent and (caption_link or next == issued.caption)) {
+                        var next_budget: usize = 4096;
+                        if (observedFigureCompoundMatchIn(required, nodes[next], false, &next_budget, false, null) == .no) return .no;
+                    };
+            }
+        }
+    }
+    var budget: usize = 4096;
+    if (selector.necessary_html_root) |root| {
+        if (nodes.len == 0 or nodes[0].parent != null or !std.ascii.eqlIgnoreCase(nodes[0].tag, "html")) return .unknown;
+        if (observedFigureCompoundMatchIn(root, nodes[0], true, &budget, false, null) == .no) return .no;
+    }
+    for (selector.necessary_sibling_ancestors) |compound| {
+        var ancestor = nodes[subject].parent;
+        var possible = false;
+        while (ancestor) |index| : (ancestor = nodes[index].parent) {
+            if (budget == 0) return .unknown;
+            if (observedFigureCompoundMatchIn(compound, nodes[index], index == 0, &budget,
+                evaluation.missing_width != null and missing_media == index,
+                observedFigureStateAt(nodes, index, evaluation)) != .no) {
+                possible = true;
+                break;
+            }
+        }
+        if (!possible) return .no;
+    }
+    return observedStyleMatchAt(selector, nodes, missing_media, subject, selector.chain.len - 1, &budget, evaluation);
+}
+fn observedFigureRuleMatchWithEffects(rule: ObservedFigureRule, context: FigureObservedContext, subject: u32, pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation) ContainerSelectorMatch {
+    if (rule.selector) |selector| {
+        const result = observedFigureSelectorMatchWithEffects(selector, context, subject, pseudo, evaluation);
+        return if (result == .known and (rule.list_uncertain or !selector.syntax_known)) .unknown else result;
+    }
+    if (rule.weak_selector) |weak| if (observedFigureSelectorMatchWithEffects(weak, context, subject, pseudo, evaluation) == .no) return .no;
+    return .unknown;
+}
+const ObservedFigureOwnedNodes = struct { indices: []const u32 };
+// One synchronous Figure proof owns this state-independent graph result.
+// It cannot escape through the public context, computed nodes or wire data.
+// Keep its allocator outside the per-state scratch arenas. Inputs are borrowed
+// for the operation; public entry wrappers always validate a fresh context.
+const ObservedFigureCandidateCounts = struct {
+    invariant_rule_visits: u64 = 0,
+    evaluated_rule_visits: u64 = 0,
+    lists_built: u64 = 0,
+    cache_hits: u64 = 0,
+};
+const ObservedFigureRuleCandidates = struct {
+    subject: u32,
+    pseudo: ?GeneratedFigurePseudo,
+    generated_style: bool,
+    rules: std.DynamicBitSetUnmanaged,
+};
+const ObservedFigureOperation = struct {
+    allocator: std.mem.Allocator,
+    context: FigureObservedContext,
+    valid: bool,
+    owned_nodes: ?ObservedFigureOwnedNodes = null,
+    // Only repeated viewport proofs retain candidates. Single-query public
+    // entries preserve the ordinary collector and its allocation lifetime.
+    retain_rule_candidates: bool = false,
+    rule_candidates: std.ArrayList(ObservedFigureRuleCandidates) = .empty,
+    // Optional operation-local counters are installed only by focused controls.
+    candidate_counts: ?*ObservedFigureCandidateCounts = null,
+    generated_section_focus_absent: ?bool = null,
+
+    fn init(a: std.mem.Allocator, context: FigureObservedContext) @This() {
+        return .{ .allocator = a, .context = context, .valid = figureObservedContextValid(context) };
+    }
+    fn deinit(self: *@This()) void {
+        if (self.owned_nodes) |held| self.allocator.free(held.indices);
+        self.owned_nodes = null;
+        for (self.rule_candidates.items) |*held| held.rules.deinit(self.allocator);
+        self.rule_candidates.deinit(self.allocator);
+        self.rule_candidates = .empty;
+    }
+    fn sectionFocusEvaluation(self: *@This(), evaluation: ObservedFigureEvaluation) !ObservedFigureEvaluation {
+        var result = observedFigureSiblingEvaluationValidated(self.context, evaluation);
+        result.generated_section_focus_absent = null;
+        if (self.generated_section_focus_absent == null)
+            self.generated_section_focus_absent = self.valid and try figureGeneratedSectionFocusAbsent(self.allocator, self.context);
+        if (self.generated_section_focus_absent.?) result.generated_section_focus_absent = .{
+            .nodes = self.context.nodes, .root = self.context.root, .frame = self.context.frame };
+        return result;
+    }
+    fn candidates(self: *@This(), subject: u32, pseudo: ?GeneratedFigurePseudo,
+        evaluation: ObservedFigureEvaluation) std.mem.Allocator.Error!?std.DynamicBitSetUnmanaged
+    {
+        const context = self.context;
+        if (!self.valid or subject >= context.nodes.len or context.styles.globally_unresolved) return null;
+        // Matching can observe generated Missing width only through style's
+        // presence. It must not reuse a no-style refutation after that write.
+        const generated_style = evaluation.missing_width != null;
+        for (self.rule_candidates.items) |held| {
+            if (held.subject == subject and held.pseudo == pseudo and held.generated_style == generated_style) {
+                if (self.candidate_counts) |counts| counts.cache_hits +|= 1;
+                return held.rules;
+            }
+        }
+        var rules = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, context.styles.observed_figure_rules.len);
+        errdefer rules.deinit(self.allocator);
+        // No link subject means all state predicates remain unknown, including
+        // predicates inside :not/:is. Conditions are deliberately not queried.
+        // The exact validated graph supplies the same sibling capability as the
+        // real collector. No positive or unknown result is cached as a match.
+        const invariant = observedFigureSiblingEvaluationValidated(context, .{ .missing_width = evaluation.missing_width });
+        for (context.styles.observed_figure_rules, 0..) |rule, index| {
+            if (self.candidate_counts) |counts| counts.invariant_rule_visits +|= 1;
+            if (observedStyleRuleMatch(rule, context.nodes, context.media, subject, pseudo, invariant) != .no)
+                rules.set(index);
+        }
+        try self.rule_candidates.append(self.allocator, .{ .subject = subject, .pseudo = pseudo,
+            .generated_style = generated_style, .rules = rules });
+        if (self.candidate_counts) |counts| counts.lists_built +|= 1;
+        return rules;
+    }
+    fn owned(self: *@This()) std.mem.Allocator.Error!?ObservedFigureOwnedNodes {
+        if (!self.valid) return null;
+        // Allocate at the original first demand, preserving invalid/overflow
+        // refusal before any later state or declaration work.
+        if (self.owned_nodes == null)
+            self.owned_nodes = try observedFigureOwnedNodes(self.allocator, self.context);
+        return self.owned_nodes;
+    }
+};
+fn observedFigureOwnedNodes(a: std.mem.Allocator, context: FigureObservedContext) std.mem.Allocator.Error!?ObservedFigureOwnedNodes {
+    // Context validation established topological parents. Mark only the owned
+    // constructor subtree and its exact ancestor path, not unrelated siblings.
+    const owned = try a.alloc(bool, context.nodes.len);
+    defer a.free(owned); @memset(owned, false);
+    owned[context.frame] = true;
+    for (context.nodes, 0..) |node, index| if (node.parent) |parent| {
+        if (owned[parent]) owned[index] = true;
+    };
+    var ancestor = context.nodes[context.frame].parent;
+    while (ancestor) |parent| : (ancestor = context.nodes[parent].parent) owned[parent] = true;
+    var indices: std.ArrayList(u32) = .empty;
+    errdefer indices.deinit(a);
+    for (owned, 0..) |include, index| if (include) {
+        if (indices.items.len == 512) { indices.deinit(a); return null; }
+        try indices.append(a, @intCast(index));
+    };
+    return .{ .indices = try indices.toOwnedSlice(a) };
+}
+fn observedFigureOtherPseudoEffectsWithWitness(context: FigureObservedContext, owned: ObservedFigureOwnedNodes,
+    evaluation: ObservedFigureEvaluation, witness: ?*ObservedReadyFigureWitness) bool {
+    for (context.styles.observed_figure_rules) |rule| {
+        const other = if (rule.selector) |selector| selector.pseudo == .other else if (rule.weak_selector) |selector| selector.pseudo == .other
+            else std.mem.indexOf(u8, rule.raw_selector, "::") != null;
+        if (!other) continue;
+        for (owned.indices) |index| if (observedFigureRuleMatchWithEffects(rule, context, index, .other, evaluation) != .no) {
+            observedReadySubject(witness, index);
+            if (observedReadyPending(witness)) |out| {
+                const tag = context.nodes[index].tag;
+                out.subject_tag_len = @min(tag.len, out.subject_tag.len);
+                @memcpy(out.subject_tag[0..out.subject_tag_len], tag[0..out.subject_tag_len]);
+                out.candidate_raw_len = @min(rule.raw_selector.len, out.candidate_raw.len);
+                @memcpy(out.candidate_raw[0..out.candidate_raw_len], rule.raw_selector[0..out.candidate_raw_len]);
+                out.candidate_truncated = rule.raw_selector.len != out.candidate_raw_len;
+                out.css_len = @min(rule.css.len, out.css.len);
+                @memcpy(out.css[0..out.css_len], rule.css[0..out.css_len]);
+                out.css_truncated = rule.css.len != out.css_len;
+            }
+            return true;
+        };
+    }
+    return false;
+}
+const ObservedFigureEvaluation = struct {
+    viewport_width: ?f64 = null,
+    reduced_motion: ?bool = null,
+    // Only the normal source-qualified mediawiki.page.media operation may set
+    // this. It changes the style attribute's presence as well as cascade width.
+    missing_width: ?u32 = null,
+    link_subject: ?u32 = null,
+    table_focus: ?*const TableSourceFocusDomain = null,
+    // Only the captured source TABLE constructor asks for its already-proved
+    // bare :focus outline-color rule while deriving the native auto request.
+    table_scroll_focus: ?*const TableSourceFocusDomain = null,
+    link_state: ObservedFigureLinkState = .{},
+    // Set only for the paired Figure link-state capability. This is selector
+    // support, not a guess about which focus-visible state is currently true.
+    focus_visible_supported: bool = false,
+    // Operation-local source proof; only exact generated SECTION ancestors.
+    generated_section_focus_absent: ?struct { nodes: []const ObservedStyleNode, root: u32, frame: u32 } = null,
+    // Set only by a validated source-proved Figure wrapper, tied to this graph identity.
+    ready_sibling: ?struct { nodes: []const ObservedStyleNode, anchor: u32, caption: u32 } = null,
+};
+// Caller has already validated the complete Figure context, including its
+// Ready/Missing role. Both selected candidate factories prove these physical
+// edges independently. This helper never scans again or infers absent facts.
+fn observedFigureSiblingEvaluationValidated(context: FigureObservedContext, evaluation: ObservedFigureEvaluation) ObservedFigureEvaluation {
+    var result = evaluation;
+    result.ready_sibling = null;
+    if (context.nodes[context.anchor].known_next_element_sibling == context.caption
+        or context.nodes[context.anchor].known_no_previous_element_sibling
+        or context.nodes[context.caption].known_caption_link_siblings
+        or context.nodes[context.caption].known_caption_inline_siblings)
+        result.ready_sibling = .{ .nodes = context.nodes, .anchor = context.anchor, .caption = context.caption };
+    return result;
+}
+// Semantic intersection compares string/slice contents, not arena addresses.
+// This is restricted to bounded data payloads; pointers/functions cannot gain
+// equality authority by sharing an address across two observed contexts.
+fn observedFigureDataEqual(comptime T: type, left: T, right: T, depth: usize) bool {
+    if (depth >= 64) return false;
+    return switch (@typeInfo(T)) {
+        .void => true,
+        .bool, .int, .float, .comptime_int, .comptime_float, .@"enum" => left == right,
+        .optional => |info| if (left) |value| if (right) |other| observedFigureDataEqual(info.child, value, other, depth + 1) else false else right == null,
+        .array => |info| blk: {
+            for (left, right) |value, other| if (!observedFigureDataEqual(info.child, value, other, depth + 1)) break :blk false;
+            break :blk true;
+        },
+        .pointer => |info| blk: {
+            if (comptime info.size != .slice) break :blk false;
+            if (left.len != right.len) break :blk false;
+            for (left, right) |value, other| if (!observedFigureDataEqual(info.child, value, other, depth + 1)) break :blk false;
+            break :blk true;
+        },
+        .@"struct" => |info| blk: {
+            inline for (info.field_names) |name| if (!observedFigureDataEqual(@FieldType(T, name), @field(left, name), @field(right, name), depth + 1)) break :blk false;
+            break :blk true;
+        },
+        .@"union" => |info| blk: {
+            if (comptime info.tag_type == null) break :blk false;
+            if (std.meta.activeTag(left) != std.meta.activeTag(right)) break :blk false;
+            inline for (info.field_names) |name| if (std.mem.eql(u8, @tagName(std.meta.activeTag(left)), name))
+                break :blk observedFigureDataEqual(@FieldType(T, name), @field(left, name), @field(right, name), depth + 1);
+            break :blk false;
+        },
+        else => false,
+    };
+}
+fn observedFigureDataClone(comptime T: type, a: std.mem.Allocator, value: T, depth: usize) (std.mem.Allocator.Error || error{InvalidStyleProfile})!T {
+    if (depth >= 64) return error.InvalidStyleProfile;
+    return switch (@typeInfo(T)) {
+        .void, .bool, .int, .float, .comptime_int, .comptime_float, .@"enum" => value,
+        .optional => |info| if (value) |payload| @as(T, try observedFigureDataClone(info.child, a, payload, depth + 1)) else null,
+        .array => |info| blk: {
+            var result: T = undefined;
+            for (value, 0..) |payload, index| result[index] = try observedFigureDataClone(info.child, a, payload, depth + 1);
+            break :blk result;
+        },
+        .pointer => |info| blk: {
+            if (comptime info.size != .slice) return error.InvalidStyleProfile;
+            const result = try a.alloc(info.child, value.len);
+            for (value, result) |payload, *out| out.* = try observedFigureDataClone(info.child, a, payload, depth + 1);
+            break :blk result;
+        },
+        .@"struct" => |info| blk: {
+            var result = value;
+            inline for (info.field_names) |name| @field(result, name) = try observedFigureDataClone(@FieldType(T, name), a, @field(value, name), depth + 1);
+            break :blk result;
+        },
+        .@"union" => |info| blk: {
+            if (comptime info.tag_type == null) return error.InvalidStyleProfile;
+            break :blk switch (value) {
+                inline else => |payload, tag| @unionInit(T, @tagName(tag), try observedFigureDataClone(@TypeOf(payload), a, payload, depth + 1)),
+            };
+        },
+        else => error.InvalidStyleProfile,
+    };
+}
+const ObservedFigureMediaAtom = struct { name: []const u8, value: []const u8 };
+fn observedFigureMediaAtom(prelude: []const u8) ?ObservedFigureMediaAtom {
+    if (!atRuleNamed(prelude, "media")) return null;
+    var text = trim(prelude[identifierEnd(prelude, 1)..]);
+    for ([_][]const u8{ "screen", "all" }) |medium| {
+        if (text.len <= medium.len or !std.ascii.eqlIgnoreCase(text[0..medium.len], medium) or !std.ascii.isWhitespace(text[medium.len])) continue;
+        text = trim(text[medium.len..]);
+        if (text.len <= 3 or !std.ascii.eqlIgnoreCase(text[0..3], "and") or !std.ascii.isWhitespace(text[3])) return null;
+        text = trim(text[3..]);
+        break;
+    }
+    if (text.len < 3 or text[0] != '(' or text[text.len - 1] != ')') return null;
+    text = trim(text[1 .. text.len - 1]);
+    const colon = std.mem.indexOfScalar(u8, text, ':') orelse return null;
+    return .{ .name = trim(text[0..colon]), .value = trim(text[colon + 1 ..]) };
+}
+fn observedFigureCondition(prelude: []const u8, evaluation: ObservedFigureEvaluation) ContainerSelectorMatch {
+    if (atRuleNamed(prelude, "supports")) {
+        var condition = trim(prelude[identifierEnd(prelude, 1)..]);
+        var negate = false;
+        if (condition.len > 3 and std.ascii.eqlIgnoreCase(condition[0..3], "not") and std.ascii.isWhitespace(condition[3])) {
+            negate = true; condition = trim(condition[3..]);
+        }
+        if (std.ascii.eqlIgnoreCase(condition, "selector(:focus-visible)")) {
+            if (!evaluation.focus_visible_supported) return .unknown;
+            return if (negate) .no else .known;
+        }
+        if (condition.len < 3 or condition[0] != '(' or condition[condition.len - 1] != ')') return .unknown;
+        condition = trim(condition[1 .. condition.len - 1]);
+        const colon = std.mem.indexOfScalar(u8, condition, ':') orelse return .unknown;
+        const property = trim(condition[0..colon]); const value = trim(condition[colon + 1 ..]);
+        // This establishes only the closed numeric grammar implemented by the
+        // producer. An unsupported/invalid result does not prove CSS absence.
+        const supported = if (std.ascii.eqlIgnoreCase(property, "width")) figureComputedWidthPx(value, null) == .known
+            else if (std.ascii.eqlIgnoreCase(property, "max-width")) figureComputedMediaMaxWidth(value, null, null) == .known
+            else false;
+        if (!supported) return .unknown;
+        return if (negate) .no else .known;
+    }
+    if (!atRuleNamed(prelude, "media")) return .unknown;
+    const text = trim(prelude[identifierEnd(prelude, 1)..]);
+    if (std.ascii.eqlIgnoreCase(text, "screen") or std.ascii.eqlIgnoreCase(text, "all")) return .known;
+    if (std.ascii.eqlIgnoreCase(text, "print")) return .no;
+    const atom = observedFigureMediaAtom(prelude) orelse return .unknown;
+    const name = atom.name; const value = atom.value;
+    if (std.ascii.eqlIgnoreCase(name, "prefers-reduced-motion")) {
+        const reduce = evaluation.reduced_motion orelse return .unknown;
+        if (!std.ascii.eqlIgnoreCase(value, "reduce") and !std.ascii.eqlIgnoreCase(value, "no-preference")) return .unknown;
+        return if (reduce == std.ascii.eqlIgnoreCase(value, "reduce")) .known else .no;
+    }
+    const maximum = std.ascii.eqlIgnoreCase(name, "max-width");
+    if (!maximum and !std.ascii.eqlIgnoreCase(name, "min-width")) return .unknown;
+    const limit = figureComputedWidthPx(value, null);
+    if (limit != .known) return .unknown;
+    const boundary = limit.known;
+    const viewport = evaluation.viewport_width orelse return .unknown;
+    if (!std.math.isFinite(boundary) or boundary < 0 or !std.math.isFinite(viewport) or viewport < 0) return .unknown;
+    // Use the actual continuous viewport domain. A min-width boundary is not
+    // rewritten to an adjacent integer max-width breakpoint.
+    return if (if (maximum) viewport <= boundary else viewport >= boundary) .known else .no;
+}
+fn observedFigureConditions(rule: ObservedFigureRule, evaluation: ObservedFigureEvaluation) ContainerSelectorMatch {
+    var result: ContainerSelectorMatch = .known;
+    if (rule.conditional and rule.conditions.len == 0) result = .unknown;
+    for (rule.conditions) |condition| switch (observedFigureCondition(condition, evaluation)) {
+        .no => return .no, .unknown => result = .unknown, .known => {},
+    };
+    return result;
+}
+const ObservedFigureViewportBoundary = struct { value: f64, minimum: bool = false, maximum: bool = false };
+fn observedFigureViewportBoundaries(a: std.mem.Allocator, context: FigureObservedContext,
+    evaluation: ObservedFigureEvaluation) !?[]const ObservedFigureViewportBoundary
+{
+    var operation = ObservedFigureOperation.init(a, context);
+    defer operation.deinit();
+    return observedFigureViewportBoundariesPrepared(a, &operation, evaluation);
+}
+fn observedFigureViewportBoundariesPrepared(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    evaluation: ObservedFigureEvaluation) !?[]const ObservedFigureViewportBoundary
+{
+    const context = operation.context;
+    if (!operation.valid) return null;
+    const owned = (try operation.owned()) orelse return null;
+    var undecided = evaluation; undecided.viewport_width = null;
+    undecided.reduced_motion = null;
+    undecided.link_subject = null; undecided.link_state = .{};
+    var result: std.ArrayList(ObservedFigureViewportBoundary) = .empty;
+    errdefer result.deinit(a);
+    for (context.styles.observed_figure_rules) |rule| {
+        if (observedFigureConditions(rule, undecided) == .no) continue;
+        var possible = false;
+        for (owned.indices) |index| {
+            for ([_]?GeneratedFigurePseudo{ null, .before, .after, .other }) |pseudo| {
+                if (observedFigureRuleMatchWithEffects(rule, context, index, pseudo, undecided) != .no) { possible = true; break; }
+            }
+            if (possible) break;
+        }
+        if (!possible) continue;
+        for (rule.conditions) |condition| {
+            const atom = observedFigureMediaAtom(condition) orelse continue;
+            const minimum = std.ascii.eqlIgnoreCase(atom.name, "min-width");
+            const maximum = std.ascii.eqlIgnoreCase(atom.name, "max-width");
+            if (!minimum and !maximum) continue;
+            const boundary = figureComputedWidthPx(atom.value, null);
+            // Unrecognized conditions remain uncertain in every real query;
+            // collecting another boundary cannot establish their truth.
+            if (boundary != .known) continue;
+            var existing: ?usize = null;
+            for (result.items, 0..) |prior, index| if (prior.value == boundary.known) { existing = index; break; };
+            if (existing) |index| {
+                result.items[index].minimum = result.items[index].minimum or minimum;
+                result.items[index].maximum = result.items[index].maximum or maximum;
+            } else {
+                if (result.items.len == 64) { result.deinit(a); return null; }
+                try result.append(a, .{ .value = boundary.known, .minimum = minimum, .maximum = maximum });
+            }
+        }
+    }
+    // Keep true continuous boundaries and their inclusive side. In particular
+    // min-width:640px is not silently rewritten as max-width:639px.
+    var index: usize = 1;
+    while (index < result.items.len) : (index += 1) {
+        const value = result.items[index];
+        var insertion = index;
+        while (insertion != 0 and result.items[insertion - 1].value > value.value) : (insertion -= 1)
+            result.items[insertion] = result.items[insertion - 1];
+        result.items[insertion] = value;
+    }
+    return try result.toOwnedSlice(a);
+}
+fn observedFigureUnknownRank(conditions: []const []const u8) bool {
+    for (conditions) |condition| if (atRuleNamed(condition, "layer") or atRuleNamed(condition, "scope")) return true;
+    return false;
+}
+const ObservedFigureDeclaration = struct {
+    name: []const u8,
+    raw: []const u8,
+    priority: Priority,
+    uncertain: bool,
+    rank_unknown: bool,
+    syntax_unknown: bool,
+    source_index: ?usize,
+    source_byte_start: usize,
+};
+fn appendObservedFigureDeclarations(a: std.mem.Allocator, result: *std.ArrayList(ObservedFigureDeclaration), css: []const u8,
+    priority: Priority, uncertain: bool, rank_unknown: bool, source_index: ?usize, source_byte_start: usize) !void
+{
+    var cursor: usize = 0; var order = priority.order;
+    while (try nextDeclarationAlloc(a, css, &cursor)) |raw| {
+        defer a.free(raw);
+        if (order == std.math.maxInt(u32) or result.items.len >= 65_536) return error.StyleProfileLimit;
+        order += 1;
+        const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+        const name = trim(raw[0..colon]);
+        if (name.len == 0) continue;
+        const parsed = customPriority(raw[colon + 1 ..]);
+        if (trim(parsed.value).len == 0) continue;
+        var syntax_unknown = parsed.unknown;
+        for (name) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_') { syntax_unknown = true; break; };
+        var selected = priority; selected.order = order; selected.important = parsed.important;
+        try result.append(a, .{ .name = try a.dupe(u8, name), .raw = try a.dupe(u8, trim(parsed.value)),
+            .priority = selected, .uncertain = uncertain or parsed.unknown or syntax_unknown, .rank_unknown = rank_unknown or parsed.unknown or syntax_unknown,
+            .syntax_unknown = syntax_unknown, .source_index = source_index, .source_byte_start = source_byte_start });
+    }
+}
+// Common captured-node cascade collection. Role validation and generated media
+// effects remain in their own consumers; an authored node supplies neither.
+fn observedStyleRuleMatch(rule: ObservedFigureRule, nodes: []const ObservedStyleNode, missing_media: ?u32,
+    subject: u32, pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation) ContainerSelectorMatch
+{
+    if (rule.selector) |selector| {
+        const result = observedStyleSelectorMatchValidated(selector, nodes, missing_media, subject, pseudo, evaluation);
+        return if (result == .known and (rule.list_uncertain or !selector.syntax_known)) .unknown else result;
+    }
+    if (rule.weak_selector) |weak| if (observedStyleSelectorMatchValidated(weak, nodes, missing_media, subject, pseudo, evaluation) == .no) return .no;
+    return .unknown;
+}
+fn observedStyleNodeDeclarations(a: std.mem.Allocator, styles: *const Profile, nodes: []const ObservedStyleNode,
+    subject: u32, missing_media: ?u32, pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation) !?std.ArrayList(ObservedFigureDeclaration)
+{
+    return observedStyleNodeDeclarationsWithLanguage(a, styles, nodes, subject, missing_media, pseudo, evaluation, false);
+}
+fn observedBareLanguageRefutes(raw: []const u8, nodes: []const ObservedStyleNode, subject: u32) bool {
+    const range = bareLanguageRange(raw) orelse return false;
+    var cursor: ?u32 = subject;
+    var remaining = nodes.len;
+    while (cursor) |index| {
+        if (index >= nodes.len or remaining == 0) return false;
+        remaining -= 1;
+        if (observedFigureAttribute(nodes[index], "lang")) |language| return languageValueRefutes(range, language);
+        cursor = nodes[index].parent;
+    }
+    return false;
+}
+fn observedStyleNodeDeclarationsWithLanguage(a: std.mem.Allocator, styles: *const Profile, nodes: []const ObservedStyleNode,
+    subject: u32, missing_media: ?u32, pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation,
+    complete_language_path: bool) !?std.ArrayList(ObservedFigureDeclaration)
+{
+    return observedStyleNodeDeclarationsSelected(a, styles, nodes, subject, missing_media, pseudo,
+        evaluation, complete_language_path, null, null);
+}
+fn observedStyleNodeDeclarationsSelected(a: std.mem.Allocator, styles: *const Profile, nodes: []const ObservedStyleNode,
+    subject: u32, missing_media: ?u32, pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation,
+    complete_language_path: bool, candidates: ?std.DynamicBitSetUnmanaged, counts: ?*ObservedFigureCandidateCounts) !?std.ArrayList(ObservedFigureDeclaration)
+{
+    if (subject >= nodes.len or styles.globally_unresolved) return null;
+    if (evaluation.table_scroll_focus) |domain| {
+        if (!domain.captured_scroll or domain.root_ancestors or evaluation.table_focus != null or
+            domain.context.styles != styles or domain.context.nodes.ptr != nodes.ptr or domain.context.nodes.len != nodes.len or
+            subject != domain.context.table or !std.ascii.eqlIgnoreCase(nodes[subject].tag, "table")) return null;
+    }
+    if (evaluation.link_subject) |index| {
+        if (index >= nodes.len or !std.ascii.eqlIgnoreCase(nodes[index].tag, "a") or
+            observedFigureAttribute(nodes[index], "href") == null or
+            (evaluation.link_state.focus_visible == true and evaluation.link_state.focus == false)) return null;
+    }
+    var result: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    errdefer result.deinit(a);
+    var selected = if (candidates) |bits| bits.iterator(.{}) else null;
+    var full_index: usize = 0;
+    while (true) {
+        const index = if (selected) |*iterator| iterator.next() orelse break else next: {
+            if (full_index == styles.observed_figure_rules.len) break;
+            const value = full_index; full_index += 1; break :next value;
+        };
+        const rule = styles.observed_figure_rules[index];
+        if (evaluation.table_focus) |domain| if (index < domain.rules.bit_length and domain.rules.isSet(index) and
+            domain.contains(styles, nodes, subject)) continue;
+        if (counts) |totals| totals.evaluated_rule_visits +|= 1;
+        if (complete_language_path and observedBareLanguageRefutes(rule.raw_selector, nodes, subject)) continue;
+        var matched = observedStyleRuleMatch(rule, nodes, missing_media, subject, pseudo, evaluation);
+        if (evaluation.table_scroll_focus) |domain| if (index < domain.rules.bit_length and domain.rules.isSet(index)) {
+            // The constructor's bitset admits only unconditional bare :focus
+            // with outline-color declarations, never general TABLE link state.
+            if (!try tableSourceFocusRule(a, rule)) return null;
+            matched = .known;
+        };
+        if (matched == .no) continue;
+        const condition = observedFigureConditions(rule, evaluation);
+        if (condition == .no) continue;
+        const specificity = if (rule.selector) |selector| selector.specificity else 0;
+        try appendObservedFigureDeclarations(a, &result, rule.css, .{ .specificity = specificity, .order = rule.order },
+            matched == .unknown or condition == .unknown, rule.rank_unknown or rule.list_uncertain or rule.selector == null,
+            rule.source_index, rule.source_byte_start);
+    }
+    if (pseudo == null) if (observedFigureAttribute(nodes[subject], "style")) |css|
+        try appendObservedFigureDeclarations(a, &result, css, .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
+    return result;
+}
+fn observedFigureDeclarations(a: std.mem.Allocator, context: FigureObservedContext, subject: u32,
+    pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation) !?[]const ObservedFigureDeclaration
+{
+    var operation = ObservedFigureOperation.init(a, context);
+    defer operation.deinit();
+    return observedFigureDeclarationsPrepared(a, &operation, subject, pseudo, evaluation);
+}
+fn observedFigureDeclarationsPrepared(a: std.mem.Allocator, operation: *ObservedFigureOperation, subject: u32,
+    pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation) !?[]const ObservedFigureDeclaration
+{
+    const context = operation.context;
+    if (!operation.valid or subject >= context.nodes.len or context.styles.globally_unresolved) return null;
+    if (evaluation.link_subject) |index| {
+        if (index >= context.nodes.len or !std.ascii.eqlIgnoreCase(context.nodes[index].tag, "a") or
+            observedFigureAttribute(context.nodes[index], "href") == null or
+            (evaluation.link_state.focus_visible == true and evaluation.link_state.focus == false)) return null;
+    }
+    if (evaluation.missing_width) |width| {
+        if (context.media_kind != .missing or width == 0 or width > 16_777_216 or
+            observedFigureAttribute(context.nodes[context.media], "style") != null or
+            observedFigureAttribute(context.nodes[context.media], "data-height") != null or
+            Profile.hasClass(observedFigureAttribute(context.nodes[context.frame], "class") orelse "", "mw-default-size")) return null;
+        const raw_width = observedFigureAttribute(context.nodes[context.media], "data-width") orelse return null;
+        if (raw_width.len == 0 or raw_width.len > 10) return null;
+        for (raw_width) |byte| if (!std.ascii.isDigit(byte)) return null;
+        if ((std.fmt.parseInt(u32, raw_width, 10) catch return null) != width) return null;
+    }
+    const candidates: ?std.DynamicBitSetUnmanaged = if (operation.retain_rule_candidates)
+        (try operation.candidates(subject, pseudo, evaluation)) orelse return null else null;
+    var result = (try observedStyleNodeDeclarationsSelected(a, context.styles, context.nodes, subject,
+        context.media, pseudo, try operation.sectionFocusEvaluation(evaluation), false,
+        candidates, operation.candidate_counts)) orelse return null;
+    errdefer result.deinit(a);
+    if (pseudo == null and subject == context.media) if (evaluation.missing_width) |width| {
+        const css = try std.fmt.allocPrint(a, "width:{d}px", .{width}); defer a.free(css);
+        try appendObservedFigureDeclarations(a, &result, css, .{ .inline_style = true, .order = max_rules * 1024 }, false, false, null, 0);
+    };
+    return try result.toOwnedSlice(a);
+}
+fn observedFigureDeclarationAffects(declaration: ObservedFigureDeclaration, property: []const u8, shorthands: []const []const u8) bool {
+    // Escaped/unparsed property names cannot certify absence. CSS custom names
+    // are case-sensitive, and `all` excludes them, direction and unicode-bidi.
+    if (declaration.syntax_unknown) return true;
+    if (std.mem.startsWith(u8, property, "--")) return std.mem.eql(u8, declaration.name, property);
+    if (std.ascii.eqlIgnoreCase(declaration.name, property)) return true;
+    if (std.ascii.eqlIgnoreCase(declaration.name, "all") and !std.ascii.eqlIgnoreCase(property, "direction") and
+        !std.ascii.eqlIgnoreCase(property, "unicode-bidi")) return true;
+    for (shorthands) |name| if (std.ascii.eqlIgnoreCase(declaration.name, name)) return true;
+    return false;
+}
+// This only removes declarations that cannot win by cascade rank. It does not
+// interpret values, expand shorthands or fall through a computed-invalid var().
+// Typed consumers must resolve all retained possibilities or refuse the query.
+fn observedFigurePropertyCandidates(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    property: []const u8, shorthands: []const []const u8) ![]const ObservedFigureDeclaration
+{
+    var best: ?Priority = null;
+    for (declarations) |declaration| {
+        if (!observedFigureDeclarationAffects(declaration, property, shorthands) or declaration.uncertain or declaration.rank_unknown) continue;
+        if (best == null or declaration.priority.wins(best.?)) best = declaration.priority;
+    }
+    var result: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    errdefer result.deinit(a);
+    for (declarations) |declaration| {
+        if (!observedFigureDeclarationAffects(declaration, property, shorthands)) continue;
+        if (best != null and !declaration.rank_unknown and !declaration.priority.wins(best.?)) continue;
+        try result.append(a, declaration);
+    }
+    return try result.toOwnedSlice(a);
+}
+const ObservedFigureKeyword = struct { value: ?[]const u8 = null, unresolved: bool = false };
+fn observedFigureKeywordValue(a: std.mem.Allocator, declaration: ObservedFigureDeclaration, property: []const u8,
+    environment: CustomEnvironment, allowed: []const []const u8, initial: ?[]const u8, inherited: ?[]const u8, is_inherited: bool) !ObservedFigureKeyword
+{
+    if (declaration.syntax_unknown) return .{ .unresolved = true };
+    const computed = try customColorValue(a, environment, declaration.raw);
+    const value = switch (computed) {
+        .unknown => return .{ .unresolved = true },
+        // Guaranteed-invalid substitution uses the property's unset behavior.
+        // It never exposes a lower declaration from before the winning var().
+        .invalid => return .{ .value = if (is_inherited) inherited else initial,
+            .unresolved = (if (is_inherited) inherited else initial) == null },
+        .known => |raw| trim(raw),
+    };
+    if (std.ascii.eqlIgnoreCase(value, "initial")) return .{ .value = initial, .unresolved = initial == null };
+    if (std.ascii.eqlIgnoreCase(value, "inherit")) return .{ .value = inherited, .unresolved = inherited == null };
+    if (std.ascii.eqlIgnoreCase(value, "unset")) return .{ .value = if (is_inherited) inherited else initial,
+        .unresolved = (if (is_inherited) inherited else initial) == null };
+    if (std.ascii.eqlIgnoreCase(declaration.name, "text-decoration") and
+        (std.ascii.eqlIgnoreCase(value, "none") or std.ascii.eqlIgnoreCase(value, "underline"))) {
+        const component = if (std.ascii.eqlIgnoreCase(property, "text-decoration-line")) value
+            else if (std.ascii.eqlIgnoreCase(property, "text-decoration-style")) "solid"
+            else if (std.ascii.eqlIgnoreCase(property, "text-decoration-thickness")) "auto" else return .{ .unresolved = true };
+        for (allowed) |keyword| if (std.ascii.eqlIgnoreCase(component, keyword)) return .{ .value = keyword };
+        return .{ .unresolved = true };
+    }
+    if (std.ascii.eqlIgnoreCase(declaration.name, "overflow") and
+        (std.ascii.eqlIgnoreCase(property, "overflow-x") or std.ascii.eqlIgnoreCase(property, "overflow-y"))) {
+        // A single overflow keyword supplies both axes. Keep compound values
+        // outside this scalar decoder; callers still check both computed axes.
+        for ([_][]const u8{ "visible", "hidden", "clip", "scroll", "auto" }) |scalar| {
+            if (!std.ascii.eqlIgnoreCase(value, scalar)) continue;
+            for (allowed) |keyword| if (std.ascii.eqlIgnoreCase(scalar, keyword)) return .{ .value = keyword };
+            break;
+        }
+        return .{ .unresolved = true };
+    }
+    if (!std.ascii.eqlIgnoreCase(declaration.name, property)) return .{ .unresolved = true };
+    for (allowed) |keyword| if (std.ascii.eqlIgnoreCase(value, keyword)) return .{ .value = keyword };
+    return .{ .unresolved = true };
+}
+fn observedFigureKeyword(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, property: []const u8,
+    shorthands: []const []const u8, environment: CustomEnvironment, allowed: []const []const u8,
+    initial: ?[]const u8, inherited: ?[]const u8, is_inherited: bool, absent: ?[]const u8) !ObservedFigureKeyword
+{
+    const candidates = try observedFigurePropertyCandidates(a, declarations, property, shorthands);
+    defer a.free(candidates);
+    var definite = false;
+    for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    var selected: ?[]const u8 = if (definite) null else absent;
+    if (!definite and absent == null) return .{ .unresolved = true };
+    for (candidates) |candidate| {
+        const decoded = try observedFigureKeywordValue(a, candidate, property, environment, allowed, initial, inherited, is_inherited);
+        if (decoded.unresolved or decoded.value == null) return .{ .unresolved = true };
+        if (selected) |prior| {
+            if (!std.ascii.eqlIgnoreCase(prior, decoded.value.?)) return .{ .unresolved = true };
+        } else selected = decoded.value;
+    }
+    return .{ .value = selected, .unresolved = selected == null };
+}
+fn observedFigureZeroTransitionTime(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    property: []const u8, environment: CustomEnvironment) !bool
+{
+    const candidates = try observedFigurePropertyCandidates(a, declarations, property, &.{"transition"});
+    defer a.free(candidates);
+    for (candidates) |candidate| {
+        if (candidate.syntax_unknown) return false;
+        const computed = try customColorValue(a, environment, candidate.raw);
+        const raw = switch (computed) { .unknown => return false, .invalid => "initial", .known => |value| trim(value) };
+        if (std.ascii.eqlIgnoreCase(raw, "initial") or std.ascii.eqlIgnoreCase(raw, "unset")) continue;
+        if (!std.ascii.eqlIgnoreCase(candidate.name, property)) return false;
+        // Initial duration and delay are zero. Different lexical zero units
+        // remain equal even across an uncertain reduced-motion condition.
+        var items = std.mem.splitScalar(u8, raw, ',');
+        var count: usize = 0;
+        while (items.next()) |item| {
+            count += 1;
+            if (count > 64) return false;
+            const time = trim(item);
+            const suffix: usize = if (std.ascii.endsWithIgnoreCase(time, "ms")) 2
+                else if (std.ascii.endsWithIgnoreCase(time, "s")) 1 else return false;
+            const number = time[0 .. time.len - suffix];
+            if (!widthNumberSyntax(number) or !widthNumberIsZero(number)) return false;
+        }
+        if (count == 0) return false;
+    }
+    return true;
+}
+fn observedFigureStaticMotion(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment) !bool
+{
+    const animation = try observedFigureKeyword(a, declarations, "animation-name", &.{"animation"}, environment,
+        &.{"none"}, "none", null, false, "none");
+    if (animation.unresolved or !std.mem.eql(u8, animation.value.?, "none")) return false;
+    if (!try observedFigureZeroTransitionTime(a, declarations, "transition-duration", environment) or
+        !try observedFigureZeroTransitionTime(a, declarations, "transition-delay", environment)) return false;
+    const scrolling = try observedFigureKeyword(a, declarations, "scroll-behavior", &.{}, environment,
+        &.{"auto"}, "auto", null, false, "auto");
+    return !scrolling.unresolved and std.mem.eql(u8, scrolling.value.?, "auto");
+}
+const ObservedFigureColor = struct { value: ?types.FigureColor = null, unresolved: bool = false };
+fn observedFigureColorEqual(left: types.FigureColor, right: types.FigureColor) bool {
+    if (left.kind != right.kind) return false;
+    return if (left.kind == .rgb) std.mem.eql(u8, left.value.?, right.value.?) else true;
+}
+fn observedFigureColor(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, property: []const u8,
+    environment: CustomEnvironment, inherited: ?types.FigureColor, current: ?types.FigureColor) !ObservedFigureColor
+{
+    const background = std.ascii.eqlIgnoreCase(property, "background-color");
+    const decoration = std.ascii.eqlIgnoreCase(property, "text-decoration-color");
+    const candidates = try observedFigurePropertyCandidates(a, declarations, property,
+        if (background) &.{"background"} else if (decoration) &.{"text-decoration"} else &.{});
+    defer a.free(candidates);
+    var definite = false;
+    for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    const initial: ?types.FigureColor = if (background) .{ .kind = .transparent } else if (decoration) current else null;
+    const absent = if (background or decoration) initial else inherited;
+    var selected: ?types.FigureColor = if (definite) null else absent;
+    if (!definite and absent == null) return .{ .unresolved = true };
+    for (candidates) |candidate| {
+        if (candidate.syntax_unknown) return .{ .unresolved = true };
+        const computed = try customColorValue(a, environment, candidate.raw);
+        const raw = switch (computed) {
+            .unknown => return .{ .unresolved = true },
+            .invalid => if (background or decoration) "initial" else "inherit",
+            .known => |value| trim(value),
+        };
+        if (std.ascii.eqlIgnoreCase(candidate.name, "all") and !std.ascii.eqlIgnoreCase(raw, "initial") and
+            !std.ascii.eqlIgnoreCase(raw, "inherit") and !std.ascii.eqlIgnoreCase(raw, "unset")) return .{ .unresolved = true };
+        const color: types.FigureColor = if (std.ascii.eqlIgnoreCase(raw, "inherit")) inherited orelse return .{ .unresolved = true }
+            else if (std.ascii.eqlIgnoreCase(raw, "initial")) initial orelse return .{ .unresolved = true }
+            else if (std.ascii.eqlIgnoreCase(raw, "unset")) absent orelse return .{ .unresolved = true }
+            else if (background and std.ascii.eqlIgnoreCase(candidate.name, "background") and std.ascii.eqlIgnoreCase(raw, "none")) .{ .kind = .transparent }
+            else if (decoration and std.ascii.eqlIgnoreCase(candidate.name, "text-decoration")) blk: {
+                if (!std.ascii.eqlIgnoreCase(raw, "none") and !std.ascii.eqlIgnoreCase(raw, "underline")) return .{ .unresolved = true };
+                break :blk current orelse return .{ .unresolved = true };
+            }
+            else if (std.ascii.eqlIgnoreCase(raw, "currentcolor")) current orelse return .{ .unresolved = true }
+            else (try figureColor(a, raw)) orelse return .{ .unresolved = true };
+        // A background shorthand is accepted here only when its complete value
+        // is this one color or a CSS-wide reset. Other background layers remain
+        // an unrepresented paint effect for the caller's complete census.
+        if (selected) |prior| {
+            if (!observedFigureColorEqual(prior, color)) return .{ .unresolved = true };
+        } else selected = color;
+    }
+    return .{ .value = selected, .unresolved = selected == null };
+}
+const ObservedFigureGraphic = union(enum) { none, known: types.FigureMediaGraphic, unknown };
+fn observedFigureGraphicEqual(left: ObservedFigureGraphic, right: ObservedFigureGraphic) bool {
+    if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+    return if (left == .known) left.known == right.known else true;
+}
+fn observedFigureLiteralUrl(raw: []const u8) ?[]const u8 {
+    const value = trim(raw);
+    if (value.len < 6 or !std.ascii.eqlIgnoreCase(value[0..4], "url(") or value[value.len - 1] != ')') return null;
+    var url = trim(value[4 .. value.len - 1]);
+    if (url.len >= 2 and (url[0] == '\'' or url[0] == '"') and url[url.len - 1] == url[0]) url = url[1 .. url.len - 1];
+    if (url.len == 0 or url.len > 8192 or std.mem.indexOfAny(u8, url, "\\()\"' \t\r\n\x00") != null) return null;
+    return url;
+}
+fn observedFigureGraphicValue(a: std.mem.Allocator, context: FigureObservedContext, declaration: ObservedFigureDeclaration,
+    environment: CustomEnvironment, inherited: ObservedFigureGraphic, assets: anytype) !ObservedFigureGraphic
+{
+    if (declaration.syntax_unknown) return .unknown;
+    var value = trim(declaration.raw);
+    // Variable-defined URL base provenance is not covered by this closed
+    // literal-URL path. Scalar none/color resets can still be resolved safely.
+    if (customCall(value) != null) {
+        const computed = try customColorValue(a, environment, value);
+        value = switch (computed) { .unknown => return .unknown, .invalid => "initial", .known => |known| trim(known) };
+        if (observedFigureLiteralUrl(value) != null) return .unknown;
+    }
+    if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) return .none;
+    if (std.ascii.eqlIgnoreCase(value, "inherit")) return inherited;
+    if (std.ascii.eqlIgnoreCase(declaration.name, "all")) return .unknown;
+    if (std.ascii.eqlIgnoreCase(value, "none")) return .none;
+    if (std.ascii.eqlIgnoreCase(declaration.name, "background")) {
+        if ((try figureColor(a, value)) != null) return .none;
+        return .unknown;
+    }
+    if (!std.ascii.eqlIgnoreCase(declaration.name, "background-image")) return .unknown;
+    const url = observedFigureLiteralUrl(value) orelse return .unknown;
+    const absolute = if (std.mem.startsWith(u8, url, "https://")) url else blk: {
+        const index = declaration.source_index orelse return .unknown;
+        if (index >= context.styles.retained_sources.len) return .unknown;
+        const base = context.styles.retained_sources[index].base_url;
+        if (!std.mem.startsWith(u8, base, "https://")) return .unknown;
+        if (std.mem.startsWith(u8, url, "//")) break :blk try std.mem.concat(a, u8, &.{ "https:", url });
+        if (url[0] != '/') return .unknown;
+        const host_end = 8 + (std.mem.indexOfAny(u8, base[8..], "/?#") orelse base.len - 8);
+        if (host_end == 8) return .unknown;
+        break :blk try std.mem.concat(a, u8, &.{ base[0..host_end], url });
+    };
+    var selected: ?types.FigureMediaGraphic = null;
+    for (assets) |asset| if (std.mem.eql(u8, absolute, asset.url)) {
+        if (selected) |prior| if (prior != asset.graphic) return .unknown;
+        selected = asset.graphic;
+    };
+    return if (selected) |graphic| .{ .known = graphic } else .unknown;
+}
+fn observedFigureGraphic(a: std.mem.Allocator, context: FigureObservedContext, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, inherited: ObservedFigureGraphic, assets: anytype) !ObservedFigureGraphic
+{
+    const candidates = try observedFigurePropertyCandidates(a, declarations, "background-image", &.{"background"});
+    defer a.free(candidates);
+    var definite = false;
+    for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    var selected: ?ObservedFigureGraphic = if (definite) null else .none;
+    for (candidates) |candidate| {
+        const value = try observedFigureGraphicValue(a, context, candidate, environment, inherited, assets);
+        if (value == .unknown) return .unknown;
+        if (selected) |prior| { if (!observedFigureGraphicEqual(prior, value)) return .unknown; } else selected = value;
+    }
+    return selected orelse .none;
+}
+fn observedFigurePhysicalLength(raw: []const u8, font_scale: f32) ?types.StyleLength {
+    const value = trim(raw);
+    if (widthNumberSyntax(value)) {
+        const number = std.fmt.parseFloat(f64, value) catch return null;
+        return if (number == 0) .{ .unit = .px, .value = 0 } else null;
+    }
+    if (value.len <= 2) return null;
+    const unit: types.StyleLengthUnit = if (std.ascii.eqlIgnoreCase(value[value.len - 2 ..], "px")) .px
+        else if (std.ascii.eqlIgnoreCase(value[value.len - 2 ..], "em")) .em else return null;
+    const number = value[0 .. value.len - 2];
+    if (!widthNumberSyntax(number)) return null;
+    const parsed = std.fmt.parseFloat(f64, number) catch return null;
+    const computed = parsed * (if (unit == .em) @as(f64, font_scale) else 1);
+    if (!std.math.isFinite(computed) or computed < 0 or computed > std.math.floatMax(f32)) return null;
+    return .{ .unit = unit, .value = @floatCast(computed) };
+}
+const ObservedFigureLength = union(enum) { automatic, known: types.StyleLength, unknown };
+const ObservedFigurePreferredWidth = union(enum) { automatic, known: f64, unknown };
+fn observedFigurePreferredWidth(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, inherited: ObservedFigurePreferredWidth) !ObservedFigurePreferredWidth
+{
+    return observedFigurePreferredWidthWithHint(a, declarations, environment, inherited, null);
+}
+fn observedFigurePreferredWidthWithHint(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, inherited: ObservedFigurePreferredWidth, presentational: ?f64) !ObservedFigurePreferredWidth
+{
+    if (presentational) |width| if (!std.math.isFinite(width) or width < 0 or width > std.math.maxInt(u32)) return .unknown;
+    const candidates = try observedFigurePropertyCandidates(a, declarations, "width", &.{});
+    defer a.free(candidates);
+    var definite = false;
+    for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    // The exact IMG width attribute is a lower-priority presentational hint,
+    // not an inline declaration. A winning initial/unset/auto resets it.
+    var selected: ?ObservedFigurePreferredWidth = if (definite) null else if (presentational) |width| .{ .known = width } else .automatic;
+    for (candidates) |candidate| {
+        if (candidate.syntax_unknown) return .unknown;
+        // Keep substitution as component tokens in the numeric parser. In
+        // particular a variable cannot turn its final number into an adjacent
+        // unit token, or acquire implicit arithmetic parentheses here.
+        // Numeric component substitution belongs to the bounded token parser.
+        // The color helper intentionally cannot expand embedded var() calls in
+        // calc()/round(); do not make it a prerequisite for a proved number.
+        const numeric_width = if (std.ascii.eqlIgnoreCase(candidate.name, "width"))
+            figureComputedWidthPx(candidate.raw, environment) else FigureWidthExpressionResult.unknown;
+        const computed: CustomValue = if (numeric_width == .known) .{ .known = candidate.raw }
+            else try customColorValue(a, environment, candidate.raw);
+        const raw = switch (computed) { .unknown => return .unknown, .invalid => "unset", .known => |value| trim(value) };
+        const value: ObservedFigurePreferredWidth = if (std.ascii.eqlIgnoreCase(raw, "auto") or
+            std.ascii.eqlIgnoreCase(raw, "initial") or std.ascii.eqlIgnoreCase(raw, "unset")) .automatic
+            else if (std.ascii.eqlIgnoreCase(raw, "inherit")) inherited
+            else numeric: {
+                if (!std.ascii.eqlIgnoreCase(candidate.name, "width")) break :numeric .unknown;
+                break :numeric if (numeric_width == .known) .{ .known = numeric_width.known } else .unknown;
+            };
+        if (value == .unknown) return .unknown;
+        if (selected) |prior| {
+            if (std.meta.activeTag(prior) != std.meta.activeTag(value) or
+                (value == .known and prior.known != value.known)) return .unknown;
+        } else selected = value;
+    }
+    return selected orelse .unknown;
+}
+fn observedFigureLengthEqual(left: ObservedFigureLength, right: ObservedFigureLength) bool {
+    if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+    return if (left == .known) std.meta.eql(left.known, right.known) else true;
+}
+fn observedFigureComputedLength(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    property: []const u8, shorthands: []const []const u8, environment: CustomEnvironment, font_scale: f32, automatic_keyword: []const u8,
+    initial: ObservedFigureLength, inherited: ObservedFigureLength, is_inherited: bool, signed: bool) !ObservedFigureLength
+{
+    if (!std.math.isFinite(font_scale) or font_scale < 0) return .unknown;
+    const candidates = try observedFigurePropertyCandidates(a, declarations, property, shorthands);
+    defer a.free(candidates);
+    var definite = false;
+    for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    var selected: ?ObservedFigureLength = if (definite) null else if (is_inherited) inherited else initial;
+    for (candidates) |candidate| {
+        if (candidate.syntax_unknown) return .unknown;
+        const computed = try customColorValue(a, environment, candidate.raw);
+        const raw = switch (computed) {
+            .unknown => return .unknown,
+            .invalid => "unset",
+            .known => |value| trim(value),
+        };
+        const value: ObservedFigureLength = if (std.ascii.eqlIgnoreCase(raw, "initial")) initial
+            else if (std.ascii.eqlIgnoreCase(raw, "inherit")) inherited
+            else if (std.ascii.eqlIgnoreCase(raw, "unset")) (if (is_inherited) inherited else initial)
+            else blk: {
+                if (!std.ascii.eqlIgnoreCase(candidate.name, property)) break :blk .unknown;
+                if (automatic_keyword.len != 0 and std.ascii.eqlIgnoreCase(raw, automatic_keyword)) break :blk .automatic;
+                const negative = raw.len != 0 and raw[0] == '-';
+                if (negative and !signed) break :blk .unknown;
+                var decoded = observedFigurePhysicalLength(if (negative) raw[1..] else raw, font_scale) orelse break :blk .unknown;
+                if (negative) decoded.value = -decoded.value;
+                break :blk .{ .known = decoded };
+            };
+        if (value == .unknown) return .unknown;
+        if (selected) |prior| {
+            if (!observedFigureLengthEqual(prior, value)) return .unknown;
+        } else selected = value;
+    }
+    return selected orelse .unknown;
+}
+const ObservedFigureMargins = struct { value: ?types.ContainerMargins = null, unresolved: bool = false };
+fn observedFigureMarginEqual(left: types.ContainerMargin, right: types.ContainerMargin) bool {
+    if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+    return if (left == .length) std.meta.eql(left.length, right.length) else true;
+}
+fn observedFigureEdges(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment,
+    padding: bool, rtl: bool, font_scale: f32, inherited: ?types.ContainerMargins) !ObservedFigureMargins
+{
+    if (!std.math.isFinite(font_scale) or font_scale < 0) return .{ .unresolved = true };
+    var result: types.ContainerMargins = undefined;
+    inline for (.{ "top", "right", "bottom", "left" }, 0..) |side, index| {
+        const prefix: []const u8 = if (padding) "padding" else "margin";
+        const property = try std.mem.concat(a, u8, &.{ prefix, "-", side }); defer a.free(property);
+        const logical_edge: []const u8 = switch (index) { 0 => "block-start", 2 => "block-end", 1 => if (rtl) "inline-start" else "inline-end", 3 => if (rtl) "inline-end" else "inline-start", else => unreachable };
+        const logical = try std.mem.concat(a, u8, &.{ prefix, "-", logical_edge }); defer a.free(logical);
+        const axis = try std.mem.concat(a, u8, &.{ prefix, if (index == 0 or index == 2) "-block" else "-inline" }); defer a.free(axis);
+        const candidates = try observedFigurePropertyCandidates(a, declarations, property, &.{ prefix, logical, axis }); defer a.free(candidates);
+        const zero: types.ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+        var definite = false;
+        for (candidates) |candidate| definite = definite or !candidate.uncertain;
+        var selected: ?types.ContainerMargin = if (definite) null else zero;
+        for (candidates) |candidate| {
+            if (candidate.syntax_unknown) return .{ .unresolved = true };
+            const computed = try customColorValue(a, environment, candidate.raw);
+            const raw = switch (computed) { .unknown => return .{ .unresolved = true }, .invalid => "initial", .known => |value| trim(value) };
+            const value: types.ContainerMargin = if (std.ascii.eqlIgnoreCase(raw, "initial") or std.ascii.eqlIgnoreCase(raw, "unset")) zero
+                else if (std.ascii.eqlIgnoreCase(raw, "inherit")) if (inherited) |parent| @field(parent, side) else return .{ .unresolved = true }
+                else blk: {
+                    var tokens: [4][]const u8 = undefined;
+                    const count = borderTokens(raw, &tokens) orelse return .{ .unresolved = true };
+                    var token_index: usize = 0;
+                    if (std.ascii.eqlIgnoreCase(candidate.name, prefix)) {
+                        token_index = switch (count) { 1 => 0, 2 => index % 2, 3 => if (index == 3) 1 else index, 4 => index, else => return .{ .unresolved = true } };
+                    } else if (std.ascii.eqlIgnoreCase(candidate.name, axis)) {
+                        if (count > 2) return .{ .unresolved = true };
+                        token_index = if (count == 1 or index == 0 or (index == 1 and rtl) or (index == 3 and !rtl)) 0 else 1;
+                    } else if (count != 1 or (!std.ascii.eqlIgnoreCase(candidate.name, property) and !std.ascii.eqlIgnoreCase(candidate.name, logical))) return .{ .unresolved = true };
+                    const atom = try customColorValue(a, environment, tokens[token_index]);
+                    if (atom != .known) return .{ .unresolved = true };
+                    if (std.ascii.eqlIgnoreCase(trim(atom.known), "auto")) {
+                        if (padding) return .{ .unresolved = true };
+                        break :blk .auto;
+                    }
+                    break :blk .{ .length = observedFigurePhysicalLength(atom.known, font_scale) orelse return .{ .unresolved = true } };
+                };
+            if (selected) |prior| {
+                if (!observedFigureMarginEqual(prior, value)) return .{ .unresolved = true };
+            } else selected = value;
+        }
+        @field(result, side) = selected orelse return .{ .unresolved = true };
+    }
+    return .{ .value = result };
+}
+const ObservedFigureBorderAssignment = struct {
+    update: BorderUpdate,
+    priority: Priority,
+    uncertain: bool,
+    rank_unknown: bool,
+};
+fn observedFigureBorderAtomEqual(left: BorderAtom, right: BorderAtom) bool {
+    if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+    return switch (left) {
+        .unknown => true,
+        .length => |value| std.meta.eql(value, right.length),
+        .line_style => |value| value == right.line_style,
+        .color => |value| containerColorEqual(value, right.color),
+    };
+}
+fn observedFigureBorderAtom(assignments: []const ObservedFigureBorderAssignment, index: usize) BorderAtom {
+    var best: ?Priority = null; var definite = false;
+    for (assignments) |assignment| {
+        if (assignment.update.atoms[index] == null) continue;
+        definite = definite or !assignment.uncertain;
+        if (!assignment.uncertain and !assignment.rank_unknown and (best == null or assignment.priority.wins(best.?))) best = assignment.priority;
+    }
+    const initial: BorderAtom = if (index % 3 == 1) .{ .line_style = .none } else .unknown;
+    var selected: ?BorderAtom = if (definite) null else initial;
+    for (assignments) |assignment| {
+        const atom = assignment.update.atoms[index] orelse continue;
+        if (best != null and !assignment.rank_unknown and !assignment.priority.wins(best.?)) continue;
+        if (selected) |prior| {
+            if (!observedFigureBorderAtomEqual(prior, atom)) return .unknown;
+        } else selected = atom;
+    }
+    return selected orelse initial;
+}
+fn observedFigureBorders(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, font_scale: f32) !?types.FigureBorderEdges
+{
+    if (!std.math.isFinite(font_scale) or font_scale < 0) return null;
+    var assignments: std.ArrayList(ObservedFigureBorderAssignment) = .empty;
+    defer assignments.deinit(a);
+    for (declarations) |declaration| {
+        const name = declaration.name;
+        const all = std.ascii.eqlIgnoreCase(name, "all");
+        if (!declaration.syntax_unknown and !all and !std.ascii.eqlIgnoreCase(name, "border") and !std.ascii.startsWithIgnoreCase(name, "border-")) continue;
+        // These independent properties have their own mandatory census. They
+        // do not silently become edge-width/style/color declarations here.
+        if (!declaration.syntax_unknown and (std.ascii.eqlIgnoreCase(name, "border-collapse") or std.ascii.eqlIgnoreCase(name, "border-spacing") or
+            std.ascii.eqlIgnoreCase(name, "border-radius") or std.ascii.startsWithIgnoreCase(name, "border-image") or
+            std.ascii.eqlIgnoreCase(name, "border-top-left-radius") or std.ascii.eqlIgnoreCase(name, "border-top-right-radius") or
+            std.ascii.eqlIgnoreCase(name, "border-bottom-left-radius") or std.ascii.eqlIgnoreCase(name, "border-bottom-right-radius"))) continue;
+        var update: BorderUpdate = if (declaration.syntax_unknown) borderUnknownUpdate(null, null) else blk: {
+            const computed = try customColorValue(a, environment, declaration.raw);
+            const value = switch (computed) { .known => |raw| trim(raw), .invalid => "initial", .unknown => declaration.raw };
+            if (all) {
+                if (std.ascii.eqlIgnoreCase(value, "initial") or std.ascii.eqlIgnoreCase(value, "unset")) break :blk try borderUpdateInContextAlloc(a, "border", "initial", environment, true);
+                break :blk borderUnknownUpdate(null, null);
+            }
+            break :blk try borderUpdateInContextAlloc(a, name, value, environment, true);
+        };
+        if (update.unsafe) update = borderUnknownUpdate(null, null);
+        for (&update.atoms) |*maybe| if (maybe.*) |*atom| {
+            if (atom.* == .length and atom.length.unit == .em) {
+                atom.length.value *= font_scale;
+                if (!types.validStyleLength(atom.length)) atom.* = .unknown;
+            }
+        };
+        try assignments.append(a, .{ .update = update, .priority = declaration.priority,
+            .uncertain = declaration.uncertain, .rank_unknown = declaration.rank_unknown });
+    }
+    var result: types.FigureBorderEdges = undefined;
+    inline for (.{ "top", "right", "bottom", "left" }, 0..) |side, index| {
+        const line = observedFigureBorderAtom(assignments.items, index * 3 + 1);
+        if (line != .line_style) return null;
+        if (line.line_style == .none) {
+            @field(result, side) = .none;
+        } else if (line.line_style == .hidden) {
+            @field(result, side) = .hidden;
+        } else {
+            const width = observedFigureBorderAtom(assignments.items, index * 3);
+            const color = observedFigureBorderAtom(assignments.items, index * 3 + 2);
+            if (width != .length or color != .color) return null;
+            const paint: types.FigureColor = switch (color.color) {
+                .transparent => .{ .kind = .transparent }, .rgb => |rgb| .{ .kind = .rgb, .value = rgb }, .light_dark => return null,
+            };
+            @field(result, side) = switch (line.line_style) {
+                .solid => .{ .solid = .{ .width = width.length, .color = paint } },
+                .dotted => .{ .dotted = .{ .width = width.length, .color = paint } },
+                .none, .hidden => unreachable,
+            };
+        }
+    }
+    return result;
+}
+const ObservedFigureFocus = union(enum) { none, known: types.FigureFocusOutline, unknown };
+fn observedFigureUniformRadius(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, font_scale: f32) !ObservedFigureLength
+{
+    var selected: ?ObservedFigureLength = null;
+    inline for (.{ "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius" }) |property| {
+        const candidates = try observedFigurePropertyCandidates(a, declarations, property, &.{"border-radius"});
+        defer a.free(candidates);
+        const rewritten = try a.dupe(ObservedFigureDeclaration, candidates); defer a.free(rewritten);
+        for (rewritten) |*candidate| {
+            if (std.ascii.eqlIgnoreCase(candidate.name, "border-radius")) candidate.name = property;
+        }
+        const zero: ObservedFigureLength = .{ .known = .{ .unit = .px, .value = 0 } };
+        // Rewriting only the property name retains priority and uncertainty.
+        // Multi-value/elliptical radii remain unparsed and refuse this uniform
+        // native outline domain instead of silently choosing one corner.
+        const value = try observedFigureComputedLength(a, rewritten, property, &.{}, environment, font_scale, "", zero, .unknown, false, false);
+        if (value != .known) return .unknown;
+        if (selected) |prior| {
+            if (!observedFigureLengthEqual(prior, value)) return .unknown;
+        } else selected = value;
+    }
+    return selected orelse .unknown;
+}
+fn observedFigureFocusOutline(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, font_scale: f32) !ObservedFigureFocus
+{
+    var outline_declarations: std.ArrayList(ObservedFigureDeclaration) = .empty; defer outline_declarations.deinit(a);
+    for (declarations) |declaration| {
+        var copied = declaration;
+        if (std.ascii.eqlIgnoreCase(declaration.name, "outline")) copied.name = "border"
+        else if (std.ascii.eqlIgnoreCase(declaration.name, "outline-width")) copied.name = "border-width"
+        else if (std.ascii.eqlIgnoreCase(declaration.name, "outline-style")) copied.name = "border-style"
+        else if (std.ascii.eqlIgnoreCase(declaration.name, "outline-color")) copied.name = "border-color"
+        else if (!declaration.syntax_unknown and !std.ascii.eqlIgnoreCase(declaration.name, "all")) continue;
+        try outline_declarations.append(a, copied);
+    }
+    const border = (try observedFigureBorders(a, outline_declarations.items, environment, font_scale)) orelse return .unknown;
+    if (border.top == .none and border.right == .none and border.bottom == .none and border.left == .none) return .none;
+    if (border.top != .solid or !observedFigureDataEqual(types.FigureBorderEdge, border.top, border.right, 0) or
+        !observedFigureDataEqual(types.FigureBorderEdge, border.top, border.bottom, 0) or
+        !observedFigureDataEqual(types.FigureBorderEdge, border.top, border.left, 0)) return .unknown;
+    const radius = try observedFigureUniformRadius(a, declarations, environment, font_scale);
+    const zero: ObservedFigureLength = .{ .known = .{ .unit = .px, .value = 0 } };
+    const offset = try observedFigureComputedLength(a, declarations, "outline-offset", &.{}, environment, font_scale, "", zero, .unknown, false, true);
+    if (radius != .known or offset != .known) return .unknown;
+    return .{ .known = .{ .width = border.top.solid.width, .color = border.top.solid.color, .radius = radius.known, .offset = offset.known } };
+}
+fn observedFigureCustomEnvironment(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    parent: CustomEnvironment, source_complete: bool) !CustomEnvironment
+{
+    var complete = parent.complete and source_complete;
+    var winners: std.ArrayList(CustomWinner) = .empty;
+    defer winners.deinit(a);
+    for (declarations) |declaration| {
+        if (declaration.syntax_unknown) { complete = false; continue; }
+        if (!std.mem.startsWith(u8, declaration.name, "--")) continue;
+        if (!customName(declaration.name) or declaration.rank_unknown) { complete = false; continue; }
+        var prior_index: ?usize = null;
+        for (winners.items, 0..) |prior, index| if (std.mem.eql(u8, prior.name, declaration.name)) { prior_index = index; break; };
+        const value: CustomWinner = .{ .name = declaration.name, .raw = declaration.raw,
+            .unknown = declaration.uncertain, .priority = declaration.priority };
+        if (prior_index) |index| {
+            if (value.priority.wins(winners.items[index].priority)) winners.items[index] = value;
+        } else {
+            if (winners.items.len == 4096) return error.StyleProfileLimit;
+            try winners.append(a, value);
+        }
+    }
+    if (winners.items.len == 0 and complete == parent.complete) {
+        var share = complete;
+        if (!complete) {
+            share = true;
+            for (parent.values) |binding| if (binding.value != .unknown) { share = false; break; };
+        }
+        if (share) return parent;
+    }
+    var values: std.ArrayList(CustomBinding) = .empty;
+    errdefer values.deinit(a);
+    try values.appendSlice(a, parent.values);
+    var stack: std.ArrayList(usize) = .empty;
+    defer stack.deinit(a);
+    for (winners.items, 0..) |entry, index| {
+        const computed = try customComputed(a, winners.items, index, parent, &stack);
+        var replaced = false;
+        for (values.items) |*prior| if (std.mem.eql(u8, prior.name, entry.name)) {
+            prior.* = .{ .name = entry.name, .value = computed }; replaced = true; break;
+        };
+        if (!replaced) try values.append(a, .{ .name = entry.name, .value = computed });
+    }
+    if (!complete) for (values.items) |*value| { value.value = .unknown; };
+    return .{ .values = try values.toOwnedSlice(a), .complete = complete };
+}
+const ObservedFigureComputedNode = struct {
+    index: u32,
+    declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment,
+};
+fn observedFigureComputedNode(computed: []const ObservedFigureComputedNode, index: u32) ?ObservedFigureComputedNode {
+    var selected: ?ObservedFigureComputedNode = null;
+    for (computed) |node| if (node.index == index) {
+        if (selected != null) return null;
+        selected = node;
+    };
+    return selected;
+}
+fn observedFigureMediaPreferredWidth(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode) !ObservedFigurePreferredWidth
+{
+    if (!figureObservedContextValid(context)) return .unknown;
+    const media = observedFigureComputedNode(computed, context.media) orelse return .unknown;
+    var hint: ?f64 = null;
+    if (context.media_kind == .image) {
+        // Only the actual image attribute supplies this hint. A File option,
+        // observed API thumbnail width or different candidate cannot replace it.
+        if (observedFigureAttribute(context.nodes[context.media], "width")) |raw| {
+            if (raw.len == 0 or raw.len > 10) return .unknown;
+            for (raw) |byte| if (!std.ascii.isDigit(byte)) return .unknown;
+            hint = @floatFromInt(std.fmt.parseInt(u32, raw, 10) catch return .unknown);
+        }
+    }
+    return observedFigurePreferredWidthWithHint(a, media.declarations, media.environment, .unknown, hint);
+}
+// A successful role lowering must account for every potentially applicable
+// declaration, not just the declarations understood by its legacy projection.
+// Marking a property here does not resolve it: the paired typed query must still
+// establish a representable winning value before the caller publishes a box.
+const ObservedFigurePropertyUse = struct {
+    declarations: []const ObservedFigureDeclaration,
+    used: []bool,
+    fn init(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration) !@This() {
+        const used = try a.alloc(bool, declarations.len);
+        @memset(used, false);
+        return .{ .declarations = declarations, .used = used };
+    }
+    fn deinit(self: *@This(), a: std.mem.Allocator) void { a.free(self.used); self.* = undefined; }
+    fn property(self: *@This(), name: []const u8, shorthands: []const []const u8) void {
+        for (self.declarations, 0..) |declaration, index| {
+            // One queried property cannot account for the reset of every other
+            // CSS property. The initial closed role domain refuses `all`.
+            if (std.ascii.eqlIgnoreCase(declaration.name, "all")) continue;
+            if (observedFigureDeclarationAffects(declaration, name, shorthands)) self.used[index] = true;
+        }
+    }
+    fn customEnvironment(self: *@This()) void {
+        for (self.declarations, 0..) |declaration, index| {
+            if (!declaration.syntax_unknown and customName(declaration.name)) self.used[index] = true;
+        }
+    }
+    fn boxEdges(self: *@This(), comptime padding: bool) void {
+        const prefix = if (padding) "padding" else "margin";
+        inline for (.{ "top", "right", "bottom", "left" }) |edge|
+            self.property(prefix ++ "-" ++ edge, &.{ prefix, prefix ++ "-block", prefix ++ "-inline", prefix ++ "-block-start", prefix ++ "-block-end", prefix ++ "-inline-start", prefix ++ "-inline-end" });
+    }
+    fn borderEdges(self: *@This()) void {
+        self.property("border", &.{});
+        inline for (.{ "width", "style", "color" }) |part| self.property("border-" ++ part, &.{});
+        inline for (.{ "top", "right", "bottom", "left" }) |edge| {
+            self.property("border-" ++ edge, &.{});
+            inline for (.{ "width", "style", "color" }) |part| self.property("border-" ++ edge ++ "-" ++ part, &.{});
+        }
+    }
+    fn staticMotion(self: *@This(), a: std.mem.Allocator, environment: CustomEnvironment) !bool {
+        if (!try observedFigureStaticMotion(a, self.declarations, environment)) return false;
+        // Timing/iteration has no live animation target only after the complete
+        // animation-name and transition queries above prove that invariant.
+        for (self.declarations, 0..) |declaration, index| {
+            if (declaration.syntax_unknown) continue;
+            if (std.ascii.eqlIgnoreCase(declaration.name, "animation-name") or
+                std.ascii.eqlIgnoreCase(declaration.name, "animation-delay") or
+                std.ascii.eqlIgnoreCase(declaration.name, "animation-duration") or
+                std.ascii.eqlIgnoreCase(declaration.name, "animation-iteration-count") or
+                std.ascii.eqlIgnoreCase(declaration.name, "animation-direction") or
+                std.ascii.eqlIgnoreCase(declaration.name, "animation-fill-mode") or
+                std.ascii.eqlIgnoreCase(declaration.name, "animation-play-state") or
+                std.ascii.eqlIgnoreCase(declaration.name, "animation-timing-function") or
+                std.ascii.eqlIgnoreCase(declaration.name, "transition-property") or
+                std.ascii.eqlIgnoreCase(declaration.name, "transition-delay") or
+                std.ascii.eqlIgnoreCase(declaration.name, "transition-duration") or
+                std.ascii.eqlIgnoreCase(declaration.name, "transition-timing-function") or
+                std.ascii.eqlIgnoreCase(declaration.name, "scroll-behavior")) self.used[index] = true;
+        }
+        return true;
+    }
+    fn complete(self: @This()) bool {
+        if (self.used.len != self.declarations.len) return false;
+        for (self.declarations, self.used) |declaration, used| {
+            // A malformed/escaped property may affect any query. It cannot be
+            // discharged merely because an affected-property mark touched it.
+            if (!used or declaration.syntax_unknown) return false;
+        }
+        return true;
+    }
+};
+fn observedFigureInheritedKeywordAt(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, subject: u32, property: []const u8,
+    shorthands: []const []const u8, allowed: []const []const u8, initial: ?[]const u8) !ObservedFigureKeyword
+{
+    if (!figureObservedContextValid(context) or subject >= context.nodes.len) return .{ .unresolved = true };
+    // The source graph has physical parents; do not substitute the native
+    // logical text parent for a missing captured node in this cascade.
+    var path: [512]u32 = undefined;
+    var count: usize = 0;
+    var next: ?u32 = subject;
+    while (next) |index| {
+        if (count == path.len or index >= context.nodes.len) return .{ .unresolved = true };
+        for (path[0..count]) |prior| if (prior == index) return .{ .unresolved = true };
+        path[count] = index; count += 1;
+        next = context.nodes[index].parent;
+    }
+    var inherited = initial;
+    while (count != 0) {
+        count -= 1;
+        const node = observedFigureComputedNode(computed, path[count]) orelse return .{ .unresolved = true };
+        const value = try observedFigureKeyword(a, node.declarations, property, shorthands, node.environment,
+            allowed, initial, inherited, true, inherited);
+        inherited = if (value.unresolved) null else value.value;
+    }
+    return .{ .value = inherited, .unresolved = inherited == null };
+}
+fn observedFigureRelativeFontSizeInWithWitness(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, parent_scale: f32, initial_scale: ?f32, root_scale: ?f32, witness: ?*ObservedReadyFigureWitness) !?f32
+{
+    observedReadyDeclarations(witness, declarations, environment);
+    observedReadyProperty(witness, "font-size");
+    if (!std.math.isFinite(parent_scale) or parent_scale < 0) return observedReadyNull(f32, witness, "observed_ready.observedFigureRelativeFontSizeIn.1");
+    for ([_]?f32{ initial_scale, root_scale }) |basis| if (basis) |value| if (!std.math.isFinite(value) or value < 0) return observedReadyNull(f32, witness, "observed_ready.observedFigureRelativeFontSizeIn.2");
+    const candidates = try observedFigurePropertyCandidates(a, declarations, "font-size", &.{"font"});
+    defer a.free(candidates);
+    var definite = false;
+    for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    var selected: ?f32 = if (definite) null else parent_scale;
+    for (candidates) |candidate| {
+        observedReadyCandidate(witness, candidate);
+        if (candidate.syntax_unknown) return observedReadyNull(f32, witness, "observed_ready.observedFigureRelativeFontSizeIn.3");
+        const computed = try customColorValue(a, environment, candidate.raw);
+        const raw = switch (computed) {
+            .unknown => return null,
+            .invalid => "inherit",
+            .known => |value| trim(value),
+        };
+        const scale: f32 = if (std.ascii.eqlIgnoreCase(raw, "inherit") or std.ascii.eqlIgnoreCase(raw, "unset")) parent_scale
+            else if (std.ascii.eqlIgnoreCase(raw, "initial") or std.ascii.eqlIgnoreCase(raw, "medium")) initial_scale orelse return null else blk: {
+            if (!std.ascii.eqlIgnoreCase(candidate.name, "font-size")) return observedReadyNull(f32, witness, "observed_ready.observedFigureRelativeFontSizeIn.4");
+            // Absolute font lengths require an independently established pixel
+            // origin. No browser medium=16px or caption-origin guess is made.
+            const percent = std.mem.endsWith(u8, raw, "%");
+            const rem = raw.len >= 3 and std.ascii.eqlIgnoreCase(raw[raw.len - 3 ..], "rem");
+            const em = !rem and raw.len >= 2 and std.ascii.eqlIgnoreCase(raw[raw.len - 2 ..], "em");
+            if (!percent and !em and !rem) {
+                if (widthNumberSyntax(raw) and (std.fmt.parseFloat(f64, raw) catch return null) == 0) break :blk 0;
+                return observedReadyNull(f32, witness, "observed_ready.observedFigureRelativeFontSizeIn.5");
+            }
+            const suffix_len: usize = if (percent) 1 else if (rem) 3 else 2;
+            const number = raw[0 .. raw.len - suffix_len];
+            if (!widthNumberSyntax(number)) return observedReadyNull(f32, witness, "observed_ready.observedFigureRelativeFontSizeIn.6");
+            const factor = std.fmt.parseFloat(f64, number) catch return observedReadyNull(f32, witness, "observed_ready.observedFigureRelativeFontSizeIn.7");
+            if (factor == 0 and !widthNumberIsZero(number)) return observedReadyNull(f32, witness, "observed_ready.observedFigureRelativeFontSizeIn.8");
+            const origin = if (rem) root_scale orelse return null else parent_scale;
+            const value = @as(f64, origin) * factor / (if (percent) @as(f64, 100) else 1);
+            if (!std.math.isFinite(value) or value < 0 or value > std.math.floatMax(f32)) return observedReadyNull(f32, witness, "observed_ready.observedFigureRelativeFontSizeIn.9");
+            const result: f32 = @floatCast(value);
+            if ((value == 0 and origin != 0 and factor != 0) or (value != 0 and result == 0)) return observedReadyNull(f32, witness, "observed_ready.observedFigureRelativeFontSizeIn.10");
+            break :blk result;
+        };
+        if (selected) |prior| { if (prior != scale) return observedReadyNull(f32, witness, "observed_ready.observedFigureRelativeFontSizeIn.11"); } else selected = scale;
+    }
+    return selected;
+}
+const ObservedFontFeaturePolicy = struct { value: ?types.FontFeaturePolicy = null, unresolved: bool = false };
+// Complete list replacement, never an additive feature patch. Escapes,
+// duplicates, unsupported tags/settings and malformed separators are refused.
+fn observedFontFeatureList(raw: []const u8) ?types.FontFeaturePolicy {
+    var rest = trim(raw);
+    if (std.ascii.eqlIgnoreCase(rest, "normal")) return .normal;
+    var seen: u8 = 0;
+    const tags = [_][]const u8{ "liga", "clig", "kern", "ccmp", "dist", "mark", "mkmk" };
+    while (rest.len != 0) {
+        if (rest.len < 6 or (rest[0] != '"' and rest[0] != '\'') or rest[5] != rest[0]) return null;
+        var bit: ?u3 = null;
+        for (tags, 0..) |tag, index| if (std.mem.eql(u8, rest[1..5], tag)) { bit = @intCast(index); break; };
+        const selected = bit orelse return null;
+        const mask = @as(u8, 1) << selected;
+        if (seen & mask != 0) return null;
+        seen |= mask;
+        rest = rest[6..];
+        // A setting, when present, is separated from the quoted tag.
+        const spaced = rest.len != 0 and std.ascii.isWhitespace(rest[0]);
+        rest = std.mem.trimStart(u8, rest, " \t\r\n\x0c");
+        if (rest.len != 0 and rest[0] != ',') {
+            if (!spaced) return null;
+            const end = std.mem.indexOfScalar(u8, rest, ',') orelse rest.len;
+            const setting = trim(rest[0..end]);
+            if (!std.ascii.eqlIgnoreCase(setting, "on") and !std.mem.eql(u8, setting, "1")) return null;
+            rest = rest[end..];
+        }
+        if (rest.len == 0) break;
+        if (rest[0] != ',') return null;
+        rest = trim(rest[1..]);
+        if (rest.len == 0) return null;
+    }
+    return if (seen == 0x7f) .seven_on else null;
+}
+fn observedFontFeatureProperty(a: std.mem.Allocator, node: ObservedFigureComputedNode,
+    property: []const u8, parent: ?types.FontFeaturePolicy) !ObservedFontFeaturePolicy
+{
+    const candidates = try observedFigurePropertyCandidates(a, node.declarations, property, &.{"font"});
+    defer a.free(candidates);
+    var definite = false;
+    for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    var selected: ObservedFontFeaturePolicy = .{ .value = parent };
+    var have_selected = !definite;
+    for (candidates) |candidate| {
+        if (candidate.syntax_unknown) return .{ .unresolved = true };
+        const computed = try customColorValue(a, node.environment, candidate.raw);
+        const raw = switch (computed) { .unknown => return .{ .unresolved = true }, .invalid => "unset", .known => |value| trim(value) };
+        const value: ?types.FontFeaturePolicy = if (std.ascii.eqlIgnoreCase(raw, "inherit") or std.ascii.eqlIgnoreCase(raw, "unset")) parent
+            else if (std.ascii.eqlIgnoreCase(raw, "initial")) .normal
+            else if (!std.ascii.eqlIgnoreCase(candidate.name, property)) return .{ .unresolved = true }
+            else observedFontFeatureList(raw) orelse return .{ .unresolved = true };
+        if (have_selected and selected.value != value) return .{ .unresolved = true };
+        selected.value = value; have_selected = true;
+    }
+    return selected;
+}
+fn observedFigureFontFeatures(a: std.mem.Allocator, node: ObservedFigureComputedNode,
+    parent: ?types.FontFeaturePolicy) !ObservedFontFeaturePolicy
+{
+    const result = try observedFontFeatureProperty(a, node, "font-feature-settings", parent);
+    if (result.unresolved) return result;
+    // Vendor spellings cannot silently disagree with the represented standard
+    // property. A vendor-only declaration does not grant standard authority.
+    for ([_][]const u8{ "-moz-font-feature-settings", "-webkit-font-feature-settings" }) |property| {
+        const candidates = try observedFigurePropertyCandidates(a, node.declarations, property, &.{});
+        defer a.free(candidates);
+        if (candidates.len == 0) continue;
+        const alias = try observedFontFeatureProperty(a, node, property, parent);
+        if (alias.unresolved or alias.value != result.value) return .{ .unresolved = true };
+    }
+    return result;
+}
+fn observedFigureNativeFontMatches(source: types.FigureMediaStrut, native: types.FigureMediaStrut) bool {
+    // Null native policy is no equivalence certificate: the complete source
+    // result materializes its own explicit policy on every owning text run.
+    // A known native policy remains a strict parent-mismatch boundary.
+    if (native.font_features != null and source.font_features != native.font_features) return false;
+    var compared = source;
+    compared.font_features = native.font_features;
+    return observedFigureDataEqual(types.FigureMediaStrut, compared, native, 0);
+}
+fn observedFigureOwnFontInWithWitness(a: std.mem.Allocator, observed: FigureObservedNode, node: ObservedFigureComputedNode,
+    parent: types.FigureMediaStrut, initial_scale: ?f32, root_scale: ?f32, family_checked: bool, witness: ?*ObservedReadyFigureWitness) !?types.FigureMediaStrut
+{
+    observedReadyNode(witness, node);
+    const font_scale = (try observedFigureRelativeFontSizeInWithWitness(a, node.declarations, node.environment, parent.font_scale, initial_scale, root_scale, witness)) orelse return observedReadyNull(types.FigureMediaStrut, witness, "observed_ready.observedFigureOwnFontIn.1");
+    const bold_element = std.ascii.eqlIgnoreCase(observed.tag, "b") or std.ascii.eqlIgnoreCase(observed.tag, "strong");
+    const italic_element = std.ascii.eqlIgnoreCase(observed.tag, "i") or std.ascii.eqlIgnoreCase(observed.tag, "em");
+    // The closed weight domain is normal400/bold700. An inherited-bold B's
+    // default bolder900 is outside it unless an authored winner overrides it.
+    const absent_weight: ?[]const u8 = if (bold_element) if (parent.bold) null else "bold" else if (parent.bold) "bold" else "normal";
+    const weight = try observedFigureKeyword(a, node.declarations, "font-weight", &.{"font"}, node.environment,
+        &.{ "normal", "400", "bold", "700" }, "normal", if (parent.bold) "bold" else "normal", true, absent_weight);
+    const italic = try observedFigureKeyword(a, node.declarations, "font-style", &.{"font"}, node.environment,
+        &.{ "normal", "italic" }, "normal", if (parent.italic) "italic" else "normal", true, if (parent.italic or italic_element) "italic" else "normal");
+    if (weight.unresolved or italic.unresolved) return observedReadyNull(types.FigureMediaStrut, witness, "observed_ready.observedFigureOwnFontIn.2");
+    // A changed font family/variant/stretch would alter the anchor strut and
+    // shaping. Only actual inheritance is covered by this initial transform.
+    for ([_][]const u8{ "font-family", "font-variant", "font-stretch", "font-size-adjust", "font-variation-settings" }) |property| {
+        observedReadyProperty(witness, property);
+        if (family_checked and std.mem.eql(u8, property, "font-family")) continue;
+        const candidates = try observedFigurePropertyCandidates(a, node.declarations, property, &.{"font"});
+        defer a.free(candidates);
+        for (candidates) |candidate| {
+        observedReadyCandidate(witness, candidate);
+            const value = try customColorValue(a, node.environment, candidate.raw);
+            if (value != .known or (!std.ascii.eqlIgnoreCase(trim(value.known), "inherit") and !std.ascii.eqlIgnoreCase(trim(value.known), "unset"))) return observedReadyNull(types.FigureMediaStrut, witness, "observed_ready.observedFigureOwnFontIn.3");
+        }
+    }
+    observedReadyProperty(witness, "font-feature-settings");
+    const features = try observedFigureFontFeatures(a, node, parent.font_features);
+    if (features.unresolved) return observedReadyNull(types.FigureMediaStrut, witness, "observed_ready.font_features");
+    var result = parent; result.font_scale = font_scale; result.font_features = features.value;
+    result.bold = std.ascii.eqlIgnoreCase(weight.value.?, "bold") or std.mem.eql(u8, weight.value.?, "700");
+    result.italic = std.ascii.eqlIgnoreCase(italic.value.?, "italic");
+    if (observedFigureAttribute(observed, "lang")) |language| {
+        if (language.len > 128) return observedReadyNull(types.FigureMediaStrut, witness, "observed_ready.observedFigureOwnFontIn.4");
+        for (language) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-') return observedReadyNull(types.FigureMediaStrut, witness, "observed_ready.observedFigureOwnFontIn.5");
+        result.language = language;
+    }
+    const inherited_direction: []const u8 = if (parent.direction == .rtl) "rtl" else "ltr";
+    const hint: ?[]const u8 = if (observedFigureAttribute(observed, "dir")) |raw|
+        if (std.ascii.eqlIgnoreCase(raw, "rtl")) "rtl" else if (std.ascii.eqlIgnoreCase(raw, "ltr")) "ltr" else null
+        else inherited_direction;
+    const direction = try observedFigureKeyword(a, node.declarations, "direction", &.{}, node.environment,
+        &.{ "ltr", "rtl" }, "ltr", inherited_direction, true, hint);
+    if (direction.unresolved) return observedReadyNull(types.FigureMediaStrut, witness, "observed_ready.observedFigureOwnFontIn.6");
+    result.direction = if (std.mem.eql(u8, direction.value.?, "rtl")) .rtl else .ltr;
+    return result;
+}
+fn observedFigureFontFamilySyntax(raw: []const u8) bool {
+    const value = trim(raw);
+    if (value.len == 0 or value.len > 4096 or !std.unicode.utf8ValidateSlice(value)) return false;
+    var position: usize = 0; var families: usize = 0;
+    while (position < value.len) {
+        while (position < value.len and std.ascii.isWhitespace(value[position])) : (position += 1) {}
+        if (position == value.len or families == 32) return false;
+        if (value[position] == '\'' or value[position] == '"') {
+            const quote = value[position]; position += 1;
+            const first = position;
+            while (position < value.len and value[position] != quote) : (position += 1)
+                if (value[position] < 0x20 or value[position] == 0x7f or value[position] == '\\') return false;
+            if (position == first or position == value.len) return false;
+            position += 1;
+        } else {
+            var words: usize = 0;
+            var generic_word = false;
+            while (true) {
+                const first = position;
+                if (position == value.len or (!std.ascii.isAlphabetic(value[position]) and value[position] != '-' and value[position] != '_' and value[position] < 0x80)) return false;
+                if (value[position] == '-') {
+                    if (position + 1 == value.len) return false;
+                    const next = value[position + 1];
+                    if (!std.ascii.isAlphabetic(next) and next != '-' and next != '_' and next < 0x80) return false;
+                }
+                while (position < value.len and (std.ascii.isAlphanumeric(value[position]) or value[position] == '-' or value[position] == '_' or value[position] >= 0x80)) : (position += 1) {}
+                if (position == first or words == 16) return false;
+                const word = value[first..position];
+                for ([_][]const u8{ "initial", "inherit", "unset", "revert", "revert-layer", "default" }) |reserved|
+                    if (std.ascii.eqlIgnoreCase(word, reserved)) return false;
+                for ([_][]const u8{ "serif", "sans-serif", "cursive", "fantasy", "monospace", "system-ui", "ui-serif",
+                    "ui-sans-serif", "ui-monospace", "ui-rounded", "math", "emoji", "fangsong" }) |generic|
+                    generic_word = generic_word or std.ascii.eqlIgnoreCase(word, generic);
+                words += 1;
+                const before_space = position;
+                while (position < value.len and std.ascii.isWhitespace(value[position])) : (position += 1) {}
+                if (position == value.len or value[position] == ',') break;
+                if (before_space == position) return false;
+            }
+            if (generic_word and words != 1) return false;
+        }
+        while (position < value.len and std.ascii.isWhitespace(value[position])) : (position += 1) {}
+        families += 1;
+        if (position == value.len) return true;
+        if (value[position] != ',') return false;
+        position += 1;
+        if (position == value.len) return false;
+    }
+    return false;
+}
+fn observedFigureFontFamilyWithWitness(a: std.mem.Allocator, node: ObservedFigureComputedNode, inherited: ?[]const u8, witness: ?*ObservedReadyFigureWitness) !?[]const u8 {
+    observedReadyNode(witness, node);
+    const candidates = try observedFigurePropertyCandidates(a, node.declarations, "font-family", &.{"font"});
+    defer a.free(candidates);
+    var definite = false;
+    for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    var selected: ?[]const u8 = if (definite) null else inherited;
+    if (!definite and inherited == null) return observedReadyNull([]const u8, witness, "observed_ready.observedFigureFontFamily.1");
+    for (candidates) |candidate| {
+        observedReadyCandidate(witness, candidate);
+        if (candidate.syntax_unknown) return observedReadyNull([]const u8, witness, "observed_ready.observedFigureFontFamily.2");
+        const computed = try customColorValue(a, node.environment, candidate.raw);
+        const raw = switch (computed) { .unknown => return null, .invalid => "inherit", .known => |value| trim(value) };
+        const family = if (std.ascii.eqlIgnoreCase(raw, "inherit") or std.ascii.eqlIgnoreCase(raw, "unset")) inherited orelse return null
+            else blk: {
+                // UA-dependent initial family and unsupported font shorthands
+                // are not inferred from the native reader's selected font.
+                if (!std.ascii.eqlIgnoreCase(candidate.name, "font-family") or !observedFigureFontFamilySyntax(raw)) return observedReadyNull([]const u8, witness, "observed_ready.observedFigureFontFamily.3");
+                break :blk raw;
+            };
+        if (selected) |prior| {
+            if (!std.ascii.eqlIgnoreCase(prior, family)) return observedReadyNull([]const u8, witness, "observed_ready.observedFigureFontFamily.4");
+        } else selected = family;
+    }
+    return selected;
+}
+fn observedFigureComputedNodes(a: std.mem.Allocator, context: FigureObservedContext, evaluation: ObservedFigureEvaluation) !?[]const ObservedFigureComputedNode {
+    var operation = ObservedFigureOperation.init(a, context);
+    defer operation.deinit();
+    return observedFigureComputedNodesPrepared(a, &operation, evaluation);
+}
+fn observedFigureComputedNodesPrepared(a: std.mem.Allocator, operation: *ObservedFigureOperation, evaluation: ObservedFigureEvaluation) !?[]const ObservedFigureComputedNode {
+    const context = operation.context;
+    if (!operation.valid) return null;
+    const owned = (try operation.owned()) orelse return null;
+    const result = try a.alloc(ObservedFigureComputedNode, owned.indices.len);
+    for (owned.indices, result, 0..) |index, *out, position| {
+        const declarations = (try observedFigureDeclarationsPrepared(a, operation, index, null, evaluation)) orelse return null;
+        // Visited matching is used only for privacy-permitted paint queries.
+        // It must not launder a visited-dependent custom value into geometry,
+        // font or another unrestricted property.
+        var custom_evaluation = evaluation; custom_evaluation.link_state.visited = null;
+        const custom_declarations = if (evaluation.link_state.visited != null)
+            (try observedFigureDeclarationsPrepared(a, operation, index, null, custom_evaluation)) orelse return null else declarations;
+        var inherited: CustomEnvironment = .{ .complete = true };
+        if (context.nodes[index].parent) |parent| {
+            var found = false;
+            for (result[0..position]) |prior| if (prior.index == parent) { inherited = prior.environment; found = true; break; };
+            if (!found) return null;
+        }
+        out.* = .{ .index = index, .declarations = declarations,
+            .environment = try observedFigureCustomEnvironment(a, custom_declarations, inherited, !context.styles.globally_unresolved) };
+        // The legacy environment can be conservative. Any known binding it
+        // did issue must agree; a stronger matcher cannot silently replace it.
+        if (context.nodes[index].custom_environment) |issued| for (issued.values) |binding| {
+            if (binding.value == .unknown) continue;
+            if (!sameObservedCustomValue(binding.value, out.environment.get(binding.name))) return null;
+        };
+    }
+    return result;
+}
+const ObservedFigureComputedColor = struct { index: u32, value: ?types.FigureColor };
+fn observedFigureComputedColors(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, root_color: ?types.FigureColor) !?[]const ObservedFigureComputedColor
+{
+    return observedFigureComputedColorsWithWitness(a, context, computed, root_color, null);
+}
+fn observedFigureComputedColorsWithWitness(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, root_color: ?types.FigureColor, witness: ?*ObservedReadyFigureWitness) !?[]const ObservedFigureComputedColor
+{
+    if (!figureObservedContextValid(context) or computed.len == 0 or computed.len > 512) return observedReadyNull([]const ObservedFigureComputedColor, witness, "observed_ready.observedFigureComputedColors.1");
+    const result = try a.alloc(ObservedFigureComputedColor, computed.len);
+    for (computed, result, 0..) |node, *out, position| {
+        observedReadyNode(witness, node);
+        if (node.index >= context.nodes.len or (position != 0 and node.index <= computed[position - 1].index)) return observedReadyNull([]const ObservedFigureComputedColor, witness, "observed_ready.observedFigureComputedColors.2");
+        var inherited = root_color;
+        if (context.nodes[node.index].parent) |parent| {
+            var found = false;
+            for (result[0..position]) |prior| if (prior.index == parent) { inherited = prior.value; found = true; break; };
+            if (!found) return observedReadyNull([]const ObservedFigureComputedColor, witness, "observed_ready.observedFigureComputedColors.3");
+        } else if (position != 0) return observedReadyNull([]const ObservedFigureComputedColor, witness, "observed_ready.observedFigureComputedColors.4");
+        const color = try observedFigureColor(a, node.declarations, "color", node.environment, inherited, inherited);
+        // Unknown ancestor paint remains unknown. A child's independently
+        // proved own color can still override it; no theme/default is invented.
+        out.* = .{ .index = node.index, .value = if (color.unresolved) null else color.value };
+    }
+    return result;
+}
+const ObservedFigureComputedFont = struct { index: u32, value: types.FigureMediaStrut, family: ?[]const u8 };
+const ObservedFigureFonts = struct { nodes: []const ObservedFigureComputedFont, root_family: []const u8, source_root_scale: f32 };
+fn observedFigureFontAt(fonts: ObservedFigureFonts, index: u32) ?types.FigureMediaStrut {
+    var result: ?types.FigureMediaStrut = null;
+    for (fonts.nodes) |font| if (font.index == index) {
+        if (result != null) return null;
+        result = font.value;
+    };
+    return result;
+}
+fn observedFigureColorAt(colors: []const ObservedFigureComputedColor, index: u32) ?types.FigureColor {
+    var result: ?types.FigureColor = null; var found = false;
+    for (colors) |color| if (color.index == index) {
+        if (found) return null;
+        found = true; result = color.value;
+    };
+    return result;
+}
+fn observedFigureComputedBackgroundsWithWitness(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, colors: []const ObservedFigureComputedColor, witness: ?*ObservedReadyFigureWitness) !?[]const ObservedFigureComputedColor
+{
+    if (!figureObservedContextValid(context) or colors.len != computed.len) return observedReadyNull([]const ObservedFigureComputedColor, witness, "observed_ready.observedFigureComputedBackgrounds.1");
+    const result = try a.alloc(ObservedFigureComputedColor, computed.len);
+    for (computed, result, 0..) |node, *out, position| {
+        observedReadyNode(witness, node);
+        if (node.index >= context.nodes.len) return observedReadyNull([]const ObservedFigureComputedColor, witness, "observed_ready.observedFigureComputedBackgrounds.2");
+        var parent: ?types.FigureColor = null;
+        if (context.nodes[node.index].parent) |parent_index| {
+            var found = false;
+            for (result[0..position]) |prior| if (prior.index == parent_index) { parent = prior.value; found = true; break; };
+            if (!found) return observedReadyNull([]const ObservedFigureComputedColor, witness, "observed_ready.observedFigureComputedBackgrounds.3");
+        }
+        const paint = try observedFigureColor(a, node.declarations, "background-color", node.environment,
+            parent, observedFigureColorAt(colors, node.index));
+        out.* = .{ .index = node.index, .value = if (paint.unresolved) null else paint.value };
+    }
+    return result;
+}
+const ObservedFigureLineHeight = union(enum) { normal, factor: f64, length: types.StyleLength, unknown };
+fn observedFigureLineHeightEqual(left: ObservedFigureLineHeight, right: ObservedFigureLineHeight) bool {
+    if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+    return switch (left) { .normal, .unknown => true, .factor => |value| value == right.factor, .length => |value| std.meta.eql(value, right.length) };
+}
+fn observedFigureLineHeight(a: std.mem.Allocator, node: ObservedFigureComputedNode,
+    inherited: ObservedFigureLineHeight, font_scale: f32) !ObservedFigureLineHeight
+{
+    const candidates = try observedFigurePropertyCandidates(a, node.declarations, "line-height", &.{"font"});
+    defer a.free(candidates);
+    var definite = false;
+    for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    var selected: ?ObservedFigureLineHeight = if (definite) null else inherited;
+    for (candidates) |candidate| {
+        if (candidate.syntax_unknown) return .unknown;
+        const computed = try customColorValue(a, node.environment, candidate.raw);
+        const raw = switch (computed) { .unknown => return .unknown, .invalid => "unset", .known => |value| trim(value) };
+        const value: ObservedFigureLineHeight = if (std.ascii.eqlIgnoreCase(raw, "normal") or std.ascii.eqlIgnoreCase(raw, "initial")) .normal
+            else if (std.ascii.eqlIgnoreCase(raw, "inherit") or std.ascii.eqlIgnoreCase(raw, "unset")) inherited
+            else decoded: {
+                if (!std.ascii.eqlIgnoreCase(candidate.name, "line-height")) break :decoded .unknown;
+                if (widthNumberSyntax(raw)) {
+                    const factor = std.fmt.parseFloat(f64, raw) catch break :decoded .unknown;
+                    if (!std.math.isFinite(factor) or factor < 0 or (factor == 0 and !widthNumberIsZero(raw))) break :decoded .unknown;
+                    break :decoded .{ .factor = factor };
+                }
+                break :decoded .{ .length = observedFigurePhysicalLength(raw, font_scale) orelse break :decoded .unknown };
+            };
+        if (value == .unknown) return .unknown;
+        if (selected) |prior| {
+            if (!observedFigureLineHeightEqual(prior, value)) return .unknown;
+        } else selected = value;
+    }
+    return selected orelse .unknown;
+}
+fn observedFigureLineHeightAt(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts, subject: u32) !ObservedFigureLineHeight
+{
+    if (!figureObservedContextValid(context) or subject >= context.nodes.len) return .unknown;
+    var path: [512]u32 = undefined; var count: usize = 0; var next: ?u32 = subject;
+    while (next) |index| {
+        if (count == path.len or index >= context.nodes.len) return .unknown;
+        for (path[0..count]) |prior| if (prior == index) return .unknown;
+        path[count] = index; count += 1; next = context.nodes[index].parent;
+    }
+    var inherited: ObservedFigureLineHeight = .normal;
+    while (count != 0) {
+        count -= 1;
+        const index = path[count];
+        const node = observedFigureComputedNode(computed, index) orelse return .unknown;
+        var scale: ?f32 = null;
+        for (fonts.nodes) |font| if (font.index == index) {
+            if (scale != null) return .unknown;
+            scale = font.value.font_scale;
+        };
+        inherited = try observedFigureLineHeight(a, node, inherited, scale orelse return .unknown);
+    }
+    return inherited;
+}
+fn observedFigureUsedLineHeight(value: ObservedFigureLineHeight, font_scale: f32) ?types.StyleLength {
+    if (!std.math.isFinite(font_scale) or font_scale < 0) return null;
+    return switch (value) {
+        .normal, .unknown => null,
+        .length => |length_value| length_value,
+        .factor => |factor| converted: {
+            const used = factor * @as(f64, font_scale);
+            if (!std.math.isFinite(used) or used < 0 or used > std.math.floatMax(f32)) break :converted null;
+            const narrowed: f32 = @floatCast(used);
+            if (used != 0 and narrowed == 0) break :converted null;
+            break :converted .{ .unit = .em, .value = narrowed };
+        },
+    };
+}
+fn observedFigureFixedEdges(value: types.ContainerMargins) ?types.StyleEdges {
+    var result: types.StyleEdges = undefined;
+    inline for (.{ "top", "right", "bottom", "left" }) |name| {
+        const edge = @field(value, name);
+        if (edge != .length) return null;
+        @field(result, name) = edge.length;
+    }
+    return result;
+}
+fn observedFigureEdgesZero(value: types.StyleEdges) bool {
+    inline for (.{ "top", "right", "bottom", "left" }) |name| if (@field(value, name).value != 0) return false;
+    return true;
+}
+fn observedFigureKeywordIs(a: std.mem.Allocator, node: ObservedFigureComputedNode, property: []const u8,
+    shorthands: []const []const u8, wanted: []const u8, initial: []const u8) !bool
+{
+    const value = try observedFigureKeyword(a, node.declarations, property, shorthands, node.environment,
+        &.{wanted}, initial, null, false, initial);
+    return !value.unresolved and std.ascii.eqlIgnoreCase(value.value.?, wanted);
+}
+const ObservedFigureFrameCaptionGeometry = struct {
+    wrapper: types.ContainerStyle,
+    frame_min_width: ?types.StyleLength,
+    table_border: types.FigureBorderEdges,
+    caption_border: types.FigureBorderEdges,
+    frame_background: types.FigureColor,
+    caption_background: types.FigureColor,
+    caption_foreground: types.FigureColor,
+    caption_padding: types.StyleEdges,
+    caption_font: types.FigureMediaStrut,
+    caption_line_height: types.StyleLength,
+    caption_text_align: types.CellTextAlign,
+};
+fn observedFigureFrameCaptionPropertiesWithWitness(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts, index: u32, is_caption: bool, witness: ?*ObservedReadyFigureWitness) !bool
+{
+    observedReadySubject(witness, index);
+    const node = observedFigureComputedNode(computed, index) orelse return observedReadyFalse(witness, "observed_ready.observedFigureFrameCaptionProperties.1");
+    observedReadyNode(witness, node);
+    const font = observedFigureFontAt(fonts, index) orelse return observedReadyFalse(witness, "observed_ready.observedFigureFrameCaptionProperties.2");
+    var use = try ObservedFigurePropertyUse.init(a, node.declarations); defer use.deinit(a);
+    use.customEnvironment();
+    if (!try use.staticMotion(a, node.environment)) return observedReadyFalse(witness, "observed_ready.observedFigureFrameCaptionProperties.3");
+    inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch", "font-size-adjust", "font-feature-settings", "-moz-font-feature-settings", "-webkit-font-feature-settings", "font-variation-settings" }) |property|
+        use.property(property, &.{"font"});
+    inline for (.{ "direction", "display", "border-collapse", "caption-side", "table-layout", "text-align", "word-break", "width", "min-width", "color", "background-color" }) |property|
+        use.property(property, if (std.mem.eql(u8, property, "background-color")) &.{"background"} else &.{});
+    use.property("line-height", &.{"font"}); use.boxEdges(false); use.boxEdges(true); use.borderEdges();
+    // Both boxes have independent borders and backgrounds, but no positioned,
+    // clipped or decorated layer beyond the semantic table/caption solver.
+    const noops = .{
+        .{ "position", "static", "static" }, .{ "z-index", "auto", "auto" },
+        .{ "box-sizing", "content-box", "content-box" }, .{ "max-width", "none", "none" },
+        .{ "max-height", "none", "none" }, .{ "opacity", "1", "1" }, .{ "transform", "none", "none" },
+        .{ "filter", "none", "none" }, .{ "box-shadow", "none", "none" }, .{ "overflow", "visible", "visible" },
+        .{ "clip-path", "none", "none" }, .{ "contain", "none", "none" },
+        .{ "isolation", "auto", "auto" }, .{ "mix-blend-mode", "normal", "normal" },
+    };
+    inline for (noops) |query| {
+        observedReadyProperty(witness, query[0]);
+        if (!try observedFigureKeywordIs(a, node, query[0], &.{}, query[1], query[2])) return observedReadyFalse(witness, "observed_ready.observedFigureFrameCaptionProperties.4");
+        use.property(query[0], &.{});
+    }
+    if ((try observedFigureComputedLength(a, node.declarations, "height", &.{}, node.environment, font.font_scale,
+        "auto", .automatic, .unknown, false, false)) != .automatic) return observedReadyFalse(witness, "observed_ready.observedFigureFrameCaptionProperties.5");
+    use.property("height", &.{});
+    const zero: ObservedFigureLength = .{ .known = .{ .unit = .px, .value = 0 } };
+    const minimum = try observedFigureComputedLength(a, node.declarations, "min-height", &.{}, node.environment,
+        font.font_scale, "auto", zero, .unknown, false, false);
+    if (minimum != .known or minimum.known.value != 0) return observedReadyFalse(witness, "observed_ready.observedFigureFrameCaptionProperties.6");
+    use.property("min-height", &.{});
+    const radius = try observedFigureUniformRadius(a, node.declarations, node.environment, font.font_scale);
+    if (radius != .known or radius.known.value != 0 or
+        (try observedFigureFocusOutline(a, node.declarations, node.environment, font.font_scale)) != .none or
+        (try observedFigureGraphic(a, context, node.declarations, node.environment, .unknown,
+            &[_]struct { url: []const u8, graphic: types.FigureMediaGraphic }{})) != .none) return observedReadyFalse(witness, "observed_ready.observedFigureFrameCaptionProperties.7");
+    inline for (.{ "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius" }) |property|
+        use.property(property, &.{"border-radius"});
+    inline for (.{ "outline", "outline-width", "outline-style", "outline-color", "outline-offset" }) |property| use.property(property, &.{});
+    use.property("background-image", &.{"background"});
+    inline for (.{ "visibility", "pointer-events", "text-shadow", "white-space", "text-decoration-line" },
+        .{ "visible", "auto", "none", "normal", "none" }) |property, expected| {
+        observedReadyProperty(witness, property);
+        const value = try observedFigureInheritedKeywordAt(a, context, computed, index, property,
+            if (std.mem.eql(u8, property, "text-decoration-line")) &.{"text-decoration"} else &.{}, &.{expected}, expected);
+        if (value.unresolved or !std.mem.eql(u8, value.value.?, expected)) return observedReadyFalse(witness, "observed_ready.observedFigureFrameCaptionProperties.8");
+        use.property(property, if (std.mem.eql(u8, property, "text-decoration-line")) &.{"text-decoration"} else &.{});
+    }
+    if (is_caption) {
+        const caption_minimum = try observedFigureComputedLength(a, node.declarations, "min-width", &.{}, node.environment,
+            font.font_scale, "auto", zero, .unknown, false, false);
+        if (caption_minimum != .known or caption_minimum.known.value != 0) return observedReadyFalse(witness, "observed_ready.observedFigureFrameCaptionProperties.9");
+        if (!try observedFigureKeywordIs(a, node, "float", &.{}, "none", "none") or
+            !try observedFigureKeywordIs(a, node, "clear", &.{}, "none", "none") or
+            !try observedFigureKeywordIs(a, node, "table-layout", &.{}, "auto", "auto")) return observedReadyFalse(witness, "observed_ready.observedFigureFrameCaptionProperties.10");
+    }
+    use.property("float", &.{}); use.property("clear", &.{});
+    const complete = use.complete();
+    if (!complete) { observedReadyUnused(witness, use); observedReadyRecord(witness, "observed_ready.observedFigureFrameCaptionProperties.complete"); }
+    return complete;
+}
+// The generated one-cell table and its external bottom caption. This resolves
+// their actual source boxes; media, generated pseudo boxes, states and complete
+// declaration accounting remain mandatory in the enclosing Figure constructor.
+fn observedFigureFrameCaptionGeometryWithWitness(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts,
+    colors: []const ObservedFigureComputedColor, backgrounds: []const ObservedFigureComputedColor, witness: ?*ObservedReadyFigureWitness) !?ObservedFigureFrameCaptionGeometry
+{
+    observedReadySubject(witness, context.frame);
+    if (!figureObservedContextValid(context) or (context.nodes[context.caption].has_text != true and !observedMissingCaptionEmpty(context))) return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.1");
+    const frame = observedFigureComputedNode(computed, context.frame) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.2");
+    const caption = observedFigureComputedNode(computed, context.caption) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.3");
+    const frame_font = observedFigureFontAt(fonts, context.frame) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.4");
+    const caption_font = observedFigureFontAt(fonts, context.caption) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.5");
+    const parent_font = observedFigureFontAt(fonts, context.nodes[context.frame].parent orelse return null) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.6");
+    // Wrapper flow and external-caption base direction reuse the real native
+    // enclosing direction. Neither the A strut nor language implies that basis.
+    if (frame_font.direction != parent_font.direction or caption_font.direction != frame_font.direction) return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.7");
+    const rtl = frame_font.direction == .rtl;
+    if (!try observedFigureKeywordIs(a, frame, "display", &.{}, "table", "inline") or
+        !try observedFigureKeywordIs(a, caption, "display", &.{}, "table-caption", "inline") or
+        !try observedFigureKeywordIs(a, frame, "table-layout", &.{}, "auto", "auto")) return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.8");
+    const collapse = try observedFigureInheritedKeywordAt(a, context, computed, context.frame, "border-collapse", &.{}, &.{ "collapse", "separate" }, "separate");
+    const side = try observedFigureInheritedKeywordAt(a, context, computed, context.caption, "caption-side", &.{}, &.{ "top", "bottom" }, "top");
+    const wrapping = try observedFigureInheritedKeywordAt(a, context, computed, context.caption, "word-break", &.{}, &.{ "normal", "break-word" }, "normal");
+    const frame_align = try observedFigureInheritedKeywordAt(a, context, computed, context.frame, "text-align", &.{}, &.{ "start", "left", "right", "center" }, "start");
+    const caption_align = try observedFigureInheritedKeywordAt(a, context, computed, context.caption, "text-align", &.{}, &.{ "start", "left", "right", "center" }, "start");
+    if (collapse.unresolved or side.unresolved or wrapping.unresolved or frame_align.unresolved or caption_align.unresolved or
+        !std.mem.eql(u8, collapse.value.?, "collapse") or !std.mem.eql(u8, side.value.?, "bottom") or
+        !std.mem.eql(u8, wrapping.value.?, "break-word") or !std.mem.eql(u8, frame_align.value.?, "center")) return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.9");
+    const frame_line = observedFigureUsedLineHeight(try observedFigureLineHeightAt(a, context, computed, fonts, context.frame), frame_font.font_scale) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.10");
+    const caption_line = observedFigureUsedLineHeight(try observedFigureLineHeightAt(a, context, computed, fonts, context.caption), caption_font.font_scale) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.11");
+    if (frame_line.value != 0 or caption_line.value <= 0) return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.12");
+    const frame_padding = try observedFigureEdges(a, frame.declarations, frame.environment, true, rtl, frame_font.font_scale, null);
+    const caption_padding = try observedFigureEdges(a, caption.declarations, caption.environment, true, caption_font.direction == .rtl, caption_font.font_scale, null);
+    const caption_margins = try observedFigureEdges(a, caption.declarations, caption.environment, false, caption_font.direction == .rtl, caption_font.font_scale, null);
+    const frame_margins = try observedFigureEdges(a, frame.declarations, frame.environment, false, rtl, frame_font.font_scale, null);
+    if (frame_padding.unresolved or caption_padding.unresolved or caption_margins.unresolved or frame_margins.unresolved or
+        !observedFigureEdgesZero(observedFigureFixedEdges(frame_padding.value.?) orelse return null) or
+        !observedFigureEdgesZero(observedFigureFixedEdges(caption_margins.value.?) orelse return null)) return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.13");
+    const floated = try observedFigureKeyword(a, frame.declarations, "float", &.{}, frame.environment,
+        &.{ "none", "left", "right" }, "none", null, false, "none");
+    const cleared = try observedFigureKeyword(a, frame.declarations, "clear", &.{}, frame.environment,
+        &.{ "none", "left", "right", "both" }, "none", null, false, "none");
+    if (floated.unresolved or cleared.unresolved or (try observedFigurePreferredWidth(a, frame.declarations, frame.environment, .unknown)) != .automatic or
+        (try observedFigurePreferredWidth(a, caption.declarations, caption.environment, .unknown)) != .automatic) return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.14");
+    const zero: ObservedFigureLength = .{ .known = .{ .unit = .px, .value = 0 } };
+    const minimum = try observedFigureComputedLength(a, frame.declarations, "min-width", &.{}, frame.environment, frame_font.font_scale, "", zero, .unknown, false, false);
+    if (minimum != .known) return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.15");
+    const background = observedFigureColorAt(backgrounds, context.frame) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.16");
+    const caption_background = observedFigureColorAt(backgrounds, context.caption) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.17");
+    const foreground = observedFigureColorAt(colors, context.caption) orelse return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.18");
+    if (foreground.kind != .rgb) return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.19");
+    if (!try observedFigureFrameCaptionPropertiesWithWitness(a, context, computed, fonts, context.frame, false, witness) or
+        !try observedFigureFrameCaptionPropertiesWithWitness(a, context, computed, fonts, context.caption, true, witness)) return observedReadyNull(ObservedFigureFrameCaptionGeometry, witness, "observed_ready.observedFigureFrameCaptionGeometry.20");
+    return .{
+        .wrapper = .{ .margin_values = frame_margins.value.?,
+            .float_side = if (std.mem.eql(u8, floated.value.?, "left")) .left else if (std.mem.eql(u8, floated.value.?, "right")) .right else null,
+            .clear = if (std.mem.eql(u8, cleared.value.?, "left")) .left else if (std.mem.eql(u8, cleared.value.?, "right")) .right else if (std.mem.eql(u8, cleared.value.?, "both")) .both else .none },
+        .frame_min_width = if (minimum.known.value == 0) null else minimum.known,
+        .table_border = (try observedFigureBorders(a, frame.declarations, frame.environment, frame_font.font_scale)) orelse return null,
+        .caption_border = (try observedFigureBorders(a, caption.declarations, caption.environment, caption_font.font_scale)) orelse return null,
+        .frame_background = background, .caption_background = caption_background, .caption_foreground = foreground,
+        .caption_padding = observedFigureFixedEdges(caption_padding.value.?) orelse return null,
+        .caption_font = caption_font, .caption_line_height = caption_line,
+        .caption_text_align = if (std.mem.eql(u8, caption_align.value.?, "center")) .center else if (std.mem.eql(u8, caption_align.value.?, "right") or
+            (std.mem.eql(u8, caption_align.value.?, "start") and caption_font.direction == .rtl)) .right else .left,
+    };
+}
+const ObservedFigureCaptionBefore = struct { value: ?types.ContainerStyle = null, unresolved: bool = false };
+const ObservedFigureEmptyPseudo = union(enum) {
+    absent,
+    known: struct { node: ObservedFigureComputedNode, font: types.FigureMediaStrut },
+    unknown,
+};
+fn observedFigureEmptyPseudoWithWitnessPrepared(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts, owner: u32,
+    kind: GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation, witness: ?*ObservedReadyFigureWitness) !ObservedFigureEmptyPseudo
+{
+    const context = operation.context;
+    observedReadySubject(witness, owner);
+    if (!operation.valid or owner >= context.nodes.len) return observedReadyUnknown(ObservedFigureEmptyPseudo, witness, "observed_ready.observedFigureEmptyPseudo.1");
+    const parent = observedFigureComputedNode(computed, owner) orelse return observedReadyUnknown(ObservedFigureEmptyPseudo, witness, "observed_ready.observedFigureEmptyPseudo.2");
+    const parent_font = observedFigureFontAt(fonts, owner) orelse return observedReadyUnknown(ObservedFigureEmptyPseudo, witness, "observed_ready.observedFigureEmptyPseudo.3");
+    const root_font = observedFigureFontAt(fonts, 0) orelse return observedReadyUnknown(ObservedFigureEmptyPseudo, witness, "observed_ready.observedFigureEmptyPseudo.4");
+    const declarations = (try observedFigureDeclarationsPrepared(a, operation, owner, kind, evaluation)) orelse return observedReadyUnknown(ObservedFigureEmptyPseudo, witness, "observed_ready.observedFigureEmptyPseudo.5");
+    const environment = try observedFigureCustomEnvironment(a, declarations, parent.environment, !context.styles.globally_unresolved);
+    observedReadyDeclarations(witness, declarations, environment);
+    observedReadyProperty(witness, "content");
+    const content = try observedFigureKeyword(a, declarations, "content", &.{}, environment,
+        &.{ "normal", "none", "''", "\"\"" }, "normal", null, false, "normal");
+    if (content.unresolved) return observedReadyUnknown(ObservedFigureEmptyPseudo, witness, "observed_ready.observedFigureEmptyPseudo.6");
+    if (std.mem.eql(u8, content.value.?, "normal") or std.mem.eql(u8, content.value.?, "none")) return .absent;
+    const node: ObservedFigureComputedNode = .{ .index = owner, .declarations = declarations, .environment = environment };
+    // This value-level font query represents an empty generated box. The
+    // temporary tag supplies no source identity, attributes or ancestry.
+    const font = (try observedFigureOwnFontInWithWitness(a, .{ .tag = "span", .attributes = &.{}, .parent = null }, node,
+        parent_font, 1, root_font.font_scale, false, witness)) orelse return observedReadyUnknown(ObservedFigureEmptyPseudo, witness, "observed_ready.observedFigureEmptyPseudo.7");
+    return .{ .known = .{ .node = node, .font = font } };
+}
+fn observedFigureCaptionBeforeWithWitnessPrepared(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts, evaluation: ObservedFigureEvaluation, witness: ?*ObservedReadyFigureWitness) !ObservedFigureCaptionBefore
+{
+    const context = operation.context;
+    observedReadySubject(witness, context.caption);
+    const generated = try observedFigureEmptyPseudoWithWitnessPrepared(a, operation, computed, fonts, context.caption, .before, evaluation, witness);
+    if (generated == .unknown) return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.1");
+    // A nonexistent generated box contributes neither a float nor paint. This
+    // differs from a present empty box with background-image:none.
+    if (generated == .absent) return .{};
+    const pseudo = generated.known.node;
+    observedReadyNode(witness, pseudo);
+    const declarations = pseudo.declarations;
+    const environment = pseudo.environment;
+    const font = generated.known.font;
+    var use = try ObservedFigurePropertyUse.init(a, declarations); defer use.deinit(a);
+    use.customEnvironment(); use.property("content", &.{});
+    if (!try use.staticMotion(a, environment)) return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.2");
+    inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch", "font-size-adjust", "font-feature-settings", "-moz-font-feature-settings", "-webkit-font-feature-settings", "font-variation-settings" }) |property|
+        use.property(property, &.{"font"});
+    use.property("direction", &.{});
+    const width = try observedFigurePreferredWidth(a, declarations, environment, .unknown);
+    const height = try observedFigureComputedLength(a, declarations, "height", &.{}, environment, font.font_scale, "auto", .automatic, .unknown, false, false);
+    use.property("width", &.{}); use.property("height", &.{});
+    if (width != .known or height != .known or width.known <= 0 or height.known.value <= 0) return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.3");
+    const margins = try observedFigureEdges(a, declarations, environment, false, font.direction == .rtl, font.font_scale, null);
+    const padding = try observedFigureEdges(a, declarations, environment, true, font.direction == .rtl, font.font_scale, null);
+    use.boxEdges(false); use.boxEdges(true);
+    if (margins.unresolved or padding.unresolved) return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.4");
+    const fixed_margins = observedFigureFixedEdges(margins.value.?) orelse return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.5");
+    const fixed_padding = observedFigureFixedEdges(padding.value.?) orelse return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.6");
+    if (!observedFigureEdgesZero(fixed_padding)) return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.7");
+    const border = (try observedFigureBorders(a, declarations, environment, font.font_scale)) orelse return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.8");
+    if (border.top != .none or border.right != .none or border.bottom != .none or border.left != .none) return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.9");
+    use.borderEdges();
+    const background = try observedFigureColor(a, declarations, "background-color", environment, null, null);
+    const graphic = try observedFigureGraphic(a, context, declarations, environment, .unknown,
+        &[_]struct { url: []const u8, graphic: types.FigureMediaGraphic }{});
+    use.property("background-color", &.{"background"}); use.property("background-image", &.{"background"});
+    if (background.unresolved or background.value == null or background.value.?.kind != .transparent or graphic != .none) return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.10");
+    const floated = try observedFigureKeyword(a, declarations, "float", &.{}, environment, &.{ "none", "left", "right" }, "none", null, false, "none");
+    use.property("float", &.{});
+    if (floated.unresolved or std.mem.eql(u8, floated.value.?, "none")) return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.11");
+    const noops = .{
+        .{ "display", "inline", "inline" }, .{ "position", "static", "static" }, .{ "z-index", "auto", "auto" },
+        .{ "box-sizing", "content-box", "content-box" }, .{ "clear", "none", "none" },
+        .{ "opacity", "1", "1" }, .{ "transform", "none", "none" }, .{ "filter", "none", "none" },
+        .{ "box-shadow", "none", "none" }, .{ "text-shadow", "none", "none" },
+        .{ "overflow", "visible", "visible" }, .{ "clip-path", "none", "none" },
+        .{ "contain", "none", "none" }, .{ "isolation", "auto", "auto" }, .{ "mix-blend-mode", "normal", "normal" },
+    };
+    inline for (noops) |query| {
+        observedReadyProperty(witness, query[0]);
+        if (!try observedFigureKeywordIs(a, pseudo, query[0], &.{}, query[1], query[2])) return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.12");
+        use.property(query[0], &.{});
+    }
+    const visibility = try observedFigureInheritedKeywordAt(a, context, computed, context.caption, "visibility", &.{}, &.{ "visible", "hidden", "collapse" }, "visible");
+    if (visibility.unresolved or !std.mem.eql(u8, visibility.value.?, "visible")) return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.13");
+    const own_visibility = try observedFigureKeyword(a, declarations, "visibility", &.{}, environment,
+        &.{"visible"}, "visible", "visible", true, "visible");
+    if (own_visibility.unresolved or !std.mem.eql(u8, own_visibility.value.?, "visible")) return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.14");
+    use.property("visibility", &.{});
+    // Empty text plus no border, background graphic or shadow has no text ink.
+    // These declarations cannot affect this explicitly sized floating box.
+    inline for (.{ "color", "text-align", "line-height", "word-break", "white-space", "text-decoration", "text-decoration-line", "text-decoration-color", "text-decoration-style" }) |property|
+        use.property(property, &.{});
+    if (!use.complete()) { observedReadyUnused(witness, use); return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.15"); }
+    const result: types.ContainerStyle = .{ .width = .{ .length = .{ .unit = .px, .value = @floatCast(width.known) } },
+        .height = height.known, .margins = fixed_margins, .float_side = if (std.mem.eql(u8, floated.value.?, "left")) .left else .right };
+    if (!types.validFigureCaptionBefore(result)) return observedReadyUnresolved(ObservedFigureCaptionBefore, witness, "observed_ready.observedFigureCaptionBefore.16");
+    return .{ .value = result };
+}
+const ObservedFigureMediaAfter = struct { value: ?types.FigureMediaAfter = null, unresolved: bool = false };
+const ObservedFigureMediaCap = union(enum) { none, known: types.AvailableWidthLimit, unknown };
+fn observedFigureMediaCap(a: std.mem.Allocator, node: ObservedFigureComputedNode, font_scale: f32) !ObservedFigureMediaCap {
+    const candidates = try observedFigurePropertyCandidates(a, node.declarations, "max-width", &.{}); defer a.free(candidates);
+    var definite = false;
+    for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    var selected: ?ObservedFigureMediaCap = if (definite) null else .none;
+    for (candidates) |candidate| {
+        if (candidate.syntax_unknown) return .unknown;
+        const computed = try customColorValue(a, node.environment, candidate.raw);
+        const raw = switch (computed) { .unknown => return .unknown, .invalid => "unset", .known => |value| trim(value) };
+        const value: ObservedFigureMediaCap = if (std.ascii.eqlIgnoreCase(raw, "none") or std.ascii.eqlIgnoreCase(raw, "initial") or std.ascii.eqlIgnoreCase(raw, "unset")) .none
+            else decoded: {
+                if (!std.ascii.eqlIgnoreCase(candidate.name, "max-width")) break :decoded .unknown;
+                const limit = figureComputedMediaMaxWidth(candidate.raw, node.environment, font_scale);
+                break :decoded if (limit == .known) .{ .known = limit.known } else .unknown;
+            };
+        if (value == .unknown) return .unknown;
+        if (selected) |prior| {
+            if (std.meta.activeTag(prior) != std.meta.activeTag(value) or
+                (value == .known and !observedFigureDataEqual(types.AvailableWidthLimit, prior.known, value.known, 0))) return .unknown;
+        } else selected = value;
+    }
+    return selected orelse .unknown;
+}
+const ObservedFigureImageGeometry = struct {
+    font: types.FigureMediaStrut,
+    foreground: types.FigureColor,
+    background: types.FigureColor,
+    border: types.FigureBorder,
+    insets: types.StyleEdges,
+    max_width: ?types.AvailableWidthLimit,
+};
+fn observedFigureImageGeometryWithWitness(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts, colors: []const ObservedFigureComputedColor,
+    backgrounds: []const ObservedFigureComputedColor, expected_width: u32, witness: ?*ObservedReadyFigureWitness) !?ObservedFigureImageGeometry
+{
+    observedReadySubject(witness, context.media);
+    if (!figureObservedContextValid(context) or context.media_kind != .image or expected_width == 0 or
+        context.nodes[context.frame].has_text != false or context.nodes[context.anchor].has_text != false or
+        context.nodes[context.media].has_text != false) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.1");
+    const node = observedFigureComputedNode(computed, context.media) orelse return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.2");
+    observedReadyNode(witness, node);
+    const font = observedFigureFontAt(fonts, context.media) orelse return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.3");
+    observedReadyProperty(witness, "width");
+    const preferred = try observedFigureMediaPreferredWidth(a, context, computed);
+    if (observedReadyPending(witness)) |out| {
+        out.preferred_width_kind = if (preferred == .known) 2 else if (preferred == .automatic) 1 else 0;
+        out.preferred_width_px = if (preferred == .known) preferred.known else null;
+        out.expected_width_px = expected_width;
+    }
+    if (preferred != .known or preferred.known != @as(f64, @floatFromInt(expected_width))) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.4");
+    var use = try ObservedFigurePropertyUse.init(a, node.declarations); defer use.deinit(a);
+    use.customEnvironment(); use.property("width", &.{});
+    if (!try use.staticMotion(a, node.environment)) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.5");
+    inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch", "font-size-adjust", "font-feature-settings", "-moz-font-feature-settings", "-webkit-font-feature-settings", "font-variation-settings" }) |property|
+        use.property(property, &.{"font"});
+    use.property("direction", &.{});
+    // A height attribute is a real presentational hint. It is not silently
+    // treated as auto: an unconditional author cascade must override it before
+    // the cyclic max-width policy can preserve the intrinsic aspect ratio.
+    const heights = try observedFigurePropertyCandidates(a, node.declarations, "height", &.{}); defer a.free(heights);
+    var definite_height = false;
+    for (heights) |candidate| definite_height = definite_height or !candidate.uncertain;
+    if (observedFigureAttribute(context.nodes[context.media], "height") != null and !definite_height) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.6");
+    const height = try observedFigureComputedLength(a, node.declarations, "height", &.{}, node.environment, font.font_scale, "auto", .automatic, .unknown, false, false);
+    use.property("height", &.{});
+    if (height != .automatic) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.7");
+    const cap = try observedFigureMediaCap(a, node, font.font_scale);
+    use.property("max-width", &.{});
+    if (cap == .unknown) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.8");
+    const zero: ObservedFigureLength = .{ .known = .{ .unit = .px, .value = 0 } };
+    inline for (.{ "min-width", "min-height" }) |property| {
+        observedReadyProperty(witness, property);
+        const minimum = try observedFigureComputedLength(a, node.declarations, property, &.{}, node.environment, font.font_scale, "auto", zero, .unknown, false, false);
+        use.property(property, &.{});
+        if (minimum != .known or minimum.known.value != 0) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.9");
+    }
+    const margins = try observedFigureEdges(a, node.declarations, node.environment, false, font.direction == .rtl, font.font_scale, null);
+    const padding = try observedFigureEdges(a, node.declarations, node.environment, true, font.direction == .rtl, font.font_scale, null);
+    use.boxEdges(false); use.boxEdges(true);
+    if (margins.unresolved or padding.unresolved or !observedFigureEdgesZero(observedFigureFixedEdges(padding.value.?) orelse return null)) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.10");
+    const insets = observedFigureFixedEdges(margins.value.?) orelse return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.11");
+    const borders = (try observedFigureBorders(a, node.declarations, node.environment, font.font_scale)) orelse return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.12");
+    use.borderEdges();
+    if (!observedFigureDataEqual(types.FigureBorderEdge, borders.top, borders.right, 0) or
+        !observedFigureDataEqual(types.FigureBorderEdge, borders.top, borders.bottom, 0) or
+        !observedFigureDataEqual(types.FigureBorderEdge, borders.top, borders.left, 0)) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.13");
+    const border: types.FigureBorder = switch (borders.top) {
+        .none => .{ .kind = .none }, .solid => |line| .{ .kind = .solid, .width = line.width, .color = line.color }, else => return null,
+    };
+    const radius = try observedFigureUniformRadius(a, node.declarations, node.environment, font.font_scale);
+    inline for (.{ "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius" }) |property|
+        use.property(property, &.{"border-radius"});
+    if (radius != .known or radius.known.value != 0) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.14");
+    const foreground = observedFigureColorAt(colors, context.media) orelse return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.15");
+    const background = observedFigureColorAt(backgrounds, context.media) orelse return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.16");
+    use.property("color", &.{}); use.property("background-color", &.{"background"});
+    if (foreground.kind != .rgb or (try observedFigureGraphic(a, context, node.declarations, node.environment, .unknown,
+        &[_]struct { url: []const u8, graphic: types.FigureMediaGraphic }{})) != .none) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.17");
+    use.property("background-image", &.{"background"});
+    const outline = try observedFigureFocusOutline(a, node.declarations, node.environment, font.font_scale);
+    inline for (.{ "outline", "outline-width", "outline-style", "outline-color", "outline-offset" }) |property| use.property(property, &.{});
+    if (outline != .none) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.18");
+    const noops = .{
+        .{ "display", "inline", "inline" }, .{ "vertical-align", "middle", "baseline" },
+        .{ "position", "static", "static" }, .{ "z-index", "auto", "auto" }, .{ "box-sizing", "content-box", "content-box" },
+        .{ "float", "none", "none" }, .{ "clear", "none", "none" }, .{ "max-height", "none", "none" },
+        .{ "aspect-ratio", "auto", "auto" }, .{ "object-fit", "fill", "fill" }, .{ "object-position", "50% 50%", "50% 50%" },
+        .{ "image-rendering", "auto", "auto" }, .{ "opacity", "1", "1" }, .{ "transform", "none", "none" },
+        .{ "filter", "none", "none" }, .{ "box-shadow", "none", "none" }, .{ "clip-path", "none", "none" },
+        .{ "contain", "none", "none" }, .{ "isolation", "auto", "auto" }, .{ "mix-blend-mode", "normal", "normal" },
+    };
+    inline for (noops) |query| {
+        observedReadyProperty(witness, query[0]);
+        if (!try observedFigureKeywordIs(a, node, query[0], &.{}, query[1], query[2])) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.19");
+        use.property(query[0], &.{});
+    }
+    inline for (.{ "visibility", "pointer-events", "text-shadow" }, .{ "visible", "auto", "none" }) |property, expected| {
+        observedReadyProperty(witness, property);
+        const inherited = try observedFigureInheritedKeywordAt(a, context, computed, context.media, property, &.{}, &.{expected}, expected);
+        if (inherited.unresolved or !std.mem.eql(u8, inherited.value.?, expected)) return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.20");
+        use.property(property, &.{});
+    }
+    // A ready replaced image contains no text line. Text decoration does not
+    // propagate through that atomic image, and its own line-height cannot alter
+    // the parent anchor strut used by the explicit middle-alignment solver.
+    inline for (.{ "line-height", "text-align", "word-break", "white-space", "text-decoration", "text-decoration-line", "text-decoration-color", "text-decoration-style", "text-decoration-thickness" }) |property|
+        use.property(property, &.{});
+    if (!use.complete()) { observedReadyUnused(witness, use); return observedReadyNull(ObservedFigureImageGeometry, witness, "observed_ready.observedFigureImageGeometry.21"); }
+    return .{ .font = font, .foreground = foreground, .background = background, .border = border, .insets = insets,
+        .max_width = if (cap == .known) cap.known else null };
+}
+const ObservedFigureReadyAnchorGeometry = struct {
+    strut: types.FigureMediaStrut,
+    radius: types.StyleLength,
+    focus: ObservedFigureFocus,
+};
+fn observedFigureReadyAnchorGeometryWithWitness(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts,
+    backgrounds: []const ObservedFigureComputedColor, image: ObservedFigureImageGeometry, witness: ?*ObservedReadyFigureWitness) !?ObservedFigureReadyAnchorGeometry
+{
+    observedReadySubject(witness, context.anchor);
+    if (context.media_kind != .image or image.foreground.kind != .rgb) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureReadyAnchorGeometry.1");
+    return observedFigureAnchorGeometryWithWitness(a, context, computed, fonts, backgrounds, true, witness);
+}
+// CSS Text 3 word-break:break-word means normal + overflow-wrap:anywhere,
+// independently of the computed overflow-wrap (legacy alias word-wrap) value.
+// The Missing wire already requires exactly that emergency-grapheme policy.
+// This proves only wrapping of the sole text-bearing inline-block label in
+// this SAME computed state; it grants no ordinary anchor/text wrapping policy.
+fn observedFigureMissingLabelWrappingKnown(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode) !bool
+{
+    if (!figureObservedContextValid(context) or context.media_kind != .missing or
+        context.nodes[context.anchor].has_text != false) return false;
+    const label = observedFigureComputedNode(computed, context.media) orelse return false;
+    if (!try observedFigureKeywordIs(a, label, "display", &.{}, "inline-block", "inline")) return false;
+    inline for (.{ "white-space", "word-break" }, .{ "normal", "break-word" }) |property, expected| {
+        const value = try observedFigureInheritedKeywordAt(a, context, computed, context.media, property, &.{}, &.{expected}, "normal");
+        if (value.unresolved or !std.mem.eql(u8, value.value.?, expected)) return false;
+    }
+    return true;
+}
+fn observedFigureAnchorGeometryWithWitness(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts,
+    backgrounds: []const ObservedFigureComputedColor, ready_image: bool, witness: ?*ObservedReadyFigureWitness) !?ObservedFigureReadyAnchorGeometry
+{
+    observedReadySubject(witness, context.anchor);
+    if (!figureObservedContextValid(context) or (context.media_kind == .image) != ready_image or
+        context.nodes[context.anchor].has_text != false or context.nodes[context.media].has_text != !ready_image) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.1");
+    const node = observedFigureComputedNode(computed, context.anchor) orelse return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.2");
+    observedReadyNode(witness, node);
+    const font = observedFigureFontAt(fonts, context.anchor) orelse return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.3");
+    var use = try ObservedFigurePropertyUse.init(a, node.declarations); defer use.deinit(a);
+    use.customEnvironment();
+    if (!try use.staticMotion(a, node.environment)) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.4");
+    inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch", "font-size-adjust", "font-feature-settings", "-moz-font-feature-settings", "-webkit-font-feature-settings", "font-variation-settings" }) |property|
+        use.property(property, &.{"font"});
+    use.property("direction", &.{});
+    const line = observedFigureUsedLineHeight(try observedFigureLineHeightAt(a, context, computed, fonts, context.anchor), font.font_scale) orelse return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.5");
+    use.property("line-height", &.{"font"});
+    if (line.value != 0) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.6");
+    const alignment = try observedFigureInheritedKeywordAt(a, context, computed, context.anchor, "text-align", &.{}, &.{ "center", "start", "left", "right" }, "start");
+    use.property("text-align", &.{});
+    if (alignment.unresolved or !std.mem.eql(u8, alignment.value.?, "center")) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.7");
+    if ((try observedFigurePreferredWidth(a, node.declarations, node.environment, .unknown)) != .automatic or
+        (try observedFigureComputedLength(a, node.declarations, "height", &.{}, node.environment, font.font_scale, "auto", .automatic, .unknown, false, false)) != .automatic) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.8");
+    use.property("width", &.{}); use.property("height", &.{});
+    const zero: ObservedFigureLength = .{ .known = .{ .unit = .px, .value = 0 } };
+    inline for (.{ "min-width", "min-height" }) |property| {
+        observedReadyProperty(witness, property);
+        const value = try observedFigureComputedLength(a, node.declarations, property, &.{}, node.environment, font.font_scale, "auto", zero, .unknown, false, false);
+        use.property(property, &.{});
+        if (value != .known or value.known.value != 0) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.9");
+    }
+    inline for (.{ "top", "right", "bottom", "left" }) |property| {
+        observedReadyProperty(witness, property);
+        const value = try observedFigureComputedLength(a, node.declarations, property, &.{"inset"}, node.environment, font.font_scale, "auto", .automatic, .unknown, false, true);
+        use.property(property, &.{"inset"});
+        if (value != .automatic) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.10");
+    }
+    const margins = try observedFigureEdges(a, node.declarations, node.environment, false, font.direction == .rtl, font.font_scale, null);
+    const padding = try observedFigureEdges(a, node.declarations, node.environment, true, font.direction == .rtl, font.font_scale, null);
+    use.boxEdges(false); use.boxEdges(true);
+    if (margins.unresolved or padding.unresolved or
+        !observedFigureEdgesZero(observedFigureFixedEdges(margins.value.?) orelse return null) or
+        !observedFigureEdgesZero(observedFigureFixedEdges(padding.value.?) orelse return null)) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.11");
+    const border = (try observedFigureBorders(a, node.declarations, node.environment, font.font_scale)) orelse return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.12");
+    use.borderEdges();
+    if (border.top != .none or border.right != .none or border.bottom != .none or border.left != .none) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.13");
+    const background = observedFigureColorAt(backgrounds, context.anchor) orelse return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.14");
+    use.property("background-color", &.{"background"});
+    if (background.kind != .transparent or (try observedFigureGraphic(a, context, node.declarations, node.environment, .unknown,
+        &[_]struct { url: []const u8, graphic: types.FigureMediaGraphic }{})) != .none) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.15");
+    use.property("background-image", &.{"background"});
+    const radius = try observedFigureUniformRadius(a, node.declarations, node.environment, font.font_scale);
+    inline for (.{ "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius" }) |property|
+        use.property(property, &.{"border-radius"});
+    const focus: ObservedFigureFocus = if (ready_image)
+        try observedFigureFocusOutline(a, node.declarations, node.environment, font.font_scale) else .none;
+    inline for (.{ "outline", "outline-width", "outline-style", "outline-color", "outline-offset" }) |property| use.property(property, &.{});
+    if (radius != .known or focus == .unknown or (focus == .known and !std.meta.eql(radius.known, focus.known.radius))) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.16");
+    if (!try observedFigureKeywordIs(a, node, "display", &.{}, if (ready_image) "block" else "inline", "inline") or
+        !try observedFigureKeywordIs(a, node, "position", &.{}, if (ready_image) "relative" else "static", "static")) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.17");
+    use.property("display", &.{}); use.property("position", &.{});
+    const noops = .{
+        .{ "z-index", "auto", "auto" },
+        .{ "box-sizing", "content-box", "content-box" }, .{ "float", "none", "none" }, .{ "clear", "none", "none" },
+        .{ "max-width", "none", "none" }, .{ "max-height", "none", "none" },
+        .{ "opacity", "1", "1" }, .{ "transform", "none", "none" }, .{ "filter", "none", "none" },
+        .{ "box-shadow", "none", "none" }, .{ "overflow", "visible", "visible" }, .{ "clip-path", "none", "none" },
+        .{ "contain", "none", "none" }, .{ "isolation", "auto", "auto" }, .{ "mix-blend-mode", "normal", "normal" },
+    };
+    inline for (noops) |query| {
+        observedReadyProperty(witness, query[0]);
+        if (!try observedFigureKeywordIs(a, node, query[0], &.{}, query[1], query[2])) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.18");
+        use.property(query[0], &.{});
+    }
+    inline for (.{ "visibility", "pointer-events", "text-shadow" }, .{ "visible", "auto", "none" }) |property, expected| {
+        observedReadyProperty(witness, property);
+        const value = try observedFigureInheritedKeywordAt(a, context, computed, context.anchor, property, &.{}, &.{expected}, expected);
+        if (value.unresolved or !std.mem.eql(u8, value.value.?, expected)) return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.19");
+        use.property(property, &.{});
+    }
+    // There is no direct text, only the independently computed atomic child.
+    // For Missing, label color is independently inherited/computed in the full
+    // state query; A decoration cannot propagate into its inline-block content.
+    // Ready-image annotation and all actual focus ink are separate queries.
+    inline for (.{ "color", "word-break", "white-space", "text-decoration", "text-decoration-line", "text-decoration-color", "text-decoration-style", "text-decoration-thickness" }) |property|
+        use.property(property, &.{});
+    // Ready contains one childless replaced IMG. Missing instead requires
+    // its sole inline-block label's exact computed wrapping proof below;
+    // that text-bearing child never borrows the ready-image exemption.
+    if (ready_image or try observedFigureMissingLabelWrappingKnown(a, context, computed)) {
+        use.property("word-wrap", &.{});
+        use.property("overflow-wrap", &.{});
+    }
+    if (!use.complete()) { observedReadyUnused(witness, use); return observedReadyNull(ObservedFigureReadyAnchorGeometry, witness, "observed_ready.observedFigureAnchorGeometry.20"); }
+    return .{ .strut = font, .radius = radius.known, .focus = focus };
+}
+fn observedFigureMediaAfterWithWitnessPrepared(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts,
+    evaluation: ObservedFigureEvaluation, assets: anytype, witness: ?*ObservedReadyFigureWitness) !ObservedFigureMediaAfter
+{
+    const context = operation.context;
+    observedReadySubject(witness, context.anchor);
+    const generated = try observedFigureEmptyPseudoWithWitnessPrepared(a, operation, computed, fonts, context.anchor, .after, evaluation, witness);
+    if (generated == .unknown) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.1");
+    if (generated == .absent) return .{};
+    const node = generated.known.node;
+    observedReadyNode(witness, node);
+    const declarations = node.declarations; const environment = node.environment; const font = generated.known.font;
+    var use = try ObservedFigurePropertyUse.init(a, declarations); defer use.deinit(a);
+    use.customEnvironment(); use.property("content", &.{});
+    if (!try use.staticMotion(a, environment)) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.2");
+    inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch", "font-size-adjust", "font-feature-settings", "-moz-font-feature-settings", "-webkit-font-feature-settings", "font-variation-settings" }) |property|
+        use.property(property, &.{"font"});
+    use.property("direction", &.{});
+    const width = try observedFigurePreferredWidth(a, declarations, environment, .unknown);
+    const height = try observedFigureComputedLength(a, declarations, "height", &.{}, environment, font.font_scale, "auto", .automatic, .unknown, false, false);
+    use.property("width", &.{}); use.property("height", &.{});
+    if (width != .known or width.known != 15 or height != .known or height.known.unit != .px or height.known.value != 11) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.3");
+    const top = try observedFigureComputedLength(a, declarations, "top", &.{"inset"}, environment, font.font_scale, "auto", .automatic, .unknown, false, true);
+    const right = try observedFigureComputedLength(a, declarations, "right", &.{"inset"}, environment, font.font_scale, "auto", .automatic, .unknown, false, true);
+    const bottom = try observedFigureComputedLength(a, declarations, "bottom", &.{"inset"}, environment, font.font_scale, "auto", .automatic, .unknown, false, true);
+    const left = try observedFigureComputedLength(a, declarations, "left", &.{"inset"}, environment, font.font_scale, "auto", .automatic, .unknown, false, true);
+    inline for (.{ "top", "right", "bottom", "left" }) |property| use.property(property, &.{"inset"});
+    if (top != .automatic or bottom != .known or bottom.known.unit != .px or bottom.known.value != -11) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.4");
+    const physical: types.TableFloatSide = if (left == .automatic and right == .known and right.known.unit == .px and right.known.value == 6) .right
+        else if (right == .automatic and left == .known and left.known.unit == .px and left.known.value == 6) .left else return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.5");
+    const margins = try observedFigureEdges(a, declarations, environment, false, font.direction == .rtl, font.font_scale, null);
+    const padding = try observedFigureEdges(a, declarations, environment, true, font.direction == .rtl, font.font_scale, null);
+    use.boxEdges(false); use.boxEdges(true);
+    if (margins.unresolved or padding.unresolved or
+        !observedFigureEdgesZero(observedFigureFixedEdges(margins.value.?) orelse return .{ .unresolved = true }) or
+        !observedFigureEdgesZero(observedFigureFixedEdges(padding.value.?) orelse return .{ .unresolved = true })) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.6");
+    const border = (try observedFigureBorders(a, declarations, environment, font.font_scale)) orelse return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.7");
+    use.borderEdges();
+    if (border.top != .none or border.right != .none or border.bottom != .none or border.left != .none) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.8");
+    const radius = try observedFigureUniformRadius(a, declarations, environment, font.font_scale);
+    inline for (.{ "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius" }) |property|
+        use.property(property, &.{"border-radius"});
+    if (radius != .known or radius.known.value != 0) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.9");
+    const background = try observedFigureColor(a, declarations, "background-color", environment, null, null);
+    const graphic = try observedFigureGraphic(a, context, declarations, environment, .unknown, assets);
+    use.property("background-color", &.{"background"}); use.property("background-image", &.{"background"});
+    if (background.unresolved or background.value == null or background.value.?.kind != .transparent or graphic == .unknown) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.10");
+    const filter = try observedFigureKeyword(a, declarations, "filter", &.{}, environment, &.{ "none", "invert(1)" }, "none", null, false, "none");
+    use.property("filter", &.{});
+    if (filter.unresolved) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.11");
+    const outline = try observedFigureFocusOutline(a, declarations, environment, font.font_scale);
+    inline for (.{ "outline", "outline-width", "outline-style", "outline-color", "outline-offset" }) |property| use.property(property, &.{});
+    if (outline != .none) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.12");
+    const noops = .{
+        .{ "position", "absolute", "static" }, .{ "display", "inline", "inline" }, .{ "z-index", "auto", "auto" },
+        .{ "box-sizing", "content-box", "content-box" }, .{ "float", "none", "none" }, .{ "clear", "none", "none" },
+        .{ "opacity", "1", "1" }, .{ "transform", "none", "none" }, .{ "box-shadow", "none", "none" }, .{ "text-shadow", "none", "none" },
+        .{ "overflow", "visible", "visible" }, .{ "clip-path", "none", "none" },
+        .{ "contain", "none", "none" }, .{ "isolation", "auto", "auto" }, .{ "mix-blend-mode", "normal", "normal" },
+        .{ "background-size", "auto auto", "auto auto" }, .{ "background-repeat", "repeat", "repeat" },
+        .{ "background-position", "0% 0%", "0% 0%" }, .{ "background-origin", "padding-box", "padding-box" },
+        .{ "background-clip", "border-box", "border-box" }, .{ "background-attachment", "scroll", "scroll" },
+    };
+    inline for (noops) |query| {
+        observedReadyProperty(witness, query[0]);
+        if (!try observedFigureKeywordIs(a, node, query[0], &.{}, query[1], query[2])) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.13");
+        use.property(query[0], &.{});
+    }
+    inline for (.{ "visibility", "pointer-events" }, .{ "visible", "auto" }) |property, expected| {
+        observedReadyProperty(witness, property);
+        const inherited = try observedFigureInheritedKeywordAt(a, context, computed, context.anchor, property, &.{}, &.{expected}, expected);
+        if (inherited.unresolved or !std.mem.eql(u8, inherited.value.?, expected)) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.14");
+        const own = try observedFigureKeyword(a, declarations, property, &.{}, environment, &.{expected}, expected, expected, true, expected);
+        if (own.unresolved or !std.mem.eql(u8, own.value.?, expected)) return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.15");
+        use.property(property, &.{});
+    }
+    // The supported issued artwork is fixed black/white SVG, not currentColor;
+    // no glyph, border, background color or shadow can consume anchor text ink.
+    inline for (.{ "color", "text-align", "line-height", "word-break", "white-space", "text-decoration", "text-decoration-line", "text-decoration-color", "text-decoration-style" }) |property|
+        use.property(property, &.{});
+    if (!use.complete()) { observedReadyUnused(witness, use); return observedReadyUnresolved(ObservedFigureMediaAfter, witness, "observed_ready.observedFigureMediaAfter.16"); }
+    return .{ .value = .{ .width = .{ .unit = .px, .value = 15 }, .height = height.known,
+        .side = physical, .inset = .{ .unit = .px, .value = 6 }, .bottom = bottom.known,
+        .paint = if (graphic == .known) .{ .graphic = graphic.known, .invert = std.mem.eql(u8, filter.value.?, "invert(1)") } else null } };
+}
+fn observedReadyCaptionAncestor(context: FigureObservedContext, index: u32, ancestor: u32) bool {
+    if (index >= context.nodes.len or ancestor >= index) return false;
+    var cursor = context.nodes[index].parent;
+    var remaining: usize = 64;
+    while (cursor) |parent| {
+        if (remaining == 0 or parent >= index) return false;
+        remaining -= 1;
+        if (parent == ancestor) return true;
+        cursor = context.nodes[parent].parent;
+    }
+    return false;
+}
+fn observedReadyCaptionLink(context: FigureObservedContext, index: u32) ?u32 {
+    var cursor: ?u32 = index;
+    var remaining: usize = 64;
+    while (cursor) |current| {
+        if (remaining == 0 or current >= context.nodes.len or current == context.caption) return null;
+        remaining -= 1;
+        const node = context.nodes[current];
+        if (std.ascii.eqlIgnoreCase(node.tag, "a")) return current;
+        cursor = node.parent;
+    }
+    return null;
+}
+fn observedReadyCaptionKindValid(context: FigureObservedContext, index: u32) bool {
+    if (!observedReadyCaptionAncestor(context, index, context.caption)) return false;
+    const node = context.nodes[index];
+    const link = std.ascii.eqlIgnoreCase(node.tag, "a");
+    const span = std.ascii.eqlIgnoreCase(node.tag, "span");
+    const line_break = std.ascii.eqlIgnoreCase(node.tag, "br");
+    if (!link and !span and !line_break and !std.ascii.eqlIgnoreCase(node.tag, "i") and
+        !std.ascii.eqlIgnoreCase(node.tag, "b")) return false;
+    if (node.has_text == null or (line_break and node.has_text != false)) return false;
+    if (line_break) for (context.nodes) |child| if (child.parent == index) return false;
+    for (node.attributes) |attribute| {
+        if (span and std.ascii.eqlIgnoreCase(attribute.name, "class")) continue;
+        if (link and (std.ascii.eqlIgnoreCase(attribute.name, "class") or
+            std.ascii.eqlIgnoreCase(attribute.name, "href") or std.ascii.eqlIgnoreCase(attribute.name, "title"))) continue;
+        return false;
+    }
+    if (link) {
+        if (observedFigureAttribute(node, "href") == null) return false;
+        const parent = node.parent orelse return false;
+        if (observedReadyCaptionLink(context, parent) != null) return false;
+    }
+    return true;
+}
+fn observedFigureReadyCaptionPaint(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    link: u32, viewport_width: ?f64) !?types.FigureLinkPaint
+{
+    const context = operation.context;
+    if (!observedReadyCaptionKindValid(context, link) or
+        !std.ascii.eqlIgnoreCase(context.nodes[link].tag, "a")) return null;
+    var result: ?types.FigureLinkPaint = null;
+    for (context.nodes, 0..) |node, index| {
+        if (node.has_text != true or observedReadyCaptionLink(context, @intCast(index)) != link) continue;
+        const paint = (try observedFigureSourceLinkPaintForCaption(a, operation, link, @intCast(index),
+            viewport_width, null, null, true)) orelse return null;
+        if (result) |prior| {
+            if (!observedFigureDataEqual(types.FigureLinkPaint, prior, paint, 0)) return null;
+        } else result = paint;
+    }
+    return result;
+}
+const ObservedFigureCaptionInlineStyle = struct {
+    font: types.FigureMediaStrut,
+    foreground: types.FigureColor,
+};
+const ObservedFigureCaptionInlineStyles = struct {
+    nodes: []const ObservedFigureCaptionInlineStyle = &.{},
+    italic: ?ObservedFigureCaptionInlineStyle = null,
+    bold: ?ObservedFigureCaptionInlineStyle = null,
+};
+fn observedFigureCaptionInlineStylesForReady(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts,
+    colors: []const ObservedFigureComputedColor, backgrounds: []const ObservedFigureComputedColor,
+    caption_line: types.StyleLength, witness: ?*ObservedReadyFigureWitness,
+    caption_paint: ?types.FigureLinkPaint) !?ObservedFigureCaptionInlineStyles
+{
+    observedReadySubject(witness, context.caption);
+    var result: ObservedFigureCaptionInlineStyles = .{};
+    var inline_nodes: std.ArrayList(ObservedFigureCaptionInlineStyle) = .empty;
+    defer inline_nodes.deinit(a);
+    for (computed) |node| {
+        if (node.index <= context.caption) continue;
+        observedReadyNode(witness, node);
+        const observed = context.nodes[node.index];
+        if (!observedReadyCaptionKindValid(context, node.index)) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.caption_inline_shape");
+        const link_owner = observedReadyCaptionLink(context, node.index);
+        const is_link = std.ascii.eqlIgnoreCase(observed.tag, "a");
+        if (is_link) {
+            const paint = caption_paint orelse return null;
+            const link_font = (try observedFigureCaptionLinkGeometryIn(a, context, computed, fonts, backgrounds,
+                node.index, caption_line, true)) orelse return null;
+            try inline_nodes.append(a, .{ .font = link_font, .foreground = .{ .kind = .rgb, .value = paint.normal.foreground } });
+            continue;
+        }
+        const font = observedFigureFontAt(fonts, node.index) orelse return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.2");
+        const foreground: types.FigureColor = if (link_owner != null) .{ .kind = .rgb,
+            .value = (caption_paint orelse return null).normal.foreground } else
+            observedFigureColorAt(colors, node.index) orelse return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.3");
+        const background = observedFigureColorAt(backgrounds, node.index) orelse return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.4");
+        if (foreground.kind != .rgb or background.kind != .transparent) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.5");
+        const line = observedFigureUsedLineHeight(try observedFigureLineHeightAt(a, context, computed, fonts, node.index), font.font_scale) orelse return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.6");
+        if (!observedFigureDataEqual(types.StyleLength, line, caption_line, 0)) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.7");
+        var use = try ObservedFigurePropertyUse.init(a, node.declarations); defer use.deinit(a);
+        use.customEnvironment();
+        if (!try use.staticMotion(a, node.environment)) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.8");
+        inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch", "font-size-adjust", "font-feature-settings", "-moz-font-feature-settings", "-webkit-font-feature-settings", "font-variation-settings" }) |property|
+            use.property(property, &.{"font"});
+        use.property("direction", &.{}); use.property("line-height", &.{"font"}); use.property("color", &.{});
+        use.property("background-color", &.{"background"});
+        const noops = .{
+            .{ "display", "inline", "inline" }, .{ "position", "static", "static" }, .{ "float", "none", "none" },
+            .{ "clear", "none", "none" }, .{ "vertical-align", "baseline", "baseline" },
+            .{ "opacity", "1", "1" }, .{ "transform", "none", "none" }, .{ "filter", "none", "none" },
+            .{ "box-shadow", "none", "none" }, .{ "clip-path", "none", "none" },
+            .{ "contain", "none", "none" }, .{ "isolation", "auto", "auto" }, .{ "mix-blend-mode", "normal", "normal" },
+        };
+        inline for (noops) |query| {
+        observedReadyProperty(witness, query[0]);
+            if (!try observedFigureKeywordIs(a, node, query[0], &.{}, query[1], query[2])) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.9");
+            use.property(query[0], &.{});
+        }
+        inline for (.{ "visibility", "pointer-events", "text-shadow", "white-space", "text-decoration-line" },
+            .{ "visible", "auto", "none", "normal", "none" }) |property, expected| {
+        observedReadyProperty(witness, property);
+            if (link_owner != null and std.mem.eql(u8, property, "text-decoration-line")) {
+                // The A palette carries propagation through ordinary inline descendants.
+                // Their own additional decorations remain a separate refusal.
+                if (!try observedFigureKeywordIs(a, node, property, &.{"text-decoration"}, "none", "none")) return null;
+                use.property(property, &.{"text-decoration"});
+            } else {
+                const value = try observedFigureInheritedKeywordAt(a, context, computed, node.index, property,
+                    if (std.mem.eql(u8, property, "text-decoration-line")) &.{"text-decoration"} else &.{}, &.{expected}, expected);
+                if (value.unresolved or !std.mem.eql(u8, value.value.?, expected)) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.10");
+                use.property(property, if (std.mem.eql(u8, property, "text-decoration-line")) &.{"text-decoration"} else &.{});
+            }
+        }
+        // Quote spans have no outline payload. A colour alone is harmless only
+        // when the complete cascade proves that no outline is painted.
+        if ((try observedFigureFocusOutline(a, node.declarations, node.environment, font.font_scale)) != .none)
+            return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.outline");
+        inline for (.{ "outline", "outline-width", "outline-style", "outline-color", "outline-offset" }) |property|
+            use.property(property, &.{});
+        if (!use.complete()) { observedReadyUnused(witness, use); return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.11"); }
+        const value: ObservedFigureCaptionInlineStyle = .{ .font = font, .foreground = foreground };
+        try inline_nodes.append(a, value);
+        if (observed.parent != context.caption or observed.attributes.len != 0 or
+            (!std.ascii.eqlIgnoreCase(observed.tag, "i") and !std.ascii.eqlIgnoreCase(observed.tag, "b"))) continue;
+        const slot = if (std.ascii.eqlIgnoreCase(observed.tag, "i")) &result.italic else &result.bold;
+        if (slot.*) |prior| {
+            if (!observedFigureDataEqual(ObservedFigureCaptionInlineStyle, prior, value, 0)) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.12");
+        } else slot.* = value;
+    }
+    result.nodes = try inline_nodes.toOwnedSlice(a);
+    return result;
+}
+pub const ObservedReadyFigureWitness = struct {
+    stage: []const u8 = "observed_ready.cascade",
+    context_index: usize = 0,
+    subject: ?u32 = null,
+    subject_tag: [32]u8 = undefined,
+    subject_tag_len: usize = 0,
+    viewport_width: ?f64 = null,
+    reduced_motion: bool = false,
+    visited: bool = false,
+    hover: bool = false,
+    active: bool = false,
+    focus_mode: u8 = 0,
+    property: [64]u8 = undefined,
+    property_len: usize = 0,
+    css: [2048]u8 = undefined,
+    candidate_raw: [512]u8 = undefined,
+    candidate_raw_len: usize = 0,
+    candidate_truncated: bool = false,
+    reading_target: u8 = 0,
+    css_len: usize = 0,
+    css_truncated: bool = false,
+    environment_complete: bool = false,
+    environment_values: usize = 0,
+    preferred_width_kind: u8 = 0,
+    preferred_width_px: ?f64 = null,
+    expected_width_px: ?u32 = null,
+    parent_source_scale: ?f32 = null,
+    parent_native_scale: ?f32 = null,
+};
+fn observedReadyPending(witness: ?*ObservedReadyFigureWitness) ?*ObservedReadyFigureWitness {
+    const out = witness orelse return null;
+    return if (std.mem.eql(u8, out.stage, "observed_ready.cascade")) out else null;
+}
+fn observedReadyRecord(witness: ?*ObservedReadyFigureWitness, stage: []const u8) void {
+    if (witness) |out| { if (std.mem.eql(u8, out.stage, "observed_ready.cascade")) out.stage = stage; }
+}
+fn observedReadyNull(comptime T: type, witness: ?*ObservedReadyFigureWitness, stage: []const u8) ?T {
+    observedReadyRecord(witness, stage); return null;
+}
+fn observedReadyFalse(witness: ?*ObservedReadyFigureWitness, stage: []const u8) bool {
+    observedReadyRecord(witness, stage); return false;
+}
+fn observedReadyUnknown(comptime T: type, witness: ?*ObservedReadyFigureWitness, stage: []const u8) T {
+    observedReadyRecord(witness, stage); return .unknown;
+}
+fn observedReadyUnresolved(comptime T: type, witness: ?*ObservedReadyFigureWitness, stage: []const u8) T {
+    observedReadyRecord(witness, stage); return .{ .unresolved = true };
+}
+fn observedReadySubject(witness: ?*ObservedReadyFigureWitness, subject: u32) void {
+    if (observedReadyPending(witness)) |out| {
+        out.subject = subject;
+        out.subject_tag_len = 0;
+        out.property_len = 0; out.candidate_raw_len = 0; out.candidate_truncated = false;
+        out.css_len = 0; out.css_truncated = false;
+        out.environment_complete = false; out.environment_values = 0;
+    }
+}
+fn observedReadyProperty(witness: ?*ObservedReadyFigureWitness, name: []const u8) void {
+    if (observedReadyPending(witness)) |out| {
+        out.candidate_raw_len = 0; out.candidate_truncated = false;
+        out.property_len = @min(name.len, out.property.len);
+        @memcpy(out.property[0..out.property_len], name[0..out.property_len]);
+    }
+}
+fn observedReadyCandidate(witness: ?*ObservedReadyFigureWitness, candidate: ObservedFigureDeclaration) void {
+    observedReadyProperty(witness, candidate.name);
+    if (observedReadyPending(witness)) |out| {
+        out.candidate_raw_len = @min(candidate.raw.len, out.candidate_raw.len);
+        @memcpy(out.candidate_raw[0..out.candidate_raw_len], candidate.raw[0..out.candidate_raw_len]);
+        out.candidate_truncated = candidate.raw.len != out.candidate_raw_len;
+    }
+}
+fn observedReadyDeclarations(witness: ?*ObservedReadyFigureWitness, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment) void {
+    if (observedReadyPending(witness)) |out| {
+        out.css_len = 0; out.css_truncated = false; out.candidate_raw_len = 0; out.candidate_truncated = false;
+        out.environment_complete = environment.complete; out.environment_values = environment.values.len;
+        for (declarations) |declaration| {
+            for ([_][]const u8{ declaration.name, ":", declaration.raw, ";" }) |part| {
+                const count = @min(part.len, out.css.len - out.css_len);
+                @memcpy(out.css[out.css_len..][0..count], part[0..count]); out.css_len += count;
+                if (count != part.len) out.css_truncated = true;
+            }
+        }
+    }
+}
+fn observedReadyNode(witness: ?*ObservedReadyFigureWitness, node: ObservedFigureComputedNode) void {
+    observedReadySubject(witness, node.index);
+    observedReadyDeclarations(witness, node.declarations, node.environment);
+}
+fn observedReadyUnused(witness: ?*ObservedReadyFigureWitness, use: ObservedFigurePropertyUse) void {
+    for (use.declarations, use.used) |declaration, used| if (!used or declaration.syntax_unknown) {
+        observedReadyCandidate(witness, declaration); return;
+    };
+}
+const ObservedFigureReadyRoles = struct {
+    frame: ObservedFigureFrameCaptionGeometry,
+    image: ObservedFigureImageGeometry,
+    anchor: ObservedFigureReadyAnchorGeometry,
+    before: ?types.ContainerStyle,
+    after: ?types.FigureMediaAfter,
+    caption_inline: ObservedFigureCaptionInlineStyles,
+    computed: []const ObservedFigureComputedNode,
+    fonts: ObservedFigureFonts,
+    colors: []const ObservedFigureComputedColor,
+    backgrounds: []const ObservedFigureComputedColor,
+};
+fn observedFigureReadyRolesWithWitnessPrepared(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    evaluation: ObservedFigureEvaluation, expected_width: u32, assets: anytype, witness: ?*ObservedReadyFigureWitness,
+    caption_paint: ?types.FigureLinkPaint) !?ObservedFigureReadyRoles
+{
+    const context = operation.context;
+    observedReadySubject(witness, context.frame);
+    if (!operation.valid or context.layout_kind != .table_caption or context.media_kind != .image or expected_width == 0 or
+        context.nodes[context.frame].has_text != false or context.nodes[context.anchor].has_text != false or
+        context.nodes[context.media].has_text != false) return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.1");
+    // The native media group is exactly one ready image. Extra direct frame or
+    // anchor children would need their own box, paint and action representation.
+    for (context.nodes, 0..) |node, index| {
+        if (node.parent == context.frame and index != context.anchor and index != context.caption) return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.2");
+        if (node.parent == context.anchor and index != context.media) return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.3");
+        if (node.parent == context.media) return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.4");
+    }
+    const computed = (try observedFigureComputedNodesPrepared(a, operation, evaluation)) orelse return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.5");
+    const owned = (try operation.owned()) orelse return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.6");
+    if (observedFigureOtherPseudoEffectsWithWitness(context, owned, evaluation, witness)) return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.7");
+    const fonts = (try observedFigureComputedFontsWithWitness(a, context, computed, witness)) orelse return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.8");
+    const colors = (try observedFigureComputedColorsWithWitness(a, context, computed, null, witness)) orelse return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.9");
+    const backgrounds = (try observedFigureComputedBackgroundsWithWitness(a, context, computed, colors, witness)) orelse return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.10");
+    const frame = (try observedFigureFrameCaptionGeometryWithWitness(a, context, computed, fonts, colors, backgrounds, witness)) orelse return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.11");
+    const image = (try observedFigureImageGeometryWithWitness(a, context, computed, fonts, colors, backgrounds, expected_width, witness)) orelse return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.12");
+    const anchor = (try observedFigureReadyAnchorGeometryWithWitness(a, context, computed, fonts, backgrounds, image, witness)) orelse return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.13");
+    const before = try observedFigureCaptionBeforeWithWitnessPrepared(a, operation, computed, fonts, evaluation, witness);
+    const after = try observedFigureMediaAfterWithWitnessPrepared(a, operation, computed, fonts, evaluation, assets, witness);
+    if (before.unresolved or after.unresolved) return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.14");
+    const caption_inline = (try observedFigureCaptionInlineStylesForReady(a, context, computed, fonts, colors, backgrounds,
+        frame.caption_line_height, witness, caption_paint)) orelse return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.15");
+    // Unknown or nonempty generated boxes anywhere in the owned subtree cannot
+    // disappear behind an otherwise supported frame/caption role assignment.
+    for (computed) |node| {
+        // Computed nodes contain only the owned subtree and its topologically
+        // earlier ancestors. Siblings are absent from this array.
+        if (node.index < context.frame) continue;
+        inline for (.{ GeneratedFigurePseudo.before, GeneratedFigurePseudo.after }) |pseudo| {
+            if (!((node.index == context.caption and pseudo == .before) or (node.index == context.anchor and pseudo == .after))) {
+                if ((try observedFigureEmptyPseudoWithWitnessPrepared(a, operation, computed, fonts, node.index, pseudo, evaluation, witness)) != .absent) return observedReadyNull(ObservedFigureReadyRoles, witness, "observed_ready.observedFigureReadyRoles.16");
+            }
+        }
+    }
+    return .{ .frame = frame, .image = image, .anchor = anchor, .before = before.value, .after = after.value, .caption_inline = caption_inline,
+        .computed = computed, .fonts = fonts, .colors = colors, .backgrounds = backgrounds };
+}
+const ObservedFigureReadyState = struct {
+    frame: ObservedFigureFrameCaptionGeometry,
+    image: ObservedFigureImageGeometry,
+    caption_inline: ObservedFigureCaptionInlineStyles,
+    caption_paint: ?types.FigureLinkPaint = null,
+    media: types.FigureMediaLayout,
+    before: ?types.ContainerStyle,
+    anchor_radius: types.StyleLength,
+    parent_font: types.FigureMediaStrut,
+    root_family: []const u8,
+    // Retain the original source basis in all state/head equality checks.
+    source_root_scale: f32,
+};
+fn observedFigureReadyStateWithWitnessPrepared(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    viewport_width: ?f64, expected_width: u32, assets: anytype, witness: ?*ObservedReadyFigureWitness) !?ObservedFigureReadyState
+{
+    const context = operation.context;
+    if (observedReadyPending(witness)) |out| out.viewport_width = viewport_width;
+    var caption_link_count: usize = 0;
+    var caption_paint: ?types.FigureLinkPaint = null;
+    for (context.nodes, 0..) |node, index| {
+        if (!std.ascii.eqlIgnoreCase(node.tag, "a") or !observedReadyCaptionAncestor(context, @intCast(index), context.caption)) continue;
+        if (caption_link_count == 16) return null;
+        const paint = (try observedFigureReadyCaptionPaint(a, operation, @intCast(index), viewport_width)) orelse return null;
+        if (caption_paint) |prior| {
+            if (!observedFigureDataEqual(types.FigureLinkPaint, prior, paint, 0)) return null;
+        } else caption_paint = paint;
+        caption_link_count += 1;
+    }
+    var result: ?ObservedFigureReadyState = null;
+    var focus_outline: ?types.FigureFocusOutline = null;
+    var saw_focus_visible = false;
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    for ([_]bool{ false, true }) |reduced_motion| for ([_]bool{ false, true }) |visited|
+        for ([_]bool{ false, true }) |hover| for ([_]bool{ false, true }) |active|
+        for ([_]ObservedFigureFocusMode{ .unfocused, .focused, .focus_visible }) |focus| {
+            _ = scratch.reset(.retain_capacity);
+            if (observedReadyPending(witness)) |out| {
+                out.reduced_motion = reduced_motion; out.visited = visited; out.hover = hover; out.active = active;
+                out.focus_mode = @intFromEnum(focus);
+                out.preferred_width_kind = 0; out.preferred_width_px = null; out.expected_width_px = null;
+            }
+            const roles = (try observedFigureReadyRolesWithWitnessPrepared(scratch.allocator(), operation, .{
+                .viewport_width = viewport_width, .reduced_motion = reduced_motion, .link_subject = context.anchor,
+                .focus_visible_supported = true,
+                .link_state = .{ .visited = visited, .hover = hover, .active = active,
+                    .focus = focus != .unfocused, .focus_visible = focus == .focus_visible, .focus_within = focus != .unfocused },
+            }, expected_width, assets, witness, caption_paint)) orelse return observedReadyNull(ObservedFigureReadyState, witness, "observed_ready.observedFigureReadyState.1");
+            const current_focus: ?types.FigureFocusOutline = switch (roles.anchor.focus) {
+                .none => null, .known => |value| value, .unknown => return null,
+            };
+            if (focus == .focus_visible) {
+                if (saw_focus_visible and !observedFigureDataEqual(?types.FigureFocusOutline, focus_outline, current_focus, 0)) return observedReadyNull(ObservedFigureReadyState, witness, "observed_ready.observedFigureReadyState.2");
+                if (!saw_focus_visible) focus_outline = observedFigureDataClone(?types.FigureFocusOutline, a, current_focus, 0) catch |failure| switch (failure) {
+                    error.OutOfMemory => return error.OutOfMemory, error.InvalidStyleProfile => return null,
+                };
+                saw_focus_visible = true;
+            } else if (current_focus != null) return observedReadyNull(ObservedFigureReadyState, witness, "observed_ready.observedFigureReadyState.3");
+            const current: ObservedFigureReadyState = .{ .frame = roles.frame, .image = roles.image,
+                .caption_inline = roles.caption_inline, .caption_paint = caption_paint, .before = roles.before, .anchor_radius = roles.anchor.radius,
+                .parent_font = observedFigureFontAt(roles.fonts, context.nodes[context.frame].parent orelse return null) orelse return null,
+                .root_family = roles.fonts.root_family, .source_root_scale = roles.fonts.source_root_scale,
+                .media = .{ .strut = roles.anchor.strut, .vertical_align = .middle,
+                    .max_width = roles.image.max_width, .positioning = .relative_auto, .after = roles.after } };
+            // Comparing semantic output excludes declaration arrays and private
+            // arena addresses. Every simultaneous input/visited/motion state
+            // must preserve actual geometry, caption paint and graphic policy.
+            if (result) |prior| {
+                if (!observedFigureDataEqual(ObservedFigureReadyState, prior, current, 0)) return observedReadyNull(ObservedFigureReadyState, witness, "observed_ready.observedFigureReadyState.4");
+            } else result = observedFigureDataClone(ObservedFigureReadyState, a, current, 0) catch |failure| switch (failure) {
+                error.OutOfMemory => return error.OutOfMemory, error.InvalidStyleProfile => return null,
+            };
+        };
+    if (result == null or !saw_focus_visible) return observedReadyNull(ObservedFigureReadyState, witness, "observed_ready.observedFigureReadyState.5");
+    result.?.media.focus_outline = focus_outline;
+    return result;
+}
+const ObservedFigureReadyViewport = struct {
+    base: ObservedFigureReadyState,
+    states: []const types.FigureViewportState,
+};
+pub const FigureObservedReadyStyle = struct {
+    geometry: ObservedFigureReadyState,
+    layout: types.TableCaptionLayout,
+};
+pub fn resolveObservedReadyFigure(a: std.mem.Allocator, contexts: []const FigureObservedContext,
+    expected_width: u32, native_parent: types.FigureMediaStrut, assets: anytype) !?FigureObservedReadyStyle
+{
+    return resolveObservedReadyFigureWithWitness(a, contexts, expected_width, native_parent, assets, null);
+}
+pub fn resolveObservedReadyFigureWithWitness(a: std.mem.Allocator, contexts: []const FigureObservedContext,
+    expected_width: u32, native_parent: types.FigureMediaStrut, assets: anytype, witness: ?*ObservedReadyFigureWitness) !?FigureObservedReadyStyle
+{
+    if (contexts.len == 0 or contexts.len > 128 or expected_width == 0) return observedReadyNull(FigureObservedReadyStyle, witness, "observed_ready.resolveObservedReadyFigure.1");
+    var agreed: ?FigureObservedReadyStyle = null;
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    for (contexts, 0..) |context, context_index| {
+        if (observedReadyPending(witness)) |out| {
+            out.* = .{};
+            out.context_index = context_index; out.reading_target = @intFromEnum(context.styles.reading_target);
+        }
+        _ = scratch.reset(.retain_capacity);
+        const viewport = (try observedFigureReadyViewportWithWitness(scratch.allocator(), context, expected_width, assets, witness)) orelse return observedReadyNull(FigureObservedReadyStyle, witness, "observed_ready.resolveObservedReadyFigure.2");
+        if (observedReadyPending(witness)) |out| {
+            out.parent_source_scale = viewport.base.parent_font.font_scale; out.parent_native_scale = native_parent.font_scale;
+        }
+        if (!observedFigureNativeFontMatches(viewport.base.parent_font, native_parent)) return observedReadyNull(FigureObservedReadyStyle, witness, "observed_ready.resolveObservedReadyFigure.3");
+        const current: FigureObservedReadyStyle = .{ .geometry = viewport.base,
+            .layout = .{ .collapse = .collapse, .wrapper = viewport.base.frame.wrapper, .table_border = viewport.base.frame.table_border,
+                .caption_border = viewport.base.frame.caption_border, .media = viewport.base.media,
+                .caption_before = viewport.base.before, .viewport_states = viewport.states,
+                .caption_link_paint = viewport.base.caption_paint } };
+        if (!types.validTableCaptionLayout(current.layout)) return observedReadyNull(FigureObservedReadyStyle, witness, "observed_ready.resolveObservedReadyFigure.4");
+        if (agreed) |prior| {
+            // Every matching source candidate under both actual head cascades
+            // must issue the same complete semantic result, not just its width.
+            if (!observedFigureDataEqual(FigureObservedReadyStyle, prior, current, 0)) return observedReadyNull(FigureObservedReadyStyle, witness, "observed_ready.resolveObservedReadyFigure.5");
+        } else agreed = observedFigureDataClone(FigureObservedReadyStyle, a, current, 0) catch |failure| switch (failure) {
+            error.OutOfMemory => return error.OutOfMemory, error.InvalidStyleProfile => return null,
+        };
+    }
+    return agreed;
+}
+fn observedFigureReadyFixedGeometryEqual(left: ObservedFigureReadyState, right: ObservedFigureReadyState) bool {
+    var first = left; var second = right;
+    // These are the only complete replacements carried by a viewport state.
+    first.frame.wrapper = .{}; second.frame.wrapper = .{};
+    first.image.max_width = null; second.image.max_width = null;
+    first.before = null; second.before = null;
+    first.media = second.media;
+    return observedFigureDataEqual(ObservedFigureReadyState, first, second, 0);
+}
+fn observedFigureReadyViewport(a: std.mem.Allocator, context: FigureObservedContext,
+    expected_width: u32, assets: anytype) !?ObservedFigureReadyViewport
+{
+    return observedFigureReadyViewportWithWitness(a, context, expected_width, assets, null);
+}
+fn observedFigureReadyViewportWithWitness(a: std.mem.Allocator, context: FigureObservedContext,
+    expected_width: u32, assets: anytype, witness: ?*ObservedReadyFigureWitness) !?ObservedFigureReadyViewport
+{
+    var operation = ObservedFigureOperation.init(a, context);
+    defer operation.deinit();
+    return observedFigureReadyViewportWithWitnessPrepared(a, &operation, expected_width, assets, witness);
+}
+fn observedFigureReadyViewportWithWitnessPrepared(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    expected_width: u32, assets: anytype, witness: ?*ObservedReadyFigureWitness) !?ObservedFigureReadyViewport
+{
+    const boundaries = (try observedFigureViewportBoundariesPrepared(a, operation, .{})) orelse return observedReadyNull(ObservedFigureReadyViewport, witness, "observed_ready.observedFigureReadyViewport.1");
+    defer a.free(boundaries);
+    operation.retain_rule_candidates = true;
+    const upper = if (boundaries.len == 0) 1 else boundaries[boundaries.len - 1].value + 1;
+    if (!std.math.isFinite(upper)) return observedReadyNull(ObservedFigureReadyViewport, witness, "observed_ready.observedFigureReadyViewport.2");
+    const base = (try observedFigureReadyStateWithWitnessPrepared(a, operation, upper, expected_width, assets, witness)) orelse return observedReadyNull(ObservedFigureReadyViewport, witness, "observed_ready.observedFigureReadyViewport.3");
+    var above = base;
+    var states: std.ArrayList(types.FigureViewportState) = .empty;
+    errdefer states.deinit(a);
+    var cursor = boundaries.len;
+    while (cursor != 0) {
+        cursor -= 1;
+        const boundary = boundaries[cursor].value;
+        if (!std.math.isFinite(boundary) or boundary < 0) { states.deinit(a); return observedReadyNull(ObservedFigureReadyViewport, witness, "observed_ready.observedFigureReadyViewport.4"); }
+        const below_width = if (boundary == 0) 0 else if (cursor == 0) boundary / 2
+            else boundaries[cursor - 1].value + (boundary - boundaries[cursor - 1].value) / 2;
+        const exact = (try observedFigureReadyStateWithWitnessPrepared(a, operation, boundary, expected_width, assets, witness)) orelse { states.deinit(a); return observedReadyNull(ObservedFigureReadyViewport, witness, "observed_ready.observedFigureReadyViewport.5"); };
+        const below = if (boundary == 0) exact else (try observedFigureReadyStateWithWitnessPrepared(a, operation, below_width, expected_width, assets, witness)) orelse { states.deinit(a); return observedReadyNull(ObservedFigureReadyViewport, witness, "observed_ready.observedFigureReadyViewport.6"); };
+        if (!observedFigureReadyFixedGeometryEqual(base, exact) or !observedFigureReadyFixedGeometryEqual(base, below)) { states.deinit(a); return observedReadyNull(ObservedFigureReadyViewport, witness, "observed_ready.observedFigureReadyViewport.7"); }
+        if (observedFigureDataEqual(ObservedFigureReadyState, exact, above, 0) and
+            observedFigureDataEqual(ObservedFigureReadyState, below, above, 0)) continue;
+        // The wire predicate is an inclusive integer max-width over a real
+        // viewport. A min-width edge, a fractional threshold, or a distinct
+        // value only at the boundary cannot be rounded into that contract.
+        if (!observedFigureDataEqual(ObservedFigureReadyState, exact, below, 0) or
+            boundary > std.math.maxInt(u32) or @floor(boundary) != boundary or
+            states.items.len == types.max_figure_viewport_states) { states.deinit(a); return observedReadyNull(ObservedFigureReadyViewport, witness, "observed_ready.observedFigureReadyViewport.8"); }
+        try states.append(a, .{ .max_width_px = @intFromFloat(boundary), .wrapper = below.frame.wrapper,
+            .media = below.media, .caption_before = below.before });
+        above = below;
+    }
+    return .{ .base = base, .states = try states.toOwnedSlice(a) };
+}
+fn observedFigureCaptionLinkGeometryIn(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts,
+    backgrounds: []const ObservedFigureComputedColor, index: u32, caption_line: types.StyleLength,
+    ready_caption: bool) !?types.FigureMediaStrut
+{
+    if (index >= context.nodes.len or !std.ascii.eqlIgnoreCase(context.nodes[index].tag, "a")) return null;
+    if (ready_caption) {
+        if (!observedReadyCaptionKindValid(context, index)) return null;
+    } else {
+        if (context.nodes[index].parent != context.caption or context.nodes[index].has_text != true) return null;
+        for (context.nodes) |child| if (child.parent == index) return null;
+    }
+    const node = observedFigureComputedNode(computed, index) orelse return null;
+    const font = observedFigureFontAt(fonts, index) orelse return null;
+    const caption_font = observedFigureFontAt(fonts, context.caption) orelse return null;
+    if (font.direction != caption_font.direction) return null;
+    const background = observedFigureColorAt(backgrounds, index) orelse return null;
+    if (background.kind != .transparent) return null;
+    const line = observedFigureUsedLineHeight(try observedFigureLineHeightAt(a, context, computed, fonts, index), font.font_scale) orelse return null;
+    if (!observedFigureDataEqual(types.StyleLength, line, caption_line, 0)) return null;
+    var use = try ObservedFigurePropertyUse.init(a, node.declarations); defer use.deinit(a);
+    use.customEnvironment();
+    if (!try use.staticMotion(a, node.environment)) return null;
+    inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch", "font-size-adjust", "font-feature-settings", "-moz-font-feature-settings", "-webkit-font-feature-settings", "font-variation-settings" }) |property|
+        use.property(property, &.{"font"});
+    use.property("direction", &.{}); use.property("line-height", &.{"font"});
+    const margins = try observedFigureEdges(a, node.declarations, node.environment, false, font.direction == .rtl, font.font_scale, null);
+    const padding = try observedFigureEdges(a, node.declarations, node.environment, true, font.direction == .rtl, font.font_scale, null);
+    use.boxEdges(false); use.boxEdges(true);
+    if (margins.unresolved or padding.unresolved or
+        !observedFigureEdgesZero(observedFigureFixedEdges(margins.value.?) orelse return null) or
+        !observedFigureEdgesZero(observedFigureFixedEdges(padding.value.?) orelse return null)) return null;
+    const borders = (try observedFigureBorders(a, node.declarations, node.environment, font.font_scale)) orelse return null;
+    if (borders.top != .none or borders.right != .none or borders.bottom != .none or borders.left != .none) return null;
+    use.borderEdges();
+    const radius = try observedFigureUniformRadius(a, node.declarations, node.environment, font.font_scale);
+    if (radius != .known or (try observedFigureGraphic(a, context, node.declarations, node.environment, .unknown,
+        &[_]struct { url: []const u8, graphic: types.FigureMediaGraphic }{})) != .none) return null;
+    inline for (.{ "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius" }) |property|
+        use.property(property, &.{"border-radius"});
+    use.property("background-color", &.{"background"}); use.property("background-image", &.{"background"});
+    const noops = .{
+        .{ "display", "inline", "inline" }, .{ "position", "static", "static" }, .{ "z-index", "auto", "auto" },
+        .{ "float", "none", "none" }, .{ "clear", "none", "none" }, .{ "vertical-align", "baseline", "baseline" },
+        .{ "opacity", "1", "1" }, .{ "transform", "none", "none" }, .{ "filter", "none", "none" },
+        .{ "box-shadow", "none", "none" }, .{ "overflow", "visible", "visible" }, .{ "clip-path", "none", "none" },
+        .{ "contain", "none", "none" }, .{ "isolation", "auto", "auto" }, .{ "mix-blend-mode", "normal", "normal" },
+    };
+    inline for (noops) |query| {
+        if (!try observedFigureKeywordIs(a, node, query[0], &.{}, query[1], query[2])) return null;
+        use.property(query[0], &.{});
+    }
+    inline for (.{ "visibility", "pointer-events", "text-shadow", "white-space", "word-break" },
+        .{ "visible", "auto", "none", "normal", "break-word" }) |property, expected| {
+        const value = try observedFigureInheritedKeywordAt(a, context, computed, index, property, &.{}, &.{expected},
+            if (std.mem.eql(u8, property, "word-break")) "normal" else expected);
+        if (value.unresolved or !std.mem.eql(u8, value.value.?, expected)) return null;
+        use.property(property, &.{});
+    }
+    // The exact computed normal white-space + word-break:break-word above
+    // already selects the represented caption emergency-wrap policy. CSS Text
+    // 3 makes overflow-wrap (legacy alias word-wrap) immaterial under that
+    // value; no unknown/normal/break-all word-break arm reaches this point.
+    use.property("word-wrap", &.{});
+    use.property("overflow-wrap", &.{});
+    // The full palette query separately validates these actual A/text states.
+    // No unvisited color, outline or underline is inferred from an unknown arm.
+    use.property("color", &.{});
+    inline for (.{ "text-decoration-line", "text-decoration-color", "text-decoration-style", "text-decoration-thickness" }) |property|
+        use.property(property, &.{"text-decoration"});
+    inline for (.{ "outline", "outline-width", "outline-style", "outline-color", "outline-offset" }) |property| use.property(property, &.{});
+    // text-align does not apply to this closed inline A with one text node.
+    use.property("text-align", &.{});
+    return if (use.complete()) font else null;
+}
+pub const ObservedMissingFigureWitness = struct {
+    stage: []const u8 = "observed_missing.cascade",
+    context_index: usize = 0,
+    subject: ?u32 = null,
+};
+fn observedMissingFigureRefusal(comptime T: type, witness: ?*ObservedMissingFigureWitness, stage: []const u8) ?T {
+    if (witness) |out| if (std.mem.eql(u8, out.stage, "observed_missing.cascade")) { out.stage = stage; };
+    return null;
+}
+fn observedFigureSourceLinkPaintForCaption(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    link: u32, text: u32, viewport_width: ?f64, missing_width: ?u32,
+    witness: ?*ObservedMissingFigureWitness, ready_caption: bool) !?types.FigureLinkPaint
+{
+    const context = operation.context;
+    if (!operation.valid or link >= context.nodes.len or text >= context.nodes.len or
+        !std.ascii.eqlIgnoreCase(context.nodes[link].tag, "a") or context.nodes[text].has_text != true) return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.1");
+    const href = observedFigureAttribute(context.nodes[link], "href") orelse return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.2");
+    if (href.len == 0) return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.3");
+    const atomic = context.media_kind == .missing and link == context.anchor and text == context.media;
+    if (ready_caption) {
+        if (!observedReadyCaptionKindValid(context, link) or observedReadyCaptionLink(context, text) != link or
+            (text != link and !observedReadyCaptionKindValid(context, text))) return null;
+    } else if (!atomic and (link != text or context.nodes[link].parent != context.caption)) return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.4");
+    var samples: [24]ObservedFigureLinkPaintSample = undefined;
+    var count: usize = 0;
+    var policy_seen = false;
+    var policies: [2]?types.FontFeaturePolicy = .{ null, null };
+    var focus_outline: ?types.FigureFocusOutline = null;
+    var saw_focus_visible = false;
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    for ([_]bool{ false, true }) |visited| for ([_]bool{ false, true }) |hover|
+        for ([_]bool{ false, true }) |active| for ([_]ObservedFigureFocusMode{ .unfocused, .focused, .focus_visible }) |focus| {
+            var agreed: ?ObservedFigureLinkPaintSample = null;
+            for ([_]bool{ false, true }) |reduced_motion| {
+                _ = scratch.reset(.retain_capacity);
+                const query_allocator = scratch.allocator();
+                const evaluation: ObservedFigureEvaluation = .{ .viewport_width = viewport_width, .missing_width = missing_width,
+                    .reduced_motion = reduced_motion, .link_subject = link, .focus_visible_supported = true,
+                    .link_state = .{ .visited = visited, .hover = hover, .active = active,
+                        .focus = focus != .unfocused, .focus_visible = focus == .focus_visible, .focus_within = focus != .unfocused } };
+                const computed = (try observedFigureComputedNodesPrepared(query_allocator, operation, evaluation)) orelse return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.5");
+                const fonts = (try observedFigureComputedFonts(query_allocator, context, computed)) orelse return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.6");
+                const link_font = observedFigureFontAt(fonts, link) orelse return null;
+                const text_font = observedFigureFontAt(fonts, text) orelse return null;
+                const current_policies = [2]?types.FontFeaturePolicy{ link_font.font_features, text_font.font_features };
+                if (policy_seen and !std.meta.eql(policies, current_policies)) return null;
+                policies = current_policies; policy_seen = true;
+                const colors = (try observedFigureComputedColors(query_allocator, context, computed, null)) orelse return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.7");
+                const foreground = observedFigureColorAt(colors, text) orelse return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.8");
+                if (foreground.kind != .rgb) return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.9");
+                const node = observedFigureComputedNode(computed, if (ready_caption) link else text) orelse return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.10");
+                if (ready_caption) {
+                    const link_color = observedFigureColorAt(colors, link) orelse return null;
+                    if (!observedFigureDataEqual(types.FigureColor, link_color, foreground, 0)) return null;
+                    var child = text;
+                    var remaining: usize = 64;
+                    while (child != link) {
+                        if (remaining == 0) return null;
+                        remaining -= 1;
+                        const descendant = observedFigureComputedNode(computed, child) orelse return null;
+                        if (!try observedFigureKeywordIs(query_allocator, descendant, "text-decoration-line", &.{"text-decoration"}, "none", "none")) return null;
+                        child = context.nodes[child].parent orelse return null;
+                    }
+                }
+                if (atomic and !try observedFigureKeywordIs(query_allocator, node, "display", &.{}, "inline-block", "inline")) return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.11");
+                // Text decoration is not inherited by default. In particular an
+                // A's decoration does not propagate into the atomic Missing SPAN.
+                const decoration = try observedFigureKeyword(query_allocator, node.declarations, "text-decoration-line", &.{"text-decoration"},
+                    node.environment, &.{ "none", "underline" }, "none", null, false, "none");
+                if (decoration.unresolved) return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.12");
+                const underline = std.mem.eql(u8, decoration.value.?, "underline");
+                if (underline) {
+                    if (!try observedFigureKeywordIs(query_allocator, node, "text-decoration-style", &.{"text-decoration"}, "solid", "solid") or
+                        !try observedFigureKeywordIs(query_allocator, node, "text-decoration-thickness", &.{"text-decoration"}, "auto", "auto")) return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.13");
+                    const ink = try observedFigureColor(query_allocator, node.declarations, "text-decoration-color", node.environment, null, foreground);
+                    if (ink.unresolved or ink.value == null or !observedFigureDataEqual(types.FigureColor, ink.value.?, foreground, 0)) return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.14");
+                }
+                const anchor = observedFigureComputedNode(computed, link) orelse return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.15");
+                const anchor_font = observedFigureFontAt(fonts, link) orelse return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.16");
+                const focus_value = try observedFigureFocusOutline(query_allocator, anchor.declarations, anchor.environment, anchor_font.font_scale);
+                const outline: ?types.FigureFocusOutline = switch (focus_value) { .none => null, .known => |value| value, .unknown => return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.17") };
+                if (focus == .focus_visible) {
+                    if (saw_focus_visible and !observedFigureDataEqual(?types.FigureFocusOutline, focus_outline, outline, 0)) return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.18");
+                    if (!saw_focus_visible) focus_outline = observedFigureDataClone(?types.FigureFocusOutline, a, outline, 0) catch |failure| switch (failure) {
+                        error.OutOfMemory => return error.OutOfMemory, error.InvalidStyleProfile => return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.19"),
+                    };
+                    saw_focus_visible = true;
+                } else if (outline != null) return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.20");
+                const sample: ObservedFigureLinkPaintSample = .{ .visited = visited, .hover = hover, .active = active,
+                    .focus = focus, .paint = .{ .foreground = foreground.value.?, .underline = underline } };
+                if (agreed) |prior| {
+                    if (!observedFigureDataEqual(ObservedFigureLinkPaintSample, prior, sample, 0)) return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.21");
+                } else agreed = observedFigureDataClone(ObservedFigureLinkPaintSample, a, sample, 0) catch |failure| switch (failure) {
+                    error.OutOfMemory => return error.OutOfMemory, error.InvalidStyleProfile => return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.22"),
+                };
+            }
+            samples[count] = agreed orelse return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.23"); count += 1;
+        };
+    var result = observedFigureLinkPaintSamples(samples[0..count]) orelse return observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.24");
+    result.focus_outline = focus_outline;
+    return if (saw_focus_visible and types.validFigureLinkPaint(result)) result
+        else observedMissingFigureRefusal(types.FigureLinkPaint, witness, "observed_missing.observedFigureSourceLinkPaintWithWitness.final_palette");
+}
+fn observedFigureComputedFonts(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode) !?ObservedFigureFonts
+{
+    return observedFigureComputedFontsWithWitness(a, context, computed, null);
+}
+fn observedFigureComputedFontsWithWitness(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, witness: ?*ObservedReadyFigureWitness) !?ObservedFigureFonts
+{
+    if (!figureObservedContextValid(context) or computed.len == 0 or computed.len > 512) return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.observedFigureComputedFonts.1");
+    const result = try a.alloc(ObservedFigureComputedFont, computed.len);
+    // First resolve the complete CSS inheritance/rem cascade in the HTML
+    // initial-medium unit. No browser pixel size is assumed. The selected
+    // parser body supplies the normal-body reference only after this cascade.
+    const initial: types.FigureMediaStrut = .{ .font_scale = 1, .direction = .ltr };
+    var html_scale: ?f32 = null;
+    var source_root_scale: ?f32 = null;
+    var root_family: ?[]const u8 = null;
+    for (computed, result, 0..) |node, *out, position| {
+        observedReadyNode(witness, node);
+        if (node.index >= context.nodes.len or (position != 0 and node.index <= computed[position - 1].index)) return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.observedFigureComputedFonts.2");
+        const observed = context.nodes[node.index];
+        // Their non-inherited UA font defaults are outside this initial source
+        // transform. Native model coverage of richer children does not admit
+        // such source without independently resolving those defaults.
+        for ([_][]const u8{ "big", "small", "sup", "sub", "font", "code", "kbd", "samp", "tt", "pre",
+            "h1", "h2", "h3", "h4", "h5", "h6", "th", "input", "button", "select", "textarea", "rt", "rp" }) |tag|
+            if (std.ascii.eqlIgnoreCase(observed.tag, tag)) return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.observedFigureComputedFonts.3");
+        var parent = initial;
+        var inherited_family: ?[]const u8 = null;
+        if (observed.parent) |parent_index| {
+            var found = false;
+            for (result[0..position]) |prior| if (prior.index == parent_index) {
+                parent = prior.value; inherited_family = prior.family; found = true; break;
+            };
+            if (!found) return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.observedFigureComputedFonts.4");
+        } else if (position != 0 or node.index != 0) return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.observedFigureComputedFonts.5");
+        const family = try observedFigureFontFamilyWithWitness(a, node, inherited_family, if (node.index < context.root) null else witness);
+        const font = (try observedFigureOwnFontInWithWitness(a, observed, node, parent, 1,
+            if (node.index == 0) @as(f32, 1) else html_scale orelse return null, true, witness)) orelse return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.observedFigureComputedFonts.6");
+        if (node.index == 0) html_scale = font.font_scale;
+        if (node.index == context.root) {
+            root_family = family orelse return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.observedFigureComputedFonts.7");
+            source_root_scale = font.font_scale;
+        }
+        if (node.index >= context.root) {
+            const baseline = root_family orelse return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.observedFigureComputedFonts.8");
+            if (family == null or !std.ascii.eqlIgnoreCase(baseline, family.?)) return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.observedFigureComputedFonts.9");
+        }
+        out.* = .{ .index = node.index, .value = font, .family = family };
+    }
+    // The source issuer binds context.root to the selected mw-parser-output
+    // body. Never use the Figure parent, a child, or the native expected value
+    // as this reference: authored descendant scaling must remain observable.
+    const body_scale = source_root_scale orelse return null;
+    if (!std.math.isFinite(body_scale) or body_scale <= 0) return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.body_font_origin");
+    for (result) |*font| {
+        const normalized = @as(f64, font.value.font_scale) / @as(f64, body_scale);
+        if (!std.math.isFinite(normalized) or normalized < 0 or normalized > std.math.floatMax(f32))
+            return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.body_font_range");
+        const narrowed: f32 = @floatCast(normalized);
+        if (normalized != 0 and narrowed == 0) return observedReadyNull(ObservedFigureFonts, witness, "observed_ready.body_font_range");
+        font.value.font_scale = narrowed;
+    }
+    // All downstream em lengths and used line heights consume these scales;
+    // physical CSS px lengths are unchanged. The raw origin remains separate
+    // so normalization cannot hide incompatible states, viewports or heads.
+    return .{ .nodes = result, .root_family = root_family orelse return null, .source_root_scale = body_scale };
+}
+
+pub const FigureWidthExpressionResult = union(enum) { known: f64, invalid, unknown };
+pub const FigureWidthLimitResult = union(enum) { known: types.AvailableWidthLimit, invalid, unknown };
+const FigureWidthMath = struct {
+    const Failure = error{ Invalid, Unknown };
+    const max_tokens = 512;
+    const max_bytes = 64 * 1024;
+    const max_depth = 32;
+    const max_variables = 16;
+    const Unit = enum { number, px, em, percent };
+    const Token = union(enum) {
+        numeric: struct { value: f64, unit: Unit },
+        ident: []const u8,
+        function: []const u8,
+        open, close, comma, plus, minus, times, space,
+    };
+    const NumericValue = struct {
+        number: bool,
+        scalar: f64 = 0,
+        px: f64 = 0,
+        em: f64 = 0,
+        percent: f64 = 0,
+        fn finite(self: NumericValue) bool {
+            return std.math.isFinite(self.scalar) and std.math.isFinite(self.px) and
+                std.math.isFinite(self.em) and std.math.isFinite(self.percent);
+        }
+        fn literal(value: f64, unit: Unit) NumericValue {
+            return switch (unit) {
+                .number => .{ .number = true, .scalar = value },
+                .px => .{ .number = false, .px = value },
+                .em => .{ .number = false, .em = value },
+                .percent => .{ .number = false, .percent = value },
+            };
+        }
+        fn add(left: NumericValue, right: NumericValue, subtract: bool) Failure!NumericValue {
+            if (left.number != right.number) return error.Invalid;
+            const sign: f64 = if (subtract) -1 else 1;
+            const value: NumericValue = .{ .number = left.number, .scalar = left.scalar + sign * right.scalar,
+                .px = left.px + sign * right.px, .em = left.em + sign * right.em,
+                .percent = left.percent + sign * right.percent };
+            if (!value.finite()) return error.Unknown;
+            return value;
+        }
+        fn multiply(left: NumericValue, right: NumericValue) Failure!NumericValue {
+            if (!left.number and !right.number) return error.Invalid;
+            const factor = if (left.number) left.scalar else right.scalar;
+            const other = if (left.number) right else left;
+            const value: NumericValue = .{ .number = other.number, .scalar = other.scalar * factor,
+                .px = other.px * factor, .em = other.em * factor, .percent = other.percent * factor };
+            if (!value.finite()) return error.Unknown;
+            return value;
+        }
+    };
+    const Lexer = struct {
+        environment: ?CustomEnvironment,
+        tokens: [max_tokens]Token = undefined,
+        len: usize = 0,
+        bytes_left: usize = max_bytes,
+        variable_stack: [max_variables][]const u8 = undefined,
+        variable_depth: usize = 0,
+        fn append(self: *Lexer, token: Token) Failure!void {
+            if (token == .space and self.len != 0 and self.tokens[self.len - 1] == .space) return;
+            if (self.len == self.tokens.len) return error.Unknown;
+            self.tokens[self.len] = token; self.len += 1;
+        }
+        fn whitespace(byte: u8) bool {
+            return byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r' or byte == 12;
+        }
+        fn nameByte(byte: u8) bool {
+            return std.ascii.isAlphanumeric(byte) or byte == '_' or byte == '-';
+        }
+        fn startsNumber(raw: []const u8, start: usize) bool {
+            var i = start;
+            if (raw[i] == '+' or raw[i] == '-') { i += 1; if (i == raw.len) return false; }
+            return std.ascii.isDigit(raw[i]) or (raw[i] == '.' and i + 1 < raw.len and std.ascii.isDigit(raw[i + 1]));
+        }
+        fn numberEnd(raw: []const u8, start: usize) usize {
+            var i = start;
+            if (raw[i] == '+' or raw[i] == '-') i += 1;
+            while (i < raw.len and std.ascii.isDigit(raw[i])) : (i += 1) {}
+            if (i + 1 < raw.len and raw[i] == '.' and std.ascii.isDigit(raw[i + 1])) {
+                i += 1; while (i < raw.len and std.ascii.isDigit(raw[i])) : (i += 1) {}
+            }
+            if (i < raw.len and (raw[i] == 'e' or raw[i] == 'E')) {
+                var next = i + 1;
+                if (next < raw.len and (raw[next] == '+' or raw[next] == '-')) next += 1;
+                if (next < raw.len and std.ascii.isDigit(raw[next])) {
+                    i = next + 1; while (i < raw.len and std.ascii.isDigit(raw[i])) : (i += 1) {}
+                }
+            }
+            return i;
+        }
+        const VarCall = struct { name: []const u8, fallback: ?[]const u8, end: usize };
+        fn varCall(raw: []const u8, start: usize) Failure!VarCall {
+            var depth: usize = 1; var comma: ?usize = null; var quote: u8 = 0; var i = start;
+            while (i < raw.len) : (i += 1) {
+                const byte = raw[i];
+                if (quote != 0) {
+                    if (byte == '\\') { i += 1; if (i >= raw.len) return error.Invalid; }
+                    else if (byte == quote) quote = 0;
+                    continue;
+                }
+                if (byte == '\'' or byte == '"') { quote = byte; continue; }
+                if (byte == '/' and i + 1 < raw.len and raw[i + 1] == '*') {
+                    const end = std.mem.indexOf(u8, raw[i + 2 ..], "*/") orelse return error.Invalid;
+                    i += 3 + end; continue;
+                }
+                if (byte == '\\') return error.Unknown;
+                if (byte == '(') { depth += 1; if (depth > max_depth) return error.Unknown; }
+                if (byte == ')') {
+                    depth -= 1;
+                    if (depth == 0) {
+                        const name = std.mem.trim(u8, raw[start .. comma orelse i], " \t\r\n\x0c");
+                        if (name.len <= 2 or !std.mem.startsWith(u8, name, "--")) return error.Invalid;
+                        for (name[2..]) |c| if (!nameByte(c)) return error.Unknown;
+                        return .{ .name = name, .fallback = if (comma) |at| raw[at + 1 .. i] else null, .end = i + 1 };
+                    }
+                }
+                if (byte == ',' and depth == 1 and comma == null) comma = i;
+            }
+            return error.Invalid;
+        }
+        fn variable(self: *Lexer, call: VarCall) Failure!void {
+            const environment = self.environment orelse return error.Unknown;
+            switch (environment.get(call.name)) {
+                .unknown => return error.Unknown,
+                .invalid => if (call.fallback) |fallback| return self.lex(fallback) else return error.Invalid,
+                .known => |raw| {
+                    if (self.variable_depth == self.variable_stack.len) return error.Unknown;
+                    for (self.variable_stack[0..self.variable_depth]) |name| if (std.mem.eql(u8, name, call.name)) return error.Invalid;
+                    self.variable_stack[self.variable_depth] = call.name; self.variable_depth += 1;
+                    defer self.variable_depth -= 1;
+                    return self.lex(raw);
+                },
+            }
+        }
+        fn lex(self: *Lexer, raw: []const u8) Failure!void {
+            if (raw.len > self.bytes_left) return error.Unknown;
+            self.bytes_left -= raw.len;
+            var i: usize = 0;
+            while (i < raw.len) {
+                const byte = raw[i];
+                if (whitespace(byte)) { try self.append(.space); i += 1; continue; }
+                if (startsNumber(raw, i)) {
+                    const end = numberEnd(raw, i);
+                    const value = std.fmt.parseFloat(f64, raw[i..end]) catch return error.Invalid;
+                    if (!std.math.isFinite(value)) return error.Unknown;
+                    i = end;
+                    var unit: Unit = .number;
+                    if (i < raw.len and raw[i] == '%') { unit = .percent; i += 1; }
+                    else if (i < raw.len and (std.ascii.isAlphabetic(raw[i]) or raw[i] == '_' or raw[i] == '-')) {
+                        const unit_start = i;
+                        while (i < raw.len and nameByte(raw[i])) : (i += 1) {}
+                        const unit_name = raw[unit_start..i];
+                        unit = if (std.ascii.eqlIgnoreCase(unit_name, "px")) .px else if (std.ascii.eqlIgnoreCase(unit_name, "em")) .em else return error.Unknown;
+                    }
+                    try self.append(.{ .numeric = .{ .value = value, .unit = unit } }); continue;
+                }
+                if (std.ascii.isAlphabetic(byte) or byte == '_' or
+                    (byte == '-' and i + 1 < raw.len and (std.ascii.isAlphabetic(raw[i + 1]) or raw[i + 1] == '_' or raw[i + 1] == '-'))) {
+                    const start = i; i += 1; while (i < raw.len and nameByte(raw[i])) : (i += 1) {}
+                    const name = raw[start..i];
+                    if (i < raw.len and raw[i] == '(') {
+                        i += 1;
+                        if (std.ascii.eqlIgnoreCase(name, "var")) {
+                            const call = try varCall(raw, i); try self.variable(call); i = call.end;
+                        } else try self.append(.{ .function = name });
+                    } else try self.append(.{ .ident = name });
+                    continue;
+                }
+                const token: Token = switch (byte) {
+                    '(' => .open, ')' => .close, ',' => .comma, '+' => .plus, '-' => .minus, '*' => .times,
+                    // CSS division/comments, escapes, other units and functions
+                    // are not claimed by this closed arithmetic capability.
+                    '/', '\\', '\'', '"', '[', ']', '{', '}' => return error.Unknown,
+                    else => return error.Invalid,
+                };
+                try self.append(token); i += 1;
+            }
+        }
+    };
+    const Parser = struct {
+        tokens: []const Token,
+        pos: usize = 0,
+        depth: usize = 0,
+        fn spaces(self: *Parser) bool {
+            const start = self.pos;
+            while (self.pos < self.tokens.len and self.tokens[self.pos] == .space) self.pos += 1;
+            return self.pos != start;
+        }
+        fn take(self: *Parser, comptime tag: std.meta.Tag(Token)) bool {
+            if (self.pos == self.tokens.len or std.meta.activeTag(self.tokens[self.pos]) != tag) return false;
+            self.pos += 1; return true;
+        }
+        fn primary(self: *Parser, math: bool) Failure!NumericValue {
+            _ = self.spaces();
+            if (self.pos == self.tokens.len) return error.Invalid;
+            if (self.depth == max_depth) return error.Unknown;
+            self.depth += 1; defer self.depth -= 1;
+            const token = self.tokens[self.pos]; self.pos += 1;
+            return switch (token) {
+                .numeric => |numeric| NumericValue.literal(numeric.value, numeric.unit),
+                .open => blk: {
+                    if (!math) return error.Invalid;
+                    const value = try self.sum(); _ = self.spaces();
+                    if (!self.take(.close)) return error.Invalid;
+                    break :blk value;
+                },
+                .function => |name| blk: {
+                    if (std.ascii.eqlIgnoreCase(name, "calc")) {
+                        const value = try self.sum(); _ = self.spaces();
+                        if (!self.take(.close)) return error.Invalid;
+                        break :blk value;
+                    }
+                    if (std.ascii.eqlIgnoreCase(name, "round")) break :blk try self.rounded();
+                    return error.Unknown;
+                },
+                .ident => return error.Unknown,
+                else => return error.Invalid,
+            };
+        }
+        fn product(self: *Parser) Failure!NumericValue {
+            var value = try self.primary(true);
+            while (true) {
+                const saved = self.pos; _ = self.spaces();
+                if (!self.take(.times)) { self.pos = saved; return value; }
+                value = try value.multiply(try self.primary(true));
+            }
+        }
+        fn sum(self: *Parser) Failure!NumericValue {
+            var value = try self.product();
+            while (true) {
+                const before = self.spaces();
+                if (self.pos == self.tokens.len or (self.tokens[self.pos] != .plus and self.tokens[self.pos] != .minus)) return value;
+                const subtract = self.tokens[self.pos] == .minus; self.pos += 1;
+                const after = self.spaces();
+                if (!before or !after) return error.Invalid;
+                value = try value.add(try self.product(), subtract);
+            }
+        }
+        fn rounded(self: *Parser) Failure!NumericValue {
+            _ = self.spaces();
+            if (self.pos < self.tokens.len and self.tokens[self.pos] == .ident) {
+                if (!std.ascii.eqlIgnoreCase(self.tokens[self.pos].ident, "nearest")) return error.Unknown;
+                self.pos += 1; _ = self.spaces(); if (!self.take(.comma)) return error.Invalid;
+            }
+            const value = try self.sum(); _ = self.spaces(); if (!self.take(.comma)) return error.Invalid;
+            const step = try self.sum(); _ = self.spaces(); if (!self.take(.close)) return error.Invalid;
+            if (step.number or step.em != 0 or step.percent != 0) return error.Unknown;
+            if (value.number) return error.Invalid;
+            if (value.em != 0 or value.percent != 0 or step.px <= 0) return error.Unknown;
+            const quotient = value.px / step.px;
+            if (!std.math.isFinite(quotient) or @abs(quotient) > 4503599627370495) return error.Unknown;
+            const below = @floor(quotient);
+            const result = (below + @as(f64, if (quotient - below >= 0.5) 1 else 0)) * step.px;
+            if (!std.math.isFinite(result)) return error.Unknown;
+            return NumericValue.literal(result, .px);
+        }
+    };
+    fn evaluate(raw: []const u8, environment: ?CustomEnvironment) Failure!struct { value: NumericValue, literal_zero: bool, has_percent: bool } {
+        var lexer: Lexer = .{ .environment = environment }; try lexer.lex(raw);
+        var parser: Parser = .{ .tokens = lexer.tokens[0..lexer.len] };
+        _ = parser.spaces(); const first = parser.pos;
+        const value = try parser.primary(false); const last = parser.pos; _ = parser.spaces();
+        if (parser.pos != parser.tokens.len) return error.Invalid;
+        var has_percent = false;
+        for (parser.tokens) |token| {
+            if (token == .numeric and token.numeric.unit == .percent) has_percent = true;
+        }
+        return .{ .value = value, .literal_zero = last == first + 1 and parser.tokens[first] == .numeric and
+            parser.tokens[first].numeric.unit == .number and parser.tokens[first].numeric.value == 0, .has_percent = has_percent };
+    }
+};
+
+/// Caller supplies the selected source-owned computed custom environment. This
+/// does not infer a factor from a width observation or evaluate CSS selectors.
+pub fn figureComputedWidthPx(raw: []const u8, environment: ?CustomEnvironment) FigureWidthExpressionResult {
+    const computed = FigureWidthMath.evaluate(raw, environment) catch |err| return switch (err) { error.Invalid => .invalid, error.Unknown => .unknown };
+    if (computed.has_percent) return .unknown;
+    const value = computed.value;
+    if (value.number) return if (computed.literal_zero) .{ .known = 0 } else .invalid;
+    if (value.em != 0 or value.percent != 0 or value.px < 0 or value.px > @as(f64, @floatFromInt(std.math.maxInt(u32)))) return .unknown;
+    return .{ .known = value.px };
+}
+
+/// owner_font_scale is the source font origin relative to normal body. Only em
+/// subtraction depends on it; px and zero never manufacture a font dependency.
+pub fn figureComputedMediaMaxWidth(raw: []const u8, environment: ?CustomEnvironment, owner_font_scale: ?f32) FigureWidthLimitResult {
+    const computed = FigureWidthMath.evaluate(raw, environment) catch |err| return switch (err) { error.Invalid => .invalid, error.Unknown => .unknown };
+    const value = computed.value;
+    if (value.number or value.percent != 100 or value.px > 0 or value.em > 0 or (value.px != 0 and value.em != 0)) return .unknown;
+    const subtract: types.StyleLength = if (value.em != 0) blk: {
+        const scale = owner_font_scale orelse return .unknown;
+        if (!std.math.isFinite(scale) or scale < 0) return .unknown;
+        const amount = -value.em * @as(f64, scale);
+        if (!std.math.isFinite(amount) or amount > std.math.floatMax(f32)) return .unknown;
+        break :blk .{ .unit = .em, .value = @floatCast(amount) };
+    } else blk: {
+        if (-value.px > std.math.floatMax(f32)) return .unknown;
+        break :blk .{ .unit = .px, .value = @floatCast(-value.px) };
+    };
+    return .{ .known = .{ .percent = 100, .subtract = subtract } };
+}
+test "observed Figure selectors retain exact inserted ancestors and direct text uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    var builder: Builder = .{ .a = arena.allocator() };
+    const root_attributes = [_]FigureObservedAttribute{.{ .name = "class", .value = "mw-parser-output" }};
+    const frame_attributes = [_]FigureObservedAttribute{.{ .name = "typeof", .value = "mw:File/Thumb" }};
+    var nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .attributes = &.{}, .parent = null },
+        .{ .tag = "body", .attributes = &.{}, .parent = 0 },
+        .{ .tag = "div", .attributes = &root_attributes, .parent = 1 },
+        .{ .tag = "td", .attributes = &.{}, .parent = 2 },
+        .{ .tag = "figure", .attributes = &frame_attributes, .parent = 3, .empty = false, .has_text = false },
+        .{ .tag = "a", .attributes = &.{}, .parent = 4, .empty = false, .has_text = false },
+        .{ .tag = "img", .attributes = &.{}, .parent = 5, .empty = true, .has_text = false },
+        .{ .tag = "figcaption", .attributes = &.{}, .parent = 4 },
+    };
+    var styles = try parseForTargetAlloc(arena.allocator(), "", .screen); defer styles.deinit();
+    const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 4, .anchor = 5, .media = 6, .caption = 7 };
+    try std.testing.expect(figureObservedContextValid(context));
+    const descendant = (try builder.generatedFigureSelector(".mw-parser-output figure > figcaption")).?;
+    const skipped = (try builder.generatedFigureSelector(".mw-parser-output > figure > figcaption")).?;
+    const physical = (try builder.generatedFigureSelector("td > figure > figcaption")).?;
+    try std.testing.expectEqual(ContainerSelectorMatch.known, observedFigureSelectorMatch(descendant, context, 7, null));
+    try std.testing.expectEqual(ContainerSelectorMatch.no, observedFigureSelectorMatch(skipped, context, 7, null));
+    try std.testing.expectEqual(ContainerSelectorMatch.known, observedFigureSelectorMatch(physical, context, 7, null));
+    const empty = (try builder.generatedFigureSelector("figcaption:empty")).?;
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, observedFigureSelectorMatch(empty, context, 7, null));
+    nodes[7].empty = true; nodes[7].has_text = false;
+    try std.testing.expectEqual(ContainerSelectorMatch.known, observedFigureSelectorMatch(empty, context, 7, null));
+    nodes[7].has_text = true;
+    try std.testing.expect(!figureObservedContextValid(context));
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, observedFigureSelectorMatch(descendant, context, 7, null));
+    nodes[7].empty = false;
+    try std.testing.expectEqual(ContainerSelectorMatch.no, observedFigureSelectorMatch(empty, context, 7, null));
+    const before = (try builder.generatedFigureSelector("figure > figcaption::before")).?;
+    try std.testing.expectEqual(ContainerSelectorMatch.known, observedFigureSelectorMatch(before, context, 7, .before));
+    try std.testing.expectEqual(ContainerSelectorMatch.no, observedFigureSelectorMatch(before, context, 7, null));
+    nodes[3].parent = 3;
+    try std.testing.expect(!figureObservedContextValid(context));
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, observedFigureSelectorMatch(physical, context, 7, null));
+}
+test "observed Figure attribute predicates use complete actual values without document language guesses" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    var builder: Builder = .{ .a = arena.allocator() };
+    const attributes = [_]FigureObservedAttribute{
+        .{ .name = "class", .value = "mw-file-element mw-file-upright" },
+        .{ .name = "width", .value = "190" },
+        .{ .name = "style", .value = "--mw-file-upright: 0.75" },
+        .{ .name = "data-example", .value = "Alpha-beta tail" },
+    };
+    const image: FigureObservedNode = .{ .tag = "img", .attributes = &attributes, .parent = null, .empty = true, .has_text = false };
+    for ([_][]const u8{ "img[width=\"190\"]", ".mw-file-element[style*=upright]", "img[data-example^=Alpha]", "img[data-example$=tail]", "img[class~=mw-file-upright]", "img[data-example]", "img[DATA-EXAMPLE^=alpha i]" }) |raw| {
+        const selector = (try builder.generatedFigureSelector(raw)).?;
+        try std.testing.expectEqual(ContainerSelectorMatch.known, observedFigureCompoundMatch(selector.chain[0], image));
+    }
+    for ([_][]const u8{ "img[width=\"250\"]", "img[style*=background]", "img[hidden]", "img[class~=file]", "img[data-example^=alpha]", "img[data-example*=\"\"]", "img[data-example~=\"\"]" }) |raw| {
+        const selector = (try builder.generatedFigureSelector(raw)).?;
+        try std.testing.expectEqual(ContainerSelectorMatch.no, observedFigureCompoundMatch(selector.chain[0], image));
+    }
+    for ([_][]const u8{ "img[dir=]", "img[width=190]", "img[xml:lang]", "img[x]span", ".a[x]suffix", "img[style*=]", "img[style*=x unknown]", "img[style*=\"x]", "img[style*=x]#" }) |raw|
+        try std.testing.expect((try builder.generatedFigureSelector(raw)) == null);
+    const enumerated = (try builder.generatedFigureSelector("img[dir=ltr i]")).?;
+    try std.testing.expectEqual(ContainerSelectorMatch.no, observedFigureCompoundMatch(enumerated.chain[0], image));
+    const ordinary: TextElement = .{ .tag = "img" };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, enumerated.chain[0].ownMatch(&ordinary, true));
+}
+test "observed Figure compound alternatives retain negation rank and unknown state without selector guesses" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    var builder: Builder = .{ .a = arena.allocator() };
+    const attrs = [_]FigureObservedAttribute{.{ .name = "class", .value = "mw-file-description x" }, .{ .name = "href", .value = "/wiki/File:Example.png" }};
+    const anchor: FigureObservedNode = .{ .tag = "a", .attributes = &attrs, .parent = null, .empty = false, .has_text = false };
+    const where = (try builder.generatedFigureSelector("a:where(:not([role=button]))")).?;
+    try std.testing.expectEqual(@as(u64, 1), where.specificity);
+    try std.testing.expectEqual(ContainerSelectorMatch.known, observedFigureCompoundMatch(where.chain[0], anchor));
+    const focused = (try builder.generatedFigureSelector("a:where(:not([role=button])):focus-visible")).?;
+    try std.testing.expectEqual((@as(u64, 1) << 21) + 1, focused.specificity);
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, observedFigureCompoundMatch(focused.chain[0], anchor));
+    const alternatives = (try builder.generatedFigureSelector(":is(span,.mw-file-description)")).?;
+    try std.testing.expectEqual(@as(u64, 1) << 21, alternatives.specificity);
+    try std.testing.expectEqual(ContainerSelectorMatch.known, observedFigureCompoundMatch(alternatives.chain[0], anchor));
+    const not_both = (try builder.generatedFigureSelector("a:not(.x.y)")).?;
+    try std.testing.expectEqual(ContainerSelectorMatch.known, observedFigureCompoundMatch(not_both.chain[0], anchor));
+    const not_any = (try builder.generatedFigureSelector("a:not(.x,.y)")).?;
+    try std.testing.expectEqual(ContainerSelectorMatch.no, observedFigureCompoundMatch(not_any.chain[0], anchor));
+    const uncertain_case = [_]FigureObservedAttribute{.{ .name = "role", .value = "BUTTON" }};
+    const role_anchor: FigureObservedNode = .{ .tag = "a", .attributes = &uncertain_case, .parent = null };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, observedFigureCompoundMatch(where.chain[0], role_anchor));
+    const exact_role = (try builder.generatedFigureSelector("a:not([role=button s])")).?;
+    try std.testing.expectEqual(ContainerSelectorMatch.known, observedFigureCompoundMatch(exact_role.chain[0], role_anchor));
+    for ([_][]const u8{ "a:where()", "a:not()", "a:is(a > b)", "a:where(:has(img))", "a:not(:dir(ltr))", "a:where([role=button]", "a:is(::before)" }) |raw|
+        try std.testing.expect((try builder.generatedFigureSelector(raw)) == null);
+}
+test "observed Figure cascade retains uncertain winning ranks and separates continuous viewport conditions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try parseForTargetAlloc(a,
+        "figure{width:180px;color:black} .absent figure{width:999px!important}" ++
+        "figure:dir(rtl){width:200px!important} figure{width:190px!important}" ++
+        "@media screen and (max-width:639px){figure{font-size:80%}}" ++
+        "@media (min-width:640px){figure{font-size:90%}}" ++
+        ":root{--image-size-standard:250px;--image-size-user:var(--image-size-standard)}" ++
+        "img.mw-file-upright{width:round(var(--image-size-user)*var(--mw-file-upright,1),10px)}", .screen);
+    defer styles.deinit();
+    const nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .attributes = &.{}, .parent = null },
+        .{ .tag = "body", .attributes = &.{}, .parent = 0 },
+        .{ .tag = "div", .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }}, .parent = 1 },
+        .{ .tag = "figure", .attributes = &.{.{ .name = "typeof", .value = "mw:File/Thumb" }, .{ .name = "style", .value = "width:170px;color:red" }}, .parent = 2 },
+        .{ .tag = "a", .attributes = &.{}, .parent = 3, .has_text = false },
+        .{ .tag = "img", .attributes = &.{.{ .name = "class", .value = "mw-file-upright" }, .{ .name = "style", .value = "--mw-file-upright:0.75" }}, .parent = 4, .empty = true, .has_text = false },
+        .{ .tag = "figcaption", .attributes = &.{}, .parent = 3, .has_text = true, .empty = false },
+    };
+    const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6 };
+    const declarations = (try observedFigureDeclarations(a, context, 3, null, .{ .viewport_width = 639.5 })).?;
+    const width = try observedFigurePropertyCandidates(a, declarations, "width", &.{});
+    try std.testing.expectEqual(@as(usize, 2), width.len);
+    var known = false; var possible = false;
+    for (width) |value| {
+        try std.testing.expect(value.priority.important);
+        if (std.mem.eql(u8, value.raw, "190px")) known = !value.uncertain;
+        if (std.mem.eql(u8, value.raw, "200px")) possible = value.uncertain;
+        try std.testing.expect(!std.mem.eql(u8, value.raw, "999px"));
+    }
+    try std.testing.expect(known and possible);
+    const color = try observedFigurePropertyCandidates(a, declarations, "color", &.{});
+    try std.testing.expectEqual(@as(usize, 1), color.len);
+    try std.testing.expectEqualStrings("red", color[0].raw);
+    try std.testing.expect(color[0].priority.inline_style);
+    try std.testing.expectEqual(@as(usize, 0), (try observedFigurePropertyCandidates(a, declarations, "font-size", &.{"font"})).len);
+    const narrow = (try observedFigureDeclarations(a, context, 3, null, .{ .viewport_width = 639 })).?;
+    const narrow_font = try observedFigurePropertyCandidates(a, narrow, "font-size", &.{"font"});
+    try std.testing.expectEqual(@as(usize, 1), narrow_font.len);
+    try std.testing.expectEqualStrings("80%", narrow_font[0].raw);
+    try std.testing.expect(!narrow_font[0].uncertain);
+    const wide = (try observedFigureDeclarations(a, context, 3, null, .{ .viewport_width = 640 })).?;
+    try std.testing.expectEqualStrings("90%", (try observedFigurePropertyCandidates(a, wide, "font-size", &.{"font"}))[0].raw);
+    const unbound = (try observedFigureDeclarations(a, context, 3, null, .{})).?;
+    const unbound_font = try observedFigurePropertyCandidates(a, unbound, "font-size", &.{"font"});
+    try std.testing.expectEqual(@as(usize, 2), unbound_font.len);
+    for (unbound_font) |value| try std.testing.expect(value.uncertain);
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, observedFigureCondition("@media (max-width:639px) and (orientation:portrait)", .{ .viewport_width = 100 }));
+    try std.testing.expectEqual(ContainerSelectorMatch.known, observedFigureCondition("@media all and (max-width:calc(640px - 1px))", .{ .viewport_width = 639 }));
+    try std.testing.expectEqual(ContainerSelectorMatch.no, observedFigureCondition("@media all and (max-width:calc(640px - 1px))", .{ .viewport_width = 639.5 }));
+    try std.testing.expectEqual(ContainerSelectorMatch.known, observedFigureCondition("@supports (width:round(1px,1px))", .{}));
+    try std.testing.expectEqual(ContainerSelectorMatch.no, observedFigureCondition("@supports not (width:round(1px,1px))", .{}));
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, observedFigureCondition("@supports (width:round(1px,0px))", .{}));
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, observedFigureCondition("@supports (width:var(--unbound))", .{}));
+    try std.testing.expectEqual(ContainerSelectorMatch.no, observedFigureCondition("@media (prefers-reduced-motion:reduce)", .{ .reduced_motion = false }));
+    const computed = (try observedFigureComputedNodes(a, context, .{ .viewport_width = 640 })).?;
+    var media_seen = false;
+    for (computed) |node| if (node.index == context.media) {
+        const preferred = try observedFigurePropertyCandidates(a, node.declarations, "width", &.{});
+        try std.testing.expectEqual(@as(usize, 1), preferred.len);
+        const pixels = figureComputedWidthPx(preferred[0].raw, node.environment);
+        try std.testing.expect(pixels == .known);
+        try std.testing.expectEqual(@as(f64, 190), pixels.known);
+        media_seen = true;
+    };
+    try std.testing.expect(media_seen);
+}
+test "observed Figure combined link states retain focus and simultaneous interaction overrides" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try parseForTargetAlloc(a,
+        "a{color:#101010}a:visited{color:#202020}a:hover{color:#303030}" ++
+        "a:visited:hover{color:#404040}a:active{color:#505050}a:visited:active{color:#606060}" ++
+        "a:hover:active{color:#707070}a:visited:hover:active{color:#808080}" ++
+        "a:focus{color:#909090}a:visited:focus{color:#a0a0a0}" ++
+        "a:focus-visible{color:#b0b0b0}a:visited:focus-visible{color:#c0c0c0}", .screen); defer styles.deinit();
+    const nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:File/Thumb" }} },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "/wiki/File:One.png" }}, .has_text = false },
+        .{ .tag = "img", .parent = 4, .attributes = &.{}, .has_text = false, .empty = true },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+        .{ .tag = "a", .parent = 6, .attributes = &.{.{ .name = "href", .value = "/wiki/Target" }}, .has_text = true },
+    };
+    const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6 };
+    var combinations: usize = 0;
+    for ([_]bool{ false, true }) |visited| for ([_]bool{ false, true }) |hover| for ([_]bool{ false, true }) |active| {
+        // Focus-visible is a subset of focus. Keep both focused modes: a
+        // source rule may distinguish them even when six isolated colors agree.
+        for (0..3) |focus_mode| {
+            const state: ObservedFigureLinkState = .{ .visited = visited, .hover = hover, .active = active,
+                .focus = focus_mode != 0, .focus_visible = focus_mode == 2, .focus_within = focus_mode != 0 };
+            const declarations = (try observedFigureDeclarations(a, context, 7, null, .{ .link_subject = 7, .link_state = state })).?;
+            const actual = try observedFigureColor(a, declarations, "color", .{ .complete = true }, null, null);
+            // Interaction compounds have greater specificity than the later
+            // single focus pseudo. Focus wins only over equal-rank single states.
+            const expected: []const u8 = if (active and hover) (if (visited) "#808080" else "#707070")
+                else if (focus_mode == 2) (if (visited) "#c0c0c0" else "#b0b0b0")
+                else if (focus_mode == 1) (if (visited) "#a0a0a0" else "#909090")
+                else if (active) (if (visited) "#606060" else "#505050")
+                else if (hover) (if (visited) "#404040" else "#303030")
+                else if (visited) "#202020" else "#101010";
+            try std.testing.expect(!actual.unresolved);
+            try std.testing.expectEqualStrings(expected, actual.value.?.value.?);
+            combinations += 1;
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 24), combinations);
+}
+test "observed Figure reduced motion declarations are inert only after animation and transition proof" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Test = struct {
+        fn value(alloc: std.mem.Allocator, css: []const u8, uncertain: bool, environment: CustomEnvironment) !bool {
+            var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+            defer declarations.deinit(alloc);
+            try appendObservedFigureDeclarations(alloc, &declarations, css, .{}, uncertain, false, null, 0);
+            return observedFigureStaticMotion(alloc, declarations.items, environment);
+        }
+    };
+    const environment: CustomEnvironment = .{ .complete = true };
+    const reduced = "animation-delay:-0.01ms!important;animation-duration:0.01ms!important;" ++
+        "animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:0ms!important";
+    try std.testing.expect(try Test.value(a, reduced, true, environment));
+    try std.testing.expect(try Test.value(a, "transition-duration:0s,0ms;transition-delay:-0s,+0ms", false, environment));
+    try std.testing.expect(try Test.value(a, "animation-duration:30s;animation-name:none", false, environment));
+    try std.testing.expect(try Test.value(a, "transition-duration:var(--absent)", false, environment));
+    try std.testing.expect(!try Test.value(a, "transition-duration:var(--absent)", false, .{ .complete = false }));
+    for ([_][]const u8{ "animation-name:spin", "animation-name:spin;animation-duration:0.01ms!important",
+        "animation:spin 1s", "transition-duration:.1s", "transition-duration:0s;transition-delay:.1s",
+        "transition-duration:1s;transition-duration:0 ms", "transition-duration:1e-999s",
+        "transition:color 0s", "transition-duration:inherit", "scroll-behavior:smooth" }) |css|
+        try std.testing.expect(!try Test.value(a, css, false, environment));
+    try std.testing.expect(!try Test.value(a, "animation-name:spin", true, environment));
+    try std.testing.expect(!try Test.value(a, "transition-duration:.1s", true, environment));
+}
+test "observed Figure viewport census keeps continuous sides and every potentially active interaction arm" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try parseForTargetAlloc(a,
+        "@media all and (max-width:calc(640px - 1px)){figure{float:none}}" ++
+        "@media(min-width:640px){figure{color:red}}@media(max-width:639.5px){figure{color:blue}}" ++
+        "@media(max-width:333px){a:hover{color:red}}@media(max-width:17px){.absent{color:red}}" ++
+        "@media print{@media(max-width:2px){figure{color:red}}}" ++
+        "@supports selector(:unknown){@media(max-width:444px){figure{color:red}}}" ++
+        "@supports not selector(:focus-visible){@media(max-width:666px){figure{color:red}}}", .screen); defer styles.deinit();
+    const nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} }, .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:File/Thumb" }} },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "/wiki/File:One.png" }}, .has_text = false },
+        .{ .tag = "img", .parent = 4, .attributes = &.{}, .has_text = false, .empty = true },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+    };
+    const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6 };
+    const boundaries = (try observedFigureViewportBoundaries(a, context, .{ .viewport_width = 2000,
+        .link_subject = 4, .link_state = .{ .hover = false }, .focus_visible_supported = true })).?;
+    try std.testing.expectEqual(@as(usize, 5), boundaries.len);
+    const expected = [_]f64{ 333, 444, 639, 639.5, 640 };
+    for (boundaries, expected) |boundary, value| {
+        try std.testing.expectEqual(value, boundary.value);
+        try std.testing.expectEqual(value == 640, boundary.minimum);
+        try std.testing.expectEqual(value != 640, boundary.maximum);
+    }
+    // Unknown feature support retains its fallback arm; it is not treated as
+    // unsupported or erased by the current sample's hover=false state.
+    const unknown_support = (try observedFigureViewportBoundaries(a, context, .{})).?;
+    try std.testing.expectEqual(@as(usize, 6), unknown_support.len);
+    try std.testing.expectEqual(@as(f64, 666), unknown_support[5].value);
+    try std.testing.expect(observedFigureCondition("@media(min-width:640px)", .{ .viewport_width = 639.5 }) == .no);
+    try std.testing.expect(observedFigureCondition("@media(max-width:639px)", .{ .viewport_width = 639.5 }) == .no);
+}
+test "observed full Figure font path retains explicit BODY policy through caption media and descendants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const body = "body{font-feature-settings:\"liga\" on,\"clig\" on,\"kern\" on,\"ccmp\" on,\"dist\" on,\"mark\" on,\"mkmk\" on}";
+    const nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} }, .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{ .{ .name = "class", .value = "mw-parser-output" },
+            .{ .name = "lang", .value = "de" }, .{ .name = "dir", .value = "ltr" } } },
+        .{ .tag = "table", .parent = 2, .attributes = &.{} }, .{ .tag = "tbody", .parent = 3, .attributes = &.{} },
+        .{ .tag = "tr", .parent = 4, .attributes = &.{} }, .{ .tag = "td", .parent = 5, .attributes = &.{} },
+        .{ .tag = "figure", .parent = 6, .attributes = &.{.{ .name = "typeof", .value = "mw:File/Thumb" }} },
+        .{ .tag = "a", .parent = 7, .attributes = &.{}, .has_text = false },
+        .{ .tag = "img", .parent = 8, .attributes = &.{}, .has_text = false, .empty = true },
+        .{ .tag = "figcaption", .parent = 7, .attributes = &.{}, .has_text = true },
+        .{ .tag = "i", .parent = 10, .attributes = &.{}, .has_text = true },
+    };
+    for ([_][]const u8{ "", "i{font-feature-settings:normal}", "figcaption{font-feature-settings:initial}" }) |reset| {
+        const css = try std.fmt.allocPrint(a, "html{{font-family:sans-serif}}body{{font-size:1rem}}{s}{s}", .{ body, reset });
+        var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+        const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 7, .anchor = 8, .media = 9, .caption = 10 };
+        const computed = (try observedFigureComputedNodes(a, context, .{})).?;
+        const fonts = (try observedFigureComputedFonts(a, context, computed)).?;
+        try std.testing.expect(fonts.nodes[0].value.font_features == null);
+        for (fonts.nodes[1..10]) |node| try std.testing.expectEqual(types.FontFeaturePolicy.seven_on, node.value.font_features.?);
+        try std.testing.expectEqual(if (std.mem.startsWith(u8, reset, "figcaption")) types.FontFeaturePolicy.normal else .seven_on, fonts.nodes[10].value.font_features.?);
+        try std.testing.expectEqual(if (reset.len != 0) types.FontFeaturePolicy.normal else .seven_on, fonts.nodes[11].value.font_features.?);
+        try std.testing.expect(fonts.nodes[11].value.italic);
+    }
+}
+const FigureOperationReuseTest = struct {
+    const frame_css = "html{font-family:sans-serif;color:#202122}" ++
+        "figure{display:table;text-align:center;border-collapse:collapse;line-height:0;margin:0 auto 0.5em;border:1px solid #c8ccd1;border-bottom:0;background:#f8f9fa}" ++
+        "figcaption{display:table-caption;caption-side:bottom;background-color:inherit;line-height:1.4em;word-break:break-word;text-align:start;padding:0 6px 6px;border:1px solid #c8ccd1;border-top:0;font-size:88.4%}";
+    const ready_css = frame_css ++
+        "a{display:block;position:relative;border:0;background:none;color:blue;border-radius:2px;text-decoration:none}a:focus-visible{outline:solid 2px #36c}" ++
+        "img{vertical-align:middle;width:190px;height:auto;margin:3px;border:1px solid #c8ccd1;background:white;color:#202122}";
+    const missing_css = frame_css ++
+        "a{color:#3366cc;text-decoration:none}a.new{color:#bf3c2c}" ++
+        "span.mw-broken-media{display:inline-block;line-height:1.6em;word-break:break-word}";
+    const ready_nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "dir", .value = "ltr" }, .{ .name = "lang", .value = "de" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "/wiki/File:Image.png" }}, .has_text = false },
+        .{ .tag = "img", .parent = 4, .attributes = &.{.{ .name = "width", .value = "190" }, .{ .name = "height", .value = "248" }}, .has_text = false },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+        .{ .tag = "i", .parent = 6, .attributes = &.{}, .has_text = true },
+    };
+    const missing_nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "dir", .value = "ltr" }, .{ .name = "lang", .value = "th" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "https://example.org/upload" }, .{ .name = "class", .value = "new" }}, .has_text = false },
+        .{ .tag = "span", .parent = 4, .attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }, .{ .name = "data-width", .value = "100" }}, .has_text = true },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+        .{ .tag = "a", .parent = 6, .attributes = &.{.{ .name = "href", .value = "/wiki/Target#section" }}, .has_text = true },
+    };
+    fn context(styles: *const Profile, nodes: []const FigureObservedNode, missing: bool) FigureObservedContext {
+        return .{ .styles = styles, .nodes = nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6,
+            .media_kind = if (missing) .missing else .image };
+    }
+};
+test "observed Figure operation indices survive scratch resets without accepting a fresh forged graph" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Fixture = FigureOperationReuseTest;
+    var styles = try parseForTargetAlloc(a, Fixture.ready_css, .screen); defer styles.deinit();
+    var nodes = Fixture.ready_nodes;
+    const context = Fixture.context(&styles, &nodes, false);
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var operation = ObservedFigureOperation.init(counting.allocator(), context); defer operation.deinit();
+    try std.testing.expect(operation.valid and operation.owned_nodes == null);
+    const first = (try operation.owned()) orelse return error.TestUnexpectedResult;
+    const first_calls = counting.alloc_index; const first_bytes = counting.allocated_bytes;
+    try std.testing.expect(first_calls > 0 and first_bytes > 0);
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    for ([_]bool{false, true}) |visited| {
+        _ = scratch.reset(.retain_capacity);
+        const computed = (try observedFigureComputedNodesPrepared(scratch.allocator(), &operation,
+            .{ .link_subject = 4, .link_state = .{ .visited = visited } })) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(first.indices.len, computed.len);
+        const repeated = (try operation.owned()) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(first.indices.ptr == repeated.indices.ptr);
+        try std.testing.expectEqualSlices(u32, &.{0, 1, 2, 3, 4, 5, 6, 7}, repeated.indices);
+    }
+    try std.testing.expectEqual(first_calls, counting.alloc_index);
+    try std.testing.expectEqual(first_bytes, counting.allocated_bytes);
+    operation.deinit();
+    // An operation is never reused after an input mutation. Each public entry
+    // must validate again even when the node allocation and length are equal.
+    for (0..4) |variant| {
+        nodes = Fixture.ready_nodes;
+        switch (variant) {
+            0 => nodes[0].parent = 0,
+            1 => nodes[4].known_next_element_sibling = 7,
+            2 => nodes[2].attributes = &.{.{ .name = "class", .value = "mw-parser-output" }, .{ .name = "CLASS", .value = "mw-parser-output" }},
+            else => nodes[5].parent = 5,
+        }
+        var rejected = ObservedFigureOperation.init(a, context); defer rejected.deinit();
+        try std.testing.expect(!rejected.valid and (try rejected.owned()) == null);
+        try std.testing.expect((try observedFigureComputedNodes(a, context, .{})) == null);
+        try std.testing.expect((try observedFigureDeclarations(a, context, 4, null, .{})) == null);
+    }
+}
+const FigureRuleCandidatesTest = struct {
+    fn ruleIndex(styles: *const Profile, raw: []const u8) !usize {
+        for (styles.observed_figure_rules, 0..) |rule, index| if (std.mem.eql(u8, rule.raw_selector, raw)) return index;
+        return error.TestUnexpectedResult;
+    }
+    fn sameDeclarations(a: std.mem.Allocator, baseline: *ObservedFigureOperation, cached: *ObservedFigureOperation,
+        subject: u32, pseudo: ?GeneratedFigurePseudo, evaluation: ObservedFigureEvaluation) !void
+    {
+        const before = (try observedFigureDeclarationsPrepared(a, baseline, subject, pseudo, evaluation)) orelse return error.TestUnexpectedResult;
+        const after = (try observedFigureDeclarationsPrepared(a, cached, subject, pseudo, evaluation)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(observedFigureDataEqual([]const ObservedFigureDeclaration, before, after, 0));
+    }
+};
+test "observed Figure rule candidates preserve every state declaration and reduce ordered rule visits" {
+    const a = std.testing.allocator;
+    const Fixture = FigureOperationReuseTest;
+    var css: std.ArrayList(u8) = .empty; defer css.deinit(a);
+    try css.appendSlice(a, Fixture.ready_css ++
+        "a:hover{color:red}a:not(:hover){color:blue}a:is(:active,:focus){outline-color:green}" ++
+        "a:visited{color:purple}a:future-state{color:orange}" ++
+        "@media(max-width:639px){a{color:black}}@media(prefers-reduced-motion:reduce){a{color:gray}}" ++
+        "@supports selector(:focus-visible){a:focus-visible{outline-color:pink}}");
+    for (0..64) |index| {
+        const extra = try std.fmt.allocPrint(a, ".definitely-absent-{d}{{color:red}}", .{index});
+        defer a.free(extra); try css.appendSlice(a, extra);
+    }
+    var styles = try parseForTargetAlloc(a, css.items, .screen); defer styles.deinit();
+    const context = Fixture.context(&styles, &Fixture.ready_nodes, false);
+    var before_counts: ObservedFigureCandidateCounts = .{};
+    var after_counts: ObservedFigureCandidateCounts = .{};
+    var baseline = ObservedFigureOperation.init(a, context); defer baseline.deinit();
+    baseline.candidate_counts = &before_counts;
+    var cached = ObservedFigureOperation.init(a, context); defer cached.deinit();
+    cached.retain_rule_candidates = true; cached.candidate_counts = &after_counts;
+    var before_arena = std.heap.ArenaAllocator.init(a); defer before_arena.deinit();
+    var after_arena = std.heap.ArenaAllocator.init(a); defer after_arena.deinit();
+    for ([_]f64{ 639, 900 }) |viewport| for ([_]bool{ false, true }) |motion|
+        for ([_]bool{ false, true }) |visited| for ([_]bool{ false, true }) |hover|
+        for ([_]bool{ false, true }) |active_state| for ([_]ObservedFigureFocusMode{ .unfocused, .focused, .focus_visible }) |focus| {
+            _ = before_arena.reset(.retain_capacity); _ = after_arena.reset(.retain_capacity);
+            const evaluation: ObservedFigureEvaluation = .{ .viewport_width = viewport, .reduced_motion = motion,
+                .link_subject = context.anchor, .focus_visible_supported = true,
+                .link_state = .{ .visited = visited, .hover = hover, .active = active_state,
+                    .focus = focus != .unfocused, .focus_visible = focus == .focus_visible, .focus_within = focus != .unfocused } };
+            const before = (try observedFigureComputedNodesPrepared(before_arena.allocator(), &baseline, evaluation)) orelse return error.TestUnexpectedResult;
+            const after = (try observedFigureComputedNodesPrepared(after_arena.allocator(), &cached, evaluation)) orelse return error.TestUnexpectedResult;
+            try std.testing.expect(observedFigureDataEqual([]const ObservedFigureComputedNode, before, after, 0));
+        };
+    const expected_visits: u64 = @intCast(2 * 48 * 2 * Fixture.ready_nodes.len * styles.observed_figure_rules.len);
+    try std.testing.expectEqual(expected_visits, before_counts.evaluated_rule_visits);
+    try std.testing.expectEqual(@as(u64, 0), before_counts.invariant_rule_visits);
+    try std.testing.expectEqual(@as(u64, Fixture.ready_nodes.len), after_counts.lists_built);
+    try std.testing.expectEqual(@as(u64, @intCast(Fixture.ready_nodes.len * styles.observed_figure_rules.len)), after_counts.invariant_rule_visits);
+    try std.testing.expect(after_counts.cache_hits > 0);
+    try std.testing.expect(after_counts.evaluated_rule_visits + after_counts.invariant_rule_visits < before_counts.evaluated_rule_visits);
+    std.debug.print("figure_candidate_fixture baseline_rule_visits={d} candidate_rule_visits={d} invariant_rule_visits={d} lists={d} hits={d} wall_saving_claimed=false\n",
+        .{ before_counts.evaluated_rule_visits, after_counts.evaluated_rule_visits, after_counts.invariant_rule_visits, after_counts.lists_built, after_counts.cache_hits });
+}
+test "observed Figure rule candidates keep generated style values negation and every unknown predicate" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Fixture = FigureOperationReuseTest;
+    const css = Fixture.missing_css ++
+        "span[style]{color:red}span:not([style]){color:blue}" ++
+        "span[style='width:100px']{color:green}span[style*='width']{color:orange}" ++
+        "span:not([style='width:100px']){color:purple}span:not([style*='width']){color:gray}" ++
+        "a:hover{color:red}a:not(:hover){color:blue}a:visited{color:purple}" ++
+        "a:is(:hover,:focus){color:green}a:not(:is(:hover,:focus)){color:orange}" ++
+        "a:future-state{color:pink}span:future-state{color:pink}" ++
+        "@media(max-width:639px){span{color:black}}@supports (unrecognized:value){span{color:gray}}" ++
+        "a::before{content:'kept'}a::after{content:'after'}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    const context = Fixture.context(&styles, &Fixture.missing_nodes, true);
+    var baseline = ObservedFigureOperation.init(a, context); defer baseline.deinit();
+    var cached = ObservedFigureOperation.init(a, context); defer cached.deinit(); cached.retain_rule_candidates = true;
+    for ([_]?u32{ null, 100 }) |width| for ([_]u32{ 4, 7 }) |link_subject|
+        for ([_]bool{ false, true }) |hover| for ([_]bool{ false, true }) |visited| {
+            const evaluation: ObservedFigureEvaluation = .{ .missing_width = width, .viewport_width = 639,
+                .link_subject = link_subject, .link_state = .{ .hover = hover, .visited = visited, .focus = hover } };
+            for ([_]u32{ 4, 5, 7 }) |subject| for ([_]?GeneratedFigurePseudo{ null, .before, .after, .other }) |pseudo|
+                try FigureRuleCandidatesTest.sameDeclarations(a, &baseline, &cached, subject, pseudo, evaluation);
+        };
+    const plain = (try cached.candidates(5, null, .{})).?;
+    const generated = (try cached.candidates(5, null, .{ .missing_width = 100 })).?;
+    const presence = try FigureRuleCandidatesTest.ruleIndex(&styles, "span[style]");
+    const absence = try FigureRuleCandidatesTest.ruleIndex(&styles, "span:not([style])");
+    try std.testing.expect(!plain.isSet(presence) and generated.isSet(presence));
+    try std.testing.expect(plain.isSet(absence) and !generated.isSet(absence));
+    for ([_][]const u8{ "span[style='width:100px']", "span[style*='width']", "span:not([style='width:100px'])", "span:not([style*='width'])", "span:future-state" }) |raw|
+        try std.testing.expect(generated.isSet(try FigureRuleCandidatesTest.ruleIndex(&styles, raw)));
+    // Unknown generated values and unknown pseudo truth cannot become positive
+    // matches merely because the candidate survived the invariant check.
+    const declarations = (try observedFigureDeclarationsPrepared(a, &cached, 5, null, .{ .missing_width = 100 })).?;
+    var saw_unknown = false;
+    for (declarations) |declaration| saw_unknown = saw_unknown or declaration.uncertain;
+    try std.testing.expect(saw_unknown);
+    var invalid = context; invalid.nodes = context.nodes[0..4];
+    try std.testing.expect((try observedFigureDeclarations(a, invalid, 3, null, .{})) == null);
+}
+test "observed Figure rule candidates retain exact sibling graph and survive scratch reset only within one operation" {
+    const a = std.testing.allocator; const Fixture = FigureOperationReuseTest;
+    var styles = try parseForTargetAlloc(a, Fixture.ready_css ++
+        "a+a{color:red}a:has(+ .definitely-absent){color:blue}a:future-state{color:purple}", .screen);
+    defer styles.deinit();
+    var nodes = Fixture.ready_nodes;
+    nodes[4].known_next_element_sibling = 6; nodes[4].known_no_previous_element_sibling = true;
+    const context = Fixture.context(&styles, &nodes, false);
+    var counts: ObservedFigureCandidateCounts = .{};
+    var cached = ObservedFigureOperation.init(a, context); defer cached.deinit();
+    cached.retain_rule_candidates = true; cached.candidate_counts = &counts;
+    const first = (try cached.candidates(4, null, .{})).?;
+    const previous_rule = try FigureRuleCandidatesTest.ruleIndex(&styles, "a+a");
+    const next_rule = try FigureRuleCandidatesTest.ruleIndex(&styles, "a:has(+ .definitely-absent)");
+    try std.testing.expect(!first.isSet(previous_rule) and !first.isSet(next_rule));
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    for ([_]bool{ false, true }) |hover| {
+        _ = scratch.reset(.retain_capacity);
+        var baseline = ObservedFigureOperation.init(a, context); defer baseline.deinit();
+        try FigureRuleCandidatesTest.sameDeclarations(scratch.allocator(), &baseline, &cached, 4, null,
+            .{ .link_subject = 4, .link_state = .{ .hover = hover } });
+        const again = (try cached.candidates(4, null, .{})).?;
+        try std.testing.expect(first.masks == again.masks);
+    }
+    try std.testing.expectEqual(@as(u64, 1), counts.lists_built);
+    cached.deinit();
+    nodes[4].known_next_element_sibling = null; nodes[4].known_no_previous_element_sibling = false;
+    var fresh = ObservedFigureOperation.init(a, context); defer fresh.deinit(); fresh.retain_rule_candidates = true;
+    const uncertain = (try fresh.candidates(4, null, .{})).?;
+    try std.testing.expect(uncertain.isSet(previous_rule) and uncertain.isSet(next_rule));
+    fresh.deinit(); nodes[0].parent = 0;
+    var forged = ObservedFigureOperation.init(a, context); defer forged.deinit(); forged.retain_rule_candidates = true;
+    try std.testing.expect(!forged.valid and (try forged.candidates(4, null, .{})) == null);
+    try std.testing.expect((try observedFigureComputedNodes(a, context, .{})) == null);
+}
+test "observed Figure rule candidate allocation failures do not publish incomplete lists or change ordinary guards" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Fixture = FigureOperationReuseTest;
+    var styles = try parseForTargetAlloc(a, Fixture.ready_css, .screen); defer styles.deinit();
+    const context = Fixture.context(&styles, &Fixture.ready_nodes, false);
+    const Harness = struct {
+        fn run(alloc: std.mem.Allocator, selected_context: FigureObservedContext) !void {
+            var operation = ObservedFigureOperation.init(alloc, selected_context); defer operation.deinit();
+            const first = (try operation.candidates(4, null, .{})) orelse return error.TestUnexpectedResult;
+            const again = (try operation.candidates(4, null, .{})) orelse return error.TestUnexpectedResult;
+            try std.testing.expect(first.masks == again.masks);
+            _ = (try operation.candidates(6, .before, .{})) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 2), operation.rule_candidates.items.len);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Harness.run, .{context});
+    for (0..2) |failure_index| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = failure_index });
+        var operation = ObservedFigureOperation.init(failing.allocator(), context); defer operation.deinit();
+        try std.testing.expectError(error.OutOfMemory, operation.candidates(4, null, .{}));
+        try std.testing.expectEqual(@as(usize, 0), operation.rule_candidates.items.len);
+        failing.fail_index = std.math.maxInt(usize);
+        _ = (try operation.candidates(4, null, .{})) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), operation.rule_candidates.items.len);
+    }
+    // Non-Figure/shared authored-node collection still uses its full ordinary
+    // rule census and complete-language-path check. Candidate storage never
+    // crosses the operation boundary or replaces that separate authority.
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    const ordinary = (try observedStyleNodeDeclarations(scratch.allocator(), &styles, context.nodes, 4, null, null, .{})).?;
+    const explicit_full = (try observedStyleNodeDeclarationsSelected(scratch.allocator(), &styles, context.nodes, 4, null, null, .{}, false, null, null)).?;
+    try std.testing.expect(observedFigureDataEqual([]const ObservedFigureDeclaration, ordinary.items, explicit_full.items, 0));
+}
+test "observed Ready mixed caption retains break nested link palette and real responsive before owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const css = FigureOperationReuseTest.ready_css ++
+        "figcaption a{display:inline;position:static;color:#3366cc}" ++
+        "figcaption a:visited{color:#795cb2}figcaption a:hover{text-decoration:underline}" ++
+        "figcaption a:active{color:#2a4b8d;text-decoration:underline}" ++
+        ".not-present li>span{display:none;float:right}" ++
+        "figure[typeof~='mw:File/Thumb']>figcaption::before{content:'';width:15px;height:11px;margin:0;margin-left:3px;margin-right:0;margin-inline-start:3px;margin-inline-end:0;float:right}" ++
+        "@media all and (max-width:calc(640px - 1px)){body.skin--responsive figure[typeof~='mw:File/Thumb']>figcaption::before{content:none}}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    var nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "dir", .value = "ltr" }, .{ .name = "lang", .value = "vi" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{.{ .name = "class", .value = "skin--responsive" }} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output mw-content-ltr" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "/wiki/File:Image.png" }}, .has_text = false },
+        .{ .tag = "img", .parent = 4, .attributes = &.{.{ .name = "width", .value = "190" }, .{ .name = "height", .value = "248" }}, .has_text = false },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+        .{ .tag = "b", .parent = 6, .attributes = &.{}, .has_text = true },
+        .{ .tag = "br", .parent = 6, .attributes = &.{}, .has_text = false, .empty = true },
+        .{ .tag = "span", .parent = 6, .attributes = &.{.{ .name = "class", .value = "biota" }}, .has_text = false },
+        .{ .tag = "a", .parent = 9, .attributes = &.{.{ .name = "href", .value = "https://species.wikimedia.org/wiki/Sphyraena_sphyraena" }, .{ .name = "class", .value = "extiw" }}, .has_text = false },
+        .{ .tag = "i", .parent = 10, .attributes = &.{}, .has_text = true },
+    };
+    const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6 };
+    const assets = &[_]struct { url: []const u8, graphic: types.FigureMediaGraphic }{};
+    const viewport = (try observedFigureReadyViewport(a, context, 190, assets)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 5), viewport.base.caption_inline.nodes.len);
+    try std.testing.expect(viewport.base.caption_inline.nodes[0].font.bold);
+    try std.testing.expect(viewport.base.caption_inline.nodes[4].font.italic);
+    try std.testing.expectEqualStrings("#3366cc", viewport.base.caption_inline.nodes[4].foreground.value.?);
+    try std.testing.expect(viewport.base.caption_paint != null and viewport.base.caption_paint.?.hover.underline);
+    try std.testing.expectEqualStrings("#795cb2", viewport.base.caption_paint.?.visited.foreground);
+    try std.testing.expect(viewport.base.caption_paint.?.active.underline);
+    try std.testing.expect(viewport.base.before != null and viewport.base.before.?.float_side == .right);
+    try std.testing.expectEqual(@as(f32, 15), viewport.base.before.?.width.?.length.value);
+    try std.testing.expectEqual(@as(usize, 1), viewport.states.len);
+    try std.testing.expect(viewport.states[0].max_width_px == 639 and viewport.states[0].caption_before == null);
+    const actual = (try resolveObservedReadyFigure(a, &.{ context, context }, 190, viewport.base.parent_font, assets)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(observedFigureDataEqual(?types.FigureLinkPaint, viewport.base.caption_paint, actual.layout.caption_link_paint, 0));
+    try std.testing.expect(observedFigureDataEqual([]const types.FigureViewportState, viewport.states, actual.layout.viewport_states, 0));
+    for ([_][]const u8{
+        // The original fixture has different active paint with/without hover;
+        // the wire active bucket cannot represent that independent combination.
+        "figcaption a:active:not(:hover){text-decoration:none}",
+        "figcaption br{display:none}", "figcaption span{padding:1px}", "figcaption a i{color:red}",
+        "figcaption a:hover{font-size:120%}", "figcaption a:visited i{font-weight:bold}",
+        "@media(max-width:639px){figcaption a{font-size:120%}}",
+        "figcaption i::before{content:'extra'}", "figcaption span{unknown-property:1}",
+    }) |extra| {
+        var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ css, extra }), .screen); defer changed.deinit();
+        var alternate = context; alternate.styles = &changed;
+        if (std.mem.eql(u8, extra, "figcaption a:active:not(:hover){text-decoration:none}"))
+            try std.testing.expect((try observedFigureReadyViewport(a, alternate, 190, assets)) == null);
+        try std.testing.expect((try resolveObservedReadyFigure(a, &.{ context, alternate }, 190, viewport.base.parent_font, assets)) == null);
+    }
+    var different = try parseForTargetAlloc(a, css ++ "figcaption a{color:#123456}", .screen); defer different.deinit();
+    var different_head = context; different_head.styles = &different;
+    try std.testing.expect((try resolveObservedReadyFigure(a, &.{ context, different_head }, 190, viewport.base.parent_font, assets)) == null);
+    var foreign_parent = viewport.base.parent_font; foreign_parent.font_scale = 2;
+    try std.testing.expect((try resolveObservedReadyFigure(a, &.{context}, 190, foreign_parent, assets)) == null);
+    nodes[8].has_text = null;
+    try std.testing.expect((try resolveObservedReadyFigure(a, &.{context}, 190, viewport.base.parent_font, assets)) == null);
+}
+test "observed sibling right tail refutes absent ancestors without granting sibling or structural predicates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:File/Thumb" }} },
+        .{ .tag = "a", .parent = 3, .attributes = &.{}, .has_text = false },
+        .{ .tag = "img", .parent = 4, .attributes = &.{}, .has_text = false },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+        .{ .tag = "span", .parent = 6, .attributes = &.{}, .has_text = false },
+        .{ .tag = "br", .parent = 7, .attributes = &.{}, .has_text = false, .empty = true },
+    };
+    for ([_][]const u8{ ".CategoryTreeTag+p br:first-child", ".absent ~ p > br:first-child",
+        ".ignored + figcaption > p br:first-child" }) |selector| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ selector, "{display:none}" }), .screen); defer styles.deinit();
+        const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6 };
+        const rule = styles.observed_figure_rules[0];
+        try std.testing.expect(figureObservedContextValid(context));
+        try std.testing.expect(rule.selector == null and rule.weak_selector != null);
+        try std.testing.expectEqual(ContainerSelectorMatch.no, observedFigureRuleMatchWithEffects(rule, context, 8, null, .{}));
+        nodes[7].tag = "p";
+        // The right tail is now possible, but neither the left sibling nor
+        // first-child truth is granted by the complete parent chain.
+        try std.testing.expectEqual(ContainerSelectorMatch.unknown,
+            observedFigureRuleMatchWithEffects(rule, context, 8, null, .{}));
+        nodes[7].tag = "span";
+    }
+    for ([_][]const u8{ "p + br:first-child", ".absent + p + br:first-child",
+        ".absent + :is(p,span) br:first-child", ".absent + :not(p) br:first-child" }) |selector| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ selector, "{display:none}" }), .screen); defer styles.deinit();
+        const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6 };
+        try std.testing.expectEqual(ContainerSelectorMatch.unknown, observedFigureRuleMatchWithEffects(styles.observed_figure_rules[0], context, 8, null, .{}));
+    }
+    for ([_][]const u8{ ".x + p > br:first-child, br", ".x + p\\31 br:first-child", ".x + p > > br:first-child" }) |selector| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ selector, "{display:none}" }), .screen); defer styles.deinit();
+        const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6 };
+        const computed = (try observedFigureComputedNodes(a, context, .{})) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!try observedFigureKeywordIs(a, observedFigureComputedNode(computed, 8).?, "display", &.{}, "inline", "inline"));
+    }
+}
+const ReadyCaptionSiblingTest = struct {
+    const pseudo_css = ".mw-editsection a:first-of-type::before,.mw-editsection-like a:first-of-type::before{content:'[';content:'[' / '';margin-right:0.25em;margin-inline:0 0.25em}" ++
+        ".client-nojs a.mw-editsection-visualeditor:first-of-type + .mw-editsection-divider + a::before,.ve-not-available a.mw-editsection-visualeditor:first-of-type + .mw-editsection-divider + a::before,.client-nojs a.mw-editsection-visualeditor:first-of-type + a::before,.ve-not-available a.mw-editsection-visualeditor:first-of-type + a::before{content:'[';content:'[' / '';margin-right:0.25em;margin-inline:0 0.25em}";
+    fn issue(nodes: []FigureObservedNode) void {
+        for (7..12) |index| {
+            nodes[index].empty = index == 8;
+            nodes[index].known_previous_element_sibling = if (index == 8 or index == 9) @intCast(index - 1) else null;
+            nodes[index].known_no_previous_element_sibling = index != 8 and index != 9;
+            nodes[index].known_next_element_sibling = if (index == 7 or index == 8) @intCast(index + 1) else null;
+            nodes[index].known_no_next_element_sibling = index != 7 and index != 8;
+        }
+        nodes[6].known_caption_inline_siblings = true;
+    }
+};
+test "complete Ready caption siblings exclude edit pseudo content without changing semantic states" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const css = FigureOperationReuseTest.ready_css ++
+        "figcaption a{display:inline;position:static;color:#3366cc}" ++
+        "figcaption a:visited{color:#795cb2}figcaption a:hover{text-decoration:underline}" ++
+        "figcaption a:active{color:#2a4b8d;text-decoration:underline}" ++
+        ".not-present li>span{display:none;float:right}" ++
+        "figure[typeof~='mw:File/Thumb']>figcaption::before{content:'';width:15px;height:11px;margin:0;margin-left:3px;margin-right:0;margin-inline-start:3px;margin-inline-end:0;float:right}" ++
+        "@media all and (max-width:calc(640px - 1px)){body.skin--responsive figure[typeof~='mw:File/Thumb']>figcaption::before{content:none}}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    var nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "dir", .value = "ltr" }, .{ .name = "lang", .value = "vi" }, .{ .name = "class", .value = "client-nojs ve-not-available" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{.{ .name = "class", .value = "skin--responsive" }} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output mw-content-ltr" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "/wiki/File:Image.png" }}, .has_text = false,
+            .known_no_previous_element_sibling = true, .known_next_element_sibling = 6 },
+        .{ .tag = "img", .parent = 4, .attributes = &.{.{ .name = "width", .value = "190" }, .{ .name = "height", .value = "248" }}, .has_text = false },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+        .{ .tag = "b", .parent = 6, .attributes = &.{}, .has_text = true },
+        .{ .tag = "br", .parent = 6, .attributes = &.{}, .has_text = false, .empty = true },
+        .{ .tag = "span", .parent = 6, .attributes = &.{.{ .name = "class", .value = "biota" }}, .has_text = false },
+        .{ .tag = "a", .parent = 9, .attributes = &.{.{ .name = "href", .value = "https://species.wikimedia.org/wiki/Sphyraena_sphyraena" }, .{ .name = "class", .value = "extiw" }}, .has_text = false },
+        .{ .tag = "i", .parent = 10, .attributes = &.{}, .has_text = true },
+    };
+    ReadyCaptionSiblingTest.issue(&nodes);
+    const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6 };
+    const assets = &[_]struct { url: []const u8, graphic: types.FigureMediaGraphic }{};
+    const viewport = (try observedFigureReadyViewport(a, context, 190, assets)) orelse return error.TestUnexpectedResult;
+    const expected = (try resolveObservedReadyFigure(a, &.{context}, 190, viewport.base.parent_font, assets)) orelse return error.TestUnexpectedResult;
+    var joined = try parseForTargetAlloc(a, css ++ ReadyCaptionSiblingTest.pseudo_css, .screen); defer joined.deinit();
+    var selected = context; selected.styles = &joined;
+    // The ordinary Book also issues the media anchor's first-child/next-caption
+    // facts. Caption-inline sibling authority alone does not prove this edge.
+    const no_media_before = (try observedFigureDeclarations(a, selected, 4, .before, .{})) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 0), no_media_before.len);
+    var unproved_anchor = nodes; unproved_anchor[4].known_no_previous_element_sibling = false;
+    var unproved = selected; unproved.nodes = &unproved_anchor;
+    const possible_media_before = (try observedFigureDeclarations(a, unproved, 4, .before, .{})) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(possible_media_before.len != 0 and possible_media_before[0].uncertain);
+    const actual = (try resolveObservedReadyFigure(a, &.{ context, selected }, 190, viewport.base.parent_font, assets)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(observedFigureDataEqual(FigureObservedReadyStyle, expected, actual, 0));
+    try std.testing.expectEqual(@as(usize, 5), actual.geometry.caption_inline.nodes.len);
+    try std.testing.expect(actual.geometry.caption_inline.nodes[0].font.bold and actual.geometry.caption_inline.nodes[4].font.italic);
+    try std.testing.expectEqualStrings("#795cb2", actual.layout.caption_link_paint.?.visited.foreground);
+    try std.testing.expect(actual.layout.caption_link_paint.?.hover.underline and actual.layout.caption_link_paint.?.active.underline);
+    try std.testing.expect(actual.layout.caption_before != null and actual.layout.viewport_states.len == 1);
+    try std.testing.expect(actual.layout.viewport_states[0].max_width_px == 639 and actual.layout.viewport_states[0].caption_before == null);
+    nodes[6].known_caption_inline_siblings = false;
+    try std.testing.expect((try resolveObservedReadyFigure(a, &.{selected}, 190, viewport.base.parent_font, assets)) == null);
+    nodes[6].known_caption_inline_siblings = true;
+    for ([_][]const u8{
+        "figcaption a::before{content:'['}", "figcaption i::after{content:']'}",
+        "figcaption a:active:not(:hover){text-decoration:none}",
+        "@media(max-width:639px){figcaption a{font-size:120%}}",
+        "figcaption a:visited i{font-weight:bold}", "figcaption span{unknown-property:1}",
+    }) |extra| {
+        var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ css, ReadyCaptionSiblingTest.pseudo_css, extra }), .screen); defer changed.deinit();
+        var alternate = selected; alternate.styles = &changed;
+        try std.testing.expect((try resolveObservedReadyFigure(a, &.{ selected, alternate }, 190, viewport.base.parent_font, assets)) == null);
+    }
+}
+test "Ready inline sibling authority rejects stale graphs and preserves possible sibling and ancestor rules" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try parseForTargetAlloc(a, ReadyCaptionSiblingTest.pseudo_css, .screen); defer styles.deinit();
+    var nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "dir", .value = "ltr" }, .{ .name = "lang", .value = "vi" }, .{ .name = "class", .value = "client-nojs ve-not-available" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{.{ .name = "class", .value = "skin--responsive" }} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output mw-content-ltr" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "/wiki/File:Image.png" }}, .has_text = false },
+        .{ .tag = "img", .parent = 4, .attributes = &.{.{ .name = "width", .value = "190" }, .{ .name = "height", .value = "248" }}, .has_text = false },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+        .{ .tag = "b", .parent = 6, .attributes = &.{}, .has_text = true },
+        .{ .tag = "br", .parent = 6, .attributes = &.{}, .has_text = false, .empty = true },
+        .{ .tag = "span", .parent = 6, .attributes = &.{.{ .name = "class", .value = "biota" }}, .has_text = false },
+        .{ .tag = "a", .parent = 9, .attributes = &.{.{ .name = "href", .value = "https://species.wikimedia.org/wiki/Sphyraena_sphyraena" }, .{ .name = "class", .value = "extiw" }}, .has_text = false },
+        .{ .tag = "i", .parent = 10, .attributes = &.{}, .has_text = true },
+    };
+    ReadyCaptionSiblingTest.issue(&nodes);
+    const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6 };
+    try std.testing.expect(figureObservedContextValid(context));
+    const discarded = (try observedFigureDeclarations(a, context, 10, .before, .{})) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 0), discarded.len);
+    var generic = (try observedStyleNodeDeclarations(a, &styles, &nodes, 10, 5, .before, .{})) orelse return error.TestUnexpectedResult;
+    defer generic.deinit(a);
+    try std.testing.expect(generic.items.len != 0 and generic.items[0].uncertain);
+    const evaluation = observedFigureSiblingEvaluationValidated(context, .{});
+    const foreign = try a.dupe(FigureObservedNode, &nodes);
+    var retained = false;
+    for (styles.observed_figure_rules) |rule| if (observedStyleRuleMatch(rule, foreign, 5, 10, .before, evaluation) == .unknown) { retained = true; };
+    try std.testing.expect(retained);
+    for (0..9) |mode| {
+        var changed = nodes;
+        switch (mode) {
+            0 => changed[10].known_no_previous_element_sibling = false,
+            1 => changed[10].known_previous_element_sibling = 7,
+            2 => changed[10].known_next_element_sibling = 11,
+            3 => changed[11].parent = 9,
+            4 => changed[8].empty = false,
+            5 => changed[9].has_text = null,
+            6 => changed[9].tag = "div",
+            7 => changed[9].tag = "a",
+            8 => changed[6].known_caption_link_siblings = true,
+            else => unreachable,
+        }
+        var alternate = context; alternate.nodes = &changed;
+        try std.testing.expect(!figureObservedContextValid(alternate));
+        try std.testing.expect((try observedFigureDeclarations(a, alternate, 10, .before, .{})) == null);
+    }
+    // A real prior element changes the sibling fact. It cannot keep the old
+    // singleton certificate, and matching/unsupported chains remain possible.
+    var siblings = nodes;
+    siblings[7].parent = 9; // invalid topology: this cannot become authority
+    var invalid_context = context; invalid_context.nodes = &siblings;
+    try std.testing.expect(!figureObservedContextValid(invalid_context));
+    const extended = try a.alloc(FigureObservedNode, 14);
+    @memcpy(extended[0..10], nodes[0..10]);
+    extended[10] = .{ .tag = "a", .parent = 9, .attributes = &.{.{ .name = "class", .value = "mw-editsection-visualeditor" }}, .empty = false, .has_text = true,
+        .known_no_previous_element_sibling = true, .known_next_element_sibling = 11 };
+    extended[11] = .{ .tag = "span", .parent = 9, .attributes = &.{.{ .name = "class", .value = "mw-editsection-divider" }}, .empty = false, .has_text = true,
+        .known_previous_element_sibling = 10, .known_next_element_sibling = 12 };
+    extended[12] = nodes[10]; extended[12].known_previous_element_sibling = 11; extended[12].known_no_previous_element_sibling = false;
+    extended[13] = nodes[11]; extended[13].parent = 12;
+    var possible = context; possible.nodes = extended;
+    try std.testing.expect(figureObservedContextValid(possible));
+    const kept = (try observedFigureDeclarations(a, possible, 12, .before, .{})) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(kept.len != 0 and kept[0].uncertain);
+    for ([_][]const u8{ ".mw-editsection a:first-of-type::before", ":not(.missing) a::before", ".unknown:has(span) a::before" }) |selector| {
+        var extra = try parseForTargetAlloc(a, try std.fmt.allocPrint(a, "{s}{{content:'['}}", .{selector}), .screen); defer extra.deinit();
+        var changed = nodes;
+        changed[9].attributes = &.{.{ .name = "class", .value = "biota mw-editsection unknown" }};
+        var alternate = context; alternate.nodes = &changed; alternate.styles = &extra;
+        const declarations = (try observedFigureDeclarations(a, alternate, 10, .before, .{})) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(declarations.len != 0);
+    }
+}
+
 const TextRule = struct {
     selector: TextSelector,
     css: []const u8,
@@ -722,6 +5876,7 @@ fn figureTypeofUnknown(selector: TextSelector, element: *const TextElement) bool
 }
 
 fn figureOuterSelectorUnknown(selector: TextSelector, element: *const TextElement) bool {
+    if (selector.ancestorIdsRefute(element)) return false;
     if (selector.chain.len < 2 or !selector.chain[selector.chain.len - 1].matches(element)) return false;
     var parent = element.parent;
     var complete = element.ancestry_complete;
@@ -823,6 +5978,8 @@ pub const ContainerRuleProvenance = struct {
     css_byte_start: usize,
 };
 pub const ContainerRuleMatch = struct {
+    closed_row_attribute: ?[]const u8 = null,
+    closed_figure_domain: bool = false,
     provenance: ?ContainerRuleProvenance = null,
     css: []const u8,
     order: u32,
@@ -868,6 +6025,34 @@ const ContainerSelector = struct {
     adjacent_sibling: ?struct { previous: TextCompound, subject: TextCompound, specificity: u64 } = null,
     specificity: u64,
     uncertain: bool = false,
+
+    // This is only a necessary-class nonmatch over an independently complete
+    // page/outer/source superset. It grants no positive selector or parent edge.
+    fn absentFromCompleteClasses(self: @This(), classes: []const u8) bool {
+        if (self.adjacent_sibling != null) return false;
+        const parts = if (self.fallback != null) self.necessary_chain else self.chain;
+        for (parts) |part| for (part.compound.classes) |required| {
+            if (!Profile.hasClass(classes, required)) return true;
+        };
+        return false;
+    }
+
+    fn completeOwnAttribute(self: @This()) ?[]const u8 {
+        if (self.uncertain or self.adjacent_sibling != null or self.necessary_chain.len != 0) return null;
+        const fallback = self.fallback orelse return null;
+        return if (fallback.own_attribute_complete and !fallback.uncertain) fallback.required_own_attribute else null;
+    }
+
+    fn requiresFigureDomain(self: @This()) bool {
+        if (self.adjacent_sibling != null) return false;
+        // Both chains contain only positive compounds joined by descendant or
+        // child edges. Unsupported functions, sibling escapes and negations
+        // have no necessary chain and therefore cannot acquire this domain.
+        const parts = if (self.fallback != null) self.necessary_chain else self.chain;
+        for (parts) |part| if (part.compound.tag) |tag|
+            if (std.ascii.eqlIgnoreCase(tag, "figure")) return true;
+        return false;
+    }
 
     fn combine(left: ContainerSelectorMatch, right: ContainerSelectorMatch) ContainerSelectorMatch {
         if (left == .no or right == .no) return .no;
@@ -928,8 +6113,17 @@ const ContainerSelector = struct {
         if (self.adjacent_sibling != null) return self.match(element);
         if (!page_scoped) return self.match(element);
         if (self.fallback) |fallback| {
-            if (self.necessary_chain.len != 0 and !self.necessary_chain[self.necessary_chain.len - 1].compound.matches(element)) return .no;
-            return switch (fallback.matchIn(element, true)) { .no => .no, else => .unknown };
+            if (self.necessary_chain.len != 0) {
+                if (!self.necessary_chain[self.necessary_chain.len - 1].compound.matches(element)) return .no;
+                // The same necessary chain used by legacy matching can refute
+                // a selected-page candidate only on its complete physical path.
+                if (element.physical_ancestry_complete) {
+                    const necessary: ContainerSelector = .{ .chain = self.necessary_chain, .specificity = 0 };
+                    var budget: usize = 4096;
+                    if (necessary.matchAt(necessary.chain.len - 1, element, false, &budget, null) == .no) return .no;
+                }
+            }
+            return switch (fallback.matchIn(element, true)) { .no => .no, .known => if (self.completeOwnAttribute() != null) .known else .unknown, .unknown => .unknown };
         }
         if (self.chain.len == 0) return .unknown;
         if (!self.chain[self.chain.len - 1].compound.matches(element)) return .no;
@@ -1024,23 +6218,35 @@ const ContainerRule = struct {
 
 fn containerViewportGroup(prelude: []const u8, parent: ContainerViewportCondition) ContainerViewportCondition {
     if (parent == .unknown or !atRuleNamed(prelude, "media")) return .unknown;
-    var text = trim(prelude[identifierEnd(prelude, 1)..]);
-    if (text.len < 6 or !std.ascii.eqlIgnoreCase(text[0..6], "screen")) return .unknown;
-    text = text[6..];
-    if (text.len == 0 or !std.ascii.isWhitespace(text[0])) return .unknown;
-    text = trim(text);
-    if (text.len < 3 or !std.ascii.eqlIgnoreCase(text[0..3], "and")) return .unknown;
-    if (text.len == 3 or !std.ascii.isWhitespace(text[3])) return .unknown;
-    text = trim(text[3..]);
-    if (text.len < 3 or text[0] != '(' or text[text.len - 1] != ')') return .unknown;
-    text = trim(text[1 .. text.len - 1]);
-    const colon = std.mem.indexOfScalar(u8, text, ':') orelse return .unknown;
-    if (!std.ascii.eqlIgnoreCase(trim(text[0..colon]), "max-width")) return .unknown;
-    const value = trim(text[colon + 1 ..]);
-    if (value.len < 3 or !std.ascii.eqlIgnoreCase(value[value.len - 2 ..], "px")) return .unknown;
-    const digits = value[0 .. value.len - 2];
-    for (digits) |byte| if (!std.ascii.isDigit(byte)) return .unknown;
-    const limit = std.fmt.parseInt(u32, digits, 10) catch return .unknown;
+    const text = trim(prelude[identifierEnd(prelude, 1)..]);
+    // Keep the explicit medium contract. Bare features, lists and modifiers
+    // do not borrow this finite max-width domain.
+    var medium_known = false;
+    for ([_][]const u8{ "screen", "all" }) |medium| {
+        if (text.len > medium.len and std.ascii.eqlIgnoreCase(text[0..medium.len], medium) and
+            std.ascii.isWhitespace(text[medium.len])) medium_known = true;
+    }
+    if (!medium_known) return .unknown;
+    const atom = observedFigureMediaAtom(prelude) orelse return .unknown;
+    if (!std.ascii.eqlIgnoreCase(atom.name, "max-width")) return .unknown;
+    const value = atom.value;
+    const limit: u32 = literal: {
+        if (value.len >= 3 and std.ascii.eqlIgnoreCase(value[value.len - 2..], "px")) {
+            const digits = value[0..value.len - 2];
+            for (digits) |byte| if (!std.ascii.isDigit(byte)) return .unknown;
+            break :literal std.fmt.parseInt(u32, digits, 10) catch return .unknown;
+        }
+        // Reuse the existing dimension-checked constant width evaluator. The
+        // new syntax is one closed calc of literal px/numbers only: no custom
+        // environment, nested functions, escapes or relative-unit dependency.
+        if (value.len < 7 or !std.ascii.eqlIgnoreCase(value[0..5], "calc(") or value[value.len - 1] != ')') return .unknown;
+        for (value[5..value.len - 1]) |byte| if (!std.ascii.isDigit(byte) and !std.ascii.isWhitespace(byte) and
+            std.mem.indexOfScalar(u8, "+-*/.pPxX", byte) == null) return .unknown;
+        const computed = figureComputedWidthPx(value, null);
+        if (computed != .known or !std.math.isFinite(computed.known) or computed.known < 1 or
+            computed.known > @as(f64, @floatFromInt(std.math.maxInt(u32))) or @floor(computed.known) != computed.known) return .unknown;
+        break :literal @intFromFloat(computed.known);
+    };
     if (limit == 0) return .unknown;
     return .{ .screen_max_width_px = if (parent == .screen_max_width_px) @min(limit, parent.screen_max_width_px) else limit };
 }
@@ -1281,7 +6487,7 @@ const ContainerCascade = struct {
     fn consider(self: *@This(), slot: ContainerSlot, value: ContainerValue, priority: Priority, uncertain: bool) void {
         const index = @intFromEnum(slot);
         if (self.slots[index]) |current| if (!priority.wins(current.priority)) return;
-        const supported_conditional = switch (slot) { .width, .max_width, .box_sizing, .line_height => true, else => false };
+        const supported_conditional = switch (slot) { .width, .max_width, .box_sizing, .line_height, .float_side, .clear => true, else => false };
         self.slots[index] = .{ .value = if (uncertain or (self.responsive and !supported_conditional)) .unknown else value, .priority = priority };
         self.specified = true;
     }
@@ -1996,6 +7202,9 @@ const BlockGeometryCascade = struct {
 
 const TextCascade = struct {
     custom_environment: ?CustomEnvironment = null,
+    // Only the complete observed ordinary-link path may compute missing-token
+    // fallbacks. Generic Container paint still requires a known binding.
+    observed_color_environment: ?CustomEnvironment = null,
     paint: TextPaint = .{},
     color_priority: Priority = .{},
     weight_priority: Priority = .{},
@@ -2038,12 +7247,25 @@ const TextCascade = struct {
             if (color) {
                 var selected: TextColor = .unknown;
                 if (!escaped and !parsed.unknown) {
-                    if (inherit or std.ascii.eqlIgnoreCase(value, "currentcolor")) selected = .inherit else if (initial) selected = .initial else if (!all) {
-                        if (try canonicalColorAlloc(a, value)) |canonical| {
-                            selected = .{ .value = canonical };
-                        } else if (try containerColorWithCustomAlloc(a, value, self.custom_environment, false)) |computed| {
-                            if (computed == .rgb) selected = .{ .value = computed.rgb };
-                        }
+                    const computed_value: CustomValue = if (self.observed_color_environment) |environment|
+                        (if (environment.complete) try customColorValue(a, environment, value) else .unknown)
+                        else .{ .known = value };
+                    switch (computed_value) {
+                        .unknown => {},
+                        .invalid => selected = .inherit,
+                        .known => |computed| {
+                            const color_value = trim(computed);
+                            if (std.ascii.eqlIgnoreCase(color_value, "inherit") or std.ascii.eqlIgnoreCase(color_value, "unset") or
+                                std.ascii.eqlIgnoreCase(color_value, "currentcolor")) selected = .inherit
+                            else if (std.ascii.eqlIgnoreCase(color_value, "initial")) selected = .initial
+                            else if (!all) {
+                                if (try canonicalColorAlloc(a, color_value)) |canonical| {
+                                    selected = .{ .value = canonical };
+                                } else if (try containerColorWithCustomAlloc(a, color_value, self.custom_environment, false)) |resolved| {
+                                    if (resolved == .rgb) selected = .{ .value = resolved.rgb };
+                                }
+                            }
+                        },
                     }
                 }
                 if (uncertain) {
@@ -2117,6 +7339,12 @@ fn requiredOwnAttribute(tail: []const u8) ?[]const u8 {
     if (value.len < 2 or (value[0] != '\'' and value[0] != '"') or value[value.len - 1] != value[0]) return null;
     for (value[1 .. value.len - 1]) |byte| if (byte == value[0] or byte == '\\' or byte == '[' or byte == ']' or byte < 32 or byte == 127) return null;
     return name;
+}
+
+fn bareOwnAttribute(raw: []const u8) ?[]const u8 {
+    const name = requiredOwnAttribute(raw) orelse return null;
+    const text = trim(raw);
+    return if (std.mem.eql(u8, trim(text[1 .. text.len - 1]), name)) name else null;
 }
 
 const DisplaySelector = struct {
@@ -2212,6 +7440,7 @@ pub const Profile = struct {
     has_unsupported_rules: bool,
     globally_unresolved: bool = false,
     text_rules: []const TextRule = &.{},
+    observed_figure_rules: []const ObservedFigureRule = &.{},
     block_rules: []const TextRule = &.{},
     container_rules: []const ContainerRule = &.{},
     figure_rules: []const TextRule = &.{},
@@ -2296,8 +7525,25 @@ pub const Profile = struct {
             if (matched == .no) continue;
             const specificity = if (element.source_sibling_scope != null and rule.selector.adjacent_sibling != null and matched == .known)
                 rule.selector.adjacent_sibling.?.specificity else rule.selector.specificity;
-            try rules.append(a, .{ .css = rule.css, .order = rule.order, .specificity = specificity,
+            try rules.append(a, .{ .closed_row_attribute = rule.selector.completeOwnAttribute(), .css = rule.css, .order = rule.order, .specificity = specificity,
                 .match = matched, .viewport = rule.viewport, .rank_unknown = rule.rank_unknown, .provenance = rule.provenance });
+        }
+        return .{ .rules = try rules.toOwnedSlice(a) };
+    }
+
+    fn containerRuleMatchesForReadyPreflightIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement, complete_classes: ?[]const u8) std.mem.Allocator.Error!ContainerRuleMatches {
+        if (self.globally_unresolved or (self.page_style_parent != null and element.page_style_root == null)) return .{ .unresolved = true };
+        var rules: std.ArrayList(ContainerRuleMatch) = .empty;
+        errdefer rules.deinit(a);
+        for (self.container_rules) |rule| {
+            if (complete_classes) |classes| if (rule.selector.absentFromCompleteClasses(classes)) continue;
+            const matched = rule.selector.matchIn(element, self.page_style_parent != null);
+            if (matched == .no) continue;
+            const specificity = if (element.source_sibling_scope != null and rule.selector.adjacent_sibling != null and matched == .known)
+                rule.selector.adjacent_sibling.?.specificity else rule.selector.specificity;
+            try rules.append(a, .{ .closed_row_attribute = rule.selector.completeOwnAttribute(), .css = rule.css, .order = rule.order, .specificity = specificity,
+                .match = matched, .viewport = rule.viewport, .rank_unknown = rule.rank_unknown, .provenance = rule.provenance,
+                .closed_figure_domain = rule.selector.requiresFigureDomain() });
         }
         return .{ .rules = try rules.toOwnedSlice(a) };
     }
@@ -2370,6 +7616,19 @@ pub const Profile = struct {
     // parent edge or computed inherited state. Custom values themselves have no
     // effect; their consuming declarations are still visited normally.
     pub fn pageAncestorEffectBlockerIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
+        return self.pageAncestorEffectBlockerWithReadyFiguresIn(a, root, null);
+    }
+
+    fn pageAncestorEffectBlockerWithReadyFiguresIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement, ready: ?ClosedReadyFigureProof) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
+        return self.pageAncestorEffectBlockerWithFigureObligationsIn(a, root, null, ready, null);
+    }
+    fn pageAncestorEffectBlockerWithFigureObligationsIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement, figures: ?ClosedMissingFigureProof, ready: ?ClosedReadyFigureProof, complete_classes: ?[]const u8) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
+        return self.pageAncestorEffectBlockerWithRowColorObligationIn(a, root, figures, ready, complete_classes, null, null);
+    }
+
+    fn pageAncestorEffectBlockerWithRowColorObligationIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement, figures: ?ClosedMissingFigureProof, ready: ?ClosedReadyFigureProof, complete_classes: ?[]const u8, row_colors: ?*const ClosedRowColorProof, row_color_required: ?*bool) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
+        const missing_covered = if (figures) |proof| proof.styles == self and proof.root == root and proof.source.len != 0 and proof.operations > 0 and proof.operations <= 64 else false;
+        const figures_covered = missing_covered or (if (ready) |proof| proof.styles == self and proof.root == root and proof.source.len != 0 and proof.operations > 0 and proof.operations <= 64 else false);
         if (self.page_style_parent == null) return null;
         if (self.globally_unresolved) return .{ .reason = .global_unresolved };
         var ancestor = root orelse return .{ .reason = .missing_root };
@@ -2382,15 +7641,19 @@ pub const Profile = struct {
             // retained as a refusal. Do not export this node to any resolver.
             query.page_style_root = &query;
             query.complete_ancestor_classes = null;
+            query.complete_ancestor_ids = null;
+            query.source_literal_div = null;
+            query.source_literal_div_current = null;
             query.source_sibling = null;
             query.source_sibling_scope = null;
             query.source_sibling_source = null;
             query.ancestry_complete = false;
             query.physical_ancestry_complete = false;
-            const matches = try self.containerRuleMatchesIn(a, &query);
+            const matches = try self.containerRuleMatchesForReadyPreflightIn(a, &query, complete_classes);
             defer a.free(matches.rules);
             if (matches.unresolved) return .{ .reason = .global_unresolved, .ancestor_depth = depth };
             for (matches.rules) |rule| {
+                if (figures_covered and rule.closed_figure_domain) continue;
                 var position: usize = 0;
                 while (true) {
                     const start = position;
@@ -2401,6 +7664,10 @@ pub const Profile = struct {
                         const name = trim(raw[0..colon]);
                         const value = customPriority(raw[colon + 1 ..]);
                         if (customName(name) and !value.unknown) continue;
+                        if (!rule.rank_unknown and rule.viewport == .all and self.rowColorDeclarationCovered(root, row_colors, rule.closed_row_attribute, name, value.unknown)) {
+                            if (row_color_required) |required| required.* = true;
+                            continue;
+                        }
                     }
                     return .{ .reason = .declaration, .ancestor_depth = depth,
                         .rule = rule, .declaration = rule.css[start..position], .declaration_offset = start };
@@ -2417,9 +7684,28 @@ pub const Profile = struct {
     // report retains the unrepresented ancestor effect. No selector is claimed
     // to match a real node by this second witness.
     pub fn pageUnprovedInheritanceBlockerIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
-        if (try self.pageAncestorEffectBlockerIn(a, root)) |failure| return failure;
+        return self.pageUnprovedInheritanceBlockerWithReadyFiguresIn(a, root, null);
+    }
+
+    pub fn pageUnprovedInheritanceBlockerWithReadyFiguresIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement, ready: ?ClosedReadyFigureProof) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
+        return self.pageUnprovedInheritanceBlockerWithFigureObligationsIn(a, root, null, ready);
+    }
+    pub fn pageUnprovedInheritanceBlockerWithFigureObligationsIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement, figures: ?ClosedMissingFigureProof, ready: ?ClosedReadyFigureProof) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
+        return self.pageUnprovedInheritanceBlockerWithCompleteClassesIn(a, root, figures, ready, null);
+    }
+
+    pub fn pageUnprovedInheritanceBlockerWithCompleteClassesIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement, figures: ?ClosedMissingFigureProof, ready: ?ClosedReadyFigureProof, complete_classes: ?[]const u8) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
+        return self.pageUnprovedInheritanceBlockerWithCompleteClassesAndRowColorObligationIn(a, root, figures, ready, complete_classes, null, null);
+    }
+
+    pub fn pageUnprovedInheritanceBlockerWithCompleteClassesAndRowColorObligationIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement, figures: ?ClosedMissingFigureProof, ready: ?ClosedReadyFigureProof, complete_classes: ?[]const u8, row_colors: ?*const ClosedRowColorProof, row_color_required: ?*bool) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
+        const missing_covered = if (figures) |proof| proof.styles == self and proof.root == root and proof.source.len != 0 and proof.operations > 0 and proof.operations <= 64 else false;
+        const figures_covered = missing_covered or (if (ready) |proof| proof.styles == self and proof.root == root and proof.source.len != 0 and proof.operations > 0 and proof.operations <= 64 else false);
+        if (try self.pageAncestorEffectBlockerWithRowColorObligationIn(a, root, figures, ready, complete_classes, row_colors, row_color_required)) |failure| return failure;
         if (self.page_style_parent == null) return null;
         for (self.container_rules) |rule| {
+            if (complete_classes) |classes| if (rule.selector.absentFromCompleteClasses(classes)) continue;
+            if (figures_covered and rule.selector.requiresFigureDomain()) continue;
             var position: usize = 0;
             while (true) {
                 const start = position;
@@ -2430,6 +7716,10 @@ pub const Profile = struct {
                     const name = trim(raw[0..colon]);
                     const value = customPriority(raw[colon + 1 ..]);
                     if (customName(name) and !value.unknown) continue;
+                    if (!rule.rank_unknown and rule.viewport == .all and self.rowColorDeclarationCovered(root, row_colors, rule.selector.completeOwnAttribute(), name, value.unknown)) {
+                        if (row_color_required) |required| required.* = true;
+                        continue;
+                    }
                 }
                 return .{ .reason = .unproved_ancestor_path,
                     .rule = .{ .css = rule.css, .order = rule.order, .specificity = rule.selector.specificity,
@@ -2438,6 +7728,14 @@ pub const Profile = struct {
             }
         }
         return null;
+    }
+
+    fn rowColorDeclarationCovered(self: *const Profile, root: ?*const TextElement, maybe: ?*const ClosedRowColorProof, attribute: ?[]const u8, property: []const u8, unknown_priority: bool) bool {
+        const proof = maybe orelse return false;
+        const name = attribute orelse return false;
+        return proof.styles == self and proof.root == root and proof.source.len != 0 and proof.owners.len > 0 and proof.owners.len <= 4096 and
+            std.mem.eql(u8, proof.attribute, "bgcolor") and std.ascii.eqlIgnoreCase(name, proof.attribute) and
+            !unknown_priority and std.ascii.eqlIgnoreCase(property, "color");
     }
 
     pub fn resolveContainerIn(self: *const Profile, a: std.mem.Allocator, element: *const TextElement, css: []const u8) std.mem.Allocator.Error!ContainerResolution {
@@ -2457,8 +7755,8 @@ pub const Profile = struct {
         if (matched.unresolved) return .{ .unresolved = true };
         var base = try containerCascadeAt(a, matched.rules, css, null, environment, border_collapse_consumed);
         if (base.unresolved) return base;
-        // This representation has one alternative. Bound proof work separately
-        // from the CSS rule budget; exceeding it keeps the source unresolved.
+        // Preserve the existing bounded selector/cascade work. Semantic changes
+        // become the already represented descending viewport bands below.
         var thresholds: [32]u32 = undefined;
         var count: usize = 0;
         for (matched.rules) |rule| {
@@ -2472,36 +7770,45 @@ pub const Profile = struct {
             while (index != 0 and thresholds[index - 1] < limit) : (index -= 1) thresholds[index] = thresholds[index - 1];
             thresholds[index] = limit; count += 1;
         }
-        var alternative: ?types.ContainerStyle = null;
-        var alternative_limit: u32 = 0;
+        var bands: std.ArrayList(types.ContainerScreenMaxWidth) = .empty;
+        defer bands.deinit(a);
+        var previous = base.style;
         for (thresholds[0..count]) |limit| {
             const selected = try containerCascadeAt(a, matched.rules, css, limit, environment, border_collapse_consumed);
             base.specified = base.specified or selected.specified;
             if (selected.unresolved) { base.unresolved = true; return base; }
-            if (containerStyleEqual(base.style, selected.style)) {
-                // A narrower interval cannot return to the base after entering
-                // an alternative: that would require a second breakpoint.
-                if (alternative != null) { base.unresolved = true; return base; }
-                continue;
-            }
-            if (alternative) |prior| {
-                if (!containerStyleEqual(prior, selected.style)) { base.unresolved = true; return base; }
-            } else {
-                alternative = selected.style; alternative_limit = limit;
-            }
-        }
-        if (alternative) |selected| {
-            var responsive: types.ContainerScreenMaxWidth = .{ .max_width_px = alternative_limit };
-            var normalized = selected;
+            if (containerStyleEqual(previous, selected.style)) continue;
+            var responsive: types.ContainerScreenMaxWidth = .{ .max_width_px = limit };
+            var normalized = selected.style;
             inline for (.{ "width", "max_width", "box_sizing", "line_height" }) |field| {
-                if (!std.meta.eql(@field(base.style, field), @field(selected, field))) {
-                    // Conditional declarations cannot remove an unconditional
-                    // winner; explicit auto/none/normal resets stay typed.
-                    @field(responsive, field) = @field(selected, field) orelse { base.unresolved = true; return base; };
+                if (!std.meta.eql(@field(previous, field), @field(selected.style, field))) {
+                    // Absence cannot erase a preceding winner. Explicit
+                    // auto/none/normal resets remain represented values.
+                    @field(responsive, field) = @field(selected.style, field) orelse { base.unresolved = true; return base; };
                 }
-                @field(normalized, field) = @field(base.style, field);
+                @field(normalized, field) = @field(previous, field);
             }
-            if (!containerStyleEqual(base.style, normalized)) { base.unresolved = true; return base; }
+            if (previous.float_side != selected.style.float_side) {
+                responsive.float_side = if (selected.style.float_side) |side| switch (side) {
+                    .left => .left, .right => .right,
+                } else .none;
+            }
+            normalized.float_side = previous.float_side;
+            if (previous.clear != selected.style.clear)
+                responsive.clear = selected.style.clear orelse { base.unresolved = true; return base; };
+            normalized.clear = previous.clear;
+            // No dynamic layout, padding, paint, font or unrepresented property
+            // is discarded by the band encoder. Alias and unknown checks above
+            // still execute independently in every selected interval.
+            if (!containerStyleEqual(previous, normalized) or !types.validContainerScreenMaxWidth(responsive) or
+                bands.items.len == types.max_container_screen_rules) { base.unresolved = true; return base; }
+            try bands.append(a, responsive);
+            previous = selected.style;
+        }
+        if (bands.items.len != 0) {
+            var responsive = bands.items[0];
+            if (bands.items.len > 1) responsive.following_rules = try a.dupe(types.ContainerScreenMaxWidth, bands.items[1..]);
+            if (!types.validContainerScreenMaxWidth(responsive)) { base.unresolved = true; return base; }
             base.style.screen_max_width = responsive;
         }
         return base;
@@ -2590,6 +7897,99 @@ pub const Profile = struct {
             cursor = ancestor.parent;
         }
         return result;
+    }
+
+    // The caller supplies the complete, source-bound class domain of the
+    // generated Figure and its finite caption, with no authored inline style.
+    // This borrowed view changes only Figure rules; never deinit the view.
+    pub fn figureStaticMotionViewIn(self: *const Profile, a: std.mem.Allocator, complete_classes: []const u8) std.mem.Allocator.Error!?Profile {
+        if (self.globally_unresolved or complete_classes.len > 65536) return null;
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+        const scratch = arena.allocator();
+        const Range = struct { start: usize = 0, end: usize = 0, eligible: bool = false };
+        const ranges = try scratch.alloc(Range, self.figure_rules.len);
+        @memset(ranges, .{});
+        var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+        for (self.figure_rules, 0..) |rule, index| {
+            if (figureMotionClassesRefute(rule.selector, complete_classes)) continue;
+            const begin = declarations.items.len;
+            // No selector, condition or cascade order is promoted to a match.
+            // Every possible declaration and the initial state remain candidates.
+            appendObservedFigureDeclarations(scratch, &declarations, rule.css,
+                .{ .specificity = rule.selector.specificity, .order = rule.order }, true, true, null, 0) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory, else => return null,
+                };
+            var complete = true; var pos: usize = 0;
+            while (try nextDeclarationAlloc(scratch, rule.css, &pos)) |raw| {
+                if (trim(raw).len == 0) continue;
+                const colon = std.mem.indexOfScalar(u8, raw, ':') orelse { complete = false; continue; };
+                if (trim(raw[0..colon]).len == 0 or trim(raw[colon + 1..]).len == 0) complete = false;
+            }
+            ranges[index] = .{ .start = begin, .end = declarations.items.len,
+                .eligible = complete and declarations.items.len != begin };
+        }
+        var used = try ObservedFigurePropertyUse.init(scratch, declarations.items);
+        // An incomplete custom environment retains variable uncertainty.
+        if (!try used.staticMotion(scratch, .{})) return null;
+        var omitted: usize = 0;
+        for (ranges) |*range| {
+            if (!range.eligible) continue;
+            for (used.used[range.start..range.end]) |consumed| range.eligible = range.eligible and consumed;
+            if (range.eligible) omitted += 1;
+        }
+        if (omitted == 0) return null;
+        const retained = try a.alloc(TextRule, self.figure_rules.len - omitted);
+        var count: usize = 0;
+        for (self.figure_rules, ranges) |rule, range| if (!range.eligible) {
+            retained[count] = rule; count += 1;
+        };
+        var view = self.*; view.figure_rules = retained;
+        return view;
+    }
+
+    // Borrowed Figure-only view: the caller owns a complete source-bound
+    // generated Figure/caption domain. Generated html/body/div/figure/
+    // figcaption/a/img roles cannot be form controls. The finite caption
+    // inventory and every actual inherited node must exclude both possible
+    // hosts of Mozilla's exact inner-focus pseudo. An open or paired ancestor
+    // path cannot lend absence. Original text/ancestor profiles stay intact.
+    pub fn figureControlPseudoViewIn(self: *const Profile, a: std.mem.Allocator, authored: ?*const TextElement, caption_tags: ?[]const []const u8) std.mem.Allocator.Error!?Profile {
+        if (self.globally_unresolved) return null;
+        const tags = caption_tags orelse return null;
+        if (tags.len > 64) return null;
+        for (tags) |tag| if (std.ascii.eqlIgnoreCase(tag, "button") or std.ascii.eqlIgnoreCase(tag, "input")) return null;
+        var cursor = authored;
+        var depth: usize = 0;
+        var closed = authored == null;
+        while (cursor) |node| : (depth += 1) {
+            if (depth == 64 or node.alternative_ancestry != null or
+                std.ascii.eqlIgnoreCase(node.tag, "button") or std.ascii.eqlIgnoreCase(node.tag, "input")) return null;
+            if (node.ancestry_complete) {
+                if (node.parent != null or !std.ascii.eqlIgnoreCase(node.tag, "div") or !hasClass(node.classes, "mw-parser-output")) return null;
+                closed = true;
+            }
+            cursor = node.parent;
+        }
+        if (!closed) return null;
+        var omitted: usize = 0;
+        for (self.figure_rules) |rule| if (rule.selector.figure_control_pseudo) { omitted += 1; };
+        if (omitted == 0) return null;
+        const retained = try a.alloc(TextRule, self.figure_rules.len - omitted);
+        var count: usize = 0;
+        for (self.figure_rules) |rule| if (!rule.selector.figure_control_pseudo) {
+            retained[count] = rule; count += 1;
+        };
+        var view = self.*; view.figure_rules = retained;
+        return view;
+    }
+
+    fn figureMotionClassesRefute(selector_value: TextSelector, complete_classes: []const u8) bool {
+        for (selector_value.necessary_ancestor_classes) |required| if (!hasClass(complete_classes, required)) return true;
+        for (selector_value.caption_class_guard) |required| if (!hasClass(complete_classes, required)) return true;
+        if (!selector_value.uncertain) for (selector_value.chain) |part| {
+            for (part.classes) |required| if (!hasClass(complete_classes, required)) return true;
+        };
+        return false;
     }
 
     pub fn resolveFigure(self: *const Profile, a: std.mem.Allocator, element: *const TextElement, font_scale: f32, rtl: bool) std.mem.Allocator.Error!FigureStyle {
@@ -2816,6 +8216,7 @@ pub const Profile = struct {
 
     fn cascade(self: *const Profile, a: std.mem.Allocator, target: Target, scope: Scope, ancestor_scope: Scope, own_names: []const u8, context: ElementContext, legacy_bg: ?[]const u8, legacy_align: ?[]const u8, inline_css: []const u8) !Winners {
         const ancestor_names = context.ancestor_classes;
+        const absent_from = context.complete_table_ancestor_classes orelse ancestor_names;
         var winners: Winners = .{};
         if (target == .td or target == .th or target == .cell) {
             addCellVerticalHint(&winners, context.legacy_vertical_align);
@@ -2827,6 +8228,9 @@ pub const Profile = struct {
         if (presentationalTextAlign(legacy_align)) |alignment| winners.add(.{ .property = .text_align, .value = .{ .align_value = alignment }, .important = false, .order = 0 }, 0, false, false);
         rules: for (self.rules) |rule| {
             const selector_value = rule.selector;
+            if (selector_value.complete_own_attribute) |required| if (context.absent_own_attribute) |absent| {
+                if (std.ascii.eqlIgnoreCase(required, absent)) continue;
+            };
             if (selector_value.target != .element and selector_value.target != target and !(selector_value.target == .cell and (target == .th or target == .td))) continue;
             if (selector_value.mask != 0 and selector_value.mask & scope == 0) continue;
             for (selector_value.own_classes) |name| if (!hasClass(own_names, name)) continue :rules;
@@ -2839,18 +8243,30 @@ pub const Profile = struct {
                     positivePageAncestorClass(context.page_style_root.?, name);
                 if (issued_root) {
                     // This one positive descendant requirement is proved.
-                } else if (ancestor_names) |names| {
+                } else if (ancestor_names != null and hasClass(ancestor_names.?, name)) {
+                    // Existing native ancestry supplies positive evidence.
+                } else if (absent_from) |names| {
                     if (!hasClass(names, name)) continue;
+                    // A possible class in another head cannot establish this
+                    // descendant selector's positive match.
+                    uncertain = true;
                 } else if (self.page_style_parent != null) {
                     uncertain = true;
                 } else if (selector_value.ancestor_mask != 0) {
                     if (selector_value.ancestor_mask & ancestor_scope == 0) continue;
                 } else uncertain = true;
             }
-            if (ancestor_names) |names| for (selector_value.necessary_classes) |name| {
+            if (absent_from) |names| for (selector_value.necessary_classes) |name| {
                 if (!hasClass(own_names, name) and !hasClass(names, name) and
                     !(self.page_style_parent != null and context.page_style_root != null and positivePageAncestorClass(context.page_style_root.?, name))) continue :rules;
             };
+            if (context.complete_table_ancestor_ids) |ids| {
+                for (selector_value.necessary_ancestor_ids) |required| {
+                    var found = false;
+                    for (ids) |id| if (std.mem.eql(u8, id, required)) { found = true; break; };
+                    if (!found) continue :rules;
+                }
+            }
             if (uncertain) winners.selector_unresolved = true;
             for (rule.declarations) |declaration| winners.add(try declarationWithCustomPaint(a, declaration, context.custom_environment), selector_value.specificity, uncertain or !representedDeclaration(target, declaration), false);
         }
@@ -2909,27 +8325,33 @@ pub const Profile = struct {
         if (winners.value(.border)) |value| if (value == .border) {
             style.border = value.border;
         };
-        style.margins = resolvedMargins(winners).value;
+        const margins = resolvedMargins(winners);
+        style.margins = margins.value;
+        style.margin_values = margins.automatic;
         projectTableBox(&style, winners);
         if (winners.value(.float_side)) |value| if (value == .float_value) {
             style.float_side = value.float_value;
         };
         const flow_conflict = tableFlowFloatConflict(&style);
-        return .{ .style = if (types.validTableStyle(style)) style else null, .scope = inherited_scope | own_scope, .unresolved = winners.unresolvedWithFont(context.font_size_consumed) or flow_conflict, .margin_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(inherited_scope, ancestor_names, context.complete_font_ancestor_ids, context.complete_font_ancestor_tags), .background_specified = winners.value(.background) != null, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
+        return .{ .style = if (types.validUnboundTableStyle(style)) style else null, .scope = inherited_scope | own_scope, .unresolved = winners.unresolvedWithFont(context.font_size_consumed) or flow_conflict, .margin_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(inherited_scope, context.complete_table_ancestor_classes orelse ancestor_names, context.complete_font_ancestor_ids, context.complete_font_ancestor_tags, context.complete_table_ancestor_ids != null), .background_specified = winners.value(.background) != null, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
     }
 
-    fn inheritedFontBasisUnresolved(self: *const Profile, scope: Scope, ancestor_names: ?[]const u8, complete_ids: ?[]const []const u8, complete_tags: ?[]const []const u8) bool {
+    fn inheritedFontBasisUnresolved(self: *const Profile, scope: Scope, ancestor_names: ?[]const u8, complete_ids: ?[]const []const u8, complete_tags: ?[]const []const u8, source_bound: bool) bool {
         rules: for (self.rules) |rule| {
             const selected = rule.selector;
             if (selected.mask != 0 and selected.mask & scope == 0) continue;
-            if (!selected.unsupported) {
+            // Only the complete source-bound Table domain extends absence
+            // to necessary tags in otherwise uncertain selectors. Legacy font
+            // inventories retain their original conservative contract.
+            if (!selected.unsupported or source_bound) {
                 if (complete_tags) |tags| if (selected.own_tag) |required| {
                     var found = false;
                     for (tags) |tag| if (std.ascii.eqlIgnoreCase(tag, required)) { found = true; break; };
                     if (!found) continue :rules;
                 };
                 if (complete_ids) |ids| {
-                    for (selected.own_ids) |required| {
+                    const required_ids: []const []const u8 = if (!selected.unsupported) selected.own_ids else &.{};
+                    for (required_ids) |required| {
                         var found = false;
                         for (ids) |id| if (std.mem.eql(u8, id, required)) { found = true; break; };
                         if (!found) continue :rules;
@@ -2992,7 +8414,7 @@ pub const Profile = struct {
         style.width = selectedCellWidth(winners);
         if (winners.value(.vertical_align)) |value| if (value == .cell_vertical_align_value) { style.vertical_align = value.cell_vertical_align_value; };
         const background = winners.value(.background);
-        return .{ .style = if (types.validCellStyle(style)) style else null, .background = if (background) |value| (if (value == .color) value.color else null) else null, .background_specified = background != null, .unresolved = winners.unresolvedWithFont(context.font_size_consumed), .padding_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(scope, ancestor_names, null, null), .alignment_specified = winners.value(.text_align) != null };
+        return .{ .style = if (types.validCellStyle(style)) style else null, .background = if (background) |value| (if (value == .color) value.color else null) else null, .background_specified = background != null, .unresolved = winners.unresolvedWithFont(context.font_size_consumed), .padding_basis_unresolved = winners.font_basis_unresolved or self.inheritedFontBasisUnresolved(scope, ancestor_names, null, null, false), .alignment_specified = winners.value(.text_align) != null };
     }
 };
 
@@ -3007,6 +8429,648 @@ fn hasBidiDeclaration(a: std.mem.Allocator, css: []const u8) std.mem.Allocator.E
     return false;
 }
 
+const ObservedFigureMissingLabelGeometry = struct {
+    font: types.FigureMediaStrut,
+    foreground: types.FigureColor,
+    background: types.FigureColor,
+    border: types.FigureBorder,
+    insets: types.StyleEdges,
+    width: types.StyleLength,
+    line_height: types.StyleLength,
+};
+
+const ObservedFigureMissingState = struct {
+    frame: ObservedFigureFrameCaptionGeometry,
+    label: ObservedFigureMissingLabelGeometry,
+    media: types.FigureMediaLayout,
+    before: ?types.ContainerStyle,
+    missing_paint: types.FigureLinkPaint,
+    caption_paint: ?types.FigureLinkPaint,
+    caption_link_font: ?types.FigureMediaStrut,
+    caption_link_count: usize,
+    caption_inline: ObservedFigureCaptionInlineStyles,
+    parent_font: types.FigureMediaStrut,
+    root_family: []const u8,
+    // Retain the original source basis in all state/head equality checks.
+    source_root_scale: f32,
+    anchor_radius: types.StyleLength,
+};
+const ObservedFigureMissingViewport = struct {
+    base: ObservedFigureMissingState,
+    states: []const types.FigureViewportState,
+};
+
+pub const FigureObservedMissingStyle = struct {
+    geometry: ObservedFigureMissingState,
+    layout: types.TableCaptionLayout,
+};
+
+fn observedFigureOtherPseudoEffects(context: FigureObservedContext, owned: ObservedFigureOwnedNodes, evaluation: ObservedFigureEvaluation) bool {
+    return observedFigureOtherPseudoEffectsWithWitness(context, owned, evaluation, null);
+}
+
+pub fn resolveObservedFigureRootCustomValue(a: std.mem.Allocator, context: FigureObservedContext,
+    name: []const u8) !?CustomValue
+{
+    if (!customName(name)) return null;
+    const computed = (try observedFigureComputedNodes(a, context, .{})) orelse return null;
+    for (computed) |node| if (node.index == context.root) return node.environment.get(name);
+    return null;
+}
+
+fn observedFigureComputedBackgrounds(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, colors: []const ObservedFigureComputedColor) !?[]const ObservedFigureComputedColor
+{
+    return observedFigureComputedBackgroundsWithWitness(a, context, computed, colors, null);
+}
+
+fn observedFigureFrameCaptionGeometry(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts,
+    colors: []const ObservedFigureComputedColor, backgrounds: []const ObservedFigureComputedColor) !?ObservedFigureFrameCaptionGeometry
+{
+    return observedFigureFrameCaptionGeometryWithWitness(a, context, computed, fonts, colors, backgrounds, null);
+}
+
+fn observedFigureAnchorGeometry(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts,
+    backgrounds: []const ObservedFigureComputedColor, ready_image: bool) !?ObservedFigureReadyAnchorGeometry
+{
+    return observedFigureAnchorGeometryWithWitness(a, context, computed, fonts, backgrounds, ready_image, null);
+}
+
+fn observedFigureCaptionInlineStylesForMedia(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts,
+    colors: []const ObservedFigureComputedColor, backgrounds: []const ObservedFigureComputedColor,
+    caption_line: types.StyleLength, witness: ?*ObservedReadyFigureWitness,
+    caption_paint: ?types.FigureLinkPaint, ready_links: bool) !?ObservedFigureCaptionInlineStyles
+{
+    observedReadySubject(witness, context.caption);
+    var result: ObservedFigureCaptionInlineStyles = .{};
+    var inline_nodes: std.ArrayList(ObservedFigureCaptionInlineStyle) = .empty;
+    defer inline_nodes.deinit(a);
+    for (computed) |node| {
+        if (node.index <= context.caption) continue;
+        observedReadyNode(witness, node);
+        const observed = context.nodes[node.index];
+        if (!observedReadyCaptionKindValid(context, node.index)) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.caption_inline_shape");
+        const link_owner = observedReadyCaptionLink(context, node.index);
+        const is_link = std.ascii.eqlIgnoreCase(observed.tag, "a");
+        if (is_link) {
+            const paint = caption_paint orelse return null;
+            const link_font = (try observedFigureCaptionLinkGeometryIn(a, context, computed, fonts, backgrounds,
+                node.index, caption_line, ready_links)) orelse return null;
+            try inline_nodes.append(a, .{ .font = link_font, .foreground = .{ .kind = .rgb, .value = paint.normal.foreground } });
+            continue;
+        }
+        const font = observedFigureFontAt(fonts, node.index) orelse return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.2");
+        const foreground: types.FigureColor = if (link_owner != null) .{ .kind = .rgb,
+            .value = (caption_paint orelse return null).normal.foreground } else
+            observedFigureColorAt(colors, node.index) orelse return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.3");
+        const background = observedFigureColorAt(backgrounds, node.index) orelse return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.4");
+        if (foreground.kind != .rgb or background.kind != .transparent) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.5");
+        const line = observedFigureUsedLineHeight(try observedFigureLineHeightAt(a, context, computed, fonts, node.index), font.font_scale) orelse return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.6");
+        if (!observedFigureDataEqual(types.StyleLength, line, caption_line, 0)) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.7");
+        var use = try ObservedFigurePropertyUse.init(a, node.declarations); defer use.deinit(a);
+        use.customEnvironment();
+        if (!try use.staticMotion(a, node.environment)) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.8");
+        inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch", "font-size-adjust", "font-feature-settings", "-moz-font-feature-settings", "-webkit-font-feature-settings", "font-variation-settings" }) |property|
+            use.property(property, &.{"font"});
+        use.property("direction", &.{}); use.property("line-height", &.{"font"}); use.property("color", &.{});
+        use.property("background-color", &.{"background"});
+        const noops = .{
+            .{ "display", "inline", "inline" }, .{ "position", "static", "static" }, .{ "float", "none", "none" },
+            .{ "clear", "none", "none" }, .{ "vertical-align", "baseline", "baseline" },
+            .{ "opacity", "1", "1" }, .{ "transform", "none", "none" }, .{ "filter", "none", "none" },
+            .{ "box-shadow", "none", "none" }, .{ "clip-path", "none", "none" },
+            .{ "contain", "none", "none" }, .{ "isolation", "auto", "auto" }, .{ "mix-blend-mode", "normal", "normal" },
+        };
+        inline for (noops) |query| {
+        observedReadyProperty(witness, query[0]);
+            if (!try observedFigureKeywordIs(a, node, query[0], &.{}, query[1], query[2])) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.9");
+            use.property(query[0], &.{});
+        }
+        inline for (.{ "visibility", "pointer-events", "text-shadow", "white-space", "text-decoration-line" },
+            .{ "visible", "auto", "none", "normal", "none" }) |property, expected| {
+        observedReadyProperty(witness, property);
+            if (link_owner != null and std.mem.eql(u8, property, "text-decoration-line")) {
+                // The A palette carries propagation through ordinary inline descendants.
+                // Their own additional decorations remain a separate refusal.
+                if (!try observedFigureKeywordIs(a, node, property, &.{"text-decoration"}, "none", "none")) return null;
+                use.property(property, &.{"text-decoration"});
+            } else {
+                const value = try observedFigureInheritedKeywordAt(a, context, computed, node.index, property,
+                    if (std.mem.eql(u8, property, "text-decoration-line")) &.{"text-decoration"} else &.{}, &.{expected}, expected);
+                if (value.unresolved or !std.mem.eql(u8, value.value.?, expected)) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.10");
+                use.property(property, if (std.mem.eql(u8, property, "text-decoration-line")) &.{"text-decoration"} else &.{});
+            }
+        }
+        // Quote spans have no outline payload. A colour alone is harmless only
+        // when the complete cascade proves that no outline is painted.
+        if ((try observedFigureFocusOutline(a, node.declarations, node.environment, font.font_scale)) != .none)
+            return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.outline");
+        inline for (.{ "outline", "outline-width", "outline-style", "outline-color", "outline-offset" }) |property|
+            use.property(property, &.{});
+        if (!use.complete()) { observedReadyUnused(witness, use); return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.11"); }
+        const value: ObservedFigureCaptionInlineStyle = .{ .font = font, .foreground = foreground };
+        try inline_nodes.append(a, value);
+        if (observed.parent != context.caption or observed.attributes.len != 0 or
+            (!std.ascii.eqlIgnoreCase(observed.tag, "i") and !std.ascii.eqlIgnoreCase(observed.tag, "b"))) continue;
+        const slot = if (std.ascii.eqlIgnoreCase(observed.tag, "i")) &result.italic else &result.bold;
+        if (slot.*) |prior| {
+            if (!observedFigureDataEqual(ObservedFigureCaptionInlineStyle, prior, value, 0)) return observedReadyNull(ObservedFigureCaptionInlineStyles, witness, "observed_ready.observedFigureCaptionInlineStyles.12");
+        } else slot.* = value;
+    }
+    result.nodes = try inline_nodes.toOwnedSlice(a);
+    return result;
+}
+
+fn observedFigureMissingLabelGeometry(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts,
+    colors: []const ObservedFigureComputedColor, backgrounds: []const ObservedFigureComputedColor,
+    width: u32, normal_foreground: types.FigureColor) !?ObservedFigureMissingLabelGeometry
+{
+    if (!figureObservedContextValid(context) or context.media_kind != .missing or width == 0 or
+        normal_foreground.kind != .rgb or !types.validFigureColor(normal_foreground)) return null;
+    const node = observedFigureComputedNode(computed, context.media) orelse return null;
+    const font = observedFigureFontAt(fonts, context.media) orelse return null;
+    const foreground = observedFigureColorAt(colors, context.media);
+    const background = observedFigureColorAt(backgrounds, context.media) orelse return null;
+    if (foreground) |known| if (known.kind != .rgb) return null;
+    var use = try ObservedFigurePropertyUse.init(a, node.declarations); defer use.deinit(a);
+    use.customEnvironment();
+    if (!try use.staticMotion(a, node.environment)) return null;
+    inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch", "font-size-adjust", "font-feature-settings", "-moz-font-feature-settings", "-webkit-font-feature-settings", "font-variation-settings" }) |property|
+        use.property(property, &.{"font"});
+    use.property("direction", &.{}); use.property("color", &.{});
+    const preferred = try observedFigurePreferredWidth(a, node.declarations, node.environment, .unknown);
+    if (preferred != .known or !std.math.isFinite(preferred.known) or preferred.known <= 0 or
+        preferred.known > 16_777_216) return null;
+    const effect = observedMissingWidthEffect(context, width) orelse return null;
+    // The source data width authenticates the operation. A default-size frame
+    // has no generated width write, so its actual label width comes from CSS.
+    // Explicit generated sizing keeps the prior exact-width requirement.
+    if (effect.generated != null and preferred.known != @as(f64, @floatFromInt(width))) return null;
+    const label_width: types.StyleLength = .{ .unit = .px, .value = @floatCast(preferred.known) };
+    if (!types.validStyleLength(label_width)) return null;
+    use.property("width", &.{});
+    if ((try observedFigureComputedLength(a, node.declarations, "height", &.{}, node.environment, font.font_scale,
+        "auto", .automatic, .unknown, false, false)) != .automatic) return null;
+    use.property("height", &.{});
+    const line = observedFigureUsedLineHeight(try observedFigureLineHeightAt(a, context, computed, fonts, context.media), font.font_scale) orelse return null;
+    if (line.value <= 0) return null;
+    use.property("line-height", &.{"font"});
+    const margins = try observedFigureEdges(a, node.declarations, node.environment, false, font.direction == .rtl, font.font_scale, null);
+    const padding = try observedFigureEdges(a, node.declarations, node.environment, true, font.direction == .rtl, font.font_scale, null);
+    use.boxEdges(false); use.boxEdges(true);
+    if (margins.unresolved or padding.unresolved or !observedFigureEdgesZero(observedFigureFixedEdges(padding.value.?) orelse return null)) return null;
+    const borders = (try observedFigureBorders(a, node.declarations, node.environment, font.font_scale)) orelse return null;
+    use.borderEdges();
+    if (!observedFigureDataEqual(types.FigureBorderEdge, borders.top, borders.right, 0) or
+        !observedFigureDataEqual(types.FigureBorderEdge, borders.top, borders.bottom, 0) or
+        !observedFigureDataEqual(types.FigureBorderEdge, borders.top, borders.left, 0)) return null;
+    const border: types.FigureBorder = switch (borders.top) {
+        .none => .{ .kind = .none }, .solid => |edge| .{ .kind = .solid, .width = edge.width, .color = edge.color }, else => return null,
+    };
+    const radius = try observedFigureUniformRadius(a, node.declarations, node.environment, font.font_scale);
+    if (radius != .known or radius.known.value != 0 or
+        (try observedFigureFocusOutline(a, node.declarations, node.environment, font.font_scale)) != .none or
+        (try observedFigureGraphic(a, context, node.declarations, node.environment, .unknown,
+            &[_]struct { url: []const u8, graphic: types.FigureMediaGraphic }{})) != .none) return null;
+    inline for (.{ "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius" }) |property|
+        use.property(property, &.{"border-radius"});
+    inline for (.{ "outline", "outline-width", "outline-style", "outline-color", "outline-offset" }) |property| use.property(property, &.{});
+    use.property("background-color", &.{"background"}); use.property("background-image", &.{"background"});
+    const zero: ObservedFigureLength = .{ .known = .{ .unit = .px, .value = 0 } };
+    inline for (.{ "min-width", "min-height" }) |property| {
+        const minimum = try observedFigureComputedLength(a, node.declarations, property, &.{}, node.environment,
+            font.font_scale, "auto", zero, .unknown, false, false);
+        if (minimum != .known or minimum.known.value != 0) return null;
+        use.property(property, &.{});
+    }
+    const noops = .{
+        .{ "display", "inline-block", "inline" }, .{ "vertical-align", "baseline", "baseline" },
+        .{ "position", "static", "static" }, .{ "float", "none", "none" }, .{ "clear", "none", "none" },
+        .{ "box-sizing", "content-box", "content-box" }, .{ "max-width", "none", "none" }, .{ "max-height", "none", "none" },
+        .{ "opacity", "1", "1" }, .{ "transform", "none", "none" }, .{ "filter", "none", "none" },
+        .{ "box-shadow", "none", "none" }, .{ "overflow", "visible", "visible" }, .{ "clip-path", "none", "none" },
+        .{ "contain", "none", "none" }, .{ "isolation", "auto", "auto" }, .{ "mix-blend-mode", "normal", "normal" },
+    };
+    inline for (noops) |query| {
+        if (!try observedFigureKeywordIs(a, node, query[0], &.{}, query[1], query[2])) return null;
+        use.property(query[0], &.{});
+    }
+    inline for (.{ "visibility", "pointer-events", "text-shadow", "white-space", "text-align", "word-break" },
+        .{ "visible", "auto", "none", "normal", "center", "break-word" }) |property, expected| {
+        const value = try observedFigureInheritedKeywordAt(a, context, computed, context.media, property, &.{}, &.{expected},
+            if (std.mem.eql(u8, property, "text-align")) "start" else if (std.mem.eql(u8, property, "word-break")) "normal" else expected);
+        if (value.unresolved or !std.mem.eql(u8, value.value.?, expected)) return null;
+        use.property(property, &.{});
+    }
+    // The just-proved word-break:break-word and normal white-space select
+    // the typed emergency-grapheme policy regardless of overflow-wrap or its
+    // legacy alias. Direct label declarations are immaterial under that same
+    // computed value, just as inherited anchor declarations are; no unknown
+    // word-break/white-space arm can reach this consumption point.
+    use.property("word-wrap", &.{});
+    use.property("overflow-wrap", &.{});
+    // Its independently computed fixed palette owns only actual label ink;
+    // the complete state constructor checks every one of these declarations.
+    inline for (.{ "text-decoration-line", "text-decoration-color", "text-decoration-style", "text-decoration-thickness" }) |property|
+        use.property(property, &.{"text-decoration"});
+    if (!use.complete()) return null;
+    return .{ .font = font, .foreground = normal_foreground, .background = background, .border = border,
+        .insets = observedFigureFixedEdges(margins.value.?) orelse return null,
+        .width = label_width, .line_height = line };
+}
+
+fn observedFigureCaptionLinkGeometry(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts,
+    backgrounds: []const ObservedFigureComputedColor, index: u32, caption_line: types.StyleLength) !?types.FigureMediaStrut
+{
+    return observedFigureCaptionLinkGeometryIn(a, context, computed, fonts, backgrounds, index, caption_line, false);
+}
+
+fn observedFigureSourceLinkPaint(a: std.mem.Allocator, context: FigureObservedContext,
+    link: u32, text: u32, viewport_width: ?f64, missing_width: ?u32) !?types.FigureLinkPaint
+{
+    return observedFigureSourceLinkPaintWithWitness(a, context, link, text, viewport_width, missing_width, null);
+}
+
+fn observedFigureSourceLinkPaintWithWitness(a: std.mem.Allocator, context: FigureObservedContext,
+    link: u32, text: u32, viewport_width: ?f64, missing_width: ?u32, witness: ?*ObservedMissingFigureWitness) !?types.FigureLinkPaint
+{
+    var operation = ObservedFigureOperation.init(a, context);
+    defer operation.deinit();
+    return observedFigureSourceLinkPaintWithWitnessPrepared(a, &operation, link, text, viewport_width, missing_width, witness);
+}
+fn observedFigureSourceLinkPaintWithWitnessPrepared(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    link: u32, text: u32, viewport_width: ?f64, missing_width: ?u32, witness: ?*ObservedMissingFigureWitness) !?types.FigureLinkPaint
+{
+    return observedFigureSourceLinkPaintForCaption(a, operation, link, text, viewport_width, missing_width, witness, false);
+}
+
+fn observedFigureMissingState(a: std.mem.Allocator, context: FigureObservedContext,
+    viewport_width: ?f64, width: u32, witness: ?*ObservedMissingFigureWitness) !?ObservedFigureMissingState
+{
+    var operation = ObservedFigureOperation.init(a, context);
+    defer operation.deinit();
+    return observedFigureMissingStatePrepared(a, &operation, viewport_width, width, witness);
+}
+
+fn observedMissingCaptionEmpty(context: FigureObservedContext) bool {
+    if (!figureObservedContextValid(context) or context.media_kind != .missing or
+        context.nodes[context.caption].has_text != false or context.nodes[context.caption].empty != true) return false;
+    for (context.nodes) |node| if (node.parent == context.caption) return false;
+    return true;
+}
+
+fn observedMissingCaptionKindValid(context: FigureObservedContext, index: u32) bool {
+    if (!observedReadyCaptionKindValid(context, index)) return false;
+    const node = context.nodes[index];
+    const line_break = std.ascii.eqlIgnoreCase(node.tag, "br");
+    if (!line_break and node.has_text != true) return false;
+    const parent = node.parent orelse return false;
+    if (parent != context.caption) {
+        if (!std.ascii.eqlIgnoreCase(node.tag, "a") or
+            !std.ascii.eqlIgnoreCase(context.nodes[parent].tag, "b") or
+            context.nodes[parent].parent != context.caption) return false;
+    }
+    return std.ascii.eqlIgnoreCase(node.tag, "a") or std.ascii.eqlIgnoreCase(node.tag, "b") or
+        std.ascii.eqlIgnoreCase(node.tag, "i") or line_break;
+}
+
+fn observedMissingWidthEffect(context: FigureObservedContext, width: u32) ?struct { generated: ?u32 } {
+    if (!figureObservedContextValid(context) or context.media_kind != .missing or width == 0 or width > 16_777_216 or
+        observedFigureAttribute(context.nodes[context.media], "style") != null or
+        observedFigureAttribute(context.nodes[context.media], "data-height") != null) return null;
+    const raw = observedFigureAttribute(context.nodes[context.media], "data-width") orelse return null;
+    if (raw.len == 0 or raw.len > 10) return null;
+    for (raw) |byte| if (!std.ascii.isDigit(byte)) return null;
+    if ((std.fmt.parseInt(u32, raw, 10) catch return null) != width) return null;
+    return .{ .generated = if (Profile.hasClass(observedFigureAttribute(context.nodes[context.frame], "class") orelse "", "mw-default-size")) null else width };
+}
+
+// A source-issued path is still checked against the complete retained graph.
+// This does not grant authored SECTIONs or change the old direct-root/TD routes.
+pub fn figureGeneratedSectionPath(context: FigureObservedContext) bool {
+    if (context.generated_section_source == null or context.media_kind != .missing or
+        !figureObservedContextValid(context)) return false;
+    var cursor = context.nodes[context.frame].parent orelse return false;
+    var count: usize = 0;
+    while (cursor != context.root) {
+        if (count == 32 or cursor >= context.nodes.len) return false;
+        const node = context.nodes[cursor];
+        if (!std.ascii.eqlIgnoreCase(node.tag, "section") or node.attributes.len < 2 or node.attributes.len > 3) return false;
+        for (node.attributes) |attribute| {
+            if (!std.mem.eql(u8, attribute.name, "data-mw-section-id") and
+                !std.mem.eql(u8, attribute.name, "id") and !std.mem.eql(u8, attribute.name, "aria-labelledby")) return false;
+        }
+        const number = observedFigureAttribute(node, "data-mw-section-id") orelse return false;
+        if (!std.mem.eql(u8, number, "-1")) {
+            if (number.len == 0 or number.len > 20 or (number.len > 1 and number[0] == '0')) return false;
+            for (number) |byte| if (!std.ascii.isDigit(byte)) return false;
+            _ = std.fmt.parseInt(u64, number, 10) catch return false;
+        }
+        _ = observedFigureAttribute(node, "id") orelse return false;
+        for ([_][]const u8{ "id", "aria-labelledby" }) |name| if (observedFigureAttribute(node, name)) |value| {
+            if (value.len == 0 or value.len > 256 or !std.unicode.utf8ValidateSlice(value)) return false;
+            for (value) |byte| if (byte <= 32 or byte == 127 or std.mem.indexOfScalar(u8, "<>\"'&", byte) != null) return false;
+        };
+        const parent = node.parent orelse return false;
+        if (parent >= cursor or parent < context.root) return false;
+        cursor = parent; count += 1;
+    }
+    return count != 0;
+}
+
+// Only the authenticated generated SECTION path lacks a focus owner. Parent
+// editing hosts and CSS editing/focus extensions retain the old uncertainty.
+fn generatedSectionFocusUnmodified(a: std.mem.Allocator, css: []const u8) !bool {
+    var cursor: usize = 0;
+    while (try nextDeclarationAlloc(a, css, &cursor)) |raw| {
+        defer a.free(raw);
+        const colon = std.mem.indexOfScalar(u8, raw, ':') orelse continue;
+        const name = trim(raw[0..colon]);
+        for (name) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_') return false;
+        if (std.ascii.eqlIgnoreCase(name, "user-focus") or std.ascii.eqlIgnoreCase(name, "user-modify") or
+            std.ascii.endsWithIgnoreCase(name, "-user-focus") or std.ascii.endsWithIgnoreCase(name, "-user-modify")) return false;
+    }
+    return true;
+}
+pub fn figureGeneratedSectionFocusAbsent(a: std.mem.Allocator, context: FigureObservedContext) !bool {
+    if (!figureGeneratedSectionPath(context)) return false;
+    var ancestor: ?u32 = context.nodes[context.frame].parent;
+    var remaining: usize = 128;
+    while (ancestor) |index| : (ancestor = context.nodes[index].parent) {
+        if (index >= context.nodes.len or remaining == 0) return false;
+        remaining -= 1;
+        if (observedFigureAttribute(context.nodes[index], "contenteditable") != null) return false;
+        if (observedFigureAttribute(context.nodes[index], "style")) |css|
+            if (!try generatedSectionFocusUnmodified(a, css)) return false;
+    }
+    for (context.styles.observed_figure_rules) |rule|
+        if (!try generatedSectionFocusUnmodified(a, rule.css)) return false;
+    return true;
+}
+fn observedFigureStateAt(nodes: []const ObservedStyleNode, index: u32,
+    evaluation: ObservedFigureEvaluation) ?ObservedFigureLinkState
+{
+    if (evaluation.link_subject == index) return evaluation.link_state;
+    const issued = evaluation.generated_section_focus_absent orelse return null;
+    if (issued.nodes.ptr != nodes.ptr or issued.nodes.len != nodes.len or issued.frame >= nodes.len) return null;
+    var cursor = nodes[issued.frame].parent orelse return null;
+    var remaining: usize = 32;
+    while (cursor != issued.root) {
+        if (cursor >= nodes.len or remaining == 0) return null;
+        remaining -= 1;
+        if (cursor == index) return .{ .focus = false, .focus_visible = false };
+        cursor = nodes[cursor].parent orelse return null;
+    }
+    return null;
+}
+
+fn observedFigureGeneratedSectionNeutral(a: std.mem.Allocator, node: ObservedFigureComputedNode) !bool {
+    // Generated block wrappers have no native box. Account for every possible
+    // declaration; inherited font/direction equality remains a separate query.
+    var use = try ObservedFigurePropertyUse.init(a, node.declarations); defer use.deinit(a);
+    inline for (.{ "direction", "display", "position", "box-sizing" }) |name| use.property(name, &.{});
+    if (!try use.staticMotion(a, node.environment) or !use.complete()) return false;
+    const display = try observedFigureKeyword(a, node.declarations, "display", &.{}, node.environment,
+        &.{"block"}, "inline", null, false, "block");
+    const position = try observedFigureKeyword(a, node.declarations, "position", &.{}, node.environment,
+        &.{"static"}, "static", null, false, "static");
+    const sizing = try observedFigureKeyword(a, node.declarations, "box-sizing", &.{}, node.environment,
+        &.{ "content-box", "border-box" }, "content-box", null, false, "content-box");
+    return !display.unresolved and display.value != null and std.mem.eql(u8, display.value.?, "block") and
+        !position.unresolved and position.value != null and std.mem.eql(u8, position.value.?, "static") and
+        !sizing.unresolved and sizing.value != null;
+}
+
+fn observedFigureMissingStatePrepared(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    viewport_width: ?f64, width: u32, witness: ?*ObservedMissingFigureWitness) !?ObservedFigureMissingState
+{
+    const context = operation.context;
+    if (!operation.valid or context.media_kind != .missing or
+        context.nodes[context.frame].has_text != false or context.nodes[context.anchor].has_text != false) return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.1");
+    const width_effect = observedMissingWidthEffect(context, width) orelse
+        return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.width_effect");
+    var subjects: [17]u32 = undefined; subjects[0] = context.anchor;
+    var subject_count: usize = 1;
+    for (context.nodes, 0..) |node, index| {
+        if (node.parent == context.media) return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.2");
+        if (!observedReadyCaptionAncestor(context, @intCast(index), context.caption)) continue;
+        if (!observedMissingCaptionKindValid(context, @intCast(index))) return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.caption_shape");
+        if (!std.ascii.eqlIgnoreCase(node.tag, "a")) continue;
+        if (subject_count == subjects.len or node.has_text != true) return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.3");
+        subjects[subject_count] = @intCast(index); subject_count += 1;
+    }
+    const missing_paint = (try observedFigureSourceLinkPaintWithWitnessPrepared(a, operation, context.anchor, context.media, viewport_width, width_effect.generated, witness)) orelse {
+        if (witness) |out| out.subject = context.anchor;
+        return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.5");
+    };
+    var caption_paint: ?types.FigureLinkPaint = null;
+    for (subjects[1..subject_count]) |link| {
+        const paint = (try observedFigureSourceLinkPaintForCaption(a, operation, link, link, viewport_width, width_effect.generated, witness, true)) orelse {
+            if (witness) |out| out.subject = link;
+            return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.6");
+        };
+        if (caption_paint) |prior| {
+            if (!observedFigureDataEqual(types.FigureLinkPaint, prior, paint, 0)) return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.7");
+        } else caption_paint = paint;
+    }
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    var result: ?ObservedFigureMissingState = null;
+    for (subjects[0..subject_count]) |subject| for ([_]bool{ false, true }) |reduced_motion|
+        for ([_]bool{ false, true }) |visited| for ([_]bool{ false, true }) |hover|
+        for ([_]bool{ false, true }) |active| for ([_]ObservedFigureFocusMode{ .unfocused, .focused, .focus_visible }) |focus| {
+            _ = scratch.reset(.retain_capacity); const query_allocator = scratch.allocator();
+            const evaluation: ObservedFigureEvaluation = .{ .viewport_width = viewport_width, .missing_width = width_effect.generated,
+                .reduced_motion = reduced_motion, .link_subject = subject, .focus_visible_supported = true,
+                .link_state = .{ .visited = visited, .hover = hover, .active = active,
+                    .focus = focus != .unfocused, .focus_visible = focus == .focus_visible, .focus_within = focus != .unfocused } };
+            const computed = (try observedFigureComputedNodesPrepared(query_allocator, operation, evaluation)) orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.8");
+            const fonts = (try observedFigureComputedFonts(query_allocator, context, computed)) orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.9");
+            if (context.generated_section_source != null) {
+                if (!figureGeneratedSectionPath(context)) return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.generated_section_path");
+                var cursor = context.nodes[context.frame].parent.?;
+                while (cursor != context.root) {
+                    const section = observedFigureComputedNode(computed, cursor) orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.generated_section_node");
+                    if (!try observedFigureGeneratedSectionNeutral(query_allocator, section)) return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.generated_section_effect");
+                    inline for (.{ GeneratedFigurePseudo.before, GeneratedFigurePseudo.after }) |pseudo| {
+                        if ((try observedFigureEmptyPseudoWithWitnessPrepared(query_allocator, operation, computed, fonts, cursor, pseudo, evaluation, null)) != .absent)
+                            return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.generated_section_pseudo");
+                    }
+                    cursor = context.nodes[cursor].parent.?;
+                }
+            }
+            const colors = (try observedFigureComputedColors(query_allocator, context, computed, null)) orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.10");
+            const backgrounds = (try observedFigureComputedBackgrounds(query_allocator, context, computed, colors)) orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.11");
+            const frame = (try observedFigureFrameCaptionGeometry(query_allocator, context, computed, fonts, colors, backgrounds)) orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.12");
+            const label = (try observedFigureMissingLabelGeometry(query_allocator, context, computed, fonts, colors, backgrounds,
+                width, .{ .kind = .rgb, .value = missing_paint.normal.foreground })) orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.13");
+            const anchor = (try observedFigureAnchorGeometry(query_allocator, context, computed, fonts, backgrounds, false)) orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.14");
+            const before = try observedFigureCaptionBeforeWithWitnessPrepared(query_allocator, operation, computed, fonts, evaluation, null);
+            if (before.unresolved) return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.15");
+            var link_font: ?types.FigureMediaStrut = null;
+            var uniform_link_font = true;
+            for (subjects[1..subject_count]) |link| {
+                const font = (try observedFigureCaptionLinkGeometryIn(query_allocator, context, computed, fonts, backgrounds,
+                    link, frame.caption_line_height, true)) orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.16");
+                if (link_font) |prior| {
+                    if (!observedFigureDataEqual(types.FigureMediaStrut, prior, font, 0)) uniform_link_font = false;
+                } else link_font = font;
+            }
+            const caption_inline = (try observedFigureCaptionInlineStylesForMedia(query_allocator, context, computed, fonts, colors, backgrounds,
+                frame.caption_line_height, null, caption_paint, true)) orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.caption_inline");
+            const owned = (try operation.owned()) orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.18");
+            if (observedFigureOtherPseudoEffects(context, owned, evaluation)) return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.19");
+            for (computed) |node| {
+                if (node.index < context.frame) continue;
+                inline for (.{ GeneratedFigurePseudo.before, GeneratedFigurePseudo.after }) |pseudo| {
+                    if (!(node.index == context.caption and pseudo == .before)) {
+                        if ((try observedFigureEmptyPseudoWithWitnessPrepared(query_allocator, operation, computed, fonts, node.index, pseudo, evaluation, null)) != .absent) return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.20");
+                    }
+                }
+            }
+            const current: ObservedFigureMissingState = .{ .frame = frame, .label = label, .before = before.value,
+                .media = .{ .strut = anchor.strut, .vertical_align = .baseline }, .missing_paint = missing_paint,
+                .caption_paint = caption_paint, .caption_link_font = if (uniform_link_font) link_font else null, .caption_link_count = subject_count - 1,
+                .caption_inline = caption_inline,
+                .parent_font = observedFigureFontAt(fonts, context.nodes[context.frame].parent orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.21")) orelse return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.22"),
+                .root_family = fonts.root_family, .source_root_scale = fonts.source_root_scale, .anchor_radius = anchor.radius };
+            if (result) |prior| {
+                if (!observedFigureDataEqual(ObservedFigureMissingState, prior, current, 0)) return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.23");
+            } else result = observedFigureDataClone(ObservedFigureMissingState, a, current, 0) catch |failure| switch (failure) {
+                error.OutOfMemory => return error.OutOfMemory, error.InvalidStyleProfile => return observedMissingFigureRefusal(ObservedFigureMissingState, witness, "observed_missing.observedFigureMissingState.24"),
+            };
+        };
+    return result;
+}
+
+fn observedFigureMissingFixedGeometryEqual(left: ObservedFigureMissingState, right: ObservedFigureMissingState) bool {
+    var first = left; var second = right;
+    first.frame.wrapper = .{}; second.frame.wrapper = .{};
+    first.before = null; second.before = null;
+    first.media = second.media;
+    return observedFigureDataEqual(ObservedFigureMissingState, first, second, 0);
+}
+
+fn observedFigureMissingViewport(a: std.mem.Allocator, context: FigureObservedContext,
+    expected_width: u32, witness: ?*ObservedMissingFigureWitness) !?ObservedFigureMissingViewport
+{
+    var operation = ObservedFigureOperation.init(a, context);
+    defer operation.deinit();
+    return observedFigureMissingViewportPrepared(a, &operation, expected_width, witness);
+}
+
+fn observedFigureMissingViewportPrepared(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    expected_width: u32, witness: ?*ObservedMissingFigureWitness) !?ObservedFigureMissingViewport
+{
+    const boundaries = (try observedFigureViewportBoundariesPrepared(a, operation, .{})) orelse return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.1");
+    defer a.free(boundaries);
+    operation.retain_rule_candidates = true;
+    const upper = if (boundaries.len == 0) 1 else boundaries[boundaries.len - 1].value + 1;
+    if (!std.math.isFinite(upper)) return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.2");
+    const base = (try observedFigureMissingStatePrepared(a, operation, upper, expected_width, witness)) orelse return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.3");
+    var above = base;
+    var states: std.ArrayList(types.FigureViewportState) = .empty;
+    errdefer states.deinit(a);
+    var cursor = boundaries.len;
+    while (cursor != 0) {
+        cursor -= 1;
+        const boundary = boundaries[cursor].value;
+        if (!std.math.isFinite(boundary) or boundary < 0) { states.deinit(a); return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.4"); }
+        const below_width = if (boundary == 0) 0 else if (cursor == 0) boundary / 2
+            else boundaries[cursor - 1].value + (boundary - boundaries[cursor - 1].value) / 2;
+        const exact = (try observedFigureMissingStatePrepared(a, operation, boundary, expected_width, witness)) orelse { states.deinit(a); return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.5"); };
+        const below = if (boundary == 0) exact else (try observedFigureMissingStatePrepared(a, operation, below_width, expected_width, witness)) orelse { states.deinit(a); return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.6"); };
+        if (!observedFigureMissingFixedGeometryEqual(base, exact) or !observedFigureMissingFixedGeometryEqual(base, below)) { states.deinit(a); return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.7"); }
+        if (observedFigureDataEqual(ObservedFigureMissingState, exact, above, 0) and
+            observedFigureDataEqual(ObservedFigureMissingState, below, above, 0)) continue;
+        // The wire predicate is an inclusive integer max-width over a real
+        // viewport. A min-width edge, a fractional threshold, or a distinct
+        // value only at the boundary cannot be rounded into that contract.
+        if (!observedFigureDataEqual(ObservedFigureMissingState, exact, below, 0) or
+            boundary > std.math.maxInt(u32) or @floor(boundary) != boundary or
+            states.items.len == types.max_figure_viewport_states) { states.deinit(a); return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.8"); }
+        try states.append(a, .{ .max_width_px = @intFromFloat(boundary), .wrapper = below.frame.wrapper,
+            .media = below.media, .caption_before = below.before });
+        above = below;
+    }
+    return .{ .base = base, .states = try states.toOwnedSlice(a) };
+}
+
+pub fn resolveObservedMissingFigure(a: std.mem.Allocator, contexts: []const FigureObservedContext,
+    expected_width: u32, native_parent: types.FigureMediaStrut) !?FigureObservedMissingStyle
+{
+    return resolveObservedMissingFigureWithWitness(a, contexts, expected_width, native_parent, null);
+}
+
+pub fn resolveObservedMissingFigureWithWitness(a: std.mem.Allocator, contexts: []const FigureObservedContext,
+    expected_width: u32, native_parent: types.FigureMediaStrut, witness: ?*ObservedMissingFigureWitness) !?FigureObservedMissingStyle
+{
+    if (contexts.len == 0 or contexts.len > 128 or expected_width == 0) return observedMissingFigureRefusal(FigureObservedMissingStyle, witness, "observed_missing.resolveObservedMissingFigureWithWitness.1");
+    var agreed: ?FigureObservedMissingStyle = null;
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    for (contexts, 0..) |context, context_index| {
+        if (witness) |out| out.context_index = context_index;
+        _ = scratch.reset(.retain_capacity);
+        const viewport = (try observedFigureMissingViewport(scratch.allocator(), context, expected_width, witness)) orelse {
+            if (witness) |out| out.context_index = context_index;
+            return observedMissingFigureRefusal(FigureObservedMissingStyle, witness, "observed_missing.resolveObservedMissingFigureWithWitness.2");
+        };
+        if (!observedFigureNativeFontMatches(viewport.base.parent_font, native_parent)) return observedMissingFigureRefusal(FigureObservedMissingStyle, witness, "observed_missing.resolveObservedMissingFigureWithWitness.3");
+        const current: FigureObservedMissingStyle = .{ .geometry = viewport.base,
+            .layout = .{ .collapse = .collapse, .wrapper = viewport.base.frame.wrapper,
+                .table_border = viewport.base.frame.table_border, .caption_border = viewport.base.frame.caption_border,
+                .media = viewport.base.media, .caption_before = viewport.base.before, .viewport_states = viewport.states,
+                .missing_link_paint = viewport.base.missing_paint, .caption_link_paint = viewport.base.caption_paint } };
+        if (!types.validTableCaptionLayout(current.layout)) return observedMissingFigureRefusal(FigureObservedMissingStyle, witness, "observed_missing.resolveObservedMissingFigureWithWitness.4");
+        if (agreed) |prior| {
+            if (!observedFigureDataEqual(FigureObservedMissingStyle, prior, current, 0)) return observedMissingFigureRefusal(FigureObservedMissingStyle, witness, "observed_missing.resolveObservedMissingFigureWithWitness.5");
+        } else agreed = observedFigureDataClone(FigureObservedMissingStyle, a, current, 0) catch |failure| switch (failure) {
+            error.OutOfMemory => return error.OutOfMemory, error.InvalidStyleProfile => return observedMissingFigureRefusal(FigureObservedMissingStyle, witness, "observed_missing.resolveObservedMissingFigureWithWitness.6"),
+        };
+    }
+    return agreed;
+}
+
+fn figureReuseReferenceMissing(a: std.mem.Allocator, context: FigureObservedContext,
+    expected_width: u32, witness: ?*ObservedMissingFigureWitness) !?ObservedFigureMissingViewport
+{
+    const boundaries = (try observedFigureViewportBoundaries(a, context, .{})) orelse return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.1");
+    defer a.free(boundaries);
+    const upper = if (boundaries.len == 0) 1 else boundaries[boundaries.len - 1].value + 1;
+    if (!std.math.isFinite(upper)) return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.2");
+    const base = (try observedFigureMissingState(a, context, upper, expected_width, witness)) orelse return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.3");
+    var above = base;
+    var states: std.ArrayList(types.FigureViewportState) = .empty;
+    errdefer states.deinit(a);
+    var cursor = boundaries.len;
+    while (cursor != 0) {
+        cursor -= 1;
+        const boundary = boundaries[cursor].value;
+        if (!std.math.isFinite(boundary) or boundary < 0) { states.deinit(a); return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.4"); }
+        const below_width = if (boundary == 0) 0 else if (cursor == 0) boundary / 2
+            else boundaries[cursor - 1].value + (boundary - boundaries[cursor - 1].value) / 2;
+        const exact = (try observedFigureMissingState(a, context, boundary, expected_width, witness)) orelse { states.deinit(a); return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.5"); };
+        const below = if (boundary == 0) exact else (try observedFigureMissingState(a, context, below_width, expected_width, witness)) orelse { states.deinit(a); return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.6"); };
+        if (!observedFigureMissingFixedGeometryEqual(base, exact) or !observedFigureMissingFixedGeometryEqual(base, below)) { states.deinit(a); return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.7"); }
+        if (observedFigureDataEqual(ObservedFigureMissingState, exact, above, 0) and
+            observedFigureDataEqual(ObservedFigureMissingState, below, above, 0)) continue;
+        // The wire predicate is an inclusive integer max-width over a real
+        // viewport. A min-width edge, a fractional threshold, or a distinct
+        // value only at the boundary cannot be rounded into that contract.
+        if (!observedFigureDataEqual(ObservedFigureMissingState, exact, below, 0) or
+            boundary > std.math.maxInt(u32) or @floor(boundary) != boundary or
+            states.items.len == types.max_figure_viewport_states) { states.deinit(a); return observedMissingFigureRefusal(ObservedFigureMissingViewport, witness, "observed_missing.observedFigureMissingViewport.8"); }
+        try states.append(a, .{ .max_width_px = @intFromFloat(boundary), .wrapper = below.frame.wrapper,
+            .media = below.media, .caption_before = below.before });
+        above = below;
+    }
+    return .{ .base = base, .states = try states.toOwnedSlice(a) };
+}
+
 const Builder = struct {
     a: std.mem.Allocator,
     reading_target: ReadingTarget = .unknown,
@@ -3019,6 +9083,7 @@ const Builder = struct {
     unsupported: bool = false,
     globally_unresolved: bool = false,
     text_rules: std.ArrayList(TextRule) = .empty,
+    observed_figure_rules: std.ArrayList(ObservedFigureRule) = .empty,
     block_rules: std.ArrayList(TextRule) = .empty,
     container_rules: std.ArrayList(ContainerRule) = .empty,
     container_source: []const u8 = "",
@@ -3031,6 +9096,491 @@ const Builder = struct {
     missing_link_custom_rules: std.ArrayList(TextRule) = .empty,
     display_rules: std.ArrayList(DisplayRule) = .empty,
     display_classes: std.ArrayList([]const u8) = .empty,
+
+    fn observedAttributeSelector(self: *Builder, raw: []const u8) !?ObservedAttributeSelector {
+        const text = trim(raw);
+        if (text.len == 0 or !paintIdentifierStart(text, 0)) return null;
+        var at = paintIdentifierEnd(text, 0);
+        const name = text[0..at];
+        while (at < text.len and std.ascii.isWhitespace(text[at])) : (at += 1) {}
+        if (at == text.len) return .{ .name = try self.a.dupe(u8, name), .operator = .present };
+        const operator: ObservedAttributeOperator = if (text[at] == '=') .equals else blk: {
+            if (at + 1 >= text.len or text[at + 1] != '=') return null;
+            break :blk switch (text[at]) { '~' => .includes, '|' => .dash, '^' => .prefix, '$' => .suffix, '*' => .substring, else => return null };
+        };
+        at += if (operator == .equals) @as(usize, 1) else 2;
+        while (at < text.len and std.ascii.isWhitespace(text[at])) : (at += 1) {}
+        if (at == text.len) return null;
+        var value: []const u8 = undefined;
+        if (text[at] == '\'' or text[at] == '"') {
+            const quote = text[at]; at += 1;
+            const start = at;
+            while (at < text.len and text[at] != quote) : (at += 1) {
+                if (text[at] == '\\' or text[at] == '\r' or text[at] == '\n' or text[at] == 0) return null;
+            }
+            if (at == text.len) return null;
+            value = text[start..at]; at += 1;
+        } else {
+            if (!paintIdentifierStart(text, at)) return null;
+            const start = at; at = paintIdentifierEnd(text, at);
+            value = text[start..at];
+        }
+        const separated = at < text.len and std.ascii.isWhitespace(text[at]);
+        while (at < text.len and std.ascii.isWhitespace(text[at])) : (at += 1) {}
+        var insensitive = false;
+        var case_known = true;
+        if (at != text.len) {
+            if (!separated or at + 1 != text.len) return null;
+            if (text[at] == 'i' or text[at] == 'I') insensitive = true
+            else if (text[at] != 's' and text[at] != 'S') return null;
+        } else case_known = observedAttributeDefaultSensitive(name);
+        return .{ .name = try self.a.dupe(u8, name), .operator = operator, .value = try self.a.dupe(u8, value), .insensitive = insensitive, .case_known = case_known };
+    }
+
+    const ObservedCompoundPrefix = struct { positive: TextCompound, attributes: []const ObservedAttributeSelector };
+    fn observedCompoundPrefix(self: *Builder, text: []const u8) !?ObservedCompoundPrefix {
+        var ordinary: std.ArrayList(u8) = .empty;
+        var attributes: std.ArrayList(ObservedAttributeSelector) = .empty;
+        var at: usize = 0;
+        while (at < text.len) {
+            if (text[at] != '[') { try ordinary.append(self.a, text[at]); at += 1; continue; }
+            if (attributes.items.len == 16) return null;
+            const start = at + 1;
+            var quote: u8 = 0; at += 1;
+            while (at < text.len) : (at += 1) {
+                const byte = text[at];
+                if (byte == '\\' or byte == 0) return null;
+                if (quote != 0) { if (byte == quote) quote = 0; continue; }
+                if (byte == '\'' or byte == '"') { quote = byte; continue; }
+                if (byte == '[') return null;
+                if (byte == ']') break;
+            }
+            if (at == text.len or quote != 0) return null;
+            const attribute = try self.observedAttributeSelector(text[start..at]) orelse return null;
+            try attributes.append(self.a, attribute); at += 1;
+            if (at < text.len and text[at] != '[' and text[at] != '.' and text[at] != '#') return null;
+        }
+        const basic: TextCompound = if (ordinary.items.len == 0) .{} else blk: {
+            const parsed = try self.paintCompound(ordinary.items, true) orelse return null;
+            break :blk .{ .tag = parsed.tag, .classes = parsed.classes, .ids = parsed.ids };
+        };
+        return .{ .positive = basic, .attributes = try attributes.toOwnedSlice(self.a) };
+    }
+
+    fn observedFunctionClose(text: []const u8, opening: usize) ?usize {
+        if (opening >= text.len or text[opening] != '(') return null;
+        var depth: usize = 1; var quote: u8 = 0; var at = opening + 1;
+        while (at < text.len) : (at += 1) {
+            const byte = text[at];
+            if (byte == '\\' or byte == 0) return null;
+            if (quote != 0) { if (byte == quote) quote = 0; continue; }
+            if (byte == '\'' or byte == '"') { quote = byte; continue; }
+            if (byte == '(') { if (depth == 16) return null; depth += 1; }
+            if (byte == ')') { depth -= 1; if (depth == 0) return at; }
+        }
+        return null;
+    }
+
+    fn observedCompoundGroup(self: *Builder, raw: []const u8, depth: usize, specificity: *u64) anyerror!?GeneratedFigureCompoundGroup {
+        if (depth > 16) return null;
+        var alternatives: std.ArrayList(GeneratedFigureCompound) = .empty;
+        var selectors: SelectorList = .{ .source = raw };
+        var maximum: u64 = 0;
+        while (try selectors.nextAlloc(self.a)) |part| {
+            const text = trim(part);
+            if (alternatives.items.len == 16 or text.len == 0 or (figureCompoundEnd(text, 0, true) orelse return null) != text.len) return null;
+            var pseudo: ?GeneratedFigurePseudo = null;
+            var rank: u64 = 0;
+            const compound = try self.generatedFigureCompoundAt(text, false, &pseudo, &rank, depth) orelse return null;
+            if (pseudo != null) return null;
+            maximum = @max(maximum, rank);
+            try alternatives.append(self.a, compound);
+        }
+        if (alternatives.items.len == 0) return null;
+        specificity.* = maximum;
+        return .{ .alternatives = try alternatives.toOwnedSlice(self.a) };
+    }
+
+    fn generatedFigureCompound(self: *Builder, text: []const u8, terminal: bool, pseudo: *?GeneratedFigurePseudo, specificity: *u64) anyerror!?GeneratedFigureCompound {
+        return self.generatedFigureCompoundAt(text, terminal, pseudo, specificity, 0);
+    }
+
+    fn generatedFigureCompoundAt(self: *Builder, text: []const u8, terminal: bool, pseudo: *?GeneratedFigurePseudo, specificity: *u64, depth: usize) anyerror!?GeneratedFigureCompound {
+        if (depth > 16) return null;
+        if (std.mem.indexOfScalar(u8, text, '\\') != null) return null;
+        var quote: u8 = 0;
+        var bracket: usize = 0;
+        var opening: usize = text.len;
+        for (text, 0..) |byte, index| {
+            if (quote != 0) { if (byte == quote) quote = 0; continue; }
+            if (byte == '\'' or byte == '"') { quote = byte; continue; }
+            if (byte == '[') { bracket += 1; continue; }
+            if (byte == ']') { if (bracket == 0) return null; bracket -= 1; continue; }
+            if (byte == ':' and bracket == 0) { opening = index; break; }
+        }
+        if (quote != 0 or bracket != 0) return null;
+        const prefix = text[0..opening];
+        const typed = if (prefix.len != 0) try self.figureTypeofCompound(prefix) else null;
+        const projected: ObservedCompoundPrefix = if (typed) |value| .{ .positive = value, .attributes = &.{} }
+            else try self.observedCompoundPrefix(prefix) orelse return null;
+        const positive = projected.positive;
+        specificity.* += (@as(u64, @intCast(positive.ids.len)) << 42) +
+            (@as(u64, @intCast(positive.classes.len + projected.attributes.len + @as(usize, @intFromBool(positive.typeof_token != null)))) << 21) +
+            @intFromBool(positive.tag != null);
+        var tags: std.ArrayList([]const u8) = .empty;
+        var classes: std.ArrayList([]const u8) = .empty;
+        var requires_empty = false;
+        var root_only = false;
+        var any_groups: std.ArrayList(GeneratedFigureCompoundGroup) = .empty;
+        var none_groups: std.ArrayList(GeneratedFigureCompoundGroup) = .empty;
+        var dynamic: std.ArrayList(ObservedDynamicPseudo) = .empty;
+        var at = opening;
+        var predicates: usize = 0;
+        while (at < text.len) {
+            if (predicates == 16 or text[at] != ':') return null;
+            predicates += 1;
+            at += 1;
+            if (at < text.len and text[at] == ':') {
+                if (!terminal or pseudo.* != null) return null;
+                const name = text[at + 1 ..];
+                if (std.ascii.startsWithIgnoreCase(name, "part(") or std.ascii.startsWithIgnoreCase(name, "slotted(")) return null;
+                pseudo.* = if (std.ascii.eqlIgnoreCase(name, "before")) .before else if (std.ascii.eqlIgnoreCase(name, "after")) .after else .other;
+                specificity.* += 1;
+                at = text.len;
+                continue;
+            }
+            const end = paintIdentifierEnd(text, at);
+            if (end == at) return null;
+            const name = text[at..end];
+            at = end;
+            if (std.ascii.eqlIgnoreCase(name, "empty")) {
+                if (requires_empty) return null;
+                requires_empty = true;
+                specificity.* += @as(u64, 1) << 21;
+                continue;
+            }
+            if (std.ascii.eqlIgnoreCase(name, "root")) {
+                root_only = true; specificity.* += @as(u64, 1) << 21; continue;
+            }
+            var dynamic_value: ?ObservedDynamicPseudo = null;
+            inline for (.{ .{ "link", ObservedDynamicPseudo.link }, .{ "any-link", ObservedDynamicPseudo.any_link },
+                .{ "visited", ObservedDynamicPseudo.visited }, .{ "hover", ObservedDynamicPseudo.hover },
+                .{ "active", ObservedDynamicPseudo.active }, .{ "focus", ObservedDynamicPseudo.focus },
+                .{ "focus-visible", ObservedDynamicPseudo.focus_visible }, .{ "focus-within", ObservedDynamicPseudo.focus_within } }) |entry|
+                if (std.ascii.eqlIgnoreCase(name, entry[0])) { dynamic_value = entry[1]; };
+            if (dynamic_value) |value| {
+                try dynamic.append(self.a, value); specificity.* += @as(u64, 1) << 21; continue;
+            }
+            const is_not = std.ascii.eqlIgnoreCase(name, "not");
+            const is_where = std.ascii.eqlIgnoreCase(name, "where");
+            if ((!is_not and !is_where and !std.ascii.eqlIgnoreCase(name, "is")) or at == text.len or text[at] != '(') return null;
+            const closing = observedFunctionClose(text, at) orelse return null;
+            const argument = trim(text[at + 1 .. closing]);
+            const is_class = argument.len != 0 and argument[0] == '.';
+            const identifier = if (is_class) argument[1..] else argument;
+            if (is_not and identifier.len != 0 and paintIdentifierStart(identifier, 0) and paintIdentifierEnd(identifier, 0) == identifier.len) {
+                if (is_class) { try classes.append(self.a, try self.a.dupe(u8, identifier)); specificity.* += @as(u64, 1) << 21; }
+                else { try tags.append(self.a, try self.a.dupe(u8, identifier)); specificity.* += 1; }
+            } else {
+                var group_rank: u64 = 0;
+                const group = try self.observedCompoundGroup(argument, depth + 1, &group_rank) orelse return null;
+                if (is_not) try none_groups.append(self.a, group) else try any_groups.append(self.a, group);
+                if (!is_where) specificity.* += group_rank;
+            }
+            at = closing + 1;
+        }
+        return .{ .positive = positive, .excluded_tags = tags.items, .excluded_classes = classes.items, .attributes = projected.attributes, .any_groups = any_groups.items, .none_groups = none_groups.items, .root_only = root_only, .dynamic_pseudos = dynamic.items, .requires_empty = requires_empty };
+    }
+
+    fn observedAdjacentHasFirst(self: *Builder, part: []const u8) anyerror!?GeneratedFigureCompound {
+        const opening = std.mem.indexOf(u8, part, ":has(") orelse return null;
+        if (opening == 0 or part.len < opening + 7 or part[part.len - 1] != ')') return null;
+        _ = try self.observedCompoundPrefix(part[0..opening]) orelse return null;
+        const body = trim(part[opening + 5 .. part.len - 1]);
+        if (body.len == 0 or body[0] != '+' or std.mem.indexOfAny(u8, body, ",\\[]()~>|") != null) return null;
+        var rest = trim(body[1..]);
+        var first: ?GeneratedFigureCompound = null;
+        var count: usize = 0;
+        while (true) {
+            if (count == 4 or rest.len == 0) return null;
+            const split = std.mem.indexOfScalar(u8, rest, '+');
+            var token = trim(rest[0 .. split orelse rest.len]);
+            const suffix = ":last-of-type";
+            if (std.mem.endsWith(u8, token, suffix)) {
+                if (split != null) return null;
+                token = token[0 .. token.len - suffix.len];
+            }
+            if (token.len == 0 or std.mem.indexOfAny(u8, token, ": \t\r\n\x0c") != null) return null;
+            const projected = try self.observedCompoundPrefix(token) orelse return null;
+            if (projected.attributes.len != 0) return null;
+            if (first == null) first = .{ .positive = projected.positive };
+            count += 1;
+            if (split) |at| rest = trim(rest[at + 1 ..]) else break;
+        }
+        return first;
+    }
+
+    fn observedNecessarySelector(self: *Builder, raw: []const u8) anyerror!?GeneratedFigureSelector {
+        const text = trim(raw);
+        if (text.len == 0 or std.mem.indexOfScalar(u8, text, '\\') != null) return null;
+        var chain: std.ArrayList(GeneratedFigureCompound) = .empty;
+        var parent_edges: std.ArrayList(bool) = .empty;
+        var pseudo: ?GeneratedFigurePseudo = null;
+        var necessary_has_next: ?GeneratedFigureCompound = null;
+        var at: usize = 0; var direct = false;
+        while (at < text.len) {
+            if (chain.items.len == 16) return null;
+            const end = figureCompoundEnd(text, at, true) orelse return null;
+            if (end == at) return null;
+            var next = end;
+            while (next < text.len and std.ascii.isWhitespace(text[next])) : (next += 1) {}
+            const terminal = next == text.len;
+            var part = text[at..end];
+            var quote: u8 = 0; var brackets: usize = 0; var parentheses: usize = 0; var pseudo_at: ?usize = null;
+            for (part, 0..) |byte, index| {
+                if (quote != 0) { if (byte == quote) quote = 0; continue; }
+                if (byte == '\'' or byte == '"') { quote = byte; continue; }
+                if (byte == '[') { brackets += 1; continue; }
+                if (byte == ']') { if (brackets == 0) return null; brackets -= 1; continue; }
+                if (brackets != 0) continue;
+                if (byte == '(') { parentheses += 1; continue; }
+                if (byte == ')') { if (parentheses == 0) return null; parentheses -= 1; continue; }
+                if (parentheses == 0 and byte == ':' and index + 1 < part.len and part[index + 1] == ':') { pseudo_at = index; break; }
+            }
+            if (pseudo_at) |start| {
+                if (!terminal) return null;
+                const tail = part[start + 2 ..];
+                if (std.mem.indexOf(u8, tail, "::") != null or std.ascii.startsWithIgnoreCase(tail, "part(") or std.ascii.startsWithIgnoreCase(tail, "slotted(")) return null;
+                pseudo = if (std.ascii.eqlIgnoreCase(tail, "before")) .before else if (std.ascii.eqlIgnoreCase(tail, "after")) .after else .other;
+                part = part[0..start];
+            }
+            if (terminal) necessary_has_next = try self.observedAdjacentHasFirst(part);
+            var opening = part.len; quote = 0; brackets = 0;
+            for (part, 0..) |byte, index| {
+                if (quote != 0) { if (byte == quote) quote = 0; continue; }
+                if (byte == '\'' or byte == '"') { quote = byte; continue; }
+                if (byte == '[') { brackets += 1; continue; }
+                if (byte == ']') { if (brackets == 0) return null; brackets -= 1; continue; }
+                if (byte == ':' and brackets == 0) { opening = index; break; }
+            }
+            if (quote != 0 or brackets != 0) return null;
+            const prefix = try self.observedCompoundPrefix(part[0..opening]) orelse return null;
+            try chain.append(self.a, .{ .positive = prefix.positive, .attributes = prefix.attributes });
+            try parent_edges.append(self.a, direct);
+            if (terminal) break;
+            direct = text[next] == '>';
+            if (direct) {
+                next += 1;
+                while (next < text.len and std.ascii.isWhitespace(text[next])) : (next += 1) {}
+                if (next == text.len) return null;
+            } else if (next == end or text[next] == '+' or text[next] == '~' or text[next] == '|') return null;
+            at = next;
+        }
+        return .{ .chain = chain.items, .direct_parent = parent_edges.items, .pseudo = pseudo,
+            .specificity = std.math.maxInt(u64), .syntax_known = false, .necessary_has_next = necessary_has_next };
+    }
+
+    fn observedOrdinaryPseudoDomainKnown(text: []const u8) bool {
+        var brackets: usize = 0; var quote: u8 = 0; var at: usize = 0;
+        while (at < text.len) {
+            const byte = text[at];
+            if (byte == '\\' or byte == 0) return false;
+            if (quote != 0) { if (byte == quote) quote = 0; at += 1; continue; }
+            if (byte == '\'' or byte == '"') { quote = byte; at += 1; continue; }
+            if (byte == '[') { brackets += 1; at += 1; continue; }
+            if (byte == ']') { if (brackets == 0) return false; brackets -= 1; at += 1; continue; }
+            if (brackets != 0 or byte != ':') { at += 1; continue; }
+            if (!paintIdentifierStart(text, at + 1)) return false;
+            const end = paintIdentifierEnd(text, at + 1);
+            if (end == at + 1) return false;
+            for ([_][]const u8{ "before", "after", "first-letter", "first-line" }) |name|
+                if (std.ascii.eqlIgnoreCase(text[at + 1 .. end], name)) return false;
+            at = end;
+            if (at < text.len and text[at] == '(')
+                at = (observedFunctionClose(text, at) orelse return false) + 1;
+            if (at < text.len and text[at] != ':') return false;
+        }
+        return brackets == 0 and quote == 0;
+    }
+
+    fn observedSiblingSubjectSelector(self: *Builder, raw: []const u8) anyerror!?GeneratedFigureSelector {
+        const text = trim(raw);
+        if (text.len == 0 or std.mem.indexOfScalar(u8, text, '\\') != null) return null;
+        var at: usize = 0; var count: usize = 0; var sibling = false;
+        var incoming_sibling = false;
+        var previous_adjacent: ?GeneratedFigureCompound = null;
+        var necessary_root: ?GeneratedFigureCompound = null;
+        var prefix: std.ArrayList(GeneratedFigureCompound) = .empty;
+        var necessary_ancestors: []const GeneratedFigureCompound = &.{};
+        var right_tail: std.ArrayList(GeneratedFigureCompound) = .empty;
+        var right_edges: std.ArrayList(bool) = .empty;
+        var incoming_direct = false;
+        while (at < text.len) {
+            if (count == 16) return null;
+            count += 1;
+            const end = figureCompoundEnd(text, at, true) orelse return null;
+            if (end == at) return null;
+            const part = (try self.observedNecessarySelector(text[at..end])) orelse return null;
+            if (part.chain.len != 1) return null;
+            if (count == 1) if (part.chain[0].positive.tag) |tag| {
+                if (std.ascii.eqlIgnoreCase(tag, "html")) necessary_root = part.chain[0];
+            };
+            var next = end;
+            while (next < text.len and std.ascii.isWhitespace(text[next])) : (next += 1) {}
+            if (next == text.len) {
+                // Only the terminal compound establishes the queried pseudo
+                // domain. Unsupported predicates in a discarded left sibling
+                // cannot remove its necessary terminal subject facts.
+                // Unsupported terminal :after/:before aliases stay unknown.
+                var terminal = part;
+                if ((try self.generatedFigureSelector(text[at..end])) == null) {
+                    // These two legacy spellings denote the same pseudo box,
+                    // never an ordinary-node selector. Reparse the complete
+                    // normalized compound before any necessary refutation.
+                    var normalized: ?[]const u8 = null;
+                    for ([_][]const u8{ ":before", ":after" }) |alias| {
+                        const compound = text[at..end];
+                        if (std.ascii.endsWithIgnoreCase(compound, alias)) {
+                            normalized = try std.mem.concat(self.a, u8, &.{ compound[0 .. compound.len - alias.len], ":", alias });
+                            break;
+                        }
+                    }
+                    if (normalized) |canonical| {
+                        if ((try self.generatedFigureSelector(canonical)) == null) return null;
+                        terminal = (try self.observedNecessarySelector(canonical)) orelse return null;
+                    } else {
+                        // Unknown ordinary predicates (e.g. :only-of-type)
+                        // cannot remove a necessary positive tag/class. They
+                        // also cannot establish a positive sibling match.
+                        if (part.pseudo != null or !observedOrdinaryPseudoDomainKnown(text[at..end])) return null;
+                    }
+                }
+                // The suffix after the last sibling edge remains a necessary
+                // parent chain: in A + P BR, P must be an ancestor of BR.
+                // No compound on the left of that sibling edge is borrowed.
+                try right_tail.append(self.a, terminal.chain[0]);
+                try right_edges.append(self.a, incoming_direct);
+                terminal.chain = try right_tail.toOwnedSlice(self.a);
+                terminal.direct_parent = try right_edges.toOwnedSlice(self.a);
+                terminal.necessary_html_root = necessary_root;
+                terminal.necessary_sibling_ancestors = necessary_ancestors;
+                terminal.necessary_previous_sibling = incoming_sibling;
+                terminal.necessary_previous_adjacent = previous_adjacent;
+                return if (sibling) terminal else null;
+            }
+            if (part.pseudo != null) return null;
+            const next_sibling = text[next] == '+' or text[next] == '~';
+            incoming_sibling = next_sibling;
+            previous_adjacent = if (text[next] == '+') part.chain[0] else null;
+            // For A B + C, only A is necessarily an ancestor of C. B is a
+            // sibling, not an ancestor. Keep this proof only when C is the
+            // terminal compound and no earlier sibling relation was crossed.
+            if (next_sibling and !sibling) {
+                necessary_ancestors = try self.a.dupe(GeneratedFigureCompound, prefix.items);
+            } else if (sibling) necessary_ancestors = &.{};
+            try prefix.append(self.a, part.chain[0]);
+            if (next_sibling) {
+                right_tail.clearRetainingCapacity();
+                right_edges.clearRetainingCapacity();
+            } else {
+                try right_tail.append(self.a, part.chain[0]);
+                try right_edges.append(self.a, incoming_direct);
+            }
+            incoming_direct = !next_sibling and text[next] == '>';
+            if (next_sibling or text[next] == '>') {
+                sibling = sibling or next_sibling;
+                next += 1;
+                while (next < text.len and std.ascii.isWhitespace(text[next])) : (next += 1) {}
+                if (next == text.len) return null;
+            } else if (next == end) return null;
+            at = next;
+        }
+        return null;
+    }
+
+    fn generatedFigureSelector(self: *Builder, raw: []const u8) !?GeneratedFigureSelector {
+        const text = trim(raw);
+        if (text.len == 0 or std.mem.indexOfScalar(u8, text, '\\') != null) return null;
+        var chain: std.ArrayList(GeneratedFigureCompound) = .empty;
+        var parent_edges: std.ArrayList(bool) = .empty;
+        var pseudo: ?GeneratedFigurePseudo = null;
+        var specificity: u64 = 0;
+        var at: usize = 0;
+        var direct = false;
+        while (at < text.len) {
+            if (chain.items.len == 16) return null;
+            const end = figureCompoundEnd(text, at, true) orelse return null;
+            if (end == at) return null;
+            var next = end;
+            while (next < text.len and std.ascii.isWhitespace(text[next])) : (next += 1) {}
+            const terminal = next == text.len;
+            const compound = try self.generatedFigureCompound(text[at..end], terminal, &pseudo, &specificity) orelse return null;
+            try chain.append(self.a, compound);
+            try parent_edges.append(self.a, direct);
+            if (terminal) break;
+            direct = text[next] == '>';
+            if (direct) {
+                next += 1;
+                while (next < text.len and std.ascii.isWhitespace(text[next])) : (next += 1) {}
+                if (next == text.len) return null;
+            } else if (next == end or text[next] == '+' or text[next] == '~') return null;
+            at = next;
+        }
+        return .{ .chain = chain.items, .direct_parent = parent_edges.items, .pseudo = pseudo, .specificity = if (pseudo == .other) std.math.maxInt(u64) else specificity, .syntax_known = pseudo != .other };
+    }
+
+    fn appendObservedFigureRules(self: *Builder, prelude: []const u8, css: []const u8, conditional: bool, order: u32, source_byte_start: usize) !void {
+        var selectors: SelectorList = .{ .source = prelude };
+        var pending: std.ArrayList(ObservedFigureRule) = .empty;
+        var list_uncertain = false;
+        while (try selectors.nextAlloc(self.a)) |raw| {
+            if (self.observed_figure_rules.items.len + pending.items.len == max_rules) return error.StyleProfileLimit;
+            const owned = try self.a.dupe(u8, raw);
+            const projected = try self.generatedFigureSelector(owned);
+            list_uncertain = list_uncertain or projected == null or !projected.?.syntax_known;
+            try pending.append(self.a, .{
+                .raw_selector = owned, .selector = projected,
+                .weak_selector = if (projected == null) (try self.observedNecessarySelector(owned)) orelse
+                    (try self.observedSiblingSubjectSelector(owned)) else null,
+                .list_uncertain = false, .css = css, .conditions = self.container_conditions, .conditional = conditional,
+                .rank_unknown = self.container_rank_unknown or observedFigureUnknownRank(self.container_conditions), .order = order,
+                .source_index = self.container_source_index, .source_byte_start = source_byte_start,
+                .focus_inner_control_host = try self.figureFocusInnerControlHost(owned),
+            });
+        }
+        for (pending.items) |*rule| rule.list_uncertain = list_uncertain;
+        try self.observed_figure_rules.appendSlice(self.a, pending.items);
+    }
+
+    fn textNecessaryAncestorIds(self: *Builder, raw: []const u8) ![]const []const u8 {
+        const text = trim(raw);
+        if (text.len == 0 or std.mem.indexOfAny(u8, text, "\\,[]+~|&\x00") != null or
+            std.mem.indexOf(u8, text, "/*") != null or !std.unicode.utf8ValidateSlice(text)) return &.{};
+        var ids: std.ArrayList([]const u8) = .empty;
+        defer ids.deinit(self.a);
+        var at: usize = 0;
+        var count: usize = 0;
+        while (at < text.len) {
+            const end = figureCompoundEnd(text, at, false) orelse return &.{};
+            if (end == at or count == 32) return &.{};
+            count += 1;
+            var next = end;
+            while (next < text.len and std.ascii.isWhitespace(text[next])) : (next += 1) {}
+            const terminal = next == text.len;
+            var part = text[at..end];
+            if (terminal and std.mem.endsWith(u8, part, ":not(:empty)")) part = part[0 .. part.len - ":not(:empty)".len];
+            const compound = (try self.paintCompound(part, true)) orelse return &.{};
+            if (terminal) return ids.toOwnedSlice(self.a);
+            try ids.appendSlice(self.a, compound.ids);
+            if (text[next] == '>') {
+                next += 1;
+                while (next < text.len and std.ascii.isWhitespace(text[next])) : (next += 1) {}
+                if (next == text.len or text[next] == '>') return &.{};
+            } else if (next == end) return &.{};
+            at = next;
+        }
+        return &.{};
+    }
 
     fn uncertainTextSelector(self: *Builder, raw: []const u8) !TextSelector {
         // Reuse the existing quote/bracket-aware terminal scanner. Unsupported
@@ -3047,9 +9597,15 @@ const Builder = struct {
         // Keep the terminal uncertainty: a satisfied necessary condition never
         // promotes this unsupported selector into a known cascade winner.
         const necessary = (try self.uncertainPaintSelector(trim(raw))).?;
-        return .{ .chain = compounds, .specificity = std.math.maxInt(u64), .uncertain = true, .required_own_attribute = terminal.required_own_attribute, .necessary_ancestor_classes = necessary.necessary_classes };
+        return .{ .chain = compounds, .specificity = std.math.maxInt(u64), .uncertain = true, .required_own_attribute = terminal.required_own_attribute, .necessary_ancestor_classes = necessary.necessary_classes, .necessary_ancestor_ids = try self.textNecessaryAncestorIds(raw) };
     }
     fn textSelector(self: *Builder, raw: []const u8, conditional: bool) !TextSelector {
+        if (bareOwnAttribute(raw)) |name| {
+            const compounds = try self.a.alloc(TextCompound, 1);
+            compounds[0] = .{};
+            return .{ .chain = compounds, .specificity = if (conditional) std.math.maxInt(u64) else 1 << 21,
+                .uncertain = conditional, .required_own_attribute = try self.a.dupe(u8, name), .own_attribute_complete = true };
+        }
         if (bareLanguageRange(raw)) |range| {
             var language_selector = try self.uncertainTextSelector(raw);
             language_selector.language_range = try self.a.dupe(u8, range);
@@ -3092,7 +9648,7 @@ const Builder = struct {
                 if (pos == text.len) return self.uncertainTextSelector(raw);
             }
         }
-        return .{ .chain = chain.items, .specificity = if (uncertain) std.math.maxInt(u64) else specificity, .uncertain = uncertain or chain.items.len == 0, .direct_children = has_child };
+        return .{ .chain = chain.items, .specificity = if (uncertain) std.math.maxInt(u64) else specificity, .uncertain = uncertain or chain.items.len == 0, .direct_children = has_child, .necessary_ancestor_ids = try self.textNecessaryAncestorIds(raw) };
     }
     fn uncertainContainerSelector(self: *Builder, raw: []const u8) !ContainerSelector {
         var fallback = try self.uncertainTextSelector(raw);
@@ -3135,6 +9691,7 @@ const Builder = struct {
         defer plain.deinit(self.a);
         var at: usize = 0;
         var simple_pseudo = false;
+        var positive_attribute = false;
         while (at < text.len) {
             if (text[at] == ':') {
                 if (terminal and (std.ascii.eqlIgnoreCase(text[at..], "::before") or std.ascii.eqlIgnoreCase(text[at..], "::after"))) break;
@@ -3169,6 +9726,7 @@ const Builder = struct {
             }
             if (at == text.len or quote != 0) return null;
             const attribute = text[start .. at + 1];
+            positive_attribute = true;
             if (requiredOwnAttribute(attribute) == null) {
                 // Reuse the strict quoted-value grammar after removing only a
                 // recognized positive comparison operator. No value is matched.
@@ -3184,7 +9742,7 @@ const Builder = struct {
         }
         // A pseudo-only compound still requires its own node in the ancestor
         // chain. Retain that universal necessary node instead of collapsing it.
-        if (plain.items.len == 0 and simple_pseudo) return .{};
+        if (plain.items.len == 0 and (simple_pseudo or positive_attribute)) return .{};
         const compound = (try self.paintCompound(plain.items, true)) orelse return null;
         if (compound.tag == null and compound.classes.len == 0 and compound.ids.len == 0) return null;
         return .{ .tag = compound.tag, .classes = compound.classes, .ids = compound.ids };
@@ -3246,6 +9804,10 @@ const Builder = struct {
         return try self.a.dupe(u8, name);
     }
     fn containerSelector(self: *Builder, raw: []const u8) !ContainerSelector {
+        if (bareOwnAttribute(raw) != null) {
+            const fallback = try self.textSelector(raw, false);
+            return .{ .fallback = fallback, .specificity = fallback.specificity };
+        }
         const text = trim(raw);
         var chain: std.ArrayList(ContainerCompound) = .empty;
         var pos: usize = 0;
@@ -3625,6 +10187,14 @@ const Builder = struct {
         return names.toOwnedSlice(self.a);
     }
 
+    fn figureFocusInnerControlHost(self: *Builder, raw: []const u8) !bool {
+        const text = trim(raw);
+        const suffix = "::-moz-focus-inner";
+        if (text.len < suffix.len or !std.ascii.eqlIgnoreCase(text[text.len - suffix.len ..], suffix)) return false;
+        const host = text[0 .. text.len - suffix.len];
+        return host.len == 0 or (try self.figureNecessaryCompound(host)) != null;
+    }
+
     fn uncertainFigureSelector(self: *Builder, raw: []const u8) !TextSelector {
         var result = try self.uncertainTextSelector(raw);
         // The existing terminal scanner retains only positive classes outside
@@ -3776,7 +10346,21 @@ const Builder = struct {
         return if (compound.classes.len != 0) compound else null;
     }
 
+    fn figureControlPseudo(self: *Builder, raw: []const u8) !bool {
+        const text = trim(raw);
+        const suffix = "::-moz-focus-inner";
+        if (text.len <= suffix.len or !std.ascii.eqlIgnoreCase(text[text.len - suffix.len ..], suffix)) return false;
+        // Only one complete positive compound before this exact terminal
+        // pseudo. No functions, ancestry, siblings, escapes or extra tails.
+        return (try self.figureNecessaryCompound(text[0 .. text.len - suffix.len])) != null;
+    }
+
     fn figureSelector(self: *Builder, raw: []const u8, conditional: bool) !TextSelector {
+        if (!conditional and try self.figureControlPseudo(raw)) {
+            var result = try self.uncertainFigureSelector(raw);
+            result.figure_control_pseudo = true;
+            return result;
+        }
         if (bareLanguageRange(raw)) |range| {
             var language_selector = try self.uncertainFigureSelector(raw);
             language_selector.language_range = try self.a.dupe(u8, range);
@@ -4199,7 +10783,7 @@ const Builder = struct {
         }
         const necessary: []const []const u8 = if (safe_ancestors and depth == 0 and quote == 0) try ancestors.toOwnedSlice(self.a) else &.{};
         if (try self.paintCompound(trim(text[start..]), false)) |last| {
-            return .{ .target = paintTarget(last.tag), .mask = 0, .own_classes = last.classes, .own_ids = last.ids, .necessary_classes = necessary, .specificity = std.math.maxInt(u64), .unsupported = true };
+            return .{ .target = paintTarget(last.tag), .mask = 0, .own_classes = last.classes, .own_ids = last.ids, .own_tag = last.tag, .necessary_classes = necessary, .specificity = std.math.maxInt(u64), .unsupported = true };
         }
         return .{ .target = .element, .mask = 0, .necessary_classes = necessary, .specificity = std.math.maxInt(u64), .unsupported = true };
     }
@@ -4231,6 +10815,7 @@ const Builder = struct {
             .own_ids = last.ids,
             .own_tag = last.tag,
             .necessary_classes = try names.toOwnedSlice(self.a),
+            .necessary_ancestor_ids = try self.textNecessaryAncestorIds(text),
             .specificity = specificity,
             .unsupported = conditional,
         };
@@ -4361,11 +10946,17 @@ const Builder = struct {
             try self.appendContainerRules(prelude, try self.a.dupe(u8, css[body_start..end]), display_order,
                 self.container_source_byte_start + (@intFromPtr(css.ptr) - @intFromPtr(self.container_source.ptr)) + body_start);
             try self.appendFigureRules(prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order);
+            try self.appendObservedFigureRules(prelude, try self.a.dupe(u8, css[body_start..end]), conditional, display_order,
+                self.container_source_byte_start + (@intFromPtr(css.ptr) - @intFromPtr(self.container_source.ptr)) + body_start);
             var selectors: SelectorList = .{ .source = prelude };
             var projected: std.ArrayList(Selector) = .empty;
             var list_uncertain = false;
             while (try selectors.nextAlloc(self.a)) |raw| {
-                if (try self.selector(raw, conditional)) |selector_value| {
+                if (try self.selector(raw, conditional)) |parsed_selector| {
+                    var selector_value = parsed_selector;
+                    if (!conditional and std.mem.eql(u8, trim(prelude), trim(raw))) if (bareOwnAttribute(raw)) |attribute| {
+                        selector_value.complete_own_attribute = try self.a.dupe(u8, attribute);
+                    };
                     list_uncertain = list_uncertain or selector_value.unsupported;
                     try projected.append(self.a, selector_value);
                 } else list_uncertain = true;
@@ -4373,6 +10964,7 @@ const Builder = struct {
             var admitted = has_display or has_alignment;
             for (projected.items) |parsed_selector| {
                 var selector_value = parsed_selector;
+                if (projected.items.len != 1) selector_value.complete_own_attribute = null;
                 // One unproved selector branch can invalidate the whole list.
                 // It may suppress a prior property, but cannot introduce paint.
                 if (list_uncertain) {
@@ -4510,7 +11102,7 @@ pub fn parseSourcesForTargetAlloc(a: std.mem.Allocator, sources: []const Source,
             .byte_start = source.byte_start, .bytes = source.css.len, .css_sha256 = std.fmt.bytesToHex(digest, .lower),
             .rule_begin = first, .rule_end = builder.number + 1 });
     }
-    return .{ .arena = arena, .reading_target = target, .sources = ranges.items, .retained_sources = retained_sources, .rules = builder.rules.items, .classes = builder.classes.items, .ancestor_classes = builder.ancestor_classes.items, .admitted_rule_numbers = builder.numbers.items, .has_unsupported_rules = builder.unsupported, .globally_unresolved = builder.globally_unresolved, .text_rules = builder.text_rules.items, .block_rules = builder.block_rules.items, .container_rules = builder.container_rules.items, .figure_rules = builder.figure_rules.items, .missing_link_custom_rules = builder.missing_link_custom_rules.items, .display_rules = builder.display_rules.items, .display_classes = builder.display_classes.items };
+    return .{ .arena = arena, .reading_target = target, .sources = ranges.items, .retained_sources = retained_sources, .rules = builder.rules.items, .classes = builder.classes.items, .ancestor_classes = builder.ancestor_classes.items, .admitted_rule_numbers = builder.numbers.items, .has_unsupported_rules = builder.unsupported, .globally_unresolved = builder.globally_unresolved, .text_rules = builder.text_rules.items, .observed_figure_rules = builder.observed_figure_rules.items, .block_rules = builder.block_rules.items, .container_rules = builder.container_rules.items, .figure_rules = builder.figure_rules.items, .missing_link_custom_rules = builder.missing_link_custom_rules.items, .display_rules = builder.display_rules.items, .display_classes = builder.display_classes.items };
 }
 
 // Reparse the original ordered inputs through the same parser so class indices,
@@ -4773,7 +11365,10 @@ fn projectTableBox(style: *types.TableStyle, winners: Winners) void {
     if (winners.value(.display)) |value| if (value == .display_value) { style.display = value.display_value; };
     if (winners.value(.vertical_align)) |value| switch (value) {
         .vertical_align_value => |alignment| style.vertical_align = alignment,
-        .cell_vertical_align_value => |alignment| switch (alignment) { .top => style.vertical_align = .top },
+        .cell_vertical_align_value => |alignment| switch (alignment) {
+            .top => style.vertical_align = .top,
+            .middle => style.vertical_align = .middle,
+        },
         else => {},
     };
     if (!unresolvedTableWidthBox(winners)) if (winners.value(.width)) |value| if (value == .width_value) { style.width = value.width_value; };
@@ -4983,7 +11578,9 @@ fn unsupportedEdges(value: []const u8, negative_allowed: bool) bool {
         const units = [_][]const u8{ "px", "em", "rem", "ex", "ch", "vw", "vh", "vmin", "vmax", "cm", "mm", "in", "pt", "pc", "q", "%" };
         for (units) |unit| {
             if (token.len > unit.len and std.ascii.endsWithIgnoreCase(token, unit)) {
-                const number = std.fmt.parseFloat(f32, token[0 .. token.len - unit.len]) catch continue;
+                const numeric = token[0 .. token.len - unit.len];
+                if (!widthNumberSyntax(numeric)) continue;
+                const number = std.fmt.parseFloat(f32, numeric) catch continue;
                 if (std.math.isFinite(number) and (negative_allowed or number >= 0)) recognized = true;
             }
         }
@@ -5057,14 +11654,19 @@ fn declarationAlloc(a: std.mem.Allocator, raw: []const u8, order: u32) !?Declara
         .margins, .padding => {
             const shorthand = std.ascii.eqlIgnoreCase(name, if (property == .margins) "margin" else "padding");
             if (shorthand) {
-                if (edges(value)) |next| {
+                const automatic = if (property == .margins) containerMarginValues(value) else null;
+                if (automatic != null and types.validTableMarginValues(automatic.?)) {
+                    projection = .{ .margin_values = automatic.? };
+                } else if (edges(value)) |next| {
                     projection = .{ .edges = next };
                 } else if (!unsupportedEdges(value, property == .margins)) return null;
             }
         },
         .margin_top, .margin_right, .margin_bottom, .margin_left => {
-            if (length(value)) |next| {
-                projection = .{ .length_value = next };
+            if ((property == .margin_right or property == .margin_left) and std.ascii.eqlIgnoreCase(value, "auto")) {
+                projection = .{ .margin_edge = .auto };
+            } else if (containerMarginLength(value)) |next| {
+                if (types.validStyleLength(next)) projection = .{ .length_value = next };
             } else {
                 var tokens = std.mem.tokenizeAny(u8, value, " \t\r\n");
                 _ = tokens.next();
@@ -7831,12 +14433,23 @@ test "valid auto margin shorthand remains unresolved beside represented table wi
     const a = arena.allocator();
     var profile = try parseAlloc(a, "");
     defer profile.deinit();
-    for ([_][]const u8{ "margin:0 auto 0.3em auto", "margin:AUTO", "margin-left:auto" }) |margin| {
+    for ([_][]const u8{ "margin:AUTO" }) |margin| {
         const css = try std.fmt.allocPrint(a, "{s};width:100%;background:#fcfbff", .{margin});
         defer a.free(css);
         const value = try profile.resolveTableWithContext(a, 0, "translations", .{ .ancestor_classes = "", .own_id = "" }, null, css);
         try std.testing.expect(value.unresolved and value.width_specified);
         try std.testing.expectEqualDeep(types.TableStyle{ .background = "#fcfbff", .width = .{ .unit = .percent, .value = 100 } }, value.style.?);
+    }
+    for ([_][]const u8{ "margin:0 auto 0.3em auto", "margin-left:auto" }, 0..) |margin, index| {
+        const css = try std.fmt.allocPrint(a, "{s};width:100%;background:#fcfbff", .{margin});
+        const value = try profile.resolveTableWithContext(a, 0, "translations", .{ .ancestor_classes = "", .own_id = "" }, null, css);
+        try std.testing.expect(!value.unresolved and value.width_specified);
+        const zero: types.ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+        const automatic: types.ContainerMargins = if (index == 0) .{ .top = zero, .right = .auto,
+            .bottom = .{ .length = .{ .unit = .em, .value = 0.3 } }, .left = .auto }
+            else .{ .top = zero, .right = zero, .bottom = zero, .left = .auto };
+        try std.testing.expectEqualDeep(types.TableStyle{ .background = "#fcfbff", .width = .{ .unit = .percent, .value = 100 },
+            .margin_values = automatic }, value.style.?);
     }
     // Invalid padding and invalid margin tokens do not become accepted edges.
     for ([_][]const u8{ "padding:auto", "padding:AUTO", "padding:0 auto", "padding:auto auto", "margin:0 auto nonsense auto", "margin:0 auto 0 auto 0" }) |invalid| {
@@ -8663,7 +15276,19 @@ test "container responsive alternatives retain explicit resets and reject incomp
             try std.testing.expect(!result.unresolved);
             try std.testing.expectEqual(@as(u32, 719), result.style.screen_max_width.?.max_width_px);
             try std.testing.expectEqual(@as(f32, 100), result.style.screen_max_width.?.width.?.length.value);
-        } else try std.testing.expect(result.unresolved);
+            try std.testing.expectEqual(@as(usize, 0), result.style.screen_max_width.?.following_rules.len);
+        } else {
+            // The existing typed following-band representation now retains
+            // these distinct effective widths, including a return to the base.
+            try std.testing.expect(!result.unresolved);
+            const screen = result.style.screen_max_width.?;
+            try std.testing.expectEqual(@as(u32, 719), screen.max_width_px);
+            try std.testing.expectEqual(@as(usize, 1), screen.following_rules.len);
+            try std.testing.expectEqual(@as(u32, 500), screen.following_rules[0].max_width_px);
+            const selected = (try types.resolveContainerScreen(result.style, 400)).?;
+            try std.testing.expectEqual(types.StyleWidth{ .unit = if (index == 1) .percent else .px,
+                .value = if (index == 1) 50 else 250 }, selected.width.?.length);
+        }
         const overridden = try profile.resolveContainerIn(a, &element, "width:42px!important");
         try std.testing.expect(!overridden.unresolved and overridden.style.screen_max_width == null);
         try std.testing.expectEqual(@as(f32, 42), overridden.style.width.?.length.value);
@@ -11807,4 +18432,4864 @@ test "Missing paint minimum width exclusion preserves paint reset escape priorit
     }
     var unknown = try parseAlloc(a, "@import url('/unobserved.css');figure{min-width:100px}"); defer unknown.deinit();
     try std.testing.expect(!try unknown.missingLinkAdditionalPaintUnchangedIn(a, &frame));
+}
+
+test "normal Ready obligation delegates only positive Figure domains and preserves legacy preflight" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var parent = try parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    for ([_][]const u8{
+        "figure [data-mw-tmh][data-mw-tmh][data-mw-tmh]{border:0}",
+        "figure .mw-tmh-player.mw-file-element.mw-file-element{border:0}",
+        ".mw-body-content figure[typeof~='mw:File/Thumb'] > a{border:0}",
+        "figure{border:1px solid red}figure > figcaption::before{content:'visible'}",
+    }) |css| {
+        var selected = try joinPageSourcesAlloc(a, &parent, &.{.{ .css = css, .base_url = "" }}, &.{}); defer selected.deinit();
+        const proof: ClosedReadyFigureProof = .{ .styles = &selected, .source = "closed source", .root = &root, .operations = 1 };
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerIn(a, &root)) != null);
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerWithReadyFiguresIn(a, &root, proof)) == null);
+        var wrong = proof; wrong.operations = 0;
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerWithReadyFiguresIn(a, &root, wrong)) != null);
+        wrong = proof; wrong.styles = &parent;
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerWithReadyFiguresIn(a, &root, wrong)) != null);
+    }
+    // Delegation is an enforced constructor obligation, not a general no-match
+    // rule. Relationships which can leave a Figure remain generic refusals.
+    for ([_][]const u8{
+        "figure + div{border:0}", "figure ~ div{border:0}", ":not(figure) a{border:0}",
+        ":is(figure,div) a{border:0}", "[data-note='figure'] a{border:0}",
+        "div{border:0}", "figure:has(+div){border:0}",
+    }) |css| {
+        var selected = try joinPageSourcesAlloc(a, &parent, &.{.{ .css = css, .base_url = "" }}, &.{}); defer selected.deinit();
+        const proof: ClosedReadyFigureProof = .{ .styles = &selected, .source = "closed source", .root = &root, .operations = 1 };
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerWithReadyFiguresIn(a, &root, proof)) != null);
+    }
+}
+
+
+test "observed Figure state color inheritance follows the exact Missing label chain without default paint" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try parseForTargetAlloc(a,
+        "body{color:#202122}body:unknown{color:#ff0000}" ++
+        "a.new{color:#bf3c2c}a.new:visited{color:#9f5555}a.extiw{color:#3366cc}", .screen); defer styles.deinit();
+    const nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }} },
+        .{ .tag = "a", .parent = 3, .attributes = &.{ .{ .name = "href", .value = "/upload" }, .{ .name = "class", .value = "new" } }, .has_text = false },
+        .{ .tag = "span", .parent = 4, .attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }}, .has_text = true },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+        .{ .tag = "a", .parent = 6, .attributes = &.{ .{ .name = "href", .value = "https://example.org/Remote" }, .{ .name = "class", .value = "extiw" } }, .has_text = true },
+    };
+    const context: FigureObservedContext = .{ .styles = &styles, .media_kind = .missing, .nodes = &nodes,
+        .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6 };
+    for ([_]bool{ false, true }) |visited| {
+        const computed = (try observedFigureComputedNodes(a, context, .{ .link_subject = 4, .link_state = .{ .visited = visited } })).?;
+        const colors = (try observedFigureComputedColors(a, context, computed, null)).?;
+        try std.testing.expect(colors[0].value == null and colors[1].value == null and colors[6].value == null);
+        const expected: []const u8 = if (visited) "#9f5555" else "#bf3c2c";
+        try std.testing.expectEqualStrings(expected, colors[4].value.?.value.?);
+        try std.testing.expectEqualStrings(expected, colors[5].value.?.value.?);
+        try std.testing.expectEqualStrings("#3366cc", colors[7].value.?.value.?);
+        // A known descendant color is not an authority for an omitted parent.
+        try std.testing.expect((try observedFigureComputedColors(a, context, computed[1..], null)) == null);
+    }
+}
+
+
+test "observed Figure source link states separate atomic Missing decoration from real caption link ink" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const css = "html{font-family:sans-serif;color:#202122}a{color:#3366cc;text-decoration:none}" ++
+        "a:visited{color:#6a60b0}a:hover{color:#3056a9}a:visited:hover{color:#534fa3}" ++
+        "a:active{color:#233566}a:visited:active{color:#353262}a:focus{text-decoration:underline}" ++
+        "a:focus-visible{outline:solid 2px #3366cc}a.new{color:#bf3c2c}a.new:visited{color:#9f5555}" ++
+        "a.new:hover{color:#a55858}a.new:visited:hover{color:#a55858}a.new:active{color:#612018}a.new:visited:active{color:#612018}" ++
+        "span.mw-broken-media{display:inline-block}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    const nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "dir", .value = "ltr" }, .{ .name = "lang", .value = "th" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "https://example.org/upload" }, .{ .name = "class", .value = "new" }}, .has_text = false },
+        .{ .tag = "span", .parent = 4, .attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }, .{ .name = "data-width", .value = "100" }}, .has_text = true },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+        .{ .tag = "a", .parent = 6, .attributes = &.{.{ .name = "href", .value = "/wiki/Target#section" }}, .has_text = true },
+    };
+    var context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+    const missing = (try observedFigureSourceLinkPaint(a, context, 4, 5, 900, 100)).?;
+    const caption = (try observedFigureSourceLinkPaint(a, context, 7, 7, 900, 100)).?;
+    try std.testing.expectEqualStrings("#bf3c2c", missing.normal.foreground);
+    try std.testing.expectEqualStrings("#9f5555", missing.visited.foreground);
+    try std.testing.expect(!missing.underline_on_focus and !missing.normal.underline and missing.focus_outline != null);
+    try std.testing.expectEqualStrings("#3366cc", caption.normal.foreground);
+    try std.testing.expectEqualStrings("#353262", caption.visited_active.foreground);
+    try std.testing.expect(caption.underline_on_focus and caption.focus_outline != null);
+    for ([_][]const u8{ "figcaption a:hover:active{color:#112233}", "figcaption a:visited:focus{color:#112233}",
+        "figcaption a:focus-visible:hover{outline-color:red}", "figcaption a:focus{text-decoration:underline dotted}",
+        "figcaption a:focus{text-decoration-color:red}", "@media(prefers-reduced-motion:reduce){figcaption a{color:red}}" }) |extra| {
+        var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ css, extra }), .screen); defer changed.deinit(); context.styles = &changed;
+        try std.testing.expect((try observedFigureSourceLinkPaint(a, context, 7, 7, 900, 100)) == null);
+    }
+}
+
+
+test "observed Missing TH anchor wrap is equivalent only with certified typed label wrapping" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const css = "html{font-family:sans-serif;color:#202122}figure{line-height:0;text-align:center}" ++
+        "a{border:0;background:none;color:#bf3c2c;border-radius:0;text-decoration:none}" ++
+        "figure[typeof~='mw:File/Thumb'] > :not(figcaption) .mw-broken-media{display:inline-block;line-height:1.6em;word-break:break-word;width:180px;font-size:94%}";
+    var nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "dir", .value = "ltr" }, .{ .name = "lang", .value = "th" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "//commons.wikimedia.org/wiki/Special:UploadWizard" }, .{ .name = "class", .value = "new" }}, .has_text = false },
+        .{ .tag = "span", .parent = 4, .attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }, .{ .name = "data-width", .value = "100" }}, .has_text = true },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+    };
+    const Harness = struct {
+        const Geometry = struct { anchor: ObservedFigureReadyAnchorGeometry, label: ObservedFigureMissingLabelGeometry };
+        fn resolve(alloc: std.mem.Allocator, current: FigureObservedContext) !?Geometry {
+            const computed = (try observedFigureComputedNodes(alloc, current, .{ .missing_width = 100 })) orelse return null;
+            const fonts = (try observedFigureComputedFonts(alloc, current, computed)) orelse return null;
+            const colors = (try observedFigureComputedColors(alloc, current, computed, null)) orelse return null;
+            const backgrounds = (try observedFigureComputedBackgrounds(alloc, current, computed, colors)) orelse return null;
+            const label = (try observedFigureMissingLabelGeometry(alloc, current, computed, fonts, colors, backgrounds,
+                100, .{ .kind = .rgb, .value = "#bf3c2c" })) orelse return null;
+            const anchor = (try observedFigureAnchorGeometry(alloc, current, computed, fonts, backgrounds, false)) orelse return null;
+            return .{ .anchor = anchor, .label = label };
+        }
+    };
+    var base = try parseForTargetAlloc(a, css, .screen); defer base.deinit();
+    var context: FigureObservedContext = .{ .styles = &base, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+    const baseline = (try Harness.resolve(a, context)) orelse return error.TestUnexpectedResult;
+    // The first row is the genuine retained skin declaration at TH response0
+    // byte106918 (also response3 byte161566), not an invented default.
+    for ([_][]const u8{ ".mw-parser-output a{word-wrap:break-word}", ".mw-parser-output a{overflow-wrap:anywhere}",
+        ".mw-parser-output a{overflow-wrap:normal}span.mw-broken-media{word-wrap:break-word}",
+        ".mw-parser-output a{word-wrap:break-word}span.mw-broken-media{overflow-wrap:anywhere}" }) |extra| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{css, extra}), .screen); defer styles.deinit(); context.styles = &styles;
+        const actual = (try Harness.resolve(a, context)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(observedFigureDataEqual(Harness.Geometry, baseline, actual, 0));
+        nodes[4].has_text = true;
+        try std.testing.expect((try Harness.resolve(a, context)) == null);
+        nodes[4].has_text = null;
+        try std.testing.expect((try Harness.resolve(a, context)) == null);
+        nodes[4].has_text = false;
+        for ([_][]const u8{ "word-break:normal !important", "word-break:break-all !important", "word-break:var(--unknown) !important",
+            "white-space:pre !important", "white-space:nowrap !important", "display:block !important" }) |refusal| {
+            var invalid = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{css, extra, "span.mw-broken-media{", refusal, "}"}), .screen); defer invalid.deinit(); context.styles = &invalid;
+            try std.testing.expect((try Harness.resolve(a, context)) == null);
+            context.styles = &styles;
+        }
+    }
+}
+
+
+test "observed Missing inherited wrapping proof checks the same interaction state and closed label graph" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const css = "span.mw-broken-media{display:inline-block;word-break:break-word}a{word-wrap:break-word}" ++
+        "a:hover span.mw-broken-media{word-break:normal}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    var nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "class", .value = "new" }, .{ .name = "href", .value = "/upload" }}, .has_text = false },
+        .{ .tag = "span", .parent = 4, .attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }}, .has_text = true },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+    };
+    const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+    for ([_]bool{ false, true }) |hover| {
+        const computed = (try observedFigureComputedNodes(a, context, .{ .link_subject = 4, .link_state = .{ .hover = hover } })).?;
+        try std.testing.expectEqual(!hover, try observedFigureMissingLabelWrappingKnown(a, context, computed));
+        nodes[5].has_text = null;
+        try std.testing.expect(!try observedFigureMissingLabelWrappingKnown(a, context, computed));
+        nodes[5].has_text = true;
+    }
+    const extra = try a.alloc(FigureObservedNode, nodes.len + 1);
+    @memcpy(extra[0..nodes.len], &nodes);
+    extra[nodes.len] = .{ .tag = "span", .parent = 4, .attributes = &.{}, .has_text = true };
+    var foreign = context; foreign.nodes = extra;
+    try std.testing.expect(!figureObservedContextValid(foreign));
+    try std.testing.expect(!try observedFigureMissingLabelWrappingKnown(a, foreign, &.{}));
+}
+
+
+test "observed Missing TH caption wrap aliases preserve only the exact computed break word geometry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const css = "html{font-family:sans-serif;color:#202122}figure{line-height:0;text-align:center}" ++
+        "figcaption{line-height:1.4em;word-break:break-word}a{color:#3366cc;text-decoration:none}";
+    var nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "dir", .value = "ltr" }, .{ .name = "lang", .value = "th" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "class", .value = "new" }, .{ .name = "href", .value = "/upload" }}, .has_text = false },
+        .{ .tag = "span", .parent = 4, .attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }}, .has_text = true },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+        .{ .tag = "a", .parent = 6, .attributes = &.{.{ .name = "class", .value = "extiw" }, .{ .name = "href", .value = "https://th.wikipedia.org/wiki/Ryakuji" }}, .has_text = true },
+    };
+    const Harness = struct {
+        fn resolve(alloc: std.mem.Allocator, current: FigureObservedContext, evaluation: ObservedFigureEvaluation) !?types.FigureMediaStrut {
+            const computed = (try observedFigureComputedNodes(alloc, current, evaluation)) orelse return null;
+            const fonts = (try observedFigureComputedFonts(alloc, current, computed)) orelse return null;
+            const colors = (try observedFigureComputedColors(alloc, current, computed, null)) orelse return null;
+            const backgrounds = (try observedFigureComputedBackgrounds(alloc, current, computed, colors)) orelse return null;
+            const caption_font = observedFigureFontAt(fonts, current.caption) orelse return null;
+            const line = observedFigureUsedLineHeight(try observedFigureLineHeightAt(alloc, current, computed, fonts, current.caption), caption_font.font_scale) orelse return null;
+            return observedFigureCaptionLinkGeometry(alloc, current, computed, fonts, backgrounds, 7, line);
+        }
+    };
+    var base = try parseForTargetAlloc(a, css, .screen); defer base.deinit();
+    var context: FigureObservedContext = .{ .styles = &base, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+    const baseline = (try Harness.resolve(a, context, .{})) orelse return error.TestUnexpectedResult;
+    // Genuine retained TH screen CSS response0@106918/response3@161566.
+    for ([_][]const u8{ ".mw-parser-output a{word-wrap:break-word}", ".mw-parser-output a{overflow-wrap:anywhere}",
+        ".mw-parser-output a{overflow-wrap:normal}", ".mw-parser-output a{word-wrap:break-word;overflow-wrap:normal}" }) |extra| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{css, extra}), .screen); defer styles.deinit(); context.styles = &styles;
+        const actual = (try Harness.resolve(a, context, .{})) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(observedFigureDataEqual(types.FigureMediaStrut, baseline, actual, 0));
+        for ([_][]const u8{ "word-break:normal", "word-break:break-all", "word-break:keep-all",
+            "white-space:pre", "white-space:nowrap", "line-height:2em", "display:block" }) |refusal| {
+            var bad = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{css, extra, "figcaption a{", refusal, "}"}), .screen); defer bad.deinit(); context.styles = &bad;
+            try std.testing.expect((try Harness.resolve(a, context, .{})) == null);
+        }
+        // Guaranteed-invalid var() is unset for this inherited property;
+        // the parent figcaption's certified break-word survives. This is a
+        // positive inheritance case, not an unknown computed-value refusal.
+        var inherited = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{css, extra, "figcaption a{word-break:var(--unknown)}"}), .screen); defer inherited.deinit(); context.styles = &inherited;
+        const inherited_geometry = (try Harness.resolve(a, context, .{})) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(observedFigureDataEqual(types.FigureMediaStrut, baseline, inherited_geometry, 0));
+        // A genuinely uncertain winning arm must still refuse; known invalid
+        // substitution cannot stand in for this source-selector uncertainty.
+        var uncertain = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{css, extra, "figcaption a:unknown-state{word-break:normal}"}), .screen); defer uncertain.deinit(); context.styles = &uncertain;
+        try std.testing.expect((try Harness.resolve(a, context, .{})) == null);
+        context.styles = &styles;
+        nodes[7].has_text = null;
+        try std.testing.expect((try Harness.resolve(a, context, .{})) == null);
+        nodes[7].has_text = true;
+        nodes[7].parent = 4;
+        try std.testing.expect((try Harness.resolve(a, context, .{})) == null);
+        nodes[7].parent = 6;
+    }
+    var dynamic = try parseForTargetAlloc(a, css ++ ".mw-parser-output a{word-wrap:break-word}figcaption a:hover{word-break:normal}", .screen); defer dynamic.deinit(); context.styles = &dynamic;
+    for ([_]bool{ false, true }) |hover| {
+        const result = try Harness.resolve(a, context, .{ .link_subject = 7, .link_state = .{ .hover = hover } });
+        try std.testing.expectEqual(!hover, result != null);
+    }
+    const extra_nodes = try a.alloc(FigureObservedNode, nodes.len + 1);
+    @memcpy(extra_nodes[0..nodes.len], &nodes);
+    extra_nodes[nodes.len] = .{ .tag = "span", .parent = 7, .attributes = &.{}, .has_text = true };
+    context.styles = &base; context.nodes = extra_nodes;
+    try std.testing.expect((try Harness.resolve(a, context, .{})) == null);
+}
+
+
+test "observed Figure operation reuse preserves complete Missing palette geometry and source refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Fixture = FigureOperationReuseTest;
+    const css = Fixture.missing_css ++ "figure{float:right}@media(max-width:639px){figure{float:none}}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    const context = Fixture.context(&styles, &Fixture.missing_nodes, true);
+    const reference = (try figureReuseReferenceMissing(a, context, 100, null)) orelse return error.TestUnexpectedResult;
+    var operation = ObservedFigureOperation.init(a, context); defer operation.deinit();
+    const actual = (try observedFigureMissingViewportPrepared(a, &operation, 100, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(observedFigureDataEqual(ObservedFigureMissingViewport, reference, actual, 0));
+    try std.testing.expectEqual(@as(usize, 1), actual.states.len);
+    try std.testing.expectEqual(@as(u32, 639), actual.states[0].max_width_px);
+    try std.testing.expectEqualStrings("#bf3c2c", actual.base.missing_paint.normal.foreground);
+    try std.testing.expectEqualStrings("#3366cc", actual.base.caption_paint.?.normal.foreground);
+    const full = (try resolveObservedMissingFigure(a, &.{context}, 100, actual.base.parent_font)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(observedFigureDataEqual(ObservedFigureMissingState, actual.base, full.geometry, 0));
+    try std.testing.expect(observedFigureDataEqual([]const types.FigureViewportState, actual.states, full.layout.viewport_states, 0));
+    for ([_][]const u8{
+        "figcaption a:hover:active{color:#112233}", "figcaption a:visited:focus{color:#112233}",
+        "@media(prefers-reduced-motion:reduce){figcaption a{color:red}}",
+        "@media(max-width:639px){figcaption{padding-bottom:10px}}", "span.mw-broken-media{white-space:pre}",
+        "figcaption a{--unknown:revert;word-break:var(--unknown)}", "figure::after{content:'visible'}",
+    }) |extra| {
+        var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{css, extra}), .screen); defer changed.deinit();
+        const altered = Fixture.context(&changed, &Fixture.missing_nodes, true);
+        var before_witness: ObservedMissingFigureWitness = .{}; var after_witness: ObservedMissingFigureWitness = .{};
+        try std.testing.expect((try figureReuseReferenceMissing(a, altered, 100, &before_witness)) == null);
+        try std.testing.expect((try observedFigureMissingViewport(a, altered, 100, &after_witness)) == null);
+        try std.testing.expectEqualStrings(before_witness.stage, after_witness.stage);
+    }
+}
+
+
+test "source-proved Missing anchor reuses sibling refutation without lending caption authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "class", .value = "client-nojs ve-not-available" }, .{ .name = "lang", .value = "th" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "https://example.org/upload" }, .{ .name = "class", .value = "new" }}, .has_text = false },
+        .{ .tag = "span", .parent = 4, .attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }, .{ .name = "data-width", .value = "100" }}, .has_text = true },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+        .{ .tag = "a", .parent = 6, .attributes = &.{.{ .name = "href", .value = "/wiki/Caption" }}, .has_text = true },
+    };
+    const Case = struct { selector: []const u8, pseudo: GeneratedFigurePseudo };
+    // Exact clauses from the retained TH alternative stylesheet. Both shell
+    // classes are supplied here only to avoid vacuous ancestor refutation.
+    for ([_]Case{
+        .{ .selector = ".client-nojs a.mw-editsection-visualeditor:first-of-type + .mw-editsection-divider + a::before", .pseudo = .before },
+        .{ .selector = ".ve-not-available a.mw-editsection-visualeditor:first-of-type + .mw-editsection-divider + a::before", .pseudo = .before },
+        .{ .selector = ".client-nojs a.mw-editsection-visualeditor:first-of-type + a::before", .pseudo = .before },
+        .{ .selector = ".ve-not-available a.mw-editsection-visualeditor:first-of-type + a::before", .pseudo = .before },
+        .{ .selector = ".client-nojs a:has(+ .mw-editsection-divider + a.mw-editsection-visualeditor:last-of-type)::after", .pseudo = .after },
+        .{ .selector = ".ve-not-available a:has(+ .mw-editsection-divider + a.mw-editsection-visualeditor:last-of-type)::after", .pseudo = .after },
+        .{ .selector = ".client-nojs a:has(+ a.mw-editsection-visualeditor:last-of-type)::after", .pseudo = .after },
+        .{ .selector = ".ve-not-available a:has(+ a.mw-editsection-visualeditor:last-of-type)::after", .pseudo = .after },
+    }) |case| {
+        const css = if (case.pseudo == .before) "{content:'[';content:'[' / '';margin-right:0.25em;margin-inline:0 0.25em}"
+            else "{content:']';content:']' / '';margin-left:0.25em;margin-inline:0.25em 0}";
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ case.selector, css }), .screen); defer styles.deinit();
+        const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+        nodes[4].known_next_element_sibling = null; nodes[4].known_no_previous_element_sibling = false;
+        const unknown = (try observedFigureDeclarations(a, context, 4, case.pseudo, .{})) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(unknown.len != 0 and unknown[0].uncertain);
+        // The opposite fact cannot discharge this relative direction.
+        if (case.pseudo == .before) nodes[4].known_next_element_sibling = 6 else nodes[4].known_no_previous_element_sibling = true;
+        const opposite = (try observedFigureDeclarations(a, context, 4, case.pseudo, .{})) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(opposite.len != 0 and opposite[0].uncertain);
+        nodes[4].known_next_element_sibling = 6; nodes[4].known_no_previous_element_sibling = true;
+        const discarded = (try observedFigureDeclarations(a, context, 4, case.pseudo, .{})) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 0), discarded.len);
+        var generic = (try observedStyleNodeDeclarations(a, &styles, &nodes, 4, null, case.pseudo, .{})) orelse return error.TestUnexpectedResult;
+        defer generic.deinit(a);
+        try std.testing.expect(generic.items.len != 0 and generic.items[0].uncertain);
+    }
+    var other = try parseForTargetAlloc(a, "a + a::before{content:'['}", .screen); defer other.deinit();
+    const context: FigureObservedContext = .{ .styles = &other, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+    // Caption A remains outside the selected anchor's source sibling witness.
+    const caption = (try observedFigureDeclarations(a, context, 7, .before, .{})) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(caption.len != 0 and caption[0].uncertain);
+    nodes[5].has_text = null;
+    try std.testing.expect(!figureObservedContextValid(context));
+    try std.testing.expect((try observedFigureDeclarations(a, context, 4, .before, .{})) == null);
+}
+
+
+test "source closed Missing caption links refute only incompatible immediate siblings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "class", .value = "client-nojs ve-not-available" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "class", .value = "new" }}, .has_text = false },
+        .{ .tag = "span", .parent = 4, .attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }}, .has_text = true },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true },
+        .{ .tag = "a", .parent = 6, .attributes = &.{.{ .name = "class", .value = "extiw" }}, .has_text = true },
+        .{ .tag = "a", .parent = 6, .attributes = &.{}, .has_text = true },
+        .{ .tag = "a", .parent = 6, .attributes = &.{}, .has_text = true },
+    };
+    const Case = struct { selector: []const u8, pseudo: GeneratedFigurePseudo };
+    // Exact eight clauses in retained TH alternative CSS3@7454/7864.
+    for ([_]Case{
+        .{ .selector = ".client-nojs a.mw-editsection-visualeditor:first-of-type + .mw-editsection-divider + a::before", .pseudo = .before },
+        .{ .selector = ".ve-not-available a.mw-editsection-visualeditor:first-of-type + .mw-editsection-divider + a::before", .pseudo = .before },
+        .{ .selector = ".client-nojs a.mw-editsection-visualeditor:first-of-type + a::before", .pseudo = .before },
+        .{ .selector = ".ve-not-available a.mw-editsection-visualeditor:first-of-type + a::before", .pseudo = .before },
+        .{ .selector = ".client-nojs a:has(+ .mw-editsection-divider + a.mw-editsection-visualeditor:last-of-type)::after", .pseudo = .after },
+        .{ .selector = ".ve-not-available a:has(+ .mw-editsection-divider + a.mw-editsection-visualeditor:last-of-type)::after", .pseudo = .after },
+        .{ .selector = ".client-nojs a:has(+ a.mw-editsection-visualeditor:last-of-type)::after", .pseudo = .after },
+        .{ .selector = ".ve-not-available a:has(+ a.mw-editsection-visualeditor:last-of-type)::after", .pseudo = .after },
+    }) |case| {
+        const css = if (case.pseudo == .before) "{content:'[';content:'[' / '';margin-right:0.25em;margin-inline:0 0.25em}"
+            else "{content:']';content:']' / '';margin-left:0.25em;margin-inline:0.25em 0}";
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{case.selector, css}), .screen); defer styles.deinit();
+        const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+        for (7..10) |subject| {
+            nodes[6].known_caption_link_siblings = false;
+            const unknown = (try observedFigureDeclarations(a, context, @intCast(subject), case.pseudo, .{})) orelse return error.TestUnexpectedResult;
+            try std.testing.expect(unknown.len != 0 and unknown[0].uncertain);
+            for (7..10) |index| {
+                nodes[index].known_previous_element_sibling = if (index == 7) null else @intCast(index - 1);
+                nodes[index].known_no_previous_element_sibling = index == 7;
+                nodes[index].known_next_element_sibling = if (index == 9) null else @intCast(index + 1);
+                nodes[index].known_no_next_element_sibling = index == 9;
+            }
+            nodes[6].known_caption_link_siblings = true;
+            const discarded = (try observedFigureDeclarations(a, context, @intCast(subject), case.pseudo, .{})) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 0), discarded.len);
+            var generic = (try observedStyleNodeDeclarations(a, &styles, &nodes, @intCast(subject), 5, case.pseudo, .{})) orelse return error.TestUnexpectedResult;
+            defer generic.deinit(a);
+            try std.testing.expect(generic.items.len != 0 and generic.items[0].uncertain);
+            const rule = styles.observed_figure_rules[0];
+            try std.testing.expect(rule.weak_selector != null);
+            const evaluation = observedFigureSiblingEvaluationValidated(context, .{});
+            const foreign = try a.dupe(FigureObservedNode, &nodes);
+            // The weak-prefix matcher can return known for necessary positives.
+            // The real rule boundary retains unsupported selector uncertainty.
+            try std.testing.expectEqual(ContainerSelectorMatch.unknown, observedStyleRuleMatch(rule, foreign, 5, @intCast(subject), case.pseudo, evaluation));
+            nodes[8].known_previous_element_sibling = null;
+            try std.testing.expect((try observedFigureDeclarations(a, context, @intCast(subject), case.pseudo, .{})) == null);
+            nodes[8].known_previous_element_sibling = 7;
+            nodes[9].known_no_next_element_sibling = false;
+            try std.testing.expect((try observedFigureDeclarations(a, context, @intCast(subject), case.pseudo, .{})) == null);
+            nodes[9].known_no_next_element_sibling = true;
+        }
+    }
+    for ([_]Case{ .{ .selector = "a + a::before", .pseudo = .before },
+        .{ .selector = "a:has(+ a)::after", .pseudo = .after },
+        .{ .selector = "span ~ a::before", .pseudo = .before } }) |case| {
+        var possible = try parseForTargetAlloc(a, try std.fmt.allocPrint(a, "{s}{{content:'x'}}", .{case.selector}), .screen); defer possible.deinit();
+        const context: FigureObservedContext = .{ .styles = &possible, .nodes = &nodes, .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+        const retained = (try observedFigureDeclarations(a, context, 8, case.pseudo, .{})) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(retained.len != 0 and retained[0].uncertain);
+    }
+}
+
+
+test "observed Missing plain and quote captions preserve media paint without requiring a caption action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const css = FigureOperationReuseTest.missing_css ++
+        "@media(prefers-reduced-motion:reduce){*,::before,::after{animation-delay:-0.01ms!important;animation-duration:0.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:0ms!important}}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    var nodes = [_]FigureObservedNode{
+        FigureOperationReuseTest.missing_nodes[0], FigureOperationReuseTest.missing_nodes[1],
+        FigureOperationReuseTest.missing_nodes[2], FigureOperationReuseTest.missing_nodes[3],
+        FigureOperationReuseTest.missing_nodes[4], FigureOperationReuseTest.missing_nodes[5],
+        FigureOperationReuseTest.missing_nodes[6],
+        .{ .tag = "i", .parent = 6, .attributes = &.{}, .has_text = true },
+        .{ .tag = "b", .parent = 6, .attributes = &.{}, .has_text = true },
+    };
+    const plain: FigureObservedContext = .{ .styles = &styles, .nodes = nodes[0..7], .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+    var quoted = plain; quoted.nodes = &nodes;
+    for ([_]FigureObservedContext{ plain, quoted }, 0..) |context, index| {
+        const viewport = (try observedFigureMissingViewport(a, context, 100, null)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 0), viewport.base.caption_link_count);
+        try std.testing.expect(viewport.base.caption_paint == null and viewport.base.caption_link_font == null);
+        try std.testing.expectEqual(@as(usize, if (index == 0) 0 else 2), viewport.base.caption_inline.nodes.len);
+        if (index == 1) {
+            try std.testing.expect(viewport.base.caption_inline.nodes[0].font.italic);
+            try std.testing.expect(viewport.base.caption_inline.nodes[1].font.bold);
+        }
+        try std.testing.expectEqualStrings("#bf3c2c", viewport.base.missing_paint.normal.foreground);
+        const resolved = (try resolveObservedMissingFigure(a, &.{ context, context }, 100, viewport.base.parent_font)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(resolved.layout.caption_link_paint == null);
+        try std.testing.expect(observedFigureDataEqual(types.FigureLinkPaint, viewport.base.missing_paint, resolved.geometry.missing_paint, 0));
+        for ([_][]const u8{ "figcaption{unknown-property:1}", "figcaption{display:none}", "@media(max-width:639px){figcaption{font-size:120%}}" }) |extra| {
+            var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ css, extra }), .screen); defer changed.deinit();
+            var alternate = context; alternate.styles = &changed;
+            try std.testing.expect((try resolveObservedMissingFigure(a, &.{ context, alternate }, 100, viewport.base.parent_font)) == null);
+        }
+    }
+    for ([_][]const u8{ "figcaption i{display:none}", "figcaption b{padding:1px}", "figcaption i::before{content:'extra'}", "figcaption b{animation-name:running}" }) |extra| {
+        var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ css, extra }), .screen); defer changed.deinit();
+        var alternate = quoted; alternate.styles = &changed;
+        try std.testing.expect((try observedFigureMissingViewport(a, alternate, 100, null)) == null);
+    }
+    nodes[8].parent = 7;
+    try std.testing.expect((try observedFigureMissingViewport(a, quoted, 100, null)) == null);
+    nodes[8].parent = 6; nodes[7].has_text = null;
+    try std.testing.expect((try observedFigureMissingViewport(a, quoted, 100, null)) == null);
+    nodes[7].has_text = false;
+    try std.testing.expect((try observedFigureMissingViewport(a, quoted, 100, null)) == null);
+}
+
+
+test "retained EL Missing nested bold local anchor and BR consume complete observed styles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try parseForTargetAlloc(a, ElMissingCaptionGraphTest.css, .screen); defer styles.deinit();
+    const context: FigureObservedContext = .{ .styles = &styles, .nodes = &ElMissingCaptionGraphTest.mixed_nodes,
+        .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+    const viewport = (try observedFigureMissingViewport(a, context, 600, null)) orelse return error.TestUnexpectedResult;
+    const resolved = (try resolveObservedMissingFigure(a, &.{context, context}, 600, viewport.base.parent_font)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), resolved.geometry.caption_link_count);
+    try std.testing.expect(resolved.geometry.caption_link_font == null);
+    try std.testing.expectEqual(@as(usize, 5), resolved.geometry.caption_inline.nodes.len);
+    const inline_nodes = resolved.geometry.caption_inline.nodes;
+    try std.testing.expect(!inline_nodes[0].font.bold and !inline_nodes[1].font.bold);
+    try std.testing.expect(inline_nodes[2].font.bold and inline_nodes[3].font.bold);
+    try std.testing.expect(!inline_nodes[4].font.bold and !inline_nodes[4].font.italic);
+    try std.testing.expectEqualStrings("#3366cc", resolved.geometry.caption_paint.?.normal.foreground);
+    try std.testing.expectEqualStrings("#bf3c2c", resolved.geometry.missing_paint.normal.foreground);
+    for ([_][]const u8{ "figcaption br{display:none}", "figcaption b{padding:1px}", "figcaption b a{font-size:120%}",
+        "figcaption br::before{content:'extra'}", "@media(max-width:639px){figcaption a{color:red}}" }) |extra| {
+        var alternate_styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ElMissingCaptionGraphTest.css, extra}), .screen); defer alternate_styles.deinit();
+        var alternate = context; alternate.styles = &alternate_styles;
+        try std.testing.expect((try resolveObservedMissingFigure(a, &.{context, alternate}, 600, viewport.base.parent_font)) == null);
+    }
+    for (0..5) |case| {
+        var nodes = ElMissingCaptionGraphTest.mixed_nodes;
+        switch (case) {
+            0 => nodes[10].parent = 7,
+            1 => nodes[11].attributes = &.{.{ .name = "style", .value = "display:none" }},
+            2 => nodes[11].has_text = null,
+            3 => nodes[9].has_text = null,
+            4 => nodes[9].tag = "span",
+            else => unreachable,
+        }
+        var changed = context; changed.nodes = &nodes;
+        try std.testing.expect((try observedFigureMissingViewport(a, changed, 600, null)) == null);
+    }
+}
+
+
+test "retained EL empty Missing caption preserves its box and refuses unknown or contradicted emptiness" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try parseForTargetAlloc(a, ElMissingCaptionGraphTest.css, .screen); defer styles.deinit();
+    const context: FigureObservedContext = .{ .styles = &styles, .nodes = &ElMissingCaptionGraphTest.empty_nodes,
+        .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+    const viewport = (try observedFigureMissingViewport(a, context, 180, null)) orelse return error.TestUnexpectedResult;
+    const resolved = (try resolveObservedMissingFigure(a, &.{context, context}, 180, viewport.base.parent_font)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(resolved.geometry.caption_paint == null and resolved.geometry.caption_link_font == null);
+    try std.testing.expectEqual(@as(usize, 0), resolved.geometry.caption_inline.nodes.len);
+    try std.testing.expectEqual(@as(usize, 0), resolved.geometry.caption_link_count);
+    try std.testing.expectEqual(@as(f32, 6), resolved.geometry.frame.caption_padding.bottom.value);
+    try std.testing.expectEqualStrings("#bf3c2c", resolved.geometry.missing_paint.normal.foreground);
+    for (0..3) |case| {
+        var nodes = ElMissingCaptionGraphTest.empty_nodes;
+        switch (case) {
+            0 => nodes[6].has_text = null,
+            1 => nodes[6].empty = null,
+            2 => nodes[6].empty = false,
+            else => unreachable,
+        }
+        var changed = context; changed.nodes = &nodes;
+        try std.testing.expect((try observedFigureMissingViewport(a, changed, 180, null)) == null);
+    }
+    var child_nodes = ElMissingCaptionGraphTest.empty_nodes ++ [_]FigureObservedNode{.{ .tag = "br", .parent = 6, .attributes = &.{}, .has_text = false, .empty = true }};
+    var changed = context; changed.nodes = &child_nodes;
+    try std.testing.expect((try observedFigureMissingViewport(a, changed, 180, null)) == null);
+    for ([_][]const u8{ "figcaption{display:none}", "figcaption::before{content:'not empty'}" }) |extra| {
+        var alternate_styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ElMissingCaptionGraphTest.css, extra}), .screen); defer alternate_styles.deinit();
+        changed = context; changed.styles = &alternate_styles;
+        try std.testing.expect((try resolveObservedMissingFigure(a, &.{context, changed}, 180, viewport.base.parent_font)) == null);
+    }
+}
+
+
+test "default Missing width uses CSS without a generated style and retains explicit width refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const css = ElMissingCaptionGraphTest.css ++
+        ".mw-broken-media[style]{color:red}.mw-broken-media:not([style]){color:green}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    var nodes = ElMissingCaptionGraphTest.empty_nodes;
+    const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes,
+        .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6, .media_kind = .missing };
+    const effect = observedMissingWidthEffect(context, 180) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(effect.generated == null);
+    const default_declarations = (try observedFigureDeclarations(a, context, 5, null, .{ .missing_width = effect.generated })) orelse return error.TestUnexpectedResult;
+    const default_color = try observedFigureColor(a, default_declarations, "color", .{ .complete = true }, null, null);
+    try std.testing.expect(!default_color.unresolved);
+    try std.testing.expectEqualStrings("#008000", default_color.value.?.value.?);
+    const preferred = try observedFigurePreferredWidth(a, default_declarations, .{ .complete = true }, .unknown);
+    try std.testing.expect(preferred == .known and preferred.known == 180);
+    // The existing imperative API still rejects default-size subjects.
+    try std.testing.expect((try observedFigureDeclarations(a, context, 5, null, .{ .missing_width = 180 })) == null);
+    try std.testing.expect(observedMissingWidthEffect(context, 181) == null);
+    nodes[3].attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }};
+    const explicit = observedMissingWidthEffect(context, 180) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?u32, 180), explicit.generated);
+    const explicit_declarations = (try observedFigureDeclarations(a, context, 5, null, .{ .missing_width = explicit.generated })) orelse return error.TestUnexpectedResult;
+    const explicit_color = try observedFigureColor(a, explicit_declarations, "color", .{ .complete = true }, null, null);
+    try std.testing.expect(!explicit_color.unresolved);
+    try std.testing.expectEqualStrings("#ff0000", explicit_color.value.?.value.?);
+    // Keep the explicit frame for the refusal cases. Ordinary stylesheet
+    // widths lose to its generated inline width; only winning overrides refute it.
+    var dominated_styles = try parseForTargetAlloc(a, ElMissingCaptionGraphTest.css ++ "span.mw-broken-media{width:181px}", .screen); defer dominated_styles.deinit();
+    var dominated = context; dominated.styles = &dominated_styles;
+    const dominated_view = (try observedFigureMissingViewport(a, dominated, 180, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f32, 180), dominated_view.base.label.width.value);
+    for ([_][]const u8{ "span.mw-broken-media{width:181px!important}", "span.mw-broken-media{width:auto!important}",
+        "span.mw-broken-media{width:var(--unproved)!important}", "@media(max-width:639px){span.mw-broken-media{width:179px!important}}" }) |extra| {
+        var changed_styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ElMissingCaptionGraphTest.css, extra}), .screen); defer changed_styles.deinit();
+        var changed = context; changed.styles = &changed_styles;
+        try std.testing.expect((try observedFigureMissingViewport(a, changed, 180, null)) == null);
+    }
+    nodes = ElMissingCaptionGraphTest.empty_nodes;
+    for ([_][]const u8{ "style", "data-height" }) |attribute| {
+        nodes[5].attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" },
+            .{ .name = "data-width", .value = "180" }, .{ .name = attribute, .value = "1" }};
+        try std.testing.expect(observedMissingWidthEffect(context, 180) == null);
+    }
+}
+
+
+test "observed Figure root custom value uses complete cascade without weakening generic uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const css = "html.selected,.unrelated .message{--line-height-content:1.5714285}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    var nodes = FigureOperationReuseTest.ready_nodes;
+    nodes[0].attributes = &.{.{ .name = "dir", .value = "ltr" }, .{ .name = "lang", .value = "ku" }, .{ .name = "class", .value = "selected" }};
+    try attachCustomProperties(&styles, &.{.{ .css = css, .base_url = "https://example.test/observed.css" }}, .{ .ancestors = &.{.{ .tag = "html", .classes = "selected", .root = true }} });
+    try std.testing.expect(styles.custom_properties.?.root_environment.get("--line-height-content") == .unknown);
+    nodes[0].custom_environment = styles.custom_properties.?.root_environment;
+    var context = FigureOperationReuseTest.context(&styles, &nodes, false);
+    const known = (try resolveObservedFigureRootCustomValue(a, context, "--line-height-content")) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(known == .known);
+    try std.testing.expectEqualStrings("1.5714285", known.known);
+    const retained = lifetime: {
+        var temporary = try parseForTargetAlloc(a, css, .screen); defer temporary.deinit();
+        const temporary_context = FigureOperationReuseTest.context(&temporary, &nodes, false);
+        break :lifetime (try resolveObservedFigureRootCustomValue(a, temporary_context, "--line-height-content")) orelse return error.TestUnexpectedResult;
+    };
+    try std.testing.expect(retained == .known);
+    try std.testing.expectEqualStrings("1.5714285", retained.known);
+    for ([_][]const u8{
+        "@media(max-width:600px){html.selected{--line-height-content:2}}",
+        "html.selected:hover{--line-height-content:2}",
+        "@media(prefers-reduced-motion:reduce){html.selected{--line-height-content:2}}",
+    }) |conditional| {
+        var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ css, conditional }), .screen); defer changed.deinit();
+        context.styles = &changed;
+        const unknown = (try resolveObservedFigureRootCustomValue(a, context, "--line-height-content")) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(unknown == .unknown);
+    }
+    context.styles = &styles;
+    context.root = 0;
+    try std.testing.expect((try resolveObservedFigureRootCustomValue(a, context, "--line-height-content")) == null);
+    context.root = 2;
+    try std.testing.expect((try resolveObservedFigureRootCustomValue(a, context, "font-size")) == null);
+}
+
+
+const ElMissingCaptionGraphTest = struct {
+    const empty_nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "lang", .value = "el" }, .{ .name = "dir", .value = "ltr" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-content-ltr mw-parser-output" }, .{ .name = "lang", .value = "el" }, .{ .name = "dir", .value = "ltr" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "class", .value = "mw-default-size" }, .{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }}, .has_text = false, .empty = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "//commons.wikimedia.org/wiki/Special:UploadWizard?uselang=el&wpDestFile=%CE%A0%CF%81%CE%BF%CF%86%CE%BF%CF%81%CE%B1%CE%B1" }, .{ .name = "class", .value = "new" }, .{ .name = "title", .value = "Αρχείο:Προφοραα" }}, .has_text = false, .empty = false },
+        .{ .tag = "span", .parent = 4, .attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }, .{ .name = "data-width", .value = "180" }}, .has_text = true, .empty = false },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = false, .empty = true },
+    };
+    const mixed_nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "lang", .value = "el" }, .{ .name = "dir", .value = "ltr" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-content-ltr mw-parser-output" }, .{ .name = "lang", .value = "el" }, .{ .name = "dir", .value = "ltr" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "class", .value = "mw-halign-left" }, .{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }}, .has_text = false, .empty = false },
+        .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "//commons.wikimedia.org/wiki/Special:UploadWizard?uselang=el&wpDestFile=1000_Drachmen_(1987)_-_Vorderseite.jpg" }, .{ .name = "class", .value = "new" }, .{ .name = "title", .value = "Αρχείο:1000 Drachmen (1987) - Vorderseite.jpg" }}, .has_text = false, .empty = false },
+        .{ .tag = "span", .parent = 4, .attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }, .{ .name = "data-width", .value = "600" }}, .has_text = true, .empty = false },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = true, .empty = false },
+        .{ .tag = "a", .parent = 6, .attributes = &.{.{ .name = "href", .value = "/wiki/%CE%B4%CF%81%CE%B1%CF%87%CE%BC%CE%AD%CF%82" }, .{ .name = "title", .value = "δραχμές" }}, .has_text = true, .empty = false },
+        .{ .tag = "a", .parent = 6, .attributes = &.{.{ .name = "href", .value = "/wiki/%CF%80%CE%BB%CE%B7%CF%81%CF%89%CF%84%CE%AD%CE%BF%CF%82" }, .{ .name = "title", .value = "πληρωτέος" }}, .has_text = true, .empty = false },
+        .{ .tag = "b", .parent = 6, .attributes = &.{}, .has_text = true, .empty = false },
+        .{ .tag = "a", .parent = 9, .attributes = &.{.{ .name = "href", .value = "/wiki/%CE%B5%CE%BC%CF%86%CE%AC%CE%BD%CE%B9%CF%83%CE%B7" }, .{ .name = "title", .value = "εμφάνιση" }}, .has_text = true, .empty = false },
+        .{ .tag = "br", .parent = 6, .attributes = &.{}, .has_text = false, .empty = true },
+    };
+    const css = "html{font-family:sans-serif;color:#202122}" ++
+        "figure{display:table;text-align:center;border-collapse:collapse;line-height:0;margin:0 auto 0.5em;border:1px solid #c8ccd1;border-bottom:0;background:#f8f9fa}" ++
+        "figcaption{display:table-caption;caption-side:bottom;background-color:inherit;line-height:1.4em;word-break:break-word;text-align:start;padding:0 6px 6px;border:1px solid #c8ccd1;border-top:0;font-size:88.4%}" ++
+        "a{color:#3366cc;text-decoration:none}a.new{color:#bf3c2c}" ++
+        "span.mw-broken-media{display:inline-block;line-height:1.6em;word-break:break-word;width:180px}";
+};
+
+
+test "closed Missing Figure coverage delegates only positive Figure domains and preserves legacy refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var parent = try parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    for ([_][]const u8{
+        "figure [data-mw-tmh][data-mw-tmh][data-mw-tmh]{border:0}",
+        "figure .mw-tmh-player.mw-file-element.mw-file-element{border:0}",
+        ".mw-body-content figure[typeof~='mw:File/Thumb'] > a{border:0}",
+        "figure{border:1px solid red}figure > figcaption::before{content:'visible'}",
+    }) |css| {
+        var selected = try joinPageSourcesAlloc(a, &parent, &.{.{ .css = css, .base_url = "" }}, &.{}); defer selected.deinit();
+        const proof: ClosedMissingFigureProof = .{ .styles = &selected, .source = "closed source", .root = &root, .operations = 1 };
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerIn(a, &root)) != null);
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerWithFigureObligationsIn(a, &root, proof, null)) == null);
+        var wrong = proof; wrong.operations = 0;
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerWithFigureObligationsIn(a, &root, wrong, null)) != null);
+        wrong = proof; wrong.styles = &parent;
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerWithFigureObligationsIn(a, &root, wrong, null)) != null);
+    }
+    // Delegation is an enforced constructor obligation, not a general no-match
+    // rule. Relationships which can leave a Figure remain generic refusals.
+    for ([_][]const u8{
+        "figure + div{border:0}", "figure ~ div{border:0}", ":not(figure) a{border:0}",
+        ":is(figure,div) a{border:0}", "[data-note='figure'] a{border:0}",
+        "div{border:0}", "figure:has(+div){border:0}",
+    }) |css| {
+        var selected = try joinPageSourcesAlloc(a, &parent, &.{.{ .css = css, .base_url = "" }}, &.{}); defer selected.deinit();
+        const proof: ClosedMissingFigureProof = .{ .styles = &selected, .source = "closed source", .root = &root, .operations = 1 };
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerWithFigureObligationsIn(a, &root, proof, null)) != null);
+    }
+}
+
+test "observed Figure normal body basis preserves HTML rem initial em and physical px" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Fixture = FigureOperationReuseTest;
+    for ([_]struct { value: []const u8, scale: f32 }{
+        .{ .value = "1em", .scale = 1 },
+        .{ .value = "1rem", .scale = 8.0 / 7.0 },
+        .{ .value = "initial", .scale = 32.0 / 35.0 },
+    }) |case| {
+        const css = try std.fmt.allocPrint(a,
+            "html{{font-family:sans-serif;font-size:125%}}body{{font-size:0.875rem}}figcaption{{font-size:{s};line-height:1.5}}", .{case.value});
+        var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+        const context = Fixture.context(&styles, &Fixture.missing_nodes, true);
+        const computed = (try observedFigureComputedNodes(a, context, .{})) orelse return error.TestUnexpectedResult;
+        const fonts = (try observedFigureComputedFonts(a, context, computed)) orelse return error.TestUnexpectedResult;
+        // The source root is independently derived from HTML125% x body0.875rem.
+        try std.testing.expectEqual(@as(f32, 1.09375), fonts.source_root_scale);
+        try std.testing.expectEqual(@as(f32, 1), observedFigureFontAt(fonts, context.root).?.font_scale);
+        const caption = observedFigureFontAt(fonts, context.caption) orelse return error.TestUnexpectedResult;
+        try std.testing.expectApproxEqAbs(case.scale, caption.font_scale, @as(f32, 0.000001));
+        try std.testing.expectEqualStrings("th", caption.language);
+        try std.testing.expect(caption.direction == .ltr and !caption.bold and !caption.italic and !caption.code and caption.font_features == null);
+        const line = observedFigureUsedLineHeight(try observedFigureLineHeightAt(a, context, computed, fonts, context.caption), caption.font_scale) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(line.unit == .em);
+        try std.testing.expectApproxEqAbs(case.scale * 1.5, line.value, @as(f32, 0.000001));
+        const relative = observedFigurePhysicalLength("2em", caption.font_scale) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(relative.unit == .em);
+        try std.testing.expectApproxEqAbs(case.scale * 2, relative.value, @as(f32, 0.000001));
+        try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 17 }, observedFigurePhysicalLength("17px", caption.font_scale).?);
+        try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 17 }, observedFigureUsedLineHeight(.{ .length = .{ .unit = .px, .value = 17 } }, caption.font_scale).?);
+    }
+}
+
+test "observed Figure normal body basis resolves Missing and Ready with independent native origin" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Fixture = FigureOperationReuseTest;
+    const assets = &[_]struct { url: []const u8, graphic: types.FigureMediaGraphic }{};
+    const missing_native: types.FigureMediaStrut = .{ .font_scale = 1, .language = "th", .direction = .ltr };
+    const ready_native: types.FigureMediaStrut = .{ .font_scale = 1, .language = "de", .direction = .ltr };
+    for ([_]struct { css: []const u8, root: f32 }{
+        .{ .css = "body{font-size:0.875rem}", .root = 0.875 },
+        .{ .css = "body{font-size:1rem}", .root = 1 },
+    }) |case| {
+        var missing_styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{Fixture.missing_css, case.css}), .screen); defer missing_styles.deinit();
+        const missing_context = Fixture.context(&missing_styles, &Fixture.missing_nodes, true);
+        const missing = (try resolveObservedMissingFigure(a, &.{missing_context, missing_context}, 100, missing_native)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(case.root, missing.geometry.source_root_scale);
+        try std.testing.expectEqualDeep(missing_native, missing.geometry.parent_font);
+        try std.testing.expectEqual(@as(f32, 1), missing.geometry.label.font.font_scale);
+        try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 100 }, missing.geometry.label.width);
+        try std.testing.expectEqualDeep(types.StyleLength{ .unit = .em, .value = 1.6 }, missing.geometry.label.line_height);
+        try std.testing.expectApproxEqAbs(@as(f32, 0.884), missing.geometry.frame.caption_font.font_scale, @as(f32, 0.000001));
+        try std.testing.expectApproxEqAbs(@as(f32, 1.2376), missing.geometry.frame.caption_line_height.value, @as(f32, 0.000001));
+        try std.testing.expect(missing.geometry.frame.caption_line_height.unit == .em);
+        try std.testing.expectEqualDeep(types.StyleLength{ .unit = .em, .value = 0.5 }, missing.geometry.frame.wrapper.margin_values.?.bottom.length);
+        try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 1 }, missing.geometry.frame.table_border.top.solid.width);
+        try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 6 }, missing.geometry.frame.caption_padding.bottom);
+        var ready_styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{Fixture.ready_css, case.css}), .screen); defer ready_styles.deinit();
+        const ready_context = Fixture.context(&ready_styles, &Fixture.ready_nodes, false);
+        const ready = (try resolveObservedReadyFigure(a, &.{ready_context, ready_context}, 190, ready_native, assets)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(case.root, ready.geometry.source_root_scale);
+        try std.testing.expectEqualDeep(ready_native, ready.geometry.parent_font);
+        try std.testing.expectEqual(@as(f32, 1), ready.layout.media.strut.font_scale);
+        try std.testing.expectApproxEqAbs(@as(f32, 0.884), ready.geometry.frame.caption_font.font_scale, @as(f32, 0.000001));
+    }
+}
+
+test "observed Figure normal body basis retains raw root state identity and local parent refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Fixture = FigureOperationReuseTest;
+    const native: types.FigureMediaStrut = .{ .font_scale = 1, .language = "th", .direction = .ltr };
+    var first = try parseForTargetAlloc(a, Fixture.missing_css ++ "body{font-size:0.875rem}", .screen); defer first.deinit();
+    var second = try parseForTargetAlloc(a, Fixture.missing_css ++ "body{font-size:1rem}", .screen); defer second.deinit();
+    const context = Fixture.context(&first, &Fixture.missing_nodes, true);
+    const other = Fixture.context(&second, &Fixture.missing_nodes, true);
+    // Their normalized descendants agree, but independent source roots do not.
+    try std.testing.expect((try resolveObservedMissingFigure(a, &.{context, other}, 100, native)) == null);
+    for ([_][]const u8{
+        "body{font-size:0}",
+        "body{font-size:0.875rem}@media(max-width:639px){body{font-size:1rem}}",
+        "body{font-size:0.875rem}body:hover{font-size:1rem}",
+    }) |extra| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{Fixture.missing_css, extra}), .screen); defer styles.deinit();
+        try std.testing.expect((try resolveObservedMissingFigure(a, &.{Fixture.context(&styles, &Fixture.missing_nodes, true)}, 100, native)) == null);
+    }
+    var foreign = native; foreign.font_scale = 2;
+    try std.testing.expect((try resolveObservedMissingFigure(a, &.{context}, 100, foreign)) == null);
+    foreign = native; foreign.direction = .rtl;
+    try std.testing.expect((try resolveObservedMissingFigure(a, &.{context}, 100, foreign)) == null);
+    foreign = native; foreign.language = "de";
+    try std.testing.expect((try resolveObservedMissingFigure(a, &.{context}, 100, foreign)) == null);
+    foreign = native; foreign.font_features = .seven_on;
+    try std.testing.expect((try resolveObservedMissingFigure(a, &.{context}, 100, foreign)) == null);
+    var local_nodes: [Fixture.missing_nodes.len + 1]FigureObservedNode = undefined;
+    @memcpy(local_nodes[0..3], Fixture.missing_nodes[0..3]);
+    local_nodes[3] = .{ .tag = "div", .parent = 2, .attributes = &.{.{ .name = "class", .value = "local-parent" }} };
+    for (Fixture.missing_nodes[3..], 4..) |node, index| {
+        local_nodes[index] = node;
+        if (node.parent) |parent| local_nodes[index].parent = if (parent >= 2) parent + 1 else parent;
+    }
+    var local_styles = try parseForTargetAlloc(a, Fixture.missing_css ++ "body{font-size:0.875rem}.local-parent{font-size:200%}", .screen); defer local_styles.deinit();
+    var local_context: FigureObservedContext = .{ .styles = &local_styles, .nodes = &local_nodes, .root = 2, .frame = 4, .anchor = 5, .media = 6, .caption = 7, .media_kind = .missing };
+    const computed = (try observedFigureComputedNodes(a, local_context, .{})) orelse return error.TestUnexpectedResult;
+    const fonts = (try observedFigureComputedFonts(a, local_context, computed)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f32, 0.875), fonts.source_root_scale);
+    try std.testing.expectEqual(@as(f32, 2), observedFigureFontAt(fonts, 3).?.font_scale);
+    try std.testing.expect((try resolveObservedMissingFigure(a, &.{local_context}, 100, native)) == null);
+    local_context.root = 3;
+    try std.testing.expect(!figureObservedContextValid(local_context));
+}
+
+
+test "complete ancestor IDs refute only necessary positive ancestor constraints" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var global = try parseForTargetAlloc(a, "", .screen); defer global.deinit();
+    const css = "#contentSub > div:not(:empty){font-size:var(--font-size-small,0.875rem);color:red;margin:8px 0 0}";
+    var selected = try joinPageSourcesAlloc(a, &global, &.{}, &.{.{ .css = css, .base_url = "" }}); defer selected.deinit();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    var element: TextElement = .{ .tag = "div", .classes = "printNav", .page_style_root = &root,
+        .complete_ancestor_ids = "content bodyContent mw-content-text" };
+    try std.testing.expect((try selected.resolveFontSizeIn(a, &element, "", null)) == null);
+    const rules = try selected.containerRuleMatchesIn(a, &element); defer a.free(rules.rules);
+    try std.testing.expect(!rules.unresolved and rules.rules.len == 0);
+    // A potential-ancestor marker cannot borrow the selected subject's IDs.
+    try std.testing.expect((try selected.pageAncestorEffectBlockerIn(a, &element)) != null);
+    for ([_]?[]const u8{ null, "contentSub", "content contentSub bodyContent" }) |ids| {
+        element.complete_ancestor_ids = ids;
+        try std.testing.expect((try selected.resolveFontSizeIn(a, &element, "", null)).? == .unknown);
+    }
+    element.complete_ancestor_ids = "contentsub";
+    try std.testing.expect((try selected.resolveFontSizeIn(a, &element, "", null)) == null);
+    element.complete_ancestor_ids = "";
+    var builder: Builder = .{ .a = a };
+    for ([_][]const u8{ ":is(#contentSub,.other) > div", ":not(#contentSub) div", "#contentSub + div", "#contentSub ~ div",
+        "#contentSub\\31 div", "#contentSub > div:is(.a,.b)", "#contentSub > div:not(:empty]", "#contentSub,div", "[id=contentSub] > div", "#contentSub > > div" }) |selector| {
+        try std.testing.expectEqual(@as(usize, 0), (try builder.textNecessaryAncestorIds(selector)).len);
+    }
+    const terminal_only = try builder.textNecessaryAncestorIds("div#contentSub:not(:empty)");
+    try std.testing.expectEqual(@as(usize, 0), terminal_only.len);
+    // A present ID never grants an unsupported predicate or an ancestor edge.
+    const fallback = try builder.uncertainTextSelector("#contentSub > div:not(:empty)");
+    element.complete_ancestor_ids = "contentSub";
+    try std.testing.expect(fallback.matchIn(&element, true) == .unknown);
+}
+
+
+
+test "table auto margins preserve actual RU declaration independent sides cascade and old numeric projection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const literal = "clear:none;margin:0.2em auto;width:70%;border-collapse:collapse;";
+    const actual = try resolveInlineTableAlloc(a, literal);
+    try std.testing.expect(!actual.unresolved);
+    const style = actual.style.?;
+    try std.testing.expect(style.margins == null);
+    try std.testing.expectEqual(types.BorderCollapse.collapse, style.collapse.?);
+    try std.testing.expectEqual(types.FigureClear.none, style.clear.?);
+    try std.testing.expectEqualDeep(types.StyleWidth{ .unit = .percent, .value = 70 }, style.width.?);
+    const margins = style.margin_values.?;
+    try std.testing.expect(margins.left == .auto and margins.right == .auto);
+    try std.testing.expectEqualDeep(types.StyleLength{ .unit = .em, .value = 0.2 }, margins.top.length);
+    try std.testing.expectEqualDeep(margins.top, margins.bottom);
+    const overridden = try resolveInlineTableAlloc(a, "margin:2px auto;margin-left:3px!important;margin-left:auto;margin-right:0");
+    try std.testing.expect(!overridden.unresolved);
+    try std.testing.expect(overridden.style.?.margin_values == null);
+    try std.testing.expectEqualDeep(types.StyleEdges{ .top = .{ .unit = .px, .value = 2 }, .right = .{ .unit = .px, .value = 0 },
+        .bottom = .{ .unit = .px, .value = 2 }, .left = .{ .unit = .px, .value = 3 } }, overridden.style.?.margins.?);
+    var profile = try parseAlloc(a, ".x{margin:2px auto}.x{margin-left:4px!important}"); defer profile.deinit();
+    const inherited = try profile.resolveTable(a, 0, "x", null, "margin-left:8px");
+    try std.testing.expect(!inherited.unresolved);
+    try std.testing.expectEqual(@as(f32, 4), inherited.style.?.margin_values.?.left.length.value);
+    try std.testing.expect(inherited.style.?.margin_values.?.right == .auto);
+}
+
+test "automatic table margins retain unknown invalid and unsupported edge barriers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_][]const u8{ "margin:auto", "margin:auto 0", "margin:-1px auto", "margin:1px auto;margin-left:10%",
+        "margin:1px auto;margin-top:var(--unknown)", "margin:1px auto;margin-left:inherit" }) |css|
+        try std.testing.expect((try resolveInlineTableAlloc(a, css)).unresolved);
+    for ([_][]const u8{ "0x1p0px", "1_0px", "1 px" }) |bad| {
+        const css = try std.fmt.allocPrint(a, "margin:2px auto;margin-top:{s}", .{bad});
+        const selected = try resolveInlineTableAlloc(a, css);
+        // Invalid grammar cannot replace the earlier valid shorthand winner.
+        try std.testing.expect(!selected.unresolved);
+        try std.testing.expectEqual(@as(f32, 2), selected.style.?.margin_values.?.top.length.value);
+    }
+    var conditional = try parseAlloc(a, ".x{margin:2px auto}@media print{.x{margin-left:3px}}"); defer conditional.deinit();
+    try std.testing.expect((try conditional.resolveTable(a, 0, "x", null, "")).unresolved);
+}
+
+
+test "observed table containing direction folds actual full parent cascade independently of table own direction" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try parseForTargetAlloc(a, "table{direction:rtl}", .screen); defer styles.deinit();
+    var nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "div", .parent = 2, .attributes = &.{} },
+        .{ .tag = "table", .parent = 3, .attributes = &.{.{ .name = "dir", .value = "rtl" }} },
+    };
+    var contexts = [_]TableContainingDirectionContext{.{ .styles = &styles, .nodes = &nodes, .root = 2, .table = 4 }};
+    try std.testing.expectEqual(@as(?types.TableContainingDirection, .ltr), try resolveObservedTableContainingDirection(a, &contexts, null));
+    nodes[3].attributes = &.{.{ .name = "dir", .value = "rtl" }};
+    try std.testing.expectEqual(@as(?types.TableContainingDirection, .rtl), try resolveObservedTableContainingDirection(a, &contexts, null));
+    try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, .ltr)) == null);
+    for ([_][]const u8{ "auto", "", "sideways" }) |value| {
+        nodes[3].attributes = &.{.{ .name = "dir", .value = value }};
+        try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, null)) == null);
+    }
+    nodes[3].attributes = &.{.{ .name = "dir", .value = "rtl" }};
+    var reset = try parseForTargetAlloc(a, "div{direction:initial}", .screen); defer reset.deinit(); contexts[0].styles = &reset;
+    try std.testing.expectEqual(@as(?types.TableContainingDirection, .ltr), try resolveObservedTableContainingDirection(a, &contexts, null));
+    var all = try parseForTargetAlloc(a, "div{all:initial;display:block;position:static}", .screen); defer all.deinit(); contexts[0].styles = &all;
+    try std.testing.expectEqual(@as(?types.TableContainingDirection, .rtl), try resolveObservedTableContainingDirection(a, &contexts, null));
+    for ([_][]const u8{ "initial", "inherit", "unset", "revert" }) |wide| {
+        const css = try std.fmt.allocPrint(a, "div{{all:{s};display:block;position:static}}", .{wide});
+        var excluded = try parseForTargetAlloc(a, css, .screen); defer excluded.deinit(); contexts[0].styles = &excluded;
+        try std.testing.expectEqual(@as(?types.TableContainingDirection, .rtl), try resolveObservedTableContainingDirection(a, &contexts, null));
+    }
+    nodes[3].attributes = &.{};
+    nodes[0].attributes = &.{.{ .name = "lang", .value = "ru" }};
+    var foreign_language = try parseForTargetAlloc(a, ":lang(ar),:lang(fa),:lang(ps),:lang(ur),:lang(syc),:lang(he){direction:rtl}", .screen);
+    defer foreign_language.deinit(); contexts[0].styles = &foreign_language;
+    try std.testing.expectEqual(@as(?types.TableContainingDirection, .ltr), try resolveObservedTableContainingDirection(a, &contexts, null));
+    for ([_][]const u8{ "ar", "", "ru--Latn" }) |language| {
+        nodes[3].attributes = &.{.{ .name = "lang", .value = language }};
+        try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, null)) == null);
+    }
+    nodes[3].attributes = &.{};
+    nodes[0].attributes = &.{};
+    try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, null)) == null);
+    // A lexical xml:lang attribute has no HTML language-processing effect.
+    // Every ancestor can retain RTL before the local dir hint conflicts with
+    // the still-potential Arabic rule; the fake ru value must not refute it.
+    nodes[0].attributes = &.{.{ .name = "lang", .value = "ar" }, .{ .name = "dir", .value = "rtl" }};
+    nodes[3].attributes = &.{.{ .name = "dir", .value = "ltr" }, .{ .name = "xml:lang", .value = "ru" }};
+    var arabic = try parseForTargetAlloc(a, ":lang(ar){direction:rtl}", .screen); defer arabic.deinit(); contexts[0].styles = &arabic;
+    try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, null)) == null);
+    try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, .ltr)) == null);
+    contexts[0].styles = &styles;
+    try std.testing.expectEqual(@as(?types.TableContainingDirection, .ltr), try resolveObservedTableContainingDirection(a, &contexts, null));
+    nodes[0].attributes = &.{};
+    for ([_][]const u8{ "display:contents;direction:rtl", "display:inline;direction:rtl", "display:inline-block", "display:none", "display:flex", "position:absolute", "position:fixed", "position:sticky" }) |css| {
+        nodes[3].attributes = &.{.{ .name = "style", .value = css }};
+        try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, null)) == null);
+    }
+    nodes[3].attributes = &.{.{ .name = "style", .value = "display:flow-root;position:relative;direction:rtl" }};
+    try std.testing.expectEqual(@as(?types.TableContainingDirection, .rtl), try resolveObservedTableContainingDirection(a, &contexts, null));
+    nodes[3].attributes = &.{};
+    nodes[1].attributes = &.{.{ .name = "style", .value = "display:none" }};
+    try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, null)) == null);
+    nodes[1].attributes = &.{};
+    for ([_][]const u8{ "position:absolute", "position:fixed", "position:relative", "display:contents", "display:inline-table" }) |css| {
+        nodes[4].attributes = &.{.{ .name = "style", .value = css }};
+        try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, null)) == null);
+    }
+    nodes[4].attributes = &.{.{ .name = "dir", .value = "rtl" }};
+    var uncertain_box = try parseForTargetAlloc(a, "div:hover{display:contents}", .screen); defer uncertain_box.deinit(); contexts[0].styles = &uncertain_box;
+    try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, null)) == null);
+    // The real Vector ancestor is block below 1120 and grid above 1120. Both
+    // alternatives are visible; neither replaces this table's nearer DIV box.
+    var responsive_ancestor = try parseForTargetAlloc(a,
+        "html{direction:rtl}@media screen and (min-width:1120px){body{display:grid;position:relative}}", .screen);
+    defer responsive_ancestor.deinit(); contexts[0].styles = &responsive_ancestor;
+    try std.testing.expectEqual(@as(?types.TableContainingDirection, .rtl), try resolveObservedTableContainingDirection(a, &contexts, null));
+    for ([_][]const u8{
+        "@media(min-width:1120px){body{display:none}}",
+        "@media(min-width:1120px){div{display:grid}}",
+        "@media(min-width:1120px){body{display:grid}}div{display:inherit}",
+        "@media(min-width:1120px){body{position:absolute}}div{position:inherit}",
+        "body{display:var(--layout)}body:hover{--layout:grid}",
+    }) |css| {
+        var refused = try parseForTargetAlloc(a, css, .screen); defer refused.deinit(); contexts[0].styles = &refused;
+        try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, null)) == null);
+    }
+    nodes[0].attributes = &.{.{ .name = "dir", .value = "rtl" }};
+    nodes[4].attributes = &.{.{ .name = "style", .value = "width:70%" }};
+    const expected_table: types.TableStyle = .{ .width = .{ .unit = .percent, .value = 70 } };
+    var responsive_table = try parseForTargetAlloc(a,
+        "@media all and(max-width:calc(640px - 1px)){table{display:block;overflow:auto;max-width:100%;width:fit-content}}", .screen);
+    defer responsive_table.deinit(); contexts[0].styles = &responsive_table;
+    // Both CSS display modes retain this static table's containing parent.
+    // That direction fact must not certify the unrepresented viewport policy.
+    try std.testing.expectEqual(@as(?types.TableContainingDirection, .rtl), try resolveObservedTableContainingDirection(a, &contexts, null));
+    const responsive = (try resolveObservedTableContainingDirectionForStyle(a, &contexts, null, expected_table)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(types.TableContainingDirection.rtl, responsive.direction);
+    try std.testing.expect(!responsive.responsive_geometry_accounted);
+    nodes[3].attributes = &.{.{ .name = "class", .value = "noresize" }};
+    var noresize = try parseForTargetAlloc(a,
+        "@media all and(max-width:calc(640px - 1px)){table{display:block;overflow:auto;max-width:100%;width:fit-content}.noresize table{display:table}}", .screen);
+    defer noresize.deinit(); contexts[0].styles = &noresize;
+    const display_restored = (try resolveObservedTableContainingDirectionForStyle(a, &contexts, null, expected_table)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!display_restored.responsive_geometry_accounted);
+    nodes[3].attributes = &.{};
+    for ([_][]const u8{ "table{display:block}", "table{overflow:auto}", "table{max-width:100%}", "table{width:fit-content!important}" }) |css| {
+        var unrepresented = try parseForTargetAlloc(a, css, .screen); defer unrepresented.deinit(); contexts[0].styles = &unrepresented;
+        try std.testing.expectEqual(@as(?types.TableContainingDirection, .rtl), try resolveObservedTableContainingDirection(a, &contexts, null));
+        const result = (try resolveObservedTableContainingDirectionForStyle(a, &contexts, null, expected_table)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!result.responsive_geometry_accounted);
+    }
+    contexts[0].styles = &styles;
+    const ordinary = (try resolveObservedTableContainingDirectionForStyle(a, &contexts, null, expected_table)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(ordinary.responsive_geometry_accounted);
+    nodes[0].attributes = &.{};
+    nodes[4].attributes = &.{.{ .name = "dir", .value = "rtl" }};
+    var inherited = try parseForTargetAlloc(a, "html{--flow:rtl;direction:var(--flow)}div{direction:inherit}", .screen); defer inherited.deinit(); contexts[0].styles = &inherited;
+    try std.testing.expectEqual(@as(?types.TableContainingDirection, .rtl), try resolveObservedTableContainingDirection(a, &contexts, null));
+    for ([_][]const u8{ "body:hover{direction:rtl}", "@media(max-width:500px){body{direction:rtl}}", "body{direction:var(--flow)}body:hover{--flow:rtl}", "body{direction:auto}", "body{direction:revert}", "body{animation-name:flow}", "body{transition:direction 1s}" }) |css| {
+        var unknown = try parseForTargetAlloc(a, css, .screen); defer unknown.deinit(); contexts[0].styles = &unknown;
+        try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, null)) == null);
+    }
+    var invalid_variable = try parseForTargetAlloc(a, "body{direction:var(--missing)}", .screen); defer invalid_variable.deinit(); contexts[0].styles = &invalid_variable;
+    try std.testing.expectEqual(@as(?types.TableContainingDirection, .ltr), try resolveObservedTableContainingDirection(a, &contexts, null));
+    contexts[0].styles = &styles;
+    const disagree = [_]TableContainingDirectionContext{ contexts[0], .{ .styles = &inherited, .nodes = &nodes, .root = 2, .table = 4 } };
+    try std.testing.expect((try resolveObservedTableContainingDirection(a, &disagree, null)) == null);
+    nodes[1].parent = null;
+    try std.testing.expect((try resolveObservedTableContainingDirection(a, &contexts, null)) == null);
+}
+
+
+test "observed table margins must agree with pending physical placement through priority variables resets and conditions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "dir", .value = "ltr" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "table", .parent = 2, .attributes = &.{.{ .name = "style", .value = "margin:0 auto" }} },
+    };
+    const zero: types.ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    const expected: types.TableStyle = .{ .margin_values = .{ .top = zero, .right = .auto, .bottom = zero, .left = .auto } };
+    const cases = [_]struct { css: []const u8, agrees: bool }{
+        .{ .css = "", .agrees = true },
+        .{ .css = "table{margin-left:12px}", .agrees = true },
+        .{ .css = "table{margin-left:auto!important;margin-top:initial!important}", .agrees = true },
+        .{ .css = "table{--edge:auto;margin-left:var(--edge)!important}", .agrees = true },
+        .{ .css = "table{margin-left:12px!important}", .agrees = false },
+        .{ .css = "table{margin:initial!important}", .agrees = false },
+        .{ .css = "table{--edge:12px;margin-left:var(--edge)!important}", .agrees = false },
+        .{ .css = "table{margin-left:var(--missing)!important}", .agrees = false },
+        .{ .css = "table{margin-left:inherit!important}", .agrees = false },
+        .{ .css = "table{margin-inline-start:12px!important}", .agrees = false },
+        .{ .css = "@media(max-width:400px){table{margin-left:12px!important}}", .agrees = false },
+    };
+    for (cases) |case| {
+        var styles = try parseForTargetAlloc(a, case.css, .screen); defer styles.deinit();
+        const contexts = [_]TableContainingDirectionContext{.{ .styles = &styles, .nodes = &nodes, .root = 2, .table = 3 }};
+        const result = (try resolveObservedRootTableContainingDirection(a, &contexts, null, expected, false)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(types.TableContainingDirection.ltr, result.direction);
+        try std.testing.expectEqual(case.agrees, result.responsive_geometry_accounted);
+    }
+}
+
+
+test "observed table generated SECTION ancestors retain cascade and refuse unrepresented geometry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "section", .parent = 2, .attributes = &.{.{ .name = "id", .value = "outer" }} },
+        .{ .tag = "section", .parent = 3, .attributes = &.{.{ .name = "id", .value = "inner" }} },
+        .{ .tag = "div", .parent = 4, .attributes = &.{.{ .name = "align", .value = "center" }} },
+        .{ .tag = "table", .parent = 5, .attributes = &.{} },
+    };
+    const expected = (try resolveInlineTableAlloc(a, "margin:0 auto")).style.?;
+    var styles = try parseForTargetAlloc(a, "#outer{direction:rtl}table{margin:0 auto;direction:ltr}", .screen); defer styles.deinit();
+    var contexts = [_]TableContainingDirectionContext{.{ .styles = &styles, .nodes = &nodes, .root = 2, .table = 6 }};
+    const positive = (try resolveObservedRootTableContainingDirection(a, &contexts, null, expected, true)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(types.TableContainingDirection.rtl, positive.direction);
+    try std.testing.expect(positive.responsive_geometry_accounted);
+    for ([_][]const u8{ "margin-left:12px", "padding:1px", "width:50%", "font-size:120%", "display:contents", "position:relative", "unknown-box:1" }) |declaration| {
+        const css = try std.fmt.allocPrint(a, "#outer{{direction:rtl}}#inner{{{s}}}table{{margin:0 auto}}", .{declaration});
+        var changed = try parseForTargetAlloc(a, css, .screen); defer changed.deinit();
+        contexts[0].styles = &changed;
+        try std.testing.expect((try resolveObservedRootTableContainingDirection(a, &contexts, null, expected, true)) == null);
+    }
+    contexts[0].styles = &styles;
+    nodes[4].tag = "div";
+    try std.testing.expect((try resolveObservedRootTableContainingDirection(a, &contexts, null, expected, true)) == null);
+}
+
+test "page ancestor preflight uses only absent positive classes from complete scope" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var parent = try parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const complete = "mw-parser-output NavFrame mw-heading mw-heading2";
+    for ([_][]const u8{
+        "body.skin-minerva .mw-parser-output .ambox{display:block;margin:0}",
+        ".ambox span{font-weight:bold}",
+        ".ambox,.absent{color:red}",
+    }) |css| {
+        var selected = try joinPageSourcesAlloc(a, &parent, &.{.{ .css = css, .base_url = "" }}, &.{}); defer selected.deinit();
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerWithFigureObligationsIn(a, &root, null, null)) != null);
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerWithCompleteClassesIn(a, &root, null, null, complete)) == null);
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerWithCompleteClassesIn(a, &root, null, null, "skin-minerva mw-parser-output ambox absent")) != null);
+    }
+    for ([_][]const u8{
+        ".NavFrame{color:red}", ".mw-heading span{font-weight:bold}", "span{font-weight:bold}",
+        ":not(.ambox) span{font-weight:bold}", ":is(.ambox,.NavFrame) span{font-weight:bold}",
+        ".NavFrame:has(.ambox){color:red}", ".ambox,.NavFrame{color:red}",
+        "body{margin:0}", ".mw-parser-output{color:red}",
+    }) |css| {
+        var selected = try joinPageSourcesAlloc(a, &parent, &.{.{ .css = css, .base_url = "" }}, &.{}); defer selected.deinit();
+        try std.testing.expect((try selected.pageUnprovedInheritanceBlockerWithCompleteClassesIn(a, &root, null, null, complete)) != null);
+    }
+}
+
+test "generated Figure motion view retains selector uncertainty until complete static motion proof" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const motion = "@media(prefers-reduced-motion:reduce){*,::before,::after{animation-delay:-0.01ms!important;animation-duration:0.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:0ms!important}}";
+    var selected = try parseAlloc(a, motion); defer selected.deinit();
+    try std.testing.expectEqual(@as(usize, 3), selected.figure_rules.len);
+    try std.testing.expect(!selected.figure_rules[0].selector.root_predicate_unresolved);
+    try std.testing.expect(selected.figure_rules[1].selector.root_predicate_unresolved);
+    try std.testing.expect(selected.figure_rules[2].selector.root_predicate_unresolved);
+    for (selected.figure_rules) |rule| try std.testing.expect(rule.selector.uncertain);
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, selected.figureRootDirectionUse(null));
+    const view = (try selected.figureStaticMotionViewIn(a, "mw-parser-output mw-default-size mw-file-element")) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 0), view.figure_rules.len);
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, view.figureRootDirectionUse(null));
+    const frame: TextElement = .{ .tag = "figure", .classes = "mw-default-size" };
+    try std.testing.expectEqualDeep(FigureStyle{}, try view.resolveFigure(a, &frame, 1, false));
+    try std.testing.expectEqual(@as(usize, 3), selected.figure_rules.len);
+    for ([_][]const u8{ "figure{animation-name:spin}", "figure::before{animation-name:spin}", "@media print{figcaption{animation-name:spin}}", "figure{animation:spin 1s}", "figure{transition-duration:1ms}", "figcaption{transition-delay:1s}", "figure{transition-duration:inherit}", "figure{transition-duration:var(--time,0s)}", "figure{scroll-behavior:smooth}", "figure{all:inherit}", ":not(.outside-caption){transition-duration:1s}" }) |extra| {
+        var denied = try parseAlloc(a, try std.mem.concat(a, u8, &.{motion,extra})); defer denied.deinit();
+        try std.testing.expect((try denied.figureStaticMotionViewIn(a, "mw-parser-output mw-default-size mw-file-element")) == null);
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, denied.figureRootDirectionUse(null));
+    }
+    var absent = try parseAlloc(a, try std.mem.concat(a, u8, &.{motion,".outside-caption{transition-duration:1s}"})); defer absent.deinit();
+    try std.testing.expect((try absent.figureStaticMotionViewIn(a, "mw-parser-output mw-default-size")) != null);
+    try std.testing.expect((try absent.figureStaticMotionViewIn(a, "mw-parser-output mw-default-size outside-caption")) == null);
+    for ([_][]const u8{ "::before{content:'kept';animation-duration:1s}", "figure{padding:1px;animation-name:none}" }) |extra| {
+        var mixed = try parseAlloc(a, try std.mem.concat(a, u8, &.{motion,extra})); defer mixed.deinit();
+        const limited = (try mixed.figureStaticMotionViewIn(a, "mw-parser-output mw-default-size")) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), limited.figure_rules.len);
+        try std.testing.expectEqualDeep(mixed.figure_rules[mixed.figure_rules.len - 1], limited.figure_rules[0]);
+        if (std.mem.startsWith(u8, extra, "::before")) {
+            try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, limited.figureRootDirectionUse(null));
+        } else {
+            const style = try limited.resolveFigure(a, &frame, 1, false);
+            try std.testing.expect(style.padding != null);
+            try std.testing.expectEqual(@as(f32, 1), style.padding.?.top.value);
+        }
+    }
+}
+
+
+test "generated Figure SECTION neutrality retains motion box font color and reset refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Test = struct {
+        fn value(alloc: std.mem.Allocator, css: []const u8, uncertain: bool) !bool {
+            var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+            defer declarations.deinit(alloc);
+            try appendObservedFigureDeclarations(alloc, &declarations, css, .{}, uncertain, false, null, 0);
+            return observedFigureGeneratedSectionNeutral(alloc, .{ .index = 3,
+                .declarations = declarations.items, .environment = .{ .complete = true } });
+        }
+    };
+    try std.testing.expect(try Test.value(a, "", false));
+    try std.testing.expect(try Test.value(a, "display:block;position:static;box-sizing:border-box", false));
+    const reduced = "animation-delay:-0.01ms!important;animation-duration:0.01ms!important;" ++
+        "animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:0ms!important";
+    try std.testing.expect(try Test.value(a, reduced, true));
+    for ([_][]const u8{ "display:flow-root", "display:none", "position:relative", "margin:0", "padding:1px",
+        "border:0", "height:100%", "overflow:auto", "float:left", "clear:both", "transform:none",
+        "font-size:100%", "font-family:serif", "color:inherit", "background:none", "text-align:center",
+        "all:initial", "animation-name:spin", "transition-duration:1s", "scroll-behavior:smooth" }) |css| {
+        try std.testing.expect(!try Test.value(a, css, false));
+        try std.testing.expect(!try Test.value(a, css, true));
+    }
+}
+
+
+test "bare own attribute text selector matches only complete observed own presence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var builder: Builder = .{ .a = a };
+    const present: ContainerAttributeTesting.Inventory = .{ .names = &.{"bgcolor", "data-custom"} };
+    const absent: ContainerAttributeTesting.Inventory = .{};
+    const unknown: ContainerAttributeTesting.Inventory = .{ .known = false };
+    const parent: TextElement = .{ .tag = "table", .attribute_presence = present.source() };
+    for ([_][]const u8{ "[bgcolor]", " [ BGCOLOR ] ", "[data-custom]" }) |raw| {
+        const selected = try builder.textSelector(raw, false);
+        try std.testing.expect(selected.own_attribute_complete and !selected.uncertain);
+        try std.testing.expectEqual(@as(u64, 1 << 21), selected.specificity);
+        for ([_]bool{ false, true }) |page_scoped| {
+            const row: TextElement = .{ .tag = "tr", .attribute_presence = present.source(), .parent = &parent };
+            try std.testing.expectEqual(ContainerSelectorMatch.known, selected.matchIn(&row, page_scoped));
+            const missing: TextElement = .{ .tag = "tr", .attribute_presence = absent.source(), .parent = &parent };
+            try std.testing.expectEqual(ContainerSelectorMatch.no, selected.matchIn(&missing, page_scoped));
+            try std.testing.expect(!selected.matches(&missing));
+            for ([_]?AttributePresenceSource{ null, unknown.source() }) |inventory| {
+                const unproved: TextElement = .{ .tag = "tr", .attribute_presence = inventory, .parent = &parent };
+                try std.testing.expectEqual(ContainerSelectorMatch.unknown, selected.matchIn(&unproved, page_scoped));
+            }
+        }
+    }
+    const selected = try builder.textSelector("[bgcolor]", true);
+    const row: TextElement = .{ .tag = "tr", .attribute_presence = present.source() };
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, selected.matchIn(&row, true));
+    const other: TextElement = .{ .tag = "tr", .attribute_presence = absent.source() };
+    var alternative = row; alternative.alternative_ancestry = &other;
+    const exact = try builder.textSelector("[bgcolor]", false);
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, exact.matchIn(&alternative, true));
+}
+
+
+test "bare own attribute parser never promotes value compound or conditional selectors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var builder: Builder = .{ .a = a };
+    const present: ContainerAttributeTesting.Inventory = .{ .names = &.{"bgcolor"} };
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const row: TextElement = .{ .tag = "tr", .classes = "row", .attribute_presence = present.source(), .parent = &root, .page_style_root = &root };
+    for ([_][]const u8{
+        "[bgcolor=red]", "[bgcolor='red']", "[bgcolor~=red]", "[bgcolor i]", "[ns|bgcolor]",
+        "[bgcolor]:hover", "[bgcolor][bgcolor]", "tr[bgcolor]", ".row[bgcolor]", "[bgcolor] tr",
+        ":is([bgcolor])", ":not([bgcolor])", "[bg\\63olor]", "[bgcolor/*comment*/]",
+    }) |raw| {
+        errdefer std.debug.print("unsupported own-attribute selector: {s}\n", .{raw});
+        try std.testing.expect(bareOwnAttribute(raw) == null);
+        const selected = try builder.textSelector(raw, false);
+        try std.testing.expect(!selected.own_attribute_complete);
+        try std.testing.expect(selected.matchIn(&row, true) != .known);
+    }
+    var grouped = try parseAlloc(a, "[bgcolor],tr:unknown{color:#333}"); defer grouped.deinit();
+    try std.testing.expect((try grouped.resolveTextPaint(a, &row, "")).color.? == .unknown);
+    var conditional = try parseAlloc(a, "@media print{[bgcolor]{color:#333}}"); defer conditional.deinit();
+    try std.testing.expect((try conditional.resolveTextPaint(a, &row, "")).color.? == .unknown);
+}
+
+
+test "bare own attribute color participates in ordinary specificity and inline cascade" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var sheet = try parseAlloc(a, "tr{color:red}[bgcolor]{color:#333}.selected{color:#444}#owner{color:#666}"); defer sheet.deinit();
+    const present: ContainerAttributeTesting.Inventory = .{ .names = &.{"bgcolor"} };
+    const absent: ContainerAttributeTesting.Inventory = .{};
+    var row: TextElement = .{ .tag = "tr", .attribute_presence = present.source() };
+    try std.testing.expectEqualStrings("#333333", (try sheet.resolveTextPaint(a, &row, "")).color.?.value);
+    row.classes = "selected";
+    try std.testing.expectEqualStrings("#444444", (try sheet.resolveTextPaint(a, &row, "")).color.?.value);
+    row.id = "owner";
+    try std.testing.expectEqualStrings("#666666", (try sheet.resolveTextPaint(a, &row, "")).color.?.value);
+    try std.testing.expectEqualStrings("#555555", (try sheet.resolveTextPaint(a, &row, "color:#555")).color.?.value);
+    row.classes = ""; row.id = ""; row.attribute_presence = absent.source();
+    try std.testing.expectEqualStrings("#ff0000", (try sheet.resolveTextPaint(a, &row, "")).color.?.value);
+    row.attribute_presence = null;
+    try std.testing.expect((try sheet.resolveTextPaint(a, &row, "")).color.? == .unknown);
+}
+
+
+test "closed row color obligation accepts only exact own presence color and preserves every other refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const source = "{|\n|- bgcolor='red'\n| cell\n|}";
+    const absent: ContainerAttributeTesting.Inventory = .{};
+    const present: ContainerAttributeTesting.Inventory = .{ .names = &.{"bgcolor"} };
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .attribute_presence = absent.source() };
+    const foreign_root = try a.create(TextElement);
+    foreign_root.* = root;
+    try std.testing.expect(foreign_root != &root);
+    const owners = [_]RowColorOwner{.{ .attrs_start = 5, .attrs_end = std.mem.indexOfScalarPos(u8, source, 5, '\n').? }};
+    var base = try parseForTargetAlloc(a, "", .screen); defer base.deinit();
+    var styles = try joinPageSourcesAlloc(a, &base, &.{.{ .css = "[bgcolor]{color:#333}", .base_url = "" }}, &.{}); defer styles.deinit();
+    const proof: ClosedRowColorProof = .{ .styles = &styles, .source = source, .root = &root, .attribute = "bgcolor", .owners = &owners };
+    var required = false;
+    try std.testing.expect((try styles.pageUnprovedInheritanceBlockerIn(a, &root)) != null);
+    try std.testing.expect((try styles.pageUnprovedInheritanceBlockerWithCompleteClassesAndRowColorObligationIn(a, &root, null, null, null, &proof, &required)) == null);
+    try std.testing.expect(required);
+    const row: TextElement = .{ .tag = "tr", .parent = &root, .page_style_root = &root, .attribute_presence = present.source() };
+    const matches = try styles.containerRuleMatchesIn(a, &row); defer a.free(matches.rules);
+    try std.testing.expect(!matches.unresolved and matches.rules.len == 1);
+    try std.testing.expectEqual(ContainerSelectorMatch.known, matches.rules[0].match);
+    try std.testing.expectEqualStrings("bgcolor", matches.rules[0].closed_row_attribute.?);
+    for (0..5) |mode| {
+        var wrong = proof;
+        switch (mode) {
+            0 => wrong.styles = &base,
+            1 => wrong.root = foreign_root,
+            2 => wrong.source = "",
+            3 => wrong.owners = &.{},
+            4 => wrong.attribute = "data-other",
+            else => unreachable,
+        }
+        try std.testing.expect((try styles.pageUnprovedInheritanceBlockerWithCompleteClassesAndRowColorObligationIn(a, &root, null, null, null, &wrong, null)) != null);
+    }
+    for ([_][]const u8{ "", "[bgcolor]{background-color:#eee}" }) |css| {
+        var unrelated = try joinPageSourcesAlloc(a, &base, &.{.{ .css = css, .base_url = "" }}, &.{}); defer unrelated.deinit();
+        var bound = proof; bound.styles = &unrelated;
+        required = false;
+        _ = try unrelated.pageUnprovedInheritanceBlockerWithCompleteClassesAndRowColorObligationIn(a, &root, null, null, null, &bound, &required);
+        try std.testing.expect(!required);
+    }
+    for ([_][]const u8{ "[bgcolor]:hover{color:#333}", "[bgcolor='red']{color:#333}",
+        "tr[bgcolor]{color:#333}", "[bgcolor],:unknown{color:#333}", "[bgcolor]{font-size:2em}",
+        "[bgcolor]{color:#333;clear:both}", "[bgcolor]{color:#333 !invalid}",
+        "@media (max-width:600px){[bgcolor]{color:#333}}" }) |css| {
+        var changed = try joinPageSourcesAlloc(a, &base, &.{.{ .css = css, .base_url = "" }}, &.{}); defer changed.deinit();
+        var bound = proof; bound.styles = &changed;
+        try std.testing.expect((try changed.pageUnprovedInheritanceBlockerWithCompleteClassesAndRowColorObligationIn(a, &root, null, null, null, &bound, null)) != null);
+    }
+}
+
+
+test "table geometry refutes only complete own attribute absence without changing unknown selector branches" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var base = try parseForTargetAlloc(a, "", .screen); defer base.deinit();
+    var selected = try joinPageSourcesAlloc(a, &base, &.{.{ .css = "[bgcolor]{color:#333}", .base_url = "" }}, &.{}); defer selected.deinit();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const absent: ElementContext = .{ .page_style_root = &root, .absent_own_attribute = "bgcolor" };
+    try std.testing.expect(!(try selected.resolveTableWithContext(a, 0, "", absent, null, "")).unresolved);
+    try std.testing.expect(!(try selected.resolveCellWithContext(a, 0, 0, "", absent, false, null, "")).unresolved);
+    var unknown = absent; unknown.absent_own_attribute = null;
+    try std.testing.expect((try selected.resolveTableWithContext(a, 0, "", unknown, null, "")).unresolved);
+    var other = absent; other.absent_own_attribute = "title";
+    try std.testing.expect((try selected.resolveCellWithContext(a, 0, 0, "", other, false, null, "")).unresolved);
+    var no_root = absent; no_root.page_style_root = null;
+    try std.testing.expect((try selected.resolveTableWithContext(a, 0, "", no_root, null, "")).unresolved);
+    for ([_][]const u8{
+        "[bgcolor] table{color:#333}", "[bgcolor]+table{color:#333}",
+        "[bgcolor],:unknown{color:#333}", "[bgcolor]:unknown{color:#333}",
+        "@media unknown{[bgcolor]{color:#333}}", "[title]{color:#333}",
+    }) |css| {
+        var unsafe = try joinPageSourcesAlloc(a, &base, &.{.{ .css = css, .base_url = "" }}, &.{}); defer unsafe.deinit();
+        try std.testing.expect((try unsafe.resolveTableWithContext(a, 0, "", absent, null, "")).unresolved);
+    }
+}
+
+const ObservedBlockMediaBox = struct {
+    wrapper: types.ContainerStyle,
+    font: types.FigureMediaStrut,
+};
+fn observedBlockMediaBox(a: std.mem.Allocator, context: FigureObservedContext,
+    computed: []const ObservedFigureComputedNode, fonts: ObservedFigureFonts,
+    backgrounds: []const ObservedFigureComputedColor, subject: u32, frame: bool,
+    witness: ?*ObservedReadyFigureWitness) !?ObservedBlockMediaBox
+{
+    observedReadySubject(witness, subject);
+    if (!figureObservedContextValid(context) or context.layout_kind != .block_media or
+        subject != (if (frame) context.frame else context.anchor)) return null;
+    const node = observedFigureComputedNode(computed, subject) orelse return null;
+    const font = observedFigureFontAt(fonts, subject) orelse return null;
+    var use = try ObservedFigurePropertyUse.init(a, node.declarations); defer use.deinit(a);
+    use.customEnvironment();
+    if (!try use.staticMotion(a, node.environment)) return null;
+    inline for (.{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch", "font-size-adjust", "font-feature-settings", "-moz-font-feature-settings", "-webkit-font-feature-settings", "font-variation-settings" }) |property|
+        use.property(property, &.{"font"});
+    use.property("direction", &.{});
+    const line = try observedFigureLineHeightAt(a, context, computed, fonts, subject);
+    const line_height: types.ContainerLineHeight = switch (line) {
+        .normal => .normal,
+        .length => |length_value| .{ .length = length_value },
+        .factor => |factor| value: {
+            if (!std.math.isFinite(factor) or factor < 0 or factor > std.math.floatMax(f32)) return null;
+            const narrowed: f32 = @floatCast(factor);
+            if (factor != 0 and narrowed == 0) return null;
+            break :value .{ .multiplier = narrowed };
+        },
+        .unknown => return null,
+    };
+    use.property("line-height", &.{"font"});
+    const alignment = try observedFigureInheritedKeywordAt(a, context, computed, subject, "text-align", &.{}, &.{ "center", "start", "left", "right" }, "start");
+    use.property("text-align", &.{});
+    if (alignment.unresolved) return null;
+    if ((try observedFigurePreferredWidth(a, node.declarations, node.environment, .unknown)) != .automatic or
+        (try observedFigureComputedLength(a, node.declarations, "height", &.{}, node.environment, font.font_scale, "auto", .automatic, .unknown, false, false)) != .automatic) return null;
+    use.property("width", &.{}); use.property("height", &.{});
+    const zero: ObservedFigureLength = .{ .known = .{ .unit = .px, .value = 0 } };
+    inline for (.{ "min-width", "min-height" }) |property| {
+        const minimum = try observedFigureComputedLength(a, node.declarations, property, &.{}, node.environment, font.font_scale, "auto", zero, .unknown, false, false);
+        use.property(property, &.{});
+        if (minimum != .known or minimum.known.value != 0) return null;
+    }
+    inline for (.{ "top", "right", "bottom", "left" }) |property| {
+        const inset = try observedFigureComputedLength(a, node.declarations, property, &.{"inset"}, node.environment, font.font_scale, "auto", .automatic, .unknown, false, true);
+        use.property(property, &.{"inset"});
+        if (inset != .automatic) return null;
+    }
+    const margins = try observedFigureEdges(a, node.declarations, node.environment, false, font.direction == .rtl, font.font_scale, null);
+    const padding = try observedFigureEdges(a, node.declarations, node.environment, true, font.direction == .rtl, font.font_scale, null);
+    use.boxEdges(false); use.boxEdges(true);
+    if (margins.unresolved or padding.unresolved or
+        !observedFigureEdgesZero(observedFigureFixedEdges(padding.value.?) orelse return null)) return null;
+    if (!frame and !observedFigureEdgesZero(observedFigureFixedEdges(margins.value.?) orelse return null)) return null;
+    const borders = (try observedFigureBorders(a, node.declarations, node.environment, font.font_scale)) orelse return null;
+    use.borderEdges();
+    if (borders.top != .none or borders.right != .none or borders.bottom != .none or borders.left != .none) return null;
+    const background = observedFigureColorAt(backgrounds, subject) orelse return null;
+    use.property("background-color", &.{"background"});
+    if (background.kind != .transparent or (try observedFigureGraphic(a, context, node.declarations, node.environment, .unknown,
+        &[_]struct { url: []const u8, graphic: types.FigureMediaGraphic }{})) != .none) return null;
+    use.property("background-image", &.{"background"});
+    const radius = try observedFigureUniformRadius(a, node.declarations, node.environment, font.font_scale);
+    inline for (.{ "border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius" }) |property|
+        use.property(property, &.{"border-radius"});
+    if (radius != .known or radius.known.value != 0 or
+        (try observedFigureFocusOutline(a, node.declarations, node.environment, font.font_scale)) != .none) return null;
+    inline for (.{ "outline", "outline-width", "outline-style", "outline-color", "outline-offset" }) |property| use.property(property, &.{});
+    if (!try observedFigureKeywordIs(a, node, "display", &.{}, if (frame) "block" else "inline", if (frame) "block" else "inline")) return null;
+    use.property("display", &.{});
+    const noops = .{
+        .{ "position", "static" }, .{ "z-index", "auto" }, .{ "vertical-align", "baseline" },
+        .{ "box-sizing", "content-box" }, .{ "float", "none" }, .{ "clear", "none" },
+        .{ "max-width", "none" }, .{ "max-height", "none" }, .{ "opacity", "1" },
+        .{ "transform", "none" }, .{ "filter", "none" }, .{ "box-shadow", "none" },
+        .{ "overflow", "visible" }, .{ "clip-path", "none" }, .{ "contain", "none" },
+        .{ "isolation", "auto" }, .{ "mix-blend-mode", "normal" },
+    };
+    inline for (noops) |query| {
+        if (!try observedFigureKeywordIs(a, node, query[0], &.{}, query[1], query[1])) return null;
+        use.property(query[0], &.{});
+    }
+    inline for (.{ "visibility", "pointer-events", "text-shadow" }, .{ "visible", "auto", "none" }) |property, expected| {
+        const inherited = try observedFigureInheritedKeywordAt(a, context, computed, subject, property, &.{}, &.{expected}, expected);
+        if (inherited.unresolved or !std.mem.eql(u8, inherited.value.?, expected)) return null;
+        use.property(property, &.{});
+    }
+    // The complete owned shape has no text, only one replaced image. These
+    // text-only effects cannot add a second box or change the image line strut.
+    inline for (.{ "color", "word-break", "white-space", "text-decoration", "text-decoration-line", "text-decoration-color", "text-decoration-style", "text-decoration-thickness", "word-wrap", "overflow-wrap" }) |property|
+        use.property(property, &.{});
+    if (!use.complete()) { observedReadyUnused(witness, use); return null; }
+    return .{ .font = font, .wrapper = .{ .width = .auto, .margin_values = margins.value.?,
+        .line_height = line_height, .owner_font_scale = font.font_scale,
+        .text_align = if (std.mem.eql(u8, alignment.value.?, "center")) .center else if (std.mem.eql(u8, alignment.value.?, "right") or
+            (std.mem.eql(u8, alignment.value.?, "start") and font.direction == .rtl)) .right else .left } };
+}
+
+const ObservedBlockMediaState = struct {
+    wrapper: types.ContainerStyle,
+    media: types.FigureMediaLayout,
+    image: ObservedFigureImageGeometry,
+    parent_font: types.FigureMediaStrut,
+    root_family: []const u8,
+};
+fn observedBlockMediaRoles(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    evaluation: ObservedFigureEvaluation, expected_width: u32, witness: ?*ObservedReadyFigureWitness) !?ObservedBlockMediaState
+{
+    const context = operation.context;
+    if (!operation.valid or context.layout_kind != .block_media or expected_width == 0 or evaluation.missing_width != null) return null;
+    const computed = (try observedFigureComputedNodesPrepared(a, operation, evaluation)) orelse return null;
+    const owned = (try operation.owned()) orelse return null;
+    if (observedFigureOtherPseudoEffectsWithWitness(context, owned, evaluation, witness)) return null;
+    const fonts = (try observedFigureComputedFontsWithWitness(a, context, computed, witness)) orelse return null;
+    const colors = (try observedFigureComputedColorsWithWitness(a, context, computed, null, witness)) orelse return null;
+    const backgrounds = (try observedFigureComputedBackgroundsWithWitness(a, context, computed, colors, witness)) orelse return null;
+    const frame = (try observedBlockMediaBox(a, context, computed, fonts, backgrounds, context.frame, true, witness)) orelse return null;
+    const span = (try observedBlockMediaBox(a, context, computed, fonts, backgrounds, context.anchor, false, witness)) orelse return null;
+    if (!observedFigureDataEqual(types.FigureMediaStrut, frame.font, span.font, 0) or
+        !observedFigureDataEqual(?types.ContainerLineHeight, frame.wrapper.line_height, span.wrapper.line_height, 0) or
+        frame.wrapper.text_align != span.wrapper.text_align) return null;
+    const image = (try observedFigureImageGeometryWithWitness(a, context, computed, fonts, colors, backgrounds, expected_width, witness)) orelse return null;
+    if (image.background.kind != .transparent or image.border.kind != .none or !observedFigureEdgesZero(image.insets)) return null;
+    const caption = observedFigureComputedNode(computed, context.caption) orelse return null;
+    // This is the real empty captured caption, not an erased source caption.
+    // Its complete display:none state suppresses both its own and pseudo boxes.
+    if (!try observedFigureKeywordIs(a, caption, "display", &.{}, "none", "block")) return null;
+    for ([_]u32{context.frame, context.anchor, context.media}) |subject|
+        inline for (.{ GeneratedFigurePseudo.before, GeneratedFigurePseudo.after }) |pseudo|
+            if ((try observedFigureEmptyPseudoWithWitnessPrepared(a, operation, computed, fonts, subject, pseudo, evaluation, witness)) != .absent) return null;
+    const parent_font = observedFigureFontAt(fonts, context.nodes[context.frame].parent orelse return null) orelse return null;
+    if (frame.font.direction != parent_font.direction) return null;
+    return .{ .wrapper = frame.wrapper, .media = .{ .strut = span.font, .vertical_align = .middle, .max_width = image.max_width },
+        .image = image, .parent_font = parent_font, .root_family = fonts.root_family };
+}
+fn observedBlockMediaState(a: std.mem.Allocator, operation: *ObservedFigureOperation,
+    viewport_width: f64, expected_width: u32, witness: ?*ObservedReadyFigureWitness) !?ObservedBlockMediaState
+{
+    var result: ?ObservedBlockMediaState = null;
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    for ([_]bool{ false, true }) |reduced_motion| for ([_]bool{ false, true }) |visited|
+        for ([_]bool{ false, true }) |hover| for ([_]bool{ false, true }) |active|
+        for ([_]ObservedFigureFocusMode{ .unfocused, .focused, .focus_visible }) |focus| {
+            _ = scratch.reset(.retain_capacity);
+            const current = (try observedBlockMediaRoles(scratch.allocator(), operation, .{
+                // A real nonlink SPAN cannot consume the A-only state API.
+                // Null leaves every applicable interaction predicate unknown:
+                // each query must agree across both predicate outcomes, including
+                // all 48 assignments below, or retain its existing refusal.
+                .viewport_width = viewport_width, .reduced_motion = reduced_motion, .link_subject = null,
+                .focus_visible_supported = true, .link_state = .{ .visited = visited, .hover = hover, .active = active,
+                    .focus = focus != .unfocused, .focus_visible = focus == .focus_visible, .focus_within = focus != .unfocused },
+            }, expected_width, witness)) orelse return null;
+            if (result) |prior| {
+                if (!observedFigureDataEqual(ObservedBlockMediaState, prior, current, 0)) return null;
+            } else result = observedFigureDataClone(ObservedBlockMediaState, a, current, 0) catch |failure| switch (failure) {
+                error.OutOfMemory => return error.OutOfMemory, error.InvalidStyleProfile => return null,
+            };
+        };
+    return result;
+}
+fn observedBlockMediaFixedEqual(left: ObservedBlockMediaState, right: ObservedBlockMediaState) bool {
+    var first = left; var second = right;
+    first.wrapper = .{}; second.wrapper = .{};
+    first.media = second.media;
+    first.image.max_width = null; second.image.max_width = null;
+    return observedFigureDataEqual(ObservedBlockMediaState, first, second, 0);
+}
+pub const FigureObservedBlockMediaStyle = struct {
+    layout: types.FigureBlockMediaLayout,
+    image_font: types.FigureMediaStrut,
+    image_foreground: types.FigureColor,
+};
+pub fn resolveObservedBlockMediaFigure(a: std.mem.Allocator, contexts: []const FigureObservedContext,
+    preferred_width: u32, natural_width: u32, natural_height: u32, renditions: [2]types.FigureBlockMediaRendition, native_parent: types.FigureMediaStrut,
+    witness: ?*ObservedReadyFigureWitness) !?FigureObservedBlockMediaStyle
+{
+    if (contexts.len == 0 or contexts.len > 128 or preferred_width == 0 or natural_width == 0 or natural_height == 0) return null;
+    var agreed: ?FigureObservedBlockMediaStyle = null;
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    for (contexts) |context| {
+        _ = scratch.reset(.retain_capacity); const work = scratch.allocator();
+        if (context.layout_kind != .block_media) return null;
+        var operation = ObservedFigureOperation.init(work, context); defer operation.deinit();
+        const boundaries = (try observedFigureViewportBoundariesPrepared(work, &operation, .{})) orelse return null;
+        operation.retain_rule_candidates = true;
+        const upper = if (boundaries.len == 0) 1 else boundaries[boundaries.len - 1].value + 1;
+        if (!std.math.isFinite(upper)) return null;
+        const base = (try observedBlockMediaState(work, &operation, upper, preferred_width, witness)) orelse return null;
+        if (!observedFigureNativeFontMatches(base.parent_font, native_parent)) return null;
+        var states: std.ArrayList(types.FigureBlockMediaState) = .empty;
+        var above = base; var cursor = boundaries.len;
+        while (cursor != 0) {
+            cursor -= 1; const boundary = boundaries[cursor].value;
+            if (!std.math.isFinite(boundary) or boundary < 0) return null;
+            const below_width = if (boundary == 0) 0 else if (cursor == 0) boundary / 2 else boundaries[cursor - 1].value + (boundary - boundaries[cursor - 1].value) / 2;
+            const exact = (try observedBlockMediaState(work, &operation, boundary, preferred_width, witness)) orelse return null;
+            const below = if (boundary == 0) exact else (try observedBlockMediaState(work, &operation, below_width, preferred_width, witness)) orelse return null;
+            if (!observedBlockMediaFixedEqual(base, exact) or !observedBlockMediaFixedEqual(base, below)) return null;
+            if (observedFigureDataEqual(ObservedBlockMediaState, exact, above, 0) and observedFigureDataEqual(ObservedBlockMediaState, below, above, 0)) continue;
+            if (!observedFigureDataEqual(ObservedBlockMediaState, exact, below, 0) or boundary > std.math.maxInt(u32) or @floor(boundary) != boundary or states.items.len == types.max_figure_viewport_states) return null;
+            try states.append(work, .{ .max_width_px = @intFromFloat(boundary), .wrapper = below.wrapper, .media = below.media }); above = below;
+        }
+        const current: FigureObservedBlockMediaStyle = .{ .layout = .{ .wrapper = base.wrapper, .media = base.media,
+            .preferred_width_px = preferred_width, .natural_width = natural_width, .natural_height = natural_height,
+            .rendition_1x = renditions[0], .rendition_2x = renditions[1], .viewport_states = states.items }, .image_font = base.image.font, .image_foreground = base.image.foreground };
+        if (!types.validFigureBlockMediaLayout(current.layout)) return null;
+        if (agreed) |prior| {
+            if (!observedFigureDataEqual(FigureObservedBlockMediaStyle, prior, current, 0)) return null;
+        } else agreed = observedFigureDataClone(FigureObservedBlockMediaStyle, a, current, 0) catch |failure| switch (failure) {
+            error.OutOfMemory => return error.OutOfMemory, error.InvalidStyleProfile => return null,
+        };
+    }
+    return agreed;
+}
+
+const BlockMediaObservedTest = struct {
+    const renditions = [2]types.FigureBlockMediaRendition{
+        .{ .url = "https://example.test/controlled-1x.png", .sha256 = "1111111111111111111111111111111111111111111111111111111111111111" },
+        .{ .url = "https://example.test/controlled-2x.png", .sha256 = "2222222222222222222222222222222222222222222222222222222222222222" },
+    };
+    const css = "html{font-family:sans-serif;color:#202122}" ++
+        "figure{display:block;margin:0;line-height:1.5;text-align:left}" ++
+        "figcaption{display:none}img{height:auto;max-width:100%;vertical-align:middle}";
+    const nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "dir", .value = "ltr" }, .{ .name = "lang", .value = "vi" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "figure", .parent = 2, .attributes = &.{.{ .name = "typeof", .value = "mw:File" }}, .has_text = false },
+        .{ .tag = "span", .parent = 3, .attributes = &.{}, .has_text = false,
+            .known_no_previous_element_sibling = true, .known_next_element_sibling = 6 },
+        .{ .tag = "img", .parent = 4, .attributes = &.{.{ .name = "width", .value = "44" }, .{ .name = "height", .value = "40" }}, .has_text = false, .empty = true },
+        .{ .tag = "figcaption", .parent = 3, .attributes = &.{}, .has_text = false, .empty = true },
+    };
+    fn context(styles: *const Profile, graph: []const FigureObservedNode) FigureObservedContext {
+        return .{ .styles = styles, .layout_kind = .block_media, .nodes = graph,
+            .root = 2, .frame = 3, .anchor = 4, .media = 5, .caption = 6 };
+    }
+    fn parent(a: std.mem.Allocator, context_value: FigureObservedContext) !types.FigureMediaStrut {
+        var operation = ObservedFigureOperation.init(a, context_value); defer operation.deinit();
+        const value = (try observedBlockMediaState(a, &operation, 1000, 44, null)) orelse return error.TestUnexpectedResult;
+        return value.parent_font;
+    }
+};
+
+test "observed block media uses real SPAN nonzero strut and complete responsive wrapper without table alias" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = BlockMediaObservedTest;
+    var styles = try parseForTargetAlloc(a, F.css ++ "@media(max-width:639px){figure{margin:0 auto;text-align:center}}", .screen); defer styles.deinit();
+    const context = F.context(&styles, &F.nodes);
+    try std.testing.expect(figureObservedContextValid(context));
+    // Exercise the actual declaration entry API: SPAN is legal without a
+    // selected link, while lending it the old A-only identity still refuses.
+    var operation = ObservedFigureOperation.init(a, context); defer operation.deinit();
+    const span_declarations = (try observedFigureDeclarationsPrepared(a, &operation, context.anchor, null,
+        .{ .viewport_width = 1000, .reduced_motion = false, .focus_visible_supported = true })) orelse return error.TestUnexpectedResult;
+    _ = span_declarations;
+    try std.testing.expect((try observedFigureDeclarationsPrepared(a, &operation, context.anchor, null,
+        .{ .viewport_width = 1000, .link_subject = context.anchor })) == null);
+    const parent = try F.parent(a, context);
+    // These are controlled rendition dimensions, not a claim about the saved VI PNG.
+    const actual = (try resolveObservedBlockMediaFigure(a, &.{context}, 44, 120, 110, F.renditions, parent, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f32, 1.5), actual.layout.wrapper.line_height.?.multiplier);
+    try std.testing.expectEqual(types.CellTextAlign.left, actual.layout.wrapper.text_align.?);
+    try std.testing.expectEqual(@as(u32, 44), actual.layout.preferred_width_px);
+    try std.testing.expectEqual(@as(u32, 120), actual.layout.natural_width);
+    try std.testing.expectEqual(@as(u32, 110), actual.layout.natural_height);
+    try std.testing.expectEqual(@as(usize, 1), actual.layout.viewport_states.len);
+    try std.testing.expectEqual(@as(u32, 639), actual.layout.viewport_states[0].max_width_px);
+    try std.testing.expectEqual(types.CellTextAlign.center, actual.layout.viewport_states[0].wrapper.text_align.?);
+    try std.testing.expect(actual.layout.viewport_states[0].wrapper.margin_values.?.left == .auto);
+    try std.testing.expect(actual.layout.viewport_states[0].wrapper.margin_values.?.right == .auto);
+    try std.testing.expectEqual(@as(f32, 100), actual.layout.media.max_width.?.percent);
+    try std.testing.expect(types.validFigureBlockMediaLayout(actual.layout));
+    try std.testing.expectEqualDeep(F.renditions[0], actual.layout.rendition_1x);
+    try std.testing.expectEqualDeep(F.renditions[1], actual.layout.rendition_2x);
+    const assets = &[_]struct { url: []const u8, graphic: types.FigureMediaGraphic }{};
+    try std.testing.expect((try resolveObservedReadyFigure(a, &.{context}, 44, parent, assets)) == null);
+    var wrong_parent = parent; wrong_parent.font_scale = 2;
+    try std.testing.expect((try resolveObservedBlockMediaFigure(a, &.{context}, 44, 120, 110, F.renditions, wrong_parent, null)) == null);
+    try std.testing.expect((try resolveObservedBlockMediaFigure(a, &.{context}, 43, 120, 110, F.renditions, parent, null)) == null);
+}
+
+test "observed block media rejects forged roles hidden body and unsupported state or viewport effects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = BlockMediaObservedTest;
+    var styles = try parseForTargetAlloc(a, F.css, .screen); defer styles.deinit();
+    const context = F.context(&styles, &F.nodes); const parent = try F.parent(a, context);
+    for (0..7) |mode| {
+        var nodes = F.nodes; var changed = F.context(&styles, &nodes);
+        switch (mode) {
+            0 => nodes[4].tag = "a",
+            1 => nodes[3].attributes = &.{.{ .name = "typeof", .value = "mw:File/Thumb" }},
+            2 => nodes[6].has_text = true,
+            3 => nodes[6].empty = false,
+            4 => nodes[4].attributes = &.{.{ .name = "class", .value = "generated" }},
+            5 => nodes[5].parent = 3,
+            6 => changed.media_kind = .missing,
+            else => unreachable,
+        }
+        try std.testing.expect(!figureObservedContextValid(changed));
+        try std.testing.expect((try resolveObservedBlockMediaFigure(a, &.{changed}, 44, 120, 110, F.renditions, parent, null)) == null);
+    }
+    for ([_][]const u8{
+        "span:hover{margin-left:1px}", "figure::before{content:'extra'}",
+        "figure{display:table}", "span{line-height:0}", "figure{overflow:hidden}",
+        "img{height:40px}", "img{max-width:calc(100% - 8px)}",
+        "figcaption{display:block}", "figure{width:44px}",
+        "@media(max-width:639.5px){figure{text-align:center}}",
+        "@media(min-width:640px){figure{text-align:center}}",
+    }) |extra| {
+        var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{F.css, extra}), .screen); defer changed.deinit();
+        try std.testing.expect((try resolveObservedBlockMediaFigure(a, &.{F.context(&changed, &F.nodes)}, 44, 120, 110, F.renditions, parent, null)) == null);
+    }
+    var missing_auto = try parseForTargetAlloc(a, "html{font-family:sans-serif;color:#202122}figure{display:block;margin:0;line-height:1.5;text-align:left}figcaption{display:none}img{max-width:100%;vertical-align:middle}", .screen); defer missing_auto.deinit();
+    try std.testing.expect((try resolveObservedBlockMediaFigure(a, &.{F.context(&missing_auto, &F.nodes)}, 44, 120, 110, F.renditions, parent, null)) == null);
+}
+
+test "container retained interproject geometry keeps independent 719 size and 639 float clearance transitions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    // Exact geometry clauses from retained GET sheet e57cbfa3 and inline
+    // TemplateStyles fa042279. Paint/font/source issuance stay separate queries.
+    const css = "div.tright,div.floatright,table.floatright{clear:right;float:right}" ++
+        "@media all and (max-width:calc(640px - 1px)){body.skin--responsive div.tright,body.skin--responsive div.floatright,body.skin--responsive table.floatright{clear:both;float:none}}" ++
+        "div.floatright,table.floatright{margin:0 0 0.5em 0.5em}" ++
+        ".mw-parser-output .interproject-box{width:250px;padding:4px;text-align:left;display:flex;flex-direction:row;align-items:center}" ++
+        "@media screen and (max-width:719px){.mw-parser-output .interproject-box{box-sizing:border-box;line-height:1.5;width:100%;max-width:100%}}";
+    var profile = try parseForTargetAlloc(a, css, .screen); defer profile.deinit();
+    const body: TextElement = .{ .tag = "body", .classes = "skin--responsive", .ancestry_complete = true };
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .parent = &body, .ancestry_complete = true };
+    const subject: TextElement = .{ .tag = "div", .classes = "interproject-box floatright", .parent = &root, .ancestry_complete = true };
+    const result = try profile.resolveContainerIn(a, &subject, "");
+    try std.testing.expect(result.specified and !result.unresolved and types.validContainerStyle(result.style));
+    try std.testing.expect(result.style.layout.? == .flex_row and result.style.align_items.? == .center);
+    try std.testing.expect(result.style.float_side.? == .right and result.style.clear.? == .right);
+    try std.testing.expectEqual(types.StyleWidth{ .unit = .px, .value = 250 }, result.style.width.?.length);
+    try std.testing.expectEqual(types.StyleEdges.all(.{ .unit = .px, .value = 4 }), result.style.padding.?);
+    try std.testing.expectEqual(types.StyleLength{ .unit = .em, .value = 0.5 }, result.style.margins.?.left);
+    const screen = result.style.screen_max_width.?;
+    try std.testing.expectEqual(@as(u32, 719), screen.max_width_px);
+    try std.testing.expect(screen.float_side == null and screen.clear == null and screen.margins == null);
+    try std.testing.expectEqual(@as(usize, 1), screen.following_rules.len);
+    const narrow = screen.following_rules[0];
+    try std.testing.expect(narrow.max_width_px == 639 and narrow.float_side.? == .none and narrow.clear.? == .both);
+    try std.testing.expect(narrow.width == null and narrow.max_width == null and narrow.box_sizing == null and narrow.line_height == null);
+    try std.testing.expect((try types.resolveContainerScreen(result.style, 719.5)) == null);
+    for ([_]f64{ 719, 700, 639.5, 639, 1 }) |viewport| {
+        const selected = (try types.resolveContainerScreen(result.style, viewport)).?;
+        try std.testing.expectEqual(types.StyleWidth{ .unit = .percent, .value = 100 }, selected.width.?.length);
+        try std.testing.expectEqualDeep(selected.width.?.length, selected.max_width.?.length);
+        try std.testing.expect(selected.box_sizing.? == .border_box and selected.line_height.?.multiplier == 1.5);
+        if (viewport > 639) try std.testing.expect(selected.float_side == null and selected.clear == null)
+        else try std.testing.expect(selected.float_side.? == .none and selected.clear.? == .both);
+    }
+    const encoded = try std.json.Stringify.valueAlloc(a, result.style, .{ .emit_null_optional_fields = false });
+    const decoded = try std.json.parseFromSliceLeaky(types.ContainerStyle, a, encoded, .{});
+    try std.testing.expectEqualDeep(result.style, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try std.json.Stringify.valueAlloc(a, decoded, .{ .emit_null_optional_fields = false }));
+}
+
+test "container width media reuses constant arithmetic and keeps fractional unknown and compound conditions refused" {
+    for ([_]struct { text: []const u8, limit: u32 }{
+        .{ .text = "@media all and (max-width:calc(640px - 1px))", .limit = 639 },
+        .{ .text = "@media screen and (max-width:719px)", .limit = 719 },
+        .{ .text = "@media all and (max-width:calc(700px + 19px))", .limit = 719 },
+    }) |case| {
+        const result = containerViewportGroup(case.text, .all);
+        try std.testing.expectEqual(case.limit, result.screen_max_width_px);
+        try std.testing.expectEqual(@as(u32, 500), containerViewportGroup(case.text, .{ .screen_max_width_px = 500 }).screen_max_width_px);
+        try std.testing.expect(containerViewportGroup(case.text, .unknown) == .unknown);
+    }
+    for ([_][]const u8{
+        "@media all and (max-width:calc(640px-1px))", "@media all and (max-width:calc(640px -1px))",
+        "@media all and (max-width:calc(640px - .5px))", "@media all and (max-width:calc(0px - 1px))",
+        "@media all and (max-width:calc(var(--limit,640px) - 1px))", "@media all and (max-width:calc(40em - 1px))",
+        "@media all and (max-width:calc(640px - 1px)) and (prefers-color-scheme:dark)",
+        "@media all and (max-width:calc(640px - 1px)),print", "@media not all and (max-width:639px)",
+        "@media only screen and (max-width:639px)", "@media (max-width:639px)", "@media print and (max-width:639px)",
+        "@media all and (min-width:639px)", "@media all and(max-width:639px)",
+        "@media all and (max-width:calc(4294967296px - 0px))", "@media all and (max-width:calc(640px / 0))",
+        "@media all and (max-width:var(--limit,639px))", "@media all and (max-width:639.5px)",
+    }) |condition| try std.testing.expect(containerViewportGroup(condition, .all) == .unknown);
+}
+
+test "container responsive bands keep all head unknown property and capacity refusals without partial publication" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const subject: TextElement = .{ .tag = "div", .classes = "box", .ancestry_complete = true };
+    var reset = try parseForTargetAlloc(a,
+        ".box{float:right;clear:both}@media all and (max-width:719px){.box{float:left;clear:left}}" ++
+        "@media screen and (max-width:639px){.box{float:none!important;clear:none}}", .screen); defer reset.deinit();
+    const reset_result = try reset.resolveContainerIn(a, &subject, "");
+    try std.testing.expect(!reset_result.unresolved);
+    const middle = (try types.resolveContainerScreen(reset_result.style, 700)).?;
+    try std.testing.expect(middle.float_side.? == .left and middle.clear.? == .left);
+    const narrow = (try types.resolveContainerScreen(reset_result.style, 639)).?;
+    try std.testing.expect(narrow.float_side.? == .none and narrow.clear.? == .none);
+    const overriding = try reset.resolveContainerIn(a, &subject, "float:right!important;clear:both!important");
+    try std.testing.expect(!overriding.unresolved and overriding.style.screen_max_width == null);
+    for ([_][]const u8{ "padding:2px", "margin-left:3px", "height:2px", "display:flex", "background:red", "float:var(--unknown)", "clear:inherit" }) |property| {
+        var bad = try parseForTargetAlloc(a, try std.fmt.allocPrint(a,
+            ".box{{width:250px;float:right;clear:right}}@media all and (max-width:calc(640px - 1px)){{.box{{{s}}}}}", .{property}), .screen);
+        defer bad.deinit();
+        const result = try bad.resolveContainerIn(a, &subject, "");
+        try std.testing.expect(result.unresolved and result.style.screen_max_width == null);
+    }
+    var dynamic = try parseForTargetAlloc(a, ".box{float:right}@media all and (max-width:639px){.box:hover{float:none}}", .screen); defer dynamic.deinit();
+    try std.testing.expect((try dynamic.resolveContainerIn(a, &subject, "")).unresolved);
+    // One candidate has the responsive BODY, the other does not. Literal
+    // source identity must not replace the existing all-head selector check.
+    var parent_style = try parseForTargetAlloc(a, "", .screen); defer parent_style.deinit();
+    var paired = try joinPageSourcesAlloc(a, &parent_style, &.{.{ .css =
+        ".box{float:right}@media all and (max-width:639px){body.skin--responsive .box{float:none}}", .base_url = "" }}, &.{});
+    defer paired.deinit();
+    const body: TextElement = .{ .tag = "body", .classes = "skin--responsive", .ancestry_complete = true, .physical_ancestry_complete = true };
+    const other_body: TextElement = .{ .tag = "body", .ancestry_complete = true, .physical_ancestry_complete = true };
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .parent = &body, .ancestry_complete = true, .physical_ancestry_complete = true };
+    const other_root: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .parent = &other_body, .ancestry_complete = true, .physical_ancestry_complete = true };
+    var alternate = subject; alternate.parent = &other_root; alternate.page_style_root = &other_root; alternate.physical_ancestry_complete = true;
+    var current = subject; current.parent = &root; current.page_style_root = &root; current.physical_ancestry_complete = true; current.alternative_ancestry = &alternate;
+    try std.testing.expect((try paired.resolveContainerIn(a, &current, "")).unresolved);
+    var missing_parent = subject; missing_parent.ancestry_complete = false;
+    var unknown = try parseForTargetAlloc(a, ".unproved .box{float:right}", .screen); defer unknown.deinit();
+    try std.testing.expect((try unknown.resolveContainerIn(a, &missing_parent, "")).unresolved);
+    for ([_]usize{ types.max_container_screen_rules, types.max_container_screen_rules + 1 }) |count| {
+        var css: std.ArrayList(u8) = .empty;
+        try css.appendSlice(a, ".box{width:1000px}");
+        for (0..count) |index| try css.appendSlice(a, try std.fmt.allocPrint(a,
+            "@media screen and (max-width:{d}px){{.box{{width:{d}px}}}}", .{ 1000 - index * 10, 900 - index }));
+        var many = try parseForTargetAlloc(a, css.items, .screen); defer many.deinit();
+        const result = try many.resolveContainerIn(a, &subject, "");
+        if (count == types.max_container_screen_rules) {
+            try std.testing.expect(!result.unresolved and types.validContainerStyle(result.style));
+            try std.testing.expectEqual(count - 1, result.style.screen_max_width.?.following_rules.len);
+        } else try std.testing.expect(result.unresolved and result.style.screen_max_width == null);
+    }
+}
+
+
+test "Figure inner focus pseudo refutation requires complete control free caption and ancestor domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const css = "button::-moz-focus-inner,[type='button']::-moz-focus-inner,[type='reset']::-moz-focus-inner,[type='submit']::-moz-focus-inner{border-style:none;padding:0}";
+    var profile = try parseAlloc(a, css); defer profile.deinit();
+    try std.testing.expectEqual(@as(usize, 4), profile.figure_rules.len);
+    for (profile.figure_rules) |rule| try std.testing.expect(rule.selector.figure_control_pseudo);
+    const tags: []const []const u8 = &.{ "span", "b", "i", "strong", "em", "a", "p", "br", "small", "sup" };
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, profile.figureRootDirectionUseWithCaptionDomain(null, "", tags));
+    const view = (try profile.figureControlPseudoViewIn(a, null, tags)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 0), view.figure_rules.len);
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, view.figureRootDirectionUseWithCaptionDomain(null, "", tags));
+    try std.testing.expectEqual(@as(usize, 4), profile.figure_rules.len);
+    try std.testing.expect((try profile.figureControlPseudoViewIn(a, null, null)) == null);
+    for ([_][]const u8{ "button", "input", "BUTTON", "INPUT" }) |tag|
+        try std.testing.expect((try profile.figureControlPseudoViewIn(a, null, &.{ "span", tag })) == null);
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .ancestry_complete = true };
+    const child: TextElement = .{ .tag = "span", .parent = &root };
+    try std.testing.expect((try profile.figureControlPseudoViewIn(a, &child, tags)) != null);
+    for ([_][]const u8{ "button", "input" }) |tag| {
+        const control: TextElement = .{ .tag = tag, .parent = &root };
+        const nested: TextElement = .{ .tag = "span", .parent = &control };
+        try std.testing.expect((try profile.figureControlPseudoViewIn(a, &nested, tags)) == null);
+    }
+    const open: TextElement = .{ .tag = "span" };
+    try std.testing.expect((try profile.figureControlPseudoViewIn(a, &open, tags)) == null);
+    var cycle: TextElement = .{ .tag = "span" }; cycle.parent = &cycle;
+    try std.testing.expect((try profile.figureControlPseudoViewIn(a, &cycle, tags)) == null);
+    const control: TextElement = .{ .tag = "button", .parent = &root };
+    var paired = child; paired.alternative_ancestry = &control;
+    try std.testing.expect((try profile.figureControlPseudoViewIn(a, &paired, tags)) == null);
+    for ([_][]const u8{
+        "button::-moz-focus-inner:hover{padding:0}", "button::-moz-focus-inner::before{padding:0}",
+        "button::unknown{padding:0}", ":not(button)::-moz-focus-inner{padding:0}",
+        ":is(button,span)::-moz-focus-inner{padding:0}", "div [type='button']::-moz-focus-inner{padding:0}",
+        "@media (unknown-feature:yes){button::-moz-focus-inner{padding:0}}",
+    }) |unknown| {
+        var refused = try parseAlloc(a, unknown); defer refused.deinit();
+        try std.testing.expect((try refused.figureControlPseudoViewIn(a, null, tags)) == null);
+    }
+    var mixed = try parseAlloc(a, css ++ "[type='button']{padding:0}button::unknown{padding:0}"); defer mixed.deinit();
+    const retained = (try mixed.figureControlPseudoViewIn(a, null, tags)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), retained.figure_rules.len);
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, retained.figureRootDirectionUseWithCaptionDomain(null, "", tags));
+}
+
+
+test "source issued generated SECTION focus absence refutes only its exact focus states" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const css = ":focus{outline-color:var(--outline-color-progressive--focus,#36c)}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const source = "[[File:missing.svg|thumb|caption]]";
+    const nodes = [_]FigureObservedNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "section", .parent = 2, .attributes = &.{.{ .name = "data-mw-section-id", .value = "1" }, .{ .name = "id", .value = "mwBg" }, .{ .name = "aria-labelledby", .value = "Frantsay" }} },
+        .{ .tag = "section", .parent = 3, .attributes = &.{.{ .name = "data-mw-section-id", .value = "-1" }, .{ .name = "id", .value = "mwDg" }, .{ .name = "aria-labelledby", .value = "Tovana" }} },
+        .{ .tag = "figure", .parent = 4, .attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }}, .has_text = false },
+        .{ .tag = "a", .parent = 5, .attributes = &.{.{ .name = "class", .value = "new" }, .{ .name = "href", .value = "/upload" }}, .has_text = false },
+        .{ .tag = "span", .parent = 6, .attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }}, .has_text = true },
+        .{ .tag = "figcaption", .parent = 5, .attributes = &.{}, .has_text = true },
+        .{ .tag = "a", .parent = 8, .attributes = &.{.{ .name = "href", .value = "/caption" }}, .has_text = true },
+    };
+    const context: FigureObservedContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .frame = 5,
+        .anchor = 6, .media = 7, .caption = 8, .media_kind = .missing,
+        .generated_section_source = .{ .source = source, .token = source, .root = &root } };
+    try std.testing.expect(try figureGeneratedSectionFocusAbsent(a, context));
+    var operation = ObservedFigureOperation.init(a, context); defer operation.deinit();
+    for ([_]u32{ 6, 9 }) |subject| for ([_]bool{ false, true }) |motion|
+        for ([_]bool{ false, true }) |visited| for ([_]bool{ false, true }) |hover|
+        for ([_]bool{ false, true }) |active| for ([_]ObservedFigureFocusMode{ .unfocused, .focused, .focus_visible }) |focus| {
+            const evaluation: ObservedFigureEvaluation = .{ .link_subject = subject, .reduced_motion = motion,
+                .focus_visible_supported = true, .link_state = .{ .visited = visited, .hover = hover, .active = active,
+                    .focus = focus != .unfocused, .focus_visible = focus == .focus_visible, .focus_within = focus != .unfocused } };
+            for ([_]u32{ 3, 4 }) |section| {
+                const declarations = (try observedFigureDeclarationsPrepared(a, &operation, section, null, evaluation)).?;
+                try std.testing.expectEqual(@as(usize, 0), declarations.len);
+                try std.testing.expect(try observedFigureGeneratedSectionNeutral(a, .{ .index = section,
+                    .declarations = declarations, .environment = .{ .complete = true } }));
+            }
+            // The actual A keeps its independently enumerated focus state.
+            const anchor = (try observedFigureDeclarationsPrepared(a, &operation, subject, null, evaluation)).?;
+            try std.testing.expectEqual(@as(usize, if (focus == .unfocused) 0 else 1), anchor.len);
+            // An unfocusable wrapper can still be hovered or contain focus.
+            const issued = try operation.sectionFocusEvaluation(evaluation);
+            const section_state = observedFigureStateAt(&nodes, 4, issued).?;
+            try std.testing.expect(section_state.focus == false and section_state.focus_visible == false);
+            try std.testing.expect(section_state.hover == null and section_state.active == null and section_state.focus_within == null);
+            try std.testing.expect(observedFigureStateAt(&nodes, context.root, issued) == null);
+    };
+    for (0..5) |mode| {
+        var changed = context;
+        const altered = try a.dupe(FigureObservedNode, &nodes);
+        switch (mode) {
+            0 => changed.generated_section_source = null,
+            1 => altered[4].attributes = &.{.{ .name = "data-mw-section-id", .value = "-1" }, .{ .name = "id", .value = "mwDg" }, .{ .name = "tabindex", .value = "0" }},
+            2 => altered[1].attributes = &.{.{ .name = "contenteditable", .value = "true" }},
+            3 => altered[2].attributes = &.{.{ .name = "class", .value = "mw-parser-output" }, .{ .name = "contenteditable", .value = "false" }},
+            4 => altered[1].attributes = &.{.{ .name = "style", .value = "-webkit-user-modify:read-write" }},
+            else => unreachable,
+        }
+        changed.nodes = altered;
+        try std.testing.expect(!try figureGeneratedSectionFocusAbsent(a, changed));
+        var denied = ObservedFigureOperation.init(a, changed); defer denied.deinit();
+        const declarations = (try observedFigureDeclarationsPrepared(a, &denied, 4, null, .{})).?;
+        try std.testing.expect(!try observedFigureGeneratedSectionNeutral(a, .{ .index = 4,
+            .declarations = declarations, .environment = .{ .complete = true } }));
+    }
+    for ([_][]const u8{ "section:focus-within{padding:1px}", "section:hover{padding:1px}",
+        "section{font-size:100%}", "section{all:initial}", "section:unknown{margin:0}",
+        "body{-moz-user-focus:normal}" }) |extra| {
+        var other = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{css, extra}), .screen); defer other.deinit();
+        var changed = context; changed.styles = &other;
+        var denied = ObservedFigureOperation.init(a, changed); defer denied.deinit();
+        const declarations = (try observedFigureDeclarationsPrepared(a, &denied, 4, null, .{})).?;
+        try std.testing.expect(!try observedFigureGeneratedSectionNeutral(a, .{ .index = 4,
+            .declarations = declarations, .environment = .{ .complete = true } }));
+    }
+}
+
+
+const TableSourceFocusDomain = struct {
+    context: TableContainingDirectionContext,
+    scope: TableContainingDirectionContext,
+    source: []const u8,
+    rules: std.DynamicBitSetUnmanaged,
+    root_ancestors: bool = false,
+    captured_scroll: bool = false,
+
+    fn contains(self: *const @This(), styles: *const Profile, nodes: []const ObservedStyleNode, subject: u32) bool {
+        if (styles != self.context.styles or subject >= nodes.len or std.ascii.eqlIgnoreCase(nodes[subject].tag, "a")) return false;
+        const table = if (nodes.ptr == self.context.nodes.ptr and nodes.len == self.context.nodes.len)
+            self.context.table else if (nodes.ptr == self.scope.nodes.ptr and nodes.len == self.scope.nodes.len)
+            self.scope.table else return false;
+        if (self.root_ancestors) return nodes.ptr == self.context.nodes.ptr and nodes.len == self.context.nodes.len and
+            subject != self.context.root and subject != table and
+            authoredElementDescendant(nodes, subject, self.context.root) and
+            authoredElementDescendant(nodes, table, subject) and tableRootStaticFocusAttributes(self.context, subject);
+        return authoredElementDescendant(nodes, subject, table);
+    }
+};
+
+
+fn authoredElementDescendant(nodes: []const ObservedStyleNode, child: u32, ancestor: u32) bool {
+    var index = child;
+    var remaining: usize = 512;
+    while (remaining != 0 and index < nodes.len) : (remaining -= 1) {
+        if (index == ancestor) return true;
+        const parent = nodes[index].parent orelse return false;
+        if (parent >= index) return false;
+        index = parent;
+    }
+    return false;
+}
+
+
+const languagePrimaryUncertain =
+    "aam aao abh abv acm acq acw acx acy adf adp ads aeb aec aed aen afb afg ajp ajs ajt apc apd arb arq " ++
+    "ars ary arz asd ase asf asp asq asw aue auz avl ayh ayl ayn ayp ayx bbz bfi bfk bgm bh bic bjd bjn " ++
+    "blg bog bqn bqy btj bve bvl bvu bzs ccq cdo cds cjr cjy cka cmk cmn cnp coa coy cpx cqu csc csd cse " ++
+    "csf csg csl csn csp csq csr csx czh czo dek dit doq drh drr drw dse dsl dsz dup dyl ecs ehs esl esn " ++
+    "eso eth fcs fse fsl fss gan gav gds gfx ggn gli gom gse gsg gsm gss gti gus guv hab haf hak hds hji " ++
+    "hks hnm hos hps hrr hsh hsl hsn ibi icl iks ils ilw in inl ins ise isg isr iw jak jax jcs jeg jhs ji " ++
+    "jks jls jos jsl jus jw kgc kgh kgi kgm knn koj krm ktr kvb kvk kvr kvs kwq kxd kxe kxl kzj kzt lak " ++
+    "lbs lce lcf lgs lii liw llo lls lmm lsb lsc lsg lsl lsn lso lsp lst lsv lsw lsy ltg luh lvs lws lzh " ++
+    "max mdl meg meo mfa mfb mfs min mnp mo mqg mrd mre msd msi msr mst mui mwj myd myt mzc mzg mzy nad " ++
+    "nan nbs ncp ncs nns nnx nom nsi nsl nsp nsr nte nts nxu nzs okl orn ors oun pat pcr pel pga pgz pks " ++
+    "pmc pmk pmu ppa ppr prl prp pry prz psc psd pse psg psl pso psp psr puz pys rib rms rnb rsi rsl rsm " ++
+    "rsn sca sdl sfb sfs sgg sgx shl shu sjc skk slf sls smd snb sqk sqs sqx ssh ssp ssr svk swc swh swl " ++
+    "syy szd szs tdu thc thw thx tie tkk tlw tmk tmp tmw tne tnf tpw tse tsf tsm tsq tss tsy tza ugn ugy " ++
+    "ukl uks uok urk uzn uzs vgt vkk vkt vsi vsl vsv wbs wuu xba xia xkh xki xml xmm xms xrq xss ybd yds " ++
+    "ygs yhs yma ymt yol yos ysl ysm yue yuu zhk zib zir zkb zlm zmi zsl zsm " ++
+    "";
+// Only primary, optional script, optional alphabetic region. Extlangs,
+// variants, grandfathered forms and extensions cannot lend this refutation.
+// Different unambiguous primary subtags cannot match through CSS extended
+// filtering; same-primary script/region differences remain deliberately unknown.
+
+
+fn languageRefutationPrimary(value: []const u8) ?[]const u8 {
+    if (!simpleLanguage(value)) return null;
+    var parts = std.mem.splitScalar(u8, value, '-');
+    const primary = parts.next() orelse return null;
+    if (primary.len < 2 or primary.len > 8) return null;
+    if (parts.next()) |second| {
+        if (second.len == 4) {
+            if (parts.next()) |region| if (region.len != 2) return null;
+        } else if (second.len != 2) return null;
+        if (parts.next() != null) return null;
+    }
+    return primary;
+}
+
+
+fn pageStaticMotionProperty(name: []const u8) bool {
+    for ([_][]const u8{ "animation-name", "animation-delay", "animation-duration", "animation-iteration-count",
+        "animation-direction", "animation-fill-mode", "animation-play-state", "animation-timing-function",
+        "transition-property", "transition-delay", "transition-duration", "transition-timing-function", "scroll-behavior" }) |property|
+        if (std.ascii.eqlIgnoreCase(name, property)) return true;
+    return false;
+}
+
+
+pub fn resolveObservedRootTableContainingDirection(a: std.mem.Allocator,
+    contexts: []const TableContainingDirectionContext, native_parent: ?types.TableContainingDirection,
+    expected: ?types.TableStyle, plain_parent: bool) !?TableContainingDirectionResult
+{
+    if (expected) |style| if (!types.validUnboundTableStyle(style)) return null;
+    return resolveObservedTableContainingDirectionWithStyle(a, contexts, native_parent, expected, plain_parent);
+}
+
+
+fn tableRootMarginsAgree(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, pending: types.ContainerMargins) !bool
+{
+    // Compare local CSS units before native em normalization, in both logical mappings.
+    for ([_]bool{ false, true }) |rtl| {
+        const observed = try observedFigureEdges(a, declarations, environment, false, rtl, 1, null);
+        if (observed.unresolved) return false;
+        const margins = observed.value orelse return false;
+        inline for (.{ "top", "right", "bottom", "left" }) |side|
+            if (!observedFigureMarginEqual(@field(margins, side), @field(pending, side))) return false;
+    }
+    return true;
+}
+
+
+fn tableRootSourceFocusDomain(a: std.mem.Allocator, context: TableContainingDirectionContext) !TableSourceFocusDomain {
+    var rules = try std.DynamicBitSetUnmanaged.initEmpty(a, context.styles.observed_figure_rules.len);
+    for (context.styles.observed_figure_rules, 0..) |rule, index|
+        if (try tableSourceFocusRule(a, rule)) rules.set(index);
+    return .{ .context = context, .scope = context, .source = "", .rules = rules, .root_ancestors = true };
+}
+
+
+fn tableRootStaticFocusAttributes(context: TableContainingDirectionContext, subject: u32) bool {
+    if (subject >= context.nodes.len) return false;
+    const owner = context.nodes[subject];
+    if (std.ascii.eqlIgnoreCase(owner.tag, "section")) {
+        if (owner.attributes.len != 3) return false;
+        const section = observedFigureAttribute(owner, "data-mw-section-id") orelse return false;
+        if (section.len == 0 or (section.len > 1 and section[0] == '0')) return false;
+        for (section) |byte| if (!std.ascii.isDigit(byte)) return false;
+        _ = std.fmt.parseInt(u64, section, 10) catch return false;
+        for ([_][]const u8{ "id", "aria-labelledby" }) |name| {
+            const value = observedFigureAttribute(owner, name) orelse return false;
+            if (value.len == 0 or value.len > 256) return false;
+            for (value) |byte| if (!std.ascii.isAlphanumeric(byte) and std.mem.indexOfScalar(u8, "_.:-", byte) == null) return false;
+        }
+    } else if (std.ascii.eqlIgnoreCase(owner.tag, "div")) {
+        if (!std.mem.eql(u8, observedFigureAttribute(owner, "align") orelse return false, "center")) return false;
+        for (owner.attributes) |attribute| {
+            var known = false;
+            for ([_][]const u8{ "align", "about", "typeof", "id", "data-mw" }) |name|
+                if (std.ascii.eqlIgnoreCase(attribute.name, name)) { known = true; break; };
+            if (!known) return false;
+        }
+    } else return false;
+    var cursor: ?u32 = subject;
+    var remaining = context.nodes.len;
+    while (cursor) |index| {
+        if (index >= context.nodes.len or remaining == 0) return false;
+        remaining -= 1;
+        const node = context.nodes[index];
+        var block = false;
+        for ([_][]const u8{ "html", "body", "main", "article", "div", "section" }) |tag|
+            if (std.ascii.eqlIgnoreCase(node.tag, tag)) { block = true; break; };
+        if (!block) return false;
+        for (node.attributes) |attribute| {
+            // Unknown activation/editing attributes cannot certify an immutable
+            // nonfocusable ancestor. Every actual path attribute stays retained.
+            var known = false;
+            for ([_][]const u8{ "class", "id", "lang", "dir", "aria-labelledby", "align", "about", "typeof", "data-mw",
+                "data-mw-section-id", "data-mw-parsoid-version", "data-mw-html-version", "data-mw-ve-target-container" }) |name|
+                if (std.ascii.eqlIgnoreCase(attribute.name, name)) { known = true; break; };
+            if (!known) return false;
+            if (std.ascii.eqlIgnoreCase(attribute.name, "class")) {
+                var classes = std.mem.tokenizeAny(u8, attribute.value, " \t\r\n\x0c");
+                while (classes.next()) |class| for ([_][]const u8{ "NavFrame", "NavContent", "collapsible", "sortable",
+                    "mw-collapsible", "mw-collapsed", "mw-collapsible-content", "oo-ui-widget", "mw-ui-button" }) |hook|
+                    if (std.mem.eql(u8, class, hook)) return false;
+            }
+        }
+        if (node.parent == null) return index == 0 and std.ascii.eqlIgnoreCase(node.tag, "html");
+        cursor = node.parent;
+    }
+    return false;
+}
+
+
+fn tableSourceFocusRule(a: std.mem.Allocator, rule: ObservedFigureRule) !bool {
+    const selector = rule.selector orelse return false;
+    if (!std.mem.eql(u8, trim(rule.raw_selector), ":focus") or rule.conditional or rule.conditions.len != 0 or
+        rule.rank_unknown or rule.list_uncertain or !selector.syntax_known or selector.pseudo != null) return false;
+    var at: usize = 0; var found = false;
+    while (try nextDeclarationAlloc(a, rule.css, &at)) |declaration| {
+        defer a.free(declaration);
+        const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse return false;
+        if (!std.ascii.eqlIgnoreCase(trim(declaration[0..colon]), "outline-color") or
+            customPriority(declaration[colon + 1..]).unknown) return false;
+        found = true;
+    }
+    return found;
+}
+
+
+fn tableSourceStaticFocusDeclarations(declarations: []const ObservedFigureDeclaration) bool {
+    for (declarations) |declaration| {
+        if (declaration.syntax_unknown) return false;
+        for ([_][]const u8{ "user-focus", "user-input", "user-modify" }) |suffix|
+            if (std.ascii.endsWithIgnoreCase(declaration.name, suffix)) return false;
+        for ([_][]const u8{ "behavior", "-ms-behavior", "-moz-binding", "user-focus", "-moz-user-focus",
+            "user-modify", "-webkit-user-modify", "nav-index", "nav-up", "nav-down", "nav-left", "nav-right",
+            "appearance", "-webkit-appearance", "-moz-appearance" }) |property|
+            if (std.ascii.eqlIgnoreCase(declaration.name, property)) return false;
+    }
+    return true;
+}
+
+
+test "observed root table neutral reduced motion retains section and aligned parent without admitting motion or box effects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    // Byte-exact rule from the authenticated FR current served stylesheet01.
+    const reduced = "@media (prefers-reduced-motion:reduce){*,::before,::after{animation-delay:-0.01ms !important;animation-duration:0.01ms !important;animation-iteration-count:1 !important;scroll-behavior:auto !important;transition-duration:0ms !important}}";
+    const nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "section", .parent = 2, .attributes = &.{.{ .name = "id", .value = "section" }} },
+        .{ .tag = "div", .parent = 3, .attributes = &.{ .{ .name = "align", .value = "center" }, .{ .name = "id", .value = "parent" } } },
+        .{ .tag = "table", .parent = 4, .attributes = &.{.{ .name = "style", .value = "margin:0 auto" }} },
+    };
+    const expected = (try resolveInlineTableAlloc(a, "margin:0 auto")).style.?;
+    const css = "html{direction:rtl}" ++ reduced;
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    var contexts = [_]TableContainingDirectionContext{.{ .styles = &styles, .nodes = &nodes, .root = 2, .table = 5 }};
+    const result = (try resolveObservedRootTableContainingDirection(a, &contexts, null, expected, true)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(types.TableContainingDirection.rtl, result.direction);
+    try std.testing.expect(result.responsive_geometry_accounted);
+    for ([_][]const u8{ "section", "parent" }) |owner| {
+        for ([_][]const u8{ "animation-name:spin!important", "transition-duration:1s!important", "transition-delay:1s!important", "scroll-behavior:smooth!important", "font-size:120%", "margin:1px", "padding:1px", "color:red", "all:initial", "unknown-motion:1" }) |declaration| {
+            const altered = try std.fmt.allocPrint(a, "{s}#{s}{{{s}}}", .{ css, owner, declaration });
+            var changed = try parseForTargetAlloc(a, altered, .screen); defer changed.deinit();
+            contexts[0].styles = &changed;
+            try std.testing.expect((try resolveObservedRootTableContainingDirection(a, &contexts, null, expected, true)) == null);
+        }
+    }
+}
+
+
+test "complete language refutation distinguishes primary subtags without guessing script aliases or extended matching" {
+    for ([_][2][]const u8{ .{ "vi-Hani", "fr" }, .{ "VI-hANI", "FR-ca" }, .{ "vi-Latn-VN", "fr-Latn-CA" }, .{ "fr-CA", "de" } }) |pair|
+        try std.testing.expect(languageValueRefutes(pair[0], pair[1]));
+    for ([_][2][]const u8{ .{ "vi-Hani", "vi" }, .{ "vi-Hani", "vi-Hani" }, .{ "vi-Hani", "vi-Latn" },
+        .{ "fr-CA", "fr-Latn-CA" }, .{ "iw-Hebr", "he" }, .{ "zh-cmn", "fr" },
+        .{ "art-lojban", "jbo" }, .{ "i-klingon", "tlh" }, .{ "en-GB-oed", "fr" }, .{ "fr-419", "vi" },
+        .{ "vi-Han", "fr" }, .{ "vi-Hani-x-private", "fr" }, .{ "vi--Hani", "fr" }, .{ "*", "fr" } }) |pair| {
+        try std.testing.expect(!languageValueRefutes(pair[0], pair[1]));
+    }
+    const nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "lang", .value = "fr" }} },
+        .{ .tag = "section", .parent = 0, .attributes = &.{} },
+        .{ .tag = "section", .parent = 1, .attributes = &.{.{ .name = "lang", .value = "vi-Hani" }} },
+    };
+    try std.testing.expect(observedBareLanguageRefutes(":lang(vi-Hani)", &nodes, 1));
+    try std.testing.expect(!observedBareLanguageRefutes(":lang(vi-Hani)", &nodes, 2));
+    try std.testing.expect(!observedBareLanguageRefutes(":lang(vi-Hani),:lang(fr)", &nodes, 1));
+    var unknown = nodes;
+    unknown[0].attributes = &.{};
+    try std.testing.expect(!observedBareLanguageRefutes(":lang(vi-Hani)", &unknown, 1));
+    unknown[0].attributes = &.{.{ .name = "xml:lang", .value = "fr" }};
+    try std.testing.expect(!observedBareLanguageRefutes(":lang(vi-Hani)", &unknown, 1));
+}
+
+
+const RootAncestorSelectorProofTest = struct {
+    const section_attributes = [_]FigureObservedAttribute{
+        .{ .name = "data-mw-section-id", .value = "3" },
+        .{ .name = "id", .value = "mwFg" },
+        .{ .name = "aria-labelledby", .value = "Conventions_internationales" },
+    };
+    fn nodes() [6]ObservedStyleNode {
+        return .{
+            .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "lang", .value = "fr" }} },
+            .{ .tag = "body", .parent = 0, .attributes = &.{} },
+            .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+            .{ .tag = "section", .parent = 2, .attributes = &section_attributes },
+            .{ .tag = "div", .parent = 3, .attributes = &.{.{ .name = "align", .value = "center" }} },
+            .{ .tag = "table", .parent = 4, .attributes = &.{.{ .name = "style", .value = "margin:0 auto" }} },
+        };
+    }
+    const css = ":focus{outline-color:var(--outline-color-progressive--focus,#36c)}:lang(vi-Hani){font-family:'Nom Na Tong',serif}";
+};
+
+test "root generated ancestor focus proof keeps complete attributes editability and box refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try parseForTargetAlloc(a, RootAncestorSelectorProofTest.css, .screen); defer styles.deinit();
+    var nodes = RootAncestorSelectorProofTest.nodes();
+    var context: TableContainingDirectionContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .table = 5 };
+    const domain = try tableRootSourceFocusDomain(a, context);
+    try std.testing.expect(domain.contains(&styles, &nodes, 3));
+    try std.testing.expect(domain.contains(&styles, &nodes, 4));
+    try std.testing.expect(!domain.contains(&styles, &nodes, 2));
+    try std.testing.expect(!domain.contains(&styles, &nodes, 5));
+    const ordinary = (try observedStyleNodeDeclarationsWithLanguage(a, &styles, &nodes, 3, null, null, .{}, true)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), ordinary.items.len);
+    try std.testing.expectEqualStrings("outline-color", ordinary.items[0].name);
+    const selected = (try observedStyleNodeDeclarationsWithLanguage(a, &styles, &nodes, 3, null, null, .{ .table_focus = &domain }, true)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 0), selected.items.len);
+    const expected = (try resolveInlineTableAlloc(a, "margin:0 auto")).style.?;
+    const result = (try resolveObservedRootTableContainingDirection(a, &.{context}, null, expected, true)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(types.TableContainingDirection.ltr, result.direction);
+    try std.testing.expect(result.responsive_geometry_accounted);
+    for ([_][]const u8{ "tabindex", "contenteditable", "autofocus", "onfocus", "accesskey", "role", "unknown" }) |name| {
+        nodes[1].attributes = &.{.{ .name = name, .value = "0" }};
+        try std.testing.expect(!domain.contains(&styles, &nodes, 3));
+        try std.testing.expect((try resolveObservedRootTableContainingDirection(a, &.{context}, null, expected, true)) == null);
+    }
+    nodes[1].attributes = &.{};
+    nodes[3].attributes = &.{.{ .name = "id", .value = "fragment" }};
+    try std.testing.expect(!domain.contains(&styles, &nodes, 3));
+    nodes = RootAncestorSelectorProofTest.nodes();
+    nodes[3].tag = "button";
+    try std.testing.expect(!domain.contains(&styles, &nodes, 3));
+    nodes = RootAncestorSelectorProofTest.nodes();
+    nodes[3].tag = "unknown-widget";
+    try std.testing.expect(!domain.contains(&styles, &nodes, 3));
+    nodes = RootAncestorSelectorProofTest.nodes();
+    for ([_][]const u8{ "section{overflow:auto}", "section{outline-color:red}", "section{font-family:serif}",
+        "section:focus{outline-color:red}", "@media(max-width:400px){:focus{outline-color:red}}", "section{animation-name:spin}",
+        "html{-webkit-user-modify:read-write}", "body{user-modify:read-write}",
+        "html{-moz-user-focus:normal}", "body{user-focus:normal}", "html{-moz-user-input:enabled}",
+        "body{user-input:enabled}", "html{behavior:url(widget.htc)}", "body{appearance:button}",
+        "@media(max-width:400px){html{-moz-user-focus:normal}}" }) |extra| {
+        var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ RootAncestorSelectorProofTest.css, extra }), .screen); defer changed.deinit();
+        context.styles = &changed;
+        try std.testing.expect((try resolveObservedRootTableContainingDirection(a, &.{context}, null, expected, true)) == null);
+    }
+}
+
+pub const SourceParentTypographyContext = struct {
+    styles: *const Profile,
+    nodes: []const ObservedStyleNode,
+    root: u32,
+    frame: u32,
+    parent: u32,
+    image: u32,
+    caption: ?u32 = null,
+    caption_absent: bool = false,
+    image_map: ?u32 = null,
+    map_areas: []const u32 = &.{},
+    description_link: ?u32 = null,
+    map_description: ?types.MapDescription = null,
+};
+
+pub const AuthoredElementObservedContext = struct {
+    styles: *const Profile,
+    nodes: []const ObservedStyleNode,
+    root: u32,
+    element: u32,
+};
+
+fn observedTableBoxSizing(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, parent: ?types.ContainerBoxSizing) !?types.ContainerBoxSizing
+{
+    const inherited: ?[]const u8 = if (parent) |value| switch (value) {
+        .content_box => "content-box", .border_box => "border-box",
+    } else null;
+    const value = try observedFigureKeyword(a, declarations, "box-sizing", &.{}, environment,
+        &.{ "content-box", "border-box" }, "content-box", inherited, false, "border-box");
+    if (value.unresolved or value.value == null) return null;
+    return if (std.ascii.eqlIgnoreCase(value.value.?, "border-box")) .border_box else .content_box;
+}
+
+fn observedTableCellPadding(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, rtl: bool, font_scale: f32, inherited: ?types.ContainerMargins) !ObservedFigureMargins
+{
+    var combined: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    defer combined.deinit(a);
+    try combined.append(a, .{ .name = "padding", .raw = "1px", .priority = .{},
+        .uncertain = false, .rank_unknown = false, .syntax_unknown = false,
+        .source_index = null, .source_byte_start = 0 });
+    // Maintained source declarations are numbered from one. Preserve an unknown
+    // foreign rank instead of accidentally giving it UA precedence.
+    for (declarations) |declaration| {
+        if (declaration.priority.order == 0) return .{ .unresolved = true };
+        try combined.append(a, declaration);
+    }
+    return observedFigureEdges(a, combined.items, environment, true, rtl, font_scale, inherited);
+}
+
+pub const ObservedTableViewportBox = struct {
+    style: types.TableStyle,
+    block: bool,
+    box_sizing: types.ContainerBoxSizing,
+    max_width: ?types.StyleWidth,
+    direction: types.TableContainingDirection,
+};
+
+pub const ObservedTableCellBox = struct { style: types.CellStyle, background: ?[]const u8 };
+
+fn observedTableLengthOrigin(value: types.StyleLength, basis: types.FontScaleBasis) ?types.StyleLength {
+    var result = value;
+    if (result.unit == .em and basis == .css_px) result.unit = .px;
+    if (basis == .context or !types.validStyleLength(result)) return null;
+    return result;
+}
+
+fn observedTableEdgesOrigin(value: types.ContainerMargins, basis: types.FontScaleBasis) ?types.ContainerMargins {
+    var result = value;
+    inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        if (@field(result, side) == .length) @field(result, side) = .{ .length = observedTableLengthOrigin(@field(result, side).length, basis) orelse return null };
+    }
+    return result;
+}
+
+const ObservedTableWidth = union(enum) { automatic, fit_content, known: types.StyleWidth, unknown };
+
+fn observedTablePaddingEdges(value: types.ContainerMargins) ?types.StyleEdges {
+    var result: types.StyleEdges = undefined;
+    inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        const edge = @field(value, side);
+        if (edge != .length) return null;
+        @field(result, side) = edge.length;
+    }
+    return result;
+}
+
+fn observedTableWidthWithHint(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, property: []const u8, scale: f32, basis: types.FontScaleBasis,
+    absent: ObservedTableWidth, hint: ObservedTableWidth) !ObservedTableWidth
+{
+    return observedTableWidthWithHintIn(a, declarations, environment, property, scale, basis, absent, hint, false);
+}
+
+fn observedTableWidth(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, property: []const u8, scale: f32, basis: types.FontScaleBasis,
+    absent: ObservedTableWidth) !ObservedTableWidth
+{
+    return observedTableWidthWithHint(a, declarations, environment, property, scale, basis, absent, absent);
+}
+
+fn observedTableWidthWithHintIn(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment, property: []const u8, scale: f32, basis: types.FontScaleBasis,
+    absent: ObservedTableWidth, hint: ObservedTableWidth, comptime fit_content: bool) !ObservedTableWidth
+{
+    const candidates = try observedFigurePropertyCandidates(a, declarations, property, &.{});
+    defer a.free(candidates);
+    var definite = false; for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    var selected: ?ObservedTableWidth = if (definite) null else hint;
+    for (candidates) |candidate| {
+        if (candidate.syntax_unknown or candidate.rank_unknown) return .unknown;
+        const raw = switch (try customColorValue(a, environment, candidate.raw)) {
+            .unknown => return .unknown, .invalid => "initial", .known => |raw| trim(raw),
+        };
+        const value: ObservedTableWidth = if (std.ascii.eqlIgnoreCase(raw, "initial") or std.ascii.eqlIgnoreCase(raw, "unset") or
+            std.ascii.eqlIgnoreCase(raw, if (std.mem.eql(u8, property, "max-width")) "none" else "auto")) absent
+            else if (fit_content and std.mem.eql(u8, property, "width") and std.ascii.eqlIgnoreCase(raw, "fit-content")) .fit_content
+            else blk: {
+                var parsed = styleWidth(raw) orelse break :blk .unknown;
+                if (parsed.unit == .em) {
+                    parsed.value *= scale;
+                    if (basis == .css_px) parsed.unit = .px else if (basis != .normal_body) break :blk .unknown;
+                }
+                if (!types.validStyleWidth(parsed)) break :blk .unknown;
+                break :blk .{ .known = parsed };
+            };
+        if (value == .unknown) return .unknown;
+        if (selected) |prior| {
+            if (!observedFigureDataEqual(ObservedTableWidth, prior, value, 0)) return .unknown;
+        } else selected = value;
+    }
+    return selected orelse .unknown;
+}
+
+fn observedTableBorderStyle(border_edges: types.FigureBorderEdges, basis: types.FontScaleBasis) ?types.StyleBorder {
+    var result: types.StyleBorderEdges = undefined;
+    var all_none = true;
+    inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        const edge = @field(border_edges, side);
+        @field(result, side) = switch (edge) {
+            .none => .none, .hidden => .hidden,
+            .solid => |line| .{ .solid = .{ .width = observedTableLengthOrigin(line.width, basis) orelse return null,
+                .color = if (line.color.kind == .rgb) line.color.value orelse return null else return null } },
+            .dotted => |line| .{ .dotted = .{ .width = observedTableLengthOrigin(line.width, basis) orelse return null,
+                .color = if (line.color.kind == .rgb) line.color.value orelse return null else return null } },
+        };
+        all_none = all_none and edge == .none;
+    }
+    if (all_none) return .none;
+    if (result.top == .solid and result.right == .solid and result.bottom == .solid and result.left == .solid and
+        std.meta.eql(result.top.solid.width, result.right.solid.width) and std.meta.eql(result.top.solid.width, result.bottom.solid.width) and
+        std.meta.eql(result.top.solid.width, result.left.solid.width) and std.mem.eql(u8, result.top.solid.color, result.right.solid.color) and
+        std.mem.eql(u8, result.top.solid.color, result.bottom.solid.color) and std.mem.eql(u8, result.top.solid.color, result.left.solid.color))
+        return .{ .solid = .{ .width = result.top.solid.width, .color = result.top.solid.color } };
+    return .{ .edges = result };
+}
+
+const ObservedTableDeclarationPath = struct {
+    declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment,
+    box_sizing: types.ContainerBoxSizing,
+    vertical_align: []const u8,
+};
+
+fn observedTableDeclarationPath(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    subject: u32, viewport_width: f64, operation: ?*ObservedTableTextOperation) !?ObservedTableDeclarationPath
+{
+    if (subject >= context.nodes.len or !std.math.isFinite(viewport_width) or viewport_width < 0) return null;
+    if (operation) |cached| {
+        if (cached.context.styles != context.styles or cached.context.nodes.ptr != context.nodes.ptr or
+            cached.context.nodes.len != context.nodes.len or cached.context.root != context.root or
+            cached.context.table != context.table or cached.viewport_width != viewport_width) return null;
+    } else if (!observedStyleGraphValid(context.styles, context.nodes, context.root)) return null;
+    var reverse: [512]u32 = undefined; var count: usize = 0; var next: ?u32 = subject;
+    var inherited: ?ObservedTableDeclarationPath = null;
+    while (next) |index| : (next = context.nodes[index].parent) {
+        if (operation) |cached| if (cached.layout_paths[index]) |known| { inherited = known; break; };
+        if (count == reverse.len) return null;
+        reverse[count] = index; count += 1;
+    }
+    if (count == 0) return inherited;
+    if (inherited == null and reverse[count - 1] != 0) return null;
+    var environment: CustomEnvironment = if (inherited) |known| known.environment else .{ .complete = true };
+    var sizing: types.ContainerBoxSizing = if (inherited) |known| known.box_sizing else .content_box;
+    var vertical: []const u8 = if (inherited) |known| known.vertical_align else "baseline";
+    var selected: []const ObservedFigureDeclaration = &.{};
+    while (count != 0) {
+        count -= 1; const index = reverse[count];
+        var collected = (try observedStyleNodeDeclarationsWithLanguage(a, context.styles, context.nodes, index, null, null,
+            .{ .viewport_width = viewport_width, .table_focus = if (operation) |held| held.focus_domain else null }, true)) orelse return null;
+        selected = try collected.toOwnedSlice(a);
+        environment = try observedFigureCustomEnvironment(a, selected, environment, !context.styles.globally_unresolved);
+        if (context.nodes[index].custom_environment) |issued| for (issued.values) |binding| {
+            if (binding.value != .unknown and !sameObservedCustomValue(binding.value, environment.get(binding.name))) return null;
+        };
+        if (!try observedFigureStaticMotion(a, selected, environment)) return null;
+        const tag = context.nodes[index].tag;
+        const group = std.ascii.eqlIgnoreCase(tag, "tbody") or std.ascii.eqlIgnoreCase(tag, "thead") or std.ascii.eqlIgnoreCase(tag, "tfoot");
+        const row = std.ascii.eqlIgnoreCase(tag, "tr");
+        const cell = std.ascii.eqlIgnoreCase(tag, "td") or std.ascii.eqlIgnoreCase(tag, "th");
+        const direct_row = row and context.nodes[index].parent != null and
+            std.ascii.eqlIgnoreCase(context.nodes[context.nodes[index].parent.?].tag, "table");
+        const hint: []const u8 = if (group or direct_row) "middle" else if (row or cell) vertical else "baseline";
+        const alignment = try observedFigureKeyword(a, selected, "vertical-align", &.{}, environment,
+            &.{ "baseline", "top", "middle", "bottom" }, "baseline", vertical, false, hint);
+        if (alignment.unresolved) return null;
+        vertical = alignment.value.?;
+        if (std.ascii.eqlIgnoreCase(context.nodes[index].tag, "table")) {
+            sizing = (try observedTableBoxSizing(a, selected, environment, sizing)) orelse return null;
+        } else {
+            const computed = try observedFigureKeyword(a, selected, "box-sizing", &.{}, environment,
+                &.{ "content-box", "border-box" }, "content-box", if (sizing == .border_box) "border-box" else "content-box", false, "content-box");
+            if (computed.unresolved) return null;
+            sizing = if (std.ascii.eqlIgnoreCase(computed.value.?, "border-box")) .border_box else .content_box;
+        }
+        if (operation) |cached| cached.layout_paths[index] = .{ .declarations = selected, .environment = environment,
+            .box_sizing = sizing, .vertical_align = vertical };
+    }
+    return .{ .declarations = selected, .environment = environment, .box_sizing = sizing, .vertical_align = vertical };
+}
+
+fn observedTablePropertiesAccounted(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment) !bool
+{
+    var used = try ObservedFigurePropertyUse.init(a, declarations); defer used.deinit(a);
+    used.customEnvironment();
+    if (!try used.staticMotion(a, environment)) return false;
+    for ([_][]const u8{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch",
+        "font-size-adjust", "font-feature-settings", "font-variation-settings", "color", "background-color",
+        "direction", "unicode-bidi", "display", "width", "min-width", "height", "min-height", "max-height", "max-width", "box-sizing",
+        "float", "clear", "position", "overflow", "overflow-x", "overflow-y", "line-height", "text-align",
+        "vertical-align", "border-collapse", "border-spacing" }) |property|
+        used.property(property, if (std.mem.startsWith(u8, property, "font-")) &.{"font"}
+            else if (std.mem.eql(u8, property, "background-color")) &.{"background"} else &.{});
+    for (authored_inherited_neutral) |item| used.property(item.property, if (item.shorthand) |value| &.{value} else &.{});
+    used.boxEdges(true); used.boxEdges(false); used.borderEdges();
+    return used.complete();
+}
+
+pub fn resolveObservedTableViewportBox(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    viewport_width: f64, scale: f32, basis: types.FontScaleBasis, containing_direction: types.TableContainingDirection,
+    own_direction: types.TableContainingDirection, operation: ?*ObservedTableTextOperation) !?ObservedTableViewportBox
+{
+    return resolveObservedTableBoxIn(a, context, viewport_width, scale, basis, containing_direction, own_direction, operation, false);
+}
+
+pub fn resolveObservedTableFloatViewportBox(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    viewport_width: f64, scale: f32, basis: types.FontScaleBasis, containing_direction: types.TableContainingDirection,
+    own_direction: types.TableContainingDirection, operation: ?*ObservedTableTextOperation) !?ObservedTableViewportBox
+{
+    if (basis != .normal_body) return null;
+    return resolveObservedTableBoxIn(a, context, viewport_width, scale, basis, containing_direction, own_direction, operation, true);
+}
+
+fn resolveObservedTableBoxIn(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    viewport_width: f64, scale: f32, basis: types.FontScaleBasis, containing_direction: types.TableContainingDirection,
+    own_direction: types.TableContainingDirection, operation: ?*ObservedTableTextOperation, comptime float_policy: bool) !?ObservedTableViewportBox
+{
+    if (!std.math.isFinite(scale) or scale < 0 or basis == .context) return null;
+    const path = (try observedTableDeclarationPath(a, context, context.table, viewport_width, operation)) orelse return null;
+    const declarations = path.declarations; const environment = path.environment;
+    if (!try observedTablePropertiesAccounted(a, declarations, environment)) return null;
+    const display = try observedFigureKeyword(a, declarations, "display", &.{}, environment,
+        &.{ "table", "block" }, "inline", null, false, "table");
+    const position = try observedFigureKeyword(a, declarations, "position", &.{}, environment, &.{"static"}, "static", null, false, "static");
+    const floating = try observedFigureKeyword(a, declarations, "float", &.{}, environment, if (float_policy) &.{ "none", "right" } else &.{"none"}, "none", null, false, "none");
+    if (display.unresolved or position.unresolved or floating.unresolved or
+        (!std.ascii.eqlIgnoreCase(display.value.?, "table") and !std.ascii.eqlIgnoreCase(display.value.?, "block")) or
+        !std.ascii.eqlIgnoreCase(position.value.?, "static") or
+        (!std.ascii.eqlIgnoreCase(floating.value.?, "none") and (!float_policy or !std.ascii.eqlIgnoreCase(floating.value.?, "right")))) return null;
+    const block = std.ascii.eqlIgnoreCase(display.value.?, "block");
+    if (block and !std.ascii.eqlIgnoreCase(floating.value.?, "none")) return null;
+    if (!block and path.box_sizing != .border_box) return null;
+    inline for (.{ "overflow", "overflow-x", "overflow-y" }) |property| {
+        const value = try observedFigureKeyword(a, declarations, property,
+            if (std.mem.eql(u8, property, "overflow")) &.{} else &.{"overflow"}, environment,
+            if (block) &.{"auto"} else &.{"visible"}, "visible", null, false, "visible");
+        if (value.unresolved or value.value == null or !std.ascii.eqlIgnoreCase(value.value.?, if (block) "auto" else "visible")) return null;
+    }
+    inline for (.{ "height", "min-height", "max-height", "min-width" }) |property| {
+        const neutral = if (std.mem.eql(u8, property, "max-height")) "none" else "auto";
+        const value = try observedFigureKeyword(a, declarations, property, &.{}, environment, &.{neutral}, neutral, null, false, neutral);
+        if (value.unresolved or value.value == null or !std.ascii.eqlIgnoreCase(value.value.?, neutral)) return null;
+    }
+    const width = try observedTableWidthWithHintIn(a, declarations, environment, "width", scale, basis, .automatic, .automatic, float_policy);
+    const maximum = try observedTableWidth(a, declarations, environment, "max-width", scale, basis, .automatic);
+    if (width == .unknown or maximum == .unknown or
+        (block and ((if (float_policy) width != .fit_content else width != .known) or maximum != .known)) or
+        (!block and (maximum != .automatic or width == .fit_content)) or
+        (float_policy and width == .known and width.known.unit == .percent)) return null;
+    const margins = try observedFigureEdges(a, declarations, environment, false, own_direction == .rtl, scale, null);
+    const padding = try observedFigureEdges(a, declarations, environment, true, own_direction == .rtl, scale, null);
+    if (margins.unresolved or padding.unresolved) return null;
+    const resolved_margins = observedTableEdgesOrigin(margins.value.?, basis) orelse return null;
+    const resolved_padding = observedTablePaddingEdges(observedTableEdgesOrigin(padding.value.?, basis) orelse return null) orelse return null;
+    const border = observedTableBorderStyle((try observedFigureBorders(a, declarations, environment, scale)) orelse return null, basis) orelse return null;
+    const background = try observedFigureColor(a, declarations, "background-color", environment, null, null);
+    if (background.unresolved or background.value == null or background.value.?.kind == .native_theme) return null;
+    const collapse = try observedFigureKeyword(a, declarations, "border-collapse", &.{}, environment, &.{"collapse"}, "separate", "separate", true, "separate");
+    const clear = try observedFigureKeyword(a, declarations, "clear", &.{}, environment, &.{ "none", "left", "right", "both" }, "none", null, false, "none");
+    if (collapse.unresolved or clear.unresolved or !std.ascii.eqlIgnoreCase(collapse.value.?, "collapse")) return null;
+    var style: types.TableStyle = .{ .width = if (width == .known) width.known else null,
+        .background = if (background.value.?.kind == .rgb) background.value.?.value else null,
+        .border = border, .clear = std.meta.stringToEnum(types.FigureClear, clear.value.?) orelse return null };
+    const automatic = resolved_margins.left == .auto or resolved_margins.right == .auto;
+    if (float_policy and automatic) return null;
+    if (automatic) { style.margin_values = resolved_margins; style.containing_direction = containing_direction; }
+    else style.margins = observedTablePaddingEdges(resolved_margins) orelse return null;
+    // Collapsed wide TABLE padding does not establish a table-box gap. Narrow
+    // block padding is an actual block edge and must stay explicitly represented.
+    if (block) style.padding = resolved_padding else style.collapse = .collapse;
+    if (float_policy and std.ascii.eqlIgnoreCase(floating.value.?, "right")) style.float_side = .right;
+    if (!types.validTableStyle(style)) return null;
+    return .{ .style = style, .block = block, .box_sizing = path.box_sizing,
+        .max_width = if (maximum == .known) maximum.known else null, .direction = own_direction };
+}
+
+pub fn resolveObservedTableViewportCellBox(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    subject: u32, viewport_width: f64, scale: f32, basis: types.FontScaleBasis,
+    direction: types.TableContainingDirection, alignment: types.CellTextAlign, operation: ?*ObservedTableTextOperation) !?ObservedTableCellBox
+{
+    return resolveObservedTableCellBoxIn(a, context, subject, viewport_width, scale, basis, direction, alignment, operation, false);
+}
+
+pub fn resolveObservedTableFloatViewportCellBox(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    subject: u32, viewport_width: f64, scale: f32, basis: types.FontScaleBasis,
+    direction: types.TableContainingDirection, alignment: types.CellTextAlign, operation: ?*ObservedTableTextOperation) !?ObservedTableCellBox
+{
+    return resolveObservedTableCellBoxIn(a, context, subject, viewport_width, scale, basis, direction, alignment, operation, true);
+}
+
+fn resolveObservedTableCellBoxIn(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    subject: u32, viewport_width: f64, scale: f32, basis: types.FontScaleBasis,
+    direction: types.TableContainingDirection, alignment: types.CellTextAlign, operation: ?*ObservedTableTextOperation, comptime allow_width_hint: bool) !?ObservedTableCellBox
+{
+    if (subject >= context.nodes.len or !std.math.isFinite(scale) or scale < 0 or basis == .context) return null;
+    const node = context.nodes[subject];
+    if (!std.ascii.eqlIgnoreCase(node.tag, "td") and !std.ascii.eqlIgnoreCase(node.tag, "th")) return null;
+    // The closed initial operation has CSS width/alignment/paint. Legacy source
+    // hints need their own lower-origin cascade and cannot be silently omitted.
+    inline for (.{ "width", "height", "bgcolor", "valign" }) |name|
+        if ((!allow_width_hint or !std.mem.eql(u8, name, "width")) and observedFigureAttribute(node, name) != null) return null;
+    var width_hint: ObservedTableWidth = .automatic;
+    if (allow_width_hint) if (observedFigureAttribute(node, "width")) |raw| {
+        if (raw.len == 0 or raw.len > 10) return null;
+        for (raw) |byte| if (byte < '0' or byte > '9') return null;
+        const number = std.fmt.parseInt(u32, raw, 10) catch return null;
+        if (number == 0 or @as(f64, @floatFromInt(number)) != @as(f64, @as(f32, @floatFromInt(number)))) return null;
+        width_hint = .{ .known = .{ .unit = .px, .value = @floatFromInt(number) } };
+    };
+    const path = (try observedTableDeclarationPath(a, context, subject, viewport_width, operation)) orelse return null;
+    if (path.box_sizing != .content_box or !try observedTablePropertiesAccounted(a, path.declarations, path.environment)) return null;
+    const display = try observedFigureKeyword(a, path.declarations, "display", &.{}, path.environment,
+        &.{"table-cell"}, "inline", null, false, "table-cell");
+    const position = try observedFigureKeyword(a, path.declarations, "position", &.{}, path.environment,
+        &.{"static"}, "static", null, false, "static");
+    const floating = try observedFigureKeyword(a, path.declarations, "float", &.{}, path.environment,
+        &.{"none"}, "none", null, false, "none");
+    if (display.unresolved or position.unresolved or floating.unresolved or
+        !std.ascii.eqlIgnoreCase(display.value.?, "table-cell") or !std.ascii.eqlIgnoreCase(position.value.?, "static") or
+        !std.ascii.eqlIgnoreCase(floating.value.?, "none")) return null;
+    inline for (.{ "overflow", "overflow-x", "overflow-y", "height", "min-height", "max-height", "max-width" }) |property| {
+        const neutral: []const u8 = if (std.mem.startsWith(u8, property, "overflow")) "visible"
+            else if (std.mem.startsWith(u8, property, "max-")) "none" else "auto";
+        const value = try observedFigureKeyword(a, path.declarations, property,
+            if (std.mem.eql(u8, property, "overflow-x") or std.mem.eql(u8, property, "overflow-y")) &.{"overflow"} else &.{},
+            path.environment, &.{neutral}, neutral, null, false, neutral);
+        if (value.unresolved or value.value == null or !std.ascii.eqlIgnoreCase(value.value.?, neutral)) return null;
+    }
+    const padding = try observedTableCellPadding(a, path.declarations, path.environment, direction == .rtl, scale, null);
+    if (padding.unresolved) return null;
+    const physical_padding = observedTablePaddingEdges(observedTableEdgesOrigin(padding.value.?, basis) orelse return null) orelse return null;
+    const border = observedTableBorderStyle((try observedFigureBorders(a, path.declarations, path.environment, scale)) orelse return null, basis) orelse return null;
+    const width = try observedTableWidthWithHint(a, path.declarations, path.environment, "width", scale, basis, .automatic, width_hint);
+    const minimum = try observedTableWidth(a, path.declarations, path.environment, "min-width", scale, basis, .automatic);
+    if (width == .unknown or minimum == .unknown or (minimum == .known and minimum.known.unit == .percent)) return null;
+    const background = try observedFigureColor(a, path.declarations, "background-color", path.environment, null, null);
+    if (background.unresolved or background.value == null or background.value.?.kind == .native_theme) return null;
+    var style: types.CellStyle = .{ .border = border, .padding = physical_padding, .text_align = alignment,
+        .width = if (width == .known) width.known else null };
+    if (minimum == .known) style.min_width = .{ .unit = if (minimum.known.unit == .px) .px else .em, .value = minimum.known.value };
+    if (std.ascii.eqlIgnoreCase(path.vertical_align, "top")) style.vertical_align = .top
+    else if (std.ascii.eqlIgnoreCase(path.vertical_align, "middle")) style.vertical_align = .middle
+    else return null;
+    if (!types.validCellStyle(style)) return null;
+    return .{ .style = style, .background = if (background.value.?.kind == .rgb) background.value.?.value else null };
+}
+
+pub fn observedTableViewportRowNeutral(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    subject: u32, viewport_width: f64, scale: f32, basis: types.FontScaleBasis, operation: ?*ObservedTableTextOperation) !bool
+{
+    if (subject >= context.nodes.len or !std.math.isFinite(scale) or scale < 0 or basis == .context) return false;
+    const node = context.nodes[subject];
+    const row = std.ascii.eqlIgnoreCase(node.tag, "tr");
+    if (!row and !std.ascii.eqlIgnoreCase(node.tag, "tbody")) return false;
+    inline for (.{ "height", "width", "bgcolor", "valign" }) |name| if (observedFigureAttribute(node, name) != null) return false;
+    const path = (try observedTableDeclarationPath(a, context, subject, viewport_width, operation)) orelse return false;
+    if (!try observedTablePropertiesAccounted(a, path.declarations, path.environment)) return false;
+    const display = try observedFigureKeyword(a, path.declarations, "display", &.{}, path.environment,
+        if (row) &.{"table-row"} else &.{"table-row-group"}, "inline", null, false, if (row) "table-row" else "table-row-group");
+    if (display.unresolved or display.value == null or !std.ascii.eqlIgnoreCase(display.value.?, if (row) "table-row" else "table-row-group")) return false;
+    inline for (.{ "position", "float", "height", "min-height", "max-height", "overflow", "overflow-x", "overflow-y" }) |property| {
+        const initial: []const u8 = if (std.mem.eql(u8, property, "position")) "static"
+            else if (std.mem.eql(u8, property, "float") or std.mem.eql(u8, property, "max-height")) "none"
+            else if (std.mem.startsWith(u8, property, "overflow")) "visible" else "auto";
+        const value = try observedFigureKeyword(a, path.declarations, property,
+            if (std.mem.eql(u8, property, "overflow-x") or std.mem.eql(u8, property, "overflow-y")) &.{"overflow"} else &.{},
+            path.environment, &.{initial}, initial, null, false, initial);
+        if (value.unresolved or value.value == null or !std.ascii.eqlIgnoreCase(value.value.?, initial)) return false;
+    }
+    const border = (try observedFigureBorders(a, path.declarations, path.environment, scale)) orelse return false;
+    inline for (.{ "top", "right", "bottom", "left" }) |side| if (@field(border, side) != .none) return false;
+    const background = try observedFigureColor(a, path.declarations, "background-color", path.environment, null, null);
+    if (background.unresolved or background.value == null or background.value.?.kind != .transparent) return false;
+    return true;
+}
+
+pub const TableLinkPaintProof = struct {
+    context: TableContainingDirectionContext,
+    scope: TableContainingDirectionContext,
+    source: []const u8,
+    rules: []const usize,
+    operation: *TableLinkOperation,
+    pub fn scrollFocusPaint(self: @This()) ?types.TableScrollFocusPaint {
+        if (!self.closedSourceFocus()) return null;
+        if (!(self.operation.focus_domain orelse return null).captured_scroll) return null;
+        return self.operation.scroll_focus_paint;
+    }
+    pub fn closedSourceFocus(self: @This()) bool {
+        const domain = self.operation.focus_domain orelse return false;
+        return domain.source.ptr == self.source.ptr and domain.source.len == self.source.len and
+            domain.context.styles == self.context.styles and domain.context.nodes.ptr == self.context.nodes.ptr and
+            domain.context.nodes.len == self.context.nodes.len and domain.context.root == self.context.root and domain.context.table == self.context.table and
+            domain.scope.nodes.ptr == self.scope.nodes.ptr and domain.scope.nodes.len == self.scope.nodes.len and
+            domain.scope.root == self.scope.root and domain.scope.table == self.scope.table and
+            self.operation.context.styles == self.context.styles and self.operation.context.nodes.ptr == self.context.nodes.ptr and
+            self.operation.context.nodes.len == self.context.nodes.len and self.operation.context.root == self.context.root and
+            self.operation.context.table == self.context.table;
+    }
+};
+
+const TableLinkOperation = struct {
+    allocator: std.mem.Allocator,
+    context: TableContainingDirectionContext,
+    candidates: std.ArrayList(ObservedFigureRuleCandidates) = .empty,
+    focus_domain: ?*const TableSourceFocusDomain = null,
+    scroll_focus_paint: ?types.TableScrollFocusPaint = null,
+
+    fn rulesFor(self: *@This(), subject: u32) !std.DynamicBitSetUnmanaged {
+        for (self.candidates.items) |held| if (held.subject == subject) return held.rules;
+        var rules = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.context.styles.observed_figure_rules.len);
+        errdefer rules.deinit(self.allocator);
+        // No conditions or active link state are supplied: only invariant no
+        // results can be removed. Keep original rule order in the bitset.
+        for (self.context.styles.observed_figure_rules, 0..) |rule, index| {
+            if (observedStyleRuleMatch(rule, self.context.nodes, null, subject, null, .{}) != .no) rules.set(index);
+        }
+        try self.candidates.append(self.allocator, .{ .subject = subject, .pseudo = null,
+            .generated_style = false, .rules = rules });
+        return rules;
+    }
+};
+
+fn tableLinkPaintSamples(samples: []const ObservedFigureLinkPaintSample) ?types.LinkPaint {
+    if (samples.len != 24) return null;
+    var seen: [24]bool = @splat(false);
+    var buckets: [8]?types.FigureLinkState = @splat(null);
+    for (samples) |sample| {
+        const identity = @as(usize, @intFromBool(sample.visited)) * 12 +
+            @as(usize, @intFromBool(sample.hover)) * 6 + @as(usize, @intFromBool(sample.active)) * 3 + @intFromEnum(sample.focus);
+        if (seen[identity]) return null;
+        seen[identity] = true;
+        if (sample.focus != .unfocused) continue;
+        const bucket = @as(usize, @intFromBool(sample.visited)) * 4 +
+            @as(usize, @intFromBool(sample.active)) * 2 + @as(usize, @intFromBool(sample.hover));
+        buckets[bucket] = sample.paint;
+    }
+    for (seen) |value| if (!value) return null;
+    for (buckets) |value| if (value == null) return null;
+    var preserves = true; var underlines = true;
+    for (samples) |sample| {
+        if (sample.focus == .unfocused) continue;
+        const bucket = @as(usize, @intFromBool(sample.visited)) * 4 +
+            @as(usize, @intFromBool(sample.active)) * 2 + @as(usize, @intFromBool(sample.hover));
+        const ordinary = buckets[bucket].?;
+        if (!std.mem.eql(u8, ordinary.foreground, sample.paint.foreground)) return null;
+        preserves = preserves and ordinary.underline == sample.paint.underline;
+        underlines = underlines and sample.paint.underline;
+    }
+    if (!preserves and !underlines) return null;
+    return .{ .normal = buckets[0].?, .hover = buckets[1].?, .active = buckets[2].?, .hover_active = buckets[3].?,
+        .visited = buckets[4].?, .visited_hover = buckets[5].?, .visited_active = buckets[6].?,
+        .visited_hover_active = buckets[7].?, .underline_on_focus = !preserves };
+}
+
+fn tableLinkPaintProperty(name: []const u8) bool {
+    for ([_][]const u8{ "color", "text-decoration", "text-decoration-line", "text-decoration-color",
+        "text-decoration-style", "text-decoration-thickness", "outline", "outline-color", "outline-style",
+        "outline-width", "outline-offset" }) |property| if (std.ascii.eqlIgnoreCase(name, property)) return true;
+    return false;
+}
+
+fn tableLinkPaintRule(a: std.mem.Allocator, rule: ObservedFigureRule) !bool {
+    const selector = rule.selector orelse return false;
+    if (rule.rank_unknown or rule.list_uncertain or !selector.syntax_known or selector.pseudo != null or
+        selector.chain.len == 0) return false;
+    // Stateful ancestor and sibling selectors can affect other elements or
+    // inherit into nonlink text. This first ordinary producer requires the
+    // state predicates on the terminal A itself.
+    for (selector.chain[0 .. selector.chain.len - 1]) |part| if (observedTableDynamicCompound(part)) return false;
+    if (selector.necessary_html_root) |part| if (observedTableDynamicCompound(part)) return false;
+    for (selector.necessary_sibling_ancestors) |part| if (observedTableDynamicCompound(part)) return false;
+    if (selector.necessary_has_next) |part| if (observedTableDynamicCompound(part)) return false;
+    if (selector.necessary_previous_adjacent) |part| if (observedTableDynamicCompound(part)) return false;
+    const terminal = selector.chain[selector.chain.len - 1];
+    if (!std.ascii.eqlIgnoreCase(terminal.positive.tag orelse return false, "a")) return false;
+    var at: usize = 0; var found = false;
+    while (try nextDeclarationAlloc(a, rule.css, &at)) |declaration| {
+        defer a.free(declaration);
+        const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse return false;
+        if (!tableLinkPaintProperty(trim(declaration[0..colon])) or customPriority(declaration[colon + 1..]).unknown) return false;
+        found = true;
+    }
+    return found;
+}
+
+fn tableSourceFocusAttributes(context: TableContainingDirectionContext, actions: []const u32, comptime constructed: bool) bool {
+    if (context.nodes.len > 8192 or actions.len > 128) return false;
+    var descendants: usize = 0; var anchors: usize = 0;
+    for (actions, 0..) |action, index| {
+        if (action >= context.nodes.len or !authoredElementDescendant(context.nodes, action, context.table) or
+            !std.ascii.eqlIgnoreCase(context.nodes[action].tag, "a")) return false;
+        for (actions[0..index]) |prior| if (action == prior) return false;
+    }
+    for (context.nodes, 0..) |node, index| {
+        const subject: u32 = @intCast(index);
+        if (!authoredElementDescendant(context.nodes, subject, context.table)) {
+            // An editable or activated ancestor is not an ordinary immutable
+            // Table owner. Other unrelated page nodes lend no authority here.
+            if (authoredElementDescendant(context.nodes, context.table, subject)) {
+                var ordinary = false;
+                for ([_][]const u8{ "html", "body", "main", "div" }) |tag|
+                    if (std.ascii.eqlIgnoreCase(node.tag, tag)) { ordinary = true; break; };
+                if (!ordinary) return false;
+                for (node.attributes) |attribute| {
+                    for ([_][]const u8{ "contenteditable", "tabindex", "autofocus", "accesskey", "role", "draggable" }) |name|
+                        if (std.ascii.eqlIgnoreCase(attribute.name, name)) return false;
+                    if (attribute.name.len >= 2 and std.ascii.eqlIgnoreCase(attribute.name[0..2], "on")) return false;
+                    if (std.ascii.eqlIgnoreCase(attribute.name, "class")) {
+                        var classes = std.mem.tokenizeAny(u8, attribute.value, " \t\r\n\x0c");
+                        while (classes.next()) |class| for ([_][]const u8{ "NavFrame", "NavContent", "collapsible", "sortable",
+                            "mw-collapsible", "mw-collapsed", "mw-collapsible-content", "oo-ui-widget", "mw-ui-button" }) |hook|
+                            if (std.mem.eql(u8, class, hook)) return false;
+                    }
+                }
+            }
+            continue;
+        }
+        descendants += 1;
+        if (descendants > 512 or (!constructed and (node.empty == null or node.has_text == null))) return false;
+        var supported = false;
+        for ([_][]const u8{ "table", "tbody", "tr", "td", "th", "a", "span", "i", "b", "em", "strong", "small", "big", "sup", "sub", "s", "u", "code", "br", "wbr" }) |tag|
+            if (std.ascii.eqlIgnoreCase(node.tag, tag)) { supported = true; break; };
+        if (constructed and std.ascii.eqlIgnoreCase(node.tag, "div")) supported = true;
+        if (!supported or (std.ascii.eqlIgnoreCase(node.tag, "table") and subject != context.table)) return false;
+        const anchor = std.ascii.eqlIgnoreCase(node.tag, "a");
+        if (anchor) {
+            var found = false;
+            for (actions) |action| if (subject == action) { found = true; break; };
+            if (!found or (observedFigureAttribute(node, "href") orelse return false).len == 0) return false;
+            anchors += 1;
+        }
+        for (node.attributes) |attribute| {
+            const name = attribute.name;
+            if (std.ascii.eqlIgnoreCase(name, "class")) {
+                if (subject != context.table) {
+                    if (constructed and anchor) {
+                        if (!std.mem.eql(u8, attribute.value, "new")) return false;
+                    } else if (constructed and (std.ascii.eqlIgnoreCase(node.tag, "td") or std.ascii.eqlIgnoreCase(node.tag, "th"))) {
+                        // These are copied ordinary cell style classes, not a
+                        // JavaScript activation constructor. Known activation
+                        // roles remain outside the immutable native source row.
+                        var classes = std.mem.tokenizeAny(u8, attribute.value, " \t\r\n\x0c");
+                        while (classes.next()) |class| for ([_][]const u8{ "NavFrame", "NavContent", "collapsible", "sortable",
+                            "mw-collapsible", "mw-collapsed", "mw-collapsible-content", "oo-ui-widget", "mw-ui-button" }) |hook|
+                            if (std.mem.eql(u8, class, hook)) return false;
+                    } else if (trim(attribute.value).len != 0) return false;
+                    continue;
+                }
+                // These are the ordinary closed Table's static style classes.
+                // Unknown classes cannot certify absence of a widget/collapse hook.
+                var classes = std.mem.tokenizeAny(u8, attribute.value, " \t\r\n\x0c");
+                while (classes.next()) |class| {
+                    var known = false;
+                    for ([_][]const u8{ "wikitable", "float-right", "inflection-table", "flexbox" }) |plain|
+                        if (std.mem.eql(u8, class, plain)) { known = true; break; };
+                    if (!known) return false;
+                }
+            } else if (std.ascii.eqlIgnoreCase(name, "href") or std.ascii.eqlIgnoreCase(name, "title")) {
+                if (!anchor) return false;
+            } else if (std.ascii.eqlIgnoreCase(name, "style") or
+                std.ascii.eqlIgnoreCase(name, "lang") or std.ascii.eqlIgnoreCase(name, "dir")) {
+                // The existing complete CSS/font/action consumers retain these.
+            } else if (std.ascii.eqlIgnoreCase(name, "width") or std.ascii.eqlIgnoreCase(name, "colspan") or
+                std.ascii.eqlIgnoreCase(name, "rowspan") or std.ascii.eqlIgnoreCase(name, "align")) {
+                if (!std.ascii.eqlIgnoreCase(node.tag, "td") and !std.ascii.eqlIgnoreCase(node.tag, "th")) return false;
+            } else return false;
+        }
+    }
+    return anchors == actions.len;
+}
+
+fn recordTableScrollFocusPaint(operation: *TableLinkOperation, value: types.TableScrollFocusPaint) !bool {
+    if (operation.scroll_focus_paint) |prior|
+        return observedFigureDataEqual(types.TableScrollFocusPaint, prior, value, 0);
+    var owned = value;
+    // Computation runs in a per-sample scratch arena. The published operation
+    // owns the resolved color until the compiler has consumed the proof.
+    if (owned.color) |*color| if (color.value) |text| {
+        color.value = try operation.allocator.dupe(u8, text);
+    };
+    operation.scroll_focus_paint = owned;
+    return true;
+}
+
+fn tableScrollFocusPaint(a: std.mem.Allocator, operation: *TableLinkOperation,
+    declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment, viewport: ?f64) !?types.TableScrollFocusPaint
+{
+    const style_candidates = try observedFigurePropertyCandidates(a, declarations, "outline-style", &.{"outline"});
+    defer a.free(style_candidates);
+    if (style_candidates.len != 0) {
+        // Definite author none/reset may override the UA. Missing declarations
+        // do not: the genuine scroll owner uses the native UA auto outline.
+        const style = try observedFigureKeyword(a, declarations, "outline-style", &.{"outline"}, environment,
+            &.{"none"}, "none", null, false, null);
+        if (style.unresolved or style.value == null or !std.ascii.eqlIgnoreCase(style.value.?, "none")) return null;
+        return .{ .mode = .authored_none };
+    }
+    const zero: ObservedFigureLength = .{ .known = .{ .unit = .px, .value = 0 } };
+    const offset = try observedFigureComputedLength(a, declarations, "outline-offset", &.{}, environment, 1, "", zero, .unknown, false, true);
+    if (offset != .known or offset.known.value != 0) return null;
+    const domain = operation.focus_domain orelse return null;
+    const context = operation.context;
+    var focused = (try observedStyleNodeDeclarationsSelected(a, context.styles, context.nodes, context.table, null, null,
+        .{ .viewport_width = viewport, .table_scroll_focus = domain }, true, try operation.rulesFor(context.table), null)) orelse return null;
+    defer focused.deinit(a);
+    const colors = try observedFigurePropertyCandidates(a, focused.items, "outline-color", &.{}); defer a.free(colors);
+    var color: ?types.FigureColor = null;
+    if (colors.len != 0) {
+        const resolved = try observedFigureColor(a, focused.items, "outline-color", environment, null, null);
+        if (resolved.unresolved or resolved.value == null) return null;
+        color = resolved.value;
+    }
+    return .{ .mode = .ua_auto, .color = color };
+}
+
+fn tableSourceFocusOverflow(a: std.mem.Allocator, operation: *TableLinkOperation, viewport: ?f64, comptime constructed: bool, comptime captured_viewport: bool) !bool {
+    const domain = operation.focus_domain orelse return false;
+    const context = operation.context;
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    const temporary = scratch.allocator();
+    const environments = try temporary.alloc(?CustomEnvironment, context.nodes.len);
+    @memset(environments, null);
+    // One complete cascade per relevant node, once for the whole operation.
+    // Repeated :focus rules reuse this proof and the same candidate masks.
+    for (context.nodes, 0..) |node, index| {
+        const subject: u32 = @intCast(index);
+        const descendant = authoredElementDescendant(context.nodes, subject, context.table);
+        if (!descendant and !authoredElementDescendant(context.nodes, context.table, subject)) continue;
+        const parent: CustomEnvironment = if (node.parent) |p| environments[p] orelse return false else .{ .complete = true };
+        const anchor = std.ascii.eqlIgnoreCase(node.tag, "a");
+        // A scrollable captured TABLE is a real source focus owner. Keep its
+        // possible focus declarations in the cascade and prove them inert;
+        // the non-A no-focus exclusion is not evidence for this owner.
+        const evaluation: ObservedFigureEvaluation = .{ .table_focus = if (captured_viewport and subject == context.table) null else domain, .viewport_width = viewport,
+            .link_subject = if (anchor) subject else null, .focus_visible_supported = true,
+            .link_state = .{ .visited = false, .hover = false, .active = false, .focus = false,
+                .focus_visible = false, .focus_within = false } };
+        const candidates = try operation.rulesFor(subject);
+        var collected = (try observedStyleNodeDeclarationsSelected(temporary, context.styles, context.nodes,
+            subject, null, null, evaluation, true, candidates, null)) orelse return false;
+        const declarations = try collected.toOwnedSlice(temporary);
+        const environment = try observedFigureCustomEnvironment(temporary, declarations, parent, true);
+        environments[index] = environment;
+        if (captured_viewport and !tableSourceStaticFocusDeclarations(declarations)) return false;
+        if (!descendant) continue;
+        if (!tableSourceStaticFocusDeclarations(declarations)) return false;
+        if (anchor) continue;
+        // Static non-A outlines still need their own representation. This is
+        // an ordinary paint guard after the source focus-domain proof above;
+        // an initial none value never establishes that focus domain.
+        if ((try observedFigureFocusOutline(temporary, declarations, environment, 1)) != .none) return false;
+        // A source-constructed native row maps authored focus only to its
+        // bound A actions. Scrollbar/host/caret focus is application UI. This
+        // does not grant geometry authority: the independent box constructors
+        // must still account for each overflow/display/width declaration.
+        if (constructed) continue;
+        if (captured_viewport and subject == context.table) {
+            const focus_paint = (try tableScrollFocusPaint(temporary, operation, declarations, environment, viewport)) orelse return false;
+            if (!try recordTableScrollFocusPaint(operation, focus_paint)) return false;
+            const display = try observedFigureKeyword(temporary, declarations, "display", &.{}, environment,
+                &.{ "table", "block" }, "inline", null, false, "table");
+            const floating = try observedFigureKeyword(temporary, declarations, "float", &.{}, environment,
+                &.{ "none", "right" }, "none", null, false, "none");
+            if (display.unresolved or floating.unresolved) return false;
+            const block = std.ascii.eqlIgnoreCase(display.value.?, "block");
+            if (block and !std.ascii.eqlIgnoreCase(floating.value.?, "none")) return false;
+            for ([_][]const u8{ "overflow", "overflow-x", "overflow-y" }) |property| {
+                const expected: []const u8 = if (block) "auto" else "visible";
+                const value = try observedFigureKeyword(temporary, declarations, property,
+                    if (std.mem.eql(u8, property, "overflow")) &.{} else &.{"overflow"}, environment,
+                    &.{expected}, "visible", null, false, "visible");
+                if (value.unresolved or value.value == null or !std.mem.eql(u8, value.value.?, expected)) return false;
+            }
+            // Native auto or definite authored-none paint is represented above.
+            // The caller still must publish the complete paired geometry policy.
+            continue;
+        }
+        // The closed ordinary native Table has no scroll owner. Absent
+        // authored overflow therefore retains its visible-flow policy.
+        for ([_][]const u8{ "overflow", "overflow-x", "overflow-y" }) |property| {
+            const value = try observedFigureKeyword(temporary, declarations, property,
+                if (std.mem.eql(u8, property, "overflow")) &.{} else &.{"overflow"}, environment,
+                &.{"visible"}, "visible", null, false, "visible");
+            if (value.unresolved or value.value == null or !std.mem.eql(u8, value.value.?, "visible")) return false;
+        }
+    }
+    return true;
+}
+
+pub fn observedTableLinkPaintProofWithSourceActions(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    scope: TableContainingDirectionContext, source: []const u8, actions: ?[]const u32) !?TableLinkPaintProof
+{
+    return observedTableLinkPaintProofWithActionsIn(a, context, scope, source, actions, false, false);
+}
+
+fn tableLinkPaintRuleCovered(proof: ?TableLinkPaintProof, context: TableContainingDirectionContext,
+    source: []const u8, index: usize) bool
+{
+    const known = proof orelse return false;
+    if (known.context.styles != context.styles or known.source.ptr != source.ptr or known.source.len != source.len or
+        known.scope.nodes.ptr != context.nodes.ptr or known.scope.nodes.len != context.nodes.len or
+        known.scope.root != context.root or known.scope.table != context.table or
+        known.context.table >= known.context.nodes.len or context.table >= context.nodes.len) return false;
+    // The source caller has independently paired the shallow TABLE graph with
+    // the complete captured one. Matching rule identity is never a source join.
+    for (known.rules) |rule| if (rule == index) return true;
+    return false;
+}
+
+pub fn observedTableLinkPaintProofWithViewportActions(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    scope: TableContainingDirectionContext, source: []const u8, actions: []const u32) !?TableLinkPaintProof
+{
+    return observedTableLinkPaintProofWithActionsIn(a, context, scope, source, actions, false, true);
+}
+
+fn observedTableLinkPaintProofWithActionsIn(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    scope: TableContainingDirectionContext, source: []const u8, actions: ?[]const u32, comptime constructed: bool, comptime captured_viewport: bool) !?TableLinkPaintProof
+{
+    if (source.len == 0 or context.table >= context.nodes.len or scope.table >= scope.nodes.len or
+        scope.styles != context.styles or scope.root != context.root or
+        !observedStyleGraphValid(scope.styles, scope.nodes, scope.root) or
+        !observedStyleGraphValid(context.styles, context.nodes, context.root) or
+        !std.ascii.eqlIgnoreCase(context.nodes[context.table].tag, "table")) return null;
+    if (constructed or captured_viewport) {
+        if (!tableSourceFocusAttributes(context, actions.?, constructed)) return null;
+        // A targeted ancestor state can affect the source box or descendants;
+        // the A-only mapping does not represent that authored owner behavior.
+        for (context.styles.observed_figure_rules) |rule| {
+            if (observedFigureConditions(rule, .{}) == .no) continue;
+            const selector = rule.selector orelse rule.weak_selector orelse continue;
+            var dynamic = false;
+            for (selector.chain) |part| dynamic = dynamic or observedTableDynamicCompound(part);
+            if (!dynamic or try tableSourceFocusRule(a, rule)) continue;
+            for (context.nodes, 0..) |_, index| {
+                const subject: u32 = @intCast(index);
+                if (subject == context.table or !authoredElementDescendant(context.nodes, context.table, subject)) continue;
+                if (observedStyleRuleMatch(rule, context.nodes, null, subject, selector.pseudo, .{}) != .no) return null;
+            }
+        }
+    }
+    var rules: std.ArrayList(usize) = .empty;
+    defer rules.deinit(a);
+    var focus_rules: std.DynamicBitSetUnmanaged = .{};
+    var retain_focus = false;
+    defer if (!retain_focus) focus_rules.deinit(a);
+    var has_focus = false;
+    for (context.styles.observed_figure_rules, 0..) |rule, index| {
+        if (observedFigureConditions(rule, .{}) == .no) continue;
+        const selector = rule.selector orelse rule.weak_selector orelse continue;
+        var dynamic = false;
+        for (selector.chain) |part| dynamic = dynamic or observedTableDynamicCompound(part);
+        // The closed source constructor can also refute guarded static rules
+        // that aggregate descendant tags/classes cannot decide (for example an
+        // attribute-qualified generated backlink). Never borrow absence from
+        // another scope, ignore a possible effect, or discard inherited owners.
+        const guarded_static = constructed and (rule.conditional or rule.conditions.len != 0 or
+            rule.rank_unknown or rule.list_uncertain or !selector.syntax_known or
+            selector.pseudo != null or rule.selector == null);
+        if (!dynamic and !guarded_static) continue;
+        var possible = false;
+        for (context.nodes, 0..) |_, subject| {
+            const descendant = authoredElementDescendant(context.nodes, @intCast(subject), context.table);
+            if (!descendant and (dynamic or !authoredElementDescendant(context.nodes, context.table, @intCast(subject)))) continue;
+            // Only the complete constructed source graph may lend its nearest
+            // explicit language owner to this absence certificate.
+            if (constructed and observedBareLanguageRefutes(rule.raw_selector, context.nodes, @intCast(subject))) continue;
+            if (observedStyleRuleMatch(rule, context.nodes, null, @intCast(subject), selector.pseudo, .{}) != .no) { possible = true; break; }
+        }
+        if (rules.items.len == 4096) return null;
+        if (!possible) { try rules.append(a, index); continue; }
+        if (!dynamic) continue;
+        if (!try tableLinkPaintRule(a, rule)) {
+            if (actions == null or !try tableSourceFocusRule(a, rule)) return null;
+            if (!has_focus) focus_rules = try std.DynamicBitSetUnmanaged.initEmpty(a, context.styles.observed_figure_rules.len);
+            focus_rules.set(index); has_focus = true;
+        }
+        try rules.append(a, index);
+    }
+    const operation = try a.create(TableLinkOperation);
+    operation.* = .{ .allocator = a, .context = context };
+    if (has_focus or captured_viewport) {
+        if (!tableSourceFocusAttributes(context, actions.?, constructed)) return null;
+        const domain = try a.create(TableSourceFocusDomain);
+        domain.* = .{ .context = context, .scope = scope, .source = source, .rules = focus_rules, .captured_scroll = captured_viewport };
+        operation.focus_domain = domain;
+        if (constructed or captured_viewport) {
+            const samples = (try observedTableLinkViewportSamples(a, &.{context})) orelse return null;
+            if (samples.len > 4096 / @max(@as(usize, 1), context.nodes.len)) return null;
+            for (samples) |sample| if (!try tableSourceFocusOverflow(a, operation, sample.width, constructed, captured_viewport)) return null;
+        } else if (!try tableSourceFocusOverflow(a, operation, null, false, false)) return null;
+        retain_focus = true;
+    }
+    return .{ .context = context, .scope = scope, .source = source, .rules = try rules.toOwnedSlice(a), .operation = operation };
+}
+
+fn tableLinkComputedPath(a: std.mem.Allocator, operation: *TableLinkOperation,
+    subject: u32, evaluation: ObservedFigureEvaluation) !?[]const ObservedFigureComputedNode
+{
+    const context = operation.context;
+    var scoped_evaluation = evaluation;
+    scoped_evaluation.table_focus = operation.focus_domain;
+    var path: [512]u32 = undefined; var count: usize = 0; var next: ?u32 = subject;
+    while (next) |index| {
+        if (index >= context.nodes.len or count == path.len) return null;
+        path[count] = index; count += 1; next = context.nodes[index].parent;
+    }
+    if (count == 0 or path[count - 1] != 0) return null;
+    const nodes = try a.alloc(ObservedFigureComputedNode, count);
+    var environment: CustomEnvironment = .{ .complete = true };
+    for (nodes, 0..) |*node, ordinal| {
+        const index = path[count - ordinal - 1];
+        const candidates = try operation.rulesFor(index);
+        var declarations = (try observedStyleNodeDeclarationsSelected(a, context.styles, context.nodes,
+            index, null, null, scoped_evaluation, true, candidates, null)) orelse return null;
+        var privacy = scoped_evaluation; privacy.link_state.visited = null;
+        const custom = (try observedStyleNodeDeclarationsSelected(a, context.styles, context.nodes,
+            index, null, null, privacy, true, candidates, null)) orelse return null;
+        environment = try observedFigureCustomEnvironment(a, custom.items, environment, !context.styles.globally_unresolved);
+        if (context.nodes[index].custom_environment) |issued| for (issued.values) |binding| {
+            if (binding.value != .unknown and !sameObservedCustomValue(binding.value, environment.get(binding.name))) return null;
+        };
+        node.* = .{ .index = index, .declarations = try declarations.toOwnedSlice(a), .environment = environment };
+    }
+    return nodes;
+}
+
+pub fn resolveObservedTableLinkPaint(a: std.mem.Allocator, proof: TableLinkPaintProof,
+    link: u32, text: u32, viewport: f64, font_scale: f32) !?types.LinkPaint
+{
+    const context = proof.context;
+    if (!observedStyleGraphValid(context.styles, context.nodes, context.root) or proof.source.len == 0 or
+        (proof.operation.focus_domain != null and !proof.closedSourceFocus()) or
+        proof.operation.context.styles != context.styles or proof.operation.context.nodes.ptr != context.nodes.ptr or
+        proof.operation.context.nodes.len != context.nodes.len or proof.operation.context.root != context.root or
+        proof.operation.context.table != context.table or
+        link >= context.nodes.len or text >= context.nodes.len or !std.math.isFinite(viewport) or viewport < 0 or
+        !std.math.isFinite(font_scale) or font_scale <= 0 or
+        !std.ascii.eqlIgnoreCase(context.nodes[link].tag, "a") or
+        (observedFigureAttribute(context.nodes[link], "href") orelse return null).len == 0 or
+        !authoredElementDescendant(context.nodes, link, context.table) or
+        !authoredElementDescendant(context.nodes, text, link)) return null;
+    var samples: [24]ObservedFigureLinkPaintSample = undefined; var count: usize = 0;
+    var outline_seen = false; var focus_outline: ?types.FigureFocusOutline = null;
+    var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
+    for ([_]bool{ false, true }) |visited| for ([_]bool{ false, true }) |hover|
+        for ([_]bool{ false, true }) |active| for ([_]ObservedFigureFocusMode{ .unfocused, .focused, .focus_visible }) |focus| {
+            var agreed: ?ObservedFigureLinkPaintSample = null;
+            for ([_]bool{ false, true }) |motion| {
+                _ = scratch.reset(.retain_capacity); const alloc = scratch.allocator();
+                const evaluation: ObservedFigureEvaluation = .{ .viewport_width = viewport, .reduced_motion = motion,
+                    .link_subject = link, .focus_visible_supported = true,
+                    .link_state = .{ .visited = visited, .hover = hover, .active = active,
+                        .focus = focus != .unfocused, .focus_visible = focus == .focus_visible, .focus_within = focus != .unfocused } };
+                const path = (try tableLinkComputedPath(alloc, proof.operation, text, evaluation)) orelse return null;
+                var inherited: ?types.FigureColor = null; var link_color: ?types.FigureColor = null;
+                var anchor: ?ObservedFigureComputedNode = null;
+                for (path) |node| {
+                    const color = try observedFigureColor(alloc, node.declarations, "color", node.environment, inherited, inherited);
+                    inherited = if (color.unresolved) null else color.value;
+                    if (node.index == link) { anchor = node; link_color = inherited; }
+                    if (node.index != link and authoredElementDescendant(context.nodes, node.index, link) and
+                        !try observedFigureKeywordIs(alloc, node, "text-decoration-line", &.{"text-decoration"}, "none", "none")) return null;
+                }
+                const foreground = inherited orelse return null;
+                const own = anchor orelse return null;
+                if (foreground.kind != .rgb or link_color == null or
+                    !observedFigureDataEqual(types.FigureColor, foreground, link_color.?, 0)) return null;
+                const decoration = try observedFigureKeyword(alloc, own.declarations, "text-decoration-line", &.{"text-decoration"},
+                    own.environment, &.{ "none", "underline" }, "none", null, false, "none");
+                if (decoration.unresolved or decoration.value == null) return null;
+                const underline = std.mem.eql(u8, decoration.value.?, "underline");
+                if (underline) {
+                    if (!try observedFigureKeywordIs(alloc, own, "text-decoration-style", &.{"text-decoration"}, "solid", "solid") or
+                        !try observedFigureKeywordIs(alloc, own, "text-decoration-thickness", &.{"text-decoration"}, "auto", "auto")) return null;
+                    const ink = try observedFigureColor(alloc, own.declarations, "text-decoration-color", own.environment, null, foreground);
+                    if (ink.unresolved or ink.value == null or !observedFigureDataEqual(types.FigureColor, ink.value.?, foreground, 0)) return null;
+                }
+                const focus_value = try observedFigureFocusOutline(alloc, own.declarations, own.environment, font_scale);
+                const outline: ?types.FigureFocusOutline = switch (focus_value) { .none => null, .known => |value| value, .unknown => return null };
+                if (focus == .focus_visible) {
+                    if (outline_seen and !observedFigureDataEqual(?types.FigureFocusOutline, focus_outline, outline, 0)) return null;
+                    if (!outline_seen) focus_outline = observedFigureDataClone(?types.FigureFocusOutline, a, outline, 0) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, error.InvalidStyleProfile => return null };
+                    outline_seen = true;
+                } else if (outline != null) return null;
+                const sample: ObservedFigureLinkPaintSample = .{ .visited = visited, .hover = hover, .active = active,
+                    .focus = focus, .paint = .{ .foreground = foreground.value.?, .underline = underline } };
+                if (agreed) |prior| {
+                    if (!observedFigureDataEqual(ObservedFigureLinkPaintSample, prior, sample, 0)) return null;
+                } else agreed = observedFigureDataClone(ObservedFigureLinkPaintSample, a, sample, 0) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, error.InvalidStyleProfile => return null };
+            }
+            samples[count] = agreed orelse return null; count += 1;
+        };
+    var result = tableLinkPaintSamples(&samples) orelse return null;
+    result.focus_outline = focus_outline;
+    return if (outline_seen and types.validLinkPaint(result)) result else null;
+}
+
+pub const ObservedTableDescendantInventory = struct {
+    // Complete over-approximations issued only from the closed cell grammar.
+    // They authorize absence refutation, never a selector or relationship match.
+    tags: []const []const u8,
+    classes: []const u8,
+    ids: []const []const u8,
+    inline_styles: []const []const u8 = &.{},
+};
+
+fn observedTableDescendantControlHostRefutes(rule: ObservedFigureRule, inventory: ObservedTableDescendantInventory) bool {
+    if (!rule.focus_inner_control_host) return false;
+    // The inventory is a complete over-approximation of the admitted cell
+    // grammar, not a sample or an attribute-absence inference. Unknown tags
+    // and either possible control host preserve the original refusal.
+    for (inventory.tags) |tag| {
+        if (tag.len == 0 or !std.ascii.isAlphabetic(tag[0])) return false;
+        for (tag[1..]) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-') return false;
+        if (std.ascii.eqlIgnoreCase(tag, "button") or std.ascii.eqlIgnoreCase(tag, "input")) return false;
+    }
+    return true;
+}
+
+fn observedTableDescendantRefutes(selector: GeneratedFigureSelector, inventory: ObservedTableDescendantInventory) bool {
+    if (selector.chain.len == 0) return false;
+    const positive = selector.chain[selector.chain.len - 1].positive;
+    if (positive.tag) |tag| {
+        var found = false;
+        for (inventory.tags) |actual| if (std.ascii.eqlIgnoreCase(actual, tag)) { found = true; break; };
+        if (!found) return true;
+    }
+    for (positive.classes) |name| if (!Profile.hasClass(inventory.classes, name)) return true;
+    for (positive.ids) |name| {
+        var found = false;
+        for (inventory.ids) |actual| if (std.mem.eql(u8, actual, name)) { found = true; break; };
+        if (!found) return true;
+    }
+    return false;
+}
+
+fn observedTableDynamicCompound(compound: GeneratedFigureCompound) bool {
+    if (compound.dynamic_pseudos.len != 0) return true;
+    for (compound.any_groups) |group| for (group.alternatives) |part| if (observedTableDynamicCompound(part)) return true;
+    for (compound.none_groups) |group| for (group.alternatives) |part| if (observedTableDynamicCompound(part)) return true;
+    return false;
+}
+
+fn observedTableRequiredSiblingClassRefutes(selector: GeneratedFigureSelector, context: TableContainingDirectionContext,
+    inventory: ObservedTableDescendantInventory) bool
+{
+    // Previous-adjacent is usable only when its target is the terminal
+    // descendant. The parser's closed :has(+ ...) projection is independently
+    // tied to that same terminal subject; it never represents general :has().
+    const previous: ?GeneratedFigureCompound = if (selector.chain.len == 1) selector.necessary_previous_adjacent else null;
+    for ([_]?GeneratedFigureCompound{ previous, selector.necessary_has_next, selector.necessary_html_root }) |required| {
+        const positive = required orelse continue;
+        if (observedTableRequiredClassesAbsent(positive, context, inventory)) return true;
+    }
+    for (selector.necessary_sibling_ancestors) |positive|
+        if (observedTableRequiredClassesAbsent(positive, context, inventory)) return true;
+    return false;
+}
+
+fn observedTableRequiredClassesAbsent(positive: GeneratedFigureCompound, context: TableContainingDirectionContext,
+    inventory: ObservedTableDescendantInventory) bool
+{
+    // Union absence is weaker than proving any relation or unique root. Never
+    // extract a class from :not(), alternatives or a functional argument here.
+    for (positive.positive.classes) |name| {
+        var present = Profile.hasClass(inventory.classes, name);
+        for (context.nodes) |node| present = present or Profile.hasClass(observedFigureAttribute(node, "class") orelse "", name);
+        if (!present) return true;
+    }
+    return false;
+}
+
+pub const TableDescendantStaticMotion = struct {
+    styles: *const Profile,
+    nodes: []const ObservedStyleNode,
+    root: u32,
+    table: u32,
+    source: []const u8,
+};
+
+fn observedTableDescendantMotionBound(context: TableContainingDirectionContext, source: []const u8,
+    optional: ?TableDescendantStaticMotion) bool
+{
+    const proof = optional orelse return false;
+    return source.len != 0 and proof.source.ptr == source.ptr and proof.source.len == source.len and
+        proof.styles == context.styles and proof.nodes.ptr == context.nodes.ptr and proof.nodes.len == context.nodes.len and
+        proof.root == context.root and proof.table == context.table;
+}
+
+fn observedTableMotionPropertiesOnly(a: std.mem.Allocator, css: []const u8) !bool {
+    var at: usize = 0; var found = false;
+    while (try nextDeclarationAlloc(a, css, &at)) |declaration| {
+        defer a.free(declaration);
+        const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse return false;
+        const value = customPriority(declaration[colon + 1..]);
+        if (value.unknown or !pageStaticMotionProperty(trim(declaration[0..colon]))) return false;
+        found = true;
+    }
+    return found;
+}
+
+fn observedTableDescendantContextRefutes(selector: GeneratedFigureSelector, context: TableContainingDirectionContext,
+    inventory: ObservedTableDescendantInventory) bool
+{
+    if (observedTableDescendantRefutes(selector, inventory) or
+        observedTableRequiredSiblingClassRefutes(selector, context, inventory)) return true;
+    for (selector.chain) |part| {
+        const positive = part.positive;
+        if (positive.tag) |tag| {
+            var present = false;
+            for (inventory.tags) |known| if (std.ascii.eqlIgnoreCase(tag, known)) { present = true; break; };
+            for (context.nodes) |node| if (std.ascii.eqlIgnoreCase(tag, node.tag)) { present = true; break; };
+            if (!present) return true;
+        }
+        for (positive.classes) |name| {
+            var present = Profile.hasClass(inventory.classes, name);
+            for (context.nodes) |node| if (Profile.hasClass(observedFigureAttribute(node, "class") orelse "", name)) { present = true; break; };
+            if (!present) return true;
+        }
+        for (positive.ids) |name| {
+            var present = false;
+            for (inventory.ids) |known| if (std.mem.eql(u8, name, known)) { present = true; break; };
+            for (context.nodes) |node| if (std.mem.eql(u8, name, observedFigureAttribute(node, "id") orelse "")) { present = true; break; };
+            if (!present) return true;
+        }
+    }
+    return false;
+}
+
+fn observedTableDescendantCompoundInputsEqual(compound: GeneratedFigureCompound, left: ObservedStyleNode,
+    right: ObservedStyleNode, budget: *usize) bool
+{
+    if (budget.* == 0) return false;
+    budget.* -= 1;
+    if (!std.ascii.eqlIgnoreCase(left.tag, right.tag) or compound.dynamic_pseudos.len != 0) return false;
+    const lc = observedFigureAttribute(left, "class") orelse "";
+    const rc = observedFigureAttribute(right, "class") orelse "";
+    for (compound.positive.classes) |name| if (Profile.hasClass(lc, name) != Profile.hasClass(rc, name)) return false;
+    for (compound.excluded_classes) |name| if (Profile.hasClass(lc, name) != Profile.hasClass(rc, name)) return false;
+    const li = observedFigureAttribute(left, "id") orelse "";
+    const ri = observedFigureAttribute(right, "id") orelse "";
+    for (compound.positive.ids) |name| if (std.mem.eql(u8, name, li) != std.mem.eql(u8, name, ri)) return false;
+    if (compound.positive.typeof_token) |token| {
+        if (Profile.hasClass(observedFigureAttribute(left, "typeof") orelse "", token) !=
+            Profile.hasClass(observedFigureAttribute(right, "typeof") orelse "", token)) return false;
+    }
+    for (compound.attributes) |attribute| {
+        const first = attribute.matches(left); const second = attribute.matches(right);
+        if (first == .unknown or second == .unknown or first != second) return false;
+    }
+    if (compound.requires_empty and (left.empty == null or right.empty == null or left.empty != right.empty)) return false;
+    // Compare atoms recursively, not only an aggregate .unknown result whose
+    // branches could depend on different facts in the two captured candidates.
+    for (compound.any_groups) |group| for (group.alternatives) |part|
+        if (!observedTableDescendantCompoundInputsEqual(part, left, right, budget)) return false;
+    for (compound.none_groups) |group| for (group.alternatives) |part|
+        if (!observedTableDescendantCompoundInputsEqual(part, left, right, budget)) return false;
+    return true;
+}
+
+fn observedTableDescendantSelectorInputsEqual(selector: GeneratedFigureSelector,
+    left: TableContainingDirectionContext, right: TableContainingDirectionContext, budget: *usize) bool
+{
+    if (left.root != right.root or left.table != right.table or left.nodes.len != right.nodes.len) return false;
+    for (left.nodes, right.nodes) |first, second| {
+        if (first.parent != second.parent or first.known_next_element_sibling != second.known_next_element_sibling or
+            first.known_previous_element_sibling != second.known_previous_element_sibling or
+            first.known_no_previous_element_sibling != second.known_no_previous_element_sibling or
+            first.known_no_next_element_sibling != second.known_no_next_element_sibling) return false;
+        for (selector.chain) |part| if (!observedTableDescendantCompoundInputsEqual(part, first, second, budget)) return false;
+        if (selector.necessary_html_root) |part| if (!observedTableDescendantCompoundInputsEqual(part, first, second, budget)) return false;
+        for (selector.necessary_sibling_ancestors) |part| if (!observedTableDescendantCompoundInputsEqual(part, first, second, budget)) return false;
+        if (selector.necessary_has_next) |part| if (!observedTableDescendantCompoundInputsEqual(part, first, second, budget)) return false;
+        if (selector.necessary_previous_adjacent) |part| if (!observedTableDescendantCompoundInputsEqual(part, first, second, budget)) return false;
+    }
+    return true;
+}
+
+fn observedTableDescendantRuleIndices(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    inventory: ObservedTableDescendantInventory, source: []const u8, motion: ?TableDescendantStaticMotion, links: ?TableLinkPaintProof) !?[]const usize
+{
+    var result: std.ArrayList(usize) = .empty;
+    defer result.deinit(a);
+    for (context.styles.observed_figure_rules, 0..) |rule, index| {
+        if (observedFigureConditions(rule, .{}) == .no) continue;
+        if (observedTableDescendantMotionBound(context, source, motion) and try observedTableMotionPropertiesOnly(a, rule.css)) continue;
+        if (tableLinkPaintRuleCovered(links, context, source, index)) continue;
+        if (observedTableDescendantControlHostRefutes(rule, inventory)) continue;
+        const selector = rule.selector orelse rule.weak_selector orelse return null;
+        if (observedTableDescendantContextRefutes(selector, context, inventory)) continue;
+        if (rule.conditional or rule.conditions.len != 0 or rule.rank_unknown or rule.list_uncertain or
+            !selector.syntax_known or selector.pseudo != null or rule.selector == null) return null;
+        for (selector.chain) |part| if (observedTableDynamicCompound(part)) return null;
+        if (result.items.len == 4096) return null;
+        try result.append(a, index);
+    }
+    return try result.toOwnedSlice(a);
+}
+
+pub fn observedTableFloatDescendantsCovered(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    inventory: ObservedTableDescendantInventory, source: []const u8, motion: ?TableDescendantStaticMotion) !bool
+{
+    return observedTableFloatDescendantsCoveredWithLinks(a, context, inventory, source, motion, null);
+}
+
+pub fn observedTableFloatDescendantsCoveredWithLinks(a: std.mem.Allocator, context: TableContainingDirectionContext,
+    inventory: ObservedTableDescendantInventory, source: []const u8, motion: ?TableDescendantStaticMotion,
+    links: ?TableLinkPaintProof) !bool
+{
+    if (!observedStyleGraphValid(context.styles, context.nodes, context.root)) return false;
+    const indices = (try observedTableDescendantRuleIndices(a, context, inventory, source, motion, links)) orelse return false;
+    a.free(indices); return true;
+}
+
+fn observedTableDescendantDependenciesEqual(raw: []const u8, left: CustomEnvironment, right: CustomEnvironment, depth: usize) bool {
+    if (depth > 32) return false;
+    const value = trim(raw);
+    const call = customCall(value) orelse return false;
+    const first = left.get(call.name); const second = right.get(call.name);
+    switch (first) {
+        .unknown => return false,
+        .invalid => if (second != .invalid) return false,
+        .known => |known| if (second != .known or !std.mem.eql(u8, known, second.known)) return false,
+    }
+    // A descendant can invalidate or shadow the main name. Its fallback's
+    // dependencies therefore must agree even when the current main value wins.
+    if (call.fallback) |fallback| {
+        var dependency = false;
+        var at: usize = 0;
+        while (at + 4 <= fallback.len) : (at += 1) if (std.ascii.eqlIgnoreCase(fallback[at..][0..4], "var(")) { dependency = true; break; };
+        if (dependency and !observedTableDescendantDependenciesEqual(fallback, left, right, depth + 1)) return false;
+    }
+    return true;
+}
+
+fn observedTableDescendantVariablesEqual(a: std.mem.Allocator, css: []const u8,
+    left: ?CustomEnvironment, right: ?CustomEnvironment) !bool
+{
+    // Escaped function/property spelling requires another dependency proof.
+    if (std.mem.indexOfScalar(u8, css, '\\') != null) return false;
+    var at: usize = 0;
+    while (try nextDeclarationAlloc(a, css, &at)) |declaration| {
+        defer a.free(declaration);
+        const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse continue;
+        const parsed = customPriority(declaration[colon + 1..]);
+        if (parsed.unknown) return false;
+        const raw = trim(parsed.value);
+        var dependency = false;
+        var index: usize = 0;
+        while (index + 4 <= raw.len) : (index += 1) if (std.ascii.eqlIgnoreCase(raw[index..][0..4], "var(")) { dependency = true; break; };
+        if (!dependency) continue;
+        if (!observedTableDescendantDependenciesEqual(raw, left orelse return false, right orelse return false, 0)) return false;
+        const first = try customColorValue(a, left orelse return false, raw);
+        const second = try customColorValue(a, right orelse return false, raw);
+        switch (first) {
+            .unknown => return false,
+            .invalid => if (second != .invalid) return false,
+            .known => |value| if (second != .known or !std.mem.eql(u8, value, second.known)) return false,
+        }
+    }
+    return true;
+}
+
+pub fn observedTableStaticDescendantsAgreeWithMotion(a: std.mem.Allocator, left: TableContainingDirectionContext,
+    right: TableContainingDirectionContext, inventory: ObservedTableDescendantInventory,
+    left_environments: []const ?CustomEnvironment, right_environments: []const ?CustomEnvironment,
+    source: []const u8, left_motion: ?TableDescendantStaticMotion, right_motion: ?TableDescendantStaticMotion) !bool
+{
+    return observedTableStaticDescendantsAgreeWithLinks(a, left, right, inventory, left_environments, right_environments,
+        source, left_motion, right_motion, null, null);
+}
+
+pub fn observedTableStaticDescendantsAgreeWithLinks(a: std.mem.Allocator, left: TableContainingDirectionContext,
+    right: TableContainingDirectionContext, inventory: ObservedTableDescendantInventory,
+    left_environments: []const ?CustomEnvironment, right_environments: []const ?CustomEnvironment,
+    source: []const u8, left_motion: ?TableDescendantStaticMotion, right_motion: ?TableDescendantStaticMotion,
+    left_links: ?TableLinkPaintProof, right_links: ?TableLinkPaintProof) !bool
+{
+    if (left_environments.len == 0 or left_environments.len != right_environments.len or left_environments.len > 4097) return false;
+    if (!observedStyleGraphValid(left.styles, left.nodes, left.root) or !observedStyleGraphValid(right.styles, right.nodes, right.root) or
+        left.table >= left.nodes.len or right.table >= right.nodes.len or
+        !std.ascii.eqlIgnoreCase(left.nodes[left.table].tag, "table") or !std.ascii.eqlIgnoreCase(right.nodes[right.table].tag, "table")) return false;
+    const first = (try observedTableDescendantRuleIndices(a, left, inventory, source, left_motion, left_links)) orelse return false;
+    defer a.free(first);
+    const second = (try observedTableDescendantRuleIndices(a, right, inventory, source, right_motion, right_links)) orelse return false;
+    defer a.free(second);
+    if (first.len != second.len) return false;
+    var selector_budget: usize = 262144;
+    var css_budget: usize = 4 * 1024 * 1024;
+    for (first, second) |one, two| {
+        const lr = left.styles.observed_figure_rules[one]; const rr = right.styles.observed_figure_rules[two];
+        // Relative order, selector specificity, CSS declaration order and
+        // !important remain exact; absolute offsets in a different head do not.
+        if (!std.mem.eql(u8, lr.raw_selector, rr.raw_selector) or !std.mem.eql(u8, lr.css, rr.css) or
+            lr.selector.?.specificity != rr.selector.?.specificity or
+            !observedTableDescendantSelectorInputsEqual(lr.selector.?, left, right, &selector_budget)) return false;
+        if (lr.css.len > css_budget / left_environments.len) return false;
+        css_budget -= lr.css.len * left_environments.len;
+        for (left_environments, right_environments) |le, re| if (!try observedTableDescendantVariablesEqual(a, lr.css, le, re)) return false;
+    }
+    // Source-authored inline declarations may read the inherited environment
+    // even when there is no matching stylesheet declaration for that property.
+    for (inventory.inline_styles) |css| {
+        if (css.len > css_budget / left_environments.len) return false;
+        css_budget -= css.len * left_environments.len;
+        for (left_environments, right_environments) |le, re| if (!try observedTableDescendantVariablesEqual(a, css, le, re)) return false;
+    }
+    return true;
+}
+
+fn observedTableOtherPseudoEmpty(context: AuthoredElementObservedContext, subject: u32) bool {
+    for (context.styles.observed_figure_rules) |rule| {
+        if (rule.focus_inner_control_host and knownNonControlHost(context.nodes[subject].tag)) continue;
+        if (observedFigureConditions(rule, .{}) == .no) continue;
+        const selector = rule.selector orelse rule.weak_selector orelse return false;
+        if (selector.pseudo == null or selector.pseudo.? != .other) continue;
+        if (observedStyleRuleMatch(rule, context.nodes, null, subject, .other, .{}) != .no) return false;
+    }
+    return true;
+}
+
+pub const ObservedTableViewportSample = struct { width: f64, boundary: bool };
+
+pub fn observedTableViewportSamples(a: std.mem.Allocator, contexts: []const TableContainingDirectionContext) !?[]const ObservedTableViewportSample {
+    return observedTableViewportSamplesIn(a, contexts, false);
+}
+
+pub fn observedTableLinkViewportSamples(a: std.mem.Allocator, contexts: []const TableContainingDirectionContext) !?[]const ObservedTableViewportSample {
+    return observedTableViewportSamplesIn(a, contexts, true);
+}
+
+fn observedTableViewportSamplesIn(a: std.mem.Allocator, contexts: []const TableContainingDirectionContext,
+    owned_only: bool) !?[]const ObservedTableViewportSample {
+    if (contexts.len == 0 or contexts.len > 128) return null;
+    var boundaries: std.ArrayList(f64) = .empty;
+    defer boundaries.deinit(a);
+    for (contexts) |context| {
+        if (!observedStyleGraphValid(context.styles, context.nodes, context.root)) return null;
+        for (context.styles.observed_figure_rules) |rule| {
+            if (observedFigureConditions(rule, .{}) == .no) continue;
+            var possible = false;
+            for (context.nodes, 0..) |_, index| {
+                if (owned_only and !authoredElementDescendant(context.nodes, @intCast(index), context.table) and
+                    !authoredElementDescendant(context.nodes, context.table, @intCast(index))) continue;
+                if (observedBareLanguageRefutes(rule.raw_selector, context.nodes, @intCast(index))) continue;
+                if (observedStyleRuleMatch(rule, context.nodes, null, @intCast(index), null, .{}) != .no) { possible = true; break; }
+            }
+            if (!possible) continue;
+            for (rule.conditions) |condition| {
+                const atom = observedFigureMediaAtom(condition) orelse continue;
+                if (!std.ascii.eqlIgnoreCase(atom.name, "min-width") and !std.ascii.eqlIgnoreCase(atom.name, "max-width")) continue;
+                const computed = figureComputedWidthPx(atom.value, null);
+                if (computed != .known) continue; // Remains uncertain in every actual query.
+                const width = computed.known;
+                if (!std.math.isFinite(width) or width < 0) return null;
+                var found = false; for (boundaries.items) |prior| if (prior == width) { found = true; break; };
+                if (!found) {
+                    if (boundaries.items.len == 64) return null;
+                    try boundaries.append(a, width);
+                }
+            }
+        }
+    }
+    var order: usize = 1;
+    while (order < boundaries.items.len) : (order += 1) {
+        const value = boundaries.items[order]; var at = order;
+        while (at != 0 and boundaries.items[at - 1] > value) : (at -= 1) boundaries.items[at] = boundaries.items[at - 1];
+        boundaries.items[at] = value;
+    }
+    var result: std.ArrayList(ObservedTableViewportSample) = .empty;
+    errdefer result.deinit(a);
+    try result.append(a, .{ .width = 0, .boundary = true });
+    var previous: f64 = 0;
+    for (boundaries.items) |width| {
+        if (width == 0) continue;
+        const middle = previous + (width - previous) / 2;
+        if (middle > previous and middle < width) try result.append(a, .{ .width = middle, .boundary = false });
+        try result.append(a, .{ .width = width, .boundary = true });
+        previous = width;
+    }
+    const upper = previous + @max(@as(f64, 1), previous / 2);
+    if (!std.math.isFinite(upper) or upper <= previous) return null;
+    try result.append(a, .{ .width = upper, .boundary = false });
+    return try result.toOwnedSlice(a);
+}
+
+pub fn authoredElementObservedContextValid(context: AuthoredElementObservedContext) bool {
+    if (!observedStyleGraphValid(context.styles, context.nodes, context.root) or
+        context.element >= context.nodes.len or context.element == context.root) return false;
+    const element = context.nodes[context.element];
+    if (!std.ascii.eqlIgnoreCase(element.tag, "div") and !std.ascii.eqlIgnoreCase(element.tag, "span")) return false;
+    var next = element.parent;
+    while (next) |index| : (next = context.nodes[index].parent) if (index == context.root) return true;
+    return false;
+}
+
+const ObservedInlineMarginCeiling = [4]?bool;
+
+fn observedLiteralPhysicalMarginMask(name: []const u8, value: []const u8) ?u4 {
+    // No computed, logical or CSS-wide reset value lends this proof.
+    for ([_][]const u8{ "initial", "inherit", "unset", "revert", "revert-layer" }) |reset|
+        if (std.ascii.eqlIgnoreCase(trim(value), reset)) return null;
+    if (std.ascii.eqlIgnoreCase(name, "margin"))
+        return if (containerMarginValues(value) != null) 0b1111 else null;
+    inline for (.{ "margin-top", "margin-right", "margin-bottom", "margin-left" }, 0..) |property, index| {
+        if (std.ascii.eqlIgnoreCase(name, property)) {
+            if (!std.ascii.eqlIgnoreCase(trim(value), "auto") and containerMarginLength(value) == null) return null;
+            return @as(u4, 1) << index;
+        }
+    }
+    return null;
+}
+
+fn observedInlineMarginCeiling(a: std.mem.Allocator, css: []const u8) !?ObservedInlineMarginCeiling {
+    var result: ObservedInlineMarginCeiling = .{ null, null, null, null };
+    var cursor: usize = 0;
+    while (try nextDeclarationAlloc(a, css, &cursor)) |declaration| {
+        defer a.free(declaration);
+        if (trim(declaration).len == 0) continue;
+        const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse return null;
+        const name = trim(declaration[0..colon]);
+        if (std.mem.indexOfScalar(u8, name, '\\') != null or std.ascii.eqlIgnoreCase(name, "all")) return null;
+        const margin = name.len >= 6 and std.ascii.eqlIgnoreCase(name[0..6], "margin");
+        if (!margin) continue;
+        const priority = customPriority(declaration[colon + 1..]);
+        if (priority.unknown) return null;
+        const mask = observedLiteralPhysicalMarginMask(name, priority.value) orelse return null;
+        for (&result, 0..) |*edge, index| if (mask & (@as(u4, 1) << @intCast(index)) != 0) {
+            if (edge.* == null or priority.important) edge.* = priority.important;
+        };
+    }
+    return result;
+}
+
+fn observedMarginRuleDominated(a: std.mem.Allocator, rule: ObservedFigureRule, ceiling: ?ObservedInlineMarginCeiling) !bool {
+    const inline_edges = ceiling orelse return false;
+    // Inline declarations cannot supply a pseudo-element's style. This first
+    // domain also declines functional/escaped selectors rather than reparse them.
+    if (std.mem.indexOfAny(u8, rule.raw_selector, ":\\") != null) return false;
+    var cursor: usize = 0;
+    var seen = false;
+    while (try nextDeclarationAlloc(a, rule.css, &cursor)) |declaration| {
+        defer a.free(declaration);
+        if (trim(declaration).len == 0) continue;
+        const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse return false;
+        const name = trim(declaration[0..colon]);
+        const priority = customPriority(declaration[colon + 1..]);
+        if (priority.unknown) return false;
+        const mask = observedLiteralPhysicalMarginMask(name, priority.value) orelse return false;
+        for (inline_edges, 0..) |edge, index| if (mask & (@as(u4, 1) << @intCast(index)) != 0) {
+            const inline_important = edge orelse return false;
+            if (priority.important and !inline_important) return false;
+        };
+        seen = true;
+    }
+    // CSS Cascade5 element-attached author styles outrank selector-mapped author
+    // styles of the same importance, before layer/specificity comparisons. No
+    // match/rank/absence fact is fabricated: every declaration is ineffective.
+    return seen;
+}
+
+fn knownNonControlHost(tag: []const u8) bool {
+    if (tag.len == 0 or !std.ascii.isAlphabetic(tag[0])) return false;
+    for (tag) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-') return false;
+    return !std.ascii.eqlIgnoreCase(tag, "button") and !std.ascii.eqlIgnoreCase(tag, "input");
+}
+
+fn observedFigureFontFamily(a: std.mem.Allocator, node: ObservedFigureComputedNode, inherited: ?[]const u8) !?[]const u8 {
+    return observedFigureFontFamilyWithWitness(a, node, inherited, null);
+}
+
+pub const AuthoredElementComputedNode = struct {
+    index: u32,
+    environment: CustomEnvironment,
+    paint: TextPaint,
+    font_size: ?ObservedFontSizeValue,
+    line_height: AuthoredElementLineHeight,
+    font_family: ?[]const u8,
+    font_features: ?types.FontFeaturePolicy = null,
+    background: ?types.FigureColor,
+    language: []const u8,
+    direction: []const u8,
+    hidden: bool,
+    alignment: AlignmentResolution,
+    container: ContainerResolution,
+    geometry: BlockGeometryResolution,
+};
+
+pub const AuthoredElementComputedContext = struct {
+    nodes: []const AuthoredElementComputedNode,
+    root: u32,
+    element: u32,
+    root_font_family: []const u8,
+    parent_alignment: ?types.CellTextAlign,
+};
+
+fn authoredElementQueryDomain(a: std.mem.Allocator, context: AuthoredElementObservedContext) !bool {
+    if (!authoredElementObservedContextValid(context)) return false;
+    const owned = try a.alloc(bool, context.nodes.len);
+    defer a.free(owned);
+    @memset(owned, false);
+    owned[context.element] = true;
+    // Mark descendants before ancestors so unrelated sibling subtrees remain out.
+    for (context.nodes, 0..) |node, index| if (node.parent) |parent| {
+        if (owned[parent]) owned[index] = true;
+    };
+    var ancestor = context.nodes[context.element].parent;
+    while (ancestor) |index| : (ancestor = context.nodes[index].parent) owned[index] = true;
+    var count: usize = 0;
+    for (owned) |include| if (include) {
+        if (count == 512) return false;
+        count += 1;
+    };
+    return true;
+}
+
+fn authoredElementRuleMatchesIn(a: std.mem.Allocator, context: AuthoredElementObservedContext, subject: u32,
+    evaluation: ObservedFigureEvaluation, complete_language_path: bool) ![]const ContainerRuleMatch
+{
+    var result: std.ArrayList(ContainerRuleMatch) = .empty;
+    errdefer result.deinit(a);
+    const inline_margin_ceiling: ?ObservedInlineMarginCeiling = if (observedFigureAttribute(context.nodes[subject], "style")) |css|
+        try observedInlineMarginCeiling(a, css) else null;
+    for (context.styles.observed_figure_rules) |rule| {
+        if (complete_language_path and observedBareLanguageRefutes(rule.raw_selector, context.nodes, subject)) continue;
+        const matched = observedStyleRuleMatch(rule, context.nodes, null, subject, null, evaluation);
+        if (matched == .no) continue;
+        const condition = observedFigureConditions(rule, evaluation);
+        if (condition == .no) continue;
+        if ((rule.rank_unknown or rule.list_uncertain or rule.selector == null) and
+            try observedMarginRuleDominated(a, rule, inline_margin_ceiling)) continue;
+        try result.append(a, .{ .css = rule.css, .order = rule.order,
+            .specificity = if (rule.selector) |selector| selector.specificity else 0,
+            .match = if (matched == .unknown or condition == .unknown) .unknown else .known,
+            .viewport = .all, .rank_unknown = rule.rank_unknown or rule.list_uncertain or rule.selector == null,
+            .provenance = .{ .selector = rule.raw_selector, .conditions = rule.conditions,
+                .source_index = rule.source_index, .css_byte_start = rule.source_byte_start } });
+    }
+    return try result.toOwnedSlice(a);
+}
+
+fn authoredElementFontSize(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment) !?ObservedFontSizeValue {
+    const candidates = try observedFigurePropertyCandidates(a, declarations, "font-size", &.{"font"});
+    defer a.free(candidates);
+    if (candidates.len == 0) return null;
+    var definite = false;
+    for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    var selected: ?ObservedFontSizeValue = if (definite) null else .inherit;
+    for (candidates) |candidate| {
+        if (candidate.syntax_unknown or candidate.rank_unknown) return .unknown;
+        const value: ObservedFontSizeValue = switch (try customColorValue(a, environment, candidate.raw)) {
+            .unknown => return .unknown,
+            .invalid => .inherit,
+            .known => |raw| fontSizeValueIn(true, candidate.name, raw) orelse if (customCall(trim(candidate.raw)) != null) ObservedFontSizeValue.inherit else return .unknown,
+        };
+        if (value == .unknown) return .unknown;
+        if (selected) |prior| {
+            if (!observedFigureDataEqual(ObservedFontSizeValue, prior, value, 0)) return .unknown;
+        } else selected = value;
+    }
+    return selected;
+}
+
+pub const AuthoredElementLineHeight = union(enum) {
+    inherit, normal, multiplier: f32, font_relative: f32, root_relative: f32, length: types.StyleLength, unknown,
+};
+
+fn authoredElementLineHeight(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment) !AuthoredElementLineHeight {
+    const candidates = try observedFigurePropertyCandidates(a, declarations, "line-height", &.{"font"});
+    defer a.free(candidates);
+    var definite = false;
+    for (candidates) |candidate| definite = definite or !candidate.uncertain;
+    var selected: ?AuthoredElementLineHeight = if (definite) null else .inherit;
+    for (candidates) |candidate| {
+        if (candidate.syntax_unknown or candidate.rank_unknown) return .unknown;
+        const raw = switch (try customColorValue(a, environment, candidate.raw)) {
+            .unknown => return .unknown, .invalid => "unset", .known => |value| trim(value),
+        };
+        const value: AuthoredElementLineHeight = if (std.ascii.eqlIgnoreCase(raw, "normal") or std.ascii.eqlIgnoreCase(raw, "initial")) .normal
+            else if (std.ascii.eqlIgnoreCase(raw, "inherit") or std.ascii.eqlIgnoreCase(raw, "unset")) .inherit
+            else parsed: {
+                if (!std.ascii.eqlIgnoreCase(candidate.name, "line-height")) break :parsed .unknown;
+                if (containerLineHeight(raw)) |height| break :parsed switch (height) {
+                    .normal => .normal,
+                    .multiplier => |factor| if (factor == 0 and !widthNumberIsZero(raw)) .unknown else .{ .multiplier = factor },
+                    .length => |computed_length| if (computed_length.unit == .em) .{ .font_relative = computed_length.value } else .{ .length = computed_length },
+                };
+                const size = fontSizeValueIn(true, "font-size", raw) orelse break :parsed .unknown;
+                break :parsed switch (size) {
+                    .relative => |factor| .{ .font_relative = factor }, .root_relative => |factor| .{ .root_relative = factor },
+                    else => .unknown,
+                };
+            };
+        if (value == .unknown) return .unknown;
+        if (selected) |prior| {
+            if (!observedFigureDataEqual(AuthoredElementLineHeight, prior, value, 0)) return .unknown;
+        } else selected = value;
+    }
+    return selected orelse .inherit;
+}
+
+fn authoredElementContainer(a: std.mem.Allocator, rules: []const ContainerRuleMatch, css: []const u8, environment: CustomEnvironment, display_none_consumed: bool) !ContainerResolution {
+    _ = display_none_consumed;
+    var selected: ?ContainerResolution = null;
+    inline for (.{ ColumnAliasPolicy.standard, .webkit, .moz, .all }) |policy| {
+        var cascade_value: ContainerCascade = .{ .column_alias_policy = policy, .custom_environment = environment };
+        for (rules) |rule| {
+            if (rule.rank_unknown or rule.viewport != .all) return .{ .unresolved = true };
+            try cascade_value.declarations(a, rule.css, rule.specificity, rule.order, rule.match == .unknown, false);
+        }
+        try cascade_value.declarations(a, css, 0, max_rules * 1024, false, true);
+        const result = cascade_value.result();
+        if (result.unresolved) return result;
+        if (selected) |prior| {
+            if (!containerStyleEqual(prior.style, result.style) or prior.positioning_specified != result.positioning_specified) return .{ .unresolved = true };
+        }
+        selected = result;
+    }
+    return selected.?;
+}
+
+fn authoredElementPseudoEmpty(a: std.mem.Allocator, context: AuthoredElementObservedContext, subject: u32,
+    pseudo: GeneratedFigurePseudo, environment: CustomEnvironment) !bool
+{
+    var collected = (try observedStyleNodeDeclarations(a, context.styles, context.nodes, subject, null, pseudo, .{})) orelse return false;
+    defer collected.deinit(a);
+    const content = try observedFigureKeyword(a, collected.items, "content", &.{}, environment,
+        &.{ "normal", "none" }, "normal", null, false, "normal");
+    return !content.unresolved and content.value != null;
+}
+
+const AuthoredInheritedNeutral = struct { property: []const u8, initial: []const u8, shorthand: ?[]const u8 = null };
+
+const authored_inherited_neutral = [_]AuthoredInheritedNeutral{
+    .{ .property = "text-transform", .initial = "none" },
+    .{ .property = "letter-spacing", .initial = "normal" }, .{ .property = "word-spacing", .initial = "normal" },
+    .{ .property = "text-shadow", .initial = "none" }, .{ .property = "white-space", .initial = "normal" },
+    .{ .property = "visibility", .initial = "visible" }, .{ .property = "writing-mode", .initial = "horizontal-tb" },
+    .{ .property = "text-orientation", .initial = "mixed" }, .{ .property = "hyphens", .initial = "manual" },
+    .{ .property = "word-break", .initial = "normal" }, .{ .property = "overflow-wrap", .initial = "normal" },
+    .{ .property = "word-wrap", .initial = "normal" }, .{ .property = "text-indent", .initial = "0" },
+    .{ .property = "text-decoration-line", .initial = "none", .shorthand = "text-decoration" },
+};
+
+fn authoredElementInheritedNeutral(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment) !bool {
+    for (authored_inherited_neutral) |item| {
+        const shorthands: []const []const u8 = if (item.shorthand) |value| &.{value} else &.{};
+        const known = try observedFigureKeyword(a, declarations, item.property, shorthands, environment,
+            &.{item.initial}, item.initial, item.initial, true, item.initial);
+        if (known.unresolved or known.value == null or !std.ascii.eqlIgnoreCase(known.value.?, item.initial)) return false;
+    }
+    // Other inherited shaping controls have no typed ordinary-text result.
+    // Their absence preserves native shaping; an authored value cannot be lost.
+    for ([_][]const u8{ "font-kerning", "font-optical-sizing", "font-synthesis", "font-synthesis-weight", "font-synthesis-style",
+        "font-synthesis-small-caps", "font-variant-ligatures", "font-variant-caps", "font-variant-numeric", "font-variant-east-asian",
+        "text-rendering", "text-emphasis", "text-emphasis-style", "text-emphasis-position", "text-combine-upright" }) |property| {
+        const candidates = try observedFigurePropertyCandidates(a, declarations, property, &.{});
+        defer a.free(candidates);
+        if (candidates.len != 0) return false;
+    }
+    return true;
+}
+
+fn authoredElementPropertiesComplete(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration, environment: CustomEnvironment) !bool {
+    var used = try ObservedFigurePropertyUse.init(a, declarations);
+    defer used.deinit(a);
+    used.customEnvironment();
+    if (!try used.staticMotion(a, environment)) return false;
+    // These properties have corresponding typed queries below. Their names do
+    // not imply support: an unknown winning value still refuses the result.
+    for ([_][]const u8{ "font-size", "font-weight", "font-style", "font-family", "font-variant", "font-stretch",
+        "font-size-adjust", "font-feature-settings", "font-variation-settings", "color", "background-color",
+        "direction", "unicode-bidi", "display", "width", "height", "min-height", "max-width", "box-sizing",
+        "float", "clear", "position", "overflow", "overflow-x", "overflow-y", "line-height", "text-align",
+        "column-count", "column-width", "column-gap", "columns", "column-fill", "break-inside", "page-break-inside" }) |property|
+        used.property(property, if (std.mem.startsWith(u8, property, "font-")) &.{"font"}
+            else if (std.mem.eql(u8, property, "background-color")) &.{"background"} else &.{});
+    for (authored_inherited_neutral) |item| used.property(item.property, if (item.shorthand) |value| &.{value} else &.{});
+    used.boxEdges(true); used.boxEdges(false); used.borderEdges();
+    return used.complete();
+}
+
+pub const ObservedTableTextOperation = struct {
+    a: std.mem.Allocator,
+    context: TableContainingDirectionContext,
+    viewport_width: f64,
+    text_nodes: []?AuthoredElementComputedNode,
+    layout_paths: []?ObservedTableDeclarationPath,
+    focus_domain: ?*const TableSourceFocusDomain = null,
+    pub fn init(a: std.mem.Allocator, context: TableContainingDirectionContext, viewport_width: f64) !?@This() {
+        return initWithLinkProof(a, context, viewport_width, null);
+    }
+    pub fn initWithLinkProof(a: std.mem.Allocator, context: TableContainingDirectionContext, viewport_width: f64,
+        proof: ?TableLinkPaintProof) !?@This()
+    {
+        var focus: ?*const TableSourceFocusDomain = null;
+        if (proof) |known| if (known.operation.focus_domain != null) {
+            if (!known.closedSourceFocus()) return null;
+            if (known.scope.styles != context.styles or known.scope.nodes.ptr != context.nodes.ptr or
+                known.scope.nodes.len != context.nodes.len or known.scope.root != context.root or known.scope.table != context.table) return null;
+            focus = known.operation.focus_domain;
+        };
+        if (!observedStyleGraphValid(context.styles, context.nodes, context.root) or context.nodes.len > 512 or
+            !std.math.isFinite(viewport_width) or viewport_width < 0) return null;
+        const nodes = try a.alloc(?AuthoredElementComputedNode, context.nodes.len);
+        @memset(nodes, null);
+        const paths = try a.alloc(?ObservedTableDeclarationPath, context.nodes.len); @memset(paths, null);
+        return .{ .a = a, .context = context, .viewport_width = viewport_width, .text_nodes = nodes, .layout_paths = paths, .focus_domain = focus };
+    }
+    pub fn resolve(self: *@This(), subject: u32) !?AuthoredElementComputedContext {
+        if (subject >= self.context.nodes.len) return null;
+        const tag = self.context.nodes[subject].tag;
+        var supported = false;
+        for ([_][]const u8{ "td", "th", "tr", "tbody", "table" }) |name| if (std.ascii.eqlIgnoreCase(tag, name)) { supported = true; break; };
+        if (!supported) return null;
+        return resolveObservedElementTextPath(self.a, .{ .styles = self.context.styles, .nodes = self.context.nodes,
+            .root = self.context.root, .element = subject }, .{ .viewport_width = self.viewport_width, .table_focus = self.focus_domain }, true, self.text_nodes, false);
+    }
+};
+
+fn resolveObservedElementTextPath(a: std.mem.Allocator, context: AuthoredElementObservedContext,
+    evaluation: ObservedFigureEvaluation, table_cell: bool, text_cache: ?[]?AuthoredElementComputedNode,
+    observed_link_colors: bool) !?AuthoredElementComputedContext
+{
+    return resolveObservedElementTextPathIn(a, context, evaluation, table_cell, text_cache, observed_link_colors, false, false);
+}
+
+fn resolveObservedElementTextPathIn(a: std.mem.Allocator, context: AuthoredElementObservedContext,
+    evaluation: ObservedFigureEvaluation, table_cell: bool, text_cache: ?[]?AuthoredElementComputedNode,
+    observed_link_colors: bool, nested_font_projection: bool, comptime font_metrics_only: bool) !?AuthoredTextPathResult(font_metrics_only)
+{
+    if ((!table_cell and !try authoredElementQueryDomain(a, context)) or context.styles.globally_unresolved) return null;
+    var reverse: [512]u32 = undefined;
+    var count: usize = 0;
+    var next: ?u32 = context.element;
+    while (next) |index| {
+        if (count == reverse.len or index >= context.nodes.len) return null;
+        for (reverse[0..count]) |prior| if (prior == index) return null;
+        reverse[count] = index; count += 1;
+        next = context.nodes[index].parent;
+    }
+    if (count == 0 or reverse[count - 1] != 0) return null;
+    const result = try a.alloc(if (font_metrics_only) AuthoredFontMetricsNode else AuthoredElementComputedNode, count);
+    var parent_environment: CustomEnvironment = .{ .complete = true };
+    var parent_family: ?[]const u8 = null;
+    var parent_features: ?types.FontFeaturePolicy = null;
+    var root_font_family: ?[]const u8 = null;
+    var parent_background: ?types.FigureColor = null;
+    var language: []const u8 = "";
+    var direction: []const u8 = "ltr";
+    var inherited_alignment: ?types.CellTextAlign = null;
+    var parent_alignment: ?types.CellTextAlign = null;
+    for (result, 0..) |*out, position| {
+        const index = reverse[count - position - 1];
+        const node = context.nodes[index];
+        if (!font_metrics_only) if (text_cache) |cache| if (cache[index]) |cached| {
+            if (index != context.element and cached.hidden) return null;
+            if (index == context.element) parent_alignment = inherited_alignment;
+            out.* = cached;
+            parent_environment = cached.environment; parent_family = cached.font_family; parent_features = cached.font_features;
+            parent_background = cached.background; language = cached.language; direction = cached.direction;
+            inherited_alignment = cached.alignment.value;
+            if (index == context.root) root_font_family = cached.font_family;
+            continue;
+        };
+        var collected = (try observedStyleNodeDeclarationsWithLanguage(a, context.styles, context.nodes, index, null, null, evaluation, table_cell)) orelse return null;
+        const declarations = try collected.toOwnedSlice(a);
+        const environment = try observedFigureCustomEnvironment(a, declarations, parent_environment, true);
+        if (node.custom_environment) |issued| for (issued.values) |binding| {
+            if (binding.value == .unknown) continue;
+            if (!sameObservedCustomValue(binding.value, environment.get(binding.name))) return null;
+        };
+        if (font_metrics_only) {
+            if (!try authoredFontMetricNeutral(a, declarations, environment)) return null;
+        } else if (!try authoredElementInheritedNeutral(a, declarations, environment)) return null;
+        const rules = try authoredElementRuleMatchesIn(a, context, index, evaluation, table_cell);
+        defer a.free(rules);
+        const css = observedFigureAttribute(node, "style") orelse "";
+        var paint: TextCascade = .{ .custom_environment = environment,
+            .observed_color_environment = if (observed_link_colors) environment else null };
+        defer paint.possible_colors.deinit(a);
+        defer paint.possible_weights.deinit(a);
+        defer paint.possible_font_styles.deinit(a);
+        var geometry: BlockGeometryCascade = .{};
+        defer geometry.possible.deinit(a);
+        var alignment: AlignmentCascade = .{};
+        if (presentationalTextAlign(observedFigureAttribute(node, "align"))) |value|
+            alignment.consider(.{ .property = .text_align, .value = .{ .align_value = value }, .important = false, .order = 0 }, 0, false, false);
+        for (rules) |rule| {
+            if (font_metrics_only) {
+                const projected = (try authoredFontMetricRuleProjection(a, rule.css)) orelse return null;
+                defer a.free(projected);
+                if (projected.len == 0) continue;
+                if (rule.rank_unknown) return null;
+                try paint.declarations(a, projected, rule.specificity, rule.order, rule.match == .unknown, false);
+                continue;
+            }
+            if (rule.rank_unknown) {
+                if (table_cell and (try authoredTableTextRuleOnlyTabStops(a, rule.css) or
+                    (nested_font_projection and try authoredNestedTableFontRuleOnlyPhysicalMargins(a, rule.css)))) continue;
+                return null;
+            }
+            try paint.declarations(a, rule.css, rule.specificity, rule.order, rule.match == .unknown, false);
+            try alignment.declarations(a, rule.css, rule.specificity, rule.order, rule.match == .unknown, false);
+            if (!table_cell and index == context.element) try geometry.declarations(a, rule.css, rule.specificity, rule.order, rule.match == .unknown, false);
+        }
+        if (font_metrics_only) {
+            const projected = (try authoredFontMetricRuleProjection(a, css)) orelse return null;
+            defer a.free(projected);
+            try paint.declarations(a, projected, 0, max_rules * 1024, false, true);
+        } else {
+            try paint.declarations(a, css, 0, max_rules * 1024, false, true);
+            try alignment.declarations(a, css, 0, max_rules * 1024, false, true);
+        }
+        if (!table_cell and index == context.element) try geometry.declarations(a, css, 0, max_rules * 1024, false, true);
+        const line_height = try authoredElementLineHeight(a, declarations, environment);
+        if (line_height == .unknown) return null;
+        const font_size = try authoredElementFontSize(a, declarations, environment);
+        if (font_size != null and font_size.? == .unknown) return null;
+        const family = try observedFigureFontFamily(a, .{ .index = index, .declarations = declarations, .environment = environment }, parent_family);
+        if (index == context.root) root_font_family = family;
+        var features = parent_features;
+        if (table_cell) {
+            const resolved_features = try observedFigureFontFeatures(a, .{ .index = index, .declarations = declarations, .environment = environment }, parent_features);
+            if (resolved_features.unresolved) return null;
+            features = resolved_features.value;
+        }
+        // Unknown ancillary font changes cannot be hidden by a size/weight query.
+        for ([_][]const u8{ "font-variant", "font-stretch", "font-size-adjust", "font-feature-settings", "font-variation-settings" }) |property| {
+            if (table_cell and std.mem.eql(u8, property, "font-feature-settings")) continue;
+            const initial: []const u8 = if (std.mem.eql(u8, property, "font-size-adjust")) "none" else "normal";
+            const known = try observedFigureKeyword(a, declarations, property, &.{"font"}, environment,
+                &.{initial}, initial, initial, true, initial);
+            if (known.unresolved) return null;
+        }
+        if (observedFigureAttribute(node, "lang")) |value| {
+            language = value;
+        }
+        if (font_metrics_only) {
+            const own_font = paint.result();
+            if ((own_font.weight != null and own_font.weight.? == .unknown) or
+                (own_font.font_style != null and own_font.font_style.? == .unknown)) return null;
+            out.* = .{ .index = index, .environment = environment,
+                .weight = own_font.weight, .font_style = own_font.font_style,
+                .font_size = font_size, .line_height = line_height, .font_family = family,
+                .font_features = features, .language = language };
+        } else {
+            const parent_direction = direction;
+            if (observedFigureAttribute(node, "dir")) |value| {
+                if (!std.ascii.eqlIgnoreCase(value, "ltr") and !std.ascii.eqlIgnoreCase(value, "rtl")) return null;
+                direction = value;
+            }
+            var directional: std.ArrayList(ObservedFigureDeclaration) = .empty;
+            defer directional.deinit(a);
+            if (table_cell) for (declarations) |declaration| {
+                if (!declaration.syntax_unknown and std.ascii.eqlIgnoreCase(declaration.name, "all")) continue;
+                try directional.append(a, declaration);
+            };
+            const direction_declarations = if (table_cell) directional.items else declarations;
+            const own_direction = try observedFigureKeyword(a, direction_declarations, "direction", &.{}, environment,
+                &.{ "ltr", "rtl" }, "ltr", if (table_cell) parent_direction else direction, true, direction);
+            const bidi = try observedFigureKeyword(a, direction_declarations, "unicode-bidi", &.{}, environment,
+                &.{"normal"}, "normal", "normal", false, "normal");
+            if (own_direction.unresolved or bidi.unresolved) return null;
+            direction = own_direction.value.?;
+            const background = try observedFigureColor(a, declarations, "background-color", environment, parent_background, null);
+            if (background.unresolved) return null;
+            const hidden = try observedFigureKeyword(a, declarations, "display", &.{}, environment,
+                if (table_cell) &.{ "none", "block", "flow-root", "grid", "flex", "inline", "inline-block", "table", "table-row-group", "table-row", "table-cell" }
+                else &.{ "none", "block", "inline", "inline-block", "table", "table-row-group", "table-row", "table-cell" },
+                "inline", null, false, if (std.ascii.eqlIgnoreCase(node.tag, "span")) "inline" else "block");
+            if (hidden.unresolved) return null;
+            // Native ownership does not certify an omitted ancestor visibility state.
+            // Keep that path refused instead of hiding the selected source body.
+            if (index != context.element and std.mem.eql(u8, hidden.value.?, "none")) return null;
+            if (index == context.element) parent_alignment = inherited_alignment;
+            if (alignment.resolution.unresolved) return null;
+            if (alignment.resolution.value) |value| inherited_alignment = value
+            else if (std.ascii.eqlIgnoreCase(node.tag, "th")) inherited_alignment = .center;
+            var effective_alignment = alignment.resolution;
+            if (effective_alignment.value == null) effective_alignment.value = inherited_alignment;
+            const own_container: ContainerResolution = if (!table_cell and index == context.element)
+                try authoredElementContainer(a, rules, css, environment, std.mem.eql(u8, hidden.value.?, "none")) else .{};
+            if (!table_cell and index == context.element) {
+                if (!try authoredElementPropertiesComplete(a, declarations, environment) or
+                    !try authoredElementPseudoEmpty(a, context, index, .before, environment) or
+                    !try authoredElementPseudoEmpty(a, context, index, .after, environment) or own_container.unresolved or alignment.resolution.unresolved) return null;
+            }
+            if (table_cell and index == context.element) {
+                if (!try authoredElementPseudoEmpty(a, context, index, .before, environment) or
+                    !try authoredElementPseudoEmpty(a, context, index, .after, environment) or
+                    !observedTableOtherPseudoEmpty(context, index)) return null;
+            }
+            const own_paint = paint.result();
+            if ((own_paint.color != null and own_paint.color.? == .unknown) or
+                (own_paint.weight != null and own_paint.weight.? == .unknown) or
+                (own_paint.font_style != null and own_paint.font_style.? == .unknown)) return null;
+            out.* = .{ .index = index, .environment = environment, .paint = own_paint, .font_size = font_size, .line_height = line_height,
+                .font_family = family, .font_features = features, .background = background.value, .language = language, .direction = direction,
+                .alignment = effective_alignment,
+                .hidden = std.mem.eql(u8, hidden.value.?, "none"), .container = own_container,
+                .geometry = if (!table_cell and index == context.element) geometry.result(std.ascii.eqlIgnoreCase(node.tag, "div")) else .{} };
+            if (text_cache) |cache| cache[index] = out.*;
+            parent_background = background.value;
+        }
+        parent_environment = environment;
+        parent_family = family; parent_features = features;
+    }
+    if (font_metrics_only) return .{ .nodes = result, .root = context.root, .element = context.element,
+        .root_font_family = root_font_family orelse return null };
+    return .{ .nodes = result, .root = context.root, .element = context.element, .root_font_family = root_font_family orelse return null, .parent_alignment = parent_alignment };
+}
+
+const OrdinaryTableLinkPaintTest = struct {
+    // The visited/active declarations are the retained Mai core-sheet rules.
+    const css = "html{font-family:sans-serif;font-size:100%;color:#202122;line-height:1.6}" ++
+        "a{color:#3366cc;text-decoration:none}" ++
+        "a:visited{color:var(--color-visited,#6a60b0)}" ++
+        "a:active{color:var(--color-progressive--active,#233566)}" ++
+        "a:hover,a:focus{text-decoration:underline}";
+    const nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "lang", .value = "de" }} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "table", .parent = 2, .attributes = &.{} },
+        .{ .tag = "tbody", .parent = 3, .attributes = &.{} },
+        .{ .tag = "tr", .parent = 4, .attributes = &.{} },
+        .{ .tag = "th", .parent = 5, .attributes = &.{} },
+        .{ .tag = "a", .parent = 6, .attributes = &.{.{ .name = "href", .value = "/wiki/Hilfe:Singular" }}, .has_text = false },
+        .{ .tag = "i", .parent = 7, .attributes = &.{}, .has_text = true },
+    };
+    fn context(styles: *const Profile, observed_nodes: []const ObservedStyleNode) TableContainingDirectionContext {
+        return .{ .styles = styles, .nodes = observed_nodes, .root = 2, .table = 3 };
+    }
+};
+
+const CapturedTableFocusTest = struct {
+    const focus = ":focus{outline-color:var(--outline-color-progressive--focus,#36c)}";
+    const anchor = "a:where(:not([role='button'])):focus-visible{outline:solid 2px var(--outline-color-progressive--focus,#36c)}";
+    fn nodes() [9]ObservedStyleNode {
+        var result = OrdinaryTableLinkPaintTest.nodes;
+        for (&result) |*node| { node.empty = false; if (node.has_text == null) node.has_text = false; }
+        return result;
+    }
+};
+
+pub fn observedFontFamilyRequestAlloc(a: std.mem.Allocator, raw: []const u8) !?types.ContainerFontFamily {
+    if (!observedFigureFontFamilySyntax(raw)) return null;
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    const temp = scratch.allocator();
+    const value = trim(raw);
+    var names: std.ArrayList([]const u8) = .empty;
+    var at: usize = 0;
+    while (at < value.len) {
+        while (at < value.len and std.ascii.isWhitespace(value[at])) : (at += 1) {}
+        if (at == value.len) return null;
+        const quoted = value[at] == '\'' or value[at] == '"';
+        var name: []const u8 = undefined;
+        if (quoted) {
+            const quote = value[at]; at += 1;
+            const begin = at;
+            while (at < value.len and value[at] != quote) : (at += 1) {}
+            if (at == value.len) return null;
+            name = value[begin..at]; at += 1;
+        } else {
+            var normalized: std.ArrayList(u8) = .empty;
+            var pending_space = false;
+            while (at < value.len and value[at] != ',') : (at += 1) {
+                const byte = value[at];
+                if (std.ascii.isWhitespace(byte)) {
+                    pending_space = normalized.items.len != 0;
+                } else {
+                    if (pending_space) try normalized.append(temp, ' ');
+                    pending_space = false;
+                    try normalized.append(temp, byte);
+                }
+            }
+            name = normalized.items;
+        }
+        while (at < value.len and std.ascii.isWhitespace(value[at])) : (at += 1) {}
+        const last = at == value.len;
+        if (!quoted and (std.ascii.eqlIgnoreCase(name, "sans-serif") or std.ascii.eqlIgnoreCase(name, "serif"))) {
+            if (!last) return null;
+            const fallback: types.GenericFontFamily = if (std.ascii.eqlIgnoreCase(name, "serif")) .serif else .sans_serif;
+            if (names.items.len == 0 and fallback == .sans_serif) return .sans_serif;
+            return try cloneFontFamilyRequestAlloc(a, .{ .stack = .{ .names = names.items, .fallback = fallback } });
+        }
+        if (!types.validFontFamilyName(name) or names.items.len == 16 or last) return null;
+        try names.append(temp, name);
+        if (value[at] != ',') return null;
+        at += 1;
+    }
+    return null;
+}
+
+pub fn cloneFontFamilyRequestAlloc(a: std.mem.Allocator, request: types.ContainerFontFamily) !types.ContainerFontFamily {
+    return switch (request) {
+        .sans_serif => .sans_serif,
+        .stack => |stack| blk: {
+            const names = try a.alloc([]const u8, stack.names.len);
+            var used: usize = 0;
+            errdefer {
+                for (names[0..used]) |name| a.free(name);
+                a.free(names);
+            }
+            for (stack.names, 0..) |name, i| {
+                names[i] = try a.dupe(u8, name);
+                used += 1;
+            }
+            break :blk .{ .stack = .{ .names = names, .fallback = stack.fallback } };
+        },
+    };
+}
+
+pub fn resolveObservedNestedTableNodeText(a: std.mem.Allocator,
+    context: TableContainingDirectionContext, subject: u32, link: ?u32,
+    viewport: f64, proof: ?TableLinkPaintProof) !?AuthoredElementComputedContext
+{
+    const evaluation = nestedTableNodeEvaluation(context, subject, link, viewport, proof) orelse return null;
+    return resolveObservedElementTextPathIn(a,
+        .{ .styles = context.styles, .nodes = context.nodes, .root = context.root, .element = subject },
+        evaluation, true, null, true, true, false);
+}
+
+fn nestedTableNodeEvaluation(context: TableContainingDirectionContext, subject: u32, link: ?u32,
+    viewport: f64, proof: ?TableLinkPaintProof) ?ObservedFigureEvaluation
+{
+    if (!std.math.isFinite(viewport) or viewport < 0 or context.table >= context.nodes.len or
+        !std.ascii.eqlIgnoreCase(context.nodes[context.table].tag, "table") or
+        !observedStyleGraphValid(context.styles, context.nodes, context.root) or
+        !authoredElementDescendant(context.nodes, subject, context.table)) return null;
+    var evaluation: ObservedFigureEvaluation = .{ .viewport_width = viewport };
+    if (proof) |known| {
+        if (known.context.styles != context.styles or known.context.nodes.ptr != context.nodes.ptr or
+            known.context.nodes.len != context.nodes.len or known.context.root != context.root or
+            known.context.table != context.table) return null;
+        if (known.operation.focus_domain != null) {
+            if (!known.closedSourceFocus()) return null;
+            evaluation.table_focus = known.operation.focus_domain;
+        }
+    }
+    if (link) |owner| {
+        if (proof == null or owner >= context.nodes.len or !std.ascii.eqlIgnoreCase(context.nodes[owner].tag, "a") or
+            !authoredElementDescendant(context.nodes, subject, owner)) return null;
+        // The separate complete LinkPaint proof retains all eight states. This
+        // baseline query must not fold an uncertain link state into the font.
+        evaluation.link_subject = owner;
+        evaluation.focus_visible_supported = true;
+        evaluation.link_state = .{ .visited = false, .hover = false, .active = false,
+            .focus = false, .focus_visible = false, .focus_within = false };
+    }
+    return evaluation;
+}
+
+fn authoredTableTextRuleOnlyTabStops(a: std.mem.Allocator, css: []const u8) !bool {
+    var at: usize = 0;
+    var seen = false;
+    while (try nextDeclarationAlloc(a, css, &at)) |raw| {
+        defer a.free(raw);
+        if (trim(raw).len == 0) continue;
+        const colon = std.mem.indexOfScalar(u8, raw, ':') orelse return false;
+        const name = trim(raw[0..colon]);
+        const priority = customPriority(raw[colon + 1 ..]);
+        if (priority.unknown or trim(priority.value).len == 0) return false;
+        if (!std.ascii.eqlIgnoreCase(name, "tab-size") and
+            !std.ascii.eqlIgnoreCase(name, "-moz-tab-size") and
+            !std.ascii.eqlIgnoreCase(name, "-o-tab-size")) return false;
+        seen = true;
+    }
+    return seen;
+}
+
+fn authoredNestedTableFontRuleOnlyPhysicalMargins(a: std.mem.Allocator, css: []const u8) !bool {
+    var cursor: usize = 0;
+    var seen = false;
+    while (try nextDeclarationAlloc(a, css, &cursor)) |declaration| {
+        defer a.free(declaration);
+        if (trim(declaration).len == 0) continue;
+        const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse return false;
+        const name = trim(declaration[0..colon]);
+        const priority = customPriority(declaration[colon + 1..]);
+        if (priority.unknown or observedLiteralPhysicalMarginMask(name, priority.value) == null) return false;
+        seen = true;
+    }
+    return seen;
+}
+
+const NestedTableMarginFontTest = struct {
+    const nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{.{ .name = "class", .value = "mw-body" }} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "table", .parent = 2, .attributes = &.{.{ .name = "style", .value = "width:25em" }} },
+        .{ .tag = "tbody", .parent = 3, .attributes = &.{} },
+        .{ .tag = "tr", .parent = 4, .attributes = &.{} },
+        .{ .tag = "td", .parent = 5, .has_text = true, .empty = false,
+            .attributes = &.{.{ .name = "style", .value = "font-family:serif;font-weight:bold;font-size:110%" }} },
+    };
+    fn context(styles: *const Profile) TableContainingDirectionContext {
+        return .{ .styles = styles, .nodes = &nodes, .root = 2, .table = 3 };
+    }
+};
+
+pub const AuthoredFontMetricsNode = struct {
+    index: u32,
+    environment: CustomEnvironment,
+    weight: ?TextWeight,
+    font_style: ?TextFontStyle,
+    font_size: ?ObservedFontSizeValue,
+    line_height: AuthoredElementLineHeight,
+    font_family: ?[]const u8,
+    font_features: ?types.FontFeaturePolicy,
+    language: []const u8,
+};
+
+pub const AuthoredFontMetricsContext = struct {
+    nodes: []const AuthoredFontMetricsNode,
+    root: u32,
+    element: u32,
+    root_font_family: []const u8,
+};
+
+fn AuthoredTextPathResult(comptime font_metrics_only: bool) type {
+    return if (font_metrics_only) AuthoredFontMetricsContext else AuthoredElementComputedContext;
+}
+
+fn authoredFontMetricProperty(name: []const u8) bool {
+    if (customName(name) or std.ascii.eqlIgnoreCase(name, "all") or
+        std.ascii.eqlIgnoreCase(name, "font") or std.ascii.eqlIgnoreCase(name, "line-height")) return true;
+    if (name.len >= 5 and std.ascii.eqlIgnoreCase(name[0..5], "font-")) return true;
+    for ([_][]const u8{ "writing-mode", "text-orientation", "text-rendering", "text-size-adjust",
+        "-webkit-text-size-adjust", "-ms-text-size-adjust", "math-depth", "math-style", "zoom" }) |property|
+        if (std.ascii.eqlIgnoreCase(name, property)) return true;
+    // Unknown vendor font controls cannot be classified as unrelated paint.
+    var at: usize = 0;
+    while (at + 4 <= name.len) : (at += 1)
+        if (std.ascii.eqlIgnoreCase(name[at .. at + 4], "font")) return true;
+    return false;
+}
+
+fn authoredFontMetricPropertySupported(name: []const u8) bool {
+    if (customName(name)) return true;
+    for ([_][]const u8{ "font", "font-family", "font-size", "font-weight", "font-style", "line-height",
+        "font-feature-settings", "-moz-font-feature-settings", "-webkit-font-feature-settings",
+        "font-variant", "font-stretch", "font-size-adjust", "font-variation-settings",
+        "font-kerning", "font-optical-sizing", "font-synthesis", "font-synthesis-weight", "font-synthesis-style",
+        "font-synthesis-small-caps", "font-variant-ligatures", "font-variant-caps", "font-variant-numeric",
+        "font-variant-east-asian", "writing-mode", "text-orientation", "text-rendering" }) |property|
+        if (std.ascii.eqlIgnoreCase(name, property)) return true;
+    return false;
+}
+
+fn authoredFontMetricRuleProjection(a: std.mem.Allocator, css: []const u8) !?[]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(a);
+    var cursor: usize = 0;
+    while (try nextDeclarationAlloc(a, css, &cursor)) |declaration| {
+        defer a.free(declaration);
+        if (trim(declaration).len == 0) continue;
+        const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse { out.deinit(a); return null; };
+        const name = trim(declaration[0..colon]);
+        if (name.len == 0 or std.mem.indexOfAny(u8, name, "\\ \t\r\n()[]{}") != null) { out.deinit(a); return null; }
+        const priority = customPriority(declaration[colon + 1..]);
+        if (priority.unknown) { out.deinit(a); return null; }
+        if (!authoredFontMetricProperty(name)) continue;
+        if (!authoredFontMetricPropertySupported(name)) { out.deinit(a); return null; }
+        try out.appendSlice(a, declaration);
+        try out.append(a, ';');
+    }
+    return try out.toOwnedSlice(a);
+}
+
+fn authoredFontMetricNeutral(a: std.mem.Allocator, declarations: []const ObservedFigureDeclaration,
+    environment: CustomEnvironment) !bool
+{
+    var requested: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    defer requested.deinit(a);
+    for (declarations) |declaration| {
+        if (declaration.syntax_unknown or authoredFontMetricProperty(declaration.name)) {
+            if (!declaration.syntax_unknown and !authoredFontMetricPropertySupported(declaration.name)) return false;
+            try requested.append(a, declaration);
+        }
+    }
+    // Reuse the existing font/synthesis and horizontal-metric restrictions.
+    // Unrequested text flow properties are not computed or returned here.
+    return try authoredElementInheritedNeutral(a, requested.items, environment) and
+        try observedFigureStaticMotion(a, declarations, environment);
+}
+
+pub fn resolveObservedNestedTableNodeFontMetrics(a: std.mem.Allocator,
+    context: TableContainingDirectionContext, subject: u32, link: ?u32,
+    viewport: f64, proof: ?TableLinkPaintProof) !?AuthoredFontMetricsContext
+{
+    const evaluation = nestedTableNodeEvaluation(context, subject, link, viewport, proof) orelse return null;
+    return resolveObservedElementTextPathIn(a,
+        .{ .styles = context.styles, .nodes = context.nodes, .root = context.root, .element = subject },
+        evaluation, true, null, false, false, true);
+}
+
+test "captured Table viewport proves inert source focus and preserves all A states without no scroll waiver" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const viewport_css = "table{float:right}@media(max-width:639px){table{float:none;display:block;overflow:auto;max-width:100%;width:fit-content}}";
+    var styles = try parseForTargetAlloc(a, OrdinaryTableLinkPaintTest.css ++ CapturedTableFocusTest.focus ++ CapturedTableFocusTest.anchor ++ viewport_css, .screen); defer styles.deinit();
+    var nodes = CapturedTableFocusTest.nodes();
+    const full = OrdinaryTableLinkPaintTest.context(&styles, &nodes);
+    const shallow = OrdinaryTableLinkPaintTest.context(&styles, nodes[0..4]);
+    try std.testing.expect((try observedTableLinkPaintProofWithSourceActions(a, full, shallow, "source", &.{7})) == null);
+    for ([_][]const u8{ "@media(prefers-reduced-motion:reduce){table{outline-style:none}}", "table:focus{outline-style:none}",
+        "table{outline-style:auto}", "table{outline:revert}", "table{outline-offset:2px}" }) |reset| {
+        var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ OrdinaryTableLinkPaintTest.css,
+            CapturedTableFocusTest.focus, CapturedTableFocusTest.anchor, viewport_css, reset }), .screen); defer changed.deinit();
+        try std.testing.expect((try observedTableLinkPaintProofWithViewportActions(a,
+            OrdinaryTableLinkPaintTest.context(&changed, &nodes), OrdinaryTableLinkPaintTest.context(&changed, nodes[0..4]), "source", &.{7})) == null);
+    }
+    const proof = (try observedTableLinkPaintProofWithViewportActions(a, full, shallow, "source", &.{7})) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(proof.closedSourceFocus());
+    try std.testing.expectEqual(types.TableScrollFocusMode.ua_auto, proof.scrollFocusPaint().?.mode);
+    try std.testing.expect(proof.scrollFocusPaint().?.color != null);
+    var authored = try parseForTargetAlloc(a, OrdinaryTableLinkPaintTest.css ++ CapturedTableFocusTest.focus ++ CapturedTableFocusTest.anchor ++ viewport_css ++ "table{outline-style:none}", .screen); defer authored.deinit();
+    const suppressed = (try observedTableLinkPaintProofWithViewportActions(a,
+        OrdinaryTableLinkPaintTest.context(&authored, &nodes), OrdinaryTableLinkPaintTest.context(&authored, nodes[0..4]), "source", &.{7})) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(types.TableScrollFocusPaint{ .mode = .authored_none }, suppressed.scrollFocusPaint().?);
+    for ([_]f64{ 0, 639, 639.5, 900 }) |width| {
+        const paint = (try resolveObservedTableLinkPaint(a, proof, 7, 8, width, 1)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("#3366cc", paint.normal.foreground);
+        try std.testing.expectEqualStrings("#6a60b0", paint.visited.foreground);
+        try std.testing.expect(paint.focus_outline != null and paint.focus_outline.?.width.value == 2);
+    }
+    for ([_][]const u8{
+        "table{outline-style:solid}", "table{outline:2px solid red}", ":focus{color:red}",
+        "table:focus{background:red}", "table:focus a{color:red}", "th{overflow:auto}",
+        "@media(max-width:639px){table{overflow:scroll}}", "table{overflow-x:hidden}",
+        "html{-moz-user-focus:normal}", "body{-webkit-user-modify:read-write}",
+    }) |extra| {
+        var changed = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ OrdinaryTableLinkPaintTest.css,
+            CapturedTableFocusTest.focus, viewport_css, extra }), .screen); defer changed.deinit();
+        try std.testing.expect((try observedTableLinkPaintProofWithViewportActions(a,
+            OrdinaryTableLinkPaintTest.context(&changed, &nodes), OrdinaryTableLinkPaintTest.context(&changed, nodes[0..4]), "source", &.{7})) == null);
+    }
+    const original = nodes;
+    for ([_][]const u8{ "tabindex", "contenteditable", "autofocus", "onclick", "role" }) |attribute| {
+        nodes = original; nodes[3].attributes = &.{.{ .name = attribute, .value = "0" }};
+        try std.testing.expect((try observedTableLinkPaintProofWithViewportActions(a, full, shallow, "source", &.{7})) == null);
+    }
+    nodes = original; nodes[8].has_text = null;
+    try std.testing.expect((try observedTableLinkPaintProofWithViewportActions(a, full, shallow, "source", &.{7})) == null);
+    nodes = original;
+    for ([_][]const u32{ &.{}, &.{7, 7}, &.{8} }) |actions|
+        try std.testing.expect((try observedTableLinkPaintProofWithViewportActions(a, full, shallow, "source", actions)) == null);
+}
+
+test "paired Table width parser admits fit content only in captured floating block state" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "table", .parent = 2, .attributes = &.{.{ .name = "class", .value = "wikitable float-right" }} },
+    };
+    const css = "table{box-sizing:border-box;border-collapse:collapse;background:#ffffff;float:right;margin:0 .4em .5em .4em}" ++
+        "@media(max-width:639px){table{float:none;display:block;overflow:auto;max-width:100%;width:fit-content;margin-left:0;margin-right:0}}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    const context: TableContainingDirectionContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .table = 3 };
+    const narrow = (try resolveObservedTableFloatViewportBox(a, context, 639, 1, .normal_body, .rtl, .ltr, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(narrow.block and narrow.style.width == null and narrow.style.float_side == null);
+    try std.testing.expect(narrow.style.margin_values == null and narrow.style.margins.?.left.value == 0);
+    try std.testing.expectEqualDeep(types.StyleWidth{ .unit = .percent, .value = 100 }, narrow.max_width.?);
+    const wide = (try resolveObservedTableFloatViewportBox(a, context, 639.5, 1, .normal_body, .rtl, .ltr, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!wide.block and wide.style.float_side == .right and wide.max_width == null);
+    try std.testing.expect((try resolveObservedTableViewportBox(a, context, 639, 1, .normal_body, .rtl, .ltr, null)) == null);
+    for ([_][]const u8{ "width:200px", "width:fit-content(50%)", "max-width:none", "float:right", "overflow:hidden", "margin-left:auto" }) |declaration| {
+        const altered = try std.fmt.allocPrint(a, "{s}@media(max-width:639px){{table{{{s}!important}}}}", .{ css, declaration });
+        var changed = try parseForTargetAlloc(a, altered, .screen); defer changed.deinit();
+        var bad = context; bad.styles = &changed;
+        try std.testing.expect((try resolveObservedTableFloatViewportBox(a, bad, 639, 1, .normal_body, .rtl, .ltr, null)) == null);
+    }
+}
+
+test "Table scroll focus request owns scratch color and refuses divergent later sample" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    var nodes = CapturedTableFocusTest.nodes();
+    var operation: TableLinkOperation = .{ .allocator = a, .context = OrdinaryTableLinkPaintTest.context(&styles, &nodes) };
+    var raw = "#3366cc".*;
+    const source: types.TableScrollFocusPaint = .{ .mode = .ua_auto, .color = .{ .kind = .rgb, .value = &raw } };
+    try std.testing.expect(try recordTableScrollFocusPaint(&operation, source));
+    try std.testing.expect(operation.scroll_focus_paint.?.color.?.value.?.ptr != raw[0..].ptr);
+    raw[1] = 'f';
+    try std.testing.expectEqualStrings("#3366cc", operation.scroll_focus_paint.?.color.?.value.?);
+    try std.testing.expect(!try recordTableScrollFocusPaint(&operation, source));
+    try std.testing.expect(!try recordTableScrollFocusPaint(&operation, .{ .mode = .authored_none }));
+    try std.testing.expectEqualStrings("#3366cc", operation.scroll_focus_paint.?.color.?.value.?);
+}
+
+test "nested Table typed font metrics omit target paint without granting selector or full text authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    try std.testing.expect(!@hasField(AuthoredFontMetricsNode, "paint") and !@hasField(AuthoredFontMetricsNode, "background") and
+        !@hasField(AuthoredFontMetricsNode, "hidden") and !@hasField(AuthoredFontMetricsNode, "geometry") and
+        !@hasField(AuthoredFontMetricsNode, "alignment") and !@hasField(AuthoredFontMetricsNode, "direction"));
+    const F = NestedTableMarginFontTest;
+    const css = "html{font-family:sans-serif;line-height:normal}.mw-body p+table{margin-top:-.5em}" ++
+        "tr:has(> :target),tr:has(> td > code:target){background:var(--paint,#DEF)}tr:target{background:red}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    for (0..2) |mode| {
+        var nodes = F.nodes;
+        if (mode == 1) nodes[6].attributes = &.{ .{ .name = "id", .value = "real-target" },
+            .{ .name = "style", .value = "font-family:serif;font-weight:bold;font-size:110%" } };
+        var context = F.context(&styles); context.nodes = &nodes;
+        for ([_]f64{ 639, 639.5, 900 }) |viewport| {
+            const font = (try resolveObservedNestedTableNodeFontMetrics(a, context, 6, null, viewport, null)) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(u32, 6), font.element);
+            try std.testing.expectEqualStrings("sans-serif", font.root_font_family);
+            try std.testing.expectEqualStrings("serif", font.nodes[6].font_family.?);
+            try std.testing.expect(font.nodes[6].weight.?.value);
+            try std.testing.expectEqual(@as(f32, 1.1), font.nodes[6].font_size.?.relative);
+            try std.testing.expect(font.nodes[6].line_height == .inherit);
+            try std.testing.expect((try resolveObservedNestedTableNodeText(a, context, 6, null, viewport, null)) == null);
+        }
+        var declarations = (try observedStyleNodeDeclarationsWithLanguage(a, &styles, &nodes, 5, null, null, .{}, true)) orelse return error.TestUnexpectedResult;
+        defer declarations.deinit(a);
+        var unknown_background = false;
+        for (declarations.items) |item| if (std.ascii.eqlIgnoreCase(item.name, "background")) {
+            unknown_background = true;
+            try std.testing.expect(item.uncertain and item.rank_unknown);
+        };
+        try std.testing.expect(unknown_background);
+        const background = try observedFigureColor(a, declarations.items, "background-color", .{ .complete = true }, null, null);
+        try std.testing.expect(background.unresolved);
+    }
+}
+
+test "nested Table typed font metrics retain font reset custom and active motion refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = NestedTableMarginFontTest;
+    for ([_][]const u8{
+        "tr:has(> :target){background:red;font-family:serif}",
+        "tr:has(> :target){font-size:200%}", "tr:has(> :target){line-height:2}",
+        "tr:has(> :target){font-weight:normal}", "tr:has(> :target){font-style:italic}",
+        "tr:has(> :target){--family:serif}", "tr:has(> :target){all:initial}",
+        "tr{all:initial}", "tr{font:revert}", "tr{font-language-override:'TRK'}",
+        "tr{font-synthesis:none}", "tr{font-variation-settings:'wght' 700}",
+        "tr{writing-mode:vertical-rl}", "tr{-webkit-text-size-adjust:120%}",
+        "tr{animation-name:spin;animation-duration:1s}", "tr{transition:font-size 1s}",
+    }) |extra| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ "html{font-family:sans-serif}", extra }), .screen);
+        defer styles.deinit();
+        try std.testing.expect((try resolveObservedNestedTableNodeFontMetrics(a, F.context(&styles), 6, null, 639, null)) == null);
+    }
+    var styles = try parseForTargetAlloc(a, "html{font-family:sans-serif}tr{--height:2;line-height:var(--height)}", .screen); defer styles.deinit();
+    const computed = (try resolveObservedNestedTableNodeFontMetrics(a, F.context(&styles), 6, null, 639, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(computed.nodes[5].line_height == .multiplier);
+    try std.testing.expectEqual(@as(f32, 2), computed.nodes[5].line_height.multiplier);
+    try std.testing.expect((try resolveObservedNestedTableNodeFontMetrics(a, F.context(&styles), 6, 6, 639, null)) == null);
+    try std.testing.expect((try resolveObservedNestedTableNodeFontMetrics(a, F.context(&styles), 2, null, 639, null)) == null);
+}
+
+test "nested Table typed font metrics require captured vendor feature agreement" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = NestedTableMarginFontTest;
+    // Exact seven-feature value retained in the original TH body rule at
+    // stylesheet 1, byte 87039; vendor spellings do not issue their own policy.
+    const seven = "\"liga\" on,\"clig\" on,\"kern\" on,\"ccmp\" on,\"dist\" on,\"mark\" on,\"mkmk\" on";
+    const prefix = "html{font-family:sans-serif}";
+    for ([_][]const u8{
+        "body{-moz-font-feature-settings:" ++ seven ++ ";-webkit-font-feature-settings:" ++ seven ++ ";font-feature-settings:" ++ seven ++ "}",
+        "body{--features:" ++ seven ++ ";-MoZ-font-feature-settings:var(--features);-webkit-font-feature-settings:var(--features);font-feature-settings:var(--features)}",
+    }) |css| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ prefix, css, "tr:has(> :target){background:red}" }), .screen);
+        defer styles.deinit();
+        for ([_]f64{ 639, 639.5, 900 }) |viewport| {
+            const context = F.context(&styles);
+            const font = (try resolveObservedNestedTableNodeFontMetrics(a, context, 6, null, viewport, null)) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("sans-serif", font.root_font_family);
+            try std.testing.expectEqualStrings("serif", font.nodes[6].font_family.?);
+            try std.testing.expect(font.nodes[6].weight.?.value);
+            try std.testing.expectEqual(@as(f32, 1.1), font.nodes[6].font_size.?.relative);
+            for (font.nodes[1..]) |item| try std.testing.expectEqual(types.FontFeaturePolicy.seven_on, item.font_features.?);
+            // A font-only answer still cannot publish the uncertain target paint.
+            try std.testing.expect((try resolveObservedNestedTableNodeText(a, context, 6, null, viewport, null)) == null);
+        }
+    }
+    for ([_][]const u8{
+        "body{-moz-font-feature-settings:" ++ seven ++ "}",
+        "body{-webkit-font-feature-settings:" ++ seven ++ "}",
+        "body{font-feature-settings:normal;-moz-font-feature-settings:" ++ seven ++ "}",
+        "body{font-feature-settings:" ++ seven ++ ";-webkit-font-feature-settings:normal}",
+        "body{font-feature-settings:" ++ seven ++ ";-moz-font-feature-settings:\"liga\" off}",
+        "body{font-feature-settings:" ++ seven ++ ";-moz-font-feature-settings:var(--missing)}",
+        "body{font-feature-settings:" ++ seven ++ ";-o-font-feature-settings:" ++ seven ++ "}",
+        "body{font-feature-settings:" ++ seven ++ "}tr:has(> :target){-moz-font-feature-settings:normal}",
+        "body{font-feature-settings:" ++ seven ++ "}tr{all:initial}",
+        "body{font-feature-settings:" ++ seven ++ "}tr{transition:font-size 1s}",
+    }) |css| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ prefix, css }), .screen);
+        defer styles.deinit();
+        try std.testing.expect((try resolveObservedNestedTableNodeFontMetrics(a, F.context(&styles), 6, null, 639, null)) == null);
+    }
+}
+
+
+test "observed Table font lengths preserve units without widening ordinary font parsing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_][]const u8{ "12px", "1.25rem", "0rem", "0px" }) |raw| {
+        try std.testing.expect(fontSizeValue("font-size", raw).? == .unknown);
+        try std.testing.expect((try resolveInlineFontSizeAlloc(a, try std.mem.concat(a, u8, &.{ "font-size:", raw }))).? == .unknown);
+    }
+    try std.testing.expectEqualDeep(ObservedFontSizeValue{ .css_px = 12 }, fontSizeValueIn(true, "font-size", "12px").?);
+    try std.testing.expectEqualDeep(ObservedFontSizeValue{ .root_relative = 1.25 }, fontSizeValueIn(true, "font-size", "1.25rem").?);
+    try std.testing.expectEqualDeep(ObservedFontSizeValue{ .relative = 1.25 }, fontSizeValueIn(true, "font-size", "125%").?);
+    for ([_][]const u8{ "1e999px", "1e-999px", "1e999rem", "1e-999rem", "revert", "calc(1px)", "var(--missing)" }) |raw|
+        try std.testing.expect(fontSizeValueIn(true, "font-size", raw).? == .unknown);
+    for ([_][]const u8{ "-1px", "-1rem", "nonsense", "12 px" }) |raw|
+        try std.testing.expect(fontSizeValueIn(true, "font-size", raw) == null);
+    try std.testing.expect(fontSizeValueIn(true, "font", "12px serif").? == .unknown);
+}
+
+test "observed Table focus inner metadata requires exact terminal control host grammar" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var sheet = try parseForTargetAlloc(a, "button::-moz-focus-inner,[type='button']::-moz-focus-inner{border-style:none}", .screen); defer sheet.deinit();
+    try std.testing.expectEqual(@as(usize, 2), sheet.observed_figure_rules.len);
+    for (sheet.observed_figure_rules) |rule| {
+        try std.testing.expect(rule.focus_inner_control_host and rule.list_uncertain);
+        const inventory: ObservedTableDescendantInventory = .{ .tags = &.{ "td", "span" }, .classes = "", .ids = &.{} };
+        try std.testing.expect(observedTableDescendantControlHostRefutes(rule, inventory));
+        for ([_][]const u8{ "button", "input", "", "?" }) |tag|
+            try std.testing.expect(!observedTableDescendantControlHostRefutes(rule, .{ .tags = &.{tag}, .classes = "", .ids = &.{} }));
+    }
+    for ([_][]const u8{ "div button::-moz-focus-inner", "button::-moz-focus-inner:hover", "button:is(.a)::-moz-focus-inner", "button" }) |selector| {
+        var bad = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ selector, "{border-style:none}" }), .screen); defer bad.deinit();
+        for (bad.observed_figure_rules) |rule| try std.testing.expect(!rule.focus_inner_control_host);
+    }
+}
+
+test "observed Table extraction does not consume generic Container height or hidden state" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_][]const u8{ "", "line-height:1.5", "display:none", "line-height:revert", "display:unknown" }) |css| {
+        var direct: ContainerCascade = .{ .custom_environment = .{ .complete = true } };
+        try direct.declarations(a, css, 0, max_rules * 1024, false, true);
+        const expected = direct.result();
+        const actual = try authoredElementContainer(a, &.{}, css, .{ .complete = true }, true);
+        try std.testing.expectEqualDeep(expected, actual);
+    }
+}
+
+
+test "default Missing label keeps computed CSS width independent of retained site data width" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = FigureOperationReuseTest;
+    var nodes = F.missing_nodes;
+    nodes[3].attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }, .{ .name = "class", .value = "mw-default-size" }};
+    nodes[5].attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }, .{ .name = "data-width", .value = "250" }};
+    for ([_][]const u8{ "180", "180.5" }) |width| {
+        const css = try std.fmt.allocPrint(a, "{s}span.mw-broken-media{{width:{s}px}}", .{ F.missing_css, width });
+        var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+        const context = F.context(&styles, &nodes, true);
+        const effect = observedMissingWidthEffect(context, 250) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(effect.generated == null);
+        const viewport = (try observedFigureMissingViewport(a, context, 250, null)) orelse return error.TestUnexpectedResult;
+        const expected = try std.fmt.parseFloat(f32, width);
+        try std.testing.expectEqual(expected, viewport.base.label.width.value);
+        try std.testing.expectEqual(types.StyleLengthUnit.px, viewport.base.label.width.unit);
+        const result = (try resolveObservedMissingFigure(a, &.{ context, context }, 250, viewport.base.parent_font)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(expected, result.geometry.label.width.value);
+        try std.testing.expectEqualStrings("250", observedFigureAttribute(context.nodes[context.media], "data-width").?);
+        try std.testing.expect(observedFigureAttribute(context.nodes[context.media], "style") == null);
+        try std.testing.expect((try observedFigureMissingViewport(a, context, 251, null)) == null);
+    }
+}
+
+test "default Missing label width still rejects uncertainty state drift and overridden explicit sizing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = FigureOperationReuseTest;
+    var nodes = F.missing_nodes;
+    nodes[3].attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }, .{ .name = "class", .value = "mw-default-size" }};
+    nodes[5].attributes = &.{.{ .name = "class", .value = "mw-file-element mw-broken-media" }, .{ .name = "data-width", .value = "250" }};
+    for ([_][]const u8{ "width:auto", "width:50%", "width:0px", "width:var(--unknown)",
+        "width:180px;height:20px", "width:180px;padding:1px", "width:180px;display:none" }) |declarations| {
+        const css = try std.fmt.allocPrint(a, "{s}span.mw-broken-media{{{s}}}", .{ F.missing_css, declarations });
+        var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+        try std.testing.expect((try observedFigureMissingViewport(a, F.context(&styles, &nodes, true), 250, null)) == null);
+    }
+    var base = try parseForTargetAlloc(a, F.missing_css ++ "span.mw-broken-media{width:180px}", .screen); defer base.deinit();
+    const context = F.context(&base, &nodes, true);
+    const viewport = (try observedFigureMissingViewport(a, context, 250, null)) orelse return error.TestUnexpectedResult;
+    var changed = try parseForTargetAlloc(a, F.missing_css ++ "span.mw-broken-media{width:181px}", .screen); defer changed.deinit();
+    try std.testing.expect((try resolveObservedMissingFigure(a, &.{context, F.context(&changed, &nodes, true)}, 250, viewport.base.parent_font)) == null);
+    var state = try parseForTargetAlloc(a, F.missing_css ++ "span.mw-broken-media{width:180px}a:hover span.mw-broken-media{width:181px}", .screen); defer state.deinit();
+    try std.testing.expect((try observedFigureMissingViewport(a, F.context(&state, &nodes, true), 250, null)) == null);
+    nodes[3].attributes = &.{.{ .name = "typeof", .value = "mw:Error mw:File/Thumb" }};
+    const explicit = F.context(&base, &nodes, true);
+    try std.testing.expectEqual(@as(?u32, 250), observedMissingWidthEffect(explicit, 250).?.generated);
+    const explicit_view = (try observedFigureMissingViewport(a, explicit, 250, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f32, 250), explicit_view.base.label.width.value);
+    var important = try parseForTargetAlloc(a, F.missing_css ++ "span.mw-broken-media{width:180px!important}", .screen); defer important.deinit();
+    try std.testing.expect((try observedFigureMissingViewport(a, F.context(&important, &nodes, true), 250, null)) == null);
+}
+
+
+test "observed scalar overflow axes retain cascade custom values and strict unknown refusal" {
+    const Check = struct {
+        fn value(a: std.mem.Allocator, css: []const u8, property: []const u8, uncertain: bool) !ObservedFigureKeyword {
+            var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+            try appendObservedFigureDeclarations(a, &declarations, css, .{}, uncertain, false, 0, 0);
+            const environment = try observedFigureCustomEnvironment(a, declarations.items, .{ .complete = true }, true);
+            return observedFigureKeyword(a, declarations.items, property, &.{"overflow"}, environment,
+                &.{ "visible", "hidden", "clip", "scroll", "auto" }, "visible", null, false, "visible");
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_][]const u8{ "overflow-x", "overflow-y" }) |axis| {
+        for ([_][]const u8{ "visible", "hidden", "clip", "scroll", "auto" }) |scalar| {
+            const css = try std.fmt.allocPrint(a, "overflow:{s}", .{scalar});
+            const result = try Check.value(a, css, axis, false);
+            try std.testing.expect(!result.unresolved);
+            try std.testing.expectEqualStrings(scalar, result.value.?);
+        }
+        for ([_][]const u8{ "overflow:AuTo", "--flow:auto;overflow:var(--flow)", "overflow:var(--absent,auto)" }) |css| {
+            const result = try Check.value(a, css, axis, false);
+            try std.testing.expect(!result.unresolved);
+            try std.testing.expectEqualStrings("auto", result.value.?);
+        }
+        for ([_][]const u8{ "overflow:initial", "overflow:unset", "overflow:var(--absent)" }) |css| {
+            const result = try Check.value(a, css, axis, false);
+            try std.testing.expect(!result.unresolved);
+            try std.testing.expectEqualStrings("visible", result.value.?);
+        }
+        for ([_][]const u8{ "overflow:auto hidden", "overflow:auto auto", "overflow:invented", "overflow:revert", "overflow:inherit", "all:revert" }) |css|
+            try std.testing.expect((try Check.value(a, css, axis, false)).unresolved);
+        try std.testing.expect((try Check.value(a, "overflow:auto", axis, true)).unresolved);
+    }
+    const horizontal = try Check.value(a, "overflow:auto;overflow-x:hidden", "overflow-x", false);
+    const vertical = try Check.value(a, "overflow:auto;overflow-x:hidden", "overflow-y", false);
+    try std.testing.expectEqualStrings("hidden", horizontal.value.?);
+    try std.testing.expectEqualStrings("auto", vertical.value.?);
+    const important = try Check.value(a, "overflow:auto!important;overflow-x:hidden", "overflow-x", false);
+    try std.testing.expectEqualStrings("auto", important.value.?);
+    const later = try Check.value(a, "overflow-x:hidden;overflow:auto", "overflow-x", false);
+    try std.testing.expectEqualStrings("auto", later.value.?);
+    // Other shorthand families do not acquire this mapping.
+    var unrelated: std.ArrayList(ObservedFigureDeclaration) = .empty;
+    try appendObservedFigureDeclarations(a, &unrelated, "border:auto", .{}, false, false, 0, 0);
+    try std.testing.expect((try observedFigureKeyword(a, unrelated.items, "overflow-x", &.{"border"},
+        .{ .complete = true }, &.{"auto"}, "visible", null, false, "visible")).unresolved);
+}
+
+test "source bound table ancestor ID absence refutes only complete necessary descendant predicates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var profile = try parseForTargetAlloc(a, "#userlogin table{background-color:#ffffe6;color:#000}", .screen); defer profile.deinit();
+    const css = "margin:0 auto;text-align:center";
+    const unknown = try profile.resolveTableWithContext(a, 0, "toccolours", .{}, null, css);
+    try std.testing.expect(unknown.unresolved and unknown.background_specified);
+    const absent = try profile.resolveTableWithContext(a, 0, "toccolours",
+        .{ .complete_table_ancestor_ids = &.{} }, null, css);
+    try std.testing.expect(!absent.unresolved and !absent.background_specified);
+    try std.testing.expect(absent.style.?.background == null and absent.style.?.margin_values.?.left == .auto);
+    const present = try profile.resolveTableWithContext(a, 0, "toccolours",
+        .{ .complete_table_ancestor_ids = &.{"userlogin"} }, null, css);
+    try std.testing.expect(present.unresolved and present.background_specified);
+    for ([_][]const u8{ "#userlogin + table", ":is(#userlogin,div) table", "#userlogin\\31 table" }) |selector| {
+        var unproved = try parseForTargetAlloc(a, try std.fmt.allocPrint(a, "{s}{{background:red}}", .{selector}), .screen); defer unproved.deinit();
+        const result = try unproved.resolveTableWithContext(a, 0, "toccolours", .{ .complete_table_ancestor_ids = &.{} }, null, css);
+        try std.testing.expect(result.unresolved and result.background_specified);
+    }
+    var own = try parseForTargetAlloc(a, "table{background:red;font-size:80%}", .screen); defer own.deinit();
+    const own_result = try own.resolveTableWithContext(a, 0, "toccolours", .{ .complete_table_ancestor_ids = &.{} }, null, css);
+    try std.testing.expect(own_result.unresolved and own_result.margin_basis_unresolved);
+    try std.testing.expectEqualStrings("#ff0000", own_result.style.?.background.?);
+}
+
+test "complete table ancestor tags refute necessary font prefixes without inventing inherited basis" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var profile = try parseForTargetAlloc(a, "kbd{font-size:.85em}span[rel='mw:referencedBy'] > a::before{font-size:100%}", .screen); defer profile.deinit();
+    const tags = [_][]const u8{ "html", "body", "div", "section" };
+    const unknown = try profile.resolveTableWithContext(a, 0, "toccolours", .{}, null, "margin:0 auto");
+    try std.testing.expect(unknown.margin_basis_unresolved);
+    const legacy = try profile.resolveTableWithContext(a, 0, "toccolours", .{ .complete_font_ancestor_tags = &tags }, null, "margin:0 auto");
+    try std.testing.expect(legacy.margin_basis_unresolved);
+    const absent = try profile.resolveTableWithContext(a, 0, "toccolours", .{ .complete_table_ancestor_ids = &.{}, .complete_font_ancestor_tags = &tags }, null, "margin:0 auto");
+    try std.testing.expect(!absent.margin_basis_unresolved);
+    for ([_][]const u8{ "kbd", "a" }) |present| {
+        const possible = try profile.resolveTableWithContext(a, 0, "toccolours", .{ .complete_table_ancestor_ids = &.{}, .complete_font_ancestor_tags = &.{present} }, null, "margin:0 auto");
+        try std.testing.expect(possible.margin_basis_unresolved);
+    }
+    var functional = try parseForTargetAlloc(a, ":is(kbd,div){font-size:80%}", .screen); defer functional.deinit();
+    const unresolved = try functional.resolveTableWithContext(a, 0, "toccolours", .{ .complete_table_ancestor_ids = &.{}, .complete_font_ancestor_tags = &tags }, null, "margin:0 auto");
+    try std.testing.expect(unresolved.margin_basis_unresolved);
+}
+
+test "table ancestor domain retains every actual head and rejects incomplete graph" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var profile = try parseForTargetAlloc(a, "", .screen); defer profile.deinit();
+    const nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "table", .parent = 2, .attributes = &.{} },
+    };
+    var extra = nodes;
+    extra[1].attributes = &.{.{ .name = "id", .value = "userlogin" }, .{ .name = "class", .value = "authored" }};
+    const contexts = [_]TableContainingDirectionContext{
+        .{ .styles = &profile, .nodes = &nodes, .root = 2, .table = 3 },
+        .{ .styles = &profile, .nodes = &extra, .root = 2, .table = 3 },
+    };
+    const domain = (try tableAncestorDomainAlloc(a, &contexts)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), domain.ids.len);
+    try std.testing.expectEqualStrings("userlogin", domain.ids[0]);
+    try std.testing.expect(Profile.hasClass(domain.classes, "authored"));
+    try std.testing.expectEqual(@as(usize, 6), domain.tags.len);
+    var malformed = nodes; malformed[2].parent = null;
+    const invalid_context = [_]TableContainingDirectionContext{.{ .styles = &profile, .nodes = &malformed, .root = 2, .table = 3 }};
+    try std.testing.expect((try tableAncestorDomainAlloc(a, &invalid_context)) == null);
+    try std.testing.expect((try tableAncestorDomainAlloc(a, &.{})) == null);
+}
+
+test "table ancestor class union never grants a supported selector across divergent heads" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var profile = try parseForTargetAlloc(a, ".foo table{background:red}", .screen); defer profile.deinit();
+    const nodes = [_]ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "table", .parent = 2, .attributes = &.{} },
+    };
+    var has_foo = nodes; has_foo[1].attributes = &.{.{ .name = "class", .value = "foo" }};
+    const without: TableContainingDirectionContext = .{ .styles = &profile, .nodes = &nodes, .root = 2, .table = 3 };
+    const with: TableContainingDirectionContext = .{ .styles = &profile, .nodes = &has_foo, .root = 2, .table = 3 };
+    for ([_][2]TableContainingDirectionContext{ .{with, without}, .{without, with}, .{with, with} }, 0..) |heads, ordinal| {
+        const domain = (try tableAncestorDomainAlloc(a, &heads)) orelse return error.TestUnexpectedResult;
+        // Empty native classes are not complete absence beyond the native root.
+        const unknown = try profile.resolveTableWithContext(a, 0, "", .{
+            .ancestor_classes = "", .complete_table_ancestor_classes = domain.classes,
+            .complete_table_ancestor_ids = domain.ids,
+        }, null, "margin:0 auto");
+        try std.testing.expect(unknown.unresolved and unknown.background_specified);
+        try std.testing.expect(unknown.style.?.background == null);
+        // In the shared-present case an independently known native ancestor
+        // supplies the positive evidence; the union alone above never does.
+        if (ordinal == 2) {
+            const known = try profile.resolveTableWithContext(a, 0, "", .{
+                .ancestor_classes = "foo", .complete_table_ancestor_classes = domain.classes,
+                .complete_table_ancestor_ids = domain.ids,
+            }, null, "margin:0 auto");
+            try std.testing.expect(!known.unresolved);
+            try std.testing.expectEqualStrings("#ff0000", known.style.?.background.?);
+        }
+    }
+    const absent_domain = (try tableAncestorDomainAlloc(a, &.{without, without})) orelse return error.TestUnexpectedResult;
+    const absent = try profile.resolveTableWithContext(a, 0, "", .{
+        .ancestor_classes = "", .complete_table_ancestor_classes = absent_domain.classes,
+        .complete_table_ancestor_ids = absent_domain.ids,
+    }, null, "margin:0 auto");
+    try std.testing.expect(!absent.unresolved and !absent.background_specified);
+    const generic = try profile.resolveTableWithContext(a, 0, "", .{ .ancestor_classes = "" }, null, "margin:0 auto");
+    try std.testing.expectEqualDeep(generic, absent);
+}
+
+test "selected Container necessary ancestry refutes retained KU blockquote suffix without discarding clear" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    // Exact retained KU stylesheet selector; a last-child predicate remains
+    // unknown when its necessary BLOCKQUOTE parent really is present.
+    const css = ".mw-body blockquote > :last-child{margin-bottom:0}";
+    var global = try parseForTargetAlloc(a, "", .screen); defer global.deinit();
+    var page = try parseForTargetAlloc(a, css, .screen); defer page.deinit();
+    const html: TextElement = .{ .tag = "html", .ancestry_complete = true };
+    const main: TextElement = .{ .tag = "main", .classes = "mw-body", .parent = &html };
+    const root: TextElement = .{ .tag = "div", .classes = "mw-content-ltr mw-parser-output", .parent = &main };
+    const clear: TextElement = .{ .tag = "div", .parent = &root, .page_style_root = &root,
+        .physical_ancestry_complete = true, .ancestry_complete = true };
+    try std.testing.expectEqual(@as(usize, 1), page.container_rules.len);
+    try std.testing.expectEqual(@as(usize, 3), page.container_rules[0].selector.necessary_chain.len);
+    try std.testing.expect(page.container_rules[0].selector.fallback != null);
+    const legacy = try page.containerRuleMatchesIn(a, &clear); defer a.free(legacy.rules);
+    try std.testing.expect(!legacy.unresolved and legacy.rules.len == 0);
+    page.page_style_parent = &global;
+    const selected = try page.containerRuleMatchesIn(a, &clear); defer a.free(selected.rules);
+    try std.testing.expect(!selected.unresolved and selected.rules.len == 0);
+    const resolved = try page.resolveContainerIn(a, &clear, "clear:both");
+    try std.testing.expect(!resolved.unresolved and resolved.specified);
+    try std.testing.expect(resolved.style.clear.? == .both);
+    try std.testing.expect(resolved.style.margins == null and resolved.style.margin_values == null);
+    try std.testing.expectEqualDeep(try resolveInlineContainerAlloc(a, "clear:both"), resolved);
+    try std.testing.expect(clear.element_index == null);
+
+    const quote: TextElement = .{ .tag = "blockquote", .parent = &root };
+    var quoted = clear; quoted.parent = &quote;
+    var incomplete = clear; incomplete.physical_ancestry_complete = false;
+    var other_head = clear; other_head.alternative_ancestry = &quoted;
+    for ([_]TextElement{ quoted, incomplete, other_head }) |uncertain| {
+        const rules = try page.containerRuleMatchesIn(a, &uncertain); defer a.free(rules.rules);
+        try std.testing.expect(!rules.unresolved and rules.rules.len == 1);
+        try std.testing.expectEqual(ContainerSelectorMatch.unknown, rules.rules[0].match);
+        try std.testing.expect((try page.resolveContainerIn(a, &uncertain, "clear:both")).unresolved);
+    }
+    var missing_root = clear; missing_root.page_style_root = null;
+    try std.testing.expect((try page.containerRuleMatchesIn(a, &missing_root)).unresolved);
+    try std.testing.expect((try page.resolveContainerIn(a, &missing_root, "clear:both")).unresolved);
+
+    // A real float remains represented alongside clear. Absence of floats is
+    // neither a prerequisite nor a reason to erase this independent property.
+    var floated = try parseForTargetAlloc(a, css ++ ".mw-parser-output>div{float:left;width:12px}", .screen); defer floated.deinit();
+    floated.page_style_parent = &global;
+    const both = try floated.resolveContainerIn(a, &clear, "clear:both");
+    try std.testing.expect(!both.unresolved and both.style.clear.? == .both and both.style.float_side.? == .left);
+    try std.testing.expectEqual(@as(f32, 12), both.style.width.?.length.value);
+}
+
+test "selected Container necessary ancestry keeps functional sibling and present-parent predicates unknown" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var global = try parseForTargetAlloc(a, "", .screen); defer global.deinit();
+    const main: TextElement = .{ .tag = "main", .classes = "mw-body", .ancestry_complete = true };
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .parent = &main };
+    const clear: TextElement = .{ .tag = "div", .parent = &root, .page_style_root = &root,
+        .physical_ancestry_complete = true, .ancestry_complete = true };
+    for ([_][]const u8{
+        ".mw-body :is(blockquote,div) > :last-child{margin-bottom:0}",
+        ".mw-body blockquote + :last-child{margin-bottom:0}",
+        ".mw-body div > :last-child{margin-bottom:0}",
+    }) |css| {
+        var page = try parseForTargetAlloc(a, css, .screen); defer page.deinit(); page.page_style_parent = &global;
+        const rules = try page.containerRuleMatchesIn(a, &clear); defer a.free(rules.rules);
+        try std.testing.expect(!rules.unresolved and rules.rules.len == 1);
+        try std.testing.expectEqual(ContainerSelectorMatch.unknown, rules.rules[0].match);
+        try std.testing.expect((try page.resolveContainerIn(a, &clear, "clear:both")).unresolved);
+    }
 }

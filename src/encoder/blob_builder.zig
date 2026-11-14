@@ -2343,10 +2343,9 @@ fn resolveSection(codes: LanguageCodes, section: language_source.Section) ?Resol
         if (std.mem.startsWith(u8, std.mem.trim(u8, section.heading, " \t\r\n"), "{{"))
             if (declarationLabel(codes, section.heading)) |label| return codes.resolve(label);
     };
-    // A balanced standalone equals declaration names its owner in the first
-    // field. Sort/display arguments, including nested calls, cannot lend one.
-    if (language_source.equalsLanguageDeclaration(section.source)) |code|
-        if (std.mem.eql(u8, code, section.heading)) return codes.resolve(code);
+    // A balanced equals declaration names its owner in the first field.
+    // Sort/display arguments, including nested calls, cannot lend one.
+    if (equalsSectionDeclaration(section)) |code| return codes.resolve(code);
     if (arabicNorwegianDeclaration(codes, section.heading) != null)
         return resolveArabicNorwegianDeclaration(codes, section.heading);
     const noun = arabicLemmaDeclaration(codes, section);
@@ -2551,12 +2550,23 @@ fn rawPrefixBannerLanguage(codes: LanguageCodes, raw: []const u8, raw_sections: 
     return canonical;
 }
 
+// Both standalone and explicitly authored L2 equals declarations name a code.
+// The latter must occupy the complete original heading; arguments or a rendered
+// label cannot lend an owner to an unknown code.
+fn equalsSectionDeclaration(section: language_source.Section) ?[]const u8 {
+    if (language_source.equalsLanguageDeclaration(section.source)) |code|
+        return if (std.mem.eql(u8, code, section.heading)) code else null;
+    const line = section.source[0 .. std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len];
+    const heading = blobs.wikitext_syntax.controlHeading(line, null) orelse return null;
+    if (heading.level != 2 or !std.mem.eql(u8, heading.title, section.heading)) return null;
+    return language_source.equalsLanguageDeclaration(heading.title);
+}
+
 fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source.Section) bool {
     if (projectParentheticalDeclaration(codes, section) != null) return true;
     if (arabicLinkedOwner(codes, section.heading) != null) return true;
     if (arabicNorwegianDeclaration(codes, section.heading) != null) return true;
-    if (language_source.equalsLanguageDeclaration(section.source)) |code|
-        if (std.mem.eql(u8, code, section.heading)) return true;
+    if (equalsSectionDeclaration(section) != null) return true;
     return declarationLabel(codes, section.heading) != null;
 }
 
@@ -4467,6 +4477,8 @@ fn bindOwnerSourceElements(source: []const u8, original: []const u8, projection:
 
 fn observeSourceElements(sizing: ?presentation_document.FigureSizingSource, source: []const u8) bool {
     const selected = sizing orelse return false;
+    if (selected.table_containing_direction) |direction|
+        if (direction.source.ptr == source.ptr and direction.source.len == source.len) return true;
     const observed = selected.text_class_scope orelse return false;
     return (observed.scope.source_siblings.len != 0 or observed.scope.source_root_tables.len != 0 or (observed.scope.page_styles != null and observed.scope.page_style_root != null)) and
         observed.source.ptr == source.ptr and observed.source.len == source.len;
@@ -5476,7 +5488,7 @@ fn processMain(
 
         // Admitting an unknown equals marker established a boundary, not an
         // owner. Its linked rendered target cannot lend a different language.
-        if (raw_aligned) if (language_source.equalsLanguageDeclaration(raw_sections.items[index].source)) |code| {
+        if (raw_aligned) if (equalsSectionDeclaration(raw_sections.items[index])) |code| {
             if (codes.resolve(code) == null) {
                 fallbacks.unresolved_language_heading = true;
                 resolved = .{ .code = "", .heading = "Unclassified" };
@@ -5652,9 +5664,10 @@ fn processMain(
     defer if (!may_cross_link) freePreObservation(page_allocator, pre_observation);
     fallbacks.unclosed_formatting = fallbacks.unclosed_formatting or pre_observation.unclosed_formatting;
     // Every fragment asks for an exact quote seed, including table-root
-    // fragments that carry no inherited HTML scope.
+    // fragments that carry no inherited HTML scope. ImageMap observations also
+    // borrow the selected page bytes: owner concatenation alone loses custody.
     const needs_source_fragments = pre_observation.scopes.len != 0 or
-        (if (codes.figure_sizing) |sizing| sizing.text_class_scope != null else false) or
+        (if (codes.figure_sizing) |sizing| sizing.text_class_scope != null or sizing.resolve_image_map_no_link_fn != null else false) or
         (codes.table_styles != null and (heading_observation.page_root_wiki_table_openings.len != 0 or heading_observation.page_top_level_wiki_table_openings.len != 0));
     const quote_cuts: PageQuoteCuts = if (needs_source_fragments)
         try pageQuoteCutsAlloc(page_allocator, source, page_sections.items, pre_observation.scopes, .{
@@ -14871,15 +14884,23 @@ test "captured Bulgarian Belgrad retains computed heading bare parameters body t
     var styles = try @import("table_style_profile.zig").parseAlloc(a, css);
     defer styles.deinit();
     try CapturedBulgarianStyleTest.verify(&styles);
-    // The exact table has no ID. Its inline background is independently known
-    // while auto margins remain outside the numeric edge projection; width is represented.
+    // The exact table's automatic edges are parsed independently of their
+    // still-unbound containing direction and inherited font basis.
     const captured_table_style = try styles.resolveTableWithContext(a, 0, "translations", .{
         .ancestor_classes = "NavFrame mw-collapsible NavContent mw-collapsible-content",
         .own_id = "",
     }, null, "margin:0 auto 0.3em auto; width:100%; background: #fcfbff;");
-    try std.testing.expect(captured_table_style.unresolved);
-    try std.testing.expectEqualDeep(@as(blobs.presentation_types.TableStyle, .{ .background = "#fcfbff", .width = .{ .unit = .percent, .value = 100 } }),
-        captured_table_style.style orelse return error.TestUnexpectedResult);
+    try std.testing.expect(!captured_table_style.unresolved);
+    const parsed_table_style = captured_table_style.style orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(@as(blobs.presentation_types.TableStyle, .{
+        .background = "#fcfbff", .width = .{ .unit = .percent, .value = 100 },
+        .margin_values = .{ .top = .{ .length = .{ .unit = .px, .value = 0 } },
+            .right = .auto, .bottom = .{ .length = .{ .unit = .em, .value = 0.3 } }, .left = .auto },
+    }), parsed_table_style);
+    try std.testing.expect(captured_table_style.margin_basis_unresolved);
+    try std.testing.expect(parsed_table_style.containing_direction == null);
+    try std.testing.expect(blobs.presentation_types.validUnboundTableStyle(parsed_table_style));
+    try std.testing.expect(!blobs.presentation_types.validTableStyle(parsed_table_style));
     const Fixture = struct {
         fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
             // Exact captured registry row: bg / български / Български / bg / Bulgarian / bul.
@@ -20703,4 +20724,144 @@ test "Writer preserves resolved owner lifetime and rejects conflicting final hea
     try std.testing.expect((try records.next()) == null);
     var unknown = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Unclassified")); defer unknown.deinit();
     try std.testing.expectEqualStrings("", (try (try blob_format.inspect(unknown.bytes)).languageMetadata()).code);
+}
+
+test "wrapped equals language declarations retain code and reject partial or deeper headings" {
+    const F = struct {
+        fn section(source: []const u8, heading: []const u8) language_source.Section {
+            return .{ .source = source, .heading = heading };
+        }
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            return if (std.mem.eql(u8, value, "nb")) .{ .code = "nb", .heading = "Bokmal" } else null;
+        }
+    };
+    const codes: LanguageCodes = .{ .resolve_fn = F.resolve };
+    const actual = F.section("=={{=roa-nor=}}==\n# ankizivavy", "{{=roa-nor=}}");
+    try std.testing.expectEqualStrings("roa-nor", equalsSectionDeclaration(actual).?);
+    try std.testing.expect(hasExplicitLanguageDeclaration(codes, actual));
+    try std.testing.expect(resolveSection(codes, actual) == null);
+    const argument = F.section("=={{=roa-nor=|nb|display=[[Bokmal]]}}==\n# body", "{{=roa-nor=|nb|display=[[Bokmal]]}}");
+    try std.testing.expectEqualStrings("roa-nor", equalsSectionDeclaration(argument).?);
+    try std.testing.expect(resolveSection(codes, argument) == null);
+    const known = F.section("=={{=nb=|roa-nor}}==\n# body", "{{=nb=|roa-nor}}");
+    try std.testing.expectEqualStrings("nb", resolveSection(codes, known).?.code);
+    for ([_]language_source.Section{
+        F.section("==={{=roa-nor=}}===\n# body", "{{=roa-nor=}}"),
+        F.section("=={{=roa-nor=}} trailing==\n# body", "{{=roa-nor=}} trailing"),
+        F.section("=={{=roa-nor=}}==\n# body", "{{=nb=}}"),
+        F.section("==<nowiki>{{=roa-nor=}}</nowiki>==\n# body", "<nowiki>{{=roa-nor=}}</nowiki>"),
+        F.section("=={{-roa-nor-}}==\n# body", "{{-roa-nor-}}"),
+        F.section("=={{=roa-nor=}}{{=nb=}}==\n# body", "{{=roa-nor=}}{{=nb=}}"),
+        F.section("<!--=={{=roa-nor=}}==-->\n# body", "{{=roa-nor=}}"),
+    }) |section| try std.testing.expect(equalsSectionDeclaration(section) == null);
+}
+
+test "wrapped unknown equals region preserves complete body and cannot inherit prior or rendered owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            inline for (.{ .{ "frm", "Middle French" }, .{ "nb", "Bokmal" } }) |row|
+                if (std.mem.eql(u8, value, row[0]) or std.mem.eql(u8, value, row[1]))
+                    return .{ .code = row[0], .heading = row[1] };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .resolve_fn = F.resolve };
+    // The selected fille declaration and all three definition strings are
+    // retained verbatim. Only the bounded surrounding test regions are synthetic;
+    // this is not an expanded whole-page reconstruction or a Norwegian alias.
+    const body = "===Anarana iombonana===\n# ankizivavy\n# lamba rongony\n# zanakao vavy\n" ++
+        "====Tsiahy====\n* [https://example.test/NAOB/fille_2 NAOB] [[fille|fille]]\n";
+    const first = "==Middle French==\n# '''FIRST''' [[avant|before]]\n";
+    const last = "==Bokmal==\n# ''LAST'' [[etter|after]]\n";
+    const raw = "=={{=frm=}}==\n# FIRST\n=={{=roa-nor=}}==\n" ++ body ++ "=={{=nb=}}==\n# LAST\n";
+    inline for (.{ "Nôrmana", "Bokmal" }) |label| {
+        const middle = "==" ++ label ++ "==\n" ++ body;
+        const source = first ++ middle ++ last;
+        var page: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "fille" };
+        try page.compileWithPhases(a, codes, source, raw, null, null, null, null);
+        try std.testing.expectEqual(@as(usize, 3), page.records.items.len);
+        for (page.records.items, 0..) |record, i| {
+            const owner: ResolvedLanguage = switch (i) {
+                0 => .{ .code = "frm", .heading = "Middle French" },
+                1 => .{ .code = "", .heading = "Unclassified" },
+                else => .{ .code = "nb", .heading = "Bokmal" },
+            };
+            try std.testing.expectEqualStrings(owner.heading, record.key);
+            const actual = try blobs.presentation_codec.decodeAlloc(a, record.payload, "fille", .language, .{ .code = owner.code, .heading = owner.heading });
+            const reference = try presentation_document.compileReportedWithLinkTrailAlloc(a, "fille", .language, owner.heading, owner.code,
+                switch (i) { 0 => first, 1 => middle, else => last }, null, codes.link_trail, null, null);
+            const expected = try blobs.presentation_codec.decodeAlloc(a, reference, "fille", .language, .{ .code = owner.code, .heading = owner.heading });
+            // Duplicate rendered headings retain their original global anchors.
+            if (i == 2 and std.mem.eql(u8, label, "Bokmal")) {
+                var adjusted = expected;
+                const sections = try a.dupe(blobs.presentation_types.Section, expected.entry.sections);
+                sections[0].anchor = "Bokmal_2";
+                adjusted.entry.sections = sections;
+                try std.testing.expectEqualDeep(adjusted, actual);
+            } else try std.testing.expectEqualDeep(expected, actual);
+            try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, actual));
+        }
+    }
+}
+
+test "complete retained fille raw keeps ten corresponding language regions and nine known owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const raw = @embedFile("testdata/mg-fille-boundary/raw.wikitext");
+    const F = struct {
+        const rows = [_]struct { raw: []const u8, code: []const u8, owner: []const u8, rendered: []const u8 }{
+            .{ .raw = "fr", .code = "fr", .owner = "French", .rendered = "Frantsay" },
+            .{ .raw = "nb", .code = "nb", .owner = "Norwegian Bokmål", .rendered = "Norveziana (Bokmal)" },
+            .{ .raw = "ga", .code = "gaa", .owner = "Ga", .rendered = "Gaelita irlandey" },
+            .{ .raw = "enm", .code = "enm", .owner = "Middle English", .rendered = "Anglisy Tafovoany" },
+            .{ .raw = "frm", .code = "frm", .owner = "Middle French", .rendered = "Romantsa" },
+            .{ .raw = "roa-nor", .code = "", .owner = "Unclassified", .rendered = "Nôrmana" },
+            .{ .raw = "nn", .code = "nn", .owner = "Norwegian Nynorsk", .rendered = "Norvejiana (Nynorsk)" },
+            .{ .raw = "fro", .code = "fro", .owner = "Old French", .rendered = "Frantsay taloha" },
+            .{ .raw = "pdc", .code = "pdc", .owner = "Pennsylvania German", .rendered = "Alemànin'i Pensilvania" },
+            .{ .raw = "stq", .code = "stq", .owner = "Saterland Frisian", .rendered = "Frizianin'I Saterland" },
+        };
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            for (rows) |row| {
+                if (row.code.len == 0) continue;
+                if (std.mem.eql(u8, value, row.raw) or std.mem.eql(u8, value, row.code) or std.mem.eql(u8, value, row.owner))
+                    return .{ .code = row.code, .heading = row.owner };
+            }
+            return null;
+        }
+    };
+    // These existing owners are retained as selected, including the independent
+    // ga/gaa registry alias; this test does not introduce or endorse a new alias.
+    const codes: LanguageCodes = .{ .resolve_fn = F.resolve };
+    const markers: LanguageMarkers = .{ .codes = &codes };
+    var iterator = languageSections(raw, &markers);
+    for (F.rows) |row| {
+        const section = iterator.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(row.raw, equalsSectionDeclaration(section).?);
+    }
+    try std.testing.expect(iterator.next() == null);
+    // Full raw is genuine. The ten displayed root labels come from the actual
+    // complete Reader, while these body lines are deliberate representative
+    // controls; no missing full expansion or page replay is fabricated.
+    var source: std.ArrayList(u8) = .empty;
+    var regions: [F.rows.len][]const u8 = undefined;
+    for (F.rows, 0..) |row, i| {
+        regions[i] = try std.fmt.allocPrint(a, "=={s}==\n# '''REGION_{d}''' [[target-{d}|action-{d}]]\n", .{ row.rendered, i, i, i });
+        try source.appendSlice(a, regions[i]);
+    }
+    var page: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "fille" };
+    try page.compileWithPhases(a, codes, source.items, raw, null, null, null, null);
+    try std.testing.expectEqual(F.rows.len, page.records.items.len);
+    for (page.records.items, F.rows, regions) |record, row, region| {
+        try std.testing.expectEqualStrings(row.owner, record.key);
+        const actual = try blobs.presentation_codec.decodeAlloc(a, record.payload, "fille", .language, .{ .code = row.code, .heading = row.owner });
+        const reference = try presentation_document.compileReportedWithLinkTrailAlloc(a, "fille", .language, row.owner, row.code, region, null, codes.link_trail, null, null);
+        const expected = try blobs.presentation_codec.decodeAlloc(a, reference, "fille", .language, .{ .code = row.code, .heading = row.owner });
+        try std.testing.expectEqualDeep(expected, actual);
+        try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, actual));
+    }
 }

@@ -1,0 +1,29 @@
+== <span id="caract">Caractère</span>[[Catégorie:Caractères]] ==
+[[Image:Jupiter symbol.svg|thumb|Symbole de [[Jupiter]].]]
+'''♃'''
+# [[Jupiter]]. [[Unicode]] : U+2643.
+
+=== <span class="titreref" title="">Références</span> ===
+* Unicode, Inc., ''[https://web.archive.org/web/20190613203257/https://www.unicode.org/charts/PDF/U2600.pdf Miscellaneous Symbols]'', The Unicode Standard, version 12.1, 2019
+
+== <span class='sectionlangue' id='conv'>Conventions internationales</span>[[Catégorie:conventions internationales]] ==
+=== <span class="titredef" id="conv-symb-1">Symbole</span><span id="conv-symb" style="font-size:0;"></span>[[Catégorie:Symboles en conventions internationales]] ===
+[[File:Zug - Zytturm 2010-06-18 calendar crop.jpg|thumb|♃ pour jeudi]]
+'''♃'''
+# ''(<span title="L’astrologie ou astromancie est l’interprétation symbolique des astres." id="conv-astrologie">Astrologie</span>)''[[Catégorie:Lexique en conventions internationales de l’astrologie]] ''(<span title="L’astronomie est la science de l’observation des astres." id="conv-astronomie">Astronomie</span>)''[[Catégorie:Lexique en conventions internationales de l’astronomie]] Symbole de [[Jupiter]].
+# ''(<span title="L’alchimie est la transmutation des métaux et élixirs." id="conv-alchimie">Alchimie</span>)''[[Catégorie:Lexique en conventions internationales de l’alchimie]] Symbole d'[[étain]].
+# ''(<span title="L’entomologie est l’étude des insectes." id="conv-entomologie">Entomologie</span>)''[[Catégorie:Lexique en conventions internationales de l’entomologie]] Symbole de l'ouvrière soldate.
+
+=== <span class="titrevoir" title="">Voir aussi</span> ===
+
+*[[w:♃|♃]] sur Wikipédia [[Image:Wikipedia-logo-v2.svg|20px|Article sur Wikipédia|link=]]<br/>
+<div style="clear:both;"></div>
+<div align="center">
+{| class="toccolours" style="margin: 0 auto;text-align:center;"
+! style="background: #ccccff;" |Symboles planétaires
+|-
+|[[Image:Sun symbol (fixed width).svg|link=☉]] · [[Image:Mercury symbol (fixed width).svg|link=☿]] · [[Image:Venus symbol (fixed width).svg|link=♀]] · [[Image:Earth symbol (fixed width).svg|link=🜨]]&ndash;[[Image:Globus cruciger (fixed width).svg|link=♁]] · [[Image:Moon crescent symbol (fixed width).svg|link=☽]]&ndash;[[Image:Moon decrescent symbol (fixed width).svg|link=☾]] · [[Image:Mars symbol (fixed width).svg|link=♂]] · [[Image:Ceres symbol (fixed width).svg|link=⚳]] · [[Image:Pallas symbol (fixed width).svg|link=⚴]] · [[Image:Juno symbol (fixed width).svg|link=⚵]] · [[Image:Vesta symbol (fixed width).svg|link=⚶]] · [[Image:Hygiea symbol (fixed width).svg|link=⯚]] · [[Image:Chiron symbol (fixed width).svg|link=⚷]] · [[Image:Jupiter symbol (fixed width).svg|link=♃]] · [[Image:Saturn symbol (fixed width).svg|link=♄]] · [[Image:Uranus symbol (fixed width).svg|link=⛢]]&ndash;[[Image:Uranus monogram (fixed width).svg|link=♅]] · [[Image:Neptune symbol (fixed width).svg|link=♆]] · [[Image:Pluto symbol (large orb, fixed width).svg|link=⯓]]&ndash;[[Image:Pluto monogram (fixed width).svg|link=♇]] · [[Image:Orcus symbol (fixed width).svg|link=🝿]] · [[Image:Haumea symbol (fixed width).svg|link=🝻]] · [[Image:Quaoar symbol (fixed width).svg|link=🝾]] · [[Image:Makemake symbol (fixed width).svg|link=🝼]] · [[Image:Gonggong symbol (fixed width).svg|link=🝽]] · [[Image:Eris symbol (fixed width).svg|link=⯰]] · [[Image:Sedna symbol (fixed width).svg|link=⯲]] · [[Image:Comet symbol (fixed width).svg|link=☄]]
+|}
+</div>
+
+[[Catégorie:Symboles astrologiques]]

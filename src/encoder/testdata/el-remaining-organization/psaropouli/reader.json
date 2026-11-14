@@ -1,0 +1,4826 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "ψαροπούλι",
+  "kind": "language",
+  "language": "Ελληνικά",
+  "match_mode": "exact-utf8",
+  "record_count": 1,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [
+          {
+            "language": "Ελληνικά",
+            "kind": "Noun",
+            "section": 4,
+            "etymology": null,
+            "definitions": [],
+            "introduction": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "other_blocks": [],
+            "related_sections": [
+              5,
+              6
+            ]
+          }
+        ],
+        "other_sections": [
+          0,
+          1,
+          2,
+          3
+        ]
+      },
+      "title": "ψαροπούλι",
+      "display_title": [],
+      "kind": "language",
+      "language": "Ελληνικά",
+      "language_code": "el",
+      "sections": [
+        {
+          "level": 2,
+          "title": "Ελληνικά",
+          "anchor": "",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "wikidict-media wikidict-media-file-4172726f777320626c75652e706e67",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "image": {
+                              "file": "Arrows blue.png",
+                              "width_px": 80,
+                              "alt": ""
+                            },
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "Δείτε επίσης",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ":",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "Ψαροπούλι",
+                            "target": "Ψαροπούλι",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f4f4f4",
+                        "style": {
+                          "text_align": "left"
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "style": {
+                  "background": "#f4f4f4",
+                  "border": {
+                    "solid": {
+                      "width": {
+                        "unit": "px",
+                        "value": 1
+                      },
+                      "color": "#dddddd"
+                    }
+                  },
+                  "margins": {
+                    "top": {
+                      "unit": "px",
+                      "value": 0
+                    },
+                    "right": {
+                      "unit": "px",
+                      "value": 0
+                    },
+                    "bottom": {
+                      "unit": "em",
+                      "value": 0.10000000149011612
+                    },
+                    "left": {
+                      "unit": "px",
+                      "value": 0
+                    }
+                  },
+                  "width": {
+                    "unit": "percent",
+                    "value": 100
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "level": 2,
+          "title": "Νέα ελληνικά (el)",
+          "anchor": "Νέα_ελληνικά_(el)",
+          "anchor_fallback": ".CE.9D.CE.AD.CE.B1_.CE.B5.CE.BB.CE.BB.CE.B7.CE.BD.CE.B9.CE.BA.CE.AC_.28el.29",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Νέα ελληνικά",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Από το 1700 ως σήμερα",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " (",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "el",
+                  "target": "Κατηγορία:Νέα ελληνικά",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Κατηγορία:νέα ελληνικά. Από το 1700 ως σήμερα",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ")",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 2,
+              "anchor": "Νέα_ελληνικά_(el)",
+              "anchor_fallback": ".CE.9D.CE.AD.CE.B1_.CE.B5.CE.BB.CE.BB.CE.B7.CE.BD.CE.B9.CE.BA.CE.AC_.28el.29",
+              "table": null
+            },
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "↓",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "πτώσεις",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#a1bdea",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#c1d3f1"
+                                }
+                              },
+                              "bottom": {
+                                "none": {}
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "ενικός",
+                            "target": "ενικός",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "ενικός αριθμός",
+                            "foreground": "#000000",
+                            "bold": true,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": "#a1bdea",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#c1d3f1"
+                                }
+                              },
+                              "bottom": {
+                                "none": {}
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "πληθυντικός",
+                            "target": "πληθυντικός",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "πληθυντικός αριθμός",
+                            "foreground": "#000000",
+                            "bold": true,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": "#a1bdea",
+                        "style": {
+                          "text_align": "center"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "ονομαστική",
+                            "target": "ονομαστική",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "ονομαστική πτώση",
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": true,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#d5e2f6",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "right"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "το",
+                            "target": "το",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "ψαροπούλ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "mw-selflink selflink skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "ι",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "mw-selflink selflink skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#eb0000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "left"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "τα",
+                            "target": "τα",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "ψαροπούλ",
+                            "target": "ψαροπούλια",
+                            "trail": "",
+                            "language": "",
+                            "classes": "skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "ια",
+                            "target": "ψαροπούλια",
+                            "trail": "",
+                            "language": "",
+                            "classes": "skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#eb0000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "left"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "γενική",
+                            "target": "γενική",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "γενική πτώση",
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": true,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#d5e2f6",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "right"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "του",
+                            "target": "του",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "ψαροπουλ",
+                            "target": "ψαροπουλιού",
+                            "trail": "",
+                            "language": "",
+                            "classes": "skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "ιού",
+                            "target": "ψαροπουλιού",
+                            "trail": "",
+                            "language": "",
+                            "classes": "skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#eb0000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "left"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "των",
+                            "target": "των",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "ψαροπουλ",
+                            "target": "ψαροπουλιών",
+                            "trail": "",
+                            "language": "",
+                            "classes": "skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "ιών",
+                            "target": "ψαροπουλιών",
+                            "trail": "",
+                            "language": "",
+                            "classes": "skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#eb0000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "left"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "αιτιατική",
+                            "target": "αιτιατική",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "αιτιατική πτώση",
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": true,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#d5e2f6",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "right"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "το",
+                            "target": "το",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "ψαροπούλ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "mw-selflink selflink skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "ι",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "mw-selflink selflink skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#eb0000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "left"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "τα",
+                            "target": "τα",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "ψαροπούλ",
+                            "target": "ψαροπούλια",
+                            "trail": "",
+                            "language": "",
+                            "classes": "skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "ια",
+                            "target": "ψαροπούλια",
+                            "trail": "",
+                            "language": "",
+                            "classes": "skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#eb0000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "left"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "κλητική",
+                            "target": "κλητική",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "κλητική πτώση",
+                            "foreground": "#000000",
+                            "font_scale": 0.8999999761581421,
+                            "font_scale_basis": "normal_body",
+                            "bold": true,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#d5e2f6",
+                        "style": {
+                          "text_align": "right"
+                        }
+                      },
+                      {
+                        "spans": [],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "ψαροπούλ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "mw-selflink selflink skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "ι",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "mw-selflink selflink skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#eb0000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#eaf0fa"
+                                }
+                              },
+                              "bottom": {
+                                "none": {}
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "text_align": "left"
+                        }
+                      },
+                      {
+                        "spans": [],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "ψαροπούλ",
+                            "target": "ψαροπούλια",
+                            "trail": "",
+                            "language": "",
+                            "classes": "skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#002000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "ια",
+                            "target": "ψαροπούλια",
+                            "trail": "",
+                            "language": "",
+                            "classes": "skin-nightmode-reset-color",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#eb0000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffff",
+                        "style": {
+                          "text_align": "left"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Οι καταλήξεις -ιού, -ια, -ιών προφέρονται με ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.800000011920929,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "συνίζηση",
+                            "target": "συνίζηση",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.800000011920929,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ".",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.800000011920929,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 5,
+                        "rowspan": 1,
+                        "background": "#eaf0fa",
+                        "style": {
+                          "text_align": "left"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "Κατηγορία",
+                            "target": "Κατηγορία:Ουσιαστικά που κλίνονται όπως το 'τραγούδι' (νέα ελληνικά)",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.699999988079071,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "  όπως «",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.699999988079071,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "τραγούδι",
+                            "target": "Παράρτημα:Ουσιαστικά (νέα ελληνικά)/ουδέτερα#τραγούδι",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.699999988079071,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "» - ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "font_scale": 0.699999988079071,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "Παράρτημα:Ουσιαστικά",
+                            "target": "Παράρτημα:Ουσιαστικά (νέα ελληνικά)",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Παράρτημα:Ουσιαστικά",
+                            "foreground": "#000000",
+                            "font_scale": 0.699999988079071,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 5,
+                        "rowspan": 1,
+                        "background": "#eaf0fa",
+                        "style": {
+                          "text_align": "right"
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "geometry": {
+                  "border": 1,
+                  "cell_spacing": 0,
+                  "cell_padding": 3,
+                  "width": null
+                },
+                "style": {
+                  "background": "#ffffff",
+                  "border": {
+                    "solid": {
+                      "width": {
+                        "unit": "px",
+                        "value": 1
+                      },
+                      "color": "#a1bdea"
+                    }
+                  },
+                  "margins": {
+                    "top": {
+                      "unit": "px",
+                      "value": 0
+                    },
+                    "right": {
+                      "unit": "px",
+                      "value": 0
+                    },
+                    "bottom": {
+                      "unit": "em",
+                      "value": 0.5
+                    },
+                    "left": {
+                      "unit": "em",
+                      "value": 0.5
+                    }
+                  },
+                  "float_side": "right",
+                  "clear": "right"
+                }
+              }
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null,
+              "figure": {
+                "image_span": {
+                  "kind": "link",
+                  "text": "",
+                  "target": "File:Flickr - coniferconifer - Kingfisher in summer plumage - crop.jpg",
+                  "trail": "",
+                  "language": "",
+                  "classes": "wikidict-media wikidict-media-file-466c69636b72202d20636f6e69666572636f6e69666572202d204b696e6766697368657220696e2073756d6d657220706c756d616765202d2063726f702e6a7067",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "image": {
+                    "file": "Flickr - coniferconifer - Kingfisher in summer plumage - crop.jpg",
+                    "width_px": 190,
+                    "alt": ""
+                  },
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                "caption": [
+                  {
+                    "kind": "text",
+                    "text": "Ψαροπούλι",
+                    "target": "",
+                    "trail": "",
+                    "language": "",
+                    "classes": "",
+                    "direction": "",
+                    "explanation": "",
+                    "tooltip": null,
+                    "foreground": null,
+                    "font_scale": 0.8840000033378601,
+                    "font_scale_basis": "normal_body",
+                    "bold": false,
+                    "italic": true,
+                    "code": false,
+                    "small": false,
+                    "superscript": false,
+                    "subscript": false,
+                    "strike": false,
+                    "underline": false,
+                    "role": "normal"
+                  }
+                ],
+                "caption_text_align": "left",
+                "format": "thumbnail",
+                "sizing": "requested_fit",
+                "placement": "float_right",
+                "clear": "right",
+                "margins": {
+                  "top": {
+                    "unit": "em",
+                    "value": 0.5
+                  },
+                  "right": {
+                    "unit": "px",
+                    "value": 0
+                  },
+                  "bottom": {
+                    "unit": "em",
+                    "value": 1.2999999523162842
+                  },
+                  "left": {
+                    "unit": "em",
+                    "value": 1.399999976158142
+                  }
+                },
+                "image_insets": {
+                  "top": {
+                    "unit": "px",
+                    "value": 3
+                  },
+                  "right": {
+                    "unit": "px",
+                    "value": 3
+                  },
+                  "bottom": {
+                    "unit": "px",
+                    "value": 3
+                  },
+                  "left": {
+                    "unit": "px",
+                    "value": 3
+                  }
+                },
+                "caption_padding": {
+                  "top": {
+                    "unit": "px",
+                    "value": 0
+                  },
+                  "right": {
+                    "unit": "px",
+                    "value": 6
+                  },
+                  "bottom": {
+                    "unit": "px",
+                    "value": 6
+                  },
+                  "left": {
+                    "unit": "px",
+                    "value": 6
+                  }
+                },
+                "caption_font_scale": 0.8840000033378601,
+                "caption_line_height": {
+                  "unit": "em",
+                  "value": 1.2375999689102173
+                },
+                "frame_background": {
+                  "kind": "native_theme"
+                },
+                "frame_border": {
+                  "kind": "solid",
+                  "width": {
+                    "unit": "px",
+                    "value": 1
+                  },
+                  "color": {
+                    "kind": "native_theme"
+                  }
+                },
+                "image_background": {
+                  "kind": "native_theme"
+                },
+                "image_border": {
+                  "kind": "solid",
+                  "width": {
+                    "unit": "px",
+                    "value": 1
+                  },
+                  "color": {
+                    "kind": "native_theme"
+                  }
+                },
+                "caption_foreground": {
+                  "kind": "native_theme"
+                },
+                "caption_background": {
+                  "kind": "native_theme"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Ετυμολογία",
+          "anchor": "Ετυμολογία",
+          "anchor_fallback": ".CE.95.CF.84.CF.85.CE.BC.CE.BF.CE.BB.CE.BF.CE.B3.CE.AF.CE.B1",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "wikidict-media wikidict-media-file-53797374656d2d7365617263682e737667",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Προέλευση και ιστορία της λέξης",
+                  "foreground": null,
+                  "image": {
+                    "file": "System-search.svg",
+                    "width_px": 30,
+                    "alt": ""
+                  },
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " Ετυμολογία ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Προέλευση και ιστορία της λέξης",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 3,
+              "anchor": "Ετυμολογία",
+              "anchor_fallback": ".CE.95.CF.84.CF.85.CE.BC.CE.BF.CE.BB.CE.BF.CE.B3.CE.AF.CE.B1",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "ψαροπούλι",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "<",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "  ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "ψαρο-",
+                  "target": "ψαρο-#Νέα ελληνικά (el)",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " + ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "-πούλι",
+                  "target": "-πούλι#Νέα ελληνικά (el)",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Προφορά",
+          "anchor": "Προφορά",
+          "anchor_fallback": ".CE.A0.CF.81.CE.BF.CF.86.CE.BF.CF.81.CE.AC",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "wikidict-media wikidict-media-file-57696b696e65777320636f6d6d656e746172792e737667",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "image": {
+                    "file": "Wikinews commentary.svg",
+                    "width_px": 28,
+                    "alt": ""
+                  },
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "Προφορά",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "pronunciation",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 3,
+              "anchor": "Προφορά",
+              "anchor_fallback": ".CE.A0.CF.81.CE.BF.CF.86.CE.BF.CF.81.CE.AC",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "ΔΦΑ",
+                  "target": "ΔΦΑ",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "ΔΦΑ - Διεθνές Φωνητικό Αλφάβητο",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " : /",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "psa.ɾoˈpu.li",
+                  "target": "Παράρτημα:Προφορά/νέα ελληνικά",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 1.100000023841858,
+                  "font_scale_basis": "normal_body",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "/",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "τυπογραφικός συλλαβισμός",
+                  "target": "συλλαβισμός#Ουσιαστικό",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "ο χωρισμός γραπτής λέξης σε συλλαβές",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ":",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "Ψα",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "‐",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "ρο",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "‐",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "πού",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "‐",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "λι",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Ουσιαστικό",
+          "anchor": "Ουσιαστικό",
+          "anchor_fallback": ".CE.9F.CF.85.CF.83.CE.B9.CE.B1.CF.83.CF.84.CE.B9.CE.BA.CF.8C",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "wikidict-media wikidict-media-file-4f4f6a732055492d6c696b65206172726f7720656d7074792d6c74722070726f67726573736976652e737667 partofspeech",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "image": {
+                    "file": "OOjs UI-like arrow empty-ltr progressive.svg",
+                    "width_px": 25,
+                    "alt": ""
+                  },
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " Ουσιαστικό",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "partofspeech",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 3,
+              "anchor": "Ουσιαστικό",
+              "anchor_fallback": ".CE.9F.CF.85.CF.83.CE.B9.CE.B1.CF.83.CF.84.CE.B9.CE.BA.CF.8C",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "ψαροπούλι",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "ουδέτερο",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "(",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "πτηνό",
+                  "target": "Κατηγορία:Πτηνά (νέα ελληνικά)",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ")",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " πουλί του γένους ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "Αλκυόνη",
+                  "target": "Αλκυόνη",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " (είδος ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "Alcedo atthis",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "), θαλάσσιο αποδημητικό πτηνό",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_detail",
+              "depth": 2,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "≈",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 1.2000000476837158,
+                  "font_scale_basis": "normal_body",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "συνώνυμα",
+                  "target": "συνώνυμο",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Λέξεις που έχουν την ίδια περίπου σημασία με «ψαροπούλι»",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ":",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "θαλασοπούλι",
+                  "target": "θαλασοπούλι",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ", ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "μπιρμπίλι",
+                  "target": "μπιρμπίλι",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " της θάλασσας",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*:",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Συγγενικά",
+          "anchor": "Συγγενικά",
+          "anchor_fallback": ".CE.A3.CF.85.CE.B3.CE.B3.CE.B5.CE.BD.CE.B9.CE.BA.CE.AC",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Συγγενικά",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Λέξεις της ίδιας γλώσσας με ετυμολογική συγγένεια",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 4,
+              "anchor": "Συγγενικά",
+              "anchor_fallback": ".CE.A3.CF.85.CE.B3.CE.B3.CE.B5.CE.BD.CE.B9.CE.BA.CE.AC",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "Ψαροπούλι",
+                  "target": "Ψαροπούλι",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " (",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "τοπωνύμιο",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ")",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "container",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null,
+              "container": {
+                "blocks": [],
+                "style": {
+                  "clear": "both"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Μεταφράσεις",
+          "anchor": "Μεταφράσεις",
+          "anchor_fallback": ".CE.9C.CE.B5.CF.84.CE.B1.CF.86.CF.81.CE.AC.CF.83.CE.B5.CE.B9.CF.82",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "wikidict-media wikidict-media-file-476e6f6d652d676c6f62652e737667",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "image": {
+                    "file": "Gnome-globe.svg",
+                    "width_px": 28,
+                    "alt": ""
+                  },
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "Μεταφράσεις",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "translations",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 4,
+              "anchor": "Μεταφράσεις",
+              "anchor_fallback": ".CE.9C.CE.B5.CF.84.CE.B1.CF.86.CF.81.CE.AC.CF.83.CE.B5.CE.B9.CF.82",
+              "table": null
+            },
+            {
+              "kind": "container",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null,
+              "container": {
+                "blocks": [
+                  {
+                    "kind": "paragraph",
+                    "depth": 0,
+                    "spans": [
+                      {
+                        "kind": "text",
+                        "text": " ",
+                        "target": "",
+                        "trail": "",
+                        "language": "",
+                        "classes": "NavFrame NavHead",
+                        "direction": "",
+                        "explanation": "",
+                        "tooltip": null,
+                        "foreground": "#000000",
+                        "font_scale": 0.949999988079071,
+                        "font_scale_basis": "normal_body",
+                        "bold": true,
+                        "italic": false,
+                        "code": false,
+                        "small": false,
+                        "superscript": false,
+                        "subscript": false,
+                        "strike": false,
+                        "underline": false,
+                        "role": "normal"
+                      },
+                      {
+                        "kind": "text",
+                        "text": " ",
+                        "target": "",
+                        "trail": "",
+                        "language": "",
+                        "classes": "NavFrame NavHead",
+                        "direction": "",
+                        "explanation": "",
+                        "tooltip": null,
+                        "foreground": "#000000",
+                        "font_scale": 0.949999988079071,
+                        "font_scale_basis": "normal_body",
+                        "bold": true,
+                        "italic": false,
+                        "code": false,
+                        "small": false,
+                        "superscript": false,
+                        "subscript": false,
+                        "strike": false,
+                        "underline": false,
+                        "role": "normal"
+                      },
+                      {
+                        "kind": "text",
+                        "text": " ",
+                        "target": "",
+                        "trail": "",
+                        "language": "",
+                        "classes": "NavFrame NavHead",
+                        "direction": "",
+                        "explanation": "",
+                        "tooltip": null,
+                        "foreground": "#000000",
+                        "font_scale": 0.949999988079071,
+                        "font_scale_basis": "normal_body",
+                        "bold": true,
+                        "italic": false,
+                        "code": false,
+                        "small": false,
+                        "superscript": false,
+                        "subscript": false,
+                        "strike": false,
+                        "underline": false,
+                        "role": "normal"
+                      },
+                      {
+                        "kind": "text",
+                        "text": " ψαροπούλι",
+                        "target": "",
+                        "trail": "",
+                        "language": "",
+                        "classes": "NavFrame NavHead",
+                        "direction": "",
+                        "explanation": "",
+                        "tooltip": null,
+                        "foreground": "#000000",
+                        "font_scale": 0.949999988079071,
+                        "font_scale_basis": "normal_body",
+                        "bold": true,
+                        "italic": false,
+                        "code": false,
+                        "small": false,
+                        "superscript": false,
+                        "subscript": false,
+                        "strike": false,
+                        "underline": false,
+                        "role": "normal"
+                      }
+                    ],
+                    "feature": null,
+                    "list_path": "",
+                    "number": "",
+                    "level": 0,
+                    "anchor": "",
+                    "anchor_fallback": "",
+                    "table": null,
+                    "text_align": "left"
+                  }
+                ],
+                "style": {
+                  "background": {
+                    "rgb": "#eeeeee"
+                  },
+                  "text_align": "left",
+                  "owner_font_scale": 0.949999988079071,
+                  "height": {
+                    "unit": "em",
+                    "value": 1.5199999809265137
+                  },
+                  "positioning": "relative_auto"
+                }
+              }
+            },
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f8f8",
+                        "blocks": [
+                          {
+                            "kind": "container",
+                            "depth": 0,
+                            "spans": [],
+                            "feature": null,
+                            "list_path": "",
+                            "number": "",
+                            "level": 0,
+                            "anchor": "",
+                            "anchor_fallback": "",
+                            "table": null,
+                            "container": {
+                              "blocks": [
+                                {
+                                  "kind": "list_item",
+                                  "depth": 1,
+                                  "spans": [
+                                    {
+                                      "kind": "link",
+                                      "text": "γαλλικά",
+                                      "target": "γαλλικά",
+                                      "trail": "",
+                                      "language": "",
+                                      "classes": "NavFrame NavContent",
+                                      "direction": "",
+                                      "explanation": "",
+                                      "tooltip": null,
+                                      "foreground": "#000000",
+                                      "font_scale": 0.949999988079071,
+                                      "font_scale_basis": "normal_body",
+                                      "bold": false,
+                                      "italic": false,
+                                      "code": false,
+                                      "small": false,
+                                      "superscript": false,
+                                      "subscript": false,
+                                      "strike": false,
+                                      "underline": false,
+                                      "role": "normal"
+                                    },
+                                    {
+                                      "kind": "text",
+                                      "text": " : ",
+                                      "target": "",
+                                      "trail": "",
+                                      "language": "",
+                                      "classes": "NavFrame NavContent",
+                                      "direction": "",
+                                      "explanation": "",
+                                      "tooltip": null,
+                                      "foreground": "#000000",
+                                      "font_scale": 0.949999988079071,
+                                      "font_scale_basis": "normal_body",
+                                      "bold": false,
+                                      "italic": false,
+                                      "code": false,
+                                      "small": false,
+                                      "superscript": false,
+                                      "subscript": false,
+                                      "strike": false,
+                                      "underline": false,
+                                      "role": "normal"
+                                    },
+                                    {
+                                      "kind": "link",
+                                      "text": "martin-pêcheur",
+                                      "target": "martin-pêcheur#Γαλλικά (fr)",
+                                      "trail": "",
+                                      "language": "",
+                                      "classes": "NavFrame NavContent",
+                                      "direction": "",
+                                      "explanation": "",
+                                      "tooltip": null,
+                                      "foreground": "#000000",
+                                      "font_scale": 0.949999988079071,
+                                      "font_scale_basis": "normal_body",
+                                      "bold": false,
+                                      "italic": false,
+                                      "code": false,
+                                      "small": false,
+                                      "superscript": false,
+                                      "subscript": false,
+                                      "strike": false,
+                                      "underline": false,
+                                      "role": "normal"
+                                    },
+                                    {
+                                      "kind": "text",
+                                      "text": " ",
+                                      "target": "",
+                                      "trail": "",
+                                      "language": "",
+                                      "classes": "NavFrame NavContent",
+                                      "direction": "",
+                                      "explanation": "",
+                                      "tooltip": null,
+                                      "foreground": "#000000",
+                                      "font_scale": 0.949999988079071,
+                                      "font_scale_basis": "normal_body",
+                                      "bold": false,
+                                      "italic": false,
+                                      "code": false,
+                                      "small": false,
+                                      "superscript": false,
+                                      "subscript": false,
+                                      "strike": false,
+                                      "underline": false,
+                                      "role": "normal"
+                                    },
+                                    {
+                                      "kind": "external_link",
+                                      "text": "(fr)",
+                                      "target": "https://fr.wiktionary.org/wiki/martin-p%C3%AAcheur",
+                                      "trail": "",
+                                      "language": "",
+                                      "classes": "NavFrame NavContent extiw",
+                                      "direction": "",
+                                      "explanation": "",
+                                      "tooltip": null,
+                                      "foreground": "#000000",
+                                      "font_scale": 0.7916666269302368,
+                                      "font_scale_basis": "normal_body",
+                                      "bold": false,
+                                      "italic": false,
+                                      "code": false,
+                                      "small": false,
+                                      "superscript": true,
+                                      "subscript": false,
+                                      "strike": false,
+                                      "underline": false,
+                                      "role": "normal"
+                                    }
+                                  ],
+                                  "feature": null,
+                                  "list_path": "*",
+                                  "number": "",
+                                  "level": 0,
+                                  "anchor": "",
+                                  "anchor_fallback": "",
+                                  "table": null,
+                                  "text_align": "left"
+                                },
+                                {
+                                  "kind": "list_item",
+                                  "depth": 1,
+                                  "spans": [
+                                    {
+                                      "kind": "link",
+                                      "text": "γερμανικά",
+                                      "target": "γερμανικά",
+                                      "trail": "",
+                                      "language": "",
+                                      "classes": "NavFrame NavContent",
+                                      "direction": "",
+                                      "explanation": "",
+                                      "tooltip": null,
+                                      "foreground": "#000000",
+                                      "font_scale": 0.949999988079071,
+                                      "font_scale_basis": "normal_body",
+                                      "bold": false,
+                                      "italic": false,
+                                      "code": false,
+                                      "small": false,
+                                      "superscript": false,
+                                      "subscript": false,
+                                      "strike": false,
+                                      "underline": false,
+                                      "role": "normal"
+                                    },
+                                    {
+                                      "kind": "text",
+                                      "text": " : ",
+                                      "target": "",
+                                      "trail": "",
+                                      "language": "",
+                                      "classes": "NavFrame NavContent",
+                                      "direction": "",
+                                      "explanation": "",
+                                      "tooltip": null,
+                                      "foreground": "#000000",
+                                      "font_scale": 0.949999988079071,
+                                      "font_scale_basis": "normal_body",
+                                      "bold": false,
+                                      "italic": false,
+                                      "code": false,
+                                      "small": false,
+                                      "superscript": false,
+                                      "subscript": false,
+                                      "strike": false,
+                                      "underline": false,
+                                      "role": "normal"
+                                    },
+                                    {
+                                      "kind": "link",
+                                      "text": "Eisvogel",
+                                      "target": "Eisvogel#Γερμανικά (de)",
+                                      "trail": "",
+                                      "language": "",
+                                      "classes": "NavFrame NavContent",
+                                      "direction": "",
+                                      "explanation": "",
+                                      "tooltip": null,
+                                      "foreground": "#000000",
+                                      "font_scale": 0.949999988079071,
+                                      "font_scale_basis": "normal_body",
+                                      "bold": false,
+                                      "italic": false,
+                                      "code": false,
+                                      "small": false,
+                                      "superscript": false,
+                                      "subscript": false,
+                                      "strike": false,
+                                      "underline": false,
+                                      "role": "normal"
+                                    },
+                                    {
+                                      "kind": "text",
+                                      "text": " ",
+                                      "target": "",
+                                      "trail": "",
+                                      "language": "",
+                                      "classes": "NavFrame NavContent",
+                                      "direction": "",
+                                      "explanation": "",
+                                      "tooltip": null,
+                                      "foreground": "#000000",
+                                      "font_scale": 0.949999988079071,
+                                      "font_scale_basis": "normal_body",
+                                      "bold": false,
+                                      "italic": false,
+                                      "code": false,
+                                      "small": false,
+                                      "superscript": false,
+                                      "subscript": false,
+                                      "strike": false,
+                                      "underline": false,
+                                      "role": "normal"
+                                    },
+                                    {
+                                      "kind": "external_link",
+                                      "text": "(de)",
+                                      "target": "https://de.wiktionary.org/wiki/Eisvogel",
+                                      "trail": "",
+                                      "language": "",
+                                      "classes": "NavFrame NavContent extiw",
+                                      "direction": "",
+                                      "explanation": "",
+                                      "tooltip": null,
+                                      "foreground": "#000000",
+                                      "font_scale": 0.7916666269302368,
+                                      "font_scale_basis": "normal_body",
+                                      "bold": false,
+                                      "italic": false,
+                                      "code": false,
+                                      "small": false,
+                                      "superscript": true,
+                                      "subscript": false,
+                                      "strike": false,
+                                      "underline": false,
+                                      "role": "normal"
+                                    },
+                                    {
+                                      "kind": "text",
+                                      "text": " ",
+                                      "target": "",
+                                      "trail": "",
+                                      "language": "",
+                                      "classes": "NavFrame NavContent",
+                                      "direction": "",
+                                      "explanation": "",
+                                      "tooltip": null,
+                                      "foreground": "#000000",
+                                      "font_scale": 0.949999988079071,
+                                      "font_scale_basis": "normal_body",
+                                      "bold": false,
+                                      "italic": false,
+                                      "code": false,
+                                      "small": false,
+                                      "superscript": false,
+                                      "subscript": false,
+                                      "strike": false,
+                                      "underline": false,
+                                      "role": "normal"
+                                    },
+                                    {
+                                      "kind": "text",
+                                      "text": "αρσενικό",
+                                      "target": "",
+                                      "trail": "",
+                                      "language": "",
+                                      "classes": "NavFrame NavContent",
+                                      "direction": "",
+                                      "explanation": "",
+                                      "tooltip": null,
+                                      "foreground": "#002000",
+                                      "background": "#ffffff",
+                                      "font_scale": 0.949999988079071,
+                                      "font_scale_basis": "normal_body",
+                                      "bold": false,
+                                      "italic": true,
+                                      "code": false,
+                                      "small": false,
+                                      "superscript": false,
+                                      "subscript": false,
+                                      "strike": false,
+                                      "underline": false,
+                                      "role": "normal"
+                                    }
+                                  ],
+                                  "feature": null,
+                                  "list_path": "*",
+                                  "number": "",
+                                  "level": 0,
+                                  "anchor": "",
+                                  "anchor_fallback": "",
+                                  "table": null,
+                                  "text_align": "left"
+                                }
+                              ],
+                              "style": {
+                                "width": {
+                                  "length": {
+                                    "unit": "percent",
+                                    "value": 100
+                                  }
+                                },
+                                "owner_font_scale": 0.949999988079071,
+                                "columns": {
+                                  "count": 2,
+                                  "gap": {
+                                    "unit": "em",
+                                    "value": 0.949999988079071
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        ],
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top",
+                          "width": {
+                            "unit": "percent",
+                            "value": 48
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "geometry": {
+                  "border": 0,
+                  "cell_spacing": null,
+                  "cell_padding": null,
+                  "width": null
+                },
+                "style": {
+                  "background": "#ffffff",
+                  "collapse": "collapse",
+                  "width": {
+                    "unit": "percent",
+                    "value": 100
+                  }
+                }
+              },
+              "text_align": "center"
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [
+        {
+          "file": "Arrows blue.png",
+          "kind": "image",
+          "caption": "Arrows blue.png"
+        },
+        {
+          "file": "Flickr - coniferconifer - Kingfisher in summer plumage - crop.jpg",
+          "kind": "image",
+          "caption": "Ψαροπούλι"
+        },
+        {
+          "file": "System-search.svg",
+          "kind": "image",
+          "caption": "System-search.svg"
+        },
+        {
+          "file": "Wikinews commentary.svg",
+          "kind": "image",
+          "caption": "Wikinews commentary.svg"
+        },
+        {
+          "file": "OOjs UI-like arrow empty-ltr progressive.svg",
+          "kind": "image",
+          "caption": "OOjs UI-like arrow empty-ltr progressive.svg"
+        },
+        {
+          "file": "Gnome-globe.svg",
+          "kind": "image",
+          "caption": "Gnome-globe.svg"
+        }
+      ],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

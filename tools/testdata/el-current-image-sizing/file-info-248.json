@@ -1,0 +1,124 @@
+{
+  "canonicaltitle": "Αρχείο:ETH-BIB-Head first out coming up!-Dia 247-F-00743 (cropped).tif",
+  "height": 2607,
+  "mediatype": "BITMAP",
+  "metadata": [
+    {
+      "name": "page_data",
+      "value": [
+        {
+          "name": 1,
+          "value": [
+            {
+              "name": "width",
+              "value": "1854"
+            },
+            {
+              "name": "height",
+              "value": "2607"
+            },
+            {
+              "name": "page",
+              "value": "1"
+            },
+            {
+              "name": "alpha",
+              "value": "false"
+            },
+            {
+              "name": "pixels",
+              "value": 4833378
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "page_count",
+      "value": 1
+    },
+    {
+      "name": "first_page",
+      "value": 1
+    },
+    {
+      "name": "last_page",
+      "value": 1
+    },
+    {
+      "name": "exif",
+      "value": [
+        {
+          "name": "ImageWidth",
+          "value": 1854
+        },
+        {
+          "name": "ImageLength",
+          "value": 2607
+        },
+        {
+          "name": "BitsPerSample",
+          "value": 8
+        },
+        {
+          "name": "Compression",
+          "value": 1
+        },
+        {
+          "name": "PhotometricInterpretation",
+          "value": 1
+        },
+        {
+          "name": "StripOffsets",
+          "value": 8
+        },
+        {
+          "name": "Orientation",
+          "value": 1
+        },
+        {
+          "name": "SamplesPerPixel",
+          "value": 1
+        },
+        {
+          "name": "RowsPerStrip",
+          "value": 2607
+        },
+        {
+          "name": "StripByteCounts",
+          "value": 4833378
+        },
+        {
+          "name": "XResolution",
+          "value": "4294967295/18993682"
+        },
+        {
+          "name": "YResolution",
+          "value": "4294967295/18993682"
+        },
+        {
+          "name": "PlanarConfiguration",
+          "value": 1
+        },
+        {
+          "name": "ResolutionUnit",
+          "value": 2
+        },
+        {
+          "name": "MEDIAWIKI_EXIF_VERSION",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "name": "TIFF_METADATA_VERSION",
+      "value": "1.4"
+    }
+  ],
+  "mime": "image/tiff",
+  "pagecount": 1,
+  "sha1": "3085d03c59348873d4e5f5dd3716376b42f4eb42",
+  "size": 4851975,
+  "timestamp": "2023-06-25T08:53:12Z",
+  "width": 1854
+}

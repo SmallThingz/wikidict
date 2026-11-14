@@ -1,4 +1,5 @@
 const std = @import("std");
+const diagnostics = @import("build_diagnostics");
 const namespaces = @import("namespace_registry");
 const encoder = @import("encoder");
 const dump_source = @import("wikimedia_dump");
@@ -24,7 +25,9 @@ fn registrationEpoch(core: []const u8) bool { return equal(core, registration_co
 // video presets differ; profile hashes still identify the reference model.
 const wmf4_core = "d45799ff7a503ab18523e720d5e3686761c84c87";
 // The twenty retained 93f1cd leaves and four media IDs match bb3b67 exactly.
-const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d", "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c" };
+// The twenty a2f179 media leaves match 93f1cd exactly; response identities
+// and all registration/replay-contract checks remain independently required.
+const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d", "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c", "a2f17941896ce97ea79981632f6ec9ffd9a79802" };
 fn wmf4Epoch(core: []const u8) bool {
     for (wmf4_cores) |member| if (equal(core, member)) return true;
     return false;
@@ -152,17 +155,18 @@ pub const replay_contract_v2 = "wikidict.figure-files-replay.v2";
 pub const replay_contract_v3 = "wikidict.figure-files-replay.v3";
 pub const replay_contract_v4 = "wikidict.figure-files-replay.v4";
 pub const replay_contract_v6 = "wikidict.figure-files-replay.v6";
+pub const replay_contract_v7 = "wikidict.figure-files-replay.v7";
 const raw_record_encoding = "zstd-jsonl-v1";
 fn explicitReplayContract(value: Value) !bool {
     if (value != .object) return invalid;
     const contract = value.object.get("replay_contract") orelse return false;
-    if (contract != .string or (!equal(contract.string, replay_contract) and !equal(contract.string, replay_contract_v2) and !equal(contract.string, replay_contract_v3) and !equal(contract.string, replay_contract_v4) and !equal(contract.string, replay_contract_v6))) return invalid;
+    if (contract != .string or (!equal(contract.string, replay_contract) and !equal(contract.string, replay_contract_v2) and !equal(contract.string, replay_contract_v3) and !equal(contract.string, replay_contract_v4) and !equal(contract.string, replay_contract_v6) and !equal(contract.string, replay_contract_v7))) return invalid;
     return true;
 }
 fn responseEpochContract(value: Value) bool {
     if (value != .object) return false;
     const contract = value.object.get("replay_contract") orelse return false;
-    return contract == .string and (equal(contract.string, replay_contract_v3) or equal(contract.string, replay_contract_v4) or equal(contract.string, replay_contract_v6));
+    return contract == .string and (equal(contract.string, replay_contract_v3) or equal(contract.string, replay_contract_v4) or equal(contract.string, replay_contract_v6) or equal(contract.string, replay_contract_v7));
 }
 fn replayDocumentShape(a: A, value: Value) !Value {
     if (!try explicitReplayContract(value)) return value;
@@ -890,6 +894,9 @@ fn metadataInteger(fields: MetadataFields, name: []const u8, expected: u32) !voi
 // This is the selected handler's single-page metadata grammar, not a filename
 // or MIME-derived assumption about decoded pixels or arbitrary TIFF pages.
 fn tiffPageAxes(a: A, image: Value, width: u32, height: u32, decimal_axes: bool) !void {
+    return tiffPageAxesIn(a, image, width, height, decimal_axes, false);
+}
+fn tiffPageAxesIn(a: A, image: Value, width: u32, height: u32, decimal_axes: bool, decimal_page: bool) !void {
     if (try positive(image, "pagecount") != 1) return invalid;
     var metadata = try metadataFields(a, try field(image, "metadata"));
     defer metadata.deinit(a);
@@ -910,7 +917,12 @@ fn tiffPageAxes(a: A, image: Value, width: u32, height: u32, decimal_axes: bool)
     if (!is_first) return invalid;
     var page = try metadataFields(a, try field(item, "value"));
     defer page.deinit(a);
-    try metadataInteger(page, "page", 1);
+    const page_number = page.get("page") orelse return invalid;
+    if (decimal_page and page_number == .string) {
+        // PagedTiffImage stores page properties as text. Only the exact
+        // first-page spelling is admitted; counts/version remain integers.
+        if (!equal(page_number.string, "1")) return invalid;
+    } else try metadataInteger(page, "page", 1);
     for ([_]struct { name: []const u8, expected: u32 }{
         .{ .name = "width", .expected = width }, .{ .name = "height", .expected = height },
     }) |axis| {
@@ -1034,7 +1046,7 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
     return server;
 }
 
-const ReplayHeader = struct { header: StreamHeader, contract: bool, encoded_records: bool, response_epochs: bool, decimal_tiff_axes: bool, default_tiff_page: bool };
+const ReplayHeader = struct { header: StreamHeader, contract: bool, encoded_records: bool, response_epochs: bool, decimal_tiff_axes: bool, default_tiff_page: bool, decimal_tiff_page: bool };
 fn rawStreamHeaderShape(a: A, value: Value, encoded_permitted: bool) !Value {
     if (value != .object) return invalid;
     const encoding = value.object.get("record_encoding") orelse return value;
@@ -1080,8 +1092,9 @@ fn readStreamHeaders(a: A, temp: A, projection: *StreamInput, raw: *StreamInput)
         raw_header.base_batches != header.base_batches or raw_header.observed_batches != header.observed_batches or
         raw_header.records_count != header.records_count) return invalid;
     return .{ .header = header, .contract = contract, .encoded_records = raw_header_value.object.contains("record_encoding"), .response_epochs = responseEpochContract(header_value),
-        .decimal_tiff_axes = contract and (equal(try string(header_value, "replay_contract"), replay_contract_v4) or equal(try string(header_value, "replay_contract"), replay_contract_v6)),
-        .default_tiff_page = contract and equal(try string(header_value, "replay_contract"), replay_contract_v6) };
+        .decimal_tiff_axes = contract and (equal(try string(header_value, "replay_contract"), replay_contract_v4) or (equal(try string(header_value, "replay_contract"), replay_contract_v6) or equal(try string(header_value, "replay_contract"), replay_contract_v7))),
+        .default_tiff_page = contract and (equal(try string(header_value, "replay_contract"), replay_contract_v6) or equal(try string(header_value, "replay_contract"), replay_contract_v7)),
+        .decimal_tiff_page = contract and equal(try string(header_value, "replay_contract"), replay_contract_v7) };
 }
 
 pub const StreamInput = struct {
@@ -1094,6 +1107,11 @@ pub const StreamInput = struct {
     end: usize = 0,
     hash: std.crypto.hash.sha2.Sha256 = std.crypto.hash.sha2.Sha256.init(.{}),
     digest: ?[32]u8 = null,
+
+    // The physical offset includes read-ahead; report the next unread byte.
+    pub fn diagnosticPosition(self: *const StreamInput) u64 {
+        return self.offset -| @as(u64, @intCast(self.end -| self.start));
+    }
 
     pub fn line(self: *StreamInput, a: A, limit: usize) !?[]u8 {
         if (self.digest != null) return null;
@@ -1318,6 +1336,14 @@ const StreamBatches = struct {
     encoded_records: bool = false,
     cursor: usize = 0,
     fn next(self: *StreamBatches, a: A) !RawFileBatch {
+        const start = self.input.diagnosticPosition();
+        return self.nextRecord(a) catch |err| {
+            if (err != error.OutOfMemory) diagnostics.printLine("figure_source stage=raw_record batch={d} raw_offset={d} error={s}\n", .{ self.cursor, start, @errorName(err) });
+            return err;
+        };
+    }
+    fn nextRecord(self: *StreamBatches, a: A) !RawFileBatch {
+
         if (self.cursor >= self.count) return invalid;
         const bytes = (try self.input.line(a, stream_batch_limit)) orelse return invalid;
         // The outer record has bounded depth independently of its quoted HTTP
@@ -1330,6 +1356,13 @@ const StreamBatches = struct {
         return batch;
     }
     fn finish(self: *StreamBatches) !void {
+        self.finishStream() catch |err| {
+            if (err != error.OutOfMemory) diagnostics.printLine("figure_source stage=raw_finish batch={d} raw_offset={d} error={s}\n", .{ self.cursor, self.input.diagnosticPosition(), @errorName(err) });
+            return err;
+        };
+    }
+    fn finishStream(self: *StreamBatches) !void {
+
         if (self.cursor != self.count) return invalid;
         try self.input.finish(self.backing);
         if (!equal(&std.fmt.bytesToHex(self.input.digest.?, .lower), self.raw_sha256)) return invalid;
@@ -1415,6 +1448,20 @@ fn sourceSvgRasterExplicitBox(record: Record, width: u32, height: u32) ?SvgClien
     if (rounded == 0 or rounded > std.math.maxInt(u32) or source_height != @as(f64, @floatFromInt(rounded))) return null;
     return .{ .width = width, .height = @intCast(rounded) };
 }
+
+const FigureStreamFailure = struct {
+    stage: []const u8 = "headers",
+    record: ?usize = null,
+    record_offset: u64 = 0,
+};
+const FigureReplayFailure = struct {
+    stage: []const u8 = "source",
+    record: ?usize = null,
+    batch: ?usize = null,
+    request: ?usize = null,
+    // Only names owned by doc.records/the caller's arena survive batch scratch.
+    file: []const u8 = "",
+};
 
 pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
@@ -1571,6 +1618,14 @@ pub const Registry = struct {
     }
 
     fn initStreamWithScratchReset(comptime reset_mode: std.heap.ArenaAllocator.ResetMode, backing: A, projection: *StreamInput, raw: *StreamInput, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8) !Registry {
+        var location: FigureStreamFailure = .{};
+        return initStreamLocated(reset_mode, backing, projection, raw, site, ns, source_core_revision, &location) catch |err| {
+            if (err != error.OutOfMemory) diagnostics.printLine("figure_source stage={s} record={?d} record_offset={d} projection_offset={d} raw_offset={d} error={s}\n", .{ location.stage, location.record, location.record_offset, projection.diagnosticPosition(), raw.diagnosticPosition(), @errorName(err) });
+            return err;
+        };
+    }
+    fn initStreamLocated(comptime reset_mode: std.heap.ArenaAllocator.ResetMode, backing: A, projection: *StreamInput, raw: *StreamInput, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, location: *FigureStreamFailure) !Registry {
+
         try preflight(site, false);
         var arena = std.heap.ArenaAllocator.init(backing);
         errdefer arena.deinit();
@@ -1583,13 +1638,19 @@ pub const Registry = struct {
         const count = std.math.cast(usize, header.base_batches + header.observed_batches) orelse return invalid;
         const fact_count = std.math.cast(usize, header.records_count) orelse return invalid;
         const records = try a.alloc(FileFact, fact_count);
-        for (records) |*record| {
+        location.stage = "projection_records";
+        for (records, 0..) |*record, index| {
+            location.record = index;
+            location.record_offset = projection.diagnosticPosition();
+
             const bytes = (try projection.line(temp, stream_fact_limit)) orelse return invalid;
             try preflight(bytes, false);
             record.* = try std.json.parseFromSliceLeaky(FileFact, a, bytes, .{ .allocate = .alloc_always });
             _ = scratch.reset(reset_mode);
         }
+        location.* = .{ .stage = "projection_finish" };
         try projection.finish(temp);
+        location.stage = "fact_batch_replay";
         var batches: StreamBatches = .{ .input = raw, .backing = backing, .count = count,
             .base_count = std.math.cast(usize, header.base_batches) orelse return invalid, .raw_sha256 = header.raw_sha256,
             .allow_tiff_companion = parsed_header.contract or equal(header.generator_sha256, file_generator_sha256),
@@ -1598,7 +1659,7 @@ pub const Registry = struct {
             .content_language = header.content_language, .core_revision = header.core_revision,
             .namespace_registry_sha256 = header.namespace_registry_sha256, .raw_sha256 = header.raw_sha256,
             .generator_sha256 = header.generator_sha256, .source_profile = header.source_profile, .records = records },
-            site, ns, source_core_revision, &batches, parsed_header.contract, parsed_header.response_epochs, parsed_header.decimal_tiff_axes, parsed_header.default_tiff_page);
+            site, ns, source_core_revision, &batches, parsed_header.contract, parsed_header.response_epochs, parsed_header.decimal_tiff_axes, parsed_header.default_tiff_page, parsed_header.decimal_tiff_page);
     }
 
     fn initFileFacts(arena: *std.heap.ArenaAllocator, value: Value, raw: []const u8, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8) !Registry {
@@ -1621,11 +1682,19 @@ pub const Registry = struct {
             batches.batches.len > max_batches or doc.records.len > max_records or !digestMatches(raw, doc.raw_sha256)) return invalid;
         var input: ArrayBatches = .{ .items = batches.batches, .count = batches.batches.len };
         return validateFileFacts(arena, doc, site, ns, source_core_revision, &input, contract, responseEpochContract(value),
-            contract and (equal(try string(value, "replay_contract"), replay_contract_v4) or equal(try string(value, "replay_contract"), replay_contract_v6)),
-            contract and equal(try string(value, "replay_contract"), replay_contract_v6));
+            contract and (equal(try string(value, "replay_contract"), replay_contract_v4) or (equal(try string(value, "replay_contract"), replay_contract_v6) or equal(try string(value, "replay_contract"), replay_contract_v7))),
+            contract and (equal(try string(value, "replay_contract"), replay_contract_v6) or equal(try string(value, "replay_contract"), replay_contract_v7)),
+            contract and equal(try string(value, "replay_contract"), replay_contract_v7));
     }
 
-    fn validateFileFacts(arena: *std.heap.ArenaAllocator, doc: FilesDocument, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, batches: anytype, contract: bool, epochs: bool, decimal_tiff_axes: bool, default_tiff_page: bool) !Registry {
+    fn validateFileFacts(arena: *std.heap.ArenaAllocator, doc: FilesDocument, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, batches: anytype, contract: bool, epochs: bool, decimal_tiff_axes: bool, default_tiff_page: bool, decimal_tiff_page: bool) !Registry {
+        var location: FigureReplayFailure = .{};
+        return validateFileFactsLocated(arena, doc, site, ns, source_core_revision, batches, contract, epochs, decimal_tiff_axes, default_tiff_page, decimal_tiff_page, &location) catch |err| {
+            if (err != error.OutOfMemory) diagnostics.printLine("figure_source stage={s} record={?d} batch={?d} request={?d} file={f} error={s}\n", .{ location.stage, location.record, location.batch, location.request, std.json.fmt(location.file, .{}), @errorName(err) });
+            return err;
+        };
+    }
+    fn validateFileFactsLocated(arena: *std.heap.ArenaAllocator, doc: FilesDocument, site: []const u8, ns: *const namespaces.Registry, source_core_revision: ?[]const u8, batches: anytype, contract: bool, epochs: bool, decimal_tiff_axes: bool, default_tiff_page: bool, decimal_tiff_page: bool, location: *FigureReplayFailure) !Registry {
         const a = arena.allocator();
         const server = (try validateFileSource(a, doc, doc.records.len, batches.count, site, ns, source_core_revision, contract, epochs)) orelse {
             try batches.finish();
@@ -1637,6 +1706,8 @@ pub const Registry = struct {
         var declared_heights: std.StringHashMapUnmanaged(*const SvgHeightObservation) = .empty;
         var height_occurrences: std.StringHashMapUnmanaged(SvgHeightAuthority) = .empty;
         for (doc.records, 0..) |*fact, i| {
+            location.* = .{ .stage = "fact", .record = i, .file = fact.requested_file };
+
             if (i != 0 and std.mem.order(u8, doc.records[i - 1].requested_file, fact.requested_file) != .lt) return invalid;
             const name = try canonicalFile(a, ns, fact.requested_file);
             if (!equal(name, fact.requested_file) or fact.batch >= batches.count or
@@ -1682,6 +1753,8 @@ pub const Registry = struct {
         var missing_files: std.StringHashMapUnmanaged(void) = .empty;
         var observing = false;
         for (0..batches.count) |batch_index| {
+            location.* = .{ .stage = "batch", .batch = batch_index };
+
             var scratch = std.heap.ArenaAllocator.init(arena.child_allocator);
             defer scratch.deinit();
             const temp = scratch.allocator();
@@ -1747,8 +1820,11 @@ pub const Registry = struct {
             }
             var used_pages: std.StringHashMapUnmanaged(void) = .empty;
             var used_requests: std.StringHashMapUnmanaged(void) = .empty;
-            for (batch.requests) |requested| {
+            for (batch.requests, 0..) |requested, request_index| {
+                location.* = .{ .stage = "request", .batch = batch_index, .request = request_index };
+
                 const fact = if (jpeg_supplement) (canonical_facts.get(requested) orelse return invalid) else (facts.get(requested) orelse return invalid);
+                location.file = fact.requested_file;
                 if ((try used_requests.getOrPut(temp, requested)).found_existing) return invalid;
                 if (jpeg_supplement) {
                     if (!equal(requested, fact.canonical_file) or !canonical_facts.contains(requested) or
@@ -1826,7 +1902,7 @@ pub const Registry = struct {
                     if (equal(fact.mime, "image/tiff")) {
                         const tiff_info = if (tiff_companion) |*companion|
                             try companion.matchingInfo(temp, ns, requested, repository, image) else image;
-                        tiffPageAxes(temp, tiff_info, width, height, decimal_tiff_axes) catch |err| switch (err) {
+                        tiffPageAxesIn(temp, tiff_info, width, height, decimal_tiff_axes, decimal_tiff_page) catch |err| switch (err) {
                             error.OutOfMemory => return error.OutOfMemory,
                             else => {
                                 eligible = false;
@@ -1910,6 +1986,7 @@ pub const Registry = struct {
                     slot.value_ptr.* = record;
                 }
             }
+            location.* = .{ .stage = "batch_finish", .batch = batch_index };
             if (tiff_companion) |*companion| try companion.finish();
             if (used_pages.count() != by_title.count()) return invalid;
             if (batch.observed_svg_occurrences) |observations| {
@@ -1934,9 +2011,12 @@ pub const Registry = struct {
                 if (observed_files.count() != used_requests.count()) return invalid;
             }
         }
+        location.* = .{ .stage = "coverage" };
         try batches.finish();
         if (used_facts.count() != facts.count() or declared_heights.count() != height_occurrences.count()) return invalid;
-        for (doc.records) |fact| {
+        for (doc.records, 0..) |fact, index| {
+            location.* = .{ .stage = "fact_consistency", .record = index, .file = fact.requested_file };
+
             if (fact.observed_batch) |observed_batch| {
                 if (used_observations.get(fact.canonical_file) != observed_batch) return invalid;
             }
@@ -1944,6 +2024,7 @@ pub const Registry = struct {
                 if (!sameFileFact(canonical.*, fact)) return invalid;
             }
         }
+        location.* = .{ .stage = "resolved_records" };
         var static_poster_files: std.StringHashMapUnmanaged(*const FileFact) = .empty;
         for (doc.records) |*fact| {
             if (!(static_poster_proofs.get(fact.canonical_file) orelse false)) continue;
@@ -1976,6 +2057,7 @@ pub const Registry = struct {
                 else if (gif and equal(fact.mime, "image/gif")) .gif
                 else if (webp and equal(fact.mime, "image/webp")) .webp else .none;
         }
+        location.* = .{ .stage = "image_map_policy" };
         // Finish arena-backed policy parsing before transferring its state.
         const image_map_no_link_policy = equal(doc.core_revision, "f45897451256aa3799aecc5d7ee320ade22beaec") and
             try imageMapNoLinkPolicy(a, site, ns);
@@ -2250,7 +2332,7 @@ pub const Registry = struct {
     }
     fn resolveScoped(raw: ?*const anyopaque, a: A, file: []const u8, format_value: types.FigureFormat, width: ?u32, height: ?u32, default_page: bool) A.Error!?types.FigureSizingPolicy {
         const self: *const Registry = @ptrCast(@alignCast(raw orelse return null));
-        // Linker uses File.getUnscaledThumb for a raster frame. Keep this
+        // Linker uses File.getUnscaledThumb for a bare frame. Keep this
         // bare-frame grant separate from authored dimensions and all thumbnail
         // bounds. The parallel classification is derived only by full file
         // fact replay; legacy measured-point records cannot supply it.
@@ -2267,6 +2349,10 @@ pub const Registry = struct {
                 !equal(self.records[lo].canonical_file, canonical)) return null;
             return switch (self.height_bound_records[lo]) {
                 .png, .gif, .jpeg_unrotated => .intrinsic,
+                // File.getUnscaledThumb selects the original logical width.
+                // SVG stepping/capping changes raster backing, not these client axes.
+                .svg_redundant_height => if (sourceSvgRasterExplicitBox(self.records[lo],
+                    self.records[lo].original_width, self.records[lo].original_height) != null) .intrinsic else null,
                 else => null,
             };
         }
@@ -5911,7 +5997,7 @@ test "bare raster frame policy requires authenticated unscaled file authority" {
     var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
     const svg = try FileTestSource.make(arena.allocator(), &ns, false);
     var vector = try Registry.init(a, svg.projection, svg.raw, TestSource.site, &ns, accepted_core, generator_sha256); defer vector.deinit();
-    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&vector, a, TestSource.file, .framed, null, null));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .intrinsic), try Registry.resolve(&vector, a, TestSource.file, .framed, null, null));
     const empty = try FileTestSource.make(arena.allocator(), &ns, true);
     var absent = try Registry.init(a, empty.projection, empty.raw, TestSource.site, &ns, accepted_core, generator_sha256); defer absent.deinit();
     try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&absent, a, TestSource.file, .framed, null, null));
@@ -7022,5 +7108,203 @@ test "canonical file identity rejects cyclic invented and mismatched raw alias a
         doc.raw_sha256 = &hex;
         const projection = try std.json.Stringify.valueAlloc(a, doc, .{});
         try std.testing.expectError(invalid, Registry.init(a, projection, raw, TestSource.site, &ns, accepted_core, generator_sha256));
+    }
+}
+
+test "captured omega SVG axes retain bare frame caption actions media and complete codec" {
+    const Shape = struct {
+        fn spansText(a: A, out: *std.ArrayList(u8), spans: anytype) !void {
+            for (spans) |span| {
+                try std.testing.expect(span.image == null);
+                try out.appendSlice(a, span.text);
+                if (comptime @hasField(@TypeOf(span), "trail")) try out.appendSlice(a, span.trail);
+            }
+        }
+        fn check(a: A, blocks: anytype, file: []const u8) !void {
+            try std.testing.expectEqual(@as(usize, 1), blocks.len);
+            try std.testing.expect(blocks[0].kind == .paragraph and blocks[0].table == null and blocks[0].figure == null);
+            const parts = blocks[0].flow orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 2), parts.len);
+            try std.testing.expect(parts[0].kind == .figure and parts[1].kind == .@"inline");
+            const figure = parts[0].figure orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(types.FigureFormat.framed, figure.format);
+            try std.testing.expectEqual(types.FigureSizingPolicy.intrinsic, figure.content.image.sizing);
+            const span = figure.content.image.span;
+            const image = span.image orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(file, image.file);
+            try std.testing.expect(image.width_px == null and image.height_px == null and !image.border);
+            try std.testing.expect(span.kind == .link);
+            try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "File:{s}", .{file}), span.target);
+            try std.testing.expectEqual(types.FigurePlacement.float_right, figure.placement);
+            try std.testing.expectEqual(types.FigureClear.right, figure.clear);
+            try std.testing.expect(figure.frame_border.kind == .solid and figure.image_border.kind == .solid);
+            try std.testing.expectEqual(@as(f32, 1), figure.frame_border.width.?.value);
+            try std.testing.expectEqual(types.StyleLengthUnit.px, figure.frame_border.width.?.unit);
+            try std.testing.expectEqual(@as(f32, 3), figure.image_insets.top.value);
+            try std.testing.expectEqual(@as(f32, 6), figure.caption_padding.bottom.value);
+            try std.testing.expectEqual(@as(?types.CellTextAlign, .left), figure.caption_text_align);
+            var caption: std.ArrayList(u8) = .empty; defer caption.deinit(a);
+            if (figure.caption_blocks) |children| {
+                for (children) |child| {
+                    try std.testing.expect(child.kind == .paragraph and child.table == null and child.figure == null);
+                    try spansText(a, &caption, child.spans);
+                    if (child.flow) |flow| for (flow) |part| {
+                        try std.testing.expect(part.kind == .@"inline");
+                        try spansText(a, &caption, part.spans);
+                    };
+                }
+            } else try spansText(a, &caption, figure.caption);
+            try std.testing.expectEqualStrings("Ωμέγα", caption.items);
+            var following: std.ArrayList(u8) = .empty; defer following.deinit(a);
+            try spansText(a, &following, parts[1].spans);
+            try std.testing.expectEqualStrings(" After next", following.items);
+            var links: usize = 0;
+            for (parts[1].spans) |value| if (value.target.len != 0) {
+                links += 1;
+                try std.testing.expect(value.kind == .link);
+                try std.testing.expectEqualStrings("Next", value.target);
+                try std.testing.expectEqualStrings("next", value.text);
+            };
+            try std.testing.expectEqual(@as(usize, 1), links);
+        }
+    };
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var source_arena = std.heap.ArenaAllocator.init(a); var source_live = true; defer if (source_live) source_arena.deinit();
+    const captured = try std.json.parseFromSliceLeaky(Value, source_arena.allocator(),
+        @embedFile("testdata/el-current-image-sizing/file-info-405.json"), .{ .allocate = .alloc_always });
+    try std.testing.expectEqualStrings("db766c01bfb81b2d3f1156a4be71cea3ab26c028", try string(captured, "sha1"));
+    try std.testing.expectEqualStrings("2009-02-26T22:25:59Z", try string(captured, "timestamp"));
+    try std.testing.expectEqualStrings("image/svg+xml", try string(captured, "mime"));
+    try std.testing.expectEqualStrings("DRAWING", try string(captured, "mediatype"));
+    try std.testing.expectEqual(@as(u32, 150), try positive(captured, "width"));
+    try std.testing.expectEqual(@as(u32, 200), try positive(captured, "height"));
+    // A controlled complete Registry replay uses the exact captured dimensions
+    // and metadata; the real ordinary page remains a separate Writer obligation.
+    const input = try GifGeometryTestSource.make(source_arena.allocator(), &ns, .{
+        .mime = try string(captured, "mime"), .mediatype = try string(captured, "mediatype"),
+        .width = try positive(captured, "width"), .height = try positive(captured, "height"),
+        .metadata = try std.json.Stringify.valueAlloc(source_arena.allocator(), try field(captured, "metadata"), .{}),
+    });
+    var registry = try StreamTestSource.init(a, try StreamTestSource.convert(source_arena.allocator(), input), &ns, 13); defer registry.deinit();
+    source_arena.deinit(); source_live = false;
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    var text_profile = try encoder.table_style_profile.parseAlloc(temp, ""); defer text_profile.deinit();
+    const compiler = encoder.presentation_compile;
+    var renderer: compiler.Renderer = .{ .a = temp, .context = .{ .namespace_catalog = &ns, .table_styles = &text_profile, .figure_sizing = .{ .ctx = &registry, .resolve_fn = Registry.resolve } } };
+    try std.testing.expectEqual(@as(u32, 150), registry.records[0].original_width);
+    try std.testing.expectEqual(@as(u32, 200), registry.records[0].original_height);
+    const source = try std.fmt.allocPrint(temp, "[[{s}|frame|Ωμέγα]]\nAfter [[Next|next]]", .{TestSource.file});
+    const blocks = try renderer.renderBody(source);
+    const file = ns.ofTitle(TestSource.file).text;
+    try Shape.check(temp, blocks, file);
+    const Section = struct { level: u8 = 2, title: []const u8 = "English", blocks: []const compiler.Block };
+    const sections = [_]Section{.{ .blocks = blocks }};
+    const bytes = try encoder.presentation_codec.encodeBuildAlloc(temp, &[_]compiler.Span{}, &sections, types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+    const stored = try encoder.presentation_codec.decodeAlloc(temp, bytes, "frame", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(temp, stored));
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.sections.len);
+    try Shape.check(temp, stored.entry.sections[0].blocks, file);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
+    try std.testing.expectEqualStrings(file, stored.entry.media[0].file);
+    try std.testing.expect(stored.entry.media[0].kind == .image);
+    try std.testing.expectEqualStrings("Ωμέγα", stored.entry.media[0].caption);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    for ([_][]const u8{ "frame|150px|caption", "frame|x153px|caption", "frame|300x153px|caption", "frame|upright|caption" }) |options| {
+        var refused: compiler.Renderer = .{ .a = temp, .context = .{ .namespace_catalog = &ns, .table_styles = &text_profile, .figure_sizing = .{ .ctx = &registry, .resolve_fn = Registry.resolve } } };
+        try std.testing.expectError(error.UncompiledPresentation, refused.renderBody(try std.fmt.allocPrint(temp, "[[{s}|{s}]]", .{TestSource.file, options})));
+    }
+}
+
+test "bare SVG frame refuses unauthenticated records foreign files and authored dimensions" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    const fixture = try FileTestSource.make(arena.allocator(), &ns, false);
+    var registry = try Registry.init(a, fixture.projection, fixture.raw, TestSource.site, &ns, accepted_core, generator_sha256); defer registry.deinit();
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .intrinsic), try Registry.resolve(&registry, a, TestSource.file, .framed, null, null));
+    for ([_]struct { width: ?u32, height: ?u32 }{ .{ .width = 150, .height = null }, .{ .width = null, .height = 200 }, .{ .width = 150, .height = 200 } }) |axes|
+        try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .framed, axes.width, axes.height));
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, "Foreign.svg", .framed, null, null));
+    registry.file_authority = false;
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .framed, null, null));
+    registry.file_authority = true;
+    registry.height_bound_records = &.{};
+    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .framed, null, null));
+}
+
+test "retained bathysphere TIFF page text requires explicit v7 and exact singleton metadata" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const bytes = @embedFile("testdata/el-current-image-sizing/file-info-248.json");
+    const actual = try std.json.parseFromSliceLeaky(Value, a, bytes, .{ .allocate = .alloc_always });
+    try std.testing.expectEqualStrings("3085d03c59348873d4e5f5dd3716376b42f4eb42", try string(actual, "sha1"));
+    try tiffPageAxesIn(a, actual, 1854, 2607, true, true);
+    try std.testing.expectError(invalid, tiffPageAxes(a, actual, 1854, 2607, true));
+    try std.testing.expectError(invalid, tiffPageAxesIn(a, actual, 1854, 2607, false, true));
+    for ([_][]const u8{ "", "0", "01", "+1", " 1", "1 ", "1.0", "1e0", "2" }) |bad| {
+        var changed = try std.json.parseFromSliceLeaky(Value, a, bytes, .{ .allocate = .alloc_always });
+        const metadata = changed.object.getPtr("metadata").?;
+        const pages = try TiffTestSource.named(metadata, "page_data");
+        (try TiffTestSource.named(pages.array.items[0].object.getPtr("value").?, "page")).* = .{ .string = bad };
+        try std.testing.expectError(invalid, tiffPageAxesIn(a, changed, 1854, 2607, true, true));
+    }
+    for ([_][]const u8{ "page_count", "first_page", "last_page" }) |name| {
+        var changed = try std.json.parseFromSliceLeaky(Value, a, bytes, .{ .allocate = .alloc_always });
+        (try TiffTestSource.named(changed.object.getPtr("metadata").?, name)).* = .{ .string = "1" };
+        try std.testing.expectError(invalid, tiffPageAxesIn(a, changed, 1854, 2607, true, true));
+    }
+    try std.testing.expectError(invalid, tiffPageAxesIn(a, actual, 2607, 1854, true, true));
+}
+
+test "TIFF v7 page text replay preserves v6 unsupported facts and authenticates aggregate and stream" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    const initial = try DecimalTiffTestSource.make(temp, &ns, false, "2420");
+    var doc = try std.json.parseFromSliceLeaky(FilesDocument, temp, initial.projection, .{});
+    const raw = try std.json.parseFromSliceLeaky(RawFileBatches, temp, initial.raw, .{});
+    const batches = try temp.dupe(RawFileBatch, raw.batches);
+    var response = try std.json.parseFromSliceLeaky(Value, temp, batches[0].response, .{ .allocate = .alloc_always });
+    const image = &response.object.getPtr("query").?.object.getPtr("pages").?.array.items[0].object.getPtr("imageinfo").?.array.items[0];
+    const pages = try TiffTestSource.named(image.object.getPtr("metadata").?, "page_data");
+    (try TiffTestSource.named(pages.array.items[0].object.getPtr("value").?, "page")).* = .{ .string = "1" };
+    batches[0].response = try std.json.Stringify.valueAlloc(temp, response, .{});
+    var fact = doc.records[0];
+    for ([_][]const u8{ replay_contract_v3, replay_contract_v4, replay_contract_v6, replay_contract_v7 }) |contract| {
+        const accepted = equal(contract, replay_contract_v7);
+        fact.state = if (accepted) .eligible else .unsupported; doc.records = &.{fact};
+        for ([_]bool{ false, true }) |streamed| {
+            const input = try ResponseEpochTestSource.seal(temp, doc, batches, TestSource.site, streamed, contract);
+            var registry = if (streamed) try StreamTestSource.init(a, input, &ns, 17)
+                else try Registry.init(a, input.projection, input.raw, input.site, &ns, accepted_core, generator_sha256);
+            defer registry.deinit();
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, if (accepted) .requested_fit else null), try Registry.resolve(&registry, a, fact.canonical_file, .thumbnail, 250, null));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolveDefaultTiffPage(&registry, a, fact.canonical_file, .thumbnail, 250, null));
+            var wrong = fact; wrong.state = if (accepted) .unsupported else .eligible;
+            var forged_doc = doc; forged_doc.records = &.{wrong};
+            const forged = try ResponseEpochTestSource.seal(temp, forged_doc, batches, TestSource.site, streamed, contract);
+            if (streamed) try std.testing.expectError(invalid, StreamTestSource.init(a, forged, &ns, 17))
+            else try std.testing.expectError(invalid, Registry.init(a, forged.projection, forged.raw, forged.site, &ns, accepted_core, generator_sha256));
+        }
+    }
+}
+
+
+test "Figure stream diagnostic position identifies unread record without changing source errors" {
+    for ([_]usize{ 1, 4, 65536 }) |chunk| {
+        var source: StreamTestSource.Slice = .{ .bytes = "one\ntwo\n\n", .chunk = chunk };
+        var input = source.input();
+        try std.testing.expectEqual(@as(u64, 0), input.diagnosticPosition());
+        const first = (try input.line(std.testing.allocator, 16)).?;
+        defer std.testing.allocator.free(first);
+        try std.testing.expectEqualStrings("one", first);
+        try std.testing.expectEqual(@as(u64, 4), input.diagnosticPosition());
+        const second = (try input.line(std.testing.allocator, 16)).?;
+        defer std.testing.allocator.free(second);
+        try std.testing.expectEqualStrings("two", second);
+        const record_start = input.diagnosticPosition();
+        try std.testing.expectEqual(@as(u64, 8), record_start);
+        try std.testing.expectError(error.InvalidFigureSizingSource, input.line(std.testing.allocator, 16));
+        try std.testing.expectEqual(@as(u64, 9), input.diagnosticPosition());
     }
 }

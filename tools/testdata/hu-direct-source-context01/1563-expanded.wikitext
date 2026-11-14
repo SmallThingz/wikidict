@@ -1,0 +1,342 @@
+<div class="infobox toptextcells float-right" style="background: #f0f6fa; border: 1px solid #ccd2d9; font-size: .86em; line-height: normal; margin: 0 0 1em 2em; padding: .5em 1em; text-align: center; width: 25em;" id="Infobox_Kontinent">
+<div style="font-size:larger">'''Afrika'''</div>
+<div style="border-top: 1px solid #ccd2d9; padding: .8em 0 .9em;">
+<imagemap>
+Kép:Africa on the globe (white-red).svg|center|200px|Lage Afrikas auf einer Weltkarte
+
+
+poly 309 158 271 161 238 165 192 208 153 262 144 308 200 364 275 398 322 402 351 453 342 557 377 623 447 650 513 652 562 594 657 534 655 453 636 367 638 304 607 307 566 316 557 300 535 257 508 222 490 206 480 184 447 176 427 176 390 168 375 163 365 153 340 152 321 152 290 162 [[Afrika]]
+poly 502 22 545 35 553 64 565 82 569 94 533 88 547 109 556 133 555 137 532 130 513 130 488 129 470 134 454 140 446 142 443 153 459 168 464 171 491 173 491 173 489 193 496 206 518 231 548 280 566 299 577 315 627 298 644 280 653 250 656 235 688 260 727 304 733 339 755 356 765 356 773 326 781 318 781 372 782 408 789 425 788 332 772 270 733 198 711 158 680 117 651 91 603 58 575 44 542 27 515 17 502 15 [[Asien]]
+poly 319 784 319 751 564 744 554 762 521 780 490 791 448 793 418 793 371 792 338 792 318 782 [[Antarktika]]
+poly 427 167 452 177 452 162 446 144 448 133 461 132 476 125 501 123 522 126 544 129 550 129 550 111 541 92 530 79 562 82 543 51 543 28 514 22 482 18 472 8 454 5 446 9 446 21 427 12 416 4 400 3 389 6 373 33 354 43 340 46 332 48 315 54 302 58 321 38 313 28 302 32 291 35 284 55 282 76 282 91 280 106 283 112 276 116 262 120 258 135 258 151 264 160 277 160 282 161 294 163 312 155 318 149 333 149 348 149 360 151 370 160 380 167 402 171 420 175 [[Europa]]
+poly 373 2 339 16 324 21 304 28 283 29 257 43 230 58 202 72 182 81 167 96 148 114 119 136 96 154 70 175 57 200 40 250 38 264 35 286 20 295 14 288 17 264 40 219 71 173 87 139 111 114 138 88 154 75 174 66 192 55 216 46 239 34 251 29 267 24 288 16 303 10 330 6 349 1 359 1 [[Nordamerika]]
+poly 792 401 788 414 781 448 782 468 789 467 793 449 792 394 [[Ozeanien]]
+poly 8 305 34 327 43 352 53 389 72 409 87 427 92 465 91 507 92 536 96 560 97 585 101 616 112 637 123 657 150 693 160 703 166 707 175 714 184 721 184 726 174 728 144 706 109 676 81 639 60 600 43 569 24 529 18 495 9 469 1 355 [[Südamerika]]
+
+
+</imagemap>
+</div>
+</div>
+<imagemap>
+Kép:Africa, administrative divisions - hu - colored.svg|600px|right
+
+
+poly 912 138 908 173 925 321 1075 320 1076 323 1083 316 1133 316 1120 294 1094 261 1068 213 1080 178 1058 141 1040 147 1024 136 1002 139 974 153 [[Egyiptom]]
+poly 642 42 632 92 624 104 640 131 648 143 652 177 667 166 664 145 687 127 687 109 689 88 687 37 [[Tunézia]]
+poly 687 111 681 135 669 145 666 161 658 183 654 243 662 280 688 301 716 309 740 311 759 295 906 368 906 357 926 358 908 131 847 112 828 118 819 155 777 137 [[Líbia]]
+poly 469 66 473 134 429 137 429 156 339 190 339 223 537 380 585 370 695 291 677 275 659 271 649 240 651 173 647 138 619 104 630 86 638 44 558 37 [[Algéria]]
+poly 470 70 452 68 436 64 418 56 404 62 384 82 368 98 346 109 327 143 298 181 273 197 247 209 238 226 213 268 169 323 253 323 256 288 272 277 283 233 336 238 350 184 378 176 396 168 433 149 434 135 477 127 [[Marokkó]]
+poly 178 325 179 366 175 396 169 419 194 411 222 428 245 450 257 451 262 428 282 442 341 436 374 437 374 408 378 262 389 260 344 219 336 239 279 244 269 289 250 291 251 327 [[Mauritánia]]
+poly 174 416 151 448 161 467 203 467 220 470 223 477 199 482 165 482 165 492 217 489 259 496 250 462 249 441 209 413 [[Szenegál]]
+poly 160 466 203 466 217 473 219 479 212 482 179 482 158 482 [[Gambia]]
+poly 156 490 185 490 221 489 215 504 194 530 170 522 [[Bissau-Guinea]]
+poly 192 530 201 510 217 507 222 486 256 496 273 506 302 500 312 528 323 552 323 581 313 592 296 597 290 585 288 569 272 572 266 552 257 536 240 544 221 564 [[Guinea]]
+poly 209 575 243 541 258 549 270 563 271 571 262 593 245 612 [[Sierra Leone]]
+poly 245 614 272 579 276 570 293 580 291 596 307 594 311 608 320 621 323 638 323 657 298 654 [[Libéria]]
+poly 324 658 325 631 321 611 310 602 311 588 320 569 320 548 332 534 352 537 372 546 393 549 409 552 412 563 412 585 406 601 404 610 410 634 410 639 [[Elefántcsontpart]]
+poly 414 525 411 554 411 585 406 605 409 626 418 640 420 650 430 652 457 650 466 642 478 637 488 630 489 623 472 604 472 602 473 582 473 559 468 547 463 534 463 528 [[Ghána]]
+poly 463 524 467 540 471 564 474 590 480 616 483 631 500 639 500 622 495 608 496 584 496 552 478 524 [[Togo]]
+poly 491 519 481 542 493 553 494 576 496 609 499 624 514 630 515 615 517 570 530 553 534 535 534 516 526 502 522 501 510 511 502 520 [[Benin]]
+poly 517 630 519 565 527 549 537 533 537 512 548 484 582 479 599 489 613 488 636 497 662 495 682 487 701 485 715 485 727 491 727 511 724 525 700 553 688 587 679 599 678 608 673 612 659 600 646 608 638 617 631 630 625 639 612 650 584 659 578 660 558 651 552 638 551 633 544 630 [[Nigéria]]
+poly 618 695 615 675 622 661 629 659 634 667 639 680 642 690 652 700 668 698 675 698 675 713 673 718 650 719 638 716 636 714 625 709 623 709 621 704 621 693 [[Egyenlítői-Guinea]]
+poly 624 649 635 624 654 609 677 610 694 579 704 549 727 526 734 518 729 496 734 494 738 513 744 532 748 543 743 548 730 558 744 573 753 585 754 597 743 611 740 632 739 650 748 679 760 691 763 702 755 702 710 688 694 691 675 694 650 693 647 683 642 665 634 659 [[Kamerun]]
+poly 636 716 624 745 622 763 638 785 649 803 658 812 670 817 676 808 686 798 690 790 684 773 696 772 716 778 728 778 731 777 734 757 731 743 723 738 722 731 724 726 732 709 725 708 717 709 711 708 709 700 706 689 686 691 673 707 671 716 [[Gabon]]
+poly 672 816 676 803 681 804 681 791 687 778 694 778 704 776 732 764 732 746 727 738 727 733 740 717 716 707 708 707 708 696 769 703 779 679 803 671 809 675 794 704 794 737 786 753 774 763 765 779 764 803 740 827 719 820 713 820 700 822 685 838 [[Kongói Köztársaság]]
+poly 682 832 705 817 713 829 699 842 703 854 774 853 795 885 820 888 836 869 861 876 869 886 878 905 876 929 875 940 884 947 919 949 909 974 878 978 872 989 870 1015 874 1040 875 1044 888 1058 892 1067 888 1072 861 1071 845 1070 814 1065 800 1061 778 1057 757 1057 718 1057 688 1059 673 1053 688 1021 697 972 713 944 710 917 701 893 693 869 [[Angola]]
+poly 696 851 688 842 702 836 705 823 722 823 744 824 764 810 768 797 770 782 781 766 792 745 801 721 812 670 814 645 835 637 844 646 869 657 892 656 905 646 944 639 969 638 985 644 994 652 1018 656 1027 662 1035 673 1039 686 1041 694 1033 713 1029 727 1025 741 1018 756 1010 767 1003 776 1006 800 1010 814 1015 836 1018 850 1024 867 1031 877 1032 882 1020 892 997 909 993 927 992 942 992 956 995 965 997 970 1023 973 1024 973 1023 979 1013 992 1009 992 992 975 982 965 967 956 960 958 952 958 931 958 923 951 898 942 893 938 884 906 882 889 873 868 853 868 835 869 824 875 803 889 792 886 773 851 [[Kongói Demokratikus Köztársaság]]
+poly 682 1061 681 1095 707 1119 718 1152 725 1188 726 1227 748 1269 758 1282 772 1266 803 1281 830 1275 831 1237 842 1150 855 1150 864 1084 895 1077 900 1088 934 1075 928 1065 893 1065 866 1071 839 1073 823 1069 805 1068 805 1060 776 1061 748 1061 725 1060 714 1055 681 1055 [[Namíbia]]
+poly 755 1279 768 1325 784 1357 802 1388 855 1388 893 1380 931 1372 989 1340 974 1307 961 1314 946 1304 944 1288 953 1279 969 1274 987 1281 988 1287 969 1307 966 1315 980 1332 1012 1311 1018 1298 1028 1284 1035 1276 1044 1259 1050 1249 1043 1249 1040 1254 1024 1253 1018 1236 1022 1224 1032 1222 1033 1221 1035 1206 1032 1170 1016 1158 993 1160 980 1165 969 1177 955 1198 920 1221 900 1217 889 1216 885 1220 861 1237 852 1237 842 1231 842 1222 834 1203 832 1206 827 1235 830 1252 830 1274 813 1280 792 1279 776 1263 770 1264 765 1277 765 1284 [[Dél-afrikai Köztársaság]]
+poly 942 1293 954 1277 982 1277 994 1291 988 1302 976 1311 952 1308 [[Lesotho]]
+poly 1015 1220 1018 1257 1039 1252 1042 1223 [[Szváziföld]]
+poly 1051 1246 1044 1240 1041 1223 1040 1182 1038 1166 1059 1131 1066 1103 1070 1067 1062 1050 1017 1029 1028 1018 1080 1004 1093 1012 1096 1017 1103 1029 1102 1050 1106 1061 1116 1062 1123 1040 1130 1026 1126 1007 1112 990 1104 970 1116 959 1220 938 1220 972 1218 994 1218 1018 1202 1050 1178 1071 1154 1084 1123 1103 1115 1111 1116 1170 1108 1193 1082 1223 [[Mozambik]]
+poly 1037 757 1042 774 1043 783 1040 784 1040 788 1041 797 1031 811 1017 830 1017 839 1028 863 1034 879 1037 888 1045 896 1079 912 1086 912 1101 918 1107 931 1115 961 1137 963 1156 963 1180 960 1202 948 1210 944 1217 936 1217 929 1207 904 1213 886 1211 871 1210 858 1209 840 1204 836 1191 825 1183 819 1168 803 1166 797 1133 778 1119 767 1105 761 1095 758 1083 757 [[Tanzánia]]
+poly 1099 754 1105 712 1119 702 1103 672 1097 654 1120 638 1130 636 1136 651 1159 651 1178 663 1189 671 1203 668 1221 657 1243 658 1241 670 1225 683 1225 696 1226 715 1232 748 1234 754 1240 767 1244 782 1236 795 1213 816 1208 829 [[Kenya]]
+poly 1252 776 1236 754 1230 742 1234 701 1238 680 1251 658 1260 651 1280 641 1302 637 1331 616 1349 583 1345 578 1312 574 1283 556 1271 543 1262 526 1266 515 1280 510 1293 507 1316 507 1338 504 1355 501 1370 499 1395 495 1405 495 1412 516 1411 529 1405 558 1400 590 1390 632 1375 660 1361 681 1340 707 1319 725 1293 746 1282 760 [[Szomália]]
+poly 1267 490 1247 495 1238 510 1239 523 1264 523 1272 511 [[Dzsibuti]]
+poly 1181 386 1164 405 1147 408 1139 465 1171 463 1197 461 1216 468 1249 495 1263 487 1238 452 1210 437 1193 414 1186 390 [[Eritrea]]
+poly 918 317 930 356 907 361 907 430 883 448 872 476 871 505 877 514 894 531 897 542 902 557 907 568 915 573 926 573 937 543 942 540 952 549 957 556 968 556 977 554 986 556 990 561 998 562 1005 561 1011 553 1022 549 1035 547 1052 554 1077 539 1074 518 1067 505 1090 505 1093 523 1090 541 1094 553 1101 554 1107 526 1117 512 1124 499 1129 489 1138 474 1140 452 1140 444 1142 423 1145 412 1157 402 1167 392 1170 387 1171 379 1158 368 1150 353 1150 331 1144 316 [[Szudán]]
+poly 1019 759 1007 789 1046 781 1043 754 [[Ruanda]]
+poly 1041 663 1039 690 1060 699 1032 715 1017 759 1030 759 1086 752 1099 753 1099 722 1106 708 1107 672 1094 655 [[Uganda]]
+poly 1004 787 1013 829 1031 822 1045 800 1043 779 [[Burundi]]
+poly 913 948 910 978 878 982 872 1050 893 1070 928 1070 942 1075 987 1069 995 1047 1032 1034 1032 1015 1069 1003 1072 980 1089 950 1086 927 1083 917 1058 904 1040 895 1024 892 1005 901 999 909 997 931 999 951 1000 961 1013 964 1016 973 1014 991 997 990 976 964 958 959 943 961 [[Zambia]]
+poly 1076 915 1086 941 1081 965 1077 985 1073 1005 1086 1011 1098 1013 1106 1022 1101 1036 1100 1046 1109 1056 1114 1063 1120 1053 1129 1041 1127 1014 1113 995 1104 983 1107 966 1109 952 1110 934 1099 918 [[Malawi]]
+poly 932 1074 948 1103 961 1116 972 1131 986 1148 1017 1159 1042 1159 1047 1140 1063 1127 1069 1099 1073 1064 1065 1046 1041 1036 1033 1033 1026 1033 997 1043 990 1054 972 1066 966 1072 937 1076 [[Zimbabwe]]
+poly 855 1085 849 1150 834 1154 830 1201 846 1224 845 1239 882 1243 891 1214 911 1218 934 1213 948 1196 972 1180 979 1164 996 1154 989 1146 974 1138 971 1122 948 1100 936 1087 930 1077 921 1078 906 1082 [[Botswana]]
+poly 1084 586 1083 575 1098 576 1105 537 1115 520 1124 493 1140 465 1159 458 1175 458 1211 462 1227 479 1239 492 1241 496 1238 506 1238 525 1250 528 1258 529 1258 535 1266 546 1281 559 1300 567 1336 582 1350 584 1304 643 1268 642 1260 652 1252 657 1233 654 1226 653 1219 654 1201 664 1164 660 1143 648 1139 648 1128 636 1127 627 1123 622 1113 602 1092 591 [[Etiópia]]
+poly 932 543 927 562 917 571 930 588 948 600 958 618 973 634 977 645 979 651 1008 655 1015 650 1028 657 1046 666 1071 663 1091 659 1115 645 1127 627 1102 594 1082 581 1098 578 1101 572 1096 549 1088 532 1084 508 1070 508 1069 526 1067 538 1055 555 1047 556 1028 546 1021 546 1017 551 1008 556 [[Dél-Szudán]]
+poly 759 595 788 592 807 588 820 576 820 562 842 562 854 546 870 533 900 532 902 545 902 561 903 569 919 572 947 590 968 612 981 624 981 633 952 635 933 638 916 644 891 648 884 650 871 661 846 648 833 634 817 646 810 663 778 675 775 674 773 682 772 690 768 689 753 672 750 665 744 654 738 627 [[Közép-afrikai Köztársaság]]
+poly 743 304 767 296 904 366 903 439 890 440 882 464 875 481 872 499 886 512 887 522 869 534 866 546 851 560 811 571 811 583 777 595 762 596 741 591 742 574 724 557 733 548 757 551 748 524 736 497 723 483 721 469 719 457 756 414 761 363 [[Csád]]
+poly 472 452 473 464 484 477 491 491 507 504 523 507 533 513 535 486 557 476 588 483 601 490 624 488 643 489 660 489 677 481 688 481 705 481 727 474 717 461 752 423 758 358 757 326 745 302 729 306 726 309 700 293 678 301 603 344 584 370 542 373 542 439 523 442 [[Niger]]
+poly 274 442 265 433 254 451 251 466 264 488 263 499 295 499 313 515 319 536 363 539 377 510 393 483 402 483 415 476 426 463 459 448 485 450 538 439 556 420 546 372 534 372 530 359 512 348 496 333 397 259 365 261 373 438 [[Mali]]
+poly 366 511 361 538 371 546 379 551 392 550 398 545 417 549 417 524 457 527 479 523 498 523 520 512 506 487 479 483 473 457 468 449 439 457 425 468 408 472 394 477 [[Burkina Faso]]
+
+
+
+
+
+poly 1243 413 1262 491 1269 494 1322 487 1363 467 1397 486 1423 501 1441 520 1466 502 1480 484 1479 464 1453 434 1434 412 1403 362 1367 364 1351 391 1342 404 1327 404 1314 393 1291 395 1274 396 1255 396 1252 412 [[Jemen]]
+poly 1446 419 1403 361 1459 331 1454 297 1436 278 1451 235 1448 225 1436 214 1447 202 1455 218 1464 241 1503 261 1518 313 1505 373 [[Omán]]
+poly 1375 255 1398 283 1446 286 1446 260 1447 242 1446 223 1437 218 1423 229 1408 236 1379 251 [[Egyesült Arab Emírségek]]
+poly 1084 180 1078 206 1106 237 1145 289 1163 312 1177 342 1191 361 1216 390 1233 411 1248 420 1253 410 1252 391 1301 401 1340 393 1355 368 1451 334 1454 290 1439 281 1396 283 1375 257 1361 247 1345 231 1337 208 1323 188 1293 176 1267 171 1250 173 1228 167 1194 146 1150 128 1130 128 1109 140 1126 156 1126 164 1113 169 1106 172 1104 185 [[Szaúd-Arábia]]
+poly 1132 100 1145 129 1177 131 1190 142 1234 170 1258 178 1278 169 1281 151 1298 157 1303 145 1286 125 1280 115 1269 101 1243 87 1227 67 1229 59 1235 47 1218 27 1192 14 1178 15 1169 30 1163 45 1168 76 [[Irak]]
+poly 1202 1 1260 2 1292 19 1329 22 1355 13 1440 3 1457 16 1466 59 1476 77 1487 88 1496 96 1500 116 1499 146 1521 161 1521 227 1469 221 1451 204 1440 203 1418 214 1396 209 1371 193 1308 149 1298 140 1277 121 1277 107 1241 83 1238 80 1238 72 1244 53 1238 42 1212 18 [[Irán]]
+poly 1303 159 1284 153 1277 170 1291 178 1309 182 1309 163 [[Kuvait]]
+poly 1356 217 1356 239 1369 255 1377 255 1378 225 [[Katar]]
+poly 1347 215 1347 227 1347 235 1354 238 1356 219 [[Bahrein]]
+poly 1082 177 1063 142 1067 128 1070 107 1081 108 1083 108 1083 120 1084 136 1084 152 1084 172 [[Izrael]]
+poly 1082 106 1085 120 1097 124 1107 121 1165 75 1168 60 1162 49 1173 33 1173 26 1146 32 1127 40 1112 41 1091 38 1088 54 1079 62 1083 81 1096 84 1095 95 [[Szíria]]
+poly 1073 109 1085 110 1095 85 1094 81 1085 81 1074 96 [[Libanon]]
+poly 1084 119 1085 138 1083 177 1100 182 1110 170 1120 167 1128 160 1128 154 1112 136 1143 124 1133 102 1104 123 [[Jordánia]]
+poly 1020 78 1028 66 1044 66 1058 60 1061 68 1058 76 1054 81 1046 87 1043 88 1025 85 [[Ciprusi Köztársaság]]
+poly 923 1 930 22 930 35 938 47 949 52 966 54 992 65 1007 53 1037 59 1056 55 1080 58 1089 54 1089 38 1104 38 1123 38 1151 31 1173 28 1192 30 1213 25 1214 16 1196 0 [[Törökország]]
+poly 1463 25 1467 61 1481 90 1497 99 1500 106 1499 126 1521 135 1519 0 1502 11 1496 23 1485 27 [[Afganisztán]]
+poly 1348 7 1369 2 1438 1 1448 11 1458 13 1460 22 1473 27 1481 28 1493 20 1496 14 1505 1 1342 0 [[Türkmenisztán]]
+poly 1500 129 1495 144 1522 161 1523 132 [[Pakisztán]]
+poly 797 0 810 35 831 66 858 79 885 93 931 97 954 92 956 68 958 53 951 47 941 45 937 38 931 29 919 23 919 11 922 9 918 0 [[Görögország]]
+poly 743 2 738 16 710 22 695 30 693 44 711 57 735 60 752 66 768 51 772 39 779 23 782 11 782 0 [[Olaszország]]
+poly 726 59 721 75 742 85 752 63 [[Málta]]
+poly 629 1 629 24 676 24 673 0 [[Franciaország]]
+
+
+poly 366 0 360 39 393 41 396 20 401 15 405 0 [[Portugália]]
+poly 192 82 197 130 257 130 244 67 [[Portugália]]
+poly 408 0 388 42 400 47 406 52 417 58 451 56 480 49 502 36 515 27 522 6 527 18 543 17 567 13 571 0 [[Spanyolország]]
+poly 169 164 165 213 242 214 282 167 259 161 [[Spanyolország]]
+
+
+poly 10 380 18 459 73 459 102 401 67 356 [[Zöld-foki-szigetek]]
+poly 182 868 180 918 237 920 234 865 [[Egyesült Királyság]]
+poly 333 1022 336 1076 409 1075 389 1015 [[Egyesült Királyság]]
+poly 1476 1123 1476 1168 1519 1167 1519 1120 [[Mauritius]]
+poly 1423 1137 1423 1192 1479 1179 1456 1130 [[Franciaország]]
+poly 1489 926 1486 976 1522 972 1513 926 [[Mauritius]]
+poly 1289 979 1287 1003 1328 1003 1317 963 [[Franciaország]]
+poly 1258 930 1232 969 1271 1005 1319 955 [[Comore-szigetek]]
+poly 1522 794 1518 900 1434 899 1416 940 1372 951 1317 952 1284 921 1295 888 1352 879 1408 876 1464 855 1461 810 [[Seychelle-szigetek]]
+poly 1237 1061 1237 1081 1257 1075 1256 1058 [[Franciaország]]
+poly 1326 956 1325 975 1343 976 1344 956 [[Franciaország]]
+poly 1254 1234 1235 1202 1225 1173 1231 1149 1253 1121 1257 1107 1256 1080 1267 1047 1282 1034 1307 1025 1320 1014 1354 973 1367 966 1382 979 1396 1012 1392 1054 1378 1102 1369 1122 1359 1142 1339 1169 1329 1189 1322 1205 1317 1221 1309 1236 1283 1248 1231 1227 [[Madagaszkár]]
+poly 589 685 564 738 587 752 618 696 [[São Tomé és Príncipe]]
+
+
+
+
+
+
+</imagemap>
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:magyar szótár|AFRIKA]]
+==[[:w:magyar nyelv|Magyar]]==
+===Kiejtés===
+
+* [[w:Nemzetközi fonetikai ábécé|IPA]]:&#32;<templatestyles src="Modul:scripts/style.css"></templatestyles><span class="IPA">[ ˈɒfrikɒ]</span>
+[[Kategória:magyar szótár]]
+===Földrajzi név===
+<strong class="Latn headword" lang="hu">Afrika</strong>[[Category:magyar lemmák|AFRIKA]][[Category:magyar földrajzi nevek|AFRIKA]]
+[[Kategória:magyar földrajzi nevek]]
+# Az Európától délre található [[földrész]]. A Föld harmadik legnagyobb területű kontinense, az összes szárazföld 1/5 része, területe 30 millió km<small>2</small>, lakossága kb. 1 milliárd.
+====Származékok====
+
+* [[afrikai]]
+====Fordítások====
+
+<div class="NavFrame mw-collapsible translations-outer">
+<templatestyles src="NavFrame/style.css" /><templatestyles src="trans-top/style.css" />
+<div class="NavHead">földrész</div>
+<div class="NavFrame mw-collapsible-content">
+{| class="translations"
+|-
+| |
+
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Afrikaans nyelv|afrikaans]]</span>[[Kategória:magyar-afrikaans szótár]][[Kategória:magyar-afrikaans szótár]]: <span class="Latn" lang="af">[[Afrika#Afrikaans|Afrika]]</span><span class="tpos">&nbsp;[[:af:Afrika|(af)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Albán nyelv|albán]]</span>[[Kategória:magyar-albán szótár]][[kategória:magyar-albán szótár]] : <span class="Latn" lang="sq">[[Afrika#Albán|Afrika]]</span><span class="tpos">&nbsp;[[:sq:Afrika|(sq)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Amhara nyelv|amhara]]</span>[[Kategória:magyar-amhara szótár]][[Kategória:magyar-amhara szótár]] : <span class="Ethi" lang="am">[[አፍሪቃ#Amhara|አፍሪቃ]]</span><span class="tpos">&nbsp;[[:am:አፍሪቃ|(am)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="am-Latn" class="tr Latn">ʾäfriḳa</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Angol nyelv|angol]]</span>[[Kategória:magyar-angol szótár]][[Kategória:magyar-angol szótár]]: <span class="Latn" lang="en">[[Africa#Angol|Africa]]</span><span class="tpos">&nbsp;[[:en:Africa|(en)]]</span>
+*:<span style="font-variant: small-caps; font-size:larger;">[[:w:Óangol nyelv|óangol]]</span>[[Kategória:magyar-óangol szótár]]: <span class="Latinx" lang="ang">[[Africa#Óangol|Africa]]</span><span class="tpos">&nbsp;[[:ang:Africa|(ang)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Arab nyelv|arab]]</span>[[Kategória:magyar-arab szótár]]: <span class="fa-Arab" lang="ar">[[إفريقيا#Arab|إِفْرِيقِيَا]]</span>&lrm;<span class="tpos">&nbsp;[[:ar:إفريقيا|(ar)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">ʔifrīqiyā</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Aragóniai nyelv|aragóniai]]</span>[[Kategória:magyar-aragóniai szótár]]: <span class="Latn" lang="an">[[Africa#Aragóniai|Africa]]</span><span class="tpos">&nbsp;[[:an:Africa|(an)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Asztúriai nyelv|asztúriai]]</span>[[Kategória:magyar-asztúriai szótár]]: <span class="Latn" lang="ast">[[África#Asztúriai|África]]</span><span class="tpos">&nbsp;[[:ast:África|(ast)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Azeri nyelv|azeri]]</span>[[Kategória:magyar-azeri szótár]]: <span class="Latn" lang="az">[[Afrika#Azeri|Afrika]]</span><span class="tpos">&nbsp;[[:az:Afrika|(az)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bambara nyelv|bambara]]</span>[[Kategória:magyar-bambara szótár]][[kategória:magyar-bambara szótár]]: [[Afrika]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Baszk nyelv|baszk]]</span>[[Kategória:magyar-baszk szótár]][[kategória:magyar-baszk szótár]]: <span class="Latn" lang="eu">[[Afrika#Baszk|Afrika]]</span><span class="tpos">&nbsp;[[:eu:Afrika|(eu)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Belarusz nyelv|belarusz]]</span>[[Kategória:magyar-belarusz szótár]][[kategória:magyar-belarusz szótár]]: <span class="Cyrl" lang="be">[[Афрыка#Belarusz|Афрыка]]</span><span class="tpos">&nbsp;[[:be:Афрыка|(be)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="be-Latn" class="tr Latn">Áfryka</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bengáli nyelv|bengáli]]</span>[[Kategória:magyar-bengáli szótár]][[kategória:magyar-bengáli szótár]]: <span class="Beng" lang="bn">[[আফ্রিকা#Bengáli|আফ্রিকা]]</span><span class="tpos">&nbsp;[[:bn:আফ্রিকা|(bn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bn-Latn" class="tr Latn">aphrika</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Breton nyelv|breton]]</span>[[Kategória:magyar-breton szótár]][[kategória:magyar-breton szótár]]: <span class="Latn" lang="br">[[Afrika#Breton|Afrika]]</span><span class="tpos">&nbsp;[[:br:Afrika|(br)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Bolgár nyelv|bolgár]]</span>[[Kategória:magyar-bolgár szótár]][[kategória:magyar-bolgár szótár]]: <span class="Cyrl" lang="bg">[[Африка#Bolgár|Африка]]</span><span class="tpos">&nbsp;[[:bg:Африка|(bg)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bg-Latn" class="tr Latn">Áfrika</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szerbhorvát nyelv|szerbhorvát]]</span>[[Kategória:magyar-szerbhorvát szótár]][[Kategória:magyar-szerbhorvát szótár]]: <span class="Latn" lang="sh">[[Afrika#Szerbhorvát|Afrika]]</span><span class="tpos">&nbsp;[[:sh:Afrika|(sh)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Burmai nyelv|burmai]]</span>[[Kategória:magyar-burmai szótár]][[Kategória:magyar-burmai szótár]]: <span class="Mymr" lang="my">[[အာဖရိက#Burmai|အာဖရိက]]</span><span class="tpos">&nbsp;[[:my:အာဖရိက|(my)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="my-Latn" class="tr Latn">ahpa.ri.ka.</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Cseroki nyelv|cseroki]]</span>[[Kategória:magyar-cseroki szótár]]: <span class="Cher" lang="chr">[[ᎬᎿᎨᏍᏛ#Cseroki|ᎬᎿᎨᏍᏛ]]</span><span class="tpos">&nbsp;[[:chr:ᎬᎿᎨᏍᏛ|(chr)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="chr-Latn" class="tr Latn">gvhnagesdv</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Cigány nyelv|cigány]]</span>[[Kategória:magyar-cigány szótár]]: <span class="Latn" lang="rom">[[Afrika#Cigány|Afrika]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Cseh nyelv|cseh]]</span>[[Kategória:magyar-cseh szótár]][[kategória:magyar-cseh szótár]]: <span class="Latn" lang="cs">[[Africa#Cseh|Africa]]</span><span class="tpos">&nbsp;[[:cs:Africa|(cs)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Dán nyelv|dán]]</span>[[Kategória:magyar-dán szótár]][[kategória:magyar-dán szótár]]: <span class="Latn" lang="da">[[Afrika#Dán|Afrika]]</span><span class="tpos">&nbsp;[[:da:Afrika|(da)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Északi számi nyelv|északi számi]]</span>[[Kategória:magyar-északi számi szótár]][[Kategória:magyar-északi számi szótár]]: <span class="Latn" lang="se">[[Afrihkká#Északi számi|Afrihkká]]</span><span class="tpos">&nbsp;[[:se:Afrihkká|(se)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Inuktitut nyelv|inuktitut]]</span>[[Kategória:magyar-inuktitut szótár]]: <span class="Cans" lang="iu">[[ᐊᑉᕆᖄ#Inuktitut|ᐊᑉᕆᖄ]]</span><span class="tpos">&nbsp;[[:iu:ᐊᑉᕆᖄ|(iu)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="iu-Latn" class="tr Latn">apriqaa</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Eszperantó nyelv|eszperantó]]</span>[[Kategória:magyar-eszperantó szótár]][[kategória:magyar-eszperantó szótár]]: <span class="Latn" lang="eo">[[Afriko#Eszperantó|Afriko]]</span><span class="tpos">&nbsp;[[:eo:Afriko|(eo)]]</span> 
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Észt nyelv|észt]]</span>[[Kategória:magyar-észt szótár]][[kategória:magyar-észt szótár]]: <span class="Latn" lang="et">[[Aafrika#Észt|Aafrika]]</span><span class="tpos">&nbsp;[[:et:Aafrika|(et)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Feröeri nyelv|feröeri]]</span>[[Kategória:magyar-feröeri szótár]][[kategória:magyar-feröeri szótár]]: <span class="Latn" lang="fo">[[Afrika#Feröeri|Afrika]]</span><span class="tpos">&nbsp;[[:fo:Afrika|(fo)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr> or <abbr title="semlegesnem">sn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Finn nyelv|finn]]</span>[[Kategória:magyar-finn szótár]][[kategória:magyar-finn szótár]]: <span class="Latn" lang="fi">[[Afrikka#Finn|Afrikka]]</span><span class="tpos">&nbsp;[[:fi:Afrikka|(fi)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Francia nyelv|francia]]</span>[[Kategória:magyar-francia szótár]][[kategória:magyar-francia szótár]]: l'<span class="Latn" lang="fr">[[Afrique#Francia|Afrique]]</span><span class="tpos">&nbsp;[[:fr:Afrique|(fr)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Nyugati fríz nyelv|nyugati fríz]]</span>[[Kategória:magyar-nyugati fríz szótár]]: <span class="Latn" lang="fy">[[Afrika#Nyugati fríz|Afrika]]</span><span class="tpos">&nbsp;[[:fy:Afrika|(fy)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Galiciai nyelv|galiciai]]</span>[[Kategória:magyar-galiciai szótár]][[kategória:magyar-galiciai szótár]]: <span class="Latn" lang="gl">[[África#Galiciai|África]]</span><span class="tpos">&nbsp;[[:gl:África|(gl)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Görög nyelv|görög]]</span>[[Kategória:magyar-görög szótár]][[kategória:magyar-görög szótár]]: <span class="Grek" lang="el">[[Αφρική#Görög|Αφρική]]</span><span class="tpos">&nbsp;[[:el:Αφρική|(el)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="el-Latn" class="tr Latn">Afrikí</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Grönlandi nyelv|grönlandi]]</span>[[Kategória:magyar-grönlandi szótár]][[kategória:magyar-grönlandi szótár]]: <span class="Latn" lang="kl">[[Afrika#Grönlandi|Afrika]]</span><span class="tpos">&nbsp;[[:kl:Afrika|(kl)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Grúz nyelv|grúz]]</span>[[Kategória:magyar-grúz szótár]][[kategória:magyar-grúz szótár]]: <span class="Geor" lang="ka">[[აფრიკა#Grúz|აფრიკა]]</span><span class="tpos">&nbsp;[[:ka:აფრიკა|(ka)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ka-Latn" class="tr Latn">apriḳa</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Gudzsaráti nyelv|gudzsaráti]]</span>[[Kategória:magyar-gudzsaráti szótár]][[kategória:magyar-gudzsaráti szótár]]: <span class="Gujr" lang="gu">[[આફ્રિકા#Gudzsaráti|આફ્રિકા]]</span><span class="tpos">&nbsp;[[:gu:આફ્રિકા|(gu)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="gu-Latn" class="tr Latn">āphrikā</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Haiti kreol nyelv|haiti kreol]]</span>[[Kategória:magyar-haiti kreol szótár]][[Kategória:magyar-haiti kreol szótár]]: <span class="Latn" lang="ht">[[Afrik#Haiti kreol|Afrik]]</span><span class="tpos">&nbsp;[[:ht:Afrik|(ht)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Hawaii nyelv|hawaii]]</span>[[Kategória:magyar-hawaii szótár]][[kategória:magyar-hawaii szótár]]: <span class="Latn" lang="haw">[[ʻApelika#Hawaii|ʻApelika]]</span><span class="tpos">&nbsp;[[:haw:ʻApelika|(haw)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Héber nyelv|héber]]</span>[[Kategória:magyar-héber szótár]][[kategória:magyar-héber szótár]]: <span class="Hebr" lang="he">[[אפריקה#Héber|אפריקה]]</span>&lrm;<span class="tpos">&nbsp;[[:he:אפריקה|(he)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span> 
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Hindi nyelv|hindi]]</span>[[Kategória:magyar-hindi szótár]][[kategória:magyar-hindi szótár]]: <span class="Deva" lang="hi">[[अफ़्रिका#Hindi|अफ़्रिका]]</span><span class="tpos">&nbsp;[[:hi:अफ़्रिका|(hi)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">afrikā</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Deva" lang="hi">[[कालद्वीप#Hindi|कालद्वीप]]</span><span class="tpos">&nbsp;[[:hi:कालद्वीप|(hi)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">kāladvīpa</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Holland nyelv|holland]]</span>[[Kategória:magyar-holland szótár]][[kategória:magyar-holland szótár]]: <span class="Latn" lang="nl">[[Afrika#Holland|Afrika]]</span><span class="tpos">&nbsp;[[:nl:Afrika|(nl)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szerbhorvát nyelv|szerbhorvát]]</span>[[Kategória:magyar-szerbhorvát szótár]][[Kategória:magyar-szerbhorvát szótár]]: <span class="Latn" lang="sh">[[Africa#Szerbhorvát|Africa]]</span><span class="tpos">&nbsp;[[:sh:Africa|(sh)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ido nyelv|ido]]</span>[[Kategória:magyar-ido szótár]]: <span class="Latn" lang="io">[[Afrika#Ido|Afrika]]</span><span class="tpos">&nbsp;[[:io:Afrika|(io)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Indonéz nyelv|indonéz]]</span>[[Kategória:magyar-indonéz szótár]][[kategória:magyar-indonéz szótár]]: <span class="Latn" lang="id">[[Afrika#Indonéz|Afrika]]</span><span class="tpos">&nbsp;[[:id:Afrika|(id)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Interlingva nyelv|interlingva]]</span>[[Kategória:magyar-interlingva szótár]]: <span class="Latn" lang="ia">[[Africa#Interlingva|Africa]]</span><span class="tpos">&nbsp;[[:ia:Africa|(ia)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ír nyelv|ír]]</span>[[Kategória:magyar-ír szótár]]: <span class="Latn" lang="ga">[[Afraic#Ír|an Afraic]]</span><span class="tpos">&nbsp;[[:ga:Afraic|(ga)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Izlandi nyelv|izlandi]]</span>[[Kategória:magyar-izlandi szótár]][[kategória:magyar-izlandi szótár]]: <span class="Latn" lang="is">[[Afríka#Izlandi|Afríka]]</span><span class="tpos">&nbsp;[[:is:Afríka|(is)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Japán nyelv|japán]]</span>[[Kategória:magyar-japán szótár]][[kategória:magyar-japán szótár]]: <span class="Jpan" lang="ja">[[アフリカ#Japán|アフリカ]]</span><span class="tpos">&nbsp;[[:ja:アフリカ|(ja)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">Afurika</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Jávai nyelv|jávai]]</span>[[Kategória:magyar-jávai szótár]]: <span class="Latn" lang="jv">[[Afrika#Jávai|Afrika]]</span><span class="tpos">&nbsp;[[:jv:Afrika|(jv)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Jiddis nyelv|jiddis]]</span>[[Kategória:magyar-jiddis szótár]][[kategória:magyar-jiddis szótár]]: <span class="Hebr" lang="yi">[[אַפֿריקע#Jiddis|אַפֿריקע]]</span>&lrm;<span class="tpos">&nbsp;[[:yi:אַפֿריקע|(yi)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="yi-Latn" class="tr Latn">afrike</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]] 
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kannada nyelv|kannada]]</span>[[Kategória:magyar-kannada szótár]][[Kategória:magyar-kannada szótár]]: <span class="Knda" lang="kn">[[ಆಫ್ರಿಕಾ#Kannada|ಆಫ್ರಿಕಾ]]</span><span class="tpos">&nbsp;[[:kn:ಆಫ್ರಿಕಾ|(kn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kn-Latn" class="tr Latn">āphrikā</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kasub nyelv|kasub]]</span>[[Kategória:magyar-kasub szótár]]: <span class="Latn" lang="csb">[[Afrika#Kasub|Afrika]]</span><span class="tpos">&nbsp;[[:csb:Afrika|(csb)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Katalán nyelv|katalán]]</span>[[Kategória:magyar-katalán szótár]][[Kategória:magyar-katalán szótár]]: <span class="Latn" lang="ca">[[Àfrica#Katalán|Àfrica]]</span><span class="tpos">&nbsp;[[:ca:Àfrica|(ca)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Khmer nyelv|khmer]]</span>[[Kategória:magyar-khmer szótár]][[kategória:magyar-khmer szótár]]: <span class="Khmr" lang="km">[[អាហ្វ្រិក#Khmer|អាហ្វ្រិក]]</span><span class="tpos">&nbsp;[[:km:អាហ្វ្រិក|(km)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="km-Latn" class="tr Latn">'āfrika</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kínai nyelv|kínai]]</span>[[Kategória:magyar-kínai szótár]][[Kategória:magyar-kínai szótár]]: <span class="Hani" lang="zh">[[非洲#Kínai|非洲]]</span><span class="tpos">&nbsp;[[:zh:非洲|(zh)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="zh-Latn" class="tr Latn">fei1 zau1</span><span class="mention-gloss-paren annotation-paren">)</span> ([[非洲]], fēi zhōu)
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kongo nyelv|kongo]]</span>[[Kategória:magyar-kongo szótár]][[Kategória:magyar-kongo szótár]]: <span class="Latn" lang="kg">[[Afelika#Kongo|Afelika]]</span><span class="tpos">&nbsp;[[:kg:Afelika|(kg)]]</span>, <span class="Latn" lang="kg">[[Afrika#Kongo|Afrika]]</span><span class="tpos">&nbsp;[[:kg:Afrika|(kg)]]</span>, <span class="Latn" lang="kg">[[Katiopa#Kongo|Katiopa]]</span><span class="tpos">&nbsp;[[:kg:Katiopa|(kg)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Koreai nyelv|koreai]]</span>[[Kategória:magyar-koreai szótár]][[kategória:magyar-koreai szótár]]: <span class="Kore" lang="ko">[[아프리카#Koreai|아프리카]]</span><span class="tpos">&nbsp;[[:ko:아프리카|(ko)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">apeurika</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Korni nyelv|korni]]</span>[[Kategória:magyar-korni szótár]][[Kategória:magyar-korni szótár]]: <span class="Latn" lang="kw">[[Afrika#Korni|Afrika]]</span><span class="tpos">&nbsp;[[:kw:Afrika|(kw)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Kurd nyelv|kurd]]</span>[[Kategória:magyar-kurd szótár]][[kategória:magyar-kurd szótár]]: <span class="Latn" lang="ku">[[Efrîqa#Kurd|Efrîqa]]</span><span class="tpos">&nbsp;[[:ku:Efrîqa|(ku)]]</span>
+| class="translations-middle" |
+| |
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lao nyelv|lao]]</span>[[Kategória:magyar-lao szótár]][[Kategória:magyar-lao szótár]]: <span class="Laoo" lang="lo">[[ອາຟຣິກກາ#Lao|ອາຟຣິກກາ]]</span><span class="tpos">&nbsp;[[:lo:ອາຟຣິກກາ|(lo)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="lo-Latn" class="tr Latn">āflikkā</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Latin nyelv|latin]]</span>[[Kategória:magyar-latin szótár]][[Kategória:magyar-latin szótár]]: <span class="Latn" lang="la">[[Africa#Latin|Africa]]</span><span class="tpos">&nbsp;[[:la:Africa|(la)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>, <span class="Latn" lang="la">[[Libya#Latin|Libya]]</span><span class="tpos">&nbsp;[[:la:Libya|(la)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lengyel nyelv|lengyel]]</span>[[Kategória:magyar-lengyel szótár]][[kategória:magyar-lengyel szótár]]: <span class="Latn" lang="pl">[[Afryka#Lengyel|Afryka]]</span><span class="tpos">&nbsp;[[:pl:Afryka|(pl)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Lett nyelv|lett]]</span>[[Kategória:magyar-lett szótár]][[kategória:magyar-lett szótár]]: <span class="Latn" lang="lv">[[Āfrika#Lett|Āfrika]]</span><span class="tpos">&nbsp;[[:lv:Āfrika|(lv)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Limburgi nyelv|limburgi]]</span>[[Kategória:magyar-limburgi szótár]][[kategória:magyar-limburgi szótár]]: <span class="Latn" lang="li">[[Afrika#Limburgi|Afrika]]</span><span class="tpos">&nbsp;[[:li:Afrika|(li)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Litván nyelv|litván]]</span>[[Kategória:magyar-litván szótár]][[kategória:magyar-litván szótár]]: <span class="Latn" lang="lt">[[Afrika#Litván|Afrika]]</span><span class="tpos">&nbsp;[[:lt:Afrika|(lt)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Luxemburgi nyelv|luxemburgi]]</span>[[Kategória:magyar-luxemburgi szótár]][[Kategória:magyar-luxemburgi szótár]]: <span class="Latn" lang="lb">[[Afrika#Luxemburgi|Afrika]]</span><span class="tpos">&nbsp;[[:lb:Afrika|(lb)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Macedón nyelv|macedón]]</span>[[Kategória:magyar-macedón szótár]][[Kategória:magyar-macedón szótár]]: <span class="Cyrl" lang="mk">[[Африка#Macedón|Африка]]</span><span class="tpos">&nbsp;[[:mk:Африка|(mk)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">Áfrika</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Malgas nyelv|malgas]]</span>[[Kategória:magyar-malgas szótár]]: <span class="Latn" lang="mg">[[Afrika#Malgas|Afrika]]</span><span class="tpos">&nbsp;[[:mg:Afrika|(mg)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Maláj nyelv|maláj]]</span>[[Kategória:magyar-maláj szótár]][[kategória:magyar-maláj szótár]]: <span class="Latn" lang="ms">[[Afrika#Maláj|Afrika]]</span><span class="tpos">&nbsp;[[:ms:Afrika|(ms)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Máltai nyelv|máltai]]</span>[[Kategória:magyar-máltai szótár]][[kategória:magyar-máltai szótár]]: <span class="Latn" lang="mt">[[Afrika#Máltai|Afrika]]</span><span class="tpos">&nbsp;[[:mt:Afrika|(mt)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Manx nyelv|manx]]</span>[[Kategória:magyar-manx szótár]][[kategória:magyar-manx szótár]]: <span class="Latn" lang="gv">[[Affrick#Manx|Yn Affrick]]</span><span class="tpos">&nbsp;[[:gv:Affrick|(gv)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Mongol nyelv|mongol]]</span>[[Kategória:magyar-mongol szótár]][[kategória:magyar-mongol szótár]]: <span class="Cyrl" lang="mn">[[Африк#Mongol|Африк]]</span><span class="tpos">&nbsp;[[:mn:Африк|(mn)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mn-Latn" class="tr Latn">Afrik</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Navahó nyelv|navahó]]</span>[[Kategória:magyar-navahó szótár]][[Kategória:magyar-navahó szótár]]: <span class="nv-Latn" lang="nv">[[Naakaii Łizhiní Bikéyah#Navahó|Naakaii Łizhiní Bikéyah]]</span><span class="tpos">&nbsp;[[:nv:Naakaii Łizhiní Bikéyah|(nv)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Német nyelv|német]]</span>[[Kategória:magyar-német szótár]][[Kategória:magyar-német szótár]]: <span class="Latn" lang="de">[[Afrika#Német|Afrika]]</span><span class="tpos">&nbsp;[[:de:Afrika|(de)]]</span>&nbsp;<span class="gender"><abbr title="semlegesnem">sn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Novial nyelv|novial]]</span>[[Kategória:magyar-novial szótár]][[kategória:magyar-novial szótár]]: <span class="Latn" lang="nov">[[Afrika#Novial|Afrika]]</span><span class="tpos">&nbsp;[[:nov:Afrika|(nov)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Provanszál nyelv|provanszál]]</span>[[Kategória:magyar-provanszál szótár]][[kategória:magyar-okszitán szótár]]: <span class="Latn" lang="oc">[[Africa#Provanszál|Africa]]</span><span class="tpos">&nbsp;[[:oc:Africa|(oc)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Olasz nyelv|olasz]]</span>[[Kategória:magyar-olasz szótár]][[Kategória:magyar-olasz szótár]]: <span class="Latn" lang="it">[[Africa#Olasz|Africa]]</span><span class="tpos">&nbsp;[[:it:Africa|(it)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Orija nyelv|orija]]</span>[[Kategória:magyar-orija szótár]][[kategória:magyar-orijá szótár]]: <span class="Orya" lang="or">[[ଆଫ୍ରିକା#Orija|ଆଫ୍ରିକା]]</span><span class="tpos">&nbsp;[[:or:ଆଫ୍ରିକା|(or)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="or-Latn" class="tr Latn">āphrikā</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Orosz nyelv|orosz]]</span>[[Kategória:magyar-orosz szótár]][[Kategória:magyar-orosz szótár]]: <span class="Cyrl" lang="ru">[[Африка#Orosz|Африка]]</span><span class="tpos">&nbsp;[[:ru:Африка|(ru)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ru-Latn" class="tr Latn">Afrika</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Örmény nyelv|örmény]]</span>[[Kategória:magyar-örmény szótár]][[kategória:magyar-örmény szótár]]: <span class="Armn" lang="hy">[[Աֆրիկա#Örmény|Աֆրիկա]]</span><span class="tpos">&nbsp;[[:hy:Աֆրիկա|(hy)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy-Latn" class="tr Latn">Afrika</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Perzsa nyelv|perzsa]]</span>[[Kategória:magyar-perzsa szótár]][[Kategória:magyar-perzsa szótár]]: <span class="fa-Arab" lang="fa">[[افریقا#Perzsa|افریقا]]</span>&lrm;<span class="tpos">&nbsp;[[:fa:افریقا|(fa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="fa-Latn" class="tr Latn">Afriqâ</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Portugál nyelv|portugál]]</span>[[Kategória:magyar-portugál szótár]][[kategória:magyar-portugál szótár]]: <span class="Latn" lang="pt">[[África#Portugál|África]]</span><span class="tpos">&nbsp;[[:pt:África|(pt)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Román nyelv|román]]</span>[[Kategória:magyar-román szótár]][[kategória:magyar-román szótár]]: <span class="Latn" lang="ro">[[Africa#Román|Africa]]</span><span class="tpos">&nbsp;[[:ro:Africa|(ro)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Skót gael nyelv|skót gael]]</span>[[Kategória:magyar-skót gael szótár]]: <span class="Latn" lang="gd">[[Afraga#Skót gael|Afraga]]</span><span class="tpos">&nbsp;[[:gd:Afraga|(gd)]]</span>&nbsp;<span class="gender"><abbr title="hímnem">hn</abbr></span> 
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Spanyol nyelv|spanyol]]</span>[[Kategória:magyar-spanyol szótár]][[Kategória:magyar-spanyol szótár]]: <span class="Latn" lang="es">[[África#Spanyol|África]]</span><span class="tpos">&nbsp;[[:es:África|(es)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Svéd nyelv|svéd]]</span>[[Kategória:magyar-svéd szótár]][[kategória:magyar-svéd szótár]]: <span class="Latn" lang="sv">[[Afrika#Svéd|Afrika]]</span><span class="tpos">&nbsp;[[:sv:Afrika|(sv)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Alnémet nyelv|alnémet]]</span>[[Kategória:magyar-alnémet szótár]]: <span class="Latn" lang="nds">[[Afrika#Alnémet|Afrika]]</span><span class="tpos">&nbsp;[[:nds:Afrika|(nds)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szamoai nyelv|szamoai]]</span>[[Kategória:magyar-szamoai szótár]][[Kategória:magyar-szamoai szótár]]: <span class="Latn" lang="sm">[[Aferika#Szamoai|Aferika]]</span><span class="tpos">&nbsp;[[:sm:Aferika|(sm)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szanszkrit nyelv|szanszkrit]]</span>[[Kategória:magyar-szanszkrit szótár]][[kategória:magyar-szanszkrit szótár]]: <span class="Deva" lang="sa">[[अफ्रीका#Szanszkrit|अफ्रीका]]</span><span class="tpos">&nbsp;[[:sa:अफ्रीका|(sa)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sa-Latn" class="tr Latn">aphrīkā</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szerbhorvát nyelv|szerbhorvát]]</span>[[Kategória:magyar-szerbhorvát szótár]][[Kategória:magyar-szerbhorvát szótár]]: <span class="Cyrl" lang="sh">[[Африка#Szerbhorvát|Африка]]</span><span class="tpos">&nbsp;[[:sh:Африка|(sh)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szicíliai nyelv|szicíliai]]</span>[[Kategória:magyar-szicíliai szótár]]: <span class="Latn" lang="scn">[[Àfrica#Szicíliai|Àfrica]]</span><span class="tpos">&nbsp;[[:scn:Àfrica|(scn)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szingaléz nyelv|szingaléz]]</span>[[Kategória:magyar-szingaléz szótár]][[kategória:magyar-szingaléz szótár]]: <span class="Sinh" lang="si">[[අප්‍රිකාව#Szingaléz|අප්‍රිකාව]]</span><span class="tpos">&nbsp;[[:si:අප්‍රිකාව|(si)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="si-Latn" class="tr Latn">ap‍rikāva</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szlovák nyelv|szlovák]]</span>[[Kategória:magyar-szlovák szótár]][[kategória:magyar-szlovák szótár]]: <span class="Latn" lang="sk">[[Afrika#Szlovák|Afrika]]</span><span class="tpos">&nbsp;[[:sk:Afrika|(sk)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szlovén nyelv|szlovén]]</span>[[Kategória:magyar-szlovén szótár]][[kategória:magyar-szlovén szótár]]: <span class="Latn" lang="sl">[[Afrika#Szlovén|Afrika]]</span><span class="tpos">&nbsp;[[:sl:Afrika|(sl)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szotó nyelv|szotó]]</span>[[Kategória:magyar-szotó szótár]]: <span class="Latn" lang="st">[[Afrika#Szotó|Afrika]]</span><span class="tpos">&nbsp;[[:st:Afrika|(st)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Alsószorb nyelv|alsószorb]]</span>[[Kategória:magyar-alsószorb szótár]]: <span class="Latn" lang="dsb">[[Afrika#Alsószorb|Afrika]]</span><span class="tpos">&nbsp;[[:dsb:Afrika|(dsb)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Felsőszorb nyelv|felsőszorb]]</span>[[Kategória:magyar-felsőszorb szótár]]: <span class="Latn" lang="hsb">[[Afrika#Felsőszorb|Afrika]]</span><span class="tpos">&nbsp;[[:hsb:Afrika|(hsb)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szundanéz nyelv|szundanéz]]</span>[[Kategória:magyar-szundanéz szótár]][[kategória:magyar-szundanéz szótár]]: <span class="Latn" lang="su">[[Afrika#Szundanéz|Afrika]]</span><span class="tpos">&nbsp;[[:su:Afrika|(su)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Szuahéli nyelv|szuahéli]]</span>[[Kategória:magyar-szuahéli szótár]][[kategória:magyar-szuahéli szótár]]: <span class="Latn" lang="sw">[[afrika#Szuahéli|afrika]]</span><span class="tpos">&nbsp;[[:sw:afrika|(sw)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tagalog nyelv|tagalog]]</span>[[Kategória:magyar-tagalog szótár]][[kategória:magyar-tagalog szótár]]: <span class="Latn" lang="tl">[[Aprika#Tagalog|Aprika]]</span><span class="tpos">&nbsp;[[:tl:Aprika|(tl)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tamil nyelv|tamil]]</span>[[Kategória:magyar-tamil szótár]][[kategória:magyar-tamil szótár]]: <span class="Taml" lang="ta">[[ஆப்பிரிக்கா#Tamil|ஆப்பிரிக்கா]]</span><span class="tpos">&nbsp;[[:ta:ஆப்பிரிக்கா|(ta)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ta-Latn" class="tr Latn">āppirikkā</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Telugu nyelv|telugu]]</span>[[Kategória:magyar-telugu szótár]][[Kategória:magyar-telugu szótár]]: <span class="Telu" lang="te">[[ఆఫ్రికా#Telugu|ఆఫ్రికా]]</span><span class="tpos">&nbsp;[[:te:ఆఫ్రికా|(te)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="te-Latn" class="tr Latn">āphrikā</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások redundáns átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Thai nyelv|thai]]</span>[[Kategória:magyar-thai szótár]][[kategória:magyar-thai szótár]]: <span class="Thai" lang="th">[[แอฟริกา#Thai|แอฟริกา]]</span><span class="tpos">&nbsp;[[:th:แอฟริกา|(th)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="th-Latn" class="tr Latn">àefrígaa</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Thai" lang="th">[[ทวีปแอฟริกา#Thai|ทวีปแอฟริกา]]</span><span class="tpos">&nbsp;[[:th:ทวีปแอฟริกา|(th)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="th-Latn" class="tr Latn">táwêep àefrígaa</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Tongai nyelv|tongai]]</span>[[Kategória:magyar-tongai szótár]][[Kategória:magyar-tongai szótár]]: <span class="Latn" lang="to">[[Aferika#Tongai|Aferika]]</span><span class="tpos">&nbsp;[[:to:Aferika|(to)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Török nyelv|török]]</span>[[Kategória:magyar-török szótár]][[kategória:magyar-török szótár]]: <span class="Latn" lang="tr">[[Afrika#Török|Afrika]]</span><span class="tpos">&nbsp;[[:tr:Afrika|(tr)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Türkmén nyelv|türkmén]]</span>[[Kategória:magyar-türkmén szótár]][[kategória:magyar-türkmén szótár]]: <span class="Latn" lang="tk">[[Afrika#Türkmén|Afrika]]</span><span class="tpos">&nbsp;[[:tk:Afrika|(tk)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Conga nyelv|conga]]</span>[[Kategória:magyar-conga szótár]]: <span class="Latn" lang="ts">[[Afrika#Conga|Afrika]]</span><span class="tpos">&nbsp;[[:ts:Afrika|(ts)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Ukrán nyelv|ukrán]]</span>[[Kategória:magyar-ukrán szótár]][[Kategória:magyar-ukrán szótár]]: <span class="Cyrl" lang="uk">[[Африка#Ukrán|Африка]]</span><span class="tpos">&nbsp;[[:uk:Африка|(uk)]]</span>&nbsp;<span class="gender"><abbr title="nőnem">nn</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="uk-Latn" class="tr Latn">Áfryka</span><span class="mention-gloss-paren annotation-paren">)</span>[[Kategória:Fordítások automatikustól eltérő manuális átírással]]
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Urdu nyelv|urdu]]</span>[[Kategória:magyar-urdu szótár]][[kategória:magyar-urdu szótár]]: <span class="ur-Arab" lang="ur">[[افریقہ#Urdu|افریقہ]]</span>&lrm;<span class="tpos">&nbsp;[[:ur:افریقہ|(ur)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ur-Latn" class="tr Latn">afrīkā</span><span class="mention-gloss-paren annotation-paren">)</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Üzbég nyelv|üzbég]]</span>[[Kategória:magyar-üzbég szótár]][[kategória:magyar-üzbég szótár]]: <span class="Latn" lang="uz">[[Afrika#Üzbég|Afrika]]</span><span class="tpos">&nbsp;[[:uz:Afrika|(uz)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Vietnámi nyelv|vietnámi]]</span>[[Kategória:magyar-vietnámi szótár]][[kategória:magyar-vietnámi szótár]]: <span class="Latn" lang="vi">[[Châu Phi#Vietnámi|Châu Phi]]</span><span class="tpos">&nbsp;[[:vi:Châu Phi|(vi)]]</span> (<span class="Hani" lang="vi">[[洲非#Vietnámi|洲非]]</span><span class="tpos">&nbsp;[[:vi:洲非|(vi)]]</span>), <span class="Latn" lang="vi">[[Phi Châu#Vietnámi|Phi Châu]]</span><span class="tpos">&nbsp;[[:vi:Phi Châu|(vi)]]</span> (<span class="Hani" lang="vi">[[非洲#Vietnámi|非洲]]</span><span class="tpos">&nbsp;[[:vi:非洲|(vi)]]</span>)
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Volapük nyelv|volapük]]</span>[[Kategória:magyar-volapük szótár]][[kategória:magyar-volapük szótár]]: <span class="Latn" lang="vo">[[Frikop#Volapük|Frikop]]</span><span class="tpos">&nbsp;[[:vo:Frikop|(vo)]]</span>, <span class="Latn" lang="vo">[[Fikop#Volapük|Fikop]]</span><span class="tpos">&nbsp;[[:vo:Fikop|(vo)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Võro nyelv|võro]]</span>[[Kategória:magyar-võro szótár]]: <span class="Latn" lang="vro">[[Afriga#Võro|Afriga]]</span><span class="tpos">&nbsp;[[:fiu-vro:Afriga|(fiu-vro)]]</span>
+*<span style="font-variant: small-caps; font-size:larger;">[[:w:Walesi nyelv|walesi]]</span>[[Kategória:magyar-walesi szótár]][[kategória:magyar-walesi szótár]]: <span class="Latn" lang="cy">[[Affrica#Walesi|Affrica]]</span><span class="tpos">&nbsp;[[:cy:Affrica|(cy)]]</span>
+|}</div></div>
+<br clear=all>
+{| style="margin:0 auto;" align=center width=75% id=toc
+|align=center| '''A [[Föld]] [[kontinens|kontinensei]]'''
+|-
+|align=center|[[Afrika]] | [[Antarktisz]] | [[Amerika]] ([[Észak-Amerika]], [[Közép-Amerika]], [[Dél-Amerika]]) | [[Ázsia]] | [[Ausztrália]] | [[Európa]] |  [[Óceánia]]
+|-
+|align=center| <imagemap>
+Kép:World, administrative divisions - hu - colored.svg|1000px|Karte
+
+
+poly 795 848 796 884 777 918 689 946 660 987 702 1054 755 1103 796 1149 836 1184 859 1219 857 1265 860 1380 846 1416 881 1508 929 1558 984 1603 1074 1619 1117 1599 1142 1549 1136 1450 1146 1315 1198 1166 1217 1077 1209 1000 1190 963 1110 895 1003 831 961 839 935 842 895 827 844 820 [[Dél-Amerika]]
+poly 373 311 470 241 565 177 644 138 783 69 919 23 1050 3 1193 22 1379 35 1484 56 1504 81 1501 138 1449 206 1421 246 1367 242 1311 279 1238 351 1160 332 1139 392 1127 476 1057 518 921 588 880 617 888 667 891 685 918 714 933 732 958 748 973 782 993 833 927 842 903 824 869 820 848 822 828 834 790 850 786 891 782 908 767 912 740 887 701 850 653 808 581 778 535 767 508 756 491 714 483 649 491 567 501 484 555 385 571 309 559 294 428 330 [[Észak-Amerika]]
+poly 103 621 256 646 284 747 323 861 350 972 395 1040 425 1116 453 1311 431 1368 517 1310 618 1265 631 1331 523 1463 400 1505 301 1513 265 1535 60 1234 12 990 37 772 [[Óceánia]]
+poly 2345 1917 2329 1890 2384 1853 2470 1812 2503 1736 2365 1678 2177 1659 1965 1657 1805 1650 1632 1656 1560 1659 1453 1682 1300 1777 1275 1793 1212 1692 1233 1647 1234 1643 1092 1646 1051 1721 893 1769 787 1843 805 1904 883 1931 959 1953 2241 1947 2388 1888 [[Antarktisz]]
+poly 1425 581 1292 587 1216 560 1228 510 1412 464 1404 410 1382 344 1358 298 1344 254 1381 239 1430 239 1460 221 1471 188 1503 121 1526 90 1589 67 1657 70 1774 77 1834 71 1873 84 1904 128 1893 186 1929 222 1931 240 1944 282 1954 346 1953 381 1946 399 1951 408 1940 424 1907 424 1880 445 1889 460 1883 487 1893 517 1902 529 1891 527 1865 522 1846 517 1824 508 1806 509 1769 502 1743 511 1735 519 1732 528 1723 532 1708 537 1711 549 1715 564 1722 578 1737 584 1743 595 1737 603 1708 610 1680 603 1644 596 1629 596 1615 587 1605 583 1592 566 1571 557 1548 561 1525 566 1486 576 1482 582 [[Európa]]
+poly 1727 609 1762 616 1771 654 1801 696 1815 733 1826 764 1847 804 1865 824 1878 836 1895 844 1916 845 1954 827 1983 827 1976 861 1949 934 1939 975 1936 1005 1993 1014 2004 1028 1952 1104 1944 1124 1944 1146 1991 1165 2006 1177 2005 1191 1987 1226 1913 1263 1897 1273 1873 1282 1825 1292 1789 1314 1763 1335 1737 1346 1720 1354 1684 1357 1639 1359 1600 1340 1587 1283 1571 1225 1570 1127 1543 1061 1528 1017 1513 986 1481 957 1451 955 1402 947 1376 919 1337 873 1322 841 1313 833 1263 834 1240 811 1241 761 1256 742 1304 728 1332 707 1339 692 1326 681 1320 656 1322 648 1333 637 1349 602 1387 598 1405 596 1451 581 1467 581 1496 575 1512 566 1540 564 1580 558 1601 567 1616 584 1639 591 1668 592 1704 616 [[Afrika]]
+poly 3000 498 2794 581 2730 679 2662 767 2665 859 2662 910 2700 953 2742 987 2738 1053 2726 1104 2680 1110 2632 1106 2583 1124 2467 1199 2378 1316 2378 1367 2351 1501 2385 1593 2461 1641 2606 1651 2674 1664 2778 1664 3026 1420 3132 1243 3177 1067 3184 966 3175 874 3136 719 3044 544 2968 459 2888 374 2701 444 [[Óceánia]]
+poly 1946 819 2009 819 2070 844 2086 897 2091 950 2113 980 2199 970 2273 987 2305 1034 2327 1081 2379 1102 2415 1117 2480 1122 2546 1119 2584 1111 2621 1090 2658 1073 2713 1087 2731 1093 2743 992 2737 944 2706 923 2662 896 2625 858 2578 805 2564 753 2584 695 2604 638 2671 546 2684 379 2671 320 2666 284 2655 223 2637 208 2615 174 2575 162 2505 127 2452 110 2385 106 2305 95 2254 83 2212 93 2176 104 2075 83 2019 59 1996 60 1922 85 1911 101 1896 143 1889 174 1899 207 1936 241 1955 314 1955 363 1963 409 1943 419 1886 415 1887 459 1892 473 1884 504 1902 532 1888 532 1816 509 1759 518 1732 532 1719 560 1734 586 1737 603 1753 613 1772 645 1788 691 1808 720 1816 748 1858 817 1869 835 1883 845 1933 839 1961 825 [[Ázsia]]
+poly 2645 188 2623 193 2644 233 2669 261 2729 279 2746 289 2725 302 2682 306 2679 328 2700 339 2744 337 2788 332 2809 308 2813 292 2802 267 2775 238 2729 207 2674 182 2668 177 [[Észak-Amerika]]
+
+
+
+</imagemap>
+|}
+
+===[[Wikiszótár:Szótárak és referenciaművek#Magyar|További információk]]===
+<templatestyles src="acol/styles.css" /><div class="ouac-acoln ouac-acol4"></div>
+* [https://mek.oszk.hu/adatbazis/magyar-nyelv-ertelmezo-szotara/kereses.php?kereses=Afrika Afrika] - ''Értelmező szótár'' (MEK)
+* [https://uesz.nytud.hu/index.html?searchmode=lemma&searchstr=Afrika Afrika] - ''Etimológiai szótár'' (UMIL)
+* [https://www.szotar.net/mind/Afrika/ Afrika] - ''Szótár.net'' (hu-hu)
+* [https://www.deepl.com/translator#hu/de/Afrika Afrika] - ''DeepL''  (hu-de)
+* [https://translate.yandex.com/?text=Afrika&lang=hu-ru Afrika] - ''Яндекс''  (hu-ru)
+* [https://translate.google.com/?sl=hu&tl=en&text=Afrika Afrika] - ''Google'' (hu-en)
+* 
+* [https://helyesiras.szotar.org/helyesirasajax.php?keresoszo=Afrika Afrika] - ''Helyesírási szótár'' (MTA)
+* [https://www.wikidata.org/w/index.php?search=Afrika Afrika] - ''Wikidata''
+* [https://hu.wikipedia.org/w/index.php?search=Afrika Afrika] - ''Wikipédia'' (magyar)[[category:hu]]
+----
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:német-magyar szótár|AFRIKA]]
+==[[:w:német nyelv|Német]]==
+===Kiejtés===
+
+* [[w:Nemzetközi fonetikai ábécé|IPA]]:&#32;<templatestyles src="Modul:scripts/style.css"></templatestyles><span class="IPA">/afrɪka/</span>[[Category:német 3 szótagú szavak]]
+===Földrajzi név===
+'''Afrika'''
+[[kategória:német földrajzi nevek]]
+
+# [[Afrika]]
+===[[Wikiszótár:Szótárak és referenciaművek#Német|További információk]]===
+<templatestyles src="acol/styles.css" /><div class="ouac-acoln ouac-acol4"></div>
+* [https://www.szotar.net/nemet/Afrika/ Afrika] - ''Szótár.net'' (de-hu)
+* <span style="white-space:nowrap">[https://www.dwds.de/wb/Afrika Afrika] - ''DWDS''</span>
+* [https://www.duden.de/rechtschreibung/Afrika Afrika] - ''Duden''
+* [https://corpora.uni-leipzig.de/de/res?&word=Afrika Afrika] <span style="white-space:nowrap">- ''Wortschatz''</span>
+* [https://www.openthesaurus.de/synonyme/Afrika Afrika] <span style="white-space:nowrap">- ''OpenThesaurus''</span>
+* [https://translate.google.com/?sl=de&tl=en&text=Afrika Afrika] - ''Google'' (de-en)
+* [https://translate.yandex.com/?text=Afrika&lang=de-ru Afrika] - ''Яндекс''  (de-ru)
+* [https://www.wikidata.org/w/index.php?search=Afrika Afrika] - ''Wikidata''
+* [https://de.wikipedia.org/w/index.php?search=Afrika Afrika] - ''Wikipédia'' (német)[[category:de]]
+----
+<templatestyles src="categorize/styles.css"/>__NOEDITSECTION__ [[Category:svéd-magyar szótár|AFRIKA]]
+==[[:w:svéd nyelv|Svéd]]==
+===Földrajzi név===
+'''Afrika'''
+
+[[kategória:svéd földrajzi nevek]]
+#Afrika
+===[[Wikiszótár:Szótárak és referenciaművek#Svéd|További információk]]===
+<templatestyles src="acol/styles.css" /><div class="ouac-acoln ouac-acol4"></div>
+* [https://www.szotar.net/?mod=keres&nyid=13&keresoszo=Afrika Afrika] - Szótár.net (sv-hu)
+* [https://dictzone.com/sved-magyar-szotar/Afrika Afrika] - ''Dictzone'' (sv-hu)
+* [https://context.reverso.net/translation/swedish-english/Afrika Afrika] - ''Reverso''  (sv-en)
+* [https://svenska.se/tre/?sok=Afrika&pz=1 Afrika] - ''Svensk ordbok''
+* [https://svenska.se/saob/?sok=Afrika Afrika] - Akademiens ordbok
+* [https://translate.google.com/?sl=sv&tl=en&text=Afrika Afrika] - ''Google'' (sv-en)
+* [https://translate.yandex.com/?text=Afrika&lang=sv-ru Afrika] - ''Яндекс''  (sv-ru)
+* [https://www.wikidata.org/w/index.php?search=Afrika Afrika] - ''Wikidata''
+* [https://sv.wikipedia.org/w/index.php?search=Afrika Afrika] - ''Wikipédia'' (svéd)[[category:sv]]

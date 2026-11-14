@@ -9,7 +9,30 @@ pub const legacy_extended_image_assets: usize = 256;
 pub const max_presentation_items: usize = 1 << 20;
 pub const Role = enum { normal, label, pronunciation, headword, example, quotation, citation, reference };
 pub const InlineKind = enum { text, link, external_link, line_break };
-pub const FontScaleBasis = enum { context, normal_body };
+pub const FontScaleBasis = enum { context, normal_body, css_px };
+/// Complete explicit OpenType feature-list policy, never an additive patch.
+/// null at the owner preserves legacy behavior. normal clears the explicit
+/// list; seven_on replaces it with liga/clig/kern/ccmp/dist/mark/mkmk = 1.
+/// Kerning, variants, tracking, direction and shaping bypasses are separate.
+pub const FontFeaturePolicy = enum(u8) {
+    normal = 0,
+    seven_on = 1,
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        if (try source.peekNextTokenType() != .string) return error.UnexpectedToken;
+        const name = try std.json.innerParse([]const u8, a, source, options);
+        return std.meta.stringToEnum(@This(), name) orelse error.InvalidEnumTag;
+    }
+    pub fn jsonParseFromValue(_: std.mem.Allocator, source: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        if (source != .string) return error.UnexpectedToken;
+        return std.meta.stringToEnum(@This(), source.string) orelse error.InvalidEnumTag;
+    }
+};
+/// A span's numeric magnitude retains its computed font origin. Pixel magnitudes
+/// are independent of the configured body font; readers apply their text policy.
+pub fn validSpanFontScale(value: ?f32, basis: FontScaleBasis) bool {
+    if (value) |number| if (!std.math.isFinite(number) or number < 0) return false;
+    return basis == .context or value != null;
+}
 pub const max_image_map_string_bytes: usize = 32 * 1024 * 1024;
 pub const MapActionKind = enum { internal, external };
 pub const MapAction = struct {
@@ -79,6 +102,137 @@ pub const InlineImage = struct {
         try jw.endObject();
     }
 };
+pub const InlineCursor = enum(u8) {
+    help,
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        if (try source.peekNextTokenType() != .string) return error.UnexpectedToken;
+        const name = try std.json.innerParse([]const u8, a, source, options);
+        return std.meta.stringToEnum(@This(), name) orelse error.InvalidEnumTag;
+    }
+    pub fn jsonParseFromValue(_: std.mem.Allocator, source: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        if (source != .string) return error.UnexpectedToken;
+        return std.meta.stringToEnum(@This(), source.string) orelse error.InvalidEnumTag;
+    }
+};
+pub const InlineUnderlineStyle = enum(u8) { solid, dotted };
+/// An additional source decoration; it does not replace a link-state underline.
+pub const InlineUnderline = struct {
+    style: InlineUnderlineStyle,
+    color: ?[]const u8 = null,
+    thickness: ?StyleLength = null,
+};
+/// The declaring owner's existing semantic font, retained before child changes.
+/// This is not a numeric browser script-font or baseline assumption.
+pub const InlineFontSnapshot = struct {
+    font_scale: ?f32 = null,
+    font_scale_basis: FontScaleBasis = .context,
+    small: bool = false,
+    superscript: bool = false,
+    subscript: bool = false,
+    font_normalized: bool = false,
+    bold: bool = false,
+    italic: bool = false,
+    code: bool = false,
+    language: []const u8 = "",
+    classes: []const u8 = "",
+    role: Role = .normal,
+    font_features: ?FontFeaturePolicy = null,
+    font_family: ?ContainerFontFamily = null,
+    pub fn jsonStringify(self: InlineFontSnapshot, jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(InlineFontSnapshot).@"struct".field_names) |name| {
+            const scale_field = comptime std.mem.eql(u8, name, "font_scale");
+            const basis_field = comptime std.mem.eql(u8, name, "font_scale_basis");
+            const family_field = comptime std.mem.eql(u8, name, "font_family");
+            // Match Span's contextual identity at the direct JSON boundary.
+            if ((!scale_field or (self.font_scale != null and (self.font_scale.? != 1 or self.font_scale_basis != .context))) and
+                (!basis_field or self.font_scale_basis != .context) and (!family_field or self.font_family != null))
+            {
+                try jw.objectField(name);
+                try jw.write(@field(self, name));
+            }
+        }
+        try jw.endObject();
+    }
+};
+pub const InlineLineHeight = union(enum) {
+    computed: ComputedLineHeight,
+    font_relative: struct { factor: f32, font: InlineFontSnapshot },
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        switch (self) {
+            .computed => |value| { try jw.objectField("computed"); try jw.write(value); },
+            .font_relative => |value| { try jw.objectField("font_relative"); try jw.write(value); },
+        }
+        try jw.endObject();
+    }
+};
+pub const InlineTextStyle = struct {
+    decoration: ?InlineUnderline = null,
+    line_height: ?InlineLineHeight = null,
+    baseline_shift: ?ComputedLineHeight = null,
+    font_normalized: bool = false,
+    cursor: ?InlineCursor = null,
+};
+
+pub fn validInlineFontSnapshot(value: InlineFontSnapshot) bool {
+    if (value.font_family) |family| if (!validContainerFontFamily(family)) return false;
+    return validSpanFontScale(value.font_scale, value.font_scale_basis) and
+        std.unicode.utf8ValidateSlice(value.language) and std.unicode.utf8ValidateSlice(value.classes) and
+        std.mem.indexOfScalar(u8, value.language, 0) == null and std.mem.indexOfScalar(u8, value.classes, 0) == null and
+        (!value.font_normalized or (value.font_scale != null and value.font_scale_basis != .context));
+}
+fn validInlineComputedLength(value: ComputedLineHeight, signed: bool) bool {
+    return value.font_scale_basis != .context and std.math.isFinite(value.value) and
+        (signed or value.value >= 0);
+}
+pub fn validInlineTextStyle(value: InlineTextStyle) bool {
+    if (value.decoration == null and value.line_height == null and value.baseline_shift == null and !value.font_normalized and value.cursor == null) return false;
+    if (value.decoration) |line| {
+        if (line.color) |color| if (!isCanonicalRgb(color)) return false;
+        if (line.thickness) |length| if (!validStyleLength(length)) return false;
+    }
+    if (value.line_height) |height| switch (height) {
+        .computed => |length| if (!validInlineComputedLength(length, false)) return false,
+        .font_relative => |relative| if (!std.math.isFinite(relative.factor) or relative.factor < 0 or
+            !validInlineFontSnapshot(relative.font)) return false,
+    };
+    if (value.baseline_shift) |shift| if (!validInlineComputedLength(shift, true)) return false;
+    return true;
+}
+pub fn validSpanInlineStyle(span: anytype) bool {
+    if (comptime !@hasField(@TypeOf(span), "inline_style")) return true;
+    const value = span.inline_style orelse return true;
+    if (!validInlineTextStyle(value)) return false;
+    const kind = @tagName(span.kind);
+    if (!std.mem.eql(u8, kind, "text") and !std.mem.eql(u8, kind, "link") and !std.mem.eql(u8, kind, "external_link")) return false;
+    if (comptime @hasField(@TypeOf(span), "image")) if (span.image != null) return false;
+    if (std.mem.eql(u8, kind, "text")) {
+        if (span.target.len != 0) return false;
+        if (span.text.len == 0 and (value.line_height == null or value.cursor != null)) return false;
+    } else if (span.target.len == 0 or span.text.len == 0) return false;
+    const scale: ?f32 = if (comptime @hasField(@TypeOf(span), "font_scale")) span.font_scale else null;
+    const basis: FontScaleBasis = if (comptime @hasField(@TypeOf(span), "font_scale_basis")) span.font_scale_basis else .context;
+    if (value.baseline_shift != null) if (value.line_height) |height| if (height == .font_relative) {
+        const font = height.font_relative.font;
+        if (font.font_scale != scale or font.font_scale_basis != basis or font.font_normalized != value.font_normalized) return false;
+        inline for (.{ "small", "superscript", "subscript", "bold", "italic", "code" }) |name| {
+            const flag = if (comptime @hasField(@TypeOf(span), name)) @field(span, name)
+                else if (comptime @hasField(@TypeOf(span), "flags")) @field(span.flags, name) else false;
+            if (@field(font, name) != flag) return false;
+        }
+        inline for (.{ "language", "classes" }) |name| {
+            const text: []const u8 = if (comptime @hasField(@TypeOf(span), name)) @field(span, name) else "";
+            if (!std.mem.eql(u8, @field(font, name), text)) return false;
+        }
+        const role = if (comptime @hasField(@TypeOf(span), "role")) @tagName(span.role) else "normal";
+        const features: ?FontFeaturePolicy = if (comptime @hasField(@TypeOf(span), "font_features")) span.font_features else null;
+        const family: ?ContainerFontFamily = if (comptime @hasField(@TypeOf(span), "font_family")) span.font_family else null;
+        if (!std.mem.eql(u8, @tagName(font.role), role) or font.font_features != features or !sameFontFamilyRequest(font.font_family, family)) return false;
+    };
+    return !value.font_normalized or (scale != null and basis != .context and validSpanFontScale(scale, basis));
+}
+
 pub const Span = struct {
     kind: InlineKind = .text,
     text: []const u8 = "",
@@ -98,6 +252,10 @@ pub const Span = struct {
     /// Numeric size relative to the selected unscaled typography basis.
     font_scale: ?f32 = null,
     font_scale_basis: FontScaleBasis = .context,
+    font_features: ?FontFeaturePolicy = null,
+    font_family: ?ContainerFontFamily = null,
+    link_paint: ?LinkPaint = null,
+    inline_style: ?InlineTextStyle = null,
     image: ?InlineImage = null,
     bold: bool = false,
     italic: bool = false,
@@ -118,9 +276,14 @@ pub const Span = struct {
             const scale_field = comptime std.mem.eql(u8, field_name, "font_scale");
             const basis_field = comptime std.mem.eql(u8, field_name, "font_scale_basis");
             const image_field = comptime std.mem.eql(u8, field_name, "image");
+            const features_field = comptime std.mem.eql(u8, field_name, "font_features");
+            const family_field = comptime std.mem.eql(u8, field_name, "font_family");
+            const link_paint_field = comptime std.mem.eql(u8, field_name, "link_paint");
+            const inline_style_field = comptime std.mem.eql(u8, field_name, "inline_style");
             if ((!fragment_field or self.target_fragment != null) and (!image_field or self.image != null) and (!background_field or self.background != null) and
-                (!scale_field or (self.font_scale != null and (self.font_scale.? != 1 or self.font_scale_basis == .normal_body))) and
-                (!basis_field or self.font_scale_basis != .context))
+                (!scale_field or (self.font_scale != null and (self.font_scale.? != 1 or self.font_scale_basis != .context))) and
+                (!basis_field or self.font_scale_basis != .context) and (!features_field or self.font_features != null) and
+                (!link_paint_field or self.link_paint != null) and (!inline_style_field or self.inline_style != null) and (!family_field or self.font_family != null))
             {
                 try jw.objectField(field_name);
                 try jw.write(@field(self, field_name));
@@ -221,11 +384,27 @@ pub const ComputedLineHeight = struct {
         try jw.endObject();
     }
 };
+pub const TableContainingDirection = enum(u8) {
+    ltr = 0,
+    rtl = 1,
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        if (try source.peekNextTokenType() != .string) return error.UnexpectedToken;
+        const name = try std.json.innerParse([]const u8, a, source, options);
+        return std.meta.stringToEnum(@This(), name) orelse error.InvalidEnumTag;
+    }
+    pub fn jsonParseFromValue(_: std.mem.Allocator, source: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        if (source != .string) return error.UnexpectedToken;
+        return std.meta.stringToEnum(@This(), source.string) orelse error.InvalidEnumTag;
+    }
+};
 pub const TableStyle = struct {
     background: ?[]const u8 = null,
     border: ?StyleBorder = null,
     collapse: ?BorderCollapse = null,
     margins: ?StyleEdges = null,
+    /// Computed table-wrapper horizontal autos, exclusive with numeric margins.
+    margin_values: ?ContainerMargins = null,
+    containing_direction: ?TableContainingDirection = null,
     float_side: ?TableFloatSide = null,
     width: ?StyleWidth = null,
     padding: ?StyleEdges = null,
@@ -238,8 +417,44 @@ pub const TableStyle = struct {
         try writeOptionalStyleFields(self, jw);
     }
 };
-// Cell top alignment is a row/cell solver policy, never inline x-height alignment.
-pub const CellVerticalAlign = enum { top };
+// Cell alignment is a row/cell solver policy, never inline x-height alignment.
+pub const CellVerticalAlign = enum(u8) {
+    top = 0,
+    middle = 1,
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        if (try source.peekNextTokenType() != .string) return error.UnexpectedToken;
+        const name = try std.json.innerParse([]const u8, a, source, options);
+        return std.meta.stringToEnum(@This(), name) orelse error.InvalidEnumTag;
+    }
+    pub fn jsonParseFromValue(_: std.mem.Allocator, source: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        if (source != .string) return error.UnexpectedToken;
+        return std.meta.stringToEnum(@This(), source.string) orelse error.InvalidEnumTag;
+    }
+};
+/// Only the cell size unavailable from its represented native owner context.
+pub const CellTextStrut = struct {
+    font_scale: f32,
+    font_scale_basis: FontScaleBasis,
+};
+pub const CellLineHeightValue = union(enum) {
+    normal,
+    multiplier: f32,
+    length: ComputedLineHeight,
+    pub fn jsonStringify(self: CellLineHeightValue, jw: anytype) !void {
+        try jw.beginObject();
+        switch (self) {
+            .normal => { try jw.objectField("normal"); try jw.beginObject(); try jw.endObject(); },
+            .multiplier => |value| { try jw.objectField("multiplier"); try jw.write(@as(f64, value)); },
+            .length => |value| { try jw.objectField("length"); try jw.write(value); },
+        }
+        try jw.endObject();
+    }
+};
+pub const CellLineHeight = struct {
+    strut: ?CellTextStrut = null,
+    height: CellLineHeightValue,
+};
+
 pub const CellStyle = struct {
     border: ?StyleBorder = null,
     padding: ?StyleEdges = null,
@@ -251,6 +466,7 @@ pub const CellStyle = struct {
     /// Resolved preferred CSS cell width, distinct from the intrinsic minimum.
     /// Em uses normal-body units; percentages remain table sizing constraints.
     width: ?StyleWidth = null,
+    line_height: ?CellLineHeight = null,
 
     pub fn jsonStringify(self: CellStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
@@ -302,6 +518,114 @@ pub const Cell = struct {
     }
 };
 pub const Row = struct { cells: []const Cell = &.{} };
+/// One compiled display:block viewport around the same anonymous table grid.
+/// The immutable pointer in Table avoids adding two inline styles to old Tables.
+/// The source scroll TABLE's focus-visible paint, independent of child A states.
+/// Native auto uses the platform outline without adding layout metrics.
+pub const TableScrollFocusMode = enum { authored_none, ua_auto };
+pub const TableScrollFocusPaint = struct {
+    mode: TableScrollFocusMode,
+    color: ?FigureColor = null,
+    const JsonFields = struct { mode: std.json.Value, color: ?FigureColor = null };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn fromJson(value: JsonFields) error{ UnexpectedToken, InvalidEnumTag }!@This() {
+        if (value.mode != .string) return error.UnexpectedToken;
+        const result: @This() = .{ .mode = std.meta.stringToEnum(TableScrollFocusMode, value.mode.string) orelse return error.InvalidEnumTag, .color = value.color };
+        if (!validTableScrollFocusPaint(result)) return error.UnexpectedToken;
+        return result;
+    }
+};
+pub fn validTableScrollFocusPaint(value: TableScrollFocusPaint) bool {
+    if (value.color) |color| return value.mode == .ua_auto and validFigureColor(color);
+    return true;
+}
+pub const TableBlockViewport = struct {
+    max_viewport_width_px: u32,
+    box_style: TableStyle,
+    box_sizing: ContainerBoxSizing,
+    max_width: StyleWidth,
+    grid_style: TableStyle,
+    grid_direction: TableContainingDirection,
+    language: []const u8,
+    focus_paint: ?TableScrollFocusPaint = null,
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(@This()).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "focus_paint")) {
+                if (self.focus_paint) |value| { try jw.objectField(name); try jw.write(value); }
+            } else { try jw.objectField(name); try jw.write(@field(self, name)); }
+        }
+        try jw.endObject();
+    }
+
+    const JsonFields = struct {
+        max_viewport_width_px: u32, box_style: TableStyle, box_sizing: std.json.Value,
+        max_width: StyleWidth, grid_style: TableStyle, grid_direction: TableContainingDirection, language: []const u8,
+        focus_paint: ?TableScrollFocusPaint = null,
+    };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn fromJson(value: JsonFields) error{ UnexpectedToken, InvalidEnumTag }!@This() {
+        if (value.box_sizing != .string) return error.UnexpectedToken;
+        if (value.language.len == 0 or value.language.len > 32 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(value.language)) return error.UnexpectedToken;
+        return .{ .max_viewport_width_px = value.max_viewport_width_px, .box_style = value.box_style,
+            .box_sizing = std.meta.stringToEnum(ContainerBoxSizing, value.box_sizing.string) orelse return error.InvalidEnumTag,
+            .max_width = value.max_width, .grid_style = value.grid_style,
+            .grid_direction = value.grid_direction, .language = value.language, .focus_paint = value.focus_paint };
+    }
+};
+/// One ordinary Table body: physical right float above the root threshold,
+/// normal flow below. No scrollport or anonymous-grid semantics are implied.
+pub const TableFloatViewport = struct {
+    max_viewport_width_px: u32,
+    containing_direction: TableContainingDirection,
+    grid_direction: TableContainingDirection,
+    language: []const u8,
+    narrow_clear: ?FigureClear = null,
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(@This()).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "narrow_clear")) {
+                if (self.narrow_clear) |value| { try jw.objectField(name); try jw.write(value); }
+            } else { try jw.objectField(name); try jw.write(@field(self, name)); }
+        }
+        try jw.endObject();
+    }
+    const JsonFields = struct { max_viewport_width_px: u32, containing_direction: TableContainingDirection,
+        grid_direction: TableContainingDirection, language: []const u8, narrow_clear: std.json.Value = .null };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn fromJson(value: JsonFields) error{ UnexpectedToken, InvalidEnumTag }!@This() {
+        if (value.max_viewport_width_px == 0 or value.language.len == 0 or value.language.len > 32 * 1024 * 1024 or
+            !std.unicode.utf8ValidateSlice(value.language)) return error.UnexpectedToken;
+        const narrow_clear: ?FigureClear = switch (value.narrow_clear) {
+            .null => null,
+            .string => |name| std.meta.stringToEnum(FigureClear, name) orelse return error.InvalidEnumTag,
+            else => return error.UnexpectedToken,
+        };
+        return .{ .max_viewport_width_px = value.max_viewport_width_px, .containing_direction = value.containing_direction,
+            .grid_direction = value.grid_direction, .language = value.language, .narrow_clear = narrow_clear };
+    }
+};
 pub const Table = struct {
     caption: []const Span = &.{},
     /// Non-null is authoritative; flat caption must be empty.
@@ -309,11 +633,14 @@ pub const Table = struct {
     rows: []const Row = &.{},
     geometry: ?TableGeometry = null,
     style: ?TableStyle = null,
+    block_viewport: ?*const TableBlockViewport = null,
+    float_viewport: ?TableFloatViewport = null,
 
     pub fn jsonStringify(self: Table, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("caption");
         try jw.write(self.caption);
+        if (self.float_viewport) |policy| { try jw.objectField("float_viewport"); try jw.write(policy); }
         if (self.caption_blocks) |blocks| { try jw.objectField("caption_blocks"); try jw.write(blocks); }
         try jw.objectField("rows");
         try jw.write(self.rows);
@@ -325,6 +652,7 @@ pub const Table = struct {
             try jw.objectField("style");
             try jw.write(style);
         }
+        if (self.block_viewport) |viewport| { try jw.objectField("block_viewport"); try jw.write(viewport.*); }
         try jw.endObject();
     }
 };
@@ -418,6 +746,210 @@ fn FigureJsonField(comptime T: type) type {
     };
 }
 
+pub const FigureBorderEdge = BorderEdgeFor(FigureColor);
+pub const FigureBorderEdges = BorderEdgesFor(FigureBorderEdge);
+/// One anonymous media grid and its external bottom caption share a semantic
+/// Figure owner. These physical edges use the existing table border algebra.
+pub const AvailableWidthLimit = struct { percent: f32, subtract: StyleLength };
+/// Explicit parent font for the zero-line-height media anchor, never alt/caption style.
+pub const FigureMediaStrut = struct {
+    font_scale: f32,
+    bold: bool = false,
+    italic: bool = false,
+    code: bool = false,
+    language: []const u8 = "",
+    direction: BidiResolvedDirection,
+    font_features: ?FontFeaturePolicy = null,
+
+    pub fn jsonStringify(self: FigureMediaStrut, jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(FigureMediaStrut).@"struct".field_names) |field_name| {
+            const features_field = comptime std.mem.eql(u8, field_name, "font_features");
+            if (!features_field or self.font_features != null) {
+                try jw.objectField(field_name);
+                try jw.write(@field(self, field_name));
+            }
+        }
+        try jw.endObject();
+    }
+};
+pub const FigureMediaGraphic = enum(u8) { magnify_clip_ltr_v1 = 0, magnify_clip_rtl_v1 = 1 };
+pub const FigureGraphicPaint = struct { graphic: FigureMediaGraphic, invert: bool = false };
+pub const FigureMediaAfter = struct {
+    width: StyleLength, height: StyleLength,
+    side: TableFloatSide, inset: StyleLength, bottom: StyleLength,
+    paint: ?FigureGraphicPaint = null,
+};
+pub const FigureFocusOutline = struct {
+    width: StyleLength, color: FigureColor, radius: StyleLength, offset: StyleLength,
+};
+pub const FigureLinkState = struct { foreground: []const u8, underline: bool };
+/// Fixed source-computed state colors, independent of the reader theme.
+pub const FigureLinkPaint = struct {
+    normal: FigureLinkState, hover: FigureLinkState, active: FigureLinkState,
+    visited: FigureLinkState, visited_hover: FigureLinkState, visited_active: FigureLinkState,
+    underline_on_focus: bool,
+    focus_outline: ?FigureFocusOutline = null,
+};
+pub const LinkState = FigureLinkState;
+/// Ordinary links retain independent hover+active combinations. Existing Figure
+/// state fields and their six-state wire encoding remain unchanged.
+pub const LinkPaint = struct {
+    normal: LinkState, hover: LinkState, active: LinkState, hover_active: LinkState,
+    visited: LinkState, visited_hover: LinkState, visited_active: LinkState, visited_hover_active: LinkState,
+    underline_on_focus: bool,
+    focus_outline: ?FigureFocusOutline = null,
+    // A data/wire prefix only; never a source proof that combined states equal active.
+    pub fn sixStatePrefix(self: LinkPaint) FigureLinkPaint {
+        return .{ .normal = self.normal, .hover = self.hover, .active = self.active, .visited = self.visited,
+            .visited_hover = self.visited_hover, .visited_active = self.visited_active,
+            .underline_on_focus = self.underline_on_focus, .focus_outline = self.focus_outline };
+    }
+    pub fn fromSixStatePrefix(prefix: FigureLinkPaint, hover_active: LinkState, visited_hover_active: LinkState) LinkPaint {
+        return .{ .normal = prefix.normal, .hover = prefix.hover, .active = prefix.active, .hover_active = hover_active,
+            .visited = prefix.visited, .visited_hover = prefix.visited_hover, .visited_active = prefix.visited_active,
+            .visited_hover_active = visited_hover_active, .underline_on_focus = prefix.underline_on_focus, .focus_outline = prefix.focus_outline };
+    }
+};
+pub fn linkPaintState(paint: LinkPaint, visited: bool, hover: bool, active: bool, focused: bool) LinkState {
+    var state = if (visited) (if (active) (if (hover) paint.visited_hover_active else paint.visited_active) else if (hover) paint.visited_hover else paint.visited)
+        else (if (active) (if (hover) paint.hover_active else paint.active) else if (hover) paint.hover else paint.normal);
+    if (focused and paint.underline_on_focus) state.underline = true;
+    return state;
+}
+pub fn validLinkPaint(paint: LinkPaint) bool {
+    return validFigureLinkPaint(paint.sixStatePrefix()) and isCanonicalRgb(paint.hover_active.foreground) and isCanonicalRgb(paint.visited_hover_active.foreground);
+}
+pub const FigureMediaLayout = struct {
+    strut: FigureMediaStrut,
+    vertical_align: InlineBoxVerticalAlign,
+    max_width: ?AvailableWidthLimit = null,
+    positioning: ?ContainerPositioning = null,
+    after: ?FigureMediaAfter = null,
+    focus_outline: ?FigureFocusOutline = null,
+};
+pub const FigureViewportState = struct {
+    max_width_px: u32,
+    wrapper: ContainerStyle,
+    media: FigureMediaLayout,
+    caption_before: ?ContainerStyle = null,
+};
+pub const max_figure_viewport_states = 16;
+pub const TableCaptionLayout = struct {
+    collapse: BorderCollapse,
+    wrapper: ContainerStyle,
+    table_border: FigureBorderEdges,
+    caption_border: FigureBorderEdges,
+    media: FigureMediaLayout,
+    caption_before: ?ContainerStyle = null,
+    viewport_states: []const FigureViewportState = &.{},
+    missing_link_paint: ?FigureLinkPaint = null,
+    caption_link_paint: ?FigureLinkPaint = null,
+    pub fn jsonStringify(self: TableCaptionLayout, jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(TableCaptionLayout).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "missing_link_paint") or std.mem.eql(u8, name, "caption_link_paint")) {
+                if (@field(self, name)) |paint| { try jw.objectField(name); try jw.write(paint); }
+            } else { try jw.objectField(name); try jw.write(@field(self, name)); }
+        }
+        try jw.endObject();
+    }
+};
+
+/// A block media owner uses ordinary block width and one explicit inline line.
+/// It is distinct from the anonymous table used by table-caption Figures.
+pub const FigureBlockMediaRendition = struct { url: []const u8, sha256: []const u8 };
+pub fn validFigureBlockMediaRendition(value: FigureBlockMediaRendition) bool {
+    if (value.url.len > 8192 or !std.mem.startsWith(u8, value.url, "https://") or value.sha256.len != 64) return false;
+    for (value.sha256) |byte| if (!std.ascii.isDigit(byte) and (byte < 'a' or byte > 'f')) return false;
+    const path = std.mem.indexOfScalarPos(u8, value.url, 8, '/') orelse return false;
+    if (path == 8 or path + 1 == value.url.len) return false;
+    const host = value.url[8..path];
+    if (host[0] == '.' or host[host.len - 1] == '.' or std.mem.indexOfScalar(u8, host, '.') == null) return false;
+    for (host) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '.' and byte != '-') return false;
+    for (value.url) |byte| if (byte <= 0x20 or byte >= 0x7f or byte == '\\' or byte == '#') return false;
+    return true;
+}
+pub const FigureBlockMediaState = struct {
+    max_width_px: u32,
+    wrapper: ContainerStyle,
+    media: FigureMediaLayout,
+};
+pub const FigureBlockMediaLayout = struct {
+    wrapper: ContainerStyle,
+    media: FigureMediaLayout,
+    preferred_width_px: u32,
+    natural_width: u32,
+    natural_height: u32,
+    rendition_1x: FigureBlockMediaRendition,
+    rendition_2x: FigureBlockMediaRendition,
+    viewport_states: []const FigureBlockMediaState = &.{},
+};
+
+fn validFigureBlockMediaState(wrapper: ContainerStyle, media: FigureMediaLayout) bool {
+    if (!validContainerStyle(wrapper) or !validFigureMediaLayout(media) or
+        wrapper.width == null or wrapper.width.? != .auto or wrapper.line_height == null or
+        wrapper.text_align == null or wrapper.owner_font_scale == null or
+        wrapper.owner_font_scale.? != media.strut.font_scale or
+        (wrapper.margins == null and wrapper.margin_values == null) or
+        media.vertical_align != .middle or media.positioning != null or
+        media.after != null or media.focus_outline != null) return false;
+    // The first source domain is a bare inline SPAN in an ordinary auto-width
+    // block. Other box/formatting effects need their own explicit representation.
+    inline for (@typeInfo(ContainerStyle).@"struct".field_names) |name| {
+        if (comptime std.mem.eql(u8, name, "width") or std.mem.eql(u8, name, "line_height") or
+            std.mem.eql(u8, name, "text_align") or std.mem.eql(u8, name, "owner_font_scale") or
+            std.mem.eql(u8, name, "margins") or std.mem.eql(u8, name, "margin_values")) continue;
+        if (@field(wrapper, name) != null) return false;
+    }
+    if (media.max_width) |limit| if (limit.percent != 100 or limit.subtract.value != 0) return false;
+    return true;
+}
+pub fn validFigureBlockMediaLayout(value: FigureBlockMediaLayout) bool {
+    if (value.preferred_width_px == 0 or value.natural_width == 0 or value.natural_height == 0 or
+        value.natural_width > std.math.maxInt(u32) / 2 or value.natural_height > std.math.maxInt(u32) / 2 or
+        !validFigureBlockMediaRendition(value.rendition_1x) or !validFigureBlockMediaRendition(value.rendition_2x) or
+        std.mem.eql(u8, value.rendition_1x.url, value.rendition_2x.url) or
+        std.mem.eql(u8, value.rendition_1x.sha256, value.rendition_2x.sha256) or
+        !validFigureBlockMediaState(value.wrapper, value.media) or
+        value.viewport_states.len > max_figure_viewport_states) return false;
+    var previous: ?u32 = null;
+    for (value.viewport_states) |state| {
+        if (previous) |bound| if (state.max_width_px >= bound) return false;
+        previous = state.max_width_px;
+        if (!validFigureBlockMediaState(state.wrapper, state.media)) return false;
+    }
+    return true;
+}
+pub fn resolveFigureBlockMediaState(value: FigureBlockMediaLayout, viewport_css_px: f64) error{InvalidPresentation}!?FigureBlockMediaState {
+    if (!validFigureBlockMediaLayout(value) or !std.math.isFinite(viewport_css_px) or viewport_css_px < 0) return error.InvalidPresentation;
+    var selected: ?FigureBlockMediaState = null;
+    for (value.viewport_states) |state| {
+        if (viewport_css_px > @as(f64, @floatFromInt(state.max_width_px))) break;
+        selected = state;
+    }
+    return selected;
+}
+fn validFigureBlockMediaContent(value: anytype, layout: FigureBlockMediaLayout) bool {
+    if (!validFigureBlockMediaLayout(layout) or value.content != .image or
+        value.placement != .none or value.clear != .none or value.frame_min_width != null or
+        value.frame_border.kind != .none or value.image_border.kind != .none or
+        value.frame_background.kind != .transparent or value.image_background.kind != .transparent or
+        value.caption_background.kind != .transparent) return false;
+    if (comptime @hasField(@TypeOf(value), "table_caption_layout")) if (value.table_caption_layout != null) return false;
+    if (comptime @hasField(@TypeOf(value), "caption")) if (value.caption.len != 0) return false;
+    if (comptime @hasField(@TypeOf(value), "caption_blocks")) if (value.caption_blocks) |blocks| if (blocks.len != 0) return false;
+    if (comptime @hasField(@TypeOf(value), "caption_text_align")) if (value.caption_text_align != null) return false;
+    inline for (.{ "margins", "image_insets", "caption_padding" }) |name|
+        inline for (.{ "top", "right", "bottom", "left" }) |side|
+            if (@field(@field(value, name), side).value != 0) return false;
+    const span = value.content.image.span;
+    if (!std.mem.eql(u8, @tagName(span.kind), "text") or span.target.len != 0) return false;
+    const image = span.image orelse return false;
+    if (image.map != null or image.static_poster != null) return false;
+    return true;
+}
+
 pub const Figure = struct {
     content: FigureContent,
     caption: []const Span = &.{},
@@ -427,6 +959,8 @@ pub const Figure = struct {
     format: FigureFormat,
     /// Physical content-box CSS floor, separate from media axes and margins.
     frame_min_width: ?StyleLength = null,
+    table_caption_layout: ?TableCaptionLayout = null,
+    block_media_layout: ?FigureBlockMediaLayout = null,
     placement: FigurePlacement,
     clear: FigureClear,
     margins: StyleEdges,
@@ -454,6 +988,10 @@ pub const Figure = struct {
                     try jw.objectField("sizing"); try jw.write(self.content.image.sizing);
                 }
                 if (self.frame_min_width) |minimum| { try jw.objectField(name); try jw.write(minimum); }
+            } else if (comptime std.mem.eql(u8, name, "table_caption_layout")) {
+                if (self.table_caption_layout) |layout| { try jw.objectField(name); try jw.write(layout); }
+            } else if (comptime std.mem.eql(u8, name, "block_media_layout")) {
+                if (self.block_media_layout) |layout| { try jw.objectField(name); try jw.write(layout); }
             } else if (comptime std.mem.eql(u8, name, "caption_font_scale")) {
                 try jw.objectField(name); try jw.write(@as(f64, self.caption_font_scale));
             } else if (comptime std.mem.eql(u8, name, "caption_text_align")) {
@@ -504,6 +1042,8 @@ const FigureJson = struct {
     sizing: FigureJsonField(FigureSizingPolicy) = .{},
     /// Physical content-box CSS floor, separate from media axes and margins.
     frame_min_width: ?StyleLength = null,
+    table_caption_layout: ?TableCaptionLayout = null,
+    block_media_layout: ?FigureBlockMediaLayout = null,
     placement: FigurePlacement,
     clear: FigureClear,
     margins: StyleEdges,
@@ -615,6 +1155,152 @@ pub const ContainerOverflow = enum { visible, auto };
 /// computed once at this owner into normal-body units, never from a child span.
 pub const ContainerColumns = struct { count: u16, gap: StyleLength };
 pub const ContainerPositioning = enum(u8) { relative_auto = 0 };
+pub const GenericFontFamily = enum(u8) { sans_serif = 0, serif = 1 };
+pub const FontFamilyStack = struct {
+    names: []const []const u8,
+    fallback: GenericFontFamily,
+};
+pub const ContainerFontFamily = union(enum) {
+    sans_serif,
+    stack: FontFamilyStack,
+
+    pub fn jsonStringify(self: ContainerFontFamily, jw: anytype) !void {
+        switch (self) {
+            .sans_serif => try jw.write("sans_serif"),
+            .stack => |value| {
+                try jw.beginObject(); try jw.objectField("stack"); try jw.write(value); try jw.endObject();
+            },
+        }
+    }
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!ContainerFontFamily {
+        const value = try std.json.innerParse(std.json.Value, a, source, options);
+        return jsonParseFromValue(a, value, options);
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, value: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!ContainerFontFamily {
+        if (value == .string) return if (std.mem.eql(u8, value.string, "sans_serif")) .sans_serif else error.InvalidEnumTag;
+        if (value != .object or value.object.count() != 1) return error.UnexpectedToken;
+        const stack = value.object.get("stack") orelse return error.UnknownField;
+        if (stack != .object or stack.object.count() != 2) return error.UnexpectedToken;
+        const raw_names = stack.object.get("names") orelse return error.MissingField;
+        const raw_fallback = stack.object.get("fallback") orelse return error.MissingField;
+        if (raw_names != .array or raw_names.array.items.len > 16 or raw_fallback != .string) return error.UnexpectedToken;
+        const fallback = std.meta.stringToEnum(GenericFontFamily, raw_fallback.string) orelse return error.InvalidEnumTag;
+        const names = try a.alloc([]const u8, raw_names.array.items.len);
+        for (raw_names.array.items, names) |raw, *name| {
+            if (raw != .string or !validFontFamilyName(raw.string)) return error.UnexpectedToken;
+            name.* = try a.dupe(u8, raw.string);
+        }
+        return .{ .stack = .{ .names = names, .fallback = fallback } };
+    }
+};
+pub fn validFontFamilyName(name: []const u8) bool {
+    if (name.len == 0 or name.len > 128 or !std.unicode.utf8ValidateSlice(name) or
+        !std.mem.eql(u8, name, std.mem.trim(u8, name, " \t\r\n\x0c"))) return false;
+    var folded: [128]u8 = undefined;
+    var length: usize = 0;
+    for (name) |byte| {
+        if (byte < 0x20 or byte >= 0x7f or byte == '[' or byte == ']') return false;
+        if (byte == ' ' and length != 0 and folded[length - 1] == ' ') continue;
+        folded[length] = std.ascii.toLower(byte); length += 1;
+    }
+    // A quoted generic-looking source name is not the generic fallback. The
+    // selected native APIs alias these spellings, so withhold this named case.
+    for ([_][]const u8{ "serif", "sans-serif", "sans serif", "sans", "monospace", "cursive", "fantasy",
+        "system", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong" }) |alias|
+        if (std.mem.eql(u8, folded[0..length], alias)) return false;
+    return true;
+}
+pub fn sameFontFamilyRequest(left: ?ContainerFontFamily, right: ?ContainerFontFamily) bool {
+    const a = left orelse return right == null;
+    const b = right orelse return false;
+    switch (a) {
+        .sans_serif => return b == .sans_serif,
+        .stack => |stack| {
+            if (b != .stack or stack.fallback != b.stack.fallback or stack.names.len != b.stack.names.len) return false;
+            for (stack.names, b.stack.names) |x, y| if (!std.mem.eql(u8, x, y)) return false;
+            return true;
+        },
+    }
+}
+pub fn validContainerFontFamily(value: ContainerFontFamily) bool {
+    switch (value) {
+        .sans_serif => return true,
+        .stack => |stack| {
+            if (stack.names.len > 16) return false;
+            for (stack.names) |name| if (!validFontFamilyName(name)) return false;
+            return true;
+        },
+    }
+}
+
+pub const SectionHeadingStyle = struct {
+    box: ContainerStyle,
+    font: InlineFontSnapshot,
+    direction: BidiResolvedDirection,
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!SectionHeadingStyle {
+        const value = try std.json.innerParse(std.json.Value, a, source, options);
+        return jsonParseFromValue(a, value, options);
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, value: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!SectionHeadingStyle {
+        if (value != .object or value.object.count() != 3) return error.UnexpectedToken;
+        const direction = value.object.get("direction") orelse return error.MissingField;
+        if (direction != .string or (!std.mem.eql(u8, direction.string, "ltr") and !std.mem.eql(u8, direction.string, "rtl"))) return error.InvalidEnumTag;
+        const Raw = struct { box: ContainerStyle, font: InlineFontSnapshot, direction: BidiResolvedDirection };
+        const raw = try std.json.innerParseFromValue(Raw, a, value, options);
+        const result: SectionHeadingStyle = .{ .box = raw.box, .font = raw.font, .direction = raw.direction };
+        if (!validSectionHeadingStyle(result)) return error.UnexpectedToken;
+        return result;
+    }
+};
+pub fn validSectionHeadingStyle(value: SectionHeadingStyle) bool {
+    const box = value.box;
+    if (!validContainerStyle(box) or box.margins == null or box.padding == null or box.border == null or
+        box.owner_font_scale == null or box.line_height == null or box.clear == null or box.font_family == null) return false;
+    const font = value.font;
+    if (font.font_family != null and !sameFontFamilyRequest(font.font_family, box.font_family)) return false;
+    if (!validInlineFontSnapshot(font) or font.font_scale == null or font.font_scale_basis != .normal_body or font.font_scale.? != box.owner_font_scale.? or
+        font.small or font.superscript or font.subscript or font.font_normalized or font.code or font.classes.len != 0 or font.role != .normal or
+        font.language.len == 0 or font.language.len > 1024 or !std.unicode.utf8ValidateSlice(font.language) or
+        std.mem.indexOfScalar(u8, font.language, 0) != null) return false;
+    return (box.width == null or box.width.? == .auto) and (box.max_width == null or box.max_width.? == .none) and
+        (box.layout == null or box.layout.? == .flow) and (box.overflow == null or box.overflow.? == .visible) and
+        box.float_side == null and box.flex_item == null and box.align_items == null and box.columns == null and
+        box.positioning == null and box.screen_max_width == null and box.height == null and box.min_height == null and box.margin_values == null;
+}
+pub fn validSectionHeadingCompanion(section: anytype) bool {
+    // Legacy build Sections have no authored heading capability. Decline at
+    // compile time before touching the new identity or companion fields.
+    inline for (.{ "heading_style", "level", "title", "blocks" }) |field|
+        if (comptime !@hasField(@TypeOf(section), field)) return false;
+    if (section.level < 1 or section.level > 6 or section.title.len == 0 or section.blocks.len == 0) return false;
+    const heading = section.blocks[0];
+    inline for (.{ "kind", "depth", "level", "list_path", "number", "feature", "table", "spans" }) |field|
+        if (comptime !@hasField(@TypeOf(heading), field)) return false;
+    const section_anchor: []const u8 = if (comptime @hasField(@TypeOf(section), "anchor")) section.anchor else "";
+    const section_fallback: []const u8 = if (comptime @hasField(@TypeOf(section), "anchor_fallback")) section.anchor_fallback else "";
+    const heading_anchor: []const u8 = if (comptime @hasField(@TypeOf(heading), "anchor")) heading.anchor else "";
+    const heading_fallback: []const u8 = if (comptime @hasField(@TypeOf(heading), "anchor_fallback")) heading.anchor_fallback else "";
+    if (!std.mem.eql(u8, @tagName(heading.kind), "heading") or heading.depth != 0 or heading.level != section.level or
+        !std.mem.eql(u8, heading_anchor, section_anchor) or !std.mem.eql(u8, heading_fallback, section_fallback) or
+        heading.list_path.len != 0 or heading.number.len != 0 or heading.feature != null or heading.table != null) return false;
+    inline for (.{ "flow", "container", "figure", "style", "rule_style", "text_align" }) |field|
+        if (comptime @hasField(@TypeOf(heading), field)) { if (@field(heading, field) != null) return false; };
+    var offset: usize = 0;
+    for (heading.spans) |span| {
+        // The existing build encoder defaults these optional source fields to
+        // no image and empty trail/direction, including Compiler.Span.
+        if (comptime @hasField(@TypeOf(span), "image")) { if (span.image != null) return false; }
+        const trail: []const u8 = if (comptime @hasField(@TypeOf(span), "trail")) span.trail else "";
+        const direction: []const u8 = if (comptime @hasField(@TypeOf(span), "direction")) span.direction else "";
+        const kind = @tagName(span.kind);
+        if (span.text.len == 0 or trail.len != 0 or direction.len != 0 or
+            (!std.mem.eql(u8, kind, "text") and !std.mem.eql(u8, kind, "link") and !std.mem.eql(u8, kind, "external_link"))) return false;
+        if (span.text.len > section.title.len - offset or !std.mem.eql(u8, span.text, section.title[offset..][0..span.text.len])) return false;
+        offset += span.text.len;
+    }
+    return offset == section.title.len;
+}
+
 pub const ContainerStyle = struct {
     // Box em lengths are computed once at this box's font origin into
     // normal-body units. Width percentages use its containing block content box.
@@ -650,6 +1336,7 @@ pub const ContainerStyle = struct {
     // Computed base margins retaining auto for the consumer's actual width and
     // formatting context. Exclusive with numeric margins; null preserves old bytes.
     margin_values: ?ContainerMargins = null,
+    font_family: ?ContainerFontFamily = null,
     pub fn jsonStringify(self: ContainerStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
     }
@@ -658,6 +1345,27 @@ pub fn ContainerFor(comptime BlockType: type) type {
     return struct { blocks: []const BlockType, style: ContainerStyle = .{} };
 }
 pub const Container = ContainerFor(Block);
+
+/// Authored separator box. Relative lengths have already been normalized to
+/// the normal-body font basis. Width is auto in the containing content box;
+/// border/padding are zero, and margins participate in ordinary block flow.
+pub const RuleStyle = struct {
+    height: StyleLength,
+    fill: ContainerColor,
+    margins: StyleEdges,
+};
+pub fn validRuleStyle(value: RuleStyle) bool {
+    return validStyleLength(value.height) and validContainerColor(value.fill) and validStyleEdges(value.margins);
+}
+pub fn validRuleStyleContext(block: anytype) bool {
+    if (comptime !@hasField(@TypeOf(block), "rule_style")) return false;
+    if (!std.mem.eql(u8, @tagName(block.kind), "rule") or block.depth != 0 or block.level != 0 or
+        block.spans.len != 0 or block.feature != null or block.table != null or
+        block.list_path.len != 0 or block.number.len != 0 or block.anchor.len != 0 or block.anchor_fallback.len != 0) return false;
+    inline for (.{ "figure", "flow", "container", "style", "text_align" }) |field|
+        if (comptime @hasField(@TypeOf(block), field)) { if (@field(block, field) != null) return false; };
+    return true;
+}
 
 pub const Block = struct {
     kind: BlockKind,
@@ -676,11 +1384,12 @@ pub const Block = struct {
     /// Anonymous ordered content; parent block owns role, list, geometry and spacing.
     flow: ?[]const FlowPart = null,
     container: ?Container = null,
+    rule_style: ?RuleStyle = null,
 
     pub fn jsonStringify(self: Block, jw: anytype) !void {
         try jw.beginObject();
         inline for (@typeInfo(Block).@"struct".field_names) |name| {
-            if (comptime std.mem.eql(u8, name, "text_align") or std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "figure") or std.mem.eql(u8, name, "flow") or std.mem.eql(u8, name, "container")) {
+            if (comptime std.mem.eql(u8, name, "text_align") or std.mem.eql(u8, name, "style") or std.mem.eql(u8, name, "figure") or std.mem.eql(u8, name, "flow") or std.mem.eql(u8, name, "container") or std.mem.eql(u8, name, "rule_style")) {
                 if (@field(self, name)) |present| {
                     try jw.objectField(name);
                     try jw.write(present);
@@ -699,6 +1408,16 @@ pub const Section = struct {
     anchor: []const u8 = "",
     anchor_fallback: []const u8 = "",
     blocks: []const Block = &.{},
+    heading_style: ?SectionHeadingStyle = null,
+    pub fn jsonStringify(self: Section, jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(Section).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "heading_style")) {
+                if (self.heading_style) |present| { try jw.objectField(name); try jw.write(present); }
+            } else { try jw.objectField(name); try jw.write(@field(self, name)); }
+        }
+        try jw.endObject();
+    }
 };
 pub const Form = struct { relation: []const u8, target: []const u8, language: []const u8 };
 pub const Sense = struct {
@@ -780,6 +1499,20 @@ pub const AliasTarget = struct {
     target_title: []const u8,
     fragment: []const u8,
 };
+// Source-qualified adjoining edges of the semantic Section body only.
+// The app owns its assigned origin; no page-chrome numeric margins are stored.
+pub const BodyAdjoiningPolicy = enum(u8) {
+    ordinary = 1,
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        if (try source.peekNextTokenType() != .string) return error.UnexpectedToken;
+        const name = try std.json.innerParse([]const u8, a, source, options);
+        return std.meta.stringToEnum(@This(), name) orelse error.InvalidEnumTag;
+    }
+    pub fn jsonParseFromValue(_: std.mem.Allocator, value: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        if (value != .string) return error.UnexpectedToken;
+        return std.meta.stringToEnum(@This(), value.string) orelse error.InvalidEnumTag;
+    }
+};
 pub const Entry = struct {
     organization: Layout = .{},
     title: []const u8,
@@ -793,6 +1526,19 @@ pub const Entry = struct {
     media: []const Media = &.{},
     redirect: ?Redirect = null,
     alias: ?AliasTarget = null,
+    body_adjoining: ?BodyAdjoiningPolicy = null,
+
+    pub fn jsonStringify(self: Entry, jw: anytype) !void {
+        try jw.beginObject();
+        inline for (@typeInfo(Entry).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "body_adjoining")) {
+                if (self.body_adjoining) |present| {
+                    try jw.objectField(name); try jw.write(present);
+                }
+            } else { try jw.objectField(name); try jw.write(@field(self, name)); }
+        }
+        try jw.endObject();
+    }
 };
 pub const Stored = struct { schema: []const u8 = schema, entry: Entry };
 
@@ -1097,6 +1843,7 @@ const ImageValidation = struct {
     maps: MapValidationBudget = .{},
     content_depth: usize = 0,
     in_reference: bool = false,
+    link_paint: ?FigureLinkPaint = null,
 
     fn deinit(self: *ImageValidation) void {
         if (self.index) |*index| index.deinit(self.a);
@@ -1118,6 +1865,8 @@ const ImageValidation = struct {
 };
 fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationError!void {
     for (spans) |span| {
+        if (span.font_family) |family| if (!validContainerFontFamily(family)) return error.InvalidPresentation;
+        if (media.link_paint) |paint| if (!validFigureLinkPaintSpan(paint, span)) return error.InvalidPresentation;
         if (span.tooltip) |advice| if (!std.unicode.utf8ValidateSlice(advice)) return error.InvalidPresentation;
         if (span.target_fragment) |fragment| if (span.kind != .link or !validTargetFragment(fragment)) return error.InvalidPresentation;
         if (span.image) |image| {
@@ -1125,8 +1874,7 @@ fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationEr
                 !validInlineImageAction(span.kind, span.target)) return error.InvalidPresentation;
             try media.validate(image);
         }
-        if (span.font_scale) |scale| if (!std.math.isFinite(scale) or scale < 0) return error.InvalidPresentation;
-        if (span.font_scale_basis == .normal_body and span.font_scale == null) return error.InvalidPresentation;
+        if (!validSpanInlineStyle(span) or !validSpanLinkPaint(span) or !validSpanFontScale(span.font_scale, span.font_scale_basis)) return error.InvalidPresentation;
         if (span.foreground) |color| if (!isCanonicalRgb(color)) return error.InvalidPresentation;
         if (span.background) |color| if (!isCanonicalRgb(color)) return error.InvalidPresentation;
     }
@@ -1162,26 +1910,111 @@ pub fn validInlineTableContent(style: ?TableStyle, caption_len: usize, has_capti
     return !tableStyleIsInline(style) or (caption_len == 0 and !has_caption_blocks and has_cells);
 }
 pub fn validComputedLineHeight(value: ComputedLineHeight) bool {
-    return std.math.isFinite(value.value) and value.value > 0;
+    return value.font_scale_basis != .css_px and std.math.isFinite(value.value) and value.value > 0;
+}
+pub fn validTableMarginValues(value: ContainerMargins) bool {
+    inline for (.{ "top", "bottom" }) |name| {
+        const edge = @field(value, name);
+        if (edge != .length or !validStyleLength(edge.length)) return false;
+    }
+    inline for (.{ "right", "left" }) |name| switch (@field(value, name)) {
+        .auto => {},
+        .length => |length| if (!validStyleLength(length)) return false,
+    };
+    return value.left == .auto or value.right == .auto;
 }
 pub fn validTableStyle(value: TableStyle) bool {
+    if ((value.margin_values != null) != (value.containing_direction != null)) return false;
+    return validUnboundTableStyle(value);
+}
+/// Build-only parsed declaration components, before actual parent direction is
+/// bound. This predicate never grants Stored/codec/native table admission.
+pub fn validUnboundTableStyle(value: TableStyle) bool {
     if (value.vertical_align) |alignment| if (alignment == .top and !tableStyleIsInline(value)) return false;
-    if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.float_side == null and value.width == null and value.padding == null and value.clear == null and value.display == null and value.vertical_align == null and value.line_height == null) return false;
+    if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.margin_values == null and value.float_side == null and value.width == null and value.padding == null and value.clear == null and value.display == null and value.vertical_align == null and value.line_height == null) return false;
     if (value.background) |color| if (!isCanonicalRgb(color)) return false;
     if (value.border) |border| if (!validBorder(border)) return false;
     if (value.margins) |margins| if (!validStyleEdges(margins)) return false;
+    if (value.margin_values) |margins| if (value.margins != null or !validTableMarginValues(margins)) return false;
     if (value.width) |width| if (!validStyleWidth(width)) return false;
     if (value.padding) |padding| if (!validStyleEdges(padding)) return false;
     if (value.line_height) |height| if (!validComputedLineHeight(height)) return false;
     if (value.display) |display| if (display != .table and value.float_side != null) return false;
     return true;
 }
+pub fn validTableBlockViewport(value: TableBlockViewport) bool {
+    return validTableBlockViewportIn(value, false);
+}
+/// In the explicitly paired responsive policy only, absent box width means
+/// fit-content and fixed margins belong to the source block scroll owner.
+pub fn validTableScrollViewport(value: TableBlockViewport) bool {
+    return validTableBlockViewportIn(value, true);
+}
+fn validTableBlockViewportIn(value: TableBlockViewport, paired: bool) bool {
+    if (paired) {
+        if (!validTableScrollFocusPaint(value.focus_paint orelse return false)) return false;
+    } else if (value.focus_paint != null) return false;
+    if (value.language.len == 0 or value.language.len > 32 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(value.language)) return false;
+    const box = value.box_style;
+    if (!validTableStyle(box) or (if (paired)
+        box.width != null or box.margins == null or box.margin_values != null or box.containing_direction != null
+        else box.width == null or box.width.?.value <= 0 or box.margin_values == null or box.margins != null) or
+        box.float_side != null or box.display != null or box.vertical_align != null or
+        box.collapse != null or box.line_height != null or !validStyleWidth(value.max_width)) return false;
+    const grid = value.grid_style;
+    // Separate borders need a represented spacing carrier. The source block's
+    // border/background/padding never become anonymous-grid defaults.
+    return validTableStyle(grid) and grid.collapse == .collapse and grid.background == null and grid.border == null and
+        grid.padding == null and grid.width == null and grid.margins == null and grid.margin_values == null and
+        grid.containing_direction == null and grid.float_side == null and grid.clear == null and grid.display == null and grid.vertical_align == null;
+}
+pub fn validTableBlockViewportHeader(geometry: ?TableGeometry, style: ?TableStyle, viewport: ?*const TableBlockViewport) bool {
+    const value = viewport orelse return true;
+    if (geometry != null or tableStyleIsInline(style)) return false;
+    if (style) |wide| if (!validTableStyle(wide) or wide.float_side != null) return false;
+    return validTableBlockViewport(value.*);
+}
+/// Both records describe mutually exclusive states of one source Table owner.
+/// The narrow owner is a fit-content auto-scroll block; the wide owner floats.
+pub fn validTableViewportHeaders(geometry: ?TableGeometry, style: ?TableStyle,
+    block: ?*const TableBlockViewport, floating: ?TableFloatViewport) bool
+{
+    if (block) |narrow| if (floating) |wide| {
+        return validTableFloatViewportHeader(geometry, style, wide) and
+            validTableScrollViewport(narrow.*) and wide.narrow_clear == null and
+            wide.max_viewport_width_px == narrow.max_viewport_width_px and
+            wide.grid_direction == narrow.grid_direction and std.mem.eql(u8, wide.language, narrow.language);
+    };
+    return validTableBlockViewportHeader(geometry, style, block) and
+        validTableFloatViewportHeader(geometry, style, floating);
+}
+/// Viewport is the document CSS viewport, never a cell's available width.
+pub fn resolveTableBlockViewport(table: Table, viewport_css_px: f32) error{InvalidPresentation}!?*const TableBlockViewport {
+    if (!validTableViewportHeaders(table.geometry, table.style, table.block_viewport, table.float_viewport) or
+        !std.math.isFinite(viewport_css_px) or viewport_css_px < 0) return error.InvalidPresentation;
+    const selected = table.block_viewport orelse return null;
+    return if (@as(f64, viewport_css_px) <= @as(f64, @floatFromInt(selected.max_viewport_width_px))) selected else null;
+}
+pub fn validCellTextMetric(value: ComputedLineHeight) bool {
+    return std.math.isFinite(value.value) and value.value >= 0 and
+        (value.font_scale_basis == .normal_body or value.font_scale_basis == .css_px);
+}
+pub fn validCellLineHeight(value: CellLineHeight) bool {
+    if (value.strut) |strut| if (!validCellTextMetric(.{ .value = strut.font_scale, .font_scale_basis = strut.font_scale_basis })) return false;
+    return switch (value.height) {
+        .normal => true,
+        .multiplier => |factor| std.math.isFinite(factor) and factor >= 0,
+        .length => |length| validCellTextMetric(length),
+    };
+}
+
 pub fn validCellStyle(value: CellStyle) bool {
     if (value.width) |width| if (!validStyleWidth(width)) return false;
     if (value.min_width) |width| if (!validStyleLength(width)) return false;
-    if (value.border == null and value.padding == null and value.text_align == null and value.min_width == null and value.vertical_align == null and value.width == null) return false;
+    if (value.border == null and value.padding == null and value.text_align == null and value.min_width == null and value.vertical_align == null and value.width == null and value.line_height == null) return false;
     if (value.border) |border| if (!validBorder(border)) return false;
     if (value.padding) |padding| if (!validStyleEdges(padding)) return false;
+    if (value.line_height) |height| if (!validCellLineHeight(height)) return false;
     return true;
 }
 pub fn validFigureColor(value: FigureColor) bool {
@@ -1196,9 +2029,153 @@ pub fn validFigureBorder(value: FigureBorder) bool {
         .solid => value.width != null and value.color != null and validStyleLength(value.width.?) and validFigureColor(value.color.?),
     };
 }
+pub fn validFigureBorderEdge(value: FigureBorderEdge) bool {
+    return switch (value) {
+        .none, .hidden => true,
+        .solid, .dotted => |line| validStyleLength(line.width) and validFigureColor(line.color),
+    };
+}
+pub fn validFigureViewportWrapper(value: ContainerStyle) bool {
+    if (!validContainerStyle(value)) return false;
+    const allowed: ContainerStyle = .{ .margins = value.margins, .margin_values = value.margin_values,
+        .float_side = value.float_side, .clear = value.clear };
+    if (!std.meta.eql(value, allowed)) return false;
+    if (value.margins) |edges| if (!validStyleEdges(edges)) return false;
+    if (value.margin_values) |edges| inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        switch (@field(edges, side)) {
+            .auto => if (comptime std.mem.eql(u8, side, "top") or std.mem.eql(u8, side, "bottom")) return false,
+            .length => |length_value| if (!validStyleLength(length_value)) return false,
+        }
+    };
+    return true;
+}
+pub fn validFigureCaptionBefore(value: ContainerStyle) bool {
+    if (!validContainerStyle(value) or value.width == null or value.height == null or value.float_side == null) return false;
+    const width = value.width.?;
+    if (width != .length or width.length.unit == .percent) return false;
+    const allowed: ContainerStyle = .{ .width = value.width, .height = value.height, .float_side = value.float_side,
+        .margins = value.margins, .layout = value.layout, .box_sizing = value.box_sizing,
+        .background = value.background, .border = value.border };
+    if (!std.meta.eql(value, allowed)) return false;
+    if (value.margins) |edges| if (!validStyleEdges(edges)) return false;
+    if (value.layout) |layout| if (layout != .flow) return false;
+    if (value.box_sizing) |sizing| if (sizing != .content_box) return false;
+    if (value.background) |background| if (background != .transparent) return false;
+    if (value.border) |border| if (border != .none) return false;
+    return true;
+}
+pub fn validFigureFocusOutline(value: FigureFocusOutline) bool {
+    return validStyleLength(value.width) and validFigureColor(value.color) and
+        validStyleLength(value.radius) and validContainerMarginLength(value.offset);
+}
+pub fn validFigureLinkPaint(value: FigureLinkPaint) bool {
+    inline for (.{ "normal", "hover", "active", "visited", "visited_hover", "visited_active" }) |name|
+        if (!isCanonicalRgb(@field(value, name).foreground)) return false;
+    if (value.focus_outline) |outline| if (!validFigureFocusOutline(outline) or outline.color.kind != .rgb) return false;
+    return true;
+}
+/// Header validity is separate; this preserves static paint agreement while the
+/// existing bounded traversal visits real text-link owners exactly once.
+pub fn validFigureLinkPaintSpan(paint: FigureLinkPaint, span: anytype) bool {
+    if (comptime @hasField(@TypeOf(span), "link_paint")) if (span.link_paint != null) return false;
+    const name = @tagName(span.kind);
+    if (!std.mem.eql(u8, name, "link") and !std.mem.eql(u8, name, "external_link")) return true;
+    if (comptime @hasField(@TypeOf(span), "image")) if (span.image != null) return true;
+    if (comptime @hasField(@TypeOf(span), "foreground")) if (span.foreground) |color|
+        if (!std.mem.eql(u8, color, paint.normal.foreground)) return false;
+    return true;
+}
+pub fn validSpanLinkPaint(span: anytype) bool {
+    const paint: LinkPaint = if (comptime @hasField(@TypeOf(span), "link_paint")) span.link_paint orelse return true else return true;
+    const kind = @tagName(span.kind);
+    if ((!std.mem.eql(u8, kind, "link") and !std.mem.eql(u8, kind, "external_link")) or span.target.len == 0 or !validLinkPaint(paint)) return false;
+    if (comptime @hasField(@TypeOf(span), "image")) if (span.image != null) return false;
+    if (comptime @hasField(@TypeOf(span), "foreground")) if (span.foreground) |ink| if (!std.mem.eql(u8, ink, paint.normal.foreground)) return false;
+    const underline = if (comptime @hasField(@TypeOf(span), "flags")) span.flags.underline else span.underline;
+    return underline == paint.normal.underline;
+}
+pub fn validFigureMediaLayout(value: FigureMediaLayout) bool {
+    if (!std.math.isFinite(value.strut.font_scale) or value.strut.font_scale < 0 or
+        value.strut.language.len > 32 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(value.strut.language)) return false;
+    if (value.vertical_align != .baseline and value.vertical_align != .middle) return false;
+    if (value.max_width) |limit| if (limit.percent != 100 or !validStyleLength(limit.subtract)) return false;
+    if (value.after) |after| {
+        if (value.positioning == null or value.positioning.? != .relative_auto) return false;
+        // This capability paints the retained natural-size asset, not arbitrary
+        // background resizing/tiling or another absolute descendant shape.
+        if (after.width.unit != .px or after.width.value != 15 or
+            after.height.unit != .px or after.height.value != 11 or
+            after.inset.unit != .px or after.inset.value != 6 or
+            after.bottom.unit != .px or after.bottom.value != -11) return false;
+    }
+    if (value.focus_outline) |outline| if (!validFigureFocusOutline(outline)) return false;
+    return true;
+}
+fn validFigureMediaContent(media: FigureMediaLayout, content: anytype) bool {
+    if (!validFigureMediaLayout(media)) return false;
+    return switch (content) {
+        .missing => media.vertical_align == .baseline and media.max_width == null and
+            media.positioning == null and media.after == null and media.focus_outline == null,
+        .image => |image| blk: {
+            if (media.vertical_align != .middle) break :blk false;
+            const file = image.span.image orelse break :blk false;
+            if (file.map != null) break :blk false;
+            if (media.after != null or media.focus_outline != null) {
+                const kind = @tagName(image.span.kind);
+                if ((!std.mem.eql(u8, kind, "link") and !std.mem.eql(u8, kind, "external_link")) or
+                    image.span.target.len == 0) break :blk false;
+            }
+            break :blk true;
+        },
+    };
+}
+pub fn validTableCaptionLayout(value: TableCaptionLayout) bool {
+    // Separate grids need their real border-spacing domain, not an implicit zero.
+    if (value.collapse != .collapse or !validFigureViewportWrapper(value.wrapper)) return false;
+    if (!validFigureMediaLayout(value.media)) return false;
+    if (value.missing_link_paint) |paint| if (!validFigureLinkPaint(paint)) return false;
+    if (value.caption_link_paint) |paint| if (!validFigureLinkPaint(paint)) return false;
+    if (value.caption_before) |before| if (!validFigureCaptionBefore(before)) return false;
+    if (value.viewport_states.len > max_figure_viewport_states) return false;
+    var previous: ?u32 = null;
+    for (value.viewport_states) |state| {
+        if (previous) |bound| if (state.max_width_px >= bound) return false;
+        previous = state.max_width_px;
+        if (!validFigureViewportWrapper(state.wrapper) or !validFigureMediaLayout(state.media)) return false;
+        if (state.caption_before) |before| if (!validFigureCaptionBefore(before)) return false;
+    }
+    inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        if (!validFigureBorderEdge(@field(value.table_border, side)) or
+            !validFigureBorderEdge(@field(value.caption_border, side))) return false;
+    }
+    return true;
+}
+pub fn resolveFigureViewportState(value: TableCaptionLayout, viewport_css_px: f64) error{InvalidPresentation}!?FigureViewportState {
+    if (!validTableCaptionLayout(value) or !std.math.isFinite(viewport_css_px) or viewport_css_px < 0) return error.InvalidPresentation;
+    var selected: ?FigureViewportState = null;
+    for (value.viewport_states) |state| {
+        if (viewport_css_px > @as(f64, @floatFromInt(state.max_width_px))) break;
+        selected = state;
+    }
+    return selected;
+}
 // BuildFigure mirrors these fields but keeps a compiler Span. Do not cast that
 // span to Stored or discard its packed flags/provenance to validate geometry.
 pub fn validFigureGeometry(value: anytype) bool {
+    if (comptime @hasField(@TypeOf(value), "block_media_layout")) if (value.block_media_layout) |layout|
+        if (!validFigureBlockMediaContent(value, layout)) return false;
+    if (comptime @hasField(@TypeOf(value), "table_caption_layout")) if (value.table_caption_layout) |layout| {
+        if (!validTableCaptionLayout(layout) or value.frame_border.kind != .none or
+            !validFigureMediaContent(layout.media, value.content)) return false;
+        for (layout.viewport_states) |state| if (!validFigureMediaContent(state.media, value.content)) return false;
+        if (layout.missing_link_paint != null) {
+            if (value.content != .missing or value.content.missing.link_paint != null) return false;
+            const label = value.content.missing.label;
+            const kind_name = @tagName(label.kind);
+            if ((!std.mem.eql(u8, kind_name, "link") and !std.mem.eql(u8, kind_name, "external_link")) or
+                label.target.len == 0) return false;
+        }
+    };
     return validStyleEdges(value.margins) and validStyleEdges(value.image_insets) and validStyleEdges(value.caption_padding) and
         std.math.isFinite(value.caption_font_scale) and value.caption_font_scale >= 0 and validStyleLength(value.caption_line_height) and
         validFigureColor(value.frame_background) and validFigureBorder(value.frame_border) and
@@ -1233,6 +2210,7 @@ pub fn validMissingFigureContent(value: anytype) bool {
         else return false;
     if (comptime @hasField(@TypeOf(value), "link_paint")) if (value.link_paint != null) {
         if (kind != .link and kind != .external_link) return false;
+        if (comptime @hasField(@TypeOf(label), "link_paint")) if (label.link_paint != null) return false;
         // A static foreground and this stateful policy have no implicit precedence.
         if (comptime @hasField(@TypeOf(label), "foreground")) if (label.foreground != null) return false;
     };
@@ -1248,14 +2226,17 @@ pub fn validMissingFigureContent(value: anytype) bool {
     if (comptime @hasField(@TypeOf(label), "tooltip")) if (label.tooltip) |tooltip|
         if (!std.unicode.utf8ValidateSlice(tooltip)) return false;
     const scale: ?f32 = if (comptime @hasField(@TypeOf(label), "font_scale")) label.font_scale else null;
-    if (scale) |number| if (!std.math.isFinite(number) or number < 0) return false;
-    if (comptime @hasField(@TypeOf(label), "font_scale_basis"))
-        if (label.font_scale_basis == .normal_body and scale == null) return false;
+    const basis: FontScaleBasis = if (comptime @hasField(@TypeOf(label), "font_scale_basis")) label.font_scale_basis else .context;
+    if (!validSpanLinkPaint(label) or !validSpanFontScale(scale, basis)) return false;
     if (comptime @hasField(@TypeOf(label), "foreground")) if (label.foreground) |color| if (!isCanonicalRgb(color)) return false;
     if (comptime @hasField(@TypeOf(label), "background")) if (label.background) |color| if (!isCanonicalRgb(color)) return false;
     return true;
 }
 pub fn validFigure(value: Figure) bool {
+    if (value.table_caption_layout != null and value.content == .image) {
+        const image = value.content.image.span.image orelse return false;
+        if (image.static_poster != null) return false;
+    }
     if (value.frame_min_width) |minimum| if (!validFigureFrameMinWidth(minimum)) return false;
     if (!validFigureGeometry(value) or (value.caption_blocks != null and value.caption.len != 0)) return false;
     switch (value.content) {
@@ -1268,8 +2249,7 @@ pub fn validFigure(value: Figure) bool {
             if (image_span.text.len != 0 or image_span.trail.len != 0 or !validInlineImage(image) or !validInlineImageAction(image_span.kind, image_span.target)) return false;
             if (image_span.target_fragment) |fragment| if (image_span.kind != .link or !validTargetFragment(fragment)) return false;
             if (image_span.tooltip) |tooltip| if (!std.unicode.utf8ValidateSlice(tooltip)) return false;
-            if (image_span.font_scale) |scale| if (!std.math.isFinite(scale) or scale < 0) return false;
-            if (image_span.font_scale_basis == .normal_body and image_span.font_scale == null) return false;
+            if (!validSpanFontScale(image_span.font_scale, image_span.font_scale_basis)) return false;
             if (image_span.foreground) |color| if (!isCanonicalRgb(color)) return false;
             if (image_span.background) |color| if (!isCanonicalRgb(color)) return false;
             return true;
@@ -1327,12 +2307,42 @@ pub fn validTableGeometry(value: TableGeometry) bool {
     return true;
 }
 
+pub fn validTableFloatViewportHeader(geometry: ?TableGeometry, style: ?TableStyle, optional: ?TableFloatViewport) bool {
+    const policy = optional orelse return true;
+    if (geometry != null or policy.max_viewport_width_px == 0 or policy.language.len == 0 or
+        policy.language.len > 32 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(policy.language)) return false;
+    const base = style orelse return false;
+    return validTableStyle(base) and base.float_side == .right and base.margins != null and
+        base.margin_values == null and base.containing_direction == null and
+        (base.width == null or base.width.?.unit != .percent) and
+        base.padding == null and base.display == null and base.vertical_align == null and base.line_height == null;
+}
+pub fn validTableFloatViewportContent(optional: ?TableFloatViewport, caption_count: usize, caption_blocks: bool, has_cells: bool) bool {
+    return optional == null or (caption_count == 0 and !caption_blocks and has_cells);
+}
+pub fn resolveTableFloatStyle(table: Table, viewport_css_px: f32) error{InvalidPresentation}!?TableStyle {
+    const policy = table.float_viewport orelse return table.style;
+    var has_cells = false; for (table.rows) |row| if (row.cells.len != 0) { has_cells = true; break; };
+    if (!validTableViewportHeaders(table.geometry, table.style, table.block_viewport, policy) or
+        !validTableFloatViewportContent(policy, table.caption.len, table.caption_blocks != null, has_cells) or
+        !std.math.isFinite(viewport_css_px) or viewport_css_px < 0) return error.InvalidPresentation;
+    var selected = table.style.?;
+    if (@as(f64, viewport_css_px) <= @as(f64, @floatFromInt(policy.max_viewport_width_px))) {
+        if (table.block_viewport) |narrow| return narrow.box_style;
+        selected.float_side = null;
+        if (policy.narrow_clear) |clear| selected.clear = clear;
+    }
+    return selected;
+}
+
 fn validateTable(table: Table, depth: usize, media: *ImageValidation) ValidationError!void {
+    if (!validTableViewportHeaders(table.geometry, table.style, table.block_viewport, table.float_viewport)) return error.InvalidPresentation;
     if (depth > max_table_depth) return error.InvalidPresentation;
     if (table.geometry) |geometry| if (!validTableGeometry(geometry)) return error.InvalidPresentation;
     if (table.style) |style| if (!validTableStyle(style)) return error.InvalidPresentation;
     var has_cells = false;
     for (table.rows) |row| if (row.cells.len != 0) { has_cells = true; break; };
+    if (!validTableFloatViewportContent(table.float_viewport, table.caption.len, table.caption_blocks != null, has_cells)) return error.InvalidPresentation;
     if (!validInlineTableContent(table.style, table.caption.len, table.caption_blocks != null, has_cells)) return error.InvalidPresentation;
     if (tableStyleIsInline(table.style)) {
         if (depth != 1 or media.content_depth != 0 or media.in_reference) return error.InvalidPresentation;
@@ -1365,7 +2375,13 @@ fn validateCaptionBlocks(blocks: []const Block, table_depth: usize, media: *Imag
 }
 fn validateFigureContent(figure: Figure, table_depth: usize, media: *ImageValidation) ValidationError!void {
     if (!validFigure(figure)) return error.InvalidPresentation;
+    const previous = media.link_paint;
+    defer media.link_paint = previous;
+    // Each Figure is its own paint boundary; an outer caption policy never
+    // recolors a nested Figure's media or caption implicitly.
+    media.link_paint = if (figure.table_caption_layout) |layout| layout.missing_link_paint else null;
     try validateSpanColors(&.{figure.content.span()}, media);
+    media.link_paint = if (figure.table_caption_layout) |layout| layout.caption_link_paint else null;
     if (figure.caption_blocks) |blocks| try validateCaptionBlocks(blocks, table_depth, media) else try validateSpanColors(figure.caption, media);
 }
 fn validateFlowParts(parts: []const FlowPart, table_depth: usize, media: *ImageValidation) ValidationError!void {
@@ -1472,6 +2488,7 @@ pub fn resolveContainerFontScale(style: ContainerStyle, inherited: f32) error{In
     return style.owner_font_scale orelse inherited;
 }
 pub fn validContainerStyle(value: ContainerStyle) bool {
+    if (value.font_family) |family| if (!validContainerFontFamily(family)) return false;
     if (value.columns) |columns| {
         if (columns.count == 0 or !validStyleLength(columns.gap)) return false;
         // Initial semantic domain has automatic balanced block extent. Do not
@@ -1555,6 +2572,7 @@ fn containerLegacyAdjoiningMarginsSupported(value: anytype, depth: usize) bool {
         // Nested heading organization is not represented by block-child paths.
         if (std.mem.eql(u8, @tagName(block.kind), "heading")) return false;
         if (comptime @hasField(@TypeOf(block), "style")) if (block.style) |style| if (style.margins) |edges| if (nonzeroVertical(edges)) return false;
+        if (comptime @hasField(@TypeOf(block), "rule_style")) if (block.rule_style) |style| if (nonzeroVertical(style.margins)) return false;
         if (comptime @hasField(@TypeOf(block), "container")) if (block.container) |child| if (!containerLegacyAdjoiningMarginsSupported(child, depth + 1)) return false;
     }
     return true;
@@ -1571,6 +2589,8 @@ pub fn containerRequiresMForMargins(value: anytype) bool {
     if (containerStyleRequiresMForMargins(value.style)) return true;
     for (value.blocks) |block| if (comptime @hasField(@TypeOf(block), "style")) if (block.style) |style|
         if (style.margins) |margins| if (nonzeroVertical(margins)) return true;
+    for (value.blocks) |block| if (comptime @hasField(@TypeOf(block), "rule_style")) if (block.rule_style) |style|
+        if (nonzeroVertical(style.margins)) return true;
     return false;
 }
 fn containerStructureSupported(value: anytype, depth: usize) bool {
@@ -1587,6 +2607,7 @@ pub fn validContainerHeader(value: anytype) bool {
     return containerStructureSupported(value, 1);
 }
 pub fn validContainerContext(block: anytype) bool {
+    if (comptime @hasField(@TypeOf(block), "rule_style")) if (block.rule_style != null) return false;
     if (comptime !@hasField(@TypeOf(block), "container")) return false;
     if (!std.mem.eql(u8, @tagName(block.kind), "container") or block.container == null or block.depth != 0 or block.spans.len != 0 or
         block.feature != null or block.table != null or block.list_path.len != 0 or block.number.len != 0 or block.level != 0 or
@@ -1621,6 +2642,7 @@ pub fn validBlockPaths(blocks: []const Block, roots: []const usize, paths: []con
 }
 
 fn validateBlock(block: Block, table_depth: usize, media: *ImageValidation) ValidationError!void {
+    if (block.rule_style) |style| if (!validRuleStyle(style) or !validRuleStyleContext(block)) return error.InvalidPresentation;
     if (block.kind == .container or block.container != null) {
         if (!validContainerContext(block) or !validContainerHeader(block.container.?) or media.content_depth >= max_content_depth) return error.InvalidPresentation;
         media.content_depth += 1; defer media.content_depth -= 1;
@@ -1703,7 +2725,10 @@ pub fn validateStored(
         } else try validateSpanColors(reference.spans, &media);
     }
     media.in_reference = false;
-    for (entry.sections) |section| for (section.blocks) |block| try validateBlock(block, 0, &media);
+    for (entry.sections) |section| {
+        if (section.heading_style) |style| if (!validSectionHeadingStyle(style) or !validSectionHeadingCompanion(section)) return error.InvalidPresentation;
+        for (section.blocks) |block| try validateBlock(block, 0, &media);
+    }
 
     for (entry.references) |reference| {
         if (reference.number == 0 or reference.number >= std.math.maxInt(u32)) return error.InvalidPresentation;
@@ -3236,4 +4261,1363 @@ test "base Container auto margins are exclusive signed typed M data independent 
     try std.testing.expectEqualDeep(reset, (try resolveContainerScreen(style, 600)).?.margins.?);
     try std.testing.expectEqualDeep(margins, (try resolveContainerScreen(style, 500)).?.margins.?);
     try std.testing.expectEqualDeep(margins, style.margin_values.?);
+}
+
+
+const TableCaptionModelFixture = struct {
+    fn before() ContainerStyle {
+        var margins = StyleEdges.all(.{ .unit = .px, .value = 0 }); margins.left.value = 3;
+        return .{ .float_side = .right, .width = .{ .length = .{ .unit = .px, .value = 15 } },
+            .height = .{ .unit = .px, .value = 11 }, .margins = margins, .background = .transparent, .border = .none };
+    }
+    fn media() FigureMediaLayout {
+        return .{ .strut = .{ .font_scale = 1, .direction = .ltr }, .vertical_align = .middle };
+    }
+    fn richMedia() FigureMediaLayout {
+        return .{ .strut = .{ .font_scale = 1.25, .bold = true, .italic = true, .code = true, .language = "de", .direction = .rtl },
+            .vertical_align = .middle, .max_width = .{ .percent = 100, .subtract = .{ .unit = .px, .value = 8 } },
+            .positioning = .relative_auto,
+            .after = .{ .width = .{ .unit = .px, .value = 15 }, .height = .{ .unit = .px, .value = 11 },
+                .side = .left, .inset = .{ .unit = .px, .value = 6 }, .bottom = .{ .unit = .px, .value = -11 },
+                .paint = .{ .graphic = .magnify_clip_rtl_v1, .invert = true } },
+            .focus_outline = .{ .width = .{ .unit = .px, .value = 2 }, .color = .{ .kind = .rgb, .value = "#3366cc" },
+                .radius = .{ .unit = .px, .value = 2 }, .offset = .{ .unit = .px, .value = 0 } } };
+    }
+    fn layout() TableCaptionLayout {
+        const edge: FigureBorderEdge = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .kind = .rgb, .value = "#a2a9b1" } } };
+        var table = FigureBorderEdges.all(edge); table.bottom = .none;
+        var caption = FigureBorderEdges.all(edge); caption.top = .none;
+        return .{ .collapse = .collapse, .wrapper = .{}, .table_border = table, .caption_border = caption, .media = media() };
+    }
+    fn figure() Figure {
+        const zero = StyleEdges.all(.{ .unit = .px, .value = 0 });
+        return .{ .content = .{ .image = .{ .span = .{ .kind = .link, .target = "File:Mai.png", .image = .{ .file = "Mai.png", .width_px = 190 } }, .sizing = .requested_fit } },
+            .format = .thumbnail, .placement = .center, .clear = .none, .table_caption_layout = layout(),
+            .margins = zero, .image_insets = StyleEdges.all(.{ .unit = .px, .value = 3 }),
+            .caption_padding = .{ .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 6 }, .bottom = .{ .unit = .px, .value = 6 }, .left = .{ .unit = .px, .value = 6 } },
+            .caption_font_scale = 0.884, .caption_line_height = .{ .unit = .em, .value = 1.2376 },
+            .frame_background = .{ .kind = .native_theme }, .frame_border = .{ .kind = .none },
+            .image_background = .{ .kind = .native_theme }, .image_border = .{ .kind = .none },
+            .caption_foreground = .{ .kind = .native_theme }, .caption_background = .{ .kind = .native_theme } };
+    }
+};
+
+test "Figure table caption keeps physical edges media constraint one caption graph and explicit responsive empty box" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var figure = TableCaptionModelFixture.figure();
+    figure.table_caption_layout.?.media = TableCaptionModelFixture.richMedia();
+    figure.table_caption_layout.?.caption_before = TableCaptionModelFixture.before();
+    const zero: ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    var narrow = figure.table_caption_layout.?.media; narrow.after.?.paint = null;
+    const states = [_]FigureViewportState{.{ .max_width_px = 639, .media = narrow, .wrapper = .{ .clear = .none,
+        .margin_values = .{ .top = zero, .right = .auto, .bottom = zero, .left = .auto } }, .caption_before = null }};
+    figure.table_caption_layout.?.viewport_states = &states;
+    const caption = [_]Block{.{ .kind = .paragraph, .spans = &.{ .{ .text = "[1] Elmar " }, .{ .kind = .link, .text = "Mai", .target = "Mai", .italic = true }, .{ .text = ", Biologe" } } }};
+    figure.caption_blocks = &caption;
+    try std.testing.expect(validFigure(figure));
+    const json = try std.json.Stringify.valueAlloc(a, figure, .{});
+    const parsed = try std.json.parseFromSlice(Figure, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(figure, parsed.value);
+    try std.testing.expect(parsed.value.table_caption_layout.?.table_border.bottom == .none);
+    try std.testing.expect(parsed.value.table_caption_layout.?.caption_border.top == .none);
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.caption_blocks.?.len);
+    try std.testing.expectEqualStrings("Mai", parsed.value.caption_blocks.?[0].spans[1].target);
+    try std.testing.expect(parsed.value.caption_blocks.?[0].spans[1].italic);
+    try std.testing.expect((try resolveFigureViewportState(figure.table_caption_layout.?, 640)) == null);
+    const selected = (try resolveFigureViewportState(figure.table_caption_layout.?, 639)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(selected.caption_before == null and selected.wrapper.float_side == null);
+    try std.testing.expect(selected.wrapper.margin_values.?.left == .auto and selected.wrapper.margin_values.?.right == .auto);
+    try std.testing.expect(figure.table_caption_layout.?.caption_before != null);
+    try std.testing.expect(selected.media.after != null and selected.media.after.?.paint == null);
+    try std.testing.expect(figure.table_caption_layout.?.media.after.?.paint != null);
+    try std.testing.expectEqualDeep(figure.table_caption_layout.?.media.strut, selected.media.strut);
+    try std.testing.expectEqual(@as(f32, 1.25), selected.media.strut.font_scale);
+    try std.testing.expectEqual(@as(f32, 0.884), figure.caption_font_scale);
+    try std.testing.expectEqual(@as(u32, 190), figure.content.image.span.image.?.width_px.?);
+    figure.table_caption_layout = null;
+    const legacy = try std.json.Stringify.valueAlloc(a, figure, .{});
+    try std.testing.expect(std.mem.indexOf(u8, legacy, "table_caption_layout") == null);
+}
+
+test "Figure table caption closes invalid edge combined policy cap and viewport style domains" {
+    var figure = TableCaptionModelFixture.figure();
+    var invalid = figure; invalid.table_caption_layout.?.collapse = .separate;
+    try std.testing.expect(!validFigure(invalid));
+    invalid = figure; invalid.frame_border = .{ .kind = .solid, .width = .{ .unit = .px, .value = 0 }, .color = .{ .kind = .transparent } };
+    try std.testing.expect(!validFigure(invalid));
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |number| {
+        invalid = figure; invalid.table_caption_layout.?.table_border.left = .{ .solid = .{ .width = .{ .unit = .px, .value = number }, .color = .{ .kind = .native_theme } } };
+        try std.testing.expect(!validFigure(invalid));
+    }
+    invalid = figure; invalid.table_caption_layout.?.caption_border.bottom = .{ .dotted = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .kind = .rgb, .value = "#ABCDEF" } } };
+    try std.testing.expect(!validFigure(invalid));
+    invalid = figure; invalid.table_caption_layout.?.table_border.left = .hidden;
+    try std.testing.expect(validFigure(invalid));
+    for ([_]f32{ -1, 0, 200, std.math.inf(f32), std.math.nan(f32) }) |percent| {
+        invalid = figure; invalid.table_caption_layout.?.media.max_width = .{ .percent = percent, .subtract = .{ .unit = .px, .value = 8 } };
+        try std.testing.expect(!validFigure(invalid));
+    }
+    var before = TableCaptionModelFixture.before(); before.width = .{ .length = .{ .unit = .percent, .value = 100 } };
+    try std.testing.expect(!validFigureCaptionBefore(before));
+    before = TableCaptionModelFixture.before(); before.margins.?.left.value = -1;
+    try std.testing.expect(!validFigureCaptionBefore(before));
+    before = TableCaptionModelFixture.before(); before.padding = StyleEdges.all(.{ .unit = .px, .value = 1 });
+    try std.testing.expect(!validFigureCaptionBefore(before));
+    var states = [_]FigureViewportState{ .{ .max_width_px = 639, .wrapper = .{}, .media = TableCaptionModelFixture.media() }, .{ .max_width_px = 639, .wrapper = .{}, .media = TableCaptionModelFixture.media() } };
+    invalid = figure; invalid.table_caption_layout.?.viewport_states = &states;
+    try std.testing.expect(!validFigure(invalid));
+    states[1].max_width_px = 319; states[0].wrapper.width = .auto;
+    try std.testing.expect(!validFigure(invalid));
+    states[0].wrapper = .{};
+    try std.testing.expect(validFigure(invalid));
+    try std.testing.expectError(error.InvalidPresentation, resolveFigureViewportState(invalid.table_caption_layout.?, std.math.nan(f64)));
+    try std.testing.expectError(error.InvalidPresentation, resolveFigureViewportState(invalid.table_caption_layout.?, -1));
+    figure.content.image.span.image.?.file = "Model.stl";
+    figure.content.image.span.image.?.height_px = staticPosterHeight(190);
+    figure.content.image.span.image.?.static_poster = .{ .policy = .three_d_stl_v1, .label = "3D", .file_sha1 = "0123456789abcdef0123456789abcdef01234567", .file_timestamp = "2026-10-01T00:00:00Z" };
+    figure.table_caption_layout = null; try std.testing.expect(validFigure(figure));
+    figure.table_caption_layout = TableCaptionModelFixture.layout(); try std.testing.expect(!validFigure(figure));
+}
+
+
+test "Figure complete media strut positioned after focus and action domains refuse independently" {
+    var figure = TableCaptionModelFixture.figure(); figure.table_caption_layout.?.media = TableCaptionModelFixture.richMedia();
+    try std.testing.expect(validFigure(figure));
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |number| {
+        var bad = figure; bad.table_caption_layout.?.media.strut.font_scale = number;
+        try std.testing.expect(!validFigure(bad));
+        bad = figure; bad.table_caption_layout.?.media.focus_outline.?.width.value = number;
+        try std.testing.expect(!validFigure(bad));
+        bad = figure; bad.table_caption_layout.?.media.focus_outline.?.radius.value = number;
+        try std.testing.expect(!validFigure(bad));
+    }
+    var bad = figure; bad.table_caption_layout.?.media.strut.language = "\xff";
+    try std.testing.expect(!validFigure(bad));
+    bad = figure; bad.table_caption_layout.?.media.vertical_align = .baseline;
+    try std.testing.expect(!validFigure(bad));
+    bad = figure; bad.table_caption_layout.?.media.vertical_align = .top;
+    try std.testing.expect(!validFigure(bad));
+    bad = figure; bad.table_caption_layout.?.media.positioning = null;
+    try std.testing.expect(!validFigure(bad));
+    inline for (.{ "width", "height", "inset", "bottom" }) |field| {
+        bad = figure; @field(bad.table_caption_layout.?.media.after.?, field).value += 1;
+        try std.testing.expect(!validFigure(bad));
+        bad = figure; @field(bad.table_caption_layout.?.media.after.?, field).unit = .em;
+        try std.testing.expect(!validFigure(bad));
+    }
+    bad = figure; bad.table_caption_layout.?.media.focus_outline.?.offset.value = std.math.nan(f32);
+    try std.testing.expect(!validFigure(bad));
+    bad = figure; bad.table_caption_layout.?.media.focus_outline.?.offset.value = -2;
+    try std.testing.expect(validFigure(bad));
+    bad = figure; bad.table_caption_layout.?.media.strut.font_scale = 0;
+    try std.testing.expect(validFigure(bad));
+    bad = figure; bad.content.image.span.kind = .text; bad.content.image.span.target = "";
+    try std.testing.expect(!validFigure(bad));
+    bad.table_caption_layout.?.media.after = null; bad.table_caption_layout.?.media.focus_outline = null;
+    try std.testing.expect(validFigure(bad));
+    bad = figure; bad.content.image.span.target = "";
+    try std.testing.expect(!validFigure(bad));
+    bad = figure; bad.content.image.span.image.?.map = .{ .regions = &.{} };
+    try std.testing.expect(validInlineImage(bad.content.image.span.image.?));
+    try std.testing.expect(!validFigure(bad));
+    bad.table_caption_layout = null;
+    try std.testing.expect(validFigure(bad));
+    var state_media = figure.table_caption_layout.?.media; state_media.strut.language = "\xff";
+    const states = [_]FigureViewportState{.{ .max_width_px = 639, .wrapper = .{}, .media = state_media }};
+    bad = figure; bad.table_caption_layout.?.viewport_states = &states;
+    try std.testing.expect(!validFigure(bad));
+}
+
+
+test "Figure media strict nested JSON and complete states never borrow hidden style defaults" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var figure = TableCaptionModelFixture.figure(); figure.table_caption_layout.?.media = TableCaptionModelFixture.richMedia();
+    const json = try std.json.Stringify.valueAlloc(a, figure, .{});
+    const dynamic = try std.json.parseFromSlice(std.json.Value, a, json, .{});
+    const known = try std.json.parseFromValue(Figure, a, dynamic.value, .{});
+    try std.testing.expectEqualDeep(figure, known.value);
+    const media = dynamic.value.object.getPtr("table_caption_layout").?.object.getPtr("media").?;
+    try media.object.put(a, "unrepresented", .null);
+    try std.testing.expectError(error.UnknownField, std.json.parseFromValue(Figure, a, dynamic.value, .{ .ignore_unknown_fields = true }));
+    var narrow = TableCaptionModelFixture.media(); narrow.strut.font_scale = 0;
+    const states = [_]FigureViewportState{.{ .max_width_px = 639, .wrapper = .{}, .media = narrow }};
+    figure.table_caption_layout.?.viewport_states = &states;
+    try std.testing.expect(validFigure(figure));
+    const selected = (try resolveFigureViewportState(figure.table_caption_layout.?, 639)).?;
+    try std.testing.expect(selected.media.after == null and selected.media.focus_outline == null);
+    try std.testing.expect(selected.media.max_width == null and selected.media.positioning == null);
+    try std.testing.expectEqual(@as(f32, 0), selected.media.strut.font_scale);
+    try std.testing.expect(figure.table_caption_layout.?.media.after != null);
+}
+
+
+const FigureLinkPaintModelTest = struct {
+    // Synthetic fixed data; source computation independently owns the real TH winners.
+    fn normal() FigureLinkPaint {
+        return .{ .normal = .{ .foreground = "#3366cc", .underline = false },
+            .hover = .{ .foreground = "#3056a9", .underline = true }, .active = .{ .foreground = "#233566", .underline = true },
+            .visited = .{ .foreground = "#6a60b0", .underline = false }, .visited_hover = .{ .foreground = "#534fa3", .underline = true },
+            .visited_active = .{ .foreground = "#353262", .underline = true }, .underline_on_focus = true,
+            .focus_outline = .{ .width = .{ .unit = .px, .value = 2 }, .color = .{ .kind = .rgb, .value = "#3366cc" },
+                .radius = .{ .unit = .px, .value = 2 }, .offset = .{ .unit = .px, .value = 0 } } };
+    }
+    fn destructive() FigureLinkPaint {
+        var value = normal();
+        value.normal.foreground = "#bf3c2c"; value.hover.foreground = "#9f3526"; value.active.foreground = "#612419";
+        value.visited.foreground = "#9f5555"; value.visited_hover.foreground = "#854848"; value.visited_active.foreground = "#512e2e";
+        // Actual-shaped atomic label: ancestor A decoration does not propagate.
+        value.normal.underline = false; value.hover.underline = false; value.active.underline = false;
+        value.visited.underline = false; value.visited_hover.underline = false; value.visited_active.underline = false;
+        value.underline_on_focus = false;
+        return value;
+    }
+    fn missing() Figure {
+        var figure = TableCaptionModelFixture.figure();
+        figure.content = .{ .missing = .{ .label = .{ .kind = .link, .text = "Missing label", .target = "File:Missing.png", .font_scale = 0.94, .font_scale_basis = .normal_body },
+            .width = .{ .unit = .px, .value = 100 }, .line_height = .{ .unit = .em, .value = 1.504 } } };
+        figure.table_caption_layout.?.media = TableCaptionModelFixture.media();
+        figure.table_caption_layout.?.media.vertical_align = .baseline;
+        figure.table_caption_layout.?.missing_link_paint = destructive();
+        figure.table_caption_layout.?.caption_link_paint = normal();
+        return figure;
+    }
+    fn stored(a: std.mem.Allocator, figure: Figure, outside: []const Block) !Stored {
+        const blocks = try a.dupe(Block, &.{.{ .kind = .paragraph, .figure = figure }});
+        const sections = try a.dupe(Section, &.{.{ .level = 2, .title = "caption", .blocks = outside },
+            .{ .level = 2, .title = "Figure", .blocks = blocks }});
+        return .{ .entry = .{ .title = "source link states", .kind = .supplemental, .sections = sections,
+            .media = &.{.{ .kind = .image, .file = "Mai.png", .caption = "media" }} } };
+    }
+};
+
+test "Figure fixed source link palettes keep independent label caption colors and strict source data" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var figure = FigureLinkPaintModelTest.missing();
+    figure.caption = &.{.{ .kind = .external_link, .text = "Ryakuji", .target = "https://example.invalid/Ryakuji", .italic = true },
+        .{ .text = " / " }, .{ .kind = .link, .text = "Door", .target = "Door", .target_fragment = "Japanese", .foreground = "#3366cc" }};
+    try std.testing.expect(validFigure(figure));
+    const json = try std.json.Stringify.valueAlloc(a, figure, .{});
+    const parsed = try std.json.parseFromSlice(Figure, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(figure, parsed.value);
+    try std.testing.expectEqualStrings("#bf3c2c", parsed.value.table_caption_layout.?.missing_link_paint.?.normal.foreground);
+    try std.testing.expectEqualStrings("#3366cc", parsed.value.table_caption_layout.?.caption_link_paint.?.normal.foreground);
+    try std.testing.expectEqualStrings("Japanese", parsed.value.caption[2].target_fragment.?);
+    try std.testing.expect(parsed.value.caption[0].italic);
+    try std.testing.expect(parsed.value.table_caption_layout.?.caption_link_paint.?.underline_on_focus);
+    try std.testing.expect(!parsed.value.table_caption_layout.?.missing_link_paint.?.hover.underline);
+    try std.testing.expect(!parsed.value.table_caption_layout.?.missing_link_paint.?.underline_on_focus);
+    var legacy = figure; legacy.table_caption_layout = null; legacy.content.missing.link_paint = .vector_new_link_v1;
+    try std.testing.expect(validFigure(legacy));
+    var bad = figure; bad.content.missing.link_paint = .vector_new_link_v1;
+    try std.testing.expect(!validFigure(bad));
+    bad = TableCaptionModelFixture.figure(); bad.table_caption_layout.?.missing_link_paint = FigureLinkPaintModelTest.destructive();
+    try std.testing.expect(!validFigure(bad));
+    var inert = FigureLinkPaintModelTest.missing(); inert.content.missing.label.kind = .text;
+    inert.content.missing.label.target = ""; inert.content.missing.label.target_fragment = null;
+    try std.testing.expect(!validFigure(inert));
+    inert.table_caption_layout.?.missing_link_paint = null;
+    try std.testing.expect(validFigure(inert));
+    const names = .{ "normal", "hover", "active", "visited", "visited_hover", "visited_active" };
+    inline for (names) |name| {
+        var paint = FigureLinkPaintModelTest.normal(); @field(paint, name).foreground = "#ABCDEF";
+        try std.testing.expect(!validFigureLinkPaint(paint));
+        @field(paint, name).foreground = "#36c"; try std.testing.expect(!validFigureLinkPaint(paint));
+    }
+    var paint = FigureLinkPaintModelTest.normal(); paint.focus_outline.?.color = .{ .kind = .native_theme };
+    try std.testing.expect(!validFigureLinkPaint(paint));
+    paint = FigureLinkPaintModelTest.normal(); paint.focus_outline.?.offset.value = std.math.nan(f32);
+    try std.testing.expect(!validFigureLinkPaint(paint));
+    var absent = TableCaptionModelFixture.figure();
+    const old_json = try std.json.Stringify.valueAlloc(a, absent, .{});
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "caption_link_paint") == null);
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "missing_link_paint") == null);
+    absent.table_caption_layout.?.caption_link_paint = FigureLinkPaintModelTest.normal();
+    const dynamic = try std.json.parseFromSlice(std.json.Value, a, try std.json.Stringify.valueAlloc(a, absent, .{}), .{});
+    const policy = dynamic.value.object.getPtr("table_caption_layout").?.object.getPtr("caption_link_paint").?;
+    try policy.object.put(a, "borrow_native_theme", .{ .bool = true });
+    // Unknown data cannot become a native default even when outer callers ask to ignore it.
+    try std.testing.expectError(error.UnknownField, std.json.parseFromValue(Figure, a, dynamic.value, .{ .ignore_unknown_fields = true }));
+}
+
+test "Figure link paint follows existing bounded caption walk and resets at nested Figure boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var outer = TableCaptionModelFixture.figure(); outer.table_caption_layout.?.caption_link_paint = FigureLinkPaintModelTest.normal();
+    var inner = TableCaptionModelFixture.figure(); inner.table_caption_layout = null;
+    inner.caption = &.{.{ .kind = .link, .text = "inner", .target = "Inner", .foreground = "#ff0000" }};
+    const links = [_]Block{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "kept", .target = "Target", .target_fragment = "Part", .foreground = "#3366cc", .bold = true }} }};
+    const wrapped = [_]Block{.{ .kind = .container, .container = .{ .blocks = &links } },
+        .{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &links }} }} } }, .{ .kind = .paragraph, .figure = inner }};
+    outer.caption_blocks = &wrapped;
+    const outside = [_]Block{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "outside", .target = "Outside", .foreground = "#abcdef" }} }};
+    const stored = try FigureLinkPaintModelTest.stored(a, outer, &outside);
+    try validateStored(a, stored, stored.entry.title, .supplemental, null);
+    var mismatch = outer; mismatch.caption_blocks = null;
+    mismatch.caption = &.{.{ .kind = .link, .text = "different static", .target = "Target", .foreground = "#ff0000" }};
+    const bad = try FigureLinkPaintModelTest.stored(a, mismatch, &outside);
+    try std.testing.expectError(error.InvalidPresentation, validateStored(a, bad, bad.entry.title, .supplemental, null));
+    var missing = FigureLinkPaintModelTest.missing(); missing.content.missing.label.foreground = "#3366cc";
+    const bad_label = try FigureLinkPaintModelTest.stored(a, missing, &outside);
+    try std.testing.expectError(error.InvalidPresentation, validateStored(a, bad_label, bad_label.entry.title, .supplemental, null));
+}
+
+
+test "CSS pixel span origin requires an explicit finite magnitude throughout Stored validation" {
+    var spans = [_]Span{.{ .kind = .link, .text = "complete", .target = "Target", .target_fragment = "kept", .bold = true,
+        .font_scale = 12, .font_scale_basis = .css_px }};
+    const stored: Stored = .{ .entry = .{ .title = "font", .kind = .supplemental, .display_title = &spans } };
+    for ([_]f32{ 0, 1, 12, 9.6 }) |value| {
+        spans[0].font_scale = value;
+        try validateStored(std.testing.allocator, stored, "font", .supplemental, null);
+    }
+    for ([_]?f32{ null, -1, std.math.nan(f32), std.math.inf(f32) }) |value| {
+        spans[0].font_scale = value;
+        try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, stored, "font", .supplemental, null));
+    }
+    try std.testing.expect(validSpanFontScale(null, .context));
+    try std.testing.expect(!validSpanFontScale(null, .normal_body));
+    try std.testing.expect(!validSpanFontScale(null, .css_px));
+}
+
+test "CSS pixel magnitude one survives semantic JSON independently from legacy context identity" {
+    const a = std.testing.allocator;
+    const span: Span = .{ .text = "full", .font_scale = 1, .font_scale_basis = .css_px };
+    const bytes = try std.json.Stringify.valueAlloc(a, span, .{}); defer a.free(bytes);
+    const value = try std.json.parseFromSlice(std.json.Value, a, bytes, .{}); defer value.deinit();
+    try std.testing.expect(value.value.object.contains("font_scale"));
+    try std.testing.expectEqualStrings("css_px", value.value.object.get("font_scale_basis").?.string);
+    const restored = try std.json.parseFromSlice(Span, a, bytes, .{}); defer restored.deinit();
+    try std.testing.expectEqualDeep(span, restored.value);
+    const old: Span = .{ .text = "full", .font_scale = 1 };
+    const old_bytes = try std.json.Stringify.valueAlloc(a, old, .{}); defer a.free(old_bytes);
+    const old_value = try std.json.parseFromSlice(std.json.Value, a, old_bytes, .{}); defer old_value.deinit();
+    try std.testing.expect(!old_value.value.object.contains("font_scale"));
+    try std.testing.expect(!old_value.value.object.contains("font_scale_basis"));
+}
+
+test "span CSS pixel extension does not authorize table line height origins" {
+    try std.testing.expect(validComputedLineHeight(.{ .value = 1, .font_scale_basis = .context }));
+    try std.testing.expect(validComputedLineHeight(.{ .value = 1, .font_scale_basis = .normal_body }));
+    try std.testing.expect(!validComputedLineHeight(.{ .value = 12, .font_scale_basis = .css_px }));
+    try std.testing.expect(!validTableStyle(.{ .line_height = .{ .value = 12, .font_scale_basis = .css_px } }));
+    try std.testing.expect(validTableStyle(.{ .line_height = .{ .value = 1, .font_scale_basis = .normal_body } }));
+}
+
+test "Figure table caption requires complete base wrapper with the same closed state domain" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var layout = TableCaptionModelFixture.layout();
+    try std.testing.expect(validTableCaptionLayout(layout));
+    const bytes = try std.json.Stringify.valueAlloc(a, layout, .{});
+    const restored = try std.json.parseFromSlice(TableCaptionLayout, a, bytes, .{}); defer restored.deinit();
+    try std.testing.expectEqualDeep(layout, restored.value);
+    var value = try std.json.parseFromSliceLeaky(std.json.Value, a, bytes, .{});
+    try std.testing.expect(value.object.contains("wrapper"));
+    try std.testing.expectEqual(@as(usize, 0), value.object.get("wrapper").?.object.count());
+    try std.testing.expect(value.object.swapRemove("wrapper"));
+    const omitted = try std.json.Stringify.valueAlloc(a, value, .{});
+    try std.testing.expectError(error.MissingField, std.json.parseFromSlice(TableCaptionLayout, a, omitted, .{}));
+    for ([_]ContainerStyle{
+        .{ .width = .auto }, .{ .height = .{ .unit = .px, .value = 0 } },
+        .{ .owner_font_scale = 1 }, .{ .overflow = .auto }, .{ .positioning = .relative_auto },
+        .{ .padding = StyleEdges.all(.{ .unit = .px, .value = 0 }) },
+        .{ .background = .transparent }, .{ .line_height = .normal },
+        .{ .screen_max_width = .{ .max_width_px = 639 } },
+        .{ .margins = StyleEdges.all(.{ .unit = .px, .value = -1 }) },
+    }) |wrapper| {
+        layout.wrapper = wrapper;
+        try std.testing.expect(!validTableCaptionLayout(layout));
+    }
+}
+
+test "Figure wrapper state is a complete replacement of the explicit base record" {
+    const zero: ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    var layout = TableCaptionModelFixture.layout();
+    const base: ContainerStyle = .{ .margin_values = .{ .top = zero, .right = .auto, .bottom = zero, .left = .auto }, .clear = .right };
+    const fixed: ContainerStyle = .{ .margins = StyleEdges.all(.{ .unit = .px, .value = 2 }), .float_side = .left, .clear = .left };
+    layout.wrapper = base;
+    const states = [_]FigureViewportState{
+        .{ .max_width_px = 639, .wrapper = .{}, .media = layout.media },
+        .{ .max_width_px = 420, .wrapper = fixed, .media = layout.media },
+    };
+    layout.viewport_states = &states;
+    try std.testing.expect(validTableCaptionLayout(layout));
+    for ([_]struct { width: f64, expected: ContainerStyle }{
+        .{ .width = 900, .expected = base }, .{ .width = 639, .expected = .{} },
+        .{ .width = 500, .expected = .{} }, .{ .width = 420, .expected = fixed }, .{ .width = 0, .expected = fixed },
+    }) |case| {
+        const state = try resolveFigureViewportState(layout, case.width);
+        const selected = if (state) |known| known.wrapper else layout.wrapper;
+        try std.testing.expectEqualDeep(case.expected, selected);
+    }
+    var invalid = layout;
+    invalid.wrapper.margin_values.?.top = .auto;
+    try std.testing.expect(!validTableCaptionLayout(invalid));
+}
+
+test "cell line height keeps nullable strut zero and explicit text origins outside old TABLE validity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const normal_json = try std.json.Stringify.valueAlloc(a, @as(CellLineHeightValue, .normal), .{});
+    try std.testing.expectEqualStrings("{\"normal\":{}}", normal_json);
+    const normal = try std.json.parseFromSlice(CellLineHeightValue, a, normal_json, .{}); defer normal.deinit();
+    try std.testing.expectEqualDeep(@as(CellLineHeightValue, .normal), normal.value);
+    try std.testing.expectError(error.UnexpectedToken, std.json.parseFromSlice(CellLineHeightValue, a, "{\"normal\":[]}", .{}));
+    const cases = [_]CellLineHeight{
+        .{ .height = .normal },
+        .{ .height = .{ .multiplier = 0 } },
+        .{ .height = .{ .multiplier = 1.25 } },
+        .{ .height = .{ .length = .{ .value = 0, .font_scale_basis = .normal_body } } },
+        .{ .strut = .{ .font_scale = 0, .font_scale_basis = .css_px }, .height = .{ .length = .{ .value = 0, .font_scale_basis = .css_px } } },
+        .{ .strut = .{ .font_scale = 0.7, .font_scale_basis = .normal_body }, .height = .{ .length = .{ .value = 0.7, .font_scale_basis = .normal_body } } },
+        .{ .strut = .{ .font_scale = 12, .font_scale_basis = .css_px }, .height = .{ .length = .{ .value = 19.5, .font_scale_basis = .css_px } } },
+    };
+    for (cases) |height| {
+        const style: CellStyle = .{ .line_height = height };
+        try std.testing.expect(validCellStyle(style));
+        const json = try std.json.Stringify.valueAlloc(a, style, .{});
+        const parsed = try std.json.parseFromSlice(CellStyle, a, json, .{}); defer parsed.deinit();
+        try std.testing.expectEqualDeep(style, parsed.value);
+    }
+    try std.testing.expect(validComputedLineHeight(.{ .value = 1, .font_scale_basis = .context }));
+    try std.testing.expect(validComputedLineHeight(.{ .value = 1, .font_scale_basis = .normal_body }));
+    try std.testing.expect(!validComputedLineHeight(.{ .value = 0, .font_scale_basis = .normal_body }));
+    try std.testing.expect(!validComputedLineHeight(.{ .value = 12, .font_scale_basis = .css_px }));
+    try std.testing.expect(!validCellTextMetric(.{ .value = 1, .font_scale_basis = .context }));
+    for ([_]f32{ -1, std.math.nan(f32), std.math.inf(f32) }) |number| {
+        try std.testing.expect(!validCellStyle(.{ .line_height = .{ .height = .{ .multiplier = number } } }));
+        try std.testing.expect(!validCellStyle(.{ .line_height = .{ .height = .{ .length = .{ .value = number, .font_scale_basis = .normal_body } } } }));
+        try std.testing.expect(!validCellStyle(.{ .line_height = .{ .strut = .{ .font_scale = number, .font_scale_basis = .css_px }, .height = .normal } }));
+    }
+    try std.testing.expect(!validCellStyle(.{ .line_height = .{ .strut = .{ .font_scale = 1, .font_scale_basis = .context }, .height = .normal } }));
+    const null_json = try std.json.Stringify.valueAlloc(a, CellLineHeight{ .height = .normal }, .{});
+    const zero_json = try std.json.Stringify.valueAlloc(a, CellLineHeight{ .strut = .{ .font_scale = 0, .font_scale_basis = .normal_body }, .height = .normal }, .{});
+    try std.testing.expect(!std.mem.eql(u8, null_json, zero_json));
+}
+
+test "cell line height retains genuine empty cells nonempty child fonts and complete actions in Stored" {
+    const fixed: CellLineHeight = .{ .strut = .{ .font_scale = 0.7, .font_scale_basis = .normal_body }, .height = .{ .length = .{ .value = 0.7, .font_scale_basis = .normal_body } } };
+    const table: Table = .{ .rows = &.{.{ .cells = &.{
+        .{ .style = .{ .line_height = fixed }, .spans = &.{
+            .{ .text = "whole footer ", .font_scale = 0.7, .font_scale_basis = .normal_body },
+            .{ .kind = .link, .text = "larger child", .target = "Kept", .target_fragment = "section", .font_scale = 1.4, .font_scale_basis = .normal_body },
+        } },
+        .{ .style = .{ .line_height = .{ .height = .{ .length = .{ .value = 0, .font_scale_basis = .normal_body } } } } },
+        .{ .spans = &.{.{ .text = "\u{a0}" }}, .style = .{ .line_height = .{ .height = .normal } } },
+    } }} };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const stored: Stored = .{ .entry = .{ .title = "cell metrics", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{.{ .kind = .table, .table = table }} }} } };
+    try validateStored(a, stored, "cell metrics", .supplemental, null);
+    try std.testing.expectEqual(@as(usize, 0), table.rows[0].cells[1].spans.len);
+    try std.testing.expect(table.rows[0].cells[1].blocks == null and table.rows[0].cells[1].nested_table == null);
+    try std.testing.expectEqualStrings("\u{a0}", table.rows[0].cells[2].spans[0].text);
+    try std.testing.expectEqual(@as(?f32, 1.4), table.rows[0].cells[0].spans[1].font_scale);
+    try std.testing.expectEqualDeep(fixed, table.rows[0].cells[0].style.?.line_height.?);
+    const json = try std.json.Stringify.valueAlloc(a, stored, .{});
+    const parsed = try std.json.parseFromSlice(Stored, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(stored, parsed.value);
+}
+
+
+test "font feature JSON preserves absent legacy fields and explicit replacement reset" {
+    const a = std.testing.allocator;
+    const legacy = try std.json.Stringify.valueAlloc(a, Span{ .text = "unchanged" }, .{}); defer a.free(legacy);
+    try std.testing.expect(std.mem.indexOf(u8, legacy, "font_features") == null);
+    const legacy_strut = try std.json.Stringify.valueAlloc(a, FigureMediaStrut{ .font_scale = 1, .direction = .ltr }, .{}); defer a.free(legacy_strut);
+    try std.testing.expect(std.mem.indexOf(u8, legacy_strut, "font_features") == null);
+    for ([_]FontFeaturePolicy{ .normal, .seven_on }) |policy| {
+        const value: Span = .{ .text = "complete", .font_features = policy };
+        const encoded = try std.json.Stringify.valueAlloc(a, value, .{}); defer a.free(encoded);
+        const decoded = try std.json.parseFromSlice(Span, a, encoded, .{}); defer decoded.deinit();
+        try std.testing.expectEqualDeep(value, decoded.value);
+        const strut: FigureMediaStrut = .{ .font_scale = 0.94, .direction = .rtl, .font_features = policy };
+        const strut_json = try std.json.Stringify.valueAlloc(a, strut, .{}); defer a.free(strut_json);
+        const strut_decoded = try std.json.parseFromSlice(FigureMediaStrut, a, strut_json, .{}); defer strut_decoded.deinit();
+        try std.testing.expectEqualDeep(strut, strut_decoded.value);
+    }
+    for ([_][]const u8{ "{\"text\":\"kept\",\"font_features\":\"dlig\"}", "{\"text\":\"kept\",\"font_features\":2}", "{\"text\":\"kept\",\"font_features\":0}", "{\"text\":\"kept\",\"font_features\":1}", "{\"text\":\"kept\",\"font_features\":\"0\"}", "{\"text\":\"kept\",\"font_features\":\"1\"}" }) |json| {
+        if (std.json.parseFromSlice(Span, a, json, .{})) |parsed| { parsed.deinit(); return error.TestUnexpectedResult; } else |_| {}
+    }
+}
+
+
+test "table automatic margins retain old absence and strict exclusive edge domain" {
+    const zero: ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    const automatic: ContainerMargins = .{ .top = zero, .right = .auto, .bottom = zero, .left = .auto };
+    try std.testing.expect(validTableStyle(.{ .margin_values = automatic, .containing_direction = .ltr }));
+    var one_auto = automatic; one_auto.left = .{ .length = .{ .unit = .em, .value = 0.2 } };
+    try std.testing.expect(validTableStyle(.{ .margin_values = one_auto, .containing_direction = .ltr }));
+    var invalid = automatic; invalid.top = .auto;
+    try std.testing.expect(!validTableStyle(.{ .margin_values = invalid, .containing_direction = .ltr }));
+    invalid = automatic; invalid.bottom = .{ .length = .{ .unit = .px, .value = -1 } };
+    try std.testing.expect(!validTableStyle(.{ .margin_values = invalid, .containing_direction = .ltr }));
+    invalid = automatic; invalid.left = .{ .length = .{ .unit = .px, .value = std.math.nan(f32) } };
+    try std.testing.expect(!validTableStyle(.{ .margin_values = invalid, .containing_direction = .ltr }));
+    invalid = automatic; invalid.right = zero; invalid.left = zero;
+    try std.testing.expect(!validTableStyle(.{ .margin_values = invalid, .containing_direction = .ltr }));
+    try std.testing.expect(!validTableStyle(.{ .margins = StyleEdges.all(.{ .unit = .px, .value = 0 }), .margin_values = automatic, .containing_direction = .ltr }));
+    const a = std.testing.allocator;
+    const old = try std.json.Stringify.valueAlloc(a, TableStyle{ .clear = .none }, .{}); defer a.free(old);
+    try std.testing.expectEqualStrings("{\"clear\":\"none\"}", old);
+    const json = try std.json.Stringify.valueAlloc(a, TableStyle{ .margin_values = automatic, .containing_direction = .ltr }, .{}); defer a.free(json);
+    const parsed = try std.json.parseFromSlice(TableStyle, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(TableStyle{ .margin_values = automatic, .containing_direction = .ltr }, parsed.value);
+}
+
+test "table containing direction is a strict paired semantic parent input independent of grid" {
+    const zero: ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    const margins: ContainerMargins = .{ .top = zero, .right = .auto, .bottom = zero, .left = .auto };
+    try std.testing.expect(validUnboundTableStyle(.{ .margin_values = margins }));
+    try std.testing.expect(!validTableStyle(.{ .margin_values = margins }));
+    try std.testing.expect(!validTableStyle(.{ .containing_direction = .ltr }));
+    const a = std.testing.allocator;
+    for ([_]TableContainingDirection{ .ltr, .rtl }) |direction| {
+        const style: TableStyle = .{ .margin_values = margins, .containing_direction = direction };
+        try std.testing.expect(validTableStyle(style));
+        const text = try std.json.Stringify.valueAlloc(a, style, .{}); defer a.free(text);
+        const parsed = try std.json.parseFromSlice(TableStyle, a, text, .{}); defer parsed.deinit();
+        try std.testing.expectEqualDeep(style, parsed.value);
+    }
+    const legacy = try std.json.Stringify.valueAlloc(a, TableStyle{ .clear = .none }, .{}); defer a.free(legacy);
+    try std.testing.expect(std.mem.indexOf(u8, legacy, "containing_direction") == null);
+    for ([_][]const u8{ "0", "1", "2", "\"0\"", "\"auto\"", "\"RTL\"", "\"unknown\"" }) |value| {
+        const text = try std.fmt.allocPrint(a, "{{\"containing_direction\":{s}}}", .{value}); defer a.free(text);
+        if (std.json.parseFromSlice(TableStyle, a, text, .{})) |parsed| { parsed.deinit(); return error.TestUnexpectedResult; } else |_| {}
+    }
+}
+
+
+const TableBlockViewportTypeTest = struct {
+    fn policy() TableBlockViewport {
+        const vertical: ContainerMargin = .{ .length = .{ .unit = .em, .value = 0.2 } };
+        return .{ .max_viewport_width_px = 639,
+            .box_style = .{ .width = .{ .unit = .percent, .value = 70 }, .clear = .none,
+                .margin_values = .{ .top = vertical, .right = .auto, .bottom = vertical, .left = .auto }, .containing_direction = .ltr },
+            .box_sizing = .content_box, .max_width = .{ .unit = .percent, .value = 100 },
+            .grid_style = .{ .collapse = .collapse }, .grid_direction = .rtl, .language = "ru" };
+    }
+};
+test "Table block viewport closes box grid spacing and legacy geometry domains" {
+    const a = std.testing.allocator;
+    const original = TableBlockViewportTypeTest.policy();
+    try std.testing.expect(validTableBlockViewport(original));
+    var table: Table = .{ .block_viewport = &original };
+    try std.testing.expect(validTableBlockViewportHeader(table.geometry, table.style, table.block_viewport));
+    // The source block and anonymous grid have independent direction/paint roles.
+    try std.testing.expect(original.grid_direction != original.box_style.containing_direction.?);
+    for (0..18) |mode| {
+        var value = original;
+        switch (mode) {
+            0 => value.box_style.width = null,
+            1 => value.box_style.width.?.value = 0,
+            2 => value.box_style.width.?.value = -1,
+            3 => value.box_style.width.?.value = std.math.inf(f32),
+            4 => value.box_style.margin_values = null,
+            5 => value.box_style.containing_direction = null,
+            6 => value.box_style.display = .table,
+            7 => value.box_style.collapse = .collapse,
+            8 => value.box_style.line_height = .{ .value = 1 },
+            9 => value.max_width.value = -1,
+            10 => value.max_width.value = std.math.nan(f32),
+            11 => value.grid_style.collapse = .separate,
+            12 => value.grid_style.border = .none,
+            13 => value.grid_style.background = "#abcdef",
+            14 => value.grid_style.padding = StyleEdges.all(.{ .unit = .px, .value = 0 }),
+            15 => value.grid_style.width = .{ .unit = .percent, .value = 100 },
+            16 => value.grid_style.clear = .none,
+            17 => { value.grid_style.margin_values = original.box_style.margin_values; value.grid_style.containing_direction = .ltr; },
+            else => unreachable,
+        }
+        try std.testing.expect(!validTableBlockViewport(value));
+    }
+    var zero_cap = original; zero_cap.max_width.value = 0;
+    try std.testing.expect(validTableBlockViewport(zero_cap));
+    table.geometry = .{ .border = 1 };
+    try std.testing.expect(!validTableBlockViewportHeader(table.geometry, table.style, table.block_viewport));
+    table.geometry = null; table.style = .{ .display = .inline_table };
+    try std.testing.expect(!validTableBlockViewportHeader(table.geometry, table.style, table.block_viewport));
+    table.style = .{ .float_side = .left };
+    try std.testing.expect(!validTableBlockViewportHeader(table.geometry, table.style, table.block_viewport));
+    const stored: Stored = .{ .entry = .{ .title = "closed", .kind = .supplemental,
+        .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{.{ .kind = .table, .table = table }} }} } };
+    try std.testing.expectError(error.InvalidPresentation, validateStored(a, stored, "closed", .supplemental, null));
+}
+test "Table block viewport uses unrounded document CSS boundary and strict optional JSON" {
+    const a = std.testing.allocator;
+    const policy = TableBlockViewportTypeTest.policy();
+    const table: Table = .{ .block_viewport = &policy };
+    for ([_]f32{ 0, 638.75, 639 }) |viewport|
+        try std.testing.expect((try resolveTableBlockViewport(table, viewport)) == &policy);
+    for ([_]f32{ 639.25, 640, 800 }) |viewport|
+        try std.testing.expect((try resolveTableBlockViewport(table, viewport)) == null);
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |viewport|
+        try std.testing.expectError(error.InvalidPresentation, resolveTableBlockViewport(table, viewport));
+    const absent: Table = .{};
+    try std.testing.expect((try resolveTableBlockViewport(absent, 0)) == null);
+    const old_json = try std.json.Stringify.valueAlloc(a, absent, .{}); defer a.free(old_json);
+    try std.testing.expectEqualStrings("{\"caption\":[],\"rows\":[]}", old_json);
+    const json = try std.json.Stringify.valueAlloc(a, table, .{}); defer a.free(json);
+    var decoded = try std.json.parseFromSlice(Table, a, json, .{}); defer decoded.deinit();
+    try std.testing.expectEqualDeep(table, decoded.value);
+    try std.testing.expectEqual(policy.grid_direction, decoded.value.block_viewport.?.grid_direction);
+    // Existing box-sizing enum is string-only in this new closed record.
+    const numeric = try std.mem.replaceOwned(u8, a, json, "\"box_sizing\":\"content_box\"", "\"box_sizing\":0"); defer a.free(numeric);
+    try std.testing.expectError(error.UnexpectedToken, std.json.parseFromSlice(Table, a, numeric, .{}));
+    const unknown = try std.mem.replaceOwned(u8, a, json, "\"max_viewport_width_px\":639", "\"unknown\":true,\"max_viewport_width_px\":639"); defer a.free(unknown);
+    try std.testing.expectError(error.UnknownField, std.json.parseFromSlice(Table, a, unknown, .{ .ignore_unknown_fields = true }));
+    const invalid = try std.mem.replaceOwned(u8, a, json, "\"grid_direction\":\"rtl\"", "\"grid_direction\":2"); defer a.free(invalid);
+    try std.testing.expectError(error.UnexpectedToken, std.json.parseFromSlice(Table, a, invalid, .{}));
+}
+
+
+test "Cell middle is explicit strict alignment independent of nullable legacy and text metrics" {
+    const a = std.testing.allocator;
+    try std.testing.expectEqual(@as(usize, 0), @intFromEnum(CellVerticalAlign.top));
+    try std.testing.expectEqual(@as(usize, 1), @intFromEnum(CellVerticalAlign.middle));
+    const old: CellStyle = .{ .vertical_align = .top };
+    const value: CellStyle = .{ .vertical_align = .middle, .padding = StyleEdges.all(.{ .unit = .px, .value = 1 }),
+        .line_height = .{ .strut = .{ .font_scale = 0, .font_scale_basis = .css_px }, .height = .{ .multiplier = 1.25 } } };
+    try std.testing.expect(validCellStyle(value));
+    const old_json = try std.json.Stringify.valueAlloc(a, old, .{}); defer a.free(old_json);
+    try std.testing.expectEqualStrings("{\"vertical_align\":\"top\"}", old_json);
+    const bytes = try std.json.Stringify.valueAlloc(a, value, .{}); defer a.free(bytes);
+    var parsed = try std.json.parseFromSlice(CellStyle, a, bytes, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(value, parsed.value);
+    try std.testing.expectEqual(CellVerticalAlign.middle, parsed.value.vertical_align.?);
+    const absent: Cell = .{};
+    try std.testing.expect(absent.style == null);
+    for ([_][]const u8{ "{\"vertical_align\":\"baseline\"}", "{\"vertical_align\":\"bottom\"}", "{\"vertical_align\":1}", "{\"vertical_align\":\"1\"}" }) |bad| {
+        if (std.json.parseFromSlice(CellStyle, a, bad, .{})) |unexpected| {
+            var owned = unexpected; owned.deinit(); return error.TestUnexpectedResult;
+        } else |_| {}
+        var tree = try std.json.parseFromSlice(std.json.Value, a, bad, .{}); defer tree.deinit();
+        if (std.json.parseFromValue(CellStyle, a, tree.value, .{})) |unexpected| {
+            var owned = unexpected; owned.deinit(); return error.TestUnexpectedResult;
+        } else |_| {}
+    }
+}
+
+
+test "Table viewport requires explicit source owner language independent of entry and run language" {
+    const a = std.testing.allocator;
+    const policy = TableBlockViewportTypeTest.policy();
+    try std.testing.expectEqualStrings("ru", policy.language);
+    try std.testing.expect(validTableBlockViewport(policy));
+    for ([_][]const u8{ "", "\xff", "r\xc3" }) |invalid| {
+        var changed = policy; changed.language = invalid;
+        try std.testing.expect(!validTableBlockViewport(changed));
+    }
+    const serialized = try std.json.Stringify.valueAlloc(a, policy, .{}); defer a.free(serialized);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, serialized, ",\"language\":\"ru\""));
+    const missing = try std.mem.replaceOwned(u8, a, serialized, ",\"language\":\"ru\"", ""); defer a.free(missing);
+    const null_value = try std.mem.replaceOwned(u8, a, serialized, "\"language\":\"ru\"", "\"language\":null"); defer a.free(null_value);
+    const number = try std.mem.replaceOwned(u8, a, serialized, "\"language\":\"ru\"", "\"language\":1"); defer a.free(number);
+    const empty = try std.mem.replaceOwned(u8, a, serialized, "\"language\":\"ru\"", "\"language\":\"\""); defer a.free(empty);
+    for ([_][]const u8{ missing, null_value, number, empty }) |invalid| {
+        if (std.json.parseFromSlice(TableBlockViewport, a, invalid, .{})) |unexpected| {
+            var owned = unexpected; owned.deinit(); return error.TestUnexpectedResult;
+        } else |_| {}
+        var tree = try std.json.parseFromSlice(std.json.Value, a, invalid, .{}); defer tree.deinit();
+        if (std.json.parseFromValue(TableBlockViewport, a, tree.value, .{})) |unexpected| {
+            var owned = unexpected; owned.deinit(); return error.TestUnexpectedResult;
+        } else |_| {}
+    }
+    const table: Table = .{ .block_viewport = &policy };
+    try std.testing.expect((try resolveTableBlockViewport(table, 639)) == &policy);
+    try std.testing.expect((try resolveTableBlockViewport(table, 640)) == null);
+    // The owner language remains on the Table even when the narrow box is inactive.
+    try std.testing.expectEqualStrings("ru", table.block_viewport.?.language);
+}
+
+
+test "Table float viewport preserves one body and exact fractional boundary and directions" {
+    const margins = StyleEdges.all(.{ .unit = .em, .value = 0.4 });
+    const policy: TableFloatViewport = .{ .max_viewport_width_px = 639, .containing_direction = .rtl, .grid_direction = .ltr, .language = "de" };
+    const table: Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "KEPT" }} }} }}, .style = .{ .float_side = .right, .margins = margins, .collapse = .collapse, .clear = .right }, .float_viewport = policy };
+    try std.testing.expect(validTableFloatViewportHeader(table.geometry, table.style, table.float_viewport));
+    for ([_]f32{ 0, 100, 639 }) |width| {
+        const selected = (try resolveTableFloatStyle(table, width)).?;
+        try std.testing.expect(selected.float_side == null and selected.clear == .right);
+        try std.testing.expectEqualDeep(margins, selected.margins.?);
+    }
+    for ([_]f32{ 639.5, 640, 1000 }) |width| try std.testing.expectEqualDeep(table.style, try resolveTableFloatStyle(table, width));
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |width| try std.testing.expectError(error.InvalidPresentation, resolveTableFloatStyle(table, width));
+    try std.testing.expectEqual(TableContainingDirection.rtl, table.float_viewport.?.containing_direction);
+    try std.testing.expectEqual(TableContainingDirection.ltr, table.float_viewport.?.grid_direction);
+    var old = table; old.float_viewport = null;
+    try std.testing.expectEqualDeep(old.style, try resolveTableFloatStyle(old, std.math.nan(f32)));
+}
+
+test "Table float viewport rejects incomplete owner and conflicting legacy geometry without changing null JSON" {
+    const a = std.testing.allocator;
+    const policy: TableFloatViewport = .{ .max_viewport_width_px = 639, .containing_direction = .ltr, .grid_direction = .rtl, .language = "de" };
+    const style: TableStyle = .{ .float_side = .right, .margins = StyleEdges.all(.{ .unit = .em, .value = 0 }) };
+    var bad = policy; bad.max_viewport_width_px = 0; try std.testing.expect(!validTableFloatViewportHeader(null, style, bad));
+    bad = policy; bad.language = ""; try std.testing.expect(!validTableFloatViewportHeader(null, style, bad));
+    bad.language = &.{255}; try std.testing.expect(!validTableFloatViewportHeader(null, style, bad));
+    try std.testing.expect(!validTableFloatViewportHeader(.{ .cell_padding = 0 }, style, policy));
+    try std.testing.expect(!validTableFloatViewportHeader(null, null, policy));
+    var wrong = style; wrong.float_side = .left; try std.testing.expect(!validTableFloatViewportHeader(null, wrong, policy));
+    wrong = style; wrong.margins = null; try std.testing.expect(!validTableFloatViewportHeader(null, wrong, policy));
+    wrong = style; wrong.width = .{ .unit = .percent, .value = 70 }; try std.testing.expect(!validTableFloatViewportHeader(null, wrong, policy));
+    try std.testing.expect(!validTableFloatViewportContent(policy, 0, false, false));
+    try std.testing.expect(!validTableFloatViewportContent(policy, 1, false, true));
+    try std.testing.expect(!validTableFloatViewportContent(policy, 0, true, true));
+    try std.testing.expect(validTableFloatViewportContent(policy, 0, false, true));
+    const absent: Table = .{ .style = style }; const encoded = try std.json.Stringify.valueAlloc(a, absent, .{}); defer a.free(encoded);
+    try std.testing.expect(std.mem.indexOf(u8, encoded, "float_viewport") == null);
+    const present: Table = .{ .style = style, .float_viewport = policy };
+    const bytes = try std.json.Stringify.valueAlloc(a, present, .{}); defer a.free(bytes);
+    const parsed = try std.json.parseFromSlice(Table, a, bytes, .{}); defer parsed.deinit(); try std.testing.expectEqualDeep(present, parsed.value);
+    try std.testing.expectError(error.MissingField, std.json.parseFromSlice(TableFloatViewport, a, "{\"max_viewport_width_px\":639,\"containing_direction\":\"ltr\",\"grid_direction\":\"ltr\"}", .{}));
+}
+
+const OrdinaryLinkPaintModelTesting = struct {
+    fn paint() LinkPaint {
+        return .{ .normal = .{ .foreground = "#3366cc", .underline = false }, .hover = .{ .foreground = "#3366cc", .underline = true },
+            .active = .{ .foreground = "#233566", .underline = false }, .hover_active = .{ .foreground = "#233566", .underline = true },
+            .visited = .{ .foreground = "#6a60b0", .underline = false },
+            .visited_hover = .{ .foreground = "#6a60b0", .underline = true }, .visited_active = .{ .foreground = "#233566", .underline = false },
+            .visited_hover_active = .{ .foreground = "#233566", .underline = true },
+            .underline_on_focus = true };
+    }
+};
+
+test "ordinary source link paint eight states and focus preserve independent hover active and history" {
+    const paint = OrdinaryLinkPaintModelTesting.paint();
+    inline for (.{ "normal", "hover", "active", "hover_active", "visited", "visited_hover", "visited_active", "visited_hover_active" }, 0..) |name, index| {
+        const visited = index >= 4; const active = index % 4 >= 2; const hover = index % 2 == 1;
+        try std.testing.expectEqualDeep(@field(paint, name), linkPaintState(paint, visited, hover, active, false));
+        const focused = linkPaintState(paint, visited, hover, active, true);
+        try std.testing.expectEqualStrings(@field(paint, name).foreground, focused.foreground);
+        try std.testing.expect(focused.underline);
+        try std.testing.expectEqualDeep(@field(paint, if (visited) "visited_hover_active" else "hover_active"), linkPaintState(paint, visited, true, true, false));
+        try std.testing.expect(!linkPaintState(paint, visited, false, true, false).underline);
+        try std.testing.expect(linkPaintState(paint, visited, true, true, false).underline);
+    }
+}
+
+test "ordinary source link paint refuses inert image malformed and normal paint conflicts" {
+    var span: Span = .{ .kind = .link, .text = "kept", .target = "Target", .link_paint = OrdinaryLinkPaintModelTesting.paint() };
+    try std.testing.expect(validSpanLinkPaint(span));
+    span.kind = .external_link; try std.testing.expect(validSpanLinkPaint(span));
+    span.kind = .text; try std.testing.expect(!validSpanLinkPaint(span));
+    span.kind = .line_break; try std.testing.expect(!validSpanLinkPaint(span));
+    span.kind = .link; span.target = ""; try std.testing.expect(!validSpanLinkPaint(span));
+    span.target = "Target"; span.image = .{ .file = "Image.svg" }; try std.testing.expect(!validSpanLinkPaint(span));
+    span.image = null; span.foreground = "#3366cc"; try std.testing.expect(validSpanLinkPaint(span));
+    span.foreground = "#ffffff"; try std.testing.expect(!validSpanLinkPaint(span));
+    span.foreground = null; span.underline = true; try std.testing.expect(!validSpanLinkPaint(span));
+    span.underline = false; span.link_paint.?.visited.foreground = "#ABCDEF"; try std.testing.expect(!validSpanLinkPaint(span));
+    span.link_paint = OrdinaryLinkPaintModelTesting.paint();
+    span.link_paint.?.focus_outline = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .kind = .native_theme },
+        .radius = .{ .unit = .px, .value = 0 }, .offset = .{ .unit = .px, .value = 0 } };
+    try std.testing.expect(!validSpanLinkPaint(span));
+}
+
+test "ordinary source link paint absent JSON stays exact and strict structured data survives" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const absent: Span = .{ .kind = .link, .text = "body", .target = "Target" };
+    const old = try std.json.Stringify.valueAlloc(a, absent, .{});
+    try std.testing.expect(std.mem.indexOf(u8, old, "link_paint") == null);
+    const parsed_null = try std.json.parseFromSlice(Span, a, "{\"kind\":\"link\",\"text\":\"body\",\"target\":\"Target\",\"link_paint\":null}", .{}); defer parsed_null.deinit();
+    try std.testing.expectEqualStrings(old, try std.json.Stringify.valueAlloc(a, parsed_null.value, .{}));
+    var present = absent; present.link_paint = OrdinaryLinkPaintModelTesting.paint();
+    const json_bytes = try std.json.Stringify.valueAlloc(a, present, .{});
+    const parsed = try std.json.parseFromSlice(Span, a, json_bytes, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(present, parsed.value); try std.testing.expect(validSpanLinkPaint(parsed.value));
+    const six_only = try std.json.Stringify.valueAlloc(a, present.link_paint.?.sixStatePrefix(), .{});
+    try std.testing.expectError(error.MissingField, std.json.parseFromSlice(LinkPaint, a, six_only, .{}));
+    try std.testing.expectError(error.MissingField, std.json.parseFromSlice(Span, a, "{\"link_paint\":{}}", .{}));
+    try std.testing.expectError(error.UnknownField, std.json.parseFromSlice(Span, a, "{\"link_paint\":{\"unknown\":true}}", .{}));
+}
+
+test "ordinary combined link paint rejects malformed combined colors without changing Figure palette" {
+    var paint = OrdinaryLinkPaintModelTesting.paint();
+    try std.testing.expect(validLinkPaint(paint));
+    try std.testing.expect(validFigureLinkPaint(paint.sixStatePrefix()));
+    paint.hover_active.foreground = "#ABCDEF"; try std.testing.expect(!validLinkPaint(paint));
+    try std.testing.expect(validFigureLinkPaint(paint.sixStatePrefix()));
+    paint = OrdinaryLinkPaintModelTesting.paint(); paint.visited_hover_active.foreground = "#36c";
+    try std.testing.expect(!validLinkPaint(paint));
+}
+
+
+test "authored Rule style validates finite colors lengths and strict separator ownership" {
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    const style: RuleStyle = .{ .height = .{ .unit = .px, .value = 1 }, .fill = .{ .light_dark = .{ .light = "#a2a9b1", .dark = "#54595d" } },
+        .margins = .{ .top = .{ .unit = .em, .value = 0.2 }, .right = zero, .bottom = .{ .unit = .em, .value = 0.2 }, .left = zero } };
+    const block: Block = .{ .kind = .rule, .rule_style = style };
+    const LegacyWithoutRuleFields = struct { kind: BlockKind = .rule };
+    try std.testing.expect(!validRuleStyleContext(LegacyWithoutRuleFields{}));
+    try std.testing.expect(validRuleStyle(style) and validRuleStyleContext(block));
+    var zero_style = style; zero_style.height = zero; zero_style.fill = .transparent;
+    try std.testing.expect(validRuleStyle(zero_style));
+    inline for (comptime std.meta.tags(BlockKind)) |kind| {
+        var changed = block; changed.kind = kind;
+        try std.testing.expectEqual(kind == .rule, validRuleStyleContext(changed));
+    }
+    for (0..13) |mode| {
+        var changed = block;
+        switch (mode) {
+            0 => changed.depth = 1,
+            1 => changed.level = 1,
+            2 => changed.list_path = ":",
+            3 => changed.number = "1",
+            4 => changed.anchor = "x",
+            5 => changed.anchor_fallback = "x",
+            6 => changed.spans = &.{.{ .kind = .link, .text = "x", .target = "x" }},
+            7 => changed.feature = .{ .kind = "x" },
+            8 => changed.table = .{},
+            9 => changed.container = .{ .blocks = &.{} },
+            10 => changed.flow = &.{},
+            11 => changed.text_align = .center,
+            12 => changed.style = .{},
+            else => unreachable,
+        }
+        try std.testing.expect(!validRuleStyleContext(changed));
+        const invalid: Stored = .{ .entry = .{ .title = "rule", .kind = .supplemental,
+            .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{changed} }} } };
+        try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, invalid, "rule", .supplemental, null));
+    }
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |invalid| {
+        var changed = style; changed.height.value = invalid; try std.testing.expect(!validRuleStyle(changed));
+        changed = style; changed.margins.bottom.value = invalid; try std.testing.expect(!validRuleStyle(changed));
+    }
+    for ([_][]const u8{ "red", "#ABCDEF", "#fff", "#a2a9b100", "" }) |invalid| {
+        var changed = style; changed.fill = .{ .rgb = invalid }; try std.testing.expect(!validRuleStyle(changed));
+    }
+}
+
+test "nullable Rule JSON preserves old separator fields and rejects malformed authored shape" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const old: Block = .{ .kind = .rule };
+    const bytes = try std.json.Stringify.valueAlloc(a, old, .{});
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "rule_style") == null);
+    try std.testing.expectEqualDeep(old, (try std.json.parseFromSlice(Block, a, bytes, .{})).value);
+    const style: RuleStyle = .{ .height = .{ .unit = .px, .value = 0 }, .fill = .transparent,
+        .margins = StyleEdges.all(.{ .unit = .px, .value = 0 }) };
+    const authored: Block = .{ .kind = .rule, .rule_style = style };
+    const encoded = try std.json.Stringify.valueAlloc(a, authored, .{});
+    try std.testing.expectEqualDeep(authored, (try std.json.parseFromSlice(Block, a, encoded, .{})).value);
+    const valid = try std.json.Stringify.valueAlloc(a, style, .{});
+    const unknown = try std.mem.concat(a, u8, &.{ valid[0 .. valid.len - 1], ",\"width\":100}" });
+    try std.testing.expectError(error.UnknownField, std.json.parseFromSlice(RuleStyle, a, unknown, .{}));
+    try std.testing.expectError(error.MissingField, std.json.parseFromSlice(RuleStyle, a, "{}", .{}));
+}
+
+
+test "authored Rule vertical margins cannot acquire legacy container adjoining authority" {
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    var style: RuleStyle = .{ .height = .{ .unit = .px, .value = 1 }, .fill = .transparent,
+        .margins = .{ .top = .{ .unit = .em, .value = 0.2 }, .right = zero, .bottom = zero, .left = zero } };
+    const block: Block = .{ .kind = .rule, .rule_style = style };
+    const box: Container = .{ .blocks = &.{block} };
+    const nested: Container = .{ .blocks = &.{.{ .kind = .container, .container = box }} };
+    try std.testing.expect(validContainerHeader(box) and validContainerHeader(nested));
+    try std.testing.expect(!legacyContainerMarginsSupported(box));
+    try std.testing.expect(!legacyContainerMarginsSupported(nested));
+    try std.testing.expect(containerRequiresMForMargins(box));
+    // The capability graph walker visits the child; this predicate checks
+    // only the own boundary rather than repeatedly scanning all descendants.
+    try std.testing.expect(!containerRequiresMForMargins(nested));
+    style.margins.top = zero;
+    for ([_]f32{ 0, 5 }) |horizontal| {
+        style.margins.left.value = horizontal;
+        const flat: Container = .{ .blocks = &.{.{ .kind = .rule, .rule_style = style }} };
+        try std.testing.expect(legacyContainerMarginsSupported(flat));
+        try std.testing.expect(!containerRequiresMForMargins(flat));
+    }
+    const old: Container = .{ .blocks = &.{.{ .kind = .rule }} };
+    try std.testing.expect(legacyContainerMarginsSupported(old));
+    try std.testing.expect(!containerRequiresMForMargins(old));
+}
+
+
+test "authored inline policies keep annotation link paint and semantic script ownership separate" {
+    const strut: InlineTextStyle = .{ .line_height = .{ .font_relative = .{ .factor = 1,
+        .font = .{ .superscript = true } } } };
+    const empty: Span = .{ .superscript = true, .inline_style = strut };
+    try std.testing.expect(validSpanInlineStyle(empty));
+    var smaller = empty; smaller.text = "+"; smaller.font_scale = 1.0 / 1.2;
+    try std.testing.expect(validSpanInlineStyle(smaller));
+    try std.testing.expectEqual(@as(?f32, null), smaller.inline_style.?.line_height.?.font_relative.font.font_scale);
+    const abbreviation: Span = .{ .kind = .external_link, .text = "Joyo", .target = "https://example.invalid/Joyo",
+        .tooltip = "source title", .explanation = "source title", .underline = true,
+        .inline_style = .{ .decoration = .{ .style = .dotted } } };
+    try std.testing.expect(validSpanInlineStyle(abbreviation));
+    var normalized = smaller; normalized.font_scale = 0.75; normalized.font_scale_basis = .normal_body;
+    normalized.inline_style.?.font_normalized = true;
+    normalized.inline_style.?.baseline_shift = .{ .value = -0.25, .font_scale_basis = .normal_body };
+    try std.testing.expect(!validSpanInlineStyle(normalized));
+    normalized.inline_style.?.line_height.?.font_relative.font = .{ .font_scale = 0.75,
+        .font_scale_basis = .normal_body, .superscript = true, .font_normalized = true };
+    try std.testing.expect(validSpanInlineStyle(normalized));
+    try std.testing.expect(normalized.superscript);
+    normalized.bold = true; normalized.italic = true; normalized.code = true;
+    normalized.language = "ja"; normalized.classes = "Jpan"; normalized.role = .headword;
+    normalized.font_features = .seven_on;
+    try std.testing.expect(!validSpanInlineStyle(normalized));
+    const owner = &normalized.inline_style.?.line_height.?.font_relative.font;
+    owner.bold = true; owner.italic = true; owner.code = true;
+    owner.language = "ja"; owner.classes = "Jpan"; owner.role = .headword;
+    owner.font_features = .seven_on;
+    try std.testing.expect(validSpanInlineStyle(normalized));
+    owner.language = "en"; try std.testing.expect(!validSpanInlineStyle(normalized));
+    owner.language = "ja"; owner.font_features = .normal;
+    try std.testing.expect(!validSpanInlineStyle(normalized));
+    const plain: Span = .{ .text = "Joyo", .explanation = "advisory only" };
+    try std.testing.expect(plain.inline_style == null);
+}
+
+test "authored inline policies reject empty ownership invalid numeric data and incompatible spans" {
+    const good: Span = .{ .text = "x", .inline_style = .{ .decoration = .{ .style = .dotted } } };
+    try std.testing.expect(validSpanInlineStyle(good));
+    var bad = good; bad.inline_style = .{}; try std.testing.expect(!validSpanInlineStyle(bad));
+    bad = good; bad.text = ""; try std.testing.expect(!validSpanInlineStyle(bad));
+    bad = good; bad.kind = .line_break; try std.testing.expect(!validSpanInlineStyle(bad));
+    bad = good; bad.target = "foreign"; try std.testing.expect(!validSpanInlineStyle(bad));
+    bad = good; bad.kind = .link; try std.testing.expect(!validSpanInlineStyle(bad));
+    bad = good; bad.inline_style.?.font_normalized = true; try std.testing.expect(!validSpanInlineStyle(bad));
+    bad = good; bad.inline_style.?.decoration.?.color = "#ABCDEF"; try std.testing.expect(!validSpanInlineStyle(bad));
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |number| {
+        bad = good; bad.inline_style.?.line_height = .{ .font_relative = .{ .factor = number, .font = .{} } };
+        try std.testing.expect(!validSpanInlineStyle(bad));
+        bad = good; bad.inline_style.?.decoration.?.thickness = .{ .unit = .px, .value = number };
+        try std.testing.expect(!validSpanInlineStyle(bad));
+    }
+    bad = good; bad.inline_style.?.line_height = .{ .computed = .{ .value = 1, .font_scale_basis = .context } };
+    try std.testing.expect(!validSpanInlineStyle(bad));
+    try std.testing.expect(!validInlineFontSnapshot(.{ .font_normalized = true }));
+    try std.testing.expect(!validInlineFontSnapshot(.{ .font_scale_basis = .normal_body }));
+    try std.testing.expect(!validInlineFontSnapshot(.{ .language = "a\x00b" }));
+    try std.testing.expect(!validInlineFontSnapshot(.{ .classes = "\xff" }));
+    try std.testing.expect(validInlineTextStyle(.{ .baseline_shift = .{ .value = -1, .font_scale_basis = .css_px } }));
+}
+
+test "inline owner JSON context identity matches ordinary Span through Stored roundtrip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_]FontScaleBasis{ .context, .normal_body }) |basis| {
+        const value: Span = .{ .kind = .link, .text = "kept", .target = "Kept", .font_scale = 1, .font_scale_basis = basis,
+            .superscript = true, .bold = true, .language = "ja", .classes = "Jpan", .role = .headword,
+            .font_features = .seven_on, .explanation = "annotation retained",
+            .inline_style = .{ .baseline_shift = .{ .value = 2, .font_scale_basis = .css_px },
+                .line_height = .{ .font_relative = .{ .factor = 1, .font = .{ .font_scale = 1, .font_scale_basis = basis,
+                    .superscript = true, .bold = true, .language = "ja", .classes = "Jpan", .role = .headword,
+                    .font_features = .seven_on } } } } };
+        const spans = [_]Span{value};
+        const stored: Stored = .{ .entry = .{ .title = "inline", .kind = .supplemental, .preamble_spans = &spans } };
+        try validateStored(a, stored, "inline", .supplemental, null);
+        const bytes = try std.json.Stringify.valueAlloc(a, stored, .{});
+        const parsed = try std.json.parseFromSlice(Stored, a, bytes, .{});
+        defer parsed.deinit();
+        try validateStored(a, parsed.value, "inline", .supplemental, null);
+        var expected = value;
+        if (basis == .context) {
+            expected.font_scale = null;
+            expected.inline_style.?.line_height.?.font_relative.font.font_scale = null;
+            try std.testing.expect(std.mem.indexOf(u8, bytes, "\"font_scale\"") == null);
+        } else {
+            try std.testing.expect(std.mem.indexOf(u8, bytes, "\"font_scale\":1") != null);
+        }
+        try std.testing.expectEqualDeep(expected, parsed.value.entry.preamble_spans[0]);
+        try std.testing.expectEqualStrings(bytes, try std.json.Stringify.valueAlloc(a, parsed.value, .{}));
+        var inconsistent = parsed.value.entry.preamble_spans[0];
+        inconsistent.inline_style.?.line_height.?.font_relative.font.font_scale = 2;
+        try std.testing.expect(!validSpanInlineStyle(inconsistent));
+    }
+    const absent: InlineFontSnapshot = .{};
+    const identity: InlineFontSnapshot = .{ .font_scale = 1 };
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, absent, .{}),
+        try std.json.Stringify.valueAlloc(a, identity, .{}));
+}
+
+test "authored Help cursor is explicit range data independent of annotation and action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const plain: Span = .{ .text = "meaning", .explanation = "source title", .tooltip = "source title" };
+    try std.testing.expect(plain.inline_style == null);
+    const old = try std.json.Stringify.valueAlloc(a, plain, .{});
+    try std.testing.expect(std.mem.indexOf(u8, old, "cursor") == null);
+    var helped = plain; helped.inline_style = .{ .cursor = .help };
+    try std.testing.expect(validSpanInlineStyle(helped));
+    const bytes = try std.json.Stringify.valueAlloc(a, helped, .{});
+    const parsed = try std.json.parseFromSlice(Span, a, bytes, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(helped, parsed.value);
+    const parsed_json = try std.json.parseFromSliceLeaky(std.json.Value, a, bytes, .{});
+    const from_value = try std.json.parseFromValue(Span, a, parsed_json, .{}); defer from_value.deinit();
+    try std.testing.expectEqualDeep(helped, from_value.value);
+    helped.kind = .link; helped.target = "Kept";
+    try std.testing.expect(validSpanInlineStyle(helped));
+    helped.kind = .external_link; helped.target = "https://example.invalid/";
+    try std.testing.expect(validSpanInlineStyle(helped));
+    helped.target = ""; try std.testing.expect(!validSpanInlineStyle(helped));
+    helped = plain; helped.text = "";
+    helped.inline_style = .{ .cursor = .help, .line_height = .{ .font_relative = .{ .factor = 1, .font = .{} } } };
+    try std.testing.expect(!validSpanInlineStyle(helped));
+    helped.inline_style.?.cursor = null; try std.testing.expect(validSpanInlineStyle(helped));
+    for ([_][]const u8{ "\"pointer\"", "0", "true", "{}", "\"0\"", "[]" }) |bad| {
+        const json = try std.fmt.allocPrint(a, "{{\"cursor\":{s}}}", .{bad});
+        if (std.json.parseFromSlice(InlineTextStyle, a, json, .{})) |accepted| {
+            accepted.deinit(); return error.TestUnexpectedResult;
+        } else |_| {}
+        const json_value = try std.json.parseFromSliceLeaky(std.json.Value, a, json, .{});
+        if (std.json.parseFromValue(InlineTextStyle, a, json_value, .{})) |accepted| {
+            accepted.deinit(); return error.TestUnexpectedResult;
+        } else |_| {}
+    }
+}
+
+test "nullable body adjoining JSON preserves the old Entry shape and closed ordinary policy" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const old: Entry = .{ .title = "body", .kind = .citations };
+    const plain = try std.json.Stringify.valueAlloc(a, old, .{});
+    try std.testing.expect(std.mem.indexOf(u8, plain, "body_adjoining") == null);
+    const OldEntry = struct {
+        organization: Layout = .{}, title: []const u8, display_title: []const Span = &.{}, kind: format.BlobKind,
+        language: ?[]const u8 = null, language_code: []const u8 = "", sections: []const Section = &.{},
+        preamble_spans: []const Span = &.{}, references: []const Reference = &.{}, media: []const Media = &.{},
+        redirect: ?Redirect = null, alias: ?AliasTarget = null,
+    };
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, OldEntry{ .title = "body", .kind = .citations }, .{}), plain);
+    var owned = old; owned.body_adjoining = .ordinary;
+    const json = try std.json.Stringify.valueAlloc(a, owned, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"body_adjoining\":\"ordinary\"") != null);
+    const decoded = try std.json.parseFromSlice(Entry, a, json, .{}); defer decoded.deinit();
+    try std.testing.expectEqualDeep(owned, decoded.value);
+    const absent = try std.json.parseFromSlice(Entry, a, "{\"title\":\"body\",\"kind\":\"citations\",\"body_adjoining\":null}", .{}); defer absent.deinit();
+    try std.testing.expectEqualDeep(old, absent.value);
+    for ([_][]const u8{ "\"normal\"", "\"\"", "true", "0", "{}", "[]" }) |value| {
+        const bad = try std.fmt.allocPrint(a, "{{\"title\":\"body\",\"kind\":\"citations\",\"body_adjoining\":{s}}}", .{value});
+        if (std.json.parseFromSlice(Entry, a, bad, .{})) |parsed| { parsed.deinit(); return error.TestUnexpectedResult; } else |_| {}
+    }
+}
+
+test "ordered heading font families preserve named order and strict generic distinction" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const names = [_][]const u8{ "Linux Libertine", "Georgia", "Times", "Source Serif 4" };
+    const policy: ContainerFontFamily = .{ .stack = .{ .names = &names, .fallback = .serif } };
+    const json = try std.json.Stringify.valueAlloc(a, policy, .{});
+    try std.testing.expectEqualStrings("{\"stack\":{\"names\":[\"Linux Libertine\",\"Georgia\",\"Times\",\"Source Serif 4\"],\"fallback\":\"serif\"}}", json);
+    const parsed = try std.json.parseFromSlice(ContainerFontFamily, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(policy, parsed.value);
+    try std.testing.expectEqualStrings("\"sans_serif\"", try std.json.Stringify.valueAlloc(a, @as(ContainerFontFamily, .sans_serif), .{}));
+    for ([_][]const u8{ "serif", "Serif", "SANS-SERIF", "Sans  Serif", "monospace", "system-ui", "ui-serif", "Times [Foundry]", "Times]", "", " Georgia", "Times\x00", "\xff" }) |name| {
+        try std.testing.expect(!validFontFamilyName(name));
+        if (!std.unicode.utf8ValidateSlice(name)) continue;
+        const bad = try std.fmt.allocPrint(a, "{{\"stack\":{{\"names\":[{s}],\"fallback\":\"serif\"}}}}", .{try std.json.Stringify.valueAlloc(a, name, .{})});
+        if (std.json.parseFromSlice(ContainerFontFamily, a, bad, .{})) |unexpected| { unexpected.deinit(); return error.TestUnexpectedResult; } else |_| {}
+    }
+    for ([_][]const u8{ "0", "[]", "\"serif\"", "{\"stack\":{\"names\":[],\"fallback\":0}}", "{\"stack\":{\"names\":[],\"fallback\":\"fantasy\"}}", "{\"stack\":{\"names\":[],\"fallback\":\"serif\",\"extra\":0}}" }) |bad| {
+        if (std.json.parseFromSlice(ContainerFontFamily, a, bad, .{})) |unexpected| { unexpected.deinit(); return error.TestUnexpectedResult; } else |_| {}
+    }
+}
+const SectionHeadingStyleTest = struct {
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    const margins: StyleEdges = .{ .top = .{ .unit = .em, .value = 0.375 }, .right = zero, .bottom = .{ .unit = .em, .value = 0.375 }, .left = zero };
+    const padding: StyleEdges = .{ .top = .{ .unit = .em, .value = 0.75 }, .right = zero, .bottom = .{ .unit = .em, .value = 0.255 }, .left = zero };
+    const style: SectionHeadingStyle = .{
+        .box = .{ .margins = margins, .padding = padding, .border = .none, .owner_font_scale = 1.5,
+            .line_height = .{ .multiplier = 1.375 }, .clear = .none,
+            .font_family = .{ .stack = .{ .names = &.{ "Linux Libertine", "Georgia", "Times", "Source Serif 4" }, .fallback = .serif } } },
+        .font = .{ .font_scale = 1.5, .font_scale_basis = .normal_body, .language = "th" }, .direction = .ltr,
+    };
+    const section: Section = .{ .level = 2, .title = "Language", .anchor = "Language", .anchor_fallback = "Legacy",
+        .heading_style = style, .blocks = &.{
+            .{ .kind = .heading, .level = 2, .anchor = "Language", .anchor_fallback = "Legacy", .spans = &.{ .{ .kind = .link, .text = "Lang", .target = "Kept", .target_fragment = "part" }, .{ .text = "uage" } } },
+            .{ .kind = .paragraph, .spans = &.{.{ .text = "same body" }} },
+        } };
+};
+test "styled Section headings require one exact companion without changing null Section JSON" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const section = SectionHeadingStyleTest.section;
+    try std.testing.expect(validSectionHeadingStyle(section.heading_style.?) and validSectionHeadingCompanion(section));
+    try validateStored(a, .{ .entry = .{ .title = "heading", .kind = .citations, .sections = &.{section} } }, "heading", .citations, null);
+    const json = try std.json.Stringify.valueAlloc(a, section, .{});
+    const parsed = try std.json.parseFromSlice(Section, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(section, parsed.value);
+    const old: Section = .{ .level = 2, .title = "legacy" };
+    const OldSection = struct { level: u8, title: []const u8, anchor: []const u8 = "", anchor_fallback: []const u8 = "", blocks: []const Block = &.{} };
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, OldSection{ .level = 2, .title = "legacy" }, .{}), try std.json.Stringify.valueAlloc(a, old, .{}));
+    for (0..7) |mutation| {
+        var bad = section; var blocks = [_]Block{section.blocks[0], section.blocks[1]}; bad.blocks = &blocks;
+        switch (mutation) {
+            0 => bad.level = 3,
+            1 => bad.anchor = "different",
+            2 => blocks[0].kind = .paragraph,
+            3 => blocks[0].spans = &.{.{ .text = "different label" }},
+            4 => bad.heading_style.?.font.font_scale = 1,
+            5 => blocks[0].spans = &.{.{ .text = "Language", .trail = "s" }},
+            6 => blocks[0].spans = &.{ .{ .text = "" }, .{ .text = "Language" } },
+            else => unreachable,
+        }
+        try std.testing.expectError(error.InvalidPresentation, validateStored(a, .{ .entry = .{ .title = "heading", .kind = .citations, .sections = &.{bad} } }, "heading", .citations, null));
+    }
+}
+
+test "nullable inline family preserves old JSON and independent declaring family identity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const old: Span = .{ .text = "x" };
+    try std.testing.expect(std.mem.indexOf(u8, try std.json.Stringify.valueAlloc(a, old, .{}), "font_family") == null);
+    try std.testing.expect(std.mem.indexOf(u8, try std.json.Stringify.valueAlloc(a, InlineFontSnapshot{}, .{}), "font_family") == null);
+    const names = [_][]const u8{ "Georgia", "Times" };
+    const first: ContainerFontFamily = .{ .stack = .{ .names = &names, .fallback = .serif } };
+    const copied_names = try a.alloc([]const u8, names.len); for (names, copied_names) |name, *copy| copy.* = try a.dupe(u8, name);
+    const copied: ContainerFontFamily = .{ .stack = .{ .names = copied_names, .fallback = .serif } };
+    try std.testing.expect(sameFontFamilyRequest(first, copied));
+    try std.testing.expect(!sameFontFamilyRequest(first, .sans_serif));
+    var shifted: Span = .{ .text = "x", .font_scale = 1.5, .font_scale_basis = .normal_body, .font_family = first,
+        .inline_style = .{ .baseline_shift = .{ .value = 0.2, .font_scale_basis = .normal_body },
+            .line_height = .{ .font_relative = .{ .factor = 1, .font = .{ .font_scale = 1.5, .font_scale_basis = .normal_body, .font_family = copied } } } } };
+    try std.testing.expect(validSpanInlineStyle(shifted));
+    shifted.font_family = null; try std.testing.expect(!validSpanInlineStyle(shifted));
+    shifted.inline_style.?.baseline_shift = null; // Independent unshifted declaring owner may differ from its child.
+    try std.testing.expect(validSpanInlineStyle(shifted));
+    const encoded = try std.json.Stringify.valueAlloc(a, shifted, .{});
+    const parsed = try std.json.parseFromSlice(Span, a, encoded, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(shifted, parsed.value);
+    var heading = SectionHeadingStyleTest.style;
+    heading.font.font_family = .sans_serif; try std.testing.expect(!validSectionHeadingStyle(heading));
+    heading.font.font_family = heading.box.font_family; try std.testing.expect(validSectionHeadingStyle(heading));
+    const body_json = "{\"title\":\"x\",\"kind\":\"citations\",\"body_adjoining\":1}";
+    if (std.json.parseFromSlice(Entry, a, body_json, .{})) |unexpected| { unexpected.deinit(); return error.TestUnexpectedResult; } else |_| {}
+    const heading_json = try std.json.Stringify.valueAlloc(a, heading, .{});
+    const numeric_direction = try std.mem.replaceOwned(u8, a, heading_json, "\"direction\":\"ltr\"", "\"direction\":0");
+    if (std.json.parseFromSlice(SectionHeadingStyle, a, numeric_direction, .{})) |unexpected| { unexpected.deinit(); return error.TestUnexpectedResult; } else |_| {}
+}
+
+test "responsive fixed width Table preserves base geometry and exact optional narrow clear" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const base: TableStyle = .{ .float_side = .right, .clear = .right, .width = .{ .unit = .em, .value = 25 },
+        .margins = StyleEdges.all(.{ .unit = .em, .value = 0.5 }), .collapse = .collapse };
+    var table: Table = .{ .style = base, .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .kind = .link, .text = "kept", .target = "Kept", .target_fragment = "part" }} }} }},
+        .float_viewport = .{ .max_viewport_width_px = 639, .containing_direction = .ltr, .grid_direction = .ltr, .language = "th", .narrow_clear = .both } };
+    try std.testing.expect(validTableFloatViewportHeader(null, table.style, table.float_viewport));
+    for ([_]f32{ 0, 638.5, 639, 639.5, 900 }) |viewport| {
+        var expected = base;
+        if (viewport <= 639) { expected.float_side = null; expected.clear = .both; }
+        try std.testing.expectEqualDeep(@as(?TableStyle, expected), try resolveTableFloatStyle(table, viewport));
+        try std.testing.expectEqual(@as(f32, 25), table.style.?.width.?.value);
+        try std.testing.expectEqualStrings("Kept", table.rows[0].cells[0].spans[0].target);
+    }
+    const json = try std.json.Stringify.valueAlloc(a, table.float_viewport.?, .{});
+    const parsed = try std.json.parseFromSlice(TableFloatViewport, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(table.float_viewport.?, parsed.value);
+    table.float_viewport.?.narrow_clear = null;
+    const old_json = try std.json.Stringify.valueAlloc(a, table.float_viewport.?, .{});
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "narrow_clear") == null);
+    var expected = base; expected.float_side = null;
+    try std.testing.expectEqualDeep(@as(?TableStyle, expected), try resolveTableFloatStyle(table, 639));
+    for ([_][]const u8{ "0", "1", "\"unknown\"", "true" }) |invalid| {
+        const bad = try std.fmt.allocPrint(a, "{{\"max_viewport_width_px\":639,\"containing_direction\":\"ltr\",\"grid_direction\":\"ltr\",\"language\":\"th\",\"narrow_clear\":{s}}}", .{invalid});
+        if (std.json.parseFromSlice(TableFloatViewport, a, bad, .{})) |unexpected| { unexpected.deinit(); return error.TestUnexpectedResult; } else |_| {}
+    }
+    table.style.?.width = .{ .unit = .percent, .value = 80 };
+    try std.testing.expect(!validTableFloatViewportHeader(null, table.style, table.float_viewport));
+    table.style.?.width = .{ .unit = .px, .value = 400 };
+    try std.testing.expect(validTableFloatViewportHeader(null, table.style, table.float_viewport));
+}
+
+test "authored heading companion supports generic build defaults without lending ownership to legacy shapes" {
+    const LegacySection = struct { level: u8 = 2, title: []const u8 = "legacy", blocks: []const Block = &.{} };
+    try std.testing.expect(!validSectionHeadingCompanion(LegacySection{}));
+    const BuildSpan = struct { kind: enum { text, link } = .text, text: []const u8 };
+    const BuildBlock = struct {
+        kind: enum { paragraph, heading } = .heading, depth: u8 = 0, level: u8 = 2,
+        anchor: []const u8 = "anchor", anchor_fallback: []const u8 = "fallback",
+        list_path: []const u8 = "", number: []const u8 = "", feature: ?Feature = null, table: ?Table = null,
+        spans: []const BuildSpan,
+    };
+    const BuildSection = struct {
+        level: u8 = 2, title: []const u8 = "Heading", anchor: []const u8 = "anchor", anchor_fallback: []const u8 = "fallback",
+        heading_style: ?SectionHeadingStyle = SectionHeadingStyleTest.style, blocks: []const BuildBlock,
+    };
+    const spans = [_]BuildSpan{.{ .text = "Heading" }};
+    var block = [_]BuildBlock{.{ .spans = &spans }};
+    var section: BuildSection = .{ .blocks = &block };
+    try std.testing.expect(validSectionHeadingCompanion(section));
+    section.anchor = "different"; try std.testing.expect(!validSectionHeadingCompanion(section));
+    section.anchor = "anchor"; block[0].kind = .paragraph;
+    try std.testing.expect(!validSectionHeadingCompanion(section));
+    const TableOnly = struct { kind: enum { table } = .table, depth: u8 = 0, level: u8 = 2,
+        anchor: []const u8 = "anchor", anchor_fallback: []const u8 = "fallback", list_path: []const u8 = "", number: []const u8 = "",
+        feature: ?Feature = null, table: ?Table = null, spans: []const BuildSpan = &.{} };
+    const OtherSection = struct { level: u8 = 2, title: []const u8 = "Heading", anchor: []const u8 = "anchor",
+        anchor_fallback: []const u8 = "fallback", heading_style: ?SectionHeadingStyle = SectionHeadingStyleTest.style,
+        blocks: []const TableOnly = &.{} };
+    try std.testing.expect(!validSectionHeadingCompanion(OtherSection{ .blocks = &.{.{ .spans = &spans }} }));
+    const NoAnchors = struct { level: u8 = 2, title: []const u8 = "Heading",
+        heading_style: ?SectionHeadingStyle = SectionHeadingStyleTest.style, blocks: []const BuildBlock };
+    block[0].kind = .heading; block[0].anchor = ""; block[0].anchor_fallback = "";
+    try std.testing.expect(validSectionHeadingCompanion(NoAnchors{ .blocks = &block }));
+    block[0].anchor = "unexpected";
+    try std.testing.expect(!validSectionHeadingCompanion(NoAnchors{ .blocks = &block }));
+    // Fully typed data retains the exact strict companion and trail policy.
+    try std.testing.expect(validSectionHeadingCompanion(SectionHeadingStyleTest.section));
+    var typed = SectionHeadingStyleTest.section;
+    var typed_blocks = [_]Block{typed.blocks[0]}; typed.blocks = &typed_blocks;
+    typed_blocks[0].spans = &.{.{ .text = "Language", .trail = "s" }};
+    try std.testing.expect(!validSectionHeadingCompanion(typed));
+}
+
+const BlockMediaModelFixture = struct {
+    fn layout() FigureBlockMediaLayout {
+        return .{ .wrapper = .{ .width = .auto, .margins = StyleEdges.all(.{ .unit = .px, .value = 0 }),
+            .line_height = .{ .multiplier = 1.5 }, .text_align = .left, .owner_font_scale = 1 },
+            .media = .{ .strut = .{ .font_scale = 1, .direction = .ltr }, .vertical_align = .middle,
+                .max_width = .{ .percent = 100, .subtract = .{ .unit = .px, .value = 0 } } },
+            .preferred_width_px = 44, .natural_width = 120, .natural_height = 110,
+            .rendition_1x = .{ .url = "https://example.test/controlled-1x.png", .sha256 = "1111111111111111111111111111111111111111111111111111111111111111" },
+            .rendition_2x = .{ .url = "https://example.test/controlled-2x.png", .sha256 = "2222222222222222222222222222222222222222222222222222222222222222" } };
+    }
+    fn figure() Figure {
+        var value = TableCaptionModelFixture.figure();
+        value.table_caption_layout = null; value.block_media_layout = layout();
+        value.placement = .none; value.clear = .none;
+        value.margins = StyleEdges.all(.{ .unit = .px, .value = 0 });
+        value.image_insets = value.margins; value.caption_padding = value.margins;
+        value.frame_background = .{ .kind = .transparent }; value.image_background = .{ .kind = .transparent };
+        value.caption_background = .{ .kind = .transparent };
+        value.content.image.span = .{ .kind = .text, .image = .{ .file = "controlled-block.svg", .width_px = 44, .height_px = 40, .alt = "controlled" } };
+        return value;
+    }
+};
+
+test "Figure block media retains explicit nonzero line state rendition aspect and legacy absent JSON" {
+    const a = std.testing.allocator;
+    var value = BlockMediaModelFixture.figure();
+    var narrow = value.block_media_layout.?.wrapper;
+    narrow.line_height = .{ .length = .{ .unit = .px, .value = 24 } };
+    narrow.text_align = .center;
+    const zero: ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    narrow.margins = null; narrow.margin_values = .{ .top = zero, .right = .auto, .bottom = zero, .left = .auto };
+    const states = [_]FigureBlockMediaState{.{ .max_width_px = 639, .wrapper = narrow, .media = value.block_media_layout.?.media }};
+    value.block_media_layout.?.viewport_states = &states;
+    try std.testing.expect(validFigure(value));
+    try std.testing.expect((try resolveFigureBlockMediaState(value.block_media_layout.?, 640)) == null);
+    const selected = (try resolveFigureBlockMediaState(value.block_media_layout.?, 639)).?;
+    try std.testing.expectEqualDeep(narrow, selected.wrapper);
+    try std.testing.expectEqual(@as(f32, 24), selected.wrapper.line_height.?.length.value);
+    const encoded = try std.json.Stringify.valueAlloc(a, value, .{}); defer a.free(encoded);
+    const decoded = try std.json.parseFromSlice(Figure, a, encoded, .{}); defer decoded.deinit();
+    try std.testing.expectEqualDeep(value, decoded.value);
+    try std.testing.expectEqual(@as(u32, 120), decoded.value.block_media_layout.?.natural_width);
+    try std.testing.expectEqual(@as(u32, 110), decoded.value.block_media_layout.?.natural_height);
+    value.block_media_layout = null;
+    const legacy = try std.json.Stringify.valueAlloc(a, value, .{}); defer a.free(legacy);
+    try std.testing.expect(std.mem.indexOf(u8, legacy, "block_media_layout") == null);
+}
+
+test "Figure block media refuses table mixing missing caption link and incomplete line authority" {
+    const value = BlockMediaModelFixture.figure();
+    try std.testing.expect(validFigure(value));
+    var bad = value; bad.table_caption_layout = TableCaptionModelFixture.layout(); try std.testing.expect(!validFigure(bad));
+    bad = value; bad.caption = &.{.{ .text = "not hidden" }}; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.caption_blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "not hidden" }} }}; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.content.image.span.kind = .link; bad.content.image.span.target = "File:controlled-block.svg"; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.block_media_layout.?.natural_height = 0; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.block_media_layout.?.preferred_width_px = 0; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.block_media_layout.?.wrapper.line_height = null; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.block_media_layout.?.wrapper.line_height = .{ .multiplier = std.math.nan(f32) }; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.block_media_layout.?.wrapper.owner_font_scale = 1.2; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.block_media_layout.?.wrapper.width = .fit_content; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.block_media_layout.?.wrapper.layout = .flex_row; try std.testing.expect(!validFigure(bad));
+    bad = value; bad.image_insets.left.value = 1; try std.testing.expect(!validFigure(bad));
+    const state: FigureBlockMediaState = .{ .max_width_px = 639, .wrapper = value.block_media_layout.?.wrapper, .media = value.block_media_layout.?.media };
+    bad = value; bad.block_media_layout.?.viewport_states = &.{state, state}; try std.testing.expect(!validFigure(bad));
+    try std.testing.expectError(error.InvalidPresentation, resolveFigureBlockMediaState(value.block_media_layout.?, std.math.inf(f64)));
+}
+
+test "Figure block raster identity requires two distinct HTTPS hash-bound density resources" {
+    const good = BlockMediaModelFixture.figure();
+    try std.testing.expect(validFigure(good));
+    for ([_][]const u8{ "", "http://example.test/a.png", "https://user@example.test/a.png", "https://example.test/a.png#x", "https://example.test/a.png\n" }) |url| {
+        var bad = good; bad.block_media_layout.?.rendition_1x.url = url; try std.testing.expect(!validFigure(bad));
+    }
+    for ([_][]const u8{ "", "00", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }) |hash| {
+        var bad = good; bad.block_media_layout.?.rendition_1x.sha256 = hash; try std.testing.expect(!validFigure(bad));
+    }
+    var bad = good; bad.block_media_layout.?.rendition_2x = bad.block_media_layout.?.rendition_1x; try std.testing.expect(!validFigure(bad));
+    bad = good; bad.block_media_layout.?.natural_width = std.math.maxInt(u32); try std.testing.expect(!validFigure(bad));
+}
+
+const PairedTableScrollTest = struct {
+    fn block() TableBlockViewport {
+        return .{ .max_viewport_width_px = 639, .box_style = .{
+            .margins = StyleEdges.all(.{ .unit = .em, .value = 0 }), .clear = .right,
+            .padding = StyleEdges.all(.{ .unit = .px, .value = 0 }),
+        }, .box_sizing = .border_box, .max_width = .{ .unit = .percent, .value = 100 },
+            .grid_style = .{ .collapse = .collapse }, .grid_direction = .ltr, .language = "de", .focus_paint = .{ .mode = .ua_auto, .color = .{ .kind = .rgb, .value = "#3366cc" } } };
+    }
+    fn table(narrow: *const TableBlockViewport) Table {
+        return .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .kind = .link, .text = "kept", .target = "Kept", .target_fragment = "part" }} }} }},
+            .style = .{ .float_side = .right, .margins = StyleEdges.all(.{ .unit = .em, .value = 0.4 }), .collapse = .collapse, .clear = .right },
+            .float_viewport = .{ .max_viewport_width_px = 639, .containing_direction = .rtl, .grid_direction = .ltr, .language = "de" }, .block_viewport = narrow };
+    }
+};
+test "paired Table float and scroll states share body actions and exact CSS breakpoint" {
+    const a = std.testing.allocator;
+    const block = PairedTableScrollTest.block(); const table = PairedTableScrollTest.table(&block);
+    try std.testing.expect(validTableViewportHeaders(null, table.style, table.block_viewport, table.float_viewport));
+    try std.testing.expect(!validTableBlockViewport(block));
+    for ([_]f32{ 1000, 639, 639.5, 0, 640, 638.75, 1000 }) |width| {
+        const selected = try resolveTableBlockViewport(table, width);
+        const style = (try resolveTableFloatStyle(table, width)).?;
+        if (width <= 639) {
+            try std.testing.expect(selected == &block and style.float_side == null and style.width == null);
+            try std.testing.expectEqualDeep(block.box_style, style);
+        } else {
+            try std.testing.expect(selected == null);
+            try std.testing.expectEqualDeep(table.style.?, style);
+        }
+        try std.testing.expectEqualStrings("Kept", table.rows[0].cells[0].spans[0].target);
+        try std.testing.expect(table.rows[0].cells[0].spans[0].target_fragment != null);
+        try std.testing.expectEqualStrings("part", table.rows[0].cells[0].spans[0].target_fragment.?);
+    }
+    const json = try std.json.Stringify.valueAlloc(a, table, .{}); defer a.free(json);
+    const decoded = try std.json.parseFromSlice(Table, a, json, .{}); defer decoded.deinit();
+    try std.testing.expectEqualDeep(table, decoded.value);
+}
+test "paired Table viewport refuses unmatched state geometry width and margin interpretations" {
+    const good = PairedTableScrollTest.block();
+    for (0..15) |mutation| {
+        var block = good; var table = PairedTableScrollTest.table(&block);
+        switch (mutation) {
+            0 => block.max_viewport_width_px = 638,
+            1 => table.float_viewport.?.max_viewport_width_px = 0,
+            2 => block.language = "fr",
+            3 => block.grid_direction = .rtl,
+            4 => table.float_viewport.?.narrow_clear = .none,
+            5 => block.box_style.width = .{ .unit = .px, .value = 200 },
+            6 => block.box_style.margin_values = .{ .top = .{ .length = .{ .unit = .px, .value = 0 } }, .right = .auto, .bottom = .{ .length = .{ .unit = .px, .value = 0 } }, .left = .auto },
+            7 => block.box_style.margins = null,
+            8 => table.geometry = .{ .border = 0 },
+            9 => table.style.?.float_side = .left,
+            10 => block.grid_style.background = "#ffffff",
+            11 => block.max_width.value = std.math.nan(f32),
+            12 => block.focus_paint = null,
+            13 => block.focus_paint.?.mode = .authored_none,
+            14 => block.focus_paint.?.color = .{ .kind = .rgb, .value = "invalid" },
+            else => unreachable,
+        }
+        try std.testing.expect(!validTableViewportHeaders(table.geometry, table.style, table.block_viewport, table.float_viewport));
+        try std.testing.expectError(error.InvalidPresentation, resolveTableBlockViewport(table, 639));
+        try std.testing.expectError(error.InvalidPresentation, resolveTableFloatStyle(table, 640));
+    }
+    const table = PairedTableScrollTest.table(&good);
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |width| {
+        try std.testing.expectError(error.InvalidPresentation, resolveTableBlockViewport(table, width));
+        try std.testing.expectError(error.InvalidPresentation, resolveTableFloatStyle(table, width));
+    }
+}
+
+test "paired scroll focus preserves authored none versus native auto and closed JSON domain" {
+    const a = std.testing.allocator;
+    const none: TableScrollFocusPaint = .{ .mode = .authored_none };
+    try std.testing.expect(validTableScrollFocusPaint(none));
+    var policy = PairedTableScrollTest.block(); policy.focus_paint = none;
+    try std.testing.expect(validTableScrollViewport(policy));
+    const old = TableBlockViewportTypeTest.policy();
+    const old_json = try std.json.Stringify.valueAlloc(a, old, .{}); defer a.free(old_json);
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "focus_paint") == null);
+    for ([_][]const u8{ "{\"mode\":0}", "{\"mode\":\"auto\"}", "{\"mode\":\"ua_auto\",\"width\":2}",
+        "{\"mode\":\"authored_none\",\"color\":{\"kind\":\"rgb\",\"value\":\"#3366cc\"}}", "{\"mode\":\"ua_auto\",\"mode\":\"ua_auto\"}" }) |invalid| {
+        if (std.json.parseFromSlice(TableScrollFocusPaint, a, invalid, .{})) |unexpected| { unexpected.deinit(); return error.TestUnexpectedResult; } else |_| {}
+    }
 }

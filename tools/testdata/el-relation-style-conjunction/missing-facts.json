@@ -1,0 +1,47 @@
+{
+  "schema": "derived-native-validator-missing-facts.v1",
+  "source": {
+    "path": "/mnt/downloads/dev/wikidict/.tmp/figure-normal-inputs01/shared-provider01/retained-bundle-driver01/el-current-main-strict03-full-failure-review01.json",
+    "bytes": 149630,
+    "sha256": "c48a75a1af4687ddbaa068dad7c2682ba2ef6e940a14952c8716fd9e094c79e8"
+  },
+  "facts": [
+    {
+      "batch": 684,
+      "canonical_file": "Αρχείο:pink Venus symbol.svg",
+      "file_sha1": "",
+      "file_timestamp": "",
+      "mediatype": "",
+      "mime": "",
+      "original_height": 0,
+      "original_width": 0,
+      "requested_file": "Αρχείο:pink Venus symbol.svg",
+      "state": "missing"
+    },
+    {
+      "batch": 687,
+      "canonical_file": "Αρχείο:Προφοραα",
+      "file_sha1": "",
+      "file_timestamp": "",
+      "mediatype": "",
+      "mime": "",
+      "original_height": 0,
+      "original_width": 0,
+      "requested_file": "Αρχείο:Προφοραα",
+      "state": "missing"
+    },
+    {
+      "batch": 1,
+      "canonical_file": "Αρχείο:1000 Drachmen (1987) - Vorderseite.jpg",
+      "file_sha1": "",
+      "file_timestamp": "",
+      "mediatype": "",
+      "mime": "",
+      "original_height": 0,
+      "original_width": 0,
+      "requested_file": "Αρχείο:1000 Drachmen (1987) - Vorderseite.jpg",
+      "state": "missing"
+    }
+  ],
+  "scope": "Existing actual normal selected Missing facts; controlled Book validator setup only. Not a compact normal Registry replay."
+}

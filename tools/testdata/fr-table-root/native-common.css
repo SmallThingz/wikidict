@@ -1,0 +1,799 @@
+body.skin-vector .mw-wiki-logo,
+body.skin-monobook .mw-wiki-logo {
+	background-image: url('https://upload.wikimedia.org/wikipedia/commons/7/70/Wiktionnaire_en_fran%C3%A7ais_-_7_millions_v2.svg') !important;
+}
+
+/* Soulignement des titres niveau 3 + clear + interligne */
+/* [[Catégorie:CSS du Wiktionnaire]] */
+.ns-0 #mw-content-text div.mw-heading3,
+.ns-106 #mw-content-text div.mw-heading3,
+.ns-110 #mw-content-text div.mw-heading3,
+.ns-118 #mw-content-text div.mw-heading3 {
+  border-bottom: dotted 1px #aaa;
+  line-height: 2;
+}
+
+/* Lien [modifier] plus petit, comme WP, sauf pour le skin Timeless */
+body:not(.skin-timeless) .mw-editsection {
+  font-size: x-small;
+}
+
+/* Espace fine insécable devant les numéros de référence */
+.reference:before {
+  content: '\202f';
+}
+
+/* T156351: Support for Parsoid’s Cite implementation */
+span[rel="mw:referencedBy"] {
+  counter-reset: mw-ref-linkback 0;
+}
+
+span[rel="mw:referencedBy"] > a::before {
+  content: counter(mw-ref-linkback, lower-alpha);
+  vertical-align: inherit;
+  font-size: 100%;
+}
+
+span[rel="mw:referencedBy"] > a:nth-last-child(2)::after {
+  content: " et ";
+}
+
+/****************************************/
+/*        Liens                        **/
+/****************************************/
+/* Liens externes en rouge (seulement avec la classe rougelinks) */
+#bodyContent .rougelinks a {
+  background: none !important;
+  color: #ba0000;
+  padding-right: 0;
+}
+
+/*****************************************/
+/* Table jaune                           */
+/*****************************************/
+table.table-jaune {
+  border: 1px solid #AAA;
+  text-align: center;
+  border-collapse: collapse;
+  background: #FFF;
+}
+
+/* Titre */
+table.table-jaune caption {
+  background: #ffffaa;
+  font-weight: bold;
+  border: 1px solid #AAA;
+  padding: 0.2em;
+}
+
+/* Titres de colonnes */
+table.table-jaune th {
+  padding: 0.2em;
+  background: #FFFFCC;
+  border: 1px solid #AAA;
+}
+
+/* Cellule */
+table.table-jaune td {
+  padding: 0.3em;
+  background: #FFF;
+  border: 1px solid #AAA;
+}
+
+/*****************************************/
+/* Boites déroulantes                    */
+/*****************************************/
+.boite {
+  border: 1px solid #aaa;
+  overflow: auto;
+  background-color: #f7f8ff;
+}
+
+.boite table {
+  border-spacing: 0;
+  width: 100%;
+  text-align: left;
+  background: #f7f8ff;
+}
+
+@media screen {
+  html.skin-theme-clientpref-night .boite {
+    background: #131520;
+    border-color: gray;
+  }
+
+  html.skin-theme-clientpref-night .boite table {
+    background: #131520;
+  }
+}
+
+@media screen and (prefers-color-scheme: dark) {
+  html.skin-theme-clientpref-os .boite {
+    background: #131520;
+    border-color: gray;
+  }
+
+  html.skin-theme-clientpref-os .boite table {
+    background: #131520;
+  }
+}
+
+/*****************************************/
+/* Boites déroulantes                    */
+/*****************************************/
+
+.liste-colonnes > ul {
+  margin-top: 0;
+}
+
+.liste-colonnes li {
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;
+  break-inside: avoid-column;
+}
+
+/*********/
+/*  API  */
+/*********/
+.API {
+  font-family: 'DejaVu Sans', 'Segoe UI', 'Lucida Grande', 'Charis SIL', 'Gentium Plus', 'Doulos SIL', sans-serif;
+  font-size: 110%;
+  text-decoration: none;
+}
+
+/*****************************************/
+/* Liens des projets Wikimedia           */
+/*****************************************/
+#liens_wikimedia td {
+  border: 1px solid #AAA;
+  background: #EEF;
+  padding: 0.3em;
+}
+
+/*****************************************/
+/* ne pas afficher les groupes vides     */
+/* des statistiques                      */
+/*****************************************/
+tr.statistics-group-zero {
+  display: none;
+}
+
+/*****************************************/
+/* Styles de bandeaux                    */
+/*****************************************/
+/* Bandeau d'EditNotice, voir [[:Catégorie:Wiktionnaire:Editnotice]] */
+.bandeau-editnotice {
+  border: 3px solid var(--border-color-progressive);
+  border-left: 0;
+  border-right: 0;
+  background-color: var(--background-color-notice-subtle);
+  text-align: left;
+  width: 95%;
+  margin: auto auto 0.5em;
+  padding: 5px 0;
+}
+
+/* Style des bandeaux principaux, par le [[Modèle:Méta bandeau d'avertissement]] */
+
+.bandeau {
+  margin: 1em 10% 1em;
+  border-style: solid;
+  border-width: 1px;
+  padding: 0.5em;
+  display: flex;
+  gap: 1em;
+}
+
+.bandeau-titre {
+  font-size: 1.1em;
+  margin-bottom: 0.5em
+}
+
+.bandeau-niveau-grave {
+  border-color: var(--border-color-error, #f54739);
+  background-color: var(--background-color-error-subtle, #ffe9e5);
+}
+
+.bandeau-niveau-modere {
+  border-color: var(--border-color-warning, #ab7f2a);
+  background-color: var(--background-color-warning-subtle, #fdf2d5);
+}
+
+.bandeau-niveau-ebauche,
+.bandeau-niveau-information,
+.bandeau-niveau-detail {
+  border-color: var(--border-color-notice, #72777d);
+  background-color: var(--background-color-notice-subtle, #eaecf0);
+}
+
+.bandeau-voir-systemes {
+  background-color: #eee;
+  font-size: 90%;
+  padding: 0.5em;
+  border: 1px solid #ccc;
+  margin-bottom: .5em;
+}
+
+/* Cadre des documentations */
+.documentation {
+  background-color: #ECFCF4;
+  border: 1px solid #aaa;
+  padding: 0.5em;
+}
+
+@media screen {
+  html.skin-theme-clientpref-night .documentation {
+    background-color: #074324;
+    border-color: gray;
+  }
+
+  html.skin-theme-clientpref-night .bandeau-voir-systemes {
+    background-color: #1c1c1c;
+    border-color: gray;
+  }
+}
+
+@media screen and (prefers-color-scheme: dark) {
+  html.skin-theme-clientpref-os .documentation {
+    background-color: #074324;
+    border-color: gray;
+  }
+
+  html.skin-theme-clientpref-os .bandeau-voir-systemes {
+    background-color: #1c1c1c;
+    border-color: gray;
+  }
+}
+
+/***************************************************************************/
+
+/* Style boîte d’ouverture de session */
+#userlogin {
+  padding: 1em 1em .7em 1em;
+  background-color: #ffffe6;
+  border: 2px solid #fc6;
+  color: #000;
+  margin-right: 2em;
+}
+
+#userlogin table {
+  background-color: #ffffe6;
+  color: #000;
+}
+
+/*************************************/
+/* Boîtes de l’accueil communautaire */
+/*************************************/
+/* Style des boîtes de l’accueil */
+.boite-accueil-haut {
+  background-color: #C8D8FF;
+  /* font-family: sans-serif; */
+  font-size: small;
+  font-weight: bold;
+  border: 1px solid #AAAAAA;
+  padding-bottom: 2px;
+  padding-left: 2px;
+  padding-top: 2px;
+  -moz-border-radius-topright: 0.5em;
+  border-top-right-radius: 0.5em;
+  -moz-border-radius-topleft: 0.5em;
+  border-top-left-radius: 0.5em;
+}
+
+/* ALTERNANCE */
+
+/* Classes permettant d'alterner les couleurs de ligne
+	dans les tableaux selon le nombre de lignes d'en-tête :
+	.alternance si nombre impair
+	.alternance2 si nombre pair.
+
+	.odd est un be kind to IE<9 qui n'implémente pas
+	le sélecteur :nth-child, appliquée via Common.js
+
+	.sortable : les tableaux triables nécessitent d'inverser
+	l'alternance.
+
+*/
+
+table.alternance tr:nth-child(odd),
+table.alternance tr:nth-child(odd) th[scope="row"],
+table.alternance tr.odd,
+table.alternance tr.odd th[scope="row"] {
+  background: #E9E9E9;
+}
+
+@media screen {
+  html.skin-theme-clientpref-night table.alternance tr:nth-child(odd),
+  html.skin-theme-clientpref-night table.alternance tr:nth-child(odd) th[scope="row"],
+  html.skin-theme-clientpref-night table.alternance tr.odd,
+  html.skin-theme-clientpref-night table.alternance tr.odd th[scope="row"] {
+    background: #1a1a1a;
+  }
+}
+
+@media screen and (prefers-color-scheme: dark) {
+  html.skin-theme-clientpref-os table.alternance tr:nth-child(odd),
+  html.skin-theme-clientpref-os table.alternance tr:nth-child(odd) th[scope="row"],
+  html.skin-theme-clientpref-os table.alternance tr.odd,
+  html.skin-theme-clientpref-os table.alternance tr.odd th[scope="row"] {
+    background: #1a1a1a;
+  }
+}
+
+/* Styles de [[Modèle:Méta palette de navigation]] */
+table.navbox {
+  background: #F9F9F9;
+  border: 1px solid #AAA;
+  clear: both;
+  font-size: 90%;
+  margin: 1em 0 0;
+  padding: 2px;
+  text-align: center;
+  width: 100%;
+}
+
+table.navbox th {
+  background: #CCF;
+  padding-left: 1em;
+  padding-right: 1em;
+}
+
+table.navbox th.group {
+  background: #DDF;
+  vertical-align: middle;
+  width: 150px;
+  padding-left: 1em;
+  padding-right: 1em;
+  font-weight: bold;
+}
+
+table.navbox td.list {
+  text-align: left
+}
+
+table.navbox td.even {
+  background: #EEF
+}
+
+table.navbox td.below {
+  background: #CCF;
+  vertical-align: middle;
+  padding-left: 1em;
+  padding-right: 1em;
+}
+
+/* Modèle de palettes groupées, [[Modèle:Palette]] */
+
+div.navbox_group {
+  border: 1px solid #aaaaaa;
+  margin-top: 15px;
+}
+
+div.navbox_group table.navbox {
+  border: 0;
+  margin: 0;
+}
+
+@media screen {
+  html.skin-theme-clientpref-night table.navbox {
+    background: #40406d;
+    border-color: gray;
+  }
+
+  html.skin-theme-clientpref-night table.navbox th {
+    background: #3b3b6d;
+  }
+
+  html.skin-theme-clientpref-night table.navbox th.group {
+    background: #2b2b4f;
+  }
+
+  html.skin-theme-clientpref-night table.navbox td.even {
+    background: #202022;
+  }
+}
+
+@media screen and (prefers-color-scheme: dark) {
+  html.skin-theme-clientpref-os table.navbox {
+    background: #40406d;
+    border-color: gray;
+  }
+
+  html.skin-theme-clientpref-os table.navbox th {
+    background: #3b3b6d;
+  }
+
+  html.skin-theme-clientpref-os table.navbox th.group {
+    background: #2b2b4f;
+  }
+
+  html.skin-theme-clientpref-os table.navbox td.even {
+    background: #202022;
+  }
+}
+
+/* Fin styles de [[Modèle:Méta palette de navigation]] */
+
+/* Boites et messages */
+
+.boite-grise {
+  background: #F9F9F9;
+  border: 1px solid #aaa;
+  padding: 5px;
+}
+
+@media screen {
+  html.skin-theme-clientpref-night .boite-grise {
+    background: #494949;
+    border-color: gray;
+  }
+}
+
+@media screen and (prefers-color-scheme: dark) {
+  html.skin-theme-clientpref-os .boite-grise {
+    background: #494949;
+    border-color: gray;
+  }
+}
+
+.boite-a-droite {
+  clear: right;
+  float: right;
+  margin: 1em 0 1em 1em;
+  width: auto;
+}
+
+.boite-a-gauche {
+  clear: left;
+  float: left;
+  margin: 0 1em 1em 1em;
+  width: auto;
+}
+
+/* Modèle:Autres projets et interprojet */
+.interprojet li.interprojet_top {
+  background-position: left top;
+}
+
+.autres-projets ul {
+  margin: 0;
+  padding: 0;
+}
+
+.autres-projets li {
+  list-style-type: none;
+  list-style-image: none;
+  margin: 0.2em 0;
+  text-indent: 0;
+  padding-left: 24px;
+  min-height: 20px;
+}
+
+.autres-projets .titre {
+  text-align: center;
+  margin: 0.2em 0;
+}
+
+.autres-projets li a {
+  font-style: italic;
+}
+
+.species {
+  background-image: url(//thumb.wikimedia.org/wikipedia/commons/thumb/d/df/Wikispecies-logo.svg/20px-Wikispecies-logo.svg.png);
+  background-position: 1px 0;
+}
+
+.source {
+  background-image: url(//thumb.wikimedia.org/wikipedia/commons/thumb/4/4c/Wikisource-logo.svg/20px-Wikisource-logo.svg.png);
+  background-position: 1px 1px;
+}
+
+.pedia {
+  background-image: url(//thumb.wikimedia.org/wikipedia/commons/thumb/8/80/Wikipedia-logo-v2.svg/20px-Wikipedia-logo-v2.svg.png);
+  background-position: 1px 0;
+}
+
+.books {
+  background-image: url(//thumb.wikimedia.org/wikipedia/commons/thumb/f/fa/Wikibooks-logo.svg/20px-Wikibooks-logo.svg.png);
+  background-position: 1px 1px;
+}
+
+.meta {
+  background-image: url("//thumb.wikimedia.org/wikipedia/commons/thumb/7/75/Wikimedia_Community_Logo.svg/20px-Wikimedia_Community_Logo.svg.png");
+  background-position: 1px 1px;
+}
+
+.versity {
+  background-image: url(//thumb.wikimedia.org/wikipedia/commons/thumb/9/91/Wikiversity-logo.svg/20px-Wikiversity-logo.svg.png);
+  background-position: 0 2px;
+}
+
+.wiktionary {
+  background-image: url(//thumb.wikimedia.org/wikipedia/commons/thumb/9/9f/Wiktprintable_without_text.svg/20px-Wiktprintable_without_text.svg.png);
+  background-position: 0 1px;
+}
+
+.news {
+  background-image: url(//thumb.wikimedia.org/wikipedia/commons/thumb/2/24/Wikinews-logo.svg/20px-Wikinews-logo.svg.png);
+  background-position: 0 5px;
+}
+
+.quote {
+  background-image: url(//thumb.wikimedia.org/wikipedia/commons/thumb/f/fa/Wikiquote-logo.svg/20px-Wikiquote-logo.svg.png);
+  background-position: 2px 1px;
+}
+
+.commons {
+  background-image: url(//thumb.wikimedia.org/wikipedia/commons/thumb/4/4a/Commons-logo.svg/20px-Commons-logo.svg.png);
+  background-position: 3px 0;
+}
+
+.media {
+  background-image: url(//thumb.wikimedia.org/wikipedia/commons/thumb/8/81/Wikimedia-logo.svg/20px-Wikimedia-logo.svg.png);
+  background-position: 0 0;
+}
+
+.data {
+  background-image: url(//thumb.wikimedia.org/wikipedia/commons/thumb/f/ff/Wikidata-logo.svg/20px-Wikidata-logo.svg.png);
+  background-position: 0 5px;
+}
+
+.voyage {
+  background-image: url(//thumb.wikimedia.org/wikipedia/commons/thumb/d/dd/Wikivoyage-Logo-v3-icon.svg/20px-Wikivoyage-Logo-v3-icon.svg.png);
+  background-position: 2px 2px;
+}
+
+.species,
+.meta,
+.versity,
+.pedia,
+.books,
+.news,
+.quote,
+.source,
+.commons,
+.data,
+.voyage {
+  background-repeat: no-repeat;
+  line-height: 1.5em;
+  text-indent: 23px;
+}
+
+/* Wikitables */
+
+table.centre {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Listes */
+
+ul.no-dots {
+  list-style-type: none;
+  list-style-image: none; /* Pour Vector */
+  margin-left: 0 !important;
+}
+
+/*
+ * Copie de http://fr.wikipedia.org/wiki/MediaWiki:Common.css
+ * Correction de la taille du texte dans les balises "syntaxhighlight", les pages .css/.js et les modules Lua
+ * workaround pour Firefox et Chrome - voir [[bugzilla:26204]]
+ */
+.mw-geshi div,
+.mw-geshi div pre,
+.mw-geshi,
+.source-css,
+.source-javascript,
+.source-lua {
+  font-family: monospace !important;
+}
+
+/* Message d’erreur */
+.error {
+  font-size: 1em;
+}
+
+/* Affichage uniquement sur mobile */
+
+.mobileonly {
+  display: none !important;
+}
+
+/* Guillemets pour citation, etc. */
+q {
+  quotes: "«\202F" "\202F»" "“" "”" "«\202F" "\202F»" "“" "”";
+}
+
+/* Pas de guillemets pour les exemples */
+.example q {
+  quotes: none;
+}
+
+kbd {
+  background-color: light-dark(#eee, #484848);
+  border-radius: 3px;
+  border: 1px solid light-dark(#b4b4b4, gray);
+  display: inline-block;
+  font-size: .85em;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 4px;
+  white-space: nowrap;
+}
+
+.nav-wordlist {
+  margin-left: 1.6em;
+}
+
+/* Alphabet tables */
+
+.letters-table {
+  width: 100%;
+  margin: 0;
+}
+
+.letters-table td {
+  text-align: center;
+}
+
+.letters-table:not(.no-space) td {
+  letter-spacing: 0.1em;
+}
+
+.letters-block {
+  display: inline-block;
+  margin-right: 0.5em;
+  letter-spacing: 0.1em;
+}
+
+/* Banners */
+
+.deleted-page-banner {
+  background-color: white;
+  border: 1px solid black;
+  width: 50%;
+  margin: 0.5em auto auto;
+  padding: 0.2em;
+  font-size: 1.5em;
+  text-align: center;
+}
+
+@media screen {
+  html.skin-theme-clientpref-night .deleted-page-banner {
+    background-color: #242424;
+    border-color: gray;
+  }
+}
+
+@media screen and (prefers-color-scheme: dark) {
+  html.skin-theme-clientpref-os .deleted-page-banner {
+    background-color: #242424;
+    border-color: gray;
+  }
+}
+
+/** Classe pour les listes horizontales séparées par des puces.
+ * Récupérée sur [[w:MediaWiki:Common.css]]
+ * Adaptation de la classe 'hlist' de en:User:Edokter.
+ * (cf. [[mw:Snippets/Horizontal lists]]).
+ */
+.liste-horizontale ul,
+.liste-horizontale ol,
+.liste-horizontale li {
+	display: inline;
+	margin-left: 0;
+}
+
+.liste-horizontale li {
+	white-space: nowrap;
+}
+.liste-horizontale li:not(:last-child)::after {
+	content: "\A0· ";
+	font-weight: bold;
+	white-space: normal; /* nécessaire s'il n'y a pas d'espace entre les <li> dans le HTML */
+}
+
+.liste-horizontale li > ul,
+.liste-horizontale li > ol {
+	white-space: normal;
+}
+.liste-horizontale li > ul::before,
+.liste-horizontale li > ol::before {
+	content: " (";
+}
+.liste-horizontale li > ul::after,
+.liste-horizontale li > ol::after {
+	content: ")";
+}
+
+.liste-horizontale ol {
+	counter-reset: listitem;
+}
+.liste-horizontale ol > li {
+	counter-increment: listitem;
+}
+.liste-horizontale ol > li::before {
+	content: counter(listitem) ".\A0";
+}
+
+/* Modèles de messages utilisateurs */
+.user-message-box {
+	background-color: var(--background-color-neutral, #C0C0C0);
+	border: 1px solid var(--border-color-base, #8888aa);
+	padding: 0 1em;
+	margin-bottom: 2em;
+	display: flex;
+	gap: 1em;
+	align-items: center;
+	text-align: justify;
+}
+.user-message-box.warning {
+	background-color: var(--background-color-warning-subtle, #fdf2d5);
+	border-color: var(--border-color-warning, #ab7f2a);
+}
+.user-message-box.second-warning {
+	background-color: var(--background-color-error-subtle, #ffe9e5);
+	border-color: var(--border-color-error, #f54739);
+}
+.user-message-box.success {
+	background-color: var(--background-color-success-subtle, #dff2eb);
+	border-color: var(--border-color-success, #099979);
+}
+
+.accueil_2017_cadre {
+	box-shadow: 0 0 0.3rem #999;
+	border-radius: 0.2rem;
+	padding: 1.2rem;
+	margin-bottom: 1.6rem;
+}
+/* S'assurer que ces règles emportent bien la priorité sur toutes les skins */
+/* Aussi, un nouveau markup [[mw:Heading HTML changes]] est en cours de mise en place, surveiller [[phab:T13555]] et [[phab:T314714]] */
+#mw-content-text .accueil_2017_cadre .mw-heading2,
+#mw-content-text .accueil_2017_cadre h2.mw-html-heading /* pour le h2 « Comment contribuer ? » */ {
+	border-bottom: solid 0.2rem #bdd8fb;
+	margin: -0.4rem 0 0.5rem;
+}
+#mw-content-text .accueil_2017_cadre h2 {
+	font-variant: small-caps;
+	letter-spacing: 0.01em;
+}
+
+/*
+ * Masquage des miniatures
+ * Décision prise ici : [[Wiktionnaire:Wikidémie/octobre 2025#Masquage_des_miniatures_de_la_barre_de_recherche]]
+ */
+#searchform .cdx-typeahead-search__menu .cdx-menu-item__thumbnail, /* Barre de recherche fixe Vector-2022 */
+#vector-sticky-search-form .cdx-typeahead-search__menu .cdx-menu-item__thumbnail, /* Barre de recherche flottante Vector-2022 */
+#minerva-overlay-search .cdx-typeahead-search__menu .cdx-menu-item__thumbnail /* Minerva */ {
+	display: none;
+}
+
+/* Pages de stats */
+
+.stats-category {
+  text-align: left;
+}
+
+.stats-entries-latest {
+  background-color: light-dark(#a9f5f2, #083836);
+}
+
+.stats-entries-evolution.positive {
+  background-color: light-dark(#fff, #161616);
+}
+
+.stats-entries-evolution.negative {
+  background-color: light-dark(#fe2e64, #911032);
+}
+
+.stats-definitions {
+  background-color: light-dark(#f1c5f9, #301934);
+}
+
+.stats-definitions-all {
+  background-color: light-dark(#fac865, #43300b);
+}
+
+.stats-lemmas {
+  background-color: light-dark(#f7be81, #663807);
+}

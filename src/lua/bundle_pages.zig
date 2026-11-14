@@ -3083,3 +3083,22 @@ test "normal HU PAGESIZE formatter requires exact effective root host context" {
     var foreign_provider = try Provider.init(io, a, root, &catalog, dump); defer foreign_provider.deinit();
     try std.testing.expectError(error.PageSizeFormatSnapshotMissing, Provider.pageSizeFormatted(&foreign_provider, page_a, 23220, host));
 }
+
+test "data only provider accepts owned direct source capsules without compiler imports or metadata language authority" {
+    const a = std.testing.allocator;
+    const fixture = page_language.SourceTesting;
+    try std.testing.expect(fixture.data_only_encoder);
+    try std.testing.expect(!@hasDecl(page_language.Registry, "lookupSourceParent"));
+    var ns = try lua_program.namespace_registry.Registry.init(a, fixture.namespace_bytes); defer ns.deinit();
+    const packet = try a.dupe(u8, fixture.packet);
+    var registry = page_language.Registry.init(a, packet, "", null, &ns) catch |err| { a.free(packet); return err; };
+    defer registry.deinit(); a.free(packet);
+    try std.testing.expect(registry.core_revision == null and registry.entries.len == 0);
+    inline for (fixture.pages) |page| {
+        try std.testing.expect(registry.lookup(page[0], page[1], 0, page[2], page[3], fixture.normal) == null);
+        const capsule = registry.lookupSourceCapsule(page[0], page[1], 0, page[2], page[3], page[4], fixture.normal) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(capsule.response.len > 0 and std.mem.startsWith(u8, capsule.response, capsule.prefix));
+        try std.testing.expect(!@hasField(@TypeOf(capsule.styles), "reading_target"));
+        try std.testing.expectEqual(@as(?bool, true), capsule.body_skin_responsive);
+    }
+}
