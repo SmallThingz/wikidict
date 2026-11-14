@@ -4309,16 +4309,21 @@ class RetainedNativeToolRoles:
         self.records = copy.deepcopy(roles)
         self.initial_sealed_context = None
         self.initial_sealed_generation = self.records['dict-bundle-build'].pop('initial_sealed_generation', None)
+        self.closed_whole_execution = self.records['dict-bundle-build'].pop('closed_whole_execution', None)
+        self._closed_native_context_options = {}
         self.sealed_expander_recovery = self.records['dict-bundle-build'].pop('sealed_expander_recovery', None)
         self.writer_figure_transition = self.records['dict-blob-build'].pop('writer_figure_transition', None)
         if self.writer_figure_transition is not None and self.sealed_expander_recovery is not None:
             raise ValueError('Writer observation and pre-blob recovery transitions are distinct')
         if self.initial_sealed_generation is not None and (self.sealed_expander_recovery is not None or self.writer_figure_transition is not None):
             raise ValueError('Initial sealed adoption requires its own selection')
+        if self.closed_whole_execution is not None and any(value is not None for value in (self.initial_sealed_generation,self.sealed_expander_recovery,self.writer_figure_transition)):
+            raise ValueError('Closed whole execution requires its own selection')
         self.tools, self.inputs, self.input_identities, self.directories = {}, {}, {}, {}
         self.zig_sha256 = zig_sha256
         self.compilation_payloads = {}
-        self.closed_native_origin=(self.closed_execution_origin() if self.initial_sealed_generation is not None else None)
+        self.closed_native_origin=(self.closed_whole_origin() if self.closed_whole_execution is not None else
+                                   self.closed_execution_origin() if self.initial_sealed_generation is not None else None)
         shared_interfaces, shared_runtime = {}, None
         for role, row in self.records.items():
             artifact = row['artifact']
@@ -4408,7 +4413,8 @@ class RetainedNativeToolRoles:
             actual = self.bind_input(path)
             if actual != artifact or not actual['mode'] & 0o111:
                 raise ValueError('Retained native artifact bytes or mode differ')
-            self.tools[role] = self.bind_tool(role,path) if not actual['mode'] & 0o222 else None
+            self.tools[role] = (None if self.closed_whole_execution is not None and role=='dict-bundle-build' else
+                                self.bind_tool(role,path) if not actual['mode'] & 0o222 else None)
         if self.initial_sealed_generation is not None:
             initial_sealed_generation(self.initial_sealed_generation, self)
             self.bind_input(Path(self.initial_sealed_generation['path']))
@@ -4419,6 +4425,243 @@ class RetainedNativeToolRoles:
             prepared_metadata(self.writer_figure_transition)
             self.bind_input(Path(self.writer_figure_transition['path']))
         self.require_unchanged()
+
+    @staticmethod
+    def closed_input_identity(path):
+        """Current physical custody for a named ordinary input, including aliases."""
+        path=Path(path)
+        if not os.path.lexists(path):return None
+        st=path.stat()
+        route=[]
+        for part in reversed((path,*path.parents)):
+            observed=part.lstat()
+            route.append([str(part),observed.st_dev,observed.st_ino,observed.st_mode,
+                          observed.st_ctime_ns if part.is_symlink() else None,os.readlink(part) if part.is_symlink() else None])
+        return dict(stamp=[st.st_dev,st.st_ino,st.st_mode,st.st_size,st.st_mtime_ns,st.st_ctime_ns,st.st_nlink],route=route)
+
+    def closed_whole_origin(self):
+        """Execute a closed worker; its failed whole attempt remains a failure."""
+        import copy
+        import extraction_cache as cache
+        def auth(descriptor):
+            if not isinstance(descriptor,dict) or set(descriptor)not in ({'path','bytes','sha256'},{'path','bytes','sha256','mode'}):
+                raise ValueError('Invalid closed whole authority descriptor')
+            path=Path(descriptor['path']);actual=self.bind_input(path)
+            if 'mode'in descriptor and actual['mode']!=descriptor['mode']:
+                raise ValueError('Closed whole authority mode changed')
+            if any(actual[key]!=descriptor[key]for key in ('path','bytes','sha256')):
+                raise ValueError('Closed whole authority changed')
+            return path
+        def metadata(descriptor):return json.loads(auth(descriptor).read_text())
+        selected=metadata(self.closed_whole_execution)
+        if set(selected)!={'ordinary_input','roles','execution_python','live_helper_application','input_stamps'}:
+            raise ValueError('Invalid closed whole execution selection')
+        plan=metadata(selected['ordinary_input']);h=metadata(plan['normal_handoff'])
+        if self.records!=metadata(selected['roles']):
+            raise ValueError('Closed whole role selection changed')
+        whole=plan.get('closed_whole_authority')
+        if not isinstance(whole,dict) or plan.get('file_metadata_provider_update') is not None:
+            raise ValueError('Closed whole execution requires its original failed whole authority')
+        # Reuse the ordinary failed-whole lineage joins; no zero-page receipt is created.
+        if not set(whole) == {'configuration', 'closure', 'attempt_result', 'producer_source', 'seal', 'wire_correspondence'}:
+            raise ValueError('Closed whole lineage differs')
+        closed = json.loads(auth(whole['closure']).read_text())
+        attempt = json.loads(auth(whole['attempt_result']).read_text())
+        if not closed['status'] == 'ALL-SELECTED-PHYSICALLY-CLOSED':
+            raise ValueError('Closed whole lineage differs')
+        if not all((closed[x] is True for x in ('physical_closure', 'cleanup_complete', 'source_guard_after', 'source_lease_released', 'locks_reacquired_same_inode', 'ps_owned_absent'))):
+            raise ValueError('Closed whole lineage differs')
+        evidence = closed['attempt_evidence'][whole['attempt_result']['path']]
+        if not (evidence['result'] == whole['attempt_result'] and evidence['physical_closure'] is True and (evidence['source_guard_after'] is True)):
+            raise ValueError('Closed whole lineage differs')
+        if not all((attempt[x] is True for x in ('cleanup_proven', 'control_proven', 'source_guard', 'production_started'))):
+            raise ValueError('Closed whole lineage differs')
+        if not attempt['source_observation']['producer_inventory'] == whole['producer_source']:
+            raise ValueError('Closed whole lineage differs')
+        cfg = json.loads(auth(whole['configuration']).read_text())
+        auth(whole['producer_source'])
+        if not (cfg['production_preparations'] == [] and cfg['prepared_source_custody'] is False):
+            raise ValueError('Closed whole lineage differs')
+        if not closed['configuration'] == whole['configuration']:
+            raise ValueError('Closed whole lineage differs')
+        if not cfg['source']['inventory'] == whole['producer_source'] == closed['source_observation_after']['producer_inventory']:
+            raise ValueError('Closed whole lineage differs')
+        edition = attempt['edition']
+        date = attempt['edition_build']['date']
+        if not (attempt['edition_build']['edition'] == edition and cfg['date'] == date and (closed['selected_editions'] == [edition])):
+            raise ValueError('Closed whole lineage differs')
+        if not Path(h['expander_root']) == Path(cfg['output']) / edition / (date + '.shards') / 'expander/.bundle-expander':
+            raise ValueError('Closed whole lineage differs')
+        wire = json.loads(auth(whole['wire_correspondence']).read_text())
+        if not (wire['old_configuration'] == whole['configuration'] and wire['old_source'] == whole['producer_source']):
+            raise ValueError('Closed whole lineage differs')
+        if not (wire['old_worker'] == h['worker'] and wire['old_seal'] == whole['seal'] and (wire['current_roles'] == h['normal_role_binding'])):
+            raise ValueError('Closed whole lineage differs')
+        if not (wire['standalone_wire_equal'] is True and wire['native_abi_equivalence_claimed'] is False):
+            raise ValueError('Closed whole lineage differs')
+        old_source = json.loads(auth(wire['old_source']).read_text())
+        current_source = json.loads(auth(wire['current_writer_source']).read_text())
+        current_map = json.loads(auth(h['normal_role_binding']).read_text())
+        if not current_map['dict-blob-build']['source'] == wire['current_writer_source']:
+            raise ValueError('Closed whole lineage differs')
+        if not current_map['dict-blob-build']['artifact'] == h['writer']:
+            raise ValueError('Closed whole lineage differs')
+        if not ({pair['relative'] for pair in wire['source_pairs']} == {'src/lua/bundle_protocol.zig', 'tools/bundle_expander.zig'} and len(wire['source_pairs']) == 2):
+            raise ValueError('Closed whole lineage differs')
+        for pair in wire['source_pairs']:
+            relative = pair['relative']
+            if not (pair['old'] == old_source['files'][relative] and pair['current'] == current_source['files'][relative]):
+                raise ValueError('Closed whole lineage differs')
+            if not old_source['modes'][relative] == current_source['modes'][relative]:
+                raise ValueError('Closed whole lineage differs')
+            if not (pair['old']['bytes'] == pair['current']['bytes'] and pair['old']['sha256'] == pair['current']['sha256']):
+                raise ValueError('Closed whole lineage differs')
+            auth(pair['old'])
+            auth(pair['current'])
+        prepared = {name: h[name] for name in ('worker', 'metadata', 'source_receipt')}
+        prepared['expander'] = h['expander_root']
+        if not Path(whole['seal']['path']) == Path(prepared['expander']) / '.completed-expander.json':
+            raise ValueError('Closed whole lineage differs')
+        seal = json.loads(auth(whole['seal']).read_text())
+        assets = {n: (size, digest) for n, size, digest in seal['identity']['assets']}
+        for name, leaf in (('worker', 'dict-bundle-expander'), ('metadata', 'lua-program.meta')):
+            if not Path(prepared[name]['path']) == Path(prepared['expander']) / leaf:
+                raise ValueError('Closed whole lineage differs')
+            if not (prepared[name]['bytes'], prepared[name]['sha256']) == assets[leaf]:
+                raise ValueError('Closed whole lineage differs')
+        if not Path(prepared['source_receipt']['path']) == Path(prepared['expander']) / 'extraction-source.json':
+            raise ValueError('Closed whole lineage differs')
+        if not plan['dump'] == h['dump']:
+            raise ValueError('Closed whole lineage differs')
+        if not Path(plan['dump']['path']) == Path(seal['identity']['source']['path']):
+            raise ValueError('Closed whole lineage differs')
+        if not set(plan['dump']) == {'path', 'bytes', 'physical'}:
+            raise ValueError('Closed whole lineage differs')
+        if not plan['dump']['physical'] == seal['identity']['source']['receipt']['source']:
+            raise ValueError('Closed whole lineage differs')
+        if not plan['dump']['bytes'] == plan['dump']['physical']['size']:
+            raise ValueError('Closed whole lineage differs')
+        restoration = wire.get('provider_restoration')
+        if restoration is not None:
+            if not set(restoration) == {'result', 'closure', 'input_authority', 'original_seal_archive'}:
+                raise ValueError('Closed whole lineage differs')
+            restored = json.loads(auth(restoration['result']).read_text())
+            restored_close = json.loads(auth(restoration['closure']).read_text())
+            restored_data = json.loads(auth(restoration['input_authority']).read_text())
+            if not (restored_close['outcome'] == 'PASSED-PHYSICALLY-SOURCE-CLOSED' and restored_close['source_after'] is True and (restored_close['allocation_released'] is True) and (restored_close['derived_provider_restoration'] is True) and (restored_close['pages_executed'] == 0)):
+                raise ValueError('Closed whole lineage differs')
+            if not (restored_close['restoration_result'] == restoration['result'] and restored_close['input_authority'] == restoration['input_authority'] == restored['input_authority']):
+                raise ValueError('Closed whole lineage differs')
+            if not (restored['passed'] is True and restored['ready'] is True and (restored['source_after'] is True) and (restored['lua_pages_executed'] == 0) and (restored['compiler_executed'] is False) and (restored['worker_rebuilt'] is False)):
+                raise ValueError('Closed whole lineage differs')
+            if not all((restored[name] is True for name in ('original_native_producer_unchanged', 'logical_provider_identity_unchanged', 'original_source_receipt_unchanged', 'all_other_native_asset_stamps_unchanged', 'source_metadata_and_nlinks_unchanged'))):
+                raise ValueError('Closed whole lineage differs')
+            if not (restored['current_seal'] == restored_close['current_seal'] == whole['seal'] and restored['worker'] == restored_close['original_worker'] == h['worker']):
+                raise ValueError('Closed whole lineage differs')
+            if not restored['original_seal_archive'] == restored_close['original_seal_archive'] == restoration['original_seal_archive']:
+                raise ValueError('Closed whole lineage differs')
+            if not (restored_data['configuration'] == whole['configuration'] and restored_data['original_whole_closure'] == whole['closure'] and (restored_data['root'] == h['expander_root']) and (restored_data['dump'] == plan['dump']['path'])):
+                raise ValueError('Closed whole lineage differs')
+            if not (restored_data['original_seal']['path'] == whole['seal']['path'] and restored_data['original_seal']['sha256'] == restored['original_seal_sha256'] == restoration['original_seal_archive']['sha256']):
+                raise ValueError('Closed whole lineage differs')
+            archive = restoration['original_seal_archive']
+            if not archive['bytes'] == restored_data['original_seal']['bytes']:
+                raise ValueError('Closed whole lineage differs')
+            original_seal = json.loads(auth(archive).read_text())
+            for name in ('identity', 'origin_graph', 'link'):
+                if not original_seal[name] == seal[name]:
+                    raise ValueError('Closed whole lineage differs')
+            if not (seal['provenance'] == 'ordinary-derived-provider-restoration' and seal['provider_update']['original_seal_sha256'] == archive['sha256']):
+                raise ValueError('Closed whole lineage differs')
+            expected_sources = {name + '.tsv': cfg['edition_options'][edition]['auxiliary_snapshots'][name] for name in ('category-stats', 'category-tree', 'wikibase-entities', 'wikibase-entity-terms')}
+            if not (restored_data['sources'] == expected_sources and restored['aliases'] == restored_close['aliases'] == {name: value['path'] for name, value in expected_sources.items()}):
+                raise ValueError('Closed whole lineage differs')
+            for name, value in original_seal['runtime_stamps']['assets'].items():
+                if name not in expected_sources:
+                    if not (seal['runtime_stamps']['assets'][name] == value and seal['runtime_stamps']['snapshot_links'][name] == original_seal['runtime_stamps']['snapshot_links'][name]):
+                        raise ValueError('Closed whole lineage differs')
+            if not seal['runtime_stamps']['plans'] == original_seal['runtime_stamps']['plans']:
+                raise ValueError('Closed whole lineage differs')
+        elif not seal['provenance'] == 'ordinary-linked-expander':
+            raise ValueError('Closed whole lineage differs')
+        original_roles=metadata(h['normal_role_binding'])
+        comparisons=[copy.deepcopy(value)for value in (original_roles,self.records)]
+        for value in comparisons:value['dict-bundle-build']['dependencies'].pop('extraction_helper',None)
+        if comparisons[0]!=comparisons[1]:raise ValueError('Closed whole compiled roles changed')
+        executed=selected['execution_python']
+        if set(executed)!={'builder','extraction_helper'}:raise ValueError('Invalid closed whole Python inputs')
+        if Path(executed['builder']['path'])!=Path(__file__).absolute() or Path(executed['extraction_helper']['path'])!=Path(cache.__file__).absolute():
+            raise ValueError('Closed whole loaded Python differs')
+        for descriptor in executed.values():auth(descriptor)
+        live=self.records['dict-bundle-build']['dependencies']['extraction_helper']
+        if live!=executed['extraction_helper']:raise ValueError('Closed whole live helper selection differs')
+        old_live=original_roles['dict-bundle-build']['dependencies']['extraction_helper']
+        if live!=old_live:
+            if not isinstance(selected['live_helper_application'],dict):raise ValueError('Closed whole helper application is missing')
+            application=metadata(selected['live_helper_application'])
+            rows=[row for row in application['rows']if row['path']=='tools/extraction_cache.py']
+            if (application.get('applied')is not True or len(rows)!=1
+                    or any(rows[0]['before'][key]!=old_live[key]for key in ('path','bytes','sha256'))
+                    or any(rows[0]['actual_post'][key]!=live[key]for key in ('path','bytes','sha256'))
+                    or rows[0]['mode']!=live['mode']):
+                raise ValueError('Closed whole live helper application differs')
+        elif selected['live_helper_application']is not None:
+            metadata(selected['live_helper_application'])
+        if (attempt.get('outcome')!='failed' or attempt.get('exit_code')!=1
+                or attempt.get('accepted')is not None or attempt['edition_build'].get('status')!='failure'):
+            raise ValueError('Closed whole attempt is not the original failed whole build')
+        producer=seal['identity']['producer'];inventory=old_source['files']
+        if (producer['abi']!=[[name,inventory[name]['sha256']]for name in RETAINED_EXPANDER_ABI_PATHS]
+                or producer['policy']!=[[name,[inventory[name]['bytes'],inventory[name]['sha256']]]for name in ('build.zig','tools/bundle_build.zig','tools/extraction_cache.py')]):
+            raise ValueError('Closed whole executed ABI or producer policy differs')
+        root=Path(prepared['expander']);dump=Path(plan['dump']['path'])
+        for descriptor in prepared.values():
+            if isinstance(descriptor,dict):auth(descriptor)
+        self._closed_native_context_options={}
+        custody=plan.get('metadata_custody_refresh')
+        if custody is not None:
+            if set(custody)!={'helper','authority','qualification'}:raise ValueError('Invalid closed whole custody selection')
+            auth(custody['helper']);authority=metadata(custody['authority']);qualified=metadata(custody['qualification'])
+            if (qualified.get('outcome')!='PASSED-PHYSICALLY-SOURCE-CLOSED'
+                    or qualified.get('source_after')is not True or qualified.get('allocation_released')is not True
+                    or authority['original_seal']!=whole['seal']
+                    or authority['original_native_seal_archive']!=wire['provider_restoration']['original_seal_archive']
+                    or authority['original_restoration_closure']!=wire['provider_restoration']['closure']
+                    or authority['receipt']['original_seal_sha256']!=whole['seal']['sha256']
+                    or any(custody['helper'][key]!=live[key]for key in ('bytes','sha256'))):
+                raise ValueError('Closed whole metadata custody differs')
+            repaired=metadata(authority['repaired_input_handoff'])
+            if h['command']['argv'][h['command']['argv'].index('--figure-input-root')+1]!=str(Path(repaired['output_manifest']['path']).parent):
+                raise ValueError('Closed whole repaired input selection differs')
+            self._closed_native_context_options={'metadata_custody_refresh':authority['receipt']}
+        context=cache.frozen_runtime_context(root,dump,whole['seal']['sha256'],**self._closed_native_context_options)
+        if context is None or any(context[name]!=seal[name]for name in ('identity','origin_graph','link')):
+            raise ValueError('Closed whole native context is not finalized')
+        expected_rows={row['path']:row for row in h['normal_input_rows']}
+        if len(expected_rows)!=len(h['normal_input_rows']) or set(selected['input_stamps'])!=set(expected_rows):
+            raise ValueError('Closed whole input custody membership differs')
+        self._closed_whole_input_stamps=selected['input_stamps']
+        for name,row in expected_rows.items():
+            current=self.closed_input_identity(name)
+            if current!=self._closed_whole_input_stamps[name]:raise ValueError('Closed whole input custody changed')
+            value=row['identity']
+            if value is None:
+                if current is not None:raise ValueError('Closed whole optional input appeared')
+            else:
+                st=Path(name).stat()
+                if dict(device_major=os.major(st.st_dev),device_minor=os.minor(st.st_dev),inode=st.st_ino,size=st.st_size,mtime_ns=st.st_mtime_ns)!=value:
+                    raise ValueError('Closed whole input identity changed')
+        if cache.tool_identity(root/'dict-bundle-expander')!=seal['identity']['runtime_libraries'] or cache.unicode_case_identity()!=producer['unicode']:
+            raise ValueError('Closed whole executed runtime libraries changed')
+        self._closed_native_worker_stamp=cache._full_stamp((root/'dict-bundle-expander').stat())
+        self._closed_library_routes={}
+        libraries=[*seal['identity']['runtime_libraries']['libraries'],*[[row['path'],row['sha256']]for row in producer['unicode']['libraries']]]
+        for name,digest in libraries:
+            if self.bind_input(Path(name).resolve(strict=True))['sha256']!=digest:
+                raise ValueError('Closed whole loaded library changed')
+            self._closed_library_routes[name]=str(Path(name).resolve(strict=True))
+        self._closed_native_context=(root,dump,whole['seal']['sha256'])
+        return context
 
     def closed_execution_origin(self):
         """Authenticate the selected closed producer, never current compiler source."""
@@ -4501,7 +4744,7 @@ class RetainedNativeToolRoles:
         # runtime_source retains the closed worker's original producer policy.
         # The separate extraction_helper names the actually imported live Python.
         # Ordinary compilation still authenticates every dependency.
-        return (self.initial_sealed_generation is None or name in
+        return ((self.initial_sealed_generation is None and getattr(self,'closed_whole_execution',None) is None) or name in
                 ('zig','extraction_helper'))
 
     def compilation_identity(self, row, relative):
@@ -4556,7 +4799,7 @@ class RetainedNativeToolRoles:
         return tool
 
     def install_role(self, role, workspace):
-        if role=='dict-bundle-build' and self.initial_sealed_generation is not None:
+        if role=='dict-bundle-build' and (self.initial_sealed_generation is not None or getattr(self,'closed_whole_execution',None) is not None):
             raise ValueError('Selected initial sealed generation cannot prepare bundle driver')
         # Use the existing private native-tools install location. Never chmod
         # or overwrite an origin in the shared Zig artifact cache.
@@ -4867,10 +5110,13 @@ class RetainedNativeToolRoles:
             self.input_identities[path]=identity
 
     def require_inputs_unchanged(self):
+        for path,expected in getattr(self,'_closed_whole_input_stamps',{}).items():
+            if self.closed_input_identity(path)!=expected:
+                raise ValueError('Closed whole input custody changed')
         context=(getattr(self, 'initial_sealed_context', None) or getattr(self,'_closed_native_context',None))
         if context is not None:
             import extraction_cache as native_cache
-            frozen=native_cache.frozen_runtime_context(*context)
+            frozen=native_cache.frozen_runtime_context(*context,**getattr(self,'_closed_native_context_options',{}))
             if frozen is None or (getattr(self,'closed_native_origin',None) is not None and frozen!=self.closed_native_origin):
                 raise ValueError('Retained initial sealed input changed')
             closed=getattr(self,'closed_native_origin',None)
@@ -4910,14 +5156,14 @@ class RetainedNativeToolRoles:
         if role not in self.records:
             raise ValueError('Unknown retained native command role')
         if role == 'dict-bundle-build':
-            if self.initial_sealed_generation is not None or getattr(_PREPARED_SOURCE,'value',None) is not None:
+            if self.initial_sealed_generation is not None or getattr(self,'closed_whole_execution',None) is not None or getattr(_PREPARED_SOURCE,'value',None) is not None:
                 raise ValueError('Prepared retained generation cannot recompile or relink')
             # parseOptions starts at index 2; another occurrence may be a value.
             if len(args) < 3 or args[2] != '--expander-only' or args.count('--expander-only') != 1:
                 raise ValueError('Retained bundle role is restricted to expander-only execution')
 
     def prepare(self, expander_args, edition, date, *, workspace=None, figure_inputs=None):
-        if expander_args is not None and self.initial_sealed_generation is not None:
+        if expander_args is not None and (self.initial_sealed_generation is not None or getattr(self,'closed_whole_execution',None) is not None):
             raise ValueError('Selected initial sealed generation cannot recompile or relink')
         self.require_unchanged()
         needed=(*BLOB_TOOL_NAMES, *(['dict-bundle-build'] if expander_args is not None else []))

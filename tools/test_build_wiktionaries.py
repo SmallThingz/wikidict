@@ -8537,6 +8537,176 @@ class RetainedNativeRoleTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'dependency changed'):
                     tools['dict-blob-build'].run(['args'],'testwiktionary','20261001','writer')
 
+    def closed_whole_fixture(self, root):
+        roles,compiler=self.fixture(root)
+        source=Path(roles['dict-blob-build']['source_root']);forward=source/'tools/bundle_expander.zig'
+        forward.parent.mkdir(parents=True,exist_ok=True);forward.write_bytes(b'unchanged wire forwarder')
+        def ref(path):return dict(path=str(path),bytes=path.stat().st_size,sha256=b.sha256_file(path))
+        def descriptor(path):return dict(ref(path),mode=path.stat().st_mode&0o777)
+        def write(path,value):path.write_text(json.dumps(value,sort_keys=True));return ref(path)
+        old=json.loads(Path(roles['dict-blob-build']['source']['path']).read_text())
+        old['tools/bundle_expander.zig']=descriptor(forward)
+        for name,value in old.items():value['path']=str(source/name)
+        source_ref=write(root/'source.json',dict(files=old,modes={name:value['mode']for name,value in old.items()}))
+        payload=root/'compiled-payload';payload.mkdir();held={}
+        for name,value in old.items():
+            path=payload/name.replace('/','__');path.write_bytes((source/name).read_bytes());held[name]=descriptor(path)
+        for row in roles.values():
+            row['source']=source_ref;row['producer_source']=source_ref['sha256']
+            row['source_payload_files']={name:held[name]for name in row['source_paths']}
+        base_ref=write(root/'roles.json',roles)
+        edition='testwiktionary';date='20261001';output=root/'whole'
+        native=output/edition/(date+'.shards')/'expander/.bundle-expander';native.mkdir(parents=True)
+        worker=native/'dict-bundle-expander';worker.write_bytes(b'closed native worker');worker.chmod(0o555)
+        meta=native/'lua-program.meta';meta.write_bytes(b'closed metadata')
+        receipt=native/'extraction-source.json';receipt.write_bytes(b'closed source receipt')
+        dump=root/'dump.xml';dump.write_bytes(b'original dump')
+        supplied=root/'ordinary-input.tsv';supplied.write_bytes(b'original external input')
+        optional=root/'optional-input.tsv'
+        library=root/'libc-fixture.so';library.write_bytes(b'loaded library')
+        st=dump.stat();physical=dict(device_major=os.major(st.st_dev),device_minor=os.minor(st.st_dev),inode=st.st_ino,size=st.st_size,mtime_ns=st.st_mtime_ns,ctime_ns=st.st_ctime_ns)
+        dump_row=dict(path=str(dump),bytes=st.st_size,physical=physical)
+        producer=dict(abi=[[name,old[name]['sha256']]for name in b.RETAINED_EXPANDER_ABI_PATHS],
+                      policy=[[name,[old[name]['bytes'],old[name]['sha256']]]for name in ('build.zig','tools/bundle_build.zig','tools/extraction_cache.py')],
+                      unicode=dict(libraries=[]))
+        libraries=dict(extractor_sha256=b.sha256_file(worker),libraries=[[str(library),b.sha256_file(library)]])
+        seal=dict(provenance='ordinary-linked-expander',identity=dict(producer=producer,runtime_libraries=libraries,
+                  source=dict(path=str(dump),receipt=dict(source=physical)),assets=[[path.name,path.stat().st_size,b.sha256_file(path)]for path in (worker,meta,receipt)]),
+                  origin_graph=dict(original='retained'),link=dict(original='retained'))
+        seal_ref=write(native/'.completed-expander.json',seal)
+        config=dict(production_preparations=[],prepared_source_custody=False,source=dict(inventory=source_ref),date=date,output=str(output))
+        cfg_ref=write(root/'configuration.json',config)
+        attempt=dict(outcome='failed',exit_code=1,accepted=None,cleanup_proven=True,control_proven=True,source_guard=True,production_started=True,
+                     source_observation=dict(producer_inventory=source_ref),edition=edition,edition_build=dict(edition=edition,date=date,status='failure'))
+        attempt_ref=write(root/'attempt.json',attempt)
+        closed=dict(status='ALL-SELECTED-PHYSICALLY-CLOSED',configuration=cfg_ref,source_observation_after=dict(producer_inventory=source_ref),selected_editions=[edition],
+                    attempt_evidence={attempt_ref['path']:dict(result=attempt_ref,physical_closure=True,source_guard_after=True)},
+                    **{name:True for name in ('physical_closure','cleanup_complete','source_guard_after','source_lease_released','locks_reacquired_same_inode','ps_owned_absent')})
+        close_ref=write(root/'closure.json',closed)
+        wire=dict(old_configuration=cfg_ref,old_source=source_ref,old_worker=ref(worker),old_seal=seal_ref,current_roles=base_ref,current_writer_source=source_ref,
+                  standalone_wire_equal=True,native_abi_equivalence_claimed=False,
+                  source_pairs=[dict(relative=name,old=old[name],current=old[name])for name in ('src/lua/bundle_protocol.zig','tools/bundle_expander.zig')])
+        wire_ref=write(root/'wire.json',wire)
+        inputs=[]
+        for path in (dump,supplied,optional):
+            st=path.stat()if path.exists()else None
+            inputs.append(dict(path=str(path),identity=None if st is None else dict(device_major=os.major(st.st_dev),device_minor=os.minor(st.st_dev),inode=st.st_ino,size=st.st_size,mtime_ns=st.st_mtime_ns)))
+        handoff=dict(normal_role_binding=base_ref,writer=roles['dict-blob-build']['artifact'],worker=ref(worker),metadata=ref(meta),source_receipt=ref(receipt),
+                     expander_root=str(native),dump=dump_row,normal_input_rows=inputs)
+        h_ref=write(root/'handoff.json',handoff)
+        whole=dict(configuration=cfg_ref,closure=close_ref,attempt_result=attempt_ref,producer_source=source_ref,seal=seal_ref,wire_correspondence=wire_ref)
+        ordinary=dict(normal_handoff=h_ref,dump=dump_row,closed_whole_authority=whole)
+        ordinary_ref=write(root/'ordinary.json',ordinary)
+        helper=roles['dict-bundle-build']['dependencies']['extraction_helper']
+        selection=dict(ordinary_input=ordinary_ref,roles=base_ref,execution_python=dict(builder=descriptor(Path(b.__file__)),extraction_helper=helper),
+                       live_helper_application=None,input_stamps={row['path']:b.RetainedNativeToolRoles.closed_input_identity(row['path'])for row in inputs})
+        selected_ref=write(root/'selection.json',selection)
+        records=copy.deepcopy(roles);records['dict-bundle-build']['closed_whole_execution']=selected_ref
+        cache=SimpleNamespace(__file__=helper['path'],frozen_runtime_context=lambda *args,**kwargs:copy.deepcopy(seal),
+                              tool_identity=lambda path:copy.deepcopy(libraries),unicode_case_identity=lambda:copy.deepcopy(producer['unicode']),
+                              _full_stamp=lambda st:[st.st_dev,st.st_ino,st.st_mode,st.st_size,st.st_mtime_ns,st.st_ctime_ns])
+        def republish():
+            whole['seal']=write(native/'.completed-expander.json',seal);wire['old_seal']=whole['seal']
+            whole['wire_correspondence']=write(root/'wire.json',wire)
+            whole['configuration']=write(root/'configuration.json',config)
+            whole['attempt_result']=write(root/'attempt.json',attempt)
+            closed['attempt_evidence']={whole['attempt_result']['path']:dict(result=whole['attempt_result'],physical_closure=True,source_guard_after=True)}
+            whole['closure']=write(root/'closure.json',closed)
+            selection['ordinary_input']=write(root/'ordinary.json',ordinary)
+            records['dict-bundle-build']['closed_whole_execution']=write(root/'selection.json',selection)
+        def update_helper():
+            previous={key:helper[key]for key in ('path','bytes','sha256')}
+            Path(helper['path']).write_bytes(b'qualified current Python helper')
+            current=descriptor(Path(helper['path']));records['dict-bundle-build']['dependencies']['extraction_helper']=current
+            base=copy.deepcopy(records);base['dict-bundle-build'].pop('closed_whole_execution')
+            selection['roles']=write(root/'current-roles.json',base)
+            selection['execution_python']['extraction_helper']=current
+            application=dict(applied=True,rows=[dict(path='tools/extraction_cache.py',before=previous,actual_post={key:current[key]for key in ('path','bytes','sha256')},mode=current['mode'])])
+            selection['live_helper_application']=write(root/'helper-application.json',application);republish()
+            return application
+        return SimpleNamespace(roles=records,compiler=compiler,source=source,worker=worker,metadata=meta,receipt=receipt,dump=dump,supplied=supplied,optional=optional,
+                               library=library,helper=Path(helper['path']),payloads=held,cache=cache,seal=seal,attempt=attempt,closed=closed,config=config,
+                               selection=selection,republish=republish,update_helper=update_helper)
+
+    def test_closed_whole_execution_allows_only_unused_current_source_drift(self):
+        with tempfile.TemporaryDirectory()as tmp:
+            f=self.closed_whole_fixture(Path(tmp))
+            (f.source/'src/lua/runtime/llvm_abi.zig').write_bytes(b'new unused current ABI source')
+            (Path(tmp)/'dependency-llvm').write_bytes(b'new unused compiler')
+            with patch.dict(sys.modules,extraction_cache=f.cache),patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None), \
+                 patch.object(b,'run_checked',side_effect=AssertionError('unexpected compiler')):
+                roles=b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler));roles.require_unchanged()
+                self.assertFalse(roles.execution_dependency('runtime_source:src/lua/runtime/llvm_abi.zig'))
+                self.assertFalse(roles.execution_dependency('llvm'));self.assertTrue(roles.execution_dependency('extraction_helper'))
+                self.assertIsNone(roles.tools['dict-bundle-build'])
+                for call in (lambda:roles.install_role('dict-bundle-build',Path(tmp)/'install'),
+                             lambda:roles.require_command('dict-bundle-build',['dump','out','--expander-only']),
+                             lambda:roles.prepare(['dump','out','--expander-only'],'testwiktionary','20261001')):
+                    with self.assertRaises(ValueError):call()
+                self.assertEqual('failed',f.attempt['outcome']);self.assertEqual(1,f.attempt['exit_code'])
+
+    def test_closed_whole_execution_rejects_executed_object_abi_input_and_python_drift(self):
+        for case in ('writer','worker','metadata','receipt','dump','supplied','optional','helper','library','abi-payload'):
+            with self.subTest(case=case),tempfile.TemporaryDirectory()as tmp:
+                f=self.closed_whole_fixture(Path(tmp))
+                path=(Path(f.roles['dict-blob-build']['artifact']['path'])if case=='writer'else
+                      Path(f.payloads['src/lua/runtime/llvm_abi.zig']['path'])if case=='abi-payload'else getattr(f,case))
+                before=path.stat()if path.exists()else None
+                if before:path.chmod(before.st_mode|0o200)
+                path.write_bytes(b'x'*(before.st_size if before else 1))
+                if before:os.utime(path,ns=(before.st_atime_ns,before.st_mtime_ns));path.chmod(before.st_mode&0o777)
+                with patch.dict(sys.modules,extraction_cache=f.cache),patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None):
+                    with self.assertRaises((ValueError,FileNotFoundError)):
+                        b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler))
+
+    def test_closed_whole_execution_requires_failed_closure_and_original_abi(self):
+        for case in ('missing-closure','unclosed','accepted','configuration','abi','policy'):
+            with self.subTest(case=case),tempfile.TemporaryDirectory()as tmp:
+                f=self.closed_whole_fixture(Path(tmp))
+                if case=='unclosed':f.closed['physical_closure']=False
+                elif case=='accepted':f.attempt.update(outcome='passed',exit_code=0,accepted=True)
+                elif case=='configuration':f.closed['configuration']=f.selection['roles']
+                elif case=='abi':f.seal['identity']['producer']['abi'][0][1]='0'*64
+                elif case=='policy':f.seal['identity']['producer']['policy'][0][1][1]='0'*64
+                f.republish()
+                if case=='missing-closure':(Path(tmp)/'closure.json').unlink()
+                with patch.dict(sys.modules,extraction_cache=f.cache),patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None):
+                    with self.assertRaises((ValueError,FileNotFoundError)):
+                        b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler))
+
+    def test_closed_whole_execution_rechecks_input_aliases_and_loaded_dependencies(self):
+        for case in ('input','alias','helper','worker','authority','context'):
+            with self.subTest(case=case),tempfile.TemporaryDirectory()as tmp:
+                f=self.closed_whole_fixture(Path(tmp))
+                with patch.dict(sys.modules,extraction_cache=f.cache),patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None):
+                    roles=b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler))
+                    if case=='context':f.cache.frozen_runtime_context=lambda *args,**kwargs:None
+                    elif case=='alias':
+                        content=f.supplied.read_bytes();f.supplied.unlink();replacement=Path(tmp)/'replacement';replacement.write_bytes(content);f.supplied.symlink_to(replacement)
+                    else:
+                        path={'input':f.supplied,'helper':f.helper,'worker':f.worker,'authority':Path(tmp)/'selection.json'}[case]
+                        before=path.stat();path.chmod(before.st_mode|0o200);path.write_bytes(b'z'*before.st_size);os.utime(path,ns=(before.st_atime_ns,before.st_mtime_ns));path.chmod(before.st_mode&0o777)
+                    with self.assertRaises(ValueError):roles.require_unchanged()
+
+    def test_closed_whole_execution_live_python_update_requires_exact_application(self):
+        for case in ('qualified','missing','before','after','builder-route','helper-route'):
+            with self.subTest(case=case),tempfile.TemporaryDirectory()as tmp:
+                f=self.closed_whole_fixture(Path(tmp));application=f.update_helper()
+                if case=='missing':f.selection['live_helper_application']=None
+                elif case in ('before','after'):
+                    application['rows'][0]['before'if case=='before'else'actual_post']['sha256']='0'*64
+                    path=Path(tmp)/'helper-application.json';path.write_text(json.dumps(application,sort_keys=True))
+                    f.selection['live_helper_application']=dict(path=str(path),bytes=path.stat().st_size,sha256=b.sha256_file(path))
+                elif case=='builder-route':f.selection['execution_python']['builder']=f.selection['execution_python']['extraction_helper']
+                elif case=='helper-route':f.cache.__file__=str(Path(tmp)/'other-helper.py')
+                f.republish()
+                with patch.dict(sys.modules,extraction_cache=f.cache),patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None):
+                    if case=='qualified':
+                        roles=b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler));roles.require_unchanged()
+                    else:
+                        with self.assertRaises(ValueError):b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler))
+
+
 
 class RetainedNativeFigureCompatibilityTests(unittest.TestCase):
     fixture=RetainedNativeRoleTests.fixture
