@@ -673,7 +673,8 @@ class CompletedExpanderTests(unittest.TestCase):
         import sys
         source = Path(cache.__file__).with_name('bundle_build.zig').read_text()
         prefixes = re.findall(r'"python3", "-I", "-S", "-B", helper', source)
-        self.assertEqual(len(prefixes), 3)
+        # One new isolated probe call plus two mutually exclusive seal argv branches.
+        self.assertEqual(len(prefixes), 5)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             marker = root/'startup-executed'
@@ -2325,6 +2326,807 @@ class OptionalExtractionPhaseTimingTests(unittest.TestCase):
         result = self.exercise(True, unavailable_cpu=True)
         self.assertEqual(result[0], 0)
         self.assertTrue(all(x['thread_cpu_seconds'] is None and x['thread_cpu_available'] is False for x in result[2]))
+
+
+class SealedFrontendTests(unittest.TestCase):
+    # Reuse the existing real-file/object-cache fixture and its native-observer
+    # mocks. No compiler, link process, expander, or presentation oracle runs.
+    setUp = CompletedExpanderTests.setUp
+    fixture = CompletedExpanderTests.fixture
+    call = CompletedExpanderTests.call
+
+    @staticmethod
+    def reference(path):
+        raw = path.read_bytes()
+        return dict(path=str(path), bytes=len(raw), sha256=cache.hashlib.sha256(raw).hexdigest())
+
+    def write_json(self, path, value):
+        path.write_text(json.dumps(value))
+        return self.reference(path)
+
+    def prepared(self):
+        if self.root.exists(): cache.shutil.rmtree(self.root)
+        root, dump, snapshots = self.fixture(ready=False,
+            output=self.base / ('old-workspace-' + str(self.sequence + 1)) / 'expander')
+        self.assertEqual(0, self.call('seal-expander', root, dump, snapshots,
+                                     dump_sha=cache.sha256(dump)))
+        cache.shutil.rmtree(root / 'llvm')
+        (root / '.incomplete').unlink(); (root.parent / '.incomplete').write_bytes(b'expander ready')
+        seal = cache.read_marker(root / cache.COMPLETED_EXPANDER)
+        dependencies = {}
+        for field, name in (('extractor','modules'),('llvm','llvm'),('runtime','worker_object'),
+                            ('leaf','value_leaf_bc'),('main_c','worker_main_c'),('zig','zig'),('clang','clang')):
+            dependencies[name] = self.reference(Path(self.graph[field]))
+        for name in ('build.zig','tools/bundle_build.zig','tools/extraction_cache.py', *cache.ABI_FILES):
+            dependencies['runtime_source:' + name] = self.reference(self.project / name)
+        dependencies['extraction_helper'] = self.reference(self.project / 'tools/extraction_cache.py')
+        builder = self.project / 'tools/build_wiktionaries.py'; builder.write_bytes(b'fixture caller')
+        roles = {'dict-bundle-build': dict(dependencies=dependencies, zig_sha256='e' * 64)}
+        old_roles = self.write_json(self.base / 'old-roles.json', roles)
+        current_roles = self.write_json(self.base / 'current-roles.json', roles)
+        old_workspace = root.parent.parent
+        old_plan = dict(roles=old_roles, inputs=[self.reference(dump)], dump=self.reference(dump),
+            workspace=str(old_workspace), cache=dict(path=str(self.root), device=self.root.stat().st_dev,
+                inode=self.root.stat().st_ino, mode=self.root.stat().st_mode & 0o7777, uid=self.root.stat().st_uid),
+            expander_args=[str(dump), str(root.parent), '--expander-only', '--seal-prepared-source',
+                '--verified-dump-sha256', cache.sha256(dump), '--verified-index-sha256', 'b' * 64])
+        plan_ref = self.write_json(self.base / 'old-plan.json', old_plan)
+        result = dict(passed=True, source_after=True, inputs_after=True, pages_executed=0,
+            input_authority=plan_ref, role_map=old_roles, expander=str(root),
+            worker=self.reference(root / 'dict-bundle-expander'), metadata=self.reference(root / 'lua-program.meta'),
+            source_receipt=self.reference(root / 'extraction-source.json'),
+            completed_expander_seal=self.reference(root / cache.COMPLETED_EXPANDER))
+        result_ref = self.write_json(self.base / 'old-result.json', result)
+        closure = dict(outcome='PASSED-PHYSICALLY-SOURCE-CLOSED', source_after=True,
+            allocation_released=True, pages_executed=0,
+            **{name: result[name] for name in ('worker','metadata','source_receipt')})
+        closure_ref = self.write_json(self.base / 'old-closure.json', closure)
+        data = dict(old_plan, roles=current_roles, workspace=str(self.base / ('new-workspace-' + str(self.sequence))),
+                    builder=self.reference(builder))
+        data['expander_args'] = list(old_plan['expander_args']); data['expander_args'][1] = data['workspace'] + '/expander'
+        data['sealed_frontend'] = dict(version=1, preparation_result=result_ref, preparation_closure=closure_ref,
+            original_policy_git=dict(repository=str(self.project), commit='1' * 40), layout_sources=[])
+        data_path = self.base / 'current-data.json'; reference = self.write_json(data_path, data)
+        return root, dump, snapshots, seal, data_path, data, reference
+
+    def selected(self, reference):
+        # Native qualification/Git is already exercised by the unchanged caller's
+        # constructor. These pure controls cover every new input/graph comparison;
+        # the eventual actual retained-role benchmark must execute validate_roles=True.
+        with mock.patch.object(cache, '__file__', str(self.project / 'tools/extraction_cache.py')):
+            return cache._frontend_selection(reference, self.graph, validate_roles=False)
+
+    def test_frontend_reference_and_data_refuse_mutation_without_new_manifest(self):
+        root, dump, snapshots, seal, path, data, reference = self.prepared()
+        self.selected(reference)
+        path.write_text(path.read_text() + ' ')
+        with self.assertRaises(ValueError): self.selected(reference)
+        reference = self.reference(path)
+        data['inputs'] = []
+        reference = self.write_json(path, data)
+        with self.assertRaisesRegex(ValueError, 'ordinary input'): self.selected(reference)
+        data['inputs'] = [self.reference(dump)]; data['expander_args'][-1] = 'c' * 64
+        reference = self.write_json(path, data)
+        with self.assertRaisesRegex(ValueError, 'arguments'): self.selected(reference)
+        self.assertEqual(b'linked worker', (root / 'dict-bundle-expander').read_bytes())
+
+    def test_frontend_selection_refuses_graph_abi_policy_and_missing_layout_authority(self):
+        import copy
+        root, dump, snapshots, seal, path, data, reference = self.prepared()
+        current_path = Path(data['roles']['path']); original = cache.read_marker(current_path)
+        for name in ('modules', 'llvm', 'value_leaf_bc', 'worker_main_c', 'zig',
+                     'runtime_source:src/lua/program_metadata.zig'):
+            with self.subTest(dependency=name):
+                changed = copy.deepcopy(original); changed['dict-bundle-build']['dependencies'][name]['sha256'] = 'd' * 64
+                data['roles'] = self.write_json(current_path, changed); reference = self.write_json(path, data)
+                with self.assertRaisesRegex(ValueError, 'dependency'): self.selected(reference)
+        data['roles'] = self.write_json(current_path, original)
+        abi_path = self.project / cache.ABI_FILES[0]; original_abi = abi_path.read_bytes()
+        abi_path.write_bytes(b'changed live ABI declaration')
+        reference = self.write_json(path, data)
+        with self.assertRaisesRegex(ValueError, 'ABI'): self.selected(reference)
+        abi_path.write_bytes(original_abi)
+        runtime = Path(self.graph['runtime']); runtime.write_bytes(b'qualified different runtime fixture')
+        changed = copy.deepcopy(original); changed['dict-bundle-build']['dependencies']['worker_object'] = self.reference(runtime)
+        data['roles'] = self.write_json(current_path, changed); reference = self.write_json(path, data)
+        with self.assertRaisesRegex(ValueError, 'layout authority'): self.selected(reference)
+        proof = self.write_json(self.base / 'layout-source.json', {'fixture_source_contract': 'unchanged layouts'})
+        changed['dict-bundle-build']['layout_source_correspondence'] = proof
+        data['sealed_frontend']['layout_sources'] = [proof]
+        data['roles'] = self.write_json(current_path, changed); reference = self.write_json(path, data)
+        self.selected(reference)
+        Path(proof['path']).write_text('{}')
+        with self.assertRaises(ValueError): self.selected(reference)
+        data['sealed_frontend']['layout_sources'] = []
+        runtime.write_bytes(b'runtime'); data['roles'] = self.write_json(current_path, original)
+        helper = self.project / 'tools/extraction_cache.py'; helper.write_bytes(b'mutated live helper')
+        reference = self.write_json(path, data)
+        with self.assertRaisesRegex(ValueError, 'live policy'): self.selected(reference)
+
+    def test_frontend_transition_and_identity_keep_all_nonruntime_semantics(self):
+        import copy
+        root, dump, snapshots, seal, path, data, reference = self.prepared()
+        original = seal['identity']; current = copy.deepcopy(original)
+        current['producer']['runtime'] = [100, 'c' * 64]
+        current['producer']['policy'][1][1] = [200, 'd' * 64]
+        current['producer']['policy'][2][1] = [300, 'e' * 64]
+        cache._frontend_producer_transition(original['producer'], current['producer'])
+        bad_policy = copy.deepcopy(current['producer']); bad_policy['policy'][0][1] = [999, 'f' * 64]
+        with self.assertRaises(ValueError): cache._frontend_producer_transition(original['producer'], bad_policy)
+        for name in ('llvm','leaf','main_c','zig','clang','unicode','abi','link_flags'):
+            with self.subTest(producer=name):
+                bad = copy.deepcopy(current['producer']); bad[name] = {'changed': True}
+                with self.assertRaises(ValueError): cache._frontend_producer_transition(original['producer'], bad)
+        for name in ('source','providers','verified_input','plans','version'):
+            with self.subTest(identity=name):
+                bad = copy.deepcopy(current); bad[name] = {'changed': True}
+                with self.assertRaises(ValueError): cache._frontend_identity_matches(original, bad)
+        cache._frontend_identity_matches(original, current)
+        for name in ('lua-program.meta','page-index.tsv','modules/123.lua'):
+            bad = copy.deepcopy(current)
+            next(row for row in bad['assets'] if row[0] == name)[2] = 'f' * 64
+            with self.assertRaises(ValueError): cache._frontend_identity_matches(original, bad)
+
+    def test_frontend_objects_verify_every_key_digest_order_and_abi_before_staging(self):
+        import copy
+        root, dump, snapshots, seal, path, data, reference = self.prepared()
+        for changed in ('order', 'abi', 'payload', 'missing'):
+            with self.subTest(changed=changed):
+                llvm = self.base / ('restore-' + changed); llvm.mkdir()
+                snapshot = copy.deepcopy(seal['link']['object_inputs']); ordered = copy.deepcopy(seal['link']['ordered_objects'])
+                first_name, first_identity = next(cache.object_entries(snapshot['identity']))
+                source = cache.object_cache_path(self.root, first_identity) / 'object.o'
+                original = source.read_bytes()
+                if changed == 'order': ordered.reverse()
+                elif changed == 'abi': snapshot['provenance']['abi'][0][1] = [1, 'a' * 64]
+                elif changed == 'payload': source.write_bytes(b'corrupt object')
+                else: source.unlink()
+                with self.assertRaises(ValueError):
+                    cache._restore_frontend_objects(self.root, llvm, snapshot, ordered, self.project, reference)
+                self.assertFalse((llvm / '.object-identity.json').exists())
+                self.assertFalse((llvm / '.object-hits').exists())
+                source.write_bytes(original)
+        llvm = self.base / 'restore-success'; llvm.mkdir()
+        cache._restore_frontend_objects(self.root, llvm, seal['link']['object_inputs'], seal['link']['ordered_objects'], self.project, reference)
+        self.assertEqual('1' * len(seal['link']['ordered_objects']) + '\n', (llvm / '.object-hits').read_text())
+        self.assertEqual(reference, cache.read_marker(llvm / '.object-identity.json')['provenance']['frontend_reference'])
+        for name, size, digest in seal['link']['ordered_objects']:
+            self.assertEqual([size, digest], cache.stable_file_digest(llvm / name))
+        self.assertFalse(any(llvm.glob('*.bc')))
+
+    def test_frontend_probe_runs_real_extraction_validation_once_then_reuses_metadata(self):
+        root, dump, snapshots, seal, path, data, reference = self.prepared()
+        expected = cache._frontend_extraction_identity(self.graph['extractor'], cache.sha256(dump), 'b' * 64, root)
+        self.assertEqual(0, cache.publish(self.root, expected, root))
+        output = Path(data['workspace']) / 'expander' / '.bundle-expander'; (output / 'llvm').mkdir(parents=True)
+        for name, source in snapshots.items():
+            if source is not None: (output / name).symlink_to(source)
+        cache.shutil.copyfile(self.graph['leaf'], output / 'llvm/value_leaf.bc')
+        real_selection = cache._frontend_selection
+        def eligibility(ref, graph, **kwargs):
+            with mock.patch.object(cache, '__file__', str(self.project / 'tools/extraction_cache.py')):
+                return real_selection(ref, graph, validate_roles=False)
+        old_worker = (root / 'dict-bundle-expander').read_bytes()
+        with mock.patch.object(cache, '_frontend_selection', side_effect=eligibility), \
+             mock.patch.object(cache, 'validate', wraps=cache.validate) as validation:
+            self.assertEqual(0, cache.probe_sealed_frontend(self.root, self.graph['extractor'], cache.sha256(dump),
+                'b' * 64, output, dump, self.graph, reference))
+        self.assertEqual(1, validation.call_count)
+        self.assertEqual((root / 'lua-program.meta').read_bytes(), (output / 'llvm/program.meta').read_bytes())
+        self.assertFalse((output / 'dict-bundle-expander').exists())
+        self.assertFalse((output / cache.COMPLETED_EXPANDER).exists())
+        self.assertFalse(any((output / 'llvm').glob('module_batch*.bc')))
+        self.assertEqual(old_worker, (root / 'dict-bundle-expander').read_bytes())
+        self.assertEqual(seal, cache.read_marker(root / cache.COMPLETED_EXPANDER))
+
+    def test_frontend_probe_missing_cache_and_retargeted_provider_refuse_without_seal(self):
+        root, dump, snapshots, seal, path, data, reference = self.prepared()
+        output = Path(data['workspace']) / 'expander' / '.bundle-expander'; (output / 'llvm').mkdir(parents=True)
+        for name, source in snapshots.items():
+            if source is not None: (output / name).symlink_to(source)
+        real_selection = cache._frontend_selection
+        def eligibility(ref, graph, **kwargs):
+            with mock.patch.object(cache, '__file__', str(self.project / 'tools/extraction_cache.py')):
+                return real_selection(ref, graph, validate_roles=False)
+        with mock.patch.object(cache, '_frontend_selection', side_effect=eligibility):
+            with self.assertRaisesRegex(ValueError, 'extraction hit'):
+                cache.probe_sealed_frontend(self.root, self.graph['extractor'], cache.sha256(dump), 'b' * 64,
+                                           output, dump, self.graph, reference)
+            target = self.base / 'other-provider'; target.write_bytes(Path(snapshots['interface-messages.tsv']).read_bytes())
+            (output / 'interface-messages.tsv').unlink(); (output / 'interface-messages.tsv').symlink_to(target)
+            with self.assertRaisesRegex(ValueError, 'physical input'):
+                cache.probe_sealed_frontend(self.root, self.graph['extractor'], cache.sha256(dump), 'b' * 64,
+                                           output, dump, self.graph, reference)
+        self.assertFalse((output / cache.COMPLETED_EXPANDER).exists())
+        self.assertFalse((output / 'llvm/program.meta').exists())
+
+
+    def original_mixed_object_record(self):
+        import copy
+        root, dump, snapshots, seal, path, data, reference = self.prepared()
+        entries = list(cache.object_entries(seal['link']['object_inputs']['identity']))
+        self.assertGreaterEqual(len(entries), 2)
+        first = cache.object_cache_path(self.root, entries[0][1]) / '.complete.json'
+        marker = cache.read_marker(first)
+        marker['provenance']['abi'][2][1] = '9' * 64
+        self.write_json(first, marker)
+        selected = data['sealed_frontend']; result = cache.read_marker(Path(selected['preparation_result']['path']))
+        record = dict(preparation_result=selected['preparation_result'], closure=selected['preparation_closure'],
+            role_map=result['role_map'], input_authority=result['input_authority'], new_seal=result['completed_expander_seal'],
+            ordered_count=len(entries), ordered_identity_exact=True, ordered_object_digests_exact=True,
+            all_marker_identities_and_abi_authenticated=True, pages_executed=0, rows=[])
+        for index, ((name, identity), linked) in enumerate(zip(entries, seal['link']['ordered_objects'])):
+            source = cache.object_cache_path(self.root, identity); stat = (source / 'object.o').stat()
+            record['rows'].append(dict(ordinal=index, link_name=name, cache_key=source.name,
+                marker=self.reference(source / '.complete.json'), object=linked[1:],
+                object_stat=dict(dev=stat.st_dev, ino=stat.st_ino, mode=oct(stat.st_mode & 0o7777), bytes=stat.st_size),
+                abi_provenance=cache.read_marker(source / '.complete.json')['provenance']['abi']))
+        proof = self.base / 'original-object-correspondence.json'
+        data['object_correspondence'] = self.write_json(proof, record)
+        reference = self.write_json(path, data)
+        return root, seal, path, data, reference, proof, record
+
+    def test_frontend_original_mixed_marker_provenance_is_preserved_without_restamping(self):
+        import copy
+        root, seal, path, data, reference, proof, record = self.original_mixed_object_record()
+        self.assertNotEqual(record['rows'][0]['abi_provenance'], seal['link']['object_inputs']['provenance']['abi'])
+        before = {row['marker']['path']: Path(row['marker']['path']).read_bytes() for row in record['rows']}
+        without = dict(data); del without['object_correspondence']
+        strict = self.write_json(self.base / 'without-proof.json', without)
+        failed = self.base / 'mixed-without-proof'; failed.mkdir()
+        with self.assertRaises(ValueError):
+            cache._restore_frontend_objects(self.root, failed, seal['link']['object_inputs'],
+                seal['link']['ordered_objects'], self.project, strict)
+        self.assertFalse((failed / '.object-identity.json').exists())
+        output = self.base / 'mixed-preserved'; output.mkdir()
+        cache._restore_frontend_objects(self.root, output, seal['link']['object_inputs'],
+            seal['link']['ordered_objects'], self.project, reference)
+        self.assertEqual('1' * len(record['rows']) + '\n', (output / '.object-hits').read_text())
+        for row in record['rows']:
+            self.assertEqual(before[row['marker']['path']], Path(row['marker']['path']).read_bytes())
+            self.assertEqual(row['object'], cache.stable_file_digest(output / row['link_name']))
+        bad_snapshot = copy.deepcopy(seal['link']['object_inputs']); bad_snapshot['provenance']['abi'][0][1] = '8' * 64
+        target = self.base / 'mixed-current-abi-refused'; target.mkdir()
+        with self.assertRaisesRegex(ValueError, 'ABI'):
+            cache._restore_frontend_objects(self.root, target, bad_snapshot, seal['link']['ordered_objects'], self.project, reference)
+        self.assertFalse((target / '.object-identity.json').exists())
+
+    def test_frontend_original_object_proof_refuses_cross_preparation_and_marker_substitution(self):
+        import copy
+        root, seal, path, data, reference, proof, original = self.original_mixed_object_record()
+        for kind in ('preparation', 'seal', 'input', 'key', 'order', 'digest', 'marker', 'provenance', 'inode', 'raw-marker', 'payload'):
+            with self.subTest(kind=kind):
+                record = copy.deepcopy(original)
+                if kind == 'preparation': record['preparation_result']['sha256'] = '1' * 64
+                elif kind == 'seal': record['new_seal']['sha256'] = '2' * 64
+                elif kind == 'input': record['input_authority']['sha256'] = '3' * 64
+                elif kind == 'key': record['rows'][0]['cache_key'] = '4' * 64
+                elif kind == 'order': record['rows'].reverse()
+                elif kind == 'digest': record['rows'][0]['object'][1] = '5' * 64
+                elif kind == 'marker': record['rows'][0]['marker'] = record['rows'][1]['marker']
+                elif kind == 'provenance': record['rows'][0]['abi_provenance'][2][1] = '6' * 64
+                elif kind == 'inode': record['rows'][0]['object_stat']['ino'] += 1
+                data['object_correspondence'] = self.write_json(proof, record)
+                reference = self.write_json(path, data)
+                marker = Path(original['rows'][0]['marker']['path']); raw = marker.read_bytes()
+                entries = list(cache.object_entries(seal['link']['object_inputs']['identity']))
+                payload = cache.object_cache_path(self.root, entries[0][1]) / 'object.o'; payload_bytes = payload.read_bytes()
+                if kind == 'raw-marker': marker.write_bytes(raw + b' ')
+                if kind == 'payload': payload.write_bytes(b'changed native object')
+                target = self.base / ('mixed-refused-' + kind); target.mkdir()
+                try:
+                    with self.assertRaises(ValueError):
+                        cache._restore_frontend_objects(self.root, target, seal['link']['object_inputs'],
+                            seal['link']['ordered_objects'], self.project, reference)
+                    self.assertFalse((target / '.object-identity.json').exists())
+                    self.assertFalse((target / '.object-hits').exists())
+                finally:
+                    marker.write_bytes(raw); payload.write_bytes(payload_bytes)
+
+
+
+    def test_frontend_nonempty_role_map_layout_authority_is_exact(self):
+        root, dump, snapshots, seal, path, data, reference = self.prepared()
+        roles_path = Path(data['roles']['path']); roles = cache.read_marker(roles_path)
+        proof = self.write_json(self.base / 'actual-shaped-layout.json', {'unchanged_abi': True})
+        roles['dict-bundle-build']['layout_source_correspondence'] = proof
+        roles['dict-blob-build'] = {'layout_source_correspondence': proof}
+        data['sealed_frontend']['layout_sources'] = [proof]
+        data['roles'] = self.write_json(roles_path, roles)
+        self.selected(self.write_json(path, data))
+        other = self.write_json(self.base / 'other-layout.json', {'unchanged_abi': False})
+        roles['dict-blob-build']['layout_source_correspondence'] = other
+        data['roles'] = self.write_json(roles_path, roles)
+        with self.assertRaisesRegex(ValueError, 'layout source authority'):
+            self.selected(self.write_json(path, data))
+        roles['dict-blob-build']['layout_source_correspondence'] = proof
+        data['roles'] = self.write_json(roles_path, roles)
+        data['sealed_frontend']['layout_sources'] = [other]
+        with self.assertRaisesRegex(ValueError, 'layout source authority'):
+            self.selected(self.write_json(path, data))
+
+class DerivedProviderRestorationTests(unittest.TestCase):
+    setUp = CompletedExpanderTests.setUp
+    fixture = CompletedExpanderTests.fixture
+    call = CompletedExpanderTests.call
+
+    def restoration_fixture(self):
+        root, dump, snapshots = self.fixture(ready=False)
+        # Real EN dbed contains 61 empty Lua assets; frozen native assets permit zero bytes.
+        (root / 'modules/empty.lua').write_bytes(b'')
+        sources, old = {}, {}
+        for name in cache.DERIVED_PROVIDER_FILES:
+            payload = ('original selected ' + name + '\n').encode()
+            original = self.base / ('missing-copy-' + str(self.sequence) + '-' + name)
+            original.write_bytes(payload)
+            source = self.base / ('retained-' + str(self.sequence) + '-' + name)
+            source.write_bytes(payload)
+            (root / name).symlink_to(original)
+            snapshots[name] = str(original)
+            sources[name] = dict(path=str(source), bytes=len(payload), sha256=cache.sha256(source))
+            old[name] = original
+        self.assertEqual(0, self.call('seal-expander', root, dump, snapshots))
+        cache.shutil.rmtree(root / 'llvm')
+        (root / '.incomplete').unlink(); (root.parent / '.incomplete').write_bytes(b'expander ready')
+        raw = (root / cache.COMPLETED_EXPANDER).read_bytes()
+        for path in old.values(): path.unlink()
+        return root, dump, sources, raw
+
+    def stage_restoration(self, root, sources):
+        with (root / '.incomplete').open('xb') as stream: stream.write(cache.PROVIDER_UPDATE_MARKER)
+        for name, descriptor in sources.items():
+            (root / name).unlink(); (root / name).symlink_to(descriptor['path'])
+
+    def test_restoration_preserves_original_native_and_source_bytes_without_copying(self):
+        root, dump, sources, raw = self.restoration_fixture()
+        original = cache.hashlib.sha256(raw).hexdigest()
+        with self.assertRaises(ValueError): cache.frozen_runtime_context(root, dump, original)
+        before = {name: (cache._full_stamp(Path(item['path']).stat()), Path(item['path']).stat().st_nlink)
+                  for name, item in sources.items()}
+        # Unrelated live policy evolution is not a new native emission.
+        (self.project / 'tools/extraction_cache.py').write_bytes(b'new live helper policy')
+        with mock.patch.object(cache, 'completed_producer_identity', side_effect=AssertionError('no native producer rebuild')):
+            proof = cache.prepare_derived_provider_restoration(root, dump, original, sources)
+            archive = Path(proof['original_seal_archive']['path'])
+            self.assertEqual(raw, archive.read_bytes())
+            self.stage_restoration(root, sources)
+            successor = cache.finish_derived_provider_restoration(proof)
+        after = cache.frozen_runtime_context(root, dump, successor, provider_update=True)
+        previous = json.loads(raw)
+        for name in ('identity', 'origin_graph', 'link'): self.assertEqual(previous[name], after[name])
+        self.assertEqual('ordinary-derived-provider-restoration', after['provenance'])
+        self.assertEqual(original, after['provider_update']['original_seal_sha256'])
+        self.assertEqual(raw, archive.read_bytes())
+        for name, item in sources.items():
+            source = Path(item['path'])
+            self.assertEqual(before[name], (cache._full_stamp(source.stat()), source.stat().st_nlink))
+            self.assertEqual(str(source), cache.os.readlink(root / name))
+            self.assertEqual(list(cache._full_stamp(source.stat())), after['runtime_stamps']['assets'][name])
+        (root / '.incomplete').unlink()
+        self.assertEqual(after, cache.frozen_runtime_context(root, dump, successor))
+        with self.assertRaises(ValueError): cache.frozen_runtime_context(root, dump, original)
+
+    def test_restoration_refuses_wrong_missing_or_changed_selected_sources(self):
+        import copy
+        for kind in ('content', 'missing', 'role', 'membership', 'after-prepare'):
+            with self.subTest(kind=kind):
+                root, dump, sources, raw = self.restoration_fixture()
+                original = cache.hashlib.sha256(raw).hexdigest(); selected = copy.deepcopy(sources)
+                name = sorted(sources)[0]
+                if kind == 'content': Path(selected[name]['path']).write_bytes(b'wrong retained bytes')
+                elif kind == 'missing': Path(selected[name]['path']).unlink()
+                elif kind == 'role': selected[name] = selected[sorted(sources)[1]]
+                elif kind == 'membership': selected.pop(name)
+                if kind != 'after-prepare':
+                    with self.assertRaises((ValueError, FileNotFoundError)):
+                        cache.prepare_derived_provider_restoration(root, dump, original, selected)
+                else:
+                    proof = cache.prepare_derived_provider_restoration(root, dump, original, selected)
+                    self.stage_restoration(root, selected)
+                    Path(selected[name]['path']).write_bytes(b'changed after original authentication')
+                    with self.assertRaises(ValueError): cache.finish_derived_provider_restoration(proof)
+                self.assertEqual(raw, (root / cache.COMPLETED_EXPANDER).read_bytes())
+
+    def test_restoration_refuses_native_alias_plan_source_and_archive_drift(self):
+        for kind in ('worker', 'metadata', 'module', 'plan', 'dump', 'receipt', 'namespace', 'member', 'alias', 'library', 'archive'):
+            with self.subTest(kind=kind):
+                root, dump, sources, raw = self.restoration_fixture()
+                proof = cache.prepare_derived_provider_restoration(root, dump, cache.hashlib.sha256(raw).hexdigest(), sources)
+                self.stage_restoration(root, sources)
+                if kind == 'alias':
+                    name = sorted(sources)[0]; (root / name).unlink(); (root / name).symlink_to(sources[sorted(sources)[1]]['path'])
+                else:
+                    path = {'worker': root / 'dict-bundle-expander', 'metadata': root / 'lua-program.meta',
+                            'module': root / 'modules/123.lua', 'plan': root.parent / 'compile-plan.tsv',
+                            'dump': dump, 'receipt': root / 'extraction-source.json', 'namespace': root / 'namespace-registry.tsv',
+                            'member': root / 'unknown-member', 'library': self.library,
+                            'archive': Path(proof['original_seal_archive']['path'])}[kind]
+                    path.write_bytes(b'changed selected input')
+                with self.assertRaises(ValueError): cache.finish_derived_provider_restoration(proof)
+                self.assertEqual(raw, (root / cache.COMPLETED_EXPANDER).read_bytes())
+
+    def test_restoration_publication_failure_keeps_old_seal_and_incomplete_state(self):
+        root, dump, sources, raw = self.restoration_fixture()
+        original = cache.hashlib.sha256(raw).hexdigest()
+        proof = cache.prepare_derived_provider_restoration(root, dump, original, sources)
+        self.stage_restoration(root, sources)
+        with mock.patch.object(cache, 'write_private_marker', side_effect=OSError('injected seal publication failure')):
+            with self.assertRaises(OSError): cache.finish_derived_provider_restoration(proof)
+        self.assertEqual(raw, (root / cache.COMPLETED_EXPANDER).read_bytes())
+        self.assertEqual(cache.PROVIDER_UPDATE_MARKER, (root / '.incomplete').read_bytes())
+        self.assertEqual(raw, Path(proof['original_seal_archive']['path']).read_bytes())
+        self.assertFalse(list(root.parent.parent.glob('*.part-*')))
+
+
+
+
+class MetadataCustodyRefreshTests(unittest.TestCase):
+    setUp = CompletedExpanderTests.setUp
+    fixture = CompletedExpanderTests.fixture
+    call = CompletedExpanderTests.call
+    binding = CompletedExpanderTests.binding
+
+    def custody_fixture(self):
+        root, dump, snapshots = self.fixture(ready=False)
+        extra = self.base / ('figure-site-' + str(self.sequence)); extra.write_bytes(b'original figure site')
+        snapshots['figure-siteinfo.raw.json'] = str(extra); (root / 'figure-siteinfo.raw.json').symlink_to(extra)
+        self.call('seal-expander', root, dump, snapshots); cache.shutil.rmtree(root / 'llvm')
+        (root / '.incomplete').unlink(); (root.parent / '.incomplete').write_bytes(b'expander ready')
+        seal = self.binding(root); self.metadata_sequence = getattr(self, 'metadata_sequence', 0) + 1
+        prefix = 'metadata-' + str(self.metadata_sequence) + '-'
+        def write(name, value):
+            p = self.base / (prefix + name); p.write_text(json.dumps(value)); return dict(path=str(p), bytes=p.stat().st_size, sha256=cache.sha256(p))
+        def info(path):
+            s = path.stat(); return {k:getattr(s,k) for k in ('st_dev','st_ino','st_mode','st_uid','st_gid','st_size','st_mtime_ns','st_ctime_ns','st_nlink')}
+        source_manifest = write('manifest.json', {'original': True}); output_manifest = write('new-manifest.json', {'repaired': True})
+        linked = []; target = self.base / (prefix + 'linked'); target.mkdir()
+        names = ['figure-siteinfo.raw.json', 'interface-messages.tsv']
+        for name in names:
+            source = Path(snapshots[name]); before = info(source); digest = cache.sha256(source)
+            cache.os.link(source, target / source.name)
+            linked.append(dict(path=source.name, before=before, after=info(source), sha256_before=digest, sha256_after=cache.sha256(source)))
+        observations = write('observations.json', dict(complete=True, source_content_mode_inode_preserved=True, linked_members=linked,
+            source_manifest_sha256=source_manifest['sha256'], repair_manifest_sha256=source_manifest['sha256']))
+        common = dict(outcome='PASSED-PHYSICALLY-SOURCE-CLOSED', source_after=True, source_lease_released=True, allocation_released=True)
+        operation = write('operation.json', dict(common, observations=observations, linked_members=linked, source_manifest=source_manifest, output_manifest=output_manifest))
+        result = write('native-result.json', dict(returncode=0, ordinary_full_stream_validation=True, input_after=True, pages_executed=0, compiler_executed=False,
+            argv=['actual-qualified-test-fixture', '--check-figure-compatibility', '--full']))
+        native = write('native-close.json', dict(common, native_returncode=0, ordinary_full_stream_validation=True, pages_executed=0, compiler_executed=False,
+            repaired_manifest=output_manifest, compatibility=result))
+        return root, dump, snapshots, dict(original_seal_sha256=seal, operation=operation, native_validation=native, names=names)
+
+    def test_closed_multi_provider_custody_refresh_preserves_original_seal_and_logical_native_identity(self):
+        root, dump, snapshots, receipt = self.custody_fixture(); seal = self.binding(root)
+        raw = (root / cache.COMPLETED_EXPANDER).read_bytes(); original = cache.read_marker(root / cache.COMPLETED_EXPANDER)
+        with self.assertRaises(ValueError): cache.frozen_runtime_context(root, dump, seal)
+        selected = {Path(snapshots[name]) for name in receipt['names']}; observed = cache.stable_file_digest
+        def no_rehash(path, **kwargs):
+            self.assertNotIn(Path(path).resolve(), selected)
+            return observed(path, **kwargs)
+        with mock.patch.object(cache, 'stable_file_digest', side_effect=no_rehash):
+            current = cache.frozen_runtime_context(root, dump, seal, metadata_custody_refresh=receipt)
+        self.assertEqual(raw, (root / cache.COMPLETED_EXPANDER).read_bytes()); self.assertEqual(seal, self.binding(root))
+        for name in ('identity', 'origin_graph', 'link', 'provenance'): self.assertEqual(original[name], current[name])
+        self.assertEqual(original['runtime_stamps']['plans'], current['runtime_stamps']['plans'])
+        self.assertEqual(original['runtime_stamps']['snapshot_links'], current['runtime_stamps']['snapshot_links'])
+        for name, value in original['runtime_stamps']['assets'].items():
+            self.assertEqual(list(cache._full_stamp((root / name).stat())) if name in receipt['names'] else value, current['runtime_stamps']['assets'][name])
+
+    def test_metadata_custody_refuses_changed_bytes_inode_mode_mtime_nlink_and_unrecorded_alias(self):
+        for change in ('bytes', 'inode', 'mode', 'mtime', 'nlink', 'alias'):
+            with self.subTest(change=change):
+                root, dump, snapshots, receipt = self.custody_fixture(); seal = self.binding(root); source = Path(snapshots[receipt['names'][0]]); before = source.stat()
+                if change == 'bytes': source.write_bytes(b'x' * before.st_size); cache.os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+                elif change == 'inode':
+                    other = source.with_suffix('.other'); other.write_bytes(source.read_bytes()); other.replace(source)
+                elif change == 'mode': source.chmod(before.st_mode ^ 0o100)
+                elif change == 'mtime': cache.os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns + 1))
+                elif change == 'nlink': cache.os.link(source, source.with_suffix('.unexpected'))
+                else:
+                    alias = root / receipt['names'][0]; other = source.with_suffix('.same'); cache.os.link(source, other); alias.unlink(); alias.symlink_to(other)
+                with self.assertRaises(ValueError): cache.frozen_runtime_context(root, dump, seal, metadata_custody_refresh=receipt)
+                self.assertEqual(seal, self.binding(root))
+
+    def test_metadata_custody_requires_exact_closed_operation_native_validation_and_selected_original_hashes(self):
+        for change in ('bad-operation-hash', 'native-unrun', 'wrong-manifest', 'changed-digest', 'old-stamp', 'duplicate', 'unrecorded', 'native-asset'):
+            with self.subTest(change=change):
+                root, dump, snapshots, receipt = self.custody_fixture(); seal = self.binding(root)
+                def rewrite(key, mutate):
+                    p = Path(receipt[key]['path']); value = json.loads(p.read_text()); mutate(value); p.write_text(json.dumps(value)); receipt[key] = dict(path=str(p), bytes=p.stat().st_size, sha256=cache.sha256(p))
+                if change == 'bad-operation-hash': receipt['operation']['sha256'] = '0' * 64
+                elif change == 'native-unrun': rewrite('native_validation', lambda v:v.update(ordinary_full_stream_validation=False))
+                elif change == 'wrong-manifest': rewrite('native_validation', lambda v:v.update(repaired_manifest={}))
+                elif change in ('changed-digest', 'old-stamp'):
+                    op = json.loads(Path(receipt['operation']['path']).read_text()); rows = op['linked_members']; rows[0]['sha256_after'] = '0' * 64 if change == 'changed-digest' else rows[0]['sha256_after']
+                    if change == 'old-stamp': rows[0]['before']['st_ctime_ns'] += 1
+                    obs_path = Path(op['observations']['path']); obs = json.loads(obs_path.read_text()); obs['linked_members'] = rows; obs_path.write_text(json.dumps(obs)); op['observations'] = dict(path=str(obs_path), bytes=obs_path.stat().st_size, sha256=cache.sha256(obs_path))
+                    op_path = Path(receipt['operation']['path']); op_path.write_text(json.dumps(op)); receipt['operation'] = dict(path=str(op_path), bytes=op_path.stat().st_size, sha256=cache.sha256(op_path))
+                elif change == 'duplicate': receipt['names'].append(receipt['names'][0])
+                elif change == 'unrecorded': receipt['names'] = ['namespace-registry.tsv']
+                else: receipt['names'] = ['dict-bundle-expander']
+                with self.assertRaises(ValueError): cache.frozen_runtime_context(root, dump, seal, metadata_custody_refresh=receipt)
+                self.assertEqual(seal, self.binding(root))
+
+    def test_metadata_custody_brackets_source_and_native_assets_without_mixing_update_families(self):
+        for change in ('source-during-validation', 'native-during-validation', 'mixed-update', 'mixed-book'):
+            with self.subTest(change=change):
+                root, dump, snapshots, receipt = self.custody_fixture(); seal = self.binding(root)
+                if change in ('mixed-update', 'mixed-book'):
+                    kwargs = dict(provider_update=True) if change == 'mixed-update' else dict(snapshot_metadata_refresh={})
+                    with self.assertRaises(ValueError): cache.frozen_runtime_context(root, dump, seal, metadata_custody_refresh=receipt, **kwargs)
+                    continue
+                observed = cache.completed_source_binding
+                def mutate_after_source(r, d):
+                    value = observed(r, d)
+                    target = Path(snapshots[receipt['names'][0]]) if change.startswith('source') else root / 'dict-bundle-expander'
+                    info = target.stat(); target.write_bytes(target.read_bytes()); cache.os.utime(target, ns=(info.st_atime_ns, info.st_mtime_ns))
+                    return value
+                with mock.patch.object(cache, 'completed_source_binding', side_effect=mutate_after_source):
+                    with self.assertRaises(ValueError): cache.frozen_runtime_context(root, dump, seal, metadata_custody_refresh=receipt)
+                self.assertEqual(seal, self.binding(root))
+
+
+class FileMetadataProviderUpdateTests(unittest.TestCase):
+    setUp = CompletedExpanderTests.setUp
+    fixture = CompletedExpanderTests.fixture
+    call = CompletedExpanderTests.call
+    binding = CompletedExpanderTests.binding
+
+    def file_fixture(self, *, book=False):
+        self.zig_tool['tool_sha256'] = cache.sha256(Path(self.graph['zig']))
+        self.tool['tool'] = cache.tool_identity(Path(self.graph['clang']))
+        root, dump, snapshots = self.fixture(ready=False)
+        original = self.base / ('file-origin-' + str(self.sequence))
+        original.write_bytes(b'# wikidict-file-metadata-v2\nFile:Existing.png\t1\t10\t20\tBITMAP\tFile:Existing.png\n')
+        snapshots['file-metadata.tsv'] = str(original)
+        (root / 'file-metadata.tsv').symlink_to(original)
+        for name in cache.DERIVED_PROVIDER_FILES:
+            source = self.base / (str(self.sequence) + '-' + name)
+            source.write_bytes(('original ' + name).encode())
+            snapshots[name] = str(source); (root / name).symlink_to(source)
+        if book:
+            observed = self.base / ('observed-' + str(self.sequence)); observed.write_bytes(b'original Book bytes')
+            snapshots['figure-page-observations.json'] = str(observed); (root / 'figure-page-observations.json').symlink_to(observed)
+        self.call('seal-expander', root, dump, snapshots)
+        cache.shutil.rmtree(root / 'llvm')
+        (root / '.incomplete').unlink(); (root.parent / '.incomplete').write_bytes(b'expander ready')
+        return root, dump, snapshots, original
+
+    def source(self, root, raw=None, suffix='selected'):
+        target = self.base / (str(self.sequence) + '-' + suffix)
+        original = (root / 'file-metadata.tsv').read_bytes()
+        target.write_bytes(raw if raw is not None else original + b'File:Voice.ogg\t1\t0\t0\tAUDIO\tFile:Actual.oga\n')
+        return dict(path=str(target), bytes=target.stat().st_size, sha256=cache.sha256(target))
+
+    def prepare_file(self, root, dump, source, titles=None):
+        return cache.prepare_wikibase_provider_update(root, dump, self.binding(root),
+            file_metadata_source=source,
+            file_metadata_titles=['File:Voice.ogg'] if titles is None else titles)
+
+    def stage_file(self, root, source):
+        (root / '.incomplete').write_bytes(cache.FILE_METADATA_UPDATE_MARKER)
+        temporary = root / '.file-metadata-update.part'
+        temporary.symlink_to(source['path']); temporary.replace(root / 'file-metadata.tsv')
+        return {'file-metadata.tsv': source['sha256']}
+
+    def test_audio_append_original_clang_symlink_is_resolved_and_chain_and_target_drift_refused(self):
+        for change in ('allowed', 'chain', 'target', 'publication-chain', 'locator-shape'):
+            with self.subTest(change=change):
+                root, dump, snapshots, original = self.file_fixture()
+                target = Path(self.graph['clang']); alias = target.with_name('clang-alias-' + str(self.sequence))
+                alias.symlink_to(target); record = cache.read_marker(root / cache.COMPLETED_EXPANDER)
+                record['origin_graph']['clang'] = str(alias)
+                cache.write_private_marker(root / cache.COMPLETED_EXPANDER, record)
+                seal = self.binding(root); source = self.source(root); observed = cache.tool_identity
+                def regular_tool(path):
+                    self.assertFalse(Path(path).is_symlink())
+                    return observed(path)
+                with mock.patch.object(cache, 'tool_identity', side_effect=regular_tool):
+                    proof = self.prepare_file(root, dump, source)
+                    locator = proof['file_metadata_update']['native_clang_locator']
+                    self.assertEqual(str(target), locator['resolved']); self.assertEqual(str(alias), locator['located'])
+                    self.assertEqual(str(alias), locator['chain'][0]['path'])
+                    hashes = self.stage_file(root, source)
+                    if change == 'chain': alias.unlink(); alias.symlink_to(target)
+                    elif change == 'target': target.write_bytes(b'other clang executable')
+                    elif change == 'locator-shape': proof['file_metadata_update']['native_clang_locator'] = {'invalid': True}
+                    if change == 'publication-chain':
+                        real_write = cache.write_private_marker
+                        def replace_alias_after_write(path, value):
+                            real_write(path, value); alias.unlink(); alias.symlink_to(target)
+                        with mock.patch.object(cache, 'write_private_marker', side_effect=replace_alias_after_write):
+                            with self.assertRaises(ValueError): cache.finish_wikibase_provider_update(proof, hashes)
+                        self.assertTrue((root / '.incomplete').exists()); continue
+                    if change != 'allowed':
+                        with self.assertRaises(ValueError): cache.finish_wikibase_provider_update(proof, hashes)
+                        self.assertEqual(seal, self.binding(root)); continue
+                    current = cache.finish_wikibase_provider_update(proof, hashes)
+                (root / '.incomplete').unlink(); after = cache.frozen_runtime_context(root, dump, current)
+                self.assertEqual(record['identity']['producer'], after['identity']['producer'])
+                self.assertEqual(record['origin_graph'], after['origin_graph'])
+
+    def test_audio_append_explicit_book_ctime_refresh_keeps_native_and_refuses_other_identity_changes(self):
+        import stat
+        for change in ('allowed', 'omitted', 'content', 'inode', 'mode', 'mtime', 'alias', 'nlink-during-validation'):
+            with self.subTest(change=change):
+                root, dump, snapshots, original = self.file_fixture(book=True)
+                seal = self.binding(root); record = cache.read_marker(root / cache.COMPLETED_EXPANDER)
+                target = Path(snapshots['figure-page-observations.json']); before = target.stat()
+                target.chmod(stat.S_IMODE(before.st_mode) ^ 0o100); target.chmod(stat.S_IMODE(before.st_mode))
+                receipt = dict(name='figure-page-observations.json', source=str(target), original_seal_sha256=seal,
+                    old_stamp=record['runtime_stamps']['assets']['figure-page-observations.json'],
+                    current_stamp=list(cache._full_stamp(target.stat())), current_nlink=target.stat().st_nlink, ctime_cause='unknown')
+                source = self.source(root)
+                if change == 'content':
+                    self.assertEqual(len(target.read_bytes()), len(b'changed Book bytes!'))
+                    target.write_bytes(b'changed Book bytes!'); cache.os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+                    receipt['current_stamp'] = list(cache._full_stamp(target.stat()))
+                elif change == 'inode':
+                    replacement = target.with_suffix('.new'); replacement.write_bytes(target.read_bytes()); replacement.replace(target)
+                elif change == 'mode': target.chmod(stat.S_IMODE(before.st_mode) ^ 0o100)
+                elif change == 'mtime': cache.os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns + 1))
+                elif change == 'alias':
+                    path = root / 'figure-page-observations.json'; path.unlink(); path.symlink_to(original)
+                args = dict(file_metadata_source=source, file_metadata_titles=['File:Voice.ogg'])
+                if change != 'omitted': args['snapshot_metadata_refresh'] = receipt
+                if change not in ('allowed', 'nlink-during-validation'):
+                    with self.assertRaises(ValueError): cache.prepare_wikibase_provider_update(root, dump, seal, **args)
+                    self.assertEqual(seal, self.binding(root)); continue
+                proof = cache.prepare_wikibase_provider_update(root, dump, seal, **args)
+                hashes = self.stage_file(root, source)
+                if change == 'nlink-during-validation':
+                    real = cache.tool_identity
+                    def link_after_worker(path):
+                        value = real(path)
+                        if Path(path) == root / 'dict-bundle-expander': cache.os.link(target, target.with_suffix('.linked'))
+                        return value
+                    with mock.patch.object(cache, 'tool_identity', side_effect=link_after_worker):
+                        with self.assertRaises(ValueError): cache.finish_wikibase_provider_update(proof, hashes)
+                    self.assertEqual(seal, self.binding(root)); continue
+                current = cache.finish_wikibase_provider_update(proof, hashes)
+                (root / '.incomplete').unlink(); after = cache.frozen_runtime_context(root, dump, current)
+                for name in ('origin_graph', 'link'): self.assertEqual(record[name], after[name])
+                for name in ('producer', 'source', 'verified_input', 'runtime_libraries', 'plans'): self.assertEqual(record['identity'][name], after['identity'][name])
+                self.assertEqual(record['identity']['providers']['figure-page-observations.json'], after['identity']['providers']['figure-page-observations.json'])
+                self.assertEqual(receipt['current_stamp'], after['runtime_stamps']['assets']['figure-page-observations.json'])
+                self.assertEqual(record, proof['original_record'])
+
+    def test_audio_append_preserves_original_native_source_and_publishes_explicit_data_origin(self):
+        root, dump, snapshots, original = self.file_fixture()
+        seal = self.binding(root); before = cache.read_marker(root / cache.COMPLETED_EXPANDER)
+        raw = (root / cache.COMPLETED_EXPANDER).read_bytes()
+        pins = {name: ((root / name).read_bytes(), cache._full_stamp((root / name).stat()))
+                for name in ('dict-bundle-expander', 'lua-program.meta', 'modules/123.lua')}
+        source = self.source(root); source_before = (cache._full_stamp(Path(source['path']).stat()), Path(source['path']).stat().st_nlink)
+        old_before = (original.read_bytes(), cache._full_stamp(original.stat()), original.stat().st_nlink)
+        # Current orchestration source is not substituted for an old native producer.
+        (self.project / 'tools/extraction_cache.py').write_bytes(b'new live helper policy')
+        proof = self.prepare_file(root, dump, source)
+        current = cache.finish_wikibase_provider_update(proof, self.stage_file(root, source))
+        self.assertIsNone(cache.frozen_runtime_context(root, dump, current))
+        self.assertEqual('ordinary-file-metadata-provider-update', cache.frozen_runtime_context(root, dump, current, provider_update=True)['provenance'])
+        (root / '.incomplete').unlink(); after = cache.frozen_runtime_context(root, dump, current)
+        self.assertEqual(seal, after['provider_update']['original_seal_sha256'])
+        self.assertEqual(before['identity']['providers']['file-metadata.tsv'], after['provider_update']['original_providers']['file-metadata.tsv'])
+        self.assertEqual([source['bytes'], source['sha256']], after['identity']['providers']['file-metadata.tsv'])
+        for field in ('origin_graph', 'link'): self.assertEqual(before[field], after[field])
+        for field in ('producer', 'source', 'verified_input', 'runtime_libraries', 'plans'): self.assertEqual(before['identity'][field], after['identity'][field])
+        for name in before['identity']['providers']:
+            if name != 'file-metadata.tsv': self.assertEqual(before['identity']['providers'][name], after['identity']['providers'][name])
+        for name, (body, stamp) in pins.items(): self.assertEqual((body, stamp), ((root / name).read_bytes(), cache._full_stamp((root / name).stat())))
+        self.assertEqual(old_before, (original.read_bytes(), cache._full_stamp(original.stat()), original.stat().st_nlink))
+        self.assertEqual(source_before, (cache._full_stamp(Path(source['path']).stat()), Path(source['path']).stat().st_nlink))
+        self.assertEqual(source['path'], cache.os.readlink(root / 'file-metadata.tsv'))
+        self.assertNotEqual(raw, (root / cache.COMPLETED_EXPANDER).read_bytes())
+
+    def test_audio_append_refuses_changed_deleted_duplicate_schema_and_non_audio_rows(self):
+        for change in ('changed', 'deleted', 'duplicate', 'header', 'bitmap', 'axes', 'exists', 'namespace', 'alias', 'extra', 'missing-newline', 'old-row-crlf', 'new-row-crlf'):
+            with self.subTest(change=change):
+                root, dump, snapshots, original = self.file_fixture(); before = (root / cache.COMPLETED_EXPANDER).read_bytes()
+                raw = original.read_bytes(); addition = b'File:Voice.ogg\t1\t0\t0\tAUDIO\tFile:Actual.oga\n'
+                if change == 'changed': raw = raw.replace(b'\t10\t20\t', b'\t11\t20\t')
+                elif change == 'deleted': raw = raw.splitlines(keepends=True)[0]
+                elif change == 'duplicate': addition += addition
+                elif change == 'header': raw = raw.replace(b'-v2\n', b'-v1\n')
+                elif change == 'bitmap': addition = addition.replace(b'AUDIO', b'BITMAP')
+                elif change == 'axes': addition = addition.replace(b'\t0\t0\t', b'\t1\t0\t')
+                elif change == 'exists': addition = addition.replace(b'\t1\t0\t0\t', b'\t0\t0\t0\t')
+                elif change == 'namespace': addition = addition.replace(b'File:Voice', b'Other:Voice')
+                elif change == 'alias': addition = addition.replace(b'File:Actual.oga', b'-')
+                elif change == 'extra': addition += b'File:Zextra.ogg\t1\t0\t0\tAUDIO\tFile:Zextra.ogg\n'
+                if change == 'old-row-crlf': raw = raw[:-1] + b'\r\n'
+                elif change == 'new-row-crlf': addition = addition[:-1] + b'\r\n'
+                if change == 'missing-newline': addition = addition.rstrip(b'\n')
+                source = self.source(root, raw + addition)
+                with self.assertRaises(ValueError): self.prepare_file(root, dump, source)
+                self.assertEqual(before, (root / cache.COMPLETED_EXPANDER).read_bytes()); self.assertFalse((root / '.incomplete').exists())
+
+    def test_audio_append_requires_exact_selected_hash_titles_and_external_source(self):
+        for change in ('hash', 'bytes', 'titles', 'duplicate-titles', 'symlink', 'original'):
+            with self.subTest(change=change):
+                root, dump, snapshots, original = self.file_fixture(); source = self.source(root); titles = ['File:Voice.ogg']
+                if change == 'hash': source['sha256'] = '0' * 64
+                elif change == 'bytes': source['bytes'] += 1
+                elif change == 'titles': titles = ['File:Other.ogg']
+                elif change == 'duplicate-titles': titles *= 2
+                elif change == 'symlink':
+                    link = self.base / (str(self.sequence) + '-alias'); link.symlink_to(source['path']); source['path'] = str(link)
+                elif change == 'original': source = dict(path=str(original), bytes=original.stat().st_size, sha256=cache.sha256(original))
+                with self.assertRaises(ValueError): self.prepare_file(root, dump, source, titles)
+                self.assertFalse((root / '.incomplete').exists())
+
+    def test_audio_append_refuses_native_plan_source_other_provider_and_tool_drift(self):
+        for change in ('worker', 'module', 'plan', 'dump', 'other-provider', 'other-provider-same-bytes', 'graph-runtime', 'graph-runtime-same-bytes', 'library'):
+            with self.subTest(change=change):
+                root, dump, snapshots, original = self.file_fixture(); source = self.source(root); proof = self.prepare_file(root, dump, source); old = self.binding(root)
+                hashes = self.stage_file(root, source)
+                if change == 'worker': (root / 'dict-bundle-expander').write_bytes(b'changed worker')
+                elif change == 'module': (root / 'modules/123.lua').write_bytes(b'return 2')
+                elif change == 'plan': (root.parent / 'module-compile-plan.tsv').write_bytes(b'changed plan')
+                elif change == 'dump': dump.write_bytes(b'changed dump')
+                elif change.startswith('other-provider'):
+                    target = Path(snapshots['interface-messages.tsv']); raw = target.read_bytes()
+                    if change.endswith('same-bytes'):
+                        new = target.with_suffix('.new'); new.write_bytes(raw); new.replace(target)
+                    else: target.write_bytes(b'other provider changed')
+                elif change.startswith('graph-runtime'):
+                    target = Path(self.graph['runtime'])
+                    if change.endswith('same-bytes'):
+                        new = target.with_suffix('.new'); new.write_bytes(target.read_bytes()); new.replace(target)
+                    else: target.write_bytes(b'new runtime')
+                else: self.library.write_bytes(b'new library')
+                with self.assertRaises(ValueError): cache.finish_wikibase_provider_update(proof, hashes)
+                self.assertEqual(old, self.binding(root)); self.assertEqual(cache.FILE_METADATA_UPDATE_MARKER, (root / '.incomplete').read_bytes())
+
+    def test_audio_append_refuses_source_ctime_alias_and_selected_authority_drift(self):
+        for change in ('original', 'selected', 'retarget', 'expected-hash', 'marker', 'original-during-validation', 'graph-during-validation'):
+            with self.subTest(change=change):
+                root, dump, snapshots, original = self.file_fixture(); source = self.source(root); proof = self.prepare_file(root, dump, source); old = self.binding(root)
+                hashes = self.stage_file(root, source)
+                if change.endswith('during-validation'):
+                    observed = cache.tool_identity
+                    def mutate_after_worker(path):
+                        value = observed(path)
+                        if Path(path) == root / 'dict-bundle-expander':
+                            target = original if change.startswith('original') else Path(self.graph['runtime'])
+                            info = target.stat(); target.write_bytes(target.read_bytes()); cache.os.utime(target, ns=(info.st_atime_ns, info.st_mtime_ns))
+                        return value
+                    with mock.patch.object(cache, 'tool_identity', side_effect=mutate_after_worker):
+                        with self.assertRaises(ValueError): cache.finish_wikibase_provider_update(proof, hashes)
+                    self.assertEqual(old, self.binding(root)); continue
+                if change in ('original', 'selected'):
+                    path = original if change == 'original' else Path(source['path']); info = path.stat(); raw = path.read_bytes(); path.write_bytes(raw); cache.os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+                elif change == 'retarget':
+                    (root / 'file-metadata.tsv').unlink(); (root / 'file-metadata.tsv').symlink_to(original)
+                elif change == 'expected-hash': hashes['file-metadata.tsv'] = '0' * 64
+                else: (root / '.incomplete').write_bytes(cache.PROVIDER_UPDATE_MARKER)
+                with self.assertRaises(ValueError): cache.finish_wikibase_provider_update(proof, hashes)
+                self.assertEqual(old, self.binding(root))
+
+    def test_audio_append_publication_failure_preserves_old_seal_and_unready_marker(self):
+        for change in ('write-failure', 'original-after-publication', 'graph-after-publication'):
+            with self.subTest(change=change):
+                root, dump, snapshots, original = self.file_fixture(); source = self.source(root); proof = self.prepare_file(root, dump, source); old = (root / cache.COMPLETED_EXPANDER).read_bytes(); hashes = self.stage_file(root, source)
+                write = cache.write_private_marker
+                def publication(path, value):
+                    if change == 'write-failure': raise OSError('injected publication failure')
+                    write(path, value)
+                    target = original if change.startswith('original') else Path(self.graph['runtime'])
+                    info = target.stat(); target.write_bytes(target.read_bytes()); cache.os.utime(target, ns=(info.st_atime_ns, info.st_mtime_ns))
+                with mock.patch.object(cache, 'write_private_marker', side_effect=publication):
+                    with self.assertRaises(OSError if change == 'write-failure' else ValueError): cache.finish_wikibase_provider_update(proof, hashes)
+                if change == 'write-failure': self.assertEqual(old, (root / cache.COMPLETED_EXPANDER).read_bytes())
+                self.assertEqual(cache.FILE_METADATA_UPDATE_MARKER, (root / '.incomplete').read_bytes())
+                self.assertIsNone(cache.frozen_runtime_context(root, dump, cache.sha256(root / cache.COMPLETED_EXPANDER)))
+
+    def test_audio_append_repeated_updates_keep_first_origin_and_reject_mixed_families(self):
+        root, dump, snapshots, original = self.file_fixture(); first = self.binding(root); previous = first
+        for index, title in enumerate(('File:Voice.ogg', 'File:Voice2.ogg')):
+            raw = (root / 'file-metadata.tsv').read_bytes() + (title + '\t1\t0\t0\tAUDIO\tFile:Actual.oga\n').encode()
+            source = self.source(root, raw, suffix='repeat-' + str(index)); proof = self.prepare_file(root, dump, source, [title]); current = cache.finish_wikibase_provider_update(proof, self.stage_file(root, source)); (root / '.incomplete').unlink()
+            after = cache.frozen_runtime_context(root, dump, current)
+            self.assertEqual(first, after['provider_update']['original_seal_sha256']); self.assertEqual(previous, after['provider_update']['previous_seal_sha256']); previous = current
+        with self.assertRaises(ValueError): cache.prepare_wikibase_provider_update(root, dump, previous)
 
 
 if __name__ == "__main__":

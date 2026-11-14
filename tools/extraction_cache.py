@@ -237,7 +237,132 @@ def completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshot
                 providers=providers, assets=assets, plans=plans, runtime_libraries=runtime_libraries)
 
 
-def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False):
+def _snapshot_metadata_refresh(root, record, expected_sha, receipt):
+    # Explicit opt-in physical custody correction; native/content origin stays exact.
+    name = 'figure-page-observations.json'
+    keys = {'name', 'source', 'original_seal_sha256', 'old_stamp', 'current_stamp', 'current_nlink', 'ctime_cause'}
+    if (not isinstance(receipt, dict) or set(receipt) != keys or receipt['name'] != name or
+            receipt['original_seal_sha256'] != expected_sha or receipt['ctime_cause'] != 'unknown' or
+            type(receipt['current_nlink']) is not int or receipt['current_nlink'] < 1):
+        raise ValueError('Invalid snapshot metadata refresh receipt')
+    old = receipt['old_stamp']; current = receipt['current_stamp']
+    if (not isinstance(old, list) or not isinstance(current, list) or len(old) != 6 or len(current) != 6 or
+            any(type(v) is not int for v in old + current) or old[:5] != current[:5] or old[5] == current[5] or
+            record['runtime_stamps']['assets'].get(name) != old):
+        raise ValueError('Snapshot metadata refresh is not ctime-only')
+    path = root / name; source = Path(receipt['source'])
+    if (not source.is_absolute() or str(source) != os.path.normpath(str(source)) or
+            any(p.is_symlink() for p in (source, *source.parents)) or not path.is_symlink() or
+            os.readlink(path) != str(source) or record['runtime_stamps']['snapshot_links'].get(name) != str(source)):
+        raise ValueError('Snapshot metadata refresh alias changed')
+    if _full_stamp(source.stat()) != tuple(current) or source.stat().st_nlink != receipt['current_nlink']:
+        raise ValueError('Snapshot metadata refresh source changed')
+    value = stable_file_digest(source, snapshot=True)
+    assets = [row for row in record['identity']['assets'] if row[0] == name]
+    if (len(assets) != 1 or list(value) != assets[0][1:] or
+            list(value) != record['identity']['providers'].get(name) or
+            _full_stamp(source.stat()) != tuple(current) or source.stat().st_nlink != receipt['current_nlink'] or
+            os.readlink(path) != str(source)):
+        raise ValueError('Snapshot metadata refresh content or identity changed')
+    successor = json.loads(json.dumps(record))
+    successor['runtime_stamps']['assets'][name] = current
+    return successor
+
+
+def _metadata_custody_json(reference):
+    if (not isinstance(reference, dict) or set(reference) != {'path', 'bytes', 'sha256'} or
+            not isinstance(reference['path'], str) or type(reference['bytes']) is not int or
+            not 0 < reference['bytes'] <= MAX_MARKER_BYTES or
+            not isinstance(reference['sha256'], str) or not re.fullmatch('[0-9a-f]{64}', reference['sha256'])):
+        raise ValueError('Invalid closed metadata custody descriptor')
+    path = Path(reference['path'])
+    if not path.is_absolute() or str(path) != os.path.normpath(str(path)) or any(p.is_symlink() for p in (path, *path.parents)):
+        raise ValueError('Unsafe closed metadata custody descriptor')
+    regular(path); before = path.stat(); raw = path.read_bytes(); after = path.stat()
+    if (_full_stamp(before) != _full_stamp(after) or before.st_nlink != after.st_nlink or
+            len(raw) != reference['bytes'] or hashlib.sha256(raw).hexdigest() != reference['sha256']):
+        raise ValueError('Closed metadata custody authority changed')
+    return json.loads(raw)
+
+
+def _closed_metadata_custody(root, recorded, expected_sha, receipt):
+    # No payload, producer, logical Provider identity, or seal is rewritten.
+    # Same-byte custody comes from an explicitly selected closed operation that
+    # hashed both sides, then a matched closed full native input validation.
+    import stat
+    if (not isinstance(receipt, dict) or set(receipt) != {'original_seal_sha256', 'operation', 'native_validation', 'names'} or
+            receipt['original_seal_sha256'] != expected_sha or not isinstance(receipt['names'], list) or
+            not receipt['names'] or any(not isinstance(n, str) for n in receipt['names']) or
+            receipt['names'] != sorted(set(receipt['names'])) or not set(receipt['names']) <= set(EXPANDER_SNAPSHOTS)):
+        raise ValueError('Invalid metadata custody receipt selection')
+    operation = _metadata_custody_json(receipt['operation']); native = _metadata_custody_json(receipt['native_validation'])
+    for evidence in (operation, native):
+        if not isinstance(evidence, dict):
+            raise ValueError('Invalid closed metadata custody evidence')
+        if (evidence.get('outcome') != 'PASSED-PHYSICALLY-SOURCE-CLOSED' or
+                any(evidence.get(k) is not True for k in ('source_after', 'source_lease_released', 'allocation_released'))):
+            raise ValueError('Metadata custody requires closed successful authorities')
+    if (native.get('native_returncode') != 0 or native.get('ordinary_full_stream_validation') is not True or
+            native.get('pages_executed') != 0 or native.get('compiler_executed') is not False or
+            native.get('repaired_manifest') != operation.get('output_manifest')):
+        raise ValueError('Metadata custody lacks matched full native validation')
+    compatibility = _metadata_custody_json(native['compatibility'])
+    if (not isinstance(compatibility, dict) or compatibility.get('returncode') != 0 or compatibility.get('ordinary_full_stream_validation') is not True or
+            compatibility.get('input_after') is not True or compatibility.get('pages_executed') != 0 or
+            compatibility.get('compiler_executed') is not False or
+            compatibility.get('argv', [])[1:3] != ['--check-figure-compatibility', '--full']):
+        raise ValueError('Metadata custody native result differs')
+    observations = _metadata_custody_json(operation['observations'])
+    if (not isinstance(observations, dict) or observations.get('complete') is not True or observations.get('source_content_mode_inode_preserved') is not True or
+            observations.get('linked_members') != operation.get('linked_members') or
+            observations.get('source_manifest_sha256') != operation['source_manifest']['sha256'] or
+            observations.get('repair_manifest_sha256') != operation['source_manifest']['sha256']):
+        raise ValueError('Metadata custody operation observations differ')
+    _metadata_custody_json(operation['source_manifest']); _metadata_custody_json(operation['output_manifest'])
+    source_root = Path(operation['source_manifest']['path']).parent
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+    frozen_fields = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    successor = json.loads(json.dumps(recorded)); held = []
+    for name in receipt['names']:
+        source_text = recorded['runtime_stamps']['snapshot_links'].get(name)
+        if not isinstance(source_text, str):
+            raise ValueError('Metadata custody requires an original external Provider alias')
+        source = Path(source_text); installed = root / name
+        if (not source.is_absolute() or source.parent != source_root or root in source.parents or
+                source.resolve(strict=True) != source or any(p.is_symlink() for p in (source, *source.parents)) or
+                not installed.is_symlink() or os.readlink(installed) != source_text):
+            raise ValueError('Metadata custody changed an unrecorded Provider alias')
+        matches = [r for r in operation['linked_members'] if r.get('path') == source.name]
+        if len(matches) != 1 or set(matches[0]) != {'path', 'before', 'after', 'sha256_before', 'sha256_after'}:
+            raise ValueError('Metadata custody Provider operation is not unique')
+        row = matches[0]; before, after = row['before'], row['after']
+        if (not isinstance(before, dict) or not isinstance(after, dict) or set(before) != set(fields) or set(after) != set(fields) or
+                any(type(v) is not int for v in [*before.values(), *after.values()]) or
+                any(before[k] != after[k] for k in fields if k not in ('st_ctime_ns', 'st_nlink')) or
+                not stat.S_ISREG(before['st_mode']) or before['st_nlink'] < 1 or after['st_nlink'] < 1 or
+                (before['st_ctime_ns'], before['st_nlink']) == (after['st_ctime_ns'], after['st_nlink']) or
+                [before[k] for k in frozen_fields] != recorded['runtime_stamps']['assets'][name]):
+            raise ValueError('Metadata custody is not a recorded physical-only change')
+        assets = [r for r in recorded['identity']['assets'] if r[0] == name]
+        expected = [before['st_size'], row['sha256_before']]
+        if (len(assets) != 1 or assets[0][1:] != expected or recorded['identity']['providers'].get(name) != expected or
+                row['sha256_before'] != row['sha256_after']):
+            raise ValueError('Metadata custody changed original Provider bytes')
+        current = source.stat()
+        if any(getattr(current, k) != after[k] for k in fields):
+            raise ValueError('Metadata custody current Provider identity differs')
+        successor['runtime_stamps']['assets'][name] = [after[k] for k in frozen_fields]
+        held.append((installed, source, source_text, after))
+    # Bracket all selected sources and alias targets together too.
+    for installed, source, source_text, after in held:
+        current = source.stat()
+        if (not installed.is_symlink() or os.readlink(installed) != source_text or
+                any(getattr(current, k) != after[k] for k in fields)):
+            raise ValueError('Metadata custody changed during validation')
+    return successor
+
+
+def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, snapshot_metadata_refresh=None, metadata_custody_refresh=None):
     """Validate an original completed seal, never the current compilation graph.
 
     None means the old/absent seal cannot authorize source-custody release.
@@ -263,6 +388,15 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False):
     if not isinstance(recorded, dict) or 'runtime_stamps' not in recorded:
         return None
     _provider_update_provenance(recorded)
+    original_recorded = recorded
+    if metadata_custody_refresh is not None:
+        if snapshot_metadata_refresh is not None or provider_update:
+            raise ValueError('Metadata custody requires an original ready context and separate authority')
+        recorded = _closed_metadata_custody(root, original_recorded, expected_sha, metadata_custody_refresh)
+    if snapshot_metadata_refresh is not None:
+        if provider_update:
+            raise ValueError('Snapshot refresh requires the original ready context')
+        recorded = _snapshot_metadata_refresh(root, recorded, expected_sha, snapshot_metadata_refresh)
     identity = recorded['identity']; stamps = recorded['runtime_stamps']
     if (set(stamps) != {'assets', 'plans', 'snapshot_links'} or
             type(identity.get('version')) is not int or identity.get('version') != COMPLETED_EXPANDER_VERSION):
@@ -272,8 +406,8 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False):
         raise ValueError('Invalid Provider update validation mode')
     if provider_update:
         regular(root / '.incomplete')
-        if (recorded.get('provenance') != 'ordinary-wikibase-provider-update' or
-                (root / '.incomplete').read_bytes() != PROVIDER_UPDATE_MARKER):
+        if (recorded.get('provenance') not in ('ordinary-wikibase-provider-update', 'ordinary-derived-provider-restoration', 'ordinary-file-metadata-provider-update') or
+                (root / '.incomplete').read_bytes() != (FILE_METADATA_UPDATE_MARKER if recorded.get('provenance') == 'ordinary-file-metadata-provider-update' else PROVIDER_UPDATE_MARKER)):
             raise ValueError('Provider update is not ready for final verification')
     elif os.path.lexists(root / '.incomplete'):
         return None
@@ -318,6 +452,12 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False):
         raise ValueError('Frozen native context changed during validation')
     # This proves original context assets only. The custody caller must also
     # authorize the source/attempt and bind private tools, Python and live libs.
+    if snapshot_metadata_refresh is not None:
+        if _snapshot_metadata_refresh(root, original_recorded, expected_sha, snapshot_metadata_refresh) != recorded:
+            raise ValueError('Snapshot metadata refresh changed during validation')
+    if metadata_custody_refresh is not None:
+        if _closed_metadata_custody(root, original_recorded, expected_sha, metadata_custody_refresh) != recorded:
+            raise ValueError('Metadata custody changed during source validation')
     return recorded
 
 
@@ -326,43 +466,237 @@ WIKIBASE_PROVIDER_FILES = frozenset(('wikibase-entities.tsv', 'wikibase-entity-t
 PROVIDER_UPDATE_MARKER = b'updating Wikibase providers\n'
 
 
+FILE_METADATA_PROVIDER_FILES = frozenset(('file-metadata.tsv',))
+FILE_METADATA_UPDATE_MARKER = b'updating file-metadata Provider\n'
+
+
+def _file_metadata_audio_append(before, after, selected_titles):
+    header = b'# wikidict-file-metadata-v2\n'
+    def rows(raw):
+        if not raw.startswith(header) or not raw.endswith(b'\n'):
+            raise ValueError('File metadata update requires identical v2 header/schema')
+        result = {}; previous = None
+        for line in raw[len(header):-1].split(b'\n'):
+            cells = line.decode('utf8').split('\t')
+            if len(cells) != 6 or not cells[0] or any(ord(ch) < 32 or ord(ch) == 127 for value in cells for ch in value):
+                raise ValueError('Malformed file metadata row')
+            title = cells[0]
+            if title.strip() != title or ':' not in title or title in result or (previous is not None and previous >= title):
+                raise ValueError('Duplicate or unordered file metadata title')
+            previous = title; result[title] = (line, cells)
+        if not result:
+            raise ValueError('File metadata origin must contain named rows')
+        return result
+    old, current = rows(before), rows(after)
+    if (not isinstance(selected_titles, list) or not selected_titles or
+            any(not isinstance(value, str) for value in selected_titles) or
+            len(set(selected_titles)) != len(selected_titles)):
+        raise ValueError('File metadata additions need exact distinct selected titles')
+    if any(title not in current or current[title][0] != row[0] for title, row in old.items()):
+        raise ValueError('File metadata update changed or deleted an original row')
+    added = set(current) - set(old)
+    if added != set(selected_titles):
+        raise ValueError('File metadata update differs from selected audio titles')
+    prefixes = {title.split(':', 1)[0] for title in old}
+    if len(prefixes) != 1:
+        raise ValueError('Ambiguous original file namespace')
+    prefix = next(iter(prefixes)) + ':'
+    for title in added:
+        cells = current[title][1]
+        if (cells[1:5] != ['1', '0', '0', 'AUDIO'] or not title.startswith(prefix) or
+                not cells[5].startswith(prefix) or cells[5] == prefix or cells[5].strip() != cells[5]):
+            raise ValueError('File metadata update permits only zero-axis AUDIO additions')
+    return sorted(added)
+
+
+def _file_metadata_sources(proof):
+    update = proof['file_metadata_update']
+    if (not isinstance(update, dict) or set(update) != {'source', 'source_stamp', 'source_nlink',
+            'original_source', 'original_source_stamp', 'original_source_nlink', 'added_titles', 'native_graph_stamps', 'native_clang_locator'}):
+        raise ValueError('Invalid file metadata update authority')
+    graph_stamps = update['native_graph_stamps']
+    if (not isinstance(graph_stamps, dict) or set(graph_stamps) != {'extractor', 'llvm', 'runtime', 'leaf', 'main_c', 'zig', 'clang'} or
+            any(not isinstance(value, (list, tuple)) or len(value) != 6 or any(type(item) is not int for item in value) for value in graph_stamps.values())):
+        raise ValueError('Invalid file metadata native producer stamp authority')
+    if (not isinstance(update['native_clang_locator'], dict) or
+            _file_metadata_clang_locator(proof['record']['origin_graph']['clang']) != update['native_clang_locator']):
+        raise ValueError('Invalid original native Clang locator authority')
+    identity = proof['record']['identity']; contents = []
+    for name, stamp_key, nlink_key in (('original_source', 'original_source_stamp', 'original_source_nlink'),
+                                     ('source', 'source_stamp', 'source_nlink')):
+        descriptor = update[name]
+        if (not isinstance(descriptor, dict) or set(descriptor) != {'path', 'bytes', 'sha256'} or not isinstance(descriptor.get('path'), str) or
+                not valid_digest_record([descriptor.get('bytes'), descriptor.get('sha256')])):
+            raise ValueError('Invalid file metadata selected source')
+        path = Path(descriptor['path'])
+        if (not path.is_absolute() or path.resolve(strict=True) != path or
+                any(item.is_symlink() for item in (path, *path.parents)) or Path(proof['root']) in path.parents):
+            raise ValueError('Unsafe file metadata selected source')
+        regular(path); before = _full_stamp(path.stat())
+        if before != tuple(update[stamp_key]) or path.stat().st_nlink != update[nlink_key]:
+            raise ValueError('File metadata source physical identity changed')
+        raw = path.read_bytes()
+        if (len(raw) != descriptor['bytes'] or hashlib.sha256(raw).hexdigest() != descriptor['sha256'] or
+                _full_stamp(path.stat()) != before or path.stat().st_nlink != update[nlink_key]):
+            raise ValueError('File metadata selected source changed')
+        contents.append(raw)
+    original = update['original_source']
+    if (identity['providers'].get('file-metadata.tsv') != [original['bytes'], original['sha256']] or
+            proof['record']['runtime_stamps']['snapshot_links']['file-metadata.tsv'] != original['path'] or
+            update['source']['path'] == original['path']):
+        raise ValueError('File metadata original Provider authority differs')
+    _file_metadata_audio_append(*contents, update['added_titles'])
+    return update
+
+
+def _file_metadata_clang_locator(command):
+    located = shutil.which(command)
+    if located is None:
+        raise ValueError('Original native Clang locator is unavailable')
+    initial = os.path.abspath(located); pending = Path(initial); chain = []
+    for _ in range(40):
+        parts = pending.parts
+        for count in range(1, len(parts) + 1):
+            path = Path(*parts[:count])
+            if path.is_symlink():
+                before = path.lstat(); target = os.readlink(path)
+                chain.append(dict(path=str(path), target=target,
+                    stamp=list(_full_stamp(before)), nlink=before.st_nlink))
+                if (_full_stamp(path.lstat()) != _full_stamp(before) or path.lstat().st_nlink != before.st_nlink or os.readlink(path) != target):
+                    raise ValueError('Native Clang alias changed during observation')
+                next_path = Path(target) if os.path.isabs(target) else path.parent / target
+                pending = Path(os.path.normpath(str(next_path.joinpath(*parts[count:]))))
+                break
+        else:
+            resolved = pending.resolve(strict=True)
+            regular(resolved)
+            return dict(command=command, located=initial, resolved=str(resolved), chain=chain)
+    raise ValueError('Native Clang alias chain is cyclic or too deep')
+
+
+def _file_metadata_native_origin(record, selected_locator=None):
+    # A closed worker keeps its original ABI/policy provenance. Authenticate its
+    # actual native artifacts and libraries, never current source as old code.
+    graph = record['origin_graph']; producer = record['identity']['producer']
+    paths = {name: Path(graph[name]) for name in ('extractor', 'llvm', 'runtime', 'leaf', 'main_c', 'zig')}
+    locator = _file_metadata_clang_locator(graph['clang'])
+    if selected_locator is not None and locator != selected_locator:
+        raise ValueError('Original native Clang locator changed')
+    paths['clang'] = Path((selected_locator if selected_locator is not None else locator)['resolved'])
+    stamps = {name: _full_stamp(path.stat()) for name, path in paths.items()}
+    for name in ('runtime', 'leaf', 'main_c'):
+        if stable_file_digest(Path(graph[name])) != producer[name]:
+            raise ValueError('File metadata update changed native producer input')
+    for name in ('extractor', 'llvm'):
+        if tool_identity(Path(graph[name])) != producer[name]:
+            raise ValueError('File metadata update changed native producer tool')
+    if (sha256(Path(graph['zig'])) != producer['zig']['tool_sha256'] or
+            tool_identity(paths['clang']) != producer['clang']['tool'] or
+            unicode_case_identity() != producer['unicode']):
+        raise ValueError('File metadata update changed native toolchain or Unicode')
+
+    if (any(_full_stamp(paths[name].stat()) != value for name, value in stamps.items()) or
+            _file_metadata_clang_locator(graph['clang']) != locator):
+        raise ValueError('File metadata native producer changed during observation')
+    return stamps, locator
+
+
+def _file_metadata_publication_guard(proof):
+    update = proof['file_metadata_update']
+    for name, stamp_key, nlink_key in (('original_source', 'original_source_stamp', 'original_source_nlink'),
+                                     ('source', 'source_stamp', 'source_nlink')):
+        path = Path(update[name]['path'])
+        if (not path.is_absolute() or path.resolve(strict=True) != path or
+                any(item.is_symlink() for item in (path, *path.parents)) or Path(proof['root']) in path.parents):
+            raise ValueError('File metadata selected source path changed at publication')
+        regular(path)
+        if _full_stamp(path.stat()) != tuple(update[stamp_key]) or path.stat().st_nlink != update[nlink_key]:
+            raise ValueError('File metadata selected source identity changed at publication')
+    graph = proof['record']['origin_graph']
+    paths = {name: Path(graph[name]) for name in ('extractor', 'llvm', 'runtime', 'leaf', 'main_c', 'zig')}
+    locator = update['native_clang_locator']
+    if _file_metadata_clang_locator(graph['clang']) != locator:
+        raise ValueError('Original native Clang locator changed at publication')
+    paths['clang'] = Path(locator['resolved'])
+    if any(_full_stamp(path.stat()) != tuple(update['native_graph_stamps'][name]) for name, path in paths.items()):
+        raise ValueError('File metadata native graph changed at publication')
+
+
 def _provider_update_provenance(record):
     if record.get('provenance') == 'ordinary-linked-expander':
         return
     update = record.get('provider_update')
-    if (record.get('provenance') != 'ordinary-wikibase-provider-update' or
+    restored = record.get('provenance') == 'ordinary-derived-provider-restoration'
+    expected_providers = (DERIVED_PROVIDER_FILES if restored else FILE_METADATA_PROVIDER_FILES
+                          if record.get('provenance') == 'ordinary-file-metadata-provider-update' else WIKIBASE_PROVIDER_FILES)
+    if (record.get('provenance') not in ('ordinary-wikibase-provider-update', 'ordinary-derived-provider-restoration', 'ordinary-file-metadata-provider-update') or
             not isinstance(update, dict) or
             set(update) != {'original_seal_sha256', 'previous_seal_sha256', 'original_providers'} or
             any(not isinstance(update.get(key), str) or not re.fullmatch('[0-9a-f]{64}', update[key])
                 for key in ('original_seal_sha256', 'previous_seal_sha256')) or
             not isinstance(update.get('original_providers'), dict) or
-            set(update['original_providers']) != WIKIBASE_PROVIDER_FILES or
+            set(update['original_providers']) != expected_providers or
             any(not valid_digest_record(value) for value in update['original_providers'].values())):
         raise ValueError('Unreviewed completed generation origin')
+    if restored and any(record.get('identity', {}).get('providers', {}).get(name) != value
+                        for name, value in update['original_providers'].items()):
+        raise ValueError('Restored derived Provider bytes differ from their original authority')
 
 
-def prepare_wikibase_provider_update(root, dump, expected_sha):
+def prepare_wikibase_provider_update(root, dump, expected_sha, *, file_metadata_source=None, file_metadata_titles=None, snapshot_metadata_refresh=None):
     """Authenticate the old native generation before its ordinary workspace reset."""
     root, dump = Path(root), Path(dump)
-    record = frozen_runtime_context(root, dump, expected_sha)
+    record = frozen_runtime_context(root, dump, expected_sha, snapshot_metadata_refresh=snapshot_metadata_refresh)
     if record is None:
         return None
-    if any(not valid_digest_record(record['identity']['providers'].get(name))
-           for name in WIKIBASE_PROVIDER_FILES):
+    selected = FILE_METADATA_PROVIDER_FILES if file_metadata_source is not None else WIKIBASE_PROVIDER_FILES
+    if any(not valid_digest_record(record['identity']['providers'].get(name)) for name in selected):
         return None
-    producer, _ = completed_producer_identity(record['origin_graph'])
-    if (producer != record['identity']['producer'] or
-            tool_identity(root / 'dict-bundle-expander') != record['identity']['runtime_libraries']):
-        raise ValueError('Native producer changed before Provider update')
-    # The caller owns the edition lock and invalidates every Provider-dependent
-    # shard. This proof never authorizes another root or a new native producer.
-    return dict(root=str(root), dump=str(dump), seal_sha256=expected_sha,
-                marker_stamp=_full_stamp((root / COMPLETED_EXPANDER).stat()), record=record)
+    if selected == FILE_METADATA_PROVIDER_FILES:
+        if (not isinstance(file_metadata_source, dict) or set(file_metadata_source) != {'path', 'bytes', 'sha256'} or not isinstance(file_metadata_source.get('path'), str) or
+                not valid_digest_record([file_metadata_source.get('bytes'), file_metadata_source.get('sha256')])):
+            raise ValueError('Invalid file metadata selected source')
+        if record['provenance'] not in ('ordinary-linked-expander', 'ordinary-file-metadata-provider-update'):
+            raise ValueError('Mixed Provider update families are not selected')
+        graph_stamps, clang_locator = _file_metadata_native_origin(record)
+    else:
+        if file_metadata_titles is not None or record['provenance'] == 'ordinary-file-metadata-provider-update':
+            raise ValueError('File metadata Provider selection differs')
+        producer, _ = completed_producer_identity(record['origin_graph'])
+        if producer != record['identity']['producer']:
+            raise ValueError('Native producer changed before Provider update')
+    if tool_identity(root / 'dict-bundle-expander') != record['identity']['runtime_libraries']:
+        raise ValueError('Native worker libraries changed before Provider update')
+    proof = dict(root=str(root), dump=str(dump), seal_sha256=expected_sha,
+                 marker_stamp=_full_stamp((root / COMPLETED_EXPANDER).stat()), record=record)
+    if snapshot_metadata_refresh is not None:
+        if selected != FILE_METADATA_PROVIDER_FILES:
+            raise ValueError('Snapshot refresh is selected only for file metadata update')
+        proof['snapshot_metadata_refresh'] = snapshot_metadata_refresh
+        proof['original_record'] = read_marker(root / COMPLETED_EXPANDER)
+    if selected == FILE_METADATA_PROVIDER_FILES:
+        path = root / 'file-metadata.tsv'
+        if not path.is_symlink():
+            raise ValueError('File metadata update requires an original external alias')
+        original = Path(os.readlink(path)); source = Path(file_metadata_source['path'])
+        if not original.is_absolute():
+            raise ValueError('File metadata original alias must be absolute')
+        value = stable_file_digest(original, snapshot=True)
+        proof['file_metadata_update'] = dict(
+            original_source=dict(path=str(original), bytes=value[0], sha256=value[1]),
+            original_source_stamp=_full_stamp(original.stat()), original_source_nlink=original.stat().st_nlink,
+            source=file_metadata_source, source_stamp=_full_stamp(source.stat()), source_nlink=source.stat().st_nlink,
+            added_titles=file_metadata_titles, native_graph_stamps=graph_stamps, native_clang_locator=clang_locator)
+        _file_metadata_sources(proof)
+    return proof
 
 
 def finish_wikibase_provider_update(proof, expected_hashes):
     """Reseal only fresh Provider data; retain the actual linked native origin."""
     root, dump = Path(proof['root']), Path(proof['dump'])
+    file_update = 'file_metadata_update' in proof
+    selected = FILE_METADATA_PROVIDER_FILES if file_update else WIKIBASE_PROVIDER_FILES
+    transaction_marker = FILE_METADATA_UPDATE_MARKER if file_update else PROVIDER_UPDATE_MARKER
     if (not root.is_absolute() or str(root) != os.path.normpath(str(root)) or
             any(path.is_symlink() for path in (root, *root.parents)) or not root.is_dir()):
         raise ValueError('Invalid Provider update root')
@@ -370,17 +704,26 @@ def finish_wikibase_provider_update(proof, expected_hashes):
         raise ValueError('Unexpected Provider update outputs')
     record = proof['record']
     marker = root / COMPLETED_EXPANDER
-    if (set(expected_hashes) != WIKIBASE_PROVIDER_FILES or
+    if (set(expected_hashes) != selected or
             any(not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value)
                 for value in expected_hashes.values()) or
-            (root / '.incomplete').read_bytes() != PROVIDER_UPDATE_MARKER or
+            (root / '.incomplete').read_bytes() != transaction_marker or
             (root.parent / '.incomplete').read_bytes() != b'expander ready'):
         raise ValueError('Invalid Provider update transaction')
     regular(marker)
     if (_full_stamp(marker.stat()) != tuple(proof['marker_stamp']) or
-            sha256(marker) != proof['seal_sha256'] or read_marker(marker) != record):
+            sha256(marker) != proof['seal_sha256'] or read_marker(marker) != proof.get('original_record', record)):
         raise ValueError('Original native generation proof changed')
+    if 'snapshot_metadata_refresh' in proof:
+        if _snapshot_metadata_refresh(root, proof['original_record'], proof['seal_sha256'], proof['snapshot_metadata_refresh']) != record:
+            raise ValueError('Snapshot metadata refresh differs from selected original')
     _provider_update_provenance(record)
+    if ((file_update and record['provenance'] not in ('ordinary-linked-expander', 'ordinary-file-metadata-provider-update')) or
+            (not file_update and record['provenance'] == 'ordinary-file-metadata-provider-update')):
+        raise ValueError('Mixed Provider update families are not selected')
+    update = _file_metadata_sources(proof) if file_update else None
+    if file_update and expected_hashes != {'file-metadata.tsv': update['source']['sha256']}:
+        raise ValueError('File metadata selected hashes differ')
     identity = record['identity']
     names = completed_asset_names(root)
     original_names = {row[0] for row in identity['assets']}
@@ -388,11 +731,19 @@ def finish_wikibase_provider_update(proof, expected_hashes):
         raise ValueError('Provider update changed native asset membership')
     native_stamps = {name: stamp for name, stamp in record['runtime_stamps']['assets'].items()
                      if name not in identity['providers']}
+    provider_stamps = {name: value for name, value in record['runtime_stamps']['assets'].items()
+                       if file_update and name in identity['providers'] and name not in selected}
     def unchanged_native():
         for name, stamp in native_stamps.items():
             regular(root / name)
             if _full_stamp((root / name).stat()) != tuple(stamp):
                 raise ValueError('Provider update changed native asset: ' + name)
+        for name, stamp in provider_stamps.items():
+            path = root / name
+            link = os.readlink(path) if path.is_symlink() else None
+            if (not path.is_file() or _full_stamp(path.stat()) != tuple(stamp) or
+                    link != record['runtime_stamps']['snapshot_links'][name]):
+                raise ValueError('File metadata update changed nonselected Provider identity')
         for name, stamp in record['runtime_stamps']['plans'].items():
             regular(root.parent / name)
             if _full_stamp((root.parent / name).stat()) != tuple(stamp):
@@ -405,7 +756,8 @@ def finish_wikibase_provider_update(proof, expected_hashes):
         path = root / name
         stamps[name] = _full_stamp(path.stat())
         links[name] = os.readlink(path) if path.is_symlink() else None
-        if links[name] != record['runtime_stamps']['snapshot_links'][name]:
+        expected_link = update['source']['path'] if file_update and name in selected else record['runtime_stamps']['snapshot_links'][name]
+        if links[name] != expected_link:
             raise ValueError('Provider update changed installed input path')
     provider_names = set(identity['providers'])
     if provider_names not in (set(EXPANDER_SNAPSHOTS),
@@ -420,17 +772,24 @@ def finish_wikibase_provider_update(proof, expected_hashes):
             providers[name] = None
             continue
         value = stable_file_digest(path, snapshot=True)
-        if name in WIKIBASE_PROVIDER_FILES:
+        if name in selected:
             if value[1] != expected_hashes[name]:
-                raise ValueError('Installed Wikibase Provider differs from selected authority')
+                raise ValueError('Installed selected Provider differs from selected authority')
         elif value != old:
-            raise ValueError('Provider update changed a non-Wikibase input')
+            raise ValueError('Provider update changed a nonselected input')
         providers[name] = value
     if completed_source_binding(root, dump) != identity['source']:
         raise ValueError('Provider update changed extraction source')
-    producer, _ = completed_producer_identity(record['origin_graph'])
-    if (producer != identity['producer'] or
-            tool_identity(root / 'dict-bundle-expander') != identity['runtime_libraries']):
+    if file_update:
+        graph_stamps, clang_locator = _file_metadata_native_origin(record, update['native_clang_locator'])
+        if ({name: tuple(value) for name, value in update['native_graph_stamps'].items()} != graph_stamps or
+                clang_locator != update['native_clang_locator']):
+            raise ValueError('File metadata native producer physical identity changed')
+    else:
+        producer, _ = completed_producer_identity(record['origin_graph'])
+        if producer != identity['producer']:
+            raise ValueError('Provider update changed native producer')
+    if tool_identity(root / 'dict-bundle-expander') != identity['runtime_libraries']:
         raise ValueError('Provider update changed native producer')
     unchanged_native()
     if (sha256(marker) != proof['seal_sha256'] or
@@ -449,13 +808,186 @@ def finish_wikibase_provider_update(proof, expected_hashes):
     successor['provider_update'] = dict(
         original_seal_sha256=previous['original_seal_sha256'] if previous else proof['seal_sha256'],
         previous_seal_sha256=proof['seal_sha256'],
-        original_providers=previous['original_providers'] if previous else
-            {name: identity['providers'][name] for name in WIKIBASE_PROVIDER_FILES})
-    successor['provenance'] = 'ordinary-wikibase-provider-update'
+        original_providers={name: previous['original_providers'][name] for name in selected} if previous else
+            {name: identity['providers'][name] for name in selected})
+    successor['provenance'] = ('ordinary-file-metadata-provider-update' if file_update else 'ordinary-wikibase-provider-update')
     # Ready is published by the builder only after binding this exact successor
     # in ordinary state.json. A write failure leaves the incomplete marker.
+    if file_update:
+        if 'snapshot_metadata_refresh' in proof:
+            _snapshot_metadata_refresh(root, proof['original_record'], proof['seal_sha256'], proof['snapshot_metadata_refresh'])
+        _file_metadata_publication_guard(proof)
     write_private_marker(marker, successor)
+    if file_update:
+        if 'snapshot_metadata_refresh' in proof:
+            _snapshot_metadata_refresh(root, proof['original_record'], proof['seal_sha256'], proof['snapshot_metadata_refresh'])
+        _file_metadata_publication_guard(proof)
+        unchanged_native()
     return sha256(marker)
+
+
+DERIVED_PROVIDER_FILES = WIKIBASE_PROVIDER_FILES | frozenset(('category-stats.tsv', 'category-tree.tsv'))
+
+
+def _derived_provider_context(proof, *, installed):
+    root, dump = Path(proof['root']), Path(proof['dump'])
+    if (not root.is_absolute() or str(root) != os.path.normpath(str(root)) or
+            any(path.is_symlink() for path in (root, *root.parents)) or not root.is_dir()):
+        raise ValueError('Invalid derived Provider restoration root')
+    marker = root / COMPLETED_EXPANDER
+    regular(marker)
+    if (_full_stamp(marker.stat()) != tuple(proof['marker_stamp']) or
+            sha256(marker) != proof['seal_sha256'] or read_marker(marker) != proof['record']):
+        raise ValueError('Original derived Provider seal changed')
+    record = proof['record']; _provider_update_provenance(record)
+    if record.get('provenance') == 'ordinary-file-metadata-provider-update':
+        raise ValueError('Mixed Provider restoration/update families are not selected')
+    identity, stamps = record['identity'], record['runtime_stamps']
+    if (identity.get('version') != COMPLETED_EXPANDER_VERSION or
+            set(stamps) != {'assets', 'plans', 'snapshot_links'} or
+            set(proof['sources']) != DERIVED_PROVIDER_FILES or
+            set(proof['source_stamps']) != DERIVED_PROVIDER_FILES or
+            set(stamps['plans']) != {'compile-plan.tsv', 'module-compile-plan.tsv'}):
+        raise ValueError('Invalid derived Provider restoration inventory')
+    assets = {name: [size, digest] for name, size, digest in identity['assets']}
+    if len(assets) != len(identity['assets']) or set(stamps['assets']) != set(assets) or set(stamps['snapshot_links']) != set(assets):
+        raise ValueError('Derived Provider asset membership differs')
+    if {path.name for path in root.parent.iterdir()} != {'.bundle-expander', '.incomplete', 'compile-plan.tsv', 'module-compile-plan.tsv'}:
+        raise ValueError('Derived Provider parent membership differs')
+    regular(root.parent / '.incomplete')
+    if (root.parent / '.incomplete').read_bytes() != b'expander ready':
+        raise ValueError('Derived Provider parent is not ready')
+    if installed:
+        regular(root / '.incomplete')
+        if (root / '.incomplete').read_bytes() != PROVIDER_UPDATE_MARKER:
+            raise ValueError('Missing derived Provider transaction marker')
+    elif os.path.lexists(root / '.incomplete'):
+        raise ValueError('Derived Provider origin is incomplete')
+    names = set(walk_assets(root))
+    for path in root.iterdir():
+        if path.name in (TREE, '.incomplete', '.compiler-inputs.lock', COMPLETED_EXPANDER):
+            continue
+        if path.name not in DERIVED_PROVIDER_FILES and not path.is_file():
+            raise ValueError('Unexpected derived Provider context member')
+        names.add(path.name)
+    if names != set(assets):
+        raise ValueError('Derived Provider native membership changed')
+    for name in names:
+        path = root / name
+        size, digest = assets[name]
+        if (type(size) is not int or size < 0 or not isinstance(digest, str) or
+                re.fullmatch('[0-9a-f]{64}', digest) is None):
+            raise ValueError('Invalid original derived Provider asset digest')
+        if name in DERIVED_PROVIDER_FILES:
+            descriptor = proof['sources'][name]
+            if (not isinstance(descriptor, dict) or set(descriptor) != {'path', 'bytes', 'sha256'} or
+                    not valid_digest_record([descriptor.get('bytes'), descriptor.get('sha256')]) or
+                    identity['providers'].get(name) != assets[name] or
+                    assets[name] != [descriptor['bytes'], descriptor['sha256']]):
+                raise ValueError('Derived Provider source authority differs')
+            source = Path(descriptor['path'])
+            if (not source.is_absolute() or source.resolve(strict=True) != source or
+                    any(item.is_symlink() for item in (source, *source.parents))):
+                raise ValueError('Unsafe derived Provider source path')
+            regular(source)
+            if _full_stamp(source.stat()) != tuple(proof['source_stamps'][name]):
+                raise ValueError('Derived Provider selected source changed')
+            if stable_file_digest(source, snapshot=True) != assets[name]:
+                raise ValueError('Derived Provider source content differs')
+            if not path.is_symlink():
+                raise ValueError('Derived Provider alias role changed')
+            expected_link = str(source) if installed else stamps['snapshot_links'][name]
+            if not isinstance(expected_link, str) or not Path(expected_link).is_absolute() or os.readlink(path) != expected_link:
+                raise ValueError('Derived Provider alias target changed')
+            if not installed and os.path.lexists(Path(expected_link)):
+                raise ValueError('Derived Provider target is not missing')
+        else:
+            if not path.is_file() or (path.is_symlink() and name not in EXPANDER_SNAPSHOTS):
+                raise ValueError('Invalid original derived Provider asset role')
+            if _full_stamp(path.stat()) != tuple(stamps['assets'][name]) or path.stat().st_size != assets[name][0]:
+                raise ValueError('Derived Provider changed original native asset: ' + name)
+            if (os.readlink(path) if path.is_symlink() else None) != stamps['snapshot_links'][name]:
+                raise ValueError('Derived Provider changed original native alias')
+    for name, value in stamps['plans'].items():
+        regular(root.parent / name)
+        if _full_stamp((root.parent / name).stat()) != tuple(value):
+            raise ValueError('Derived Provider changed original native plan')
+    if completed_source_binding(root, dump) != identity['source']:
+        raise ValueError('Derived Provider changed original extraction source')
+    return record
+
+
+def prepare_derived_provider_restoration(root, dump, expected_sha, sources):
+    """Authenticate missing aliases against the original sealed Provider bytes.
+
+    This is a restoration of data beside an unchanged native worker. It never
+    recompiles a producer or interprets current source as its historical policy.
+    The caller owns the original edition locks through finish and ready publish.
+    """
+    root, dump = Path(root), Path(dump)
+    marker = root / COMPLETED_EXPANDER
+    if not re.fullmatch('[0-9a-f]{64}', expected_sha):
+        raise ValueError('Invalid original derived Provider seal binding')
+    before = _full_stamp(marker.stat()); raw = marker.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != expected_sha or _full_stamp(marker.stat()) != before:
+        raise ValueError('Original derived Provider seal changed while reading')
+    if not isinstance(sources, dict) or set(sources) != DERIVED_PROVIDER_FILES:
+        raise ValueError('Derived Provider restoration requires exactly four sources')
+    if any(not isinstance(value, dict) or set(value) != {'path', 'bytes', 'sha256'} or
+           not isinstance(value['path'], str) or not valid_digest_record([value['bytes'], value['sha256']])
+           for value in sources.values()):
+        raise ValueError('Invalid derived Provider selected source descriptor')
+    proof = dict(root=str(root), dump=str(dump), seal_sha256=expected_sha,
+                 marker_stamp=before, record=json.loads(raw), sources=json.loads(json.dumps(sources)),
+                 source_stamps={name: _full_stamp(Path(value['path']).stat()) for name, value in sources.items()})
+    _derived_provider_context(proof, installed=False)
+    # Keep the exact old bytes/mode outside the frozen expander-parent inventory.
+    archive = root.parent.parent / ('.completed-before-derived-provider-' + expected_sha + '.json')
+    if not os.path.lexists(archive):
+        descriptor, temporary = tempfile.mkstemp(prefix=archive.name + '.part-', dir=archive.parent)
+        try:
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(raw); stream.flush()
+                os.fchmod(stream.fileno(), marker.stat().st_mode & 0o7777)
+            os.link(temporary, archive, follow_symlinks=False)
+        finally:
+            os.unlink(temporary)
+    regular(archive)
+    if archive.read_bytes() != raw or (archive.stat().st_mode & 0o7777) != (marker.stat().st_mode & 0o7777):
+        raise ValueError('Original derived Provider archive differs')
+    proof['original_seal_archive'] = dict(path=str(archive), bytes=len(raw), sha256=expected_sha)
+    _derived_provider_context(proof, installed=False)
+    return proof
+
+
+def finish_derived_provider_restoration(proof):
+    """Publish new physical custody for byte-identical restored Provider aliases."""
+    record = _derived_provider_context(proof, installed=True)
+    root, dump = Path(proof['root']), Path(proof['dump'])
+    archive = proof['original_seal_archive']; path = Path(archive['path'])
+    if path != root.parent.parent / ('.completed-before-derived-provider-' + proof['seal_sha256'] + '.json'):
+        raise ValueError('Derived Provider original archive path differs')
+    regular(path)
+    if (stable_file_digest(path) != [archive['bytes'], archive['sha256']] or archive['sha256'] != proof['seal_sha256'] or
+            (path.stat().st_mode & 0o7777) != (proof['marker_stamp'][2] & 0o7777)):
+        raise ValueError('Derived Provider original archive changed')
+    if tool_identity(root / 'dict-bundle-expander') != record['identity']['runtime_libraries']:
+        raise ValueError('Derived Provider original native worker or libraries changed')
+    successor = json.loads(json.dumps(record))
+    for name in DERIVED_PROVIDER_FILES:
+        successor['runtime_stamps']['assets'][name] = list(_full_stamp((root / name).stat()))
+        successor['runtime_stamps']['snapshot_links'][name] = str(Path(proof['sources'][name]['path']))
+    successor['provenance'] = 'ordinary-derived-provider-restoration'
+    successor['provider_update'] = dict(original_seal_sha256=proof['seal_sha256'],
+        previous_seal_sha256=proof['seal_sha256'],
+        original_providers={name: record['identity']['providers'][name] for name in DERIVED_PROVIDER_FILES})
+    _provider_update_provenance(successor)
+    _derived_provider_context(proof, installed=True)
+    write_private_marker(root / COMPLETED_EXPANDER, successor)
+    digest = sha256(root / COMPLETED_EXPANDER)
+    if frozen_runtime_context(root, dump, digest, provider_update=True) != successor:
+        raise ValueError('Restored Provider successor is not a complete current context')
+    return digest
 
 
 def completed_link_provenance(root, graph):
@@ -486,7 +1018,7 @@ def completed_link_provenance(root, graph):
     return dict(object_inputs=snapshot, ordered_objects=objects, response=response_digest)
 
 
-def seal_completed_expander(root, dump, dump_sha, index_sha, graph, snapshots):
+def seal_completed_expander(root, dump, dump_sha, index_sha, graph, snapshots, *, frontend_reference=None):
     marker = root / COMPLETED_EXPANDER
     # The caller has joined native compilation/linking and moved program metadata,
     # but must not publish its ordinary ready marker until this seal succeeds.
@@ -500,6 +1032,14 @@ def seal_completed_expander(root, dump, dump_sha, index_sha, graph, snapshots):
     plan_stamps = {name: _full_stamp((root.parent / name).stat()) for name in ('compile-plan.tsv', 'module-compile-plan.tsv')}
     identity = completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshots)
     link = completed_link_provenance(root, graph)
+    if frontend_reference is not None:
+        _, _, _, original, _, _, _ = _frontend_selection(frontend_reference, graph, validate_roles=False,
+                                                         producer_observation=identity['producer'])
+        _frontend_identity_matches(original['identity'], identity)
+        if (link['object_inputs']['identity'] != original['link']['object_inputs']['identity'] or
+                link['ordered_objects'] != original['link']['ordered_objects'] or
+                link['object_inputs']['provenance'].get('frontend_reference') != frontend_reference):
+            raise ValueError('Sealed frontend linked objects or original selection changed')
     if (completed_asset_names(root, sealing=True) != names or
             any(_full_stamp((root / name).stat()) != stamp for name, stamp in stamps.items())):
         raise ValueError('Expander output changed before sealing')
@@ -981,7 +1521,7 @@ def _owned_extraction_link(source, destination):
     return str(destination)
 
 
-def probe(root, expected, output):
+def probe(root, expected, output, *, _after_verified=None):
     key = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
     source = cache_path(root, key)
     validated_identity = expected
@@ -995,6 +1535,14 @@ def probe(root, expected, output):
         source = cache_path(root, legacy_key)
         if not os.path.lexists(source):
             return MISS
+    verified_marker = source / '.complete.json'
+    if _after_verified is not None:
+        if source.is_symlink():
+            return MISS
+        regular(verified_marker)
+        marker_stamp = _full_stamp(verified_marker.stat())
+        marker_bytes = verified_marker.read_bytes()
+        verified_record = json.loads(marker_bytes)
     try:
         if source.is_symlink() or not validate(source, validated_identity):
             return MISS
@@ -1040,6 +1588,10 @@ def probe(root, expected, output):
         raise
     finally:
         shutil.rmtree(temporary)
+    if _after_verified is not None:
+        if (_full_stamp(verified_marker.stat()) != marker_stamp or verified_marker.read_bytes() != marker_bytes):
+            raise ValueError('Verified extraction marker changed before frontend restoration')
+        _after_verified(source, verified_record)
     print(f"Reusing verified extraction assets: {source}", flush=True)
     return 0
 
@@ -1541,7 +2093,375 @@ def publish_objects(root, llvm_dir, clang, flags):
     return 0
 
 
+
+def _frontend_reference(reference):
+    if (not isinstance(reference, dict) or set(reference) != {'path', 'bytes', 'sha256'} or
+            type(reference['bytes']) is not int or not 0 <= reference['bytes'] <= MAX_MARKER_BYTES or
+            not isinstance(reference['path'], str) or not reference['path'] or
+            not isinstance(reference['sha256'], str) or not re.fullmatch('[0-9a-f]{64}', reference['sha256'])):
+        raise ValueError('Invalid sealed frontend reference')
+    path = Path(reference['path'])
+    if not path.is_absolute() or '..' in path.parts or any(p.is_symlink() for p in (path, *path.parents)):
+        raise ValueError('Unsafe sealed frontend reference')
+    regular(path)
+    before = _full_stamp(path.stat())
+    raw = path.read_bytes()
+    if (len(raw) != reference['bytes'] or hashlib.sha256(raw).hexdigest() != reference['sha256'] or
+            _full_stamp(path.stat()) != before):
+        raise ValueError('Sealed frontend reference changed')
+    return json.loads(raw)
+
+
+def _frontend_sources(record):
+    values = []
+    for value in record.values():
+        if isinstance(value, dict) and 'layout_source_correspondence' in value:
+            reference = value['layout_source_correspondence']
+            if reference not in values:
+                values.append(reference)
+    return sorted(values, key=lambda value: (value['path'], value['sha256']))
+
+
+def _frontend_selection(reference, graph, *, validate_roles, producer_observation=None):
+    authority = _frontend_reference(reference)
+    # Reuse the existing keyed-preparation DATA, not a new manifest layer.
+    selected = authority.get('sealed_frontend') if isinstance(authority, dict) else None
+    if (not isinstance(selected, dict) or set(selected) != {'version', 'preparation_result',
+            'preparation_closure', 'original_policy_git', 'layout_sources'} or type(selected['version']) is not int or selected['version'] != 1 or
+            not {'roles', 'inputs', 'expander_args', 'workspace', 'cache', 'dump', 'builder'} <= set(authority)):
+        raise ValueError('Invalid sealed frontend selection in preparation DATA')
+    selection = dict(selected, current_roles=authority['roles'], workspace=authority['workspace'], cache=authority['cache'])
+    result = _frontend_reference(selection['preparation_result'])
+    closed = _frontend_reference(selection['preparation_closure'])
+    if (not isinstance(result, dict) or not isinstance(closed, dict) or
+            not {'input_authority', 'role_map', 'worker', 'metadata', 'source_receipt', 'expander',
+                 'completed_expander_seal'} <= set(result)):
+        raise ValueError('Invalid sealed frontend preparation records')
+    if (result.get('passed') is not True or result.get('source_after') is not True or
+            result.get('inputs_after') is not True or result.get('pages_executed') != 0 or
+            closed.get('outcome') != 'PASSED-PHYSICALLY-SOURCE-CLOSED' or
+            any(closed.get(key) is not True for key in ('source_after', 'allocation_released')) or
+            closed.get('pages_executed') != 0 or any(closed.get(key) != result.get(key)
+                for key in ('worker', 'metadata', 'source_receipt'))):
+        raise ValueError('Sealed frontend preparation is not independently closed')
+    plan = _frontend_reference(result['input_authority'])
+    if not isinstance(plan, dict) or not {'roles', 'expander_args', 'workspace', 'dump'} <= set(plan):
+        raise ValueError('Invalid sealed frontend original inputs')
+    if plan.get('roles') != result.get('role_map'):
+        raise ValueError('Sealed frontend original role map differs')
+    for name in ('inputs', 'dump', 'cache', 'registry', 'interwiki', 'page_links', 'page_redirects',
+                 'staged_complete', 'original_configuration'):
+        if authority.get(name) != plan.get(name):
+            raise ValueError('Sealed frontend selected another ordinary input')
+    expected_args = list(plan['expander_args'])
+    expected_args[1] = str(Path(authority['workspace']) / 'expander')
+    if authority['expander_args'] != expected_args:
+        raise ValueError('Sealed frontend preparation arguments changed')
+    old_workspace, workspace = Path(plan['workspace']), Path(authority['workspace'])
+    if (not workspace.is_absolute() or workspace.is_relative_to(old_workspace) or
+            old_workspace.is_relative_to(workspace)):
+        raise ValueError('Sealed frontend requires a fresh independent workspace')
+    original_roles = _frontend_reference(plan['roles'])
+    current_roles = _frontend_reference(selection['current_roles'])
+    original = original_roles['dict-bundle-build']
+    current = current_roles['dict-bundle-build']
+    # Only the frontend's inputs are projected here. Blob tools remain separately
+    # authenticated by the ordinary retained-role constructor and never authorize
+    # reuse of analysis. The pipeline/options artifact is authenticated there too.
+    old_dependencies, dependencies = original['dependencies'], current['dependencies']
+    excluded = {'blobs', 'pipeline_paths', 'worker_object', 'extraction_helper',
+                'runtime_source:tools/bundle_build.zig', 'runtime_source:tools/extraction_cache.py'}
+    if (set(old_dependencies) != set(dependencies) or
+            {k:v for k,v in old_dependencies.items() if k not in excluded} !=
+            {k:v for k,v in dependencies.items() if k not in excluded}):
+        raise ValueError('Sealed frontend compiler or ABI dependency changed')
+    root = Path(result['expander'])
+    if (Path(result['metadata']['path']) != root / 'lua-program.meta' or
+            Path(result['completed_expander_seal']['path']) != root / COMPLETED_EXPANDER or
+            Path(result['source_receipt']['path']) != root / 'extraction-source.json' or
+            os.path.lexists(root / '.incomplete') or (root.parent / '.incomplete').read_bytes() != b'expander ready'):
+        raise ValueError('Sealed frontend original workspace is not ready')
+    seal = _frontend_reference(result['completed_expander_seal'])
+    if seal.get('provenance') != 'ordinary-linked-expander':
+        raise ValueError('Sealed frontend origin is not an ordinary linked worker')
+    if plan['dump']['sha256'] != seal['identity']['verified_input'][0]:
+        raise ValueError('Sealed frontend original dump authority differs')
+    for flag, digest in zip(('--verified-dump-sha256', '--verified-index-sha256'), seal['identity']['verified_input']):
+        args = plan['expander_args']
+        if args.count(flag) != 1 or args.index(flag) + 1 >= len(args) or args[args.index(flag) + 1] != digest:
+            raise ValueError('Sealed frontend original verified input arguments differ')
+    for name in ('lua-program.meta',):
+        regular(root / name)
+        if _full_stamp((root / name).stat()) != tuple(seal['runtime_stamps']['assets'][name]):
+            raise ValueError('Sealed frontend original metadata physical input changed')
+    for name, stamp in seal['runtime_stamps']['plans'].items():
+        regular(root.parent / name)
+        if _full_stamp((root.parent / name).stat()) != tuple(stamp):
+            raise ValueError('Sealed frontend original plan physical input changed')
+    if result['metadata']['sha256'] != seal['link']['object_inputs']['identity']['program_meta_sha256']:
+        raise ValueError('Sealed frontend metadata authority differs')
+    if selection['layout_sources'] != _frontend_sources(current_roles):
+        raise ValueError('Sealed frontend layout source authority differs')
+    for descriptor in selection['layout_sources']:
+        _frontend_reference(descriptor)
+    if (seal['identity']['producer']['runtime'] != [old_dependencies['worker_object'][k] for k in ('bytes', 'sha256')] or
+            (old_dependencies['worker_object'] != dependencies['worker_object'] and not selection['layout_sources'])):
+        raise ValueError('Sealed frontend runtime lacks its original/layout authority')
+    project = Path(graph['project_root'])
+    if not project.is_absolute():
+        project = Path.cwd() / project
+    project = project.resolve(strict=True)
+    observation = dict(graph, project_root=str(project))
+    for field, dependency in (('extractor', 'modules'), ('llvm', 'llvm'), ('runtime', 'worker_object'),
+                               ('leaf', 'value_leaf_bc'), ('main_c', 'worker_main_c'), ('zig', 'zig')):
+        path = Path(graph[field])
+        if not path.is_absolute(): path = project / path
+        if str(path) != dependencies[dependency]['path']:
+            raise ValueError('Sealed frontend selected another live native graph')
+        observation[field] = str(path)
+    if Path(dependencies['extraction_helper']['path']).resolve() != Path(__file__).resolve():
+        raise ValueError('Sealed frontend imported another extraction helper')
+    # This is the existing constructor, not a second native-role interpretation.
+    # It authenticates compilation/Git custody, actual closed emissions and all
+    # live inputs. It does not install tools, compile, relink or run a worker.
+    if validate_roles:
+        import importlib.util
+        import sys
+        descriptor = authority['builder']
+        builder_path = Path(descriptor['path'])
+        if (builder_path != project / 'tools/build_wiktionaries.py' or
+                stable_file_digest(builder_path) != [descriptor[k] for k in ('bytes', 'sha256')]):
+            raise ValueError('Sealed frontend selected another build pipeline')
+        # -I deliberately removes the script directory from sys.path. Resolve the
+        # existing caller by its authenticated absolute path, then its own imports.
+        sys.path.insert(0, str(project / 'tools'))
+        spec = importlib.util.spec_from_file_location('build_wiktionaries', builder_path)
+        builder = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = builder
+        spec.loader.exec_module(builder)
+        roles = builder.RetainedNativeToolRoles(current_roles, zig_sha256=current['zig_sha256'])
+        if any(getattr(roles, name, None) is not None for name in
+               ('initial_sealed_generation', 'sealed_expander_recovery', 'writer_figure_transition')):
+            raise ValueError('Sealed frontend is a fresh preparation, not sealed-worker adoption')
+        if getattr(builder._PREPARED_SOURCE, 'value', None) is not None:
+            raise ValueError('An authorized generation cannot relink')
+        for name in ('tools/bundle_build.zig', 'tools/extraction_cache.py'):
+            identity = roles.compilation_identity({'source_payload_git': selection['original_policy_git']}, name)
+            if [identity[k] for k in ('bytes', 'sha256')] != dict(seal['identity']['producer']['policy'])[name]:
+                raise ValueError('Sealed frontend original policy custody differs')
+        roles.require_unchanged()
+    producer, stamps = (completed_producer_identity(observation) if producer_observation is None
+                        else (producer_observation, {}))
+    expected_policy = dict(producer['policy'])
+    for name in ('tools/bundle_build.zig', 'tools/extraction_cache.py'):
+        descriptor = dependencies['runtime_source:' + name]
+        if expected_policy[name] != [descriptor[k] for k in ('bytes', 'sha256')]:
+            raise ValueError('Sealed frontend live policy differs from qualified roles')
+    if producer['runtime'] != [dependencies['worker_object'][k] for k in ('bytes', 'sha256')]:
+        raise ValueError('Sealed frontend live runtime differs from qualified roles')
+    _frontend_producer_transition(seal['identity']['producer'], producer)
+    return selection, result, plan, seal, observation, producer, stamps
+
+
+def _frontend_producer_transition(original, current):
+    before, after = json.loads(json.dumps(original)), json.loads(json.dumps(current))
+    if not {'runtime', 'policy'} <= set(before) or set(before) != set(after):
+        raise ValueError('Sealed frontend producer contract changed')
+    before.pop('runtime'); after.pop('runtime')
+    old_policy, policy = dict(before.pop('policy')), dict(after.pop('policy'))
+    for name in ('tools/bundle_build.zig', 'tools/extraction_cache.py'):
+        if name not in old_policy or name not in policy:
+            raise ValueError('Sealed frontend lacks explicit pipeline/helper policy')
+        del old_policy[name]; del policy[name]
+    if before != after or old_policy != policy:
+        raise ValueError('Sealed frontend LLVM, leaf, main-C, flags or ABI changed')
+
+
+def _frontend_identity_matches(original, current):
+    required = {'version', 'source', 'verified_input', 'providers', 'plans', 'assets', 'producer', 'runtime_libraries'}
+    if not isinstance(original, dict) or not isinstance(current, dict) or set(original) != required or set(current) != required:
+        raise ValueError('Invalid sealed frontend identity shape')
+    for name in ('version', 'source', 'verified_input', 'providers', 'plans'):
+        if original[name] != current[name]:
+            raise ValueError('Sealed frontend source, provider or plan changed')
+    old_assets = {name: [size, digest] for name,size,digest in original['assets']}
+    assets = {name: [size, digest] for name,size,digest in current['assets']}
+    if len(old_assets) != len(original['assets']) or len(assets) != len(current['assets']):
+        raise ValueError('Duplicate sealed frontend assets')
+    if (set(old_assets) != set(assets) or
+            {k:v for k,v in old_assets.items() if k != 'dict-bundle-expander'} !=
+            {k:v for k,v in assets.items() if k != 'dict-bundle-expander'}):
+        raise ValueError('Sealed frontend metadata or extraction asset changed')
+    old_libraries, libraries = dict(original['runtime_libraries']), dict(current['runtime_libraries'])
+    if libraries.pop('extractor_sha256') != assets['dict-bundle-expander'][1]:
+        raise ValueError('Sealed frontend linked runtime identity differs')
+    old_libraries.pop('extractor_sha256')
+    if old_libraries != libraries:
+        raise ValueError('Sealed frontend linked library changed')
+
+
+def _frontend_original_object_rows(cache_root, snapshot, ordered, reference):
+    authority = _frontend_reference(reference)
+    descriptor = authority.get('object_correspondence') if isinstance(authority, dict) else None
+    if descriptor is None:
+        return None
+    selected = authority.get('sealed_frontend')
+    if not isinstance(selected, dict) or not {'preparation_result', 'preparation_closure'} <= set(selected):
+        raise ValueError('Sealed frontend original object preparation differs')
+    result = _frontend_reference(selected['preparation_result'])
+    record = _frontend_reference(descriptor)
+    required = {'preparation_result', 'closure', 'role_map', 'input_authority', 'new_seal',
+                'ordered_count', 'ordered_identity_exact', 'ordered_object_digests_exact',
+                'all_marker_identities_and_abi_authenticated', 'pages_executed', 'rows'}
+    if (not isinstance(record, dict) or not required <= set(record) or
+            not isinstance(result, dict) or not {'role_map', 'input_authority', 'completed_expander_seal'} <= set(result) or
+            record['preparation_result'] != selected['preparation_result'] or
+            record['closure'] != selected['preparation_closure'] or
+            record['role_map'] != result['role_map'] or record['input_authority'] != result['input_authority'] or
+            record['new_seal'] != result['completed_expander_seal'] or
+            any(record[key] is not True for key in ('ordered_identity_exact', 'ordered_object_digests_exact',
+                                                   'all_marker_identities_and_abi_authenticated')) or
+            type(record['ordered_count']) is not int or record['ordered_count'] != len(ordered) or
+            type(record['pages_executed']) is not int or record['pages_executed'] != 0 or
+            not isinstance(record['rows'], list) or len(record['rows']) != len(ordered)):
+        raise ValueError('Sealed frontend original object correspondence differs')
+    entries = list(object_entries(snapshot['identity']))
+    if len(entries) != len(ordered):
+        raise ValueError('Sealed frontend original object count differs')
+    for index, ((name, identity), linked, row) in enumerate(zip(entries, ordered, record['rows'])):
+        source = object_cache_path(cache_root, identity)
+        fields = {'ordinal', 'link_name', 'cache_key', 'marker', 'object', 'object_stat', 'abi_provenance'}
+        if (not isinstance(row, dict) or not fields <= set(row) or type(row['ordinal']) is not int or
+                row['ordinal'] != index or row['link_name'] != name or linked[0] != name or
+                row['cache_key'] != source.name or row['object'] != linked[1:] or
+                not isinstance(row['marker'], dict) or row['marker'].get('path') != str(source / '.complete.json') or
+                not valid_abi_provenance(row['abi_provenance'])):
+            raise ValueError('Sealed frontend original object order/key differs')
+        marker = _frontend_reference(row['marker'])
+        if (not isinstance(marker, dict) or marker.get('identity') != identity or
+                marker.get('object') != row['object'] or not isinstance(marker.get('provenance'), dict) or
+                marker['provenance'].get('abi') != row['abi_provenance']):
+            raise ValueError('Sealed frontend original marker provenance differs')
+        regular(source / 'object.o')
+        stat = (source / 'object.o').stat()
+        if row['object_stat'] != dict(dev=stat.st_dev, ino=stat.st_ino,
+                                     mode=oct(stat.st_mode & 0o7777), bytes=stat.st_size):
+            raise ValueError('Sealed frontend original object physical input differs')
+    return record['rows']
+
+
+def _restore_frontend_objects(cache_root, llvm, snapshot, ordered, project, reference):
+    if (not isinstance(snapshot, dict) or not isinstance(snapshot.get('identity'), dict) or
+            not isinstance(snapshot.get('provenance'), dict) or not isinstance(ordered, list) or
+            llvm.is_symlink() or not llvm.is_dir()):
+        raise ValueError('Invalid sealed frontend object restoration')
+    expected = snapshot['identity']
+    entries = list(object_entries(expected))
+    if (len(entries) != len(ordered) or
+            snapshot['provenance']['abi'] != abi_provenance(project) or
+            not valid_abi_provenance(snapshot['provenance']['abi'])):
+        raise ValueError('Sealed frontend native ABI/order changed')
+    original_rows = _frontend_original_object_rows(cache_root, snapshot, ordered, reference)
+    sources = []
+    for index, ((name, identity), row) in enumerate(zip(entries, ordered)):
+        if row[0] != name or os.path.lexists(llvm / name):
+            raise ValueError('Sealed frontend object order or destination changed')
+        source = object_cache_path(cache_root, identity)
+        value = cached_object(source, identity)
+        expected_abi = (snapshot['provenance']['abi'] if original_rows is None
+                        else original_rows[index]['abi_provenance'])
+        if original_rows is not None:
+            _frontend_reference(original_rows[index]['marker'])
+        if (value != row[1:] or read_marker(source / '.complete.json')['provenance']['abi'] != expected_abi):
+            raise ValueError('Sealed frontend requires every exact verified native object')
+        sources.append((source / 'object.o', llvm / name))
+    # Publish nothing until every original object has actually verified.
+    restored = dict(snapshot, restored=ordered, provenance=dict(snapshot['provenance'], frontend_reference=reference))
+    write_private_marker(llvm / '.object-identity.json', restored)
+    for source, destination in sources:
+        link_or_copy(source, destination)
+    (llvm / '.object-hits').write_text('1' * len(entries) + '\n')
+    print(f'Reusing sealed frontend verified native objects: {len(entries)}/{len(entries)}', flush=True)
+
+
+def probe_sealed_frontend(cache_root, executable, dump_sha, index_sha, output, dump, graph, reference):
+    selection, result, plan, seal, observation, producer, graph_stamps = _frontend_selection(reference, graph, validate_roles=True)
+    if (str(dump) != plan['dump']['path'] or seal['identity']['verified_input'] != [dump_sha, index_sha]):
+        raise ValueError('Sealed frontend dump/index selection changed')
+    old_root = Path(result['expander'])
+    if output != Path(selection['workspace']) / 'expander' / '.bundle-expander' or cache_root != Path(selection['cache']['path']):
+        raise ValueError('Sealed frontend selected another output/cache')
+    info = cache_root.lstat()
+    if (cache_root.is_symlink() or not cache_root.is_dir() or
+            (info.st_dev, info.st_ino, info.st_mode & 0o7777, info.st_uid) !=
+            tuple(selection['cache'][name] for name in ('device', 'inode', 'mode', 'uid'))):
+        raise ValueError('Sealed frontend cache identity changed')
+    # Providers are not extraction-cache assets. This first, deliberately narrow
+    # route requires the same retained physical provider inputs; it never treats
+    # a changed stamp or retargeted link as a cached digest.
+    provider_stamps = {}
+    for name, value in seal['identity']['providers'].items():
+        path = output / name
+        if value is None:
+            if os.path.lexists(path): raise ValueError('Unexpected sealed frontend provider')
+        else:
+            if (_full_stamp(path.stat()) != tuple(seal['runtime_stamps']['assets'][name]) or
+                    path.resolve(strict=True) != (old_root / name).resolve(strict=True)):
+                raise ValueError('Sealed frontend provider physical input changed')
+            provider_stamps[name] = (_full_stamp(path.stat()), os.readlink(path) if path.is_symlink() else None)
+    expected = _frontend_extraction_identity(executable, dump_sha, index_sha, output)
+    def restore(source, record):
+        old_assets = {name: [size, digest] for name,size,digest in seal['identity']['assets']}
+        expected_names = {name for name in old_assets if name in FILES or name == 'extraction-completion.json' or name.startswith(TREE + '/')}
+        if ({name: [size, digest] for name,size,digest in record['assets']} !=
+                {name: old_assets[name] for name in expected_names}):
+            raise ValueError('Sealed frontend extraction bytes changed')
+        if completed_source_binding(output, dump) != seal['identity']['source']:
+            raise ValueError('Sealed frontend physical extraction receipt changed')
+        source_stamps = {name: _full_stamp((output / name).stat()) for name in walk_assets(output)}
+        llvm = output / 'llvm'
+        for source_name, target in [('lua-program.meta', llvm / 'program.meta'),
+                                    ('compile-plan.tsv', llvm / 'batch-plan.tsv'),
+                                    ('module-compile-plan.tsv', llvm / 'compile-plan.tsv')]:
+            src = old_root / source_name if source_name == 'lua-program.meta' else old_root.parent / source_name
+            value = ([result['metadata'][k] for k in ('bytes', 'sha256')] if source_name == 'lua-program.meta' else
+                     next([size,digest] for name,size,digest in seal['identity']['plans'] if name == source_name))
+            if stable_file_digest(src) != value or os.path.lexists(target):
+                raise ValueError('Sealed frontend metadata/plan changed or target exists')
+            before = _full_stamp(src.stat()); shutil.copyfile(src, target)
+            if _full_stamp(src.stat()) != before or stable_file_digest(target) != value:
+                raise ValueError('Sealed frontend metadata changed during staging')
+        _restore_frontend_objects(cache_root, llvm, seal['link']['object_inputs'], seal['link']['ordered_objects'], Path(observation['project_root']), reference)
+        if (any(_full_stamp((output / name).stat()) != stamp for name,stamp in source_stamps.items()) or
+                any((_full_stamp((output / name).stat()), os.readlink(output / name) if (output / name).is_symlink() else None) != stamp
+                    for name,stamp in provider_stamps.items()) or
+                any(_full_stamp(Path(observation[name]).stat()) != stamp for name,stamp in graph_stamps.items())):
+            raise ValueError('Sealed frontend input changed during restoration')
+        _frontend_reference(reference)
+    if probe(cache_root, expected, output, _after_verified=restore) != 0:
+        raise ValueError('Explicit sealed frontend reuse requires an ordinary extraction hit')
+    return 0
+
+
+def _frontend_extraction_identity(executable, dump_sha, index_sha, output):
+    redirects, page_redirects = output / 'transclusion-redirects.tsv', output / 'page-redirects.tsv'
+    if page_redirects.exists() or page_redirects.is_symlink():
+        page_redirects = page_redirects.resolve(strict=True); regular(page_redirects)
+    return identity(Path(executable), dump_sha, index_sha, sha256(output / 'namespace-registry.tsv'),
+                    sha256(redirects) if redirects.exists() else None,
+                    sha256(page_redirects) if page_redirects.exists() else None)
+
+
 def main(argv):
+    if len(argv) == 10 and argv[1] == "probe-sealed-frontend":
+        _, _, cache, executable, dump_sha, index_sha, root, dump, graph, reference = argv
+        return probe_sealed_frontend(Path(cache), executable, dump_sha, index_sha, Path(root),
+                                     Path(dump), json.loads(graph), json.loads(reference))
+    if len(argv) == 9 and argv[1] == "seal-expander":
+        _, _, root, dump, dump_sha, index_sha, graph, snapshots, reference = argv
+        return seal_completed_expander(Path(root), Path(dump), dump_sha, index_sha,
+                                       json.loads(graph), json.loads(snapshots),
+                                       frontend_reference=json.loads(reference))
     if len(argv) == 8 and argv[1] == "seal-expander":
         _, action, root, dump, dump_sha, index_sha, graph, snapshots = argv
         return seal_completed_expander(Path(root), Path(dump), dump_sha, index_sha,
@@ -1590,7 +2510,7 @@ if __name__ == "__main__":
         try:
             action = sys.argv[1] if len(sys.argv) > 1 else "unknown"
             if action not in ("probe", "publish", "probe-objects", "publish-objects",
-                              "seal-expander"):
+                              "seal-expander", "probe-sealed-frontend"):
                 action = "unknown"
             print("EXTRACTION_CACHE_PHASE " + json.dumps(dict(
                 action=action, status=phase_status, exit_code=phase_exit_code,
