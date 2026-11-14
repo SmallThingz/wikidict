@@ -11194,6 +11194,488 @@ fn literalDivAttributes(a: A, tag: syntax.Tag) !?Inventory {
     return attrs;
 }
 
+// A note identity is the complete closed literal body, not the repeated style
+// signature or its position in a group. Structural bytes distinguish list and
+// emphasis boundaries; the proof cannot admit links, extensions or magic links.
+fn noteIdentityText(a: A, out: *std.ArrayList(u8), raw: []const u8) !bool {
+    if (std.mem.indexOfAny(u8, raw, "<>[]{}'~\\\x00") != null or std.mem.indexOf(u8, raw, "__") != null) return false;
+    const decoded = decodedAttribute(a, raw) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
+    if (std.mem.indexOfAny(u8, decoded, "<>[]{}'~\\\x00") != null or std.mem.indexOf(u8, decoded, "__") != null or std.mem.indexOf(u8, decoded, "//") != null) return false;
+    for (decoded, 0..) |byte, i| {
+        if (byte < 0x20 and byte != '\n' and byte != '\t') return false;
+        if (byte == ':' and i + 1 < decoded.len and !std.ascii.isWhitespace(decoded[i + 1])) return false;
+    }
+    var words = std.mem.tokenizeAny(u8, decoded, " \t\n");
+    while (words.next()) |word| for ([_][]const u8{ "ISBN", "RFC", "PMID" }) |magic| {
+        if (word.len >= magic.len and std.ascii.eqlIgnoreCase(word[0..magic.len], magic)) return false;
+    };
+    _ = std.unicode.Utf8View.init(decoded) catch return false;
+    for (decoded) |byte| {
+        if (byte == ' ' or byte == '\n' or byte == '\t') {
+            if (out.items.len != 0 and out.items[out.items.len - 1] != ' ') try out.append(a, ' ');
+        } else try out.append(a, byte);
+    }
+    return true;
+}
+fn noteIdentityInline(a: A, out: *std.ArrayList(u8), raw: []const u8) !bool {
+    var at: usize = 0; var text_start: usize = 0; var bold = false; var italic = false;
+    while (at < raw.len) {
+        if (raw[at] != '\'') { at += 1; continue; }
+        if (!try noteIdentityText(a, out, raw[text_start..at])) return false;
+        var end = at;
+        while (end < raw.len and raw[end] == '\'') : (end += 1) {}
+        if (end - at == 3 and !italic) {
+            try out.append(a, if (bold) 2 else 1); bold = !bold;
+        } else if (end - at == 2 and !bold) {
+            try out.append(a, if (italic) 4 else 3); italic = !italic;
+        } else return false;
+        at = end; text_start = end;
+    }
+    return !bold and !italic and try noteIdentityText(a, out, raw[text_start..]);
+}
+fn noteIdentityNormalize(a: A, raw: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (raw, 0..) |byte, i| {
+        if (byte == ' ' and (out.items.len == 0 or out.items[out.items.len - 1] >= 5 and out.items[out.items.len - 1] <= 8 or
+            i + 1 == raw.len or raw[i + 1] >= 5 and raw[i + 1] <= 8)) continue;
+        try out.append(a, byte);
+    }
+    return out.toOwnedSlice(a);
+}
+fn sourceNoteBodyIdentity(a: A, source: []const u8, anchor_value: SourceCustomAnchor) !?[]const u8 {
+    const opening = syntax.tagAt(source, anchor_value.range.anchor_start) orelse return null;
+    const pair = syntax.matchingTag(source, opening) orelse return null;
+    if (pair.end != anchor_value.range.anchor_end) return null;
+    const body = source[opening.end..pair.inner_end];
+    if (body.len > 16384) return null;
+    var lines = std.mem.splitScalar(u8, body, '\n');
+    var out: std.ArrayList(u8) = .empty;
+    if (!try noteIdentityInline(a, &out, lines.next() orelse return null)) return null;
+    var depth: usize = 0; var count: usize = 0;
+    while (lines.next()) |line| {
+        var next: usize = 0;
+        while (next < line.len and line[next] == '*') : (next += 1) {}
+        if (next == 0 or next > 8 or next > depth + 1 or next == line.len) return null;
+        count += 1;
+        if (next > depth) {
+            try out.appendSlice(a, &.{ 5, 7 });
+        } else {
+            try out.append(a, 8);
+            while (depth > next) : (depth -= 1) try out.appendSlice(a, &.{ 6, 8 });
+            try out.append(a, 7);
+        }
+        depth = next;
+        if (!try noteIdentityInline(a, &out, std.mem.trim(u8, line[next..], " \t"))) return null;
+    }
+    if (count == 0) return null;
+    while (depth != 0) : (depth -= 1) try out.appendSlice(a, &.{ 8, 6 });
+    return try noteIdentityNormalize(a, out.items);
+}
+fn observedNoteBodyIdentity(a: A, html: []const u8, node: ObservedSiblingNode) !?[]const u8 {
+    const end = node.inner_end orelse return null;
+    if (end < node.tag.end or end - node.tag.end > 32768) return null;
+    var out: std.ArrayList(u8) = .empty;
+    var stack: [32]u8 = undefined; var depth: usize = 0;
+    var at = node.tag.end;
+    while (at < end) {
+        const next = std.mem.indexOfScalarPos(u8, html[0..end], at, '<') orelse end;
+        if (!try noteIdentityText(a, &out, html[at..next])) return null;
+        if (next == end) break;
+        const tag = syntax.tagAt(html, next) orelse return null;
+        if (tag.end > end or tag.self_closing or tag.attrs.len != 0) return null;
+        const kind: u8 = if (tag.is("b")) 1 else if (tag.is("i")) 3 else if (tag.is("ul")) 5 else if (tag.is("li")) 7 else return null;
+        if (tag.closing) {
+            if (depth == 0 or stack[depth - 1] != kind) return null;
+            depth -= 1;
+        } else {
+            if (depth == stack.len) return null;
+            stack[depth] = kind; depth += 1;
+        }
+        try out.append(a, kind + @as(u8, if (tag.closing) 1 else 0));
+        at = tag.end;
+    }
+    if (depth != 0) return null;
+    return try noteIdentityNormalize(a, out.items);
+}
+const NoteLiteralDiv = struct { tag: syntax.Tag, end: usize, attrs: ?Inventory, parent: ?usize = null };
+fn noteSourceParentShape(a: A, ns: *const namespaces.Registry, source: []const u8, selected: SourceCustomAnchor,
+    html: []const u8, nodes: []const ObservedSiblingNode) !bool
+{
+    var at: usize = 0; var restore_end: ?usize = null;
+    while (at < selected.range.anchor_start) {
+        if (source[at] == '[') if (try authoredElementLinkEndIn(a, ns, source, at, 0, true)) |end| { at = end; continue; };
+        if (source[at] != '<') { at += 1; continue; }
+        if (syntax.protectedEnd(source, at)) |end| { at = end; continue; }
+        const tag = syntax.tagAt(source, at) orelse { at += 1; continue; };
+        if (tag.closing or tag.is("br") or tag.is("hr") or tag.is("wbr")) { at = tag.end; continue; }
+        if (syntax.matchingTag(source, tag)) |pair| {
+            if (pair.end > selected.range.anchor_start) {
+                // A source inline/list/table owner cannot disappear merely
+                // because the captured DIV has a convenient parent signature.
+                if (!tag.is("div")) return false;
+                at = tag.end; continue;
+            }
+            if (try sourceCustomAnchor(a, source, at)) |previous| if (try sourceNoteBodyIdentity(a, source, previous)) |identity| {
+                var matches: usize = 0;
+                for (nodes) |node| {
+                    if (!node.tag.is("div") or !sameSiblingAttributes(previous.attributes, node.attributes)) continue;
+                    const captured = (try observedNoteBodyIdentity(a, html, node)) orelse continue;
+                    if (equal(identity, captured)) matches += 1;
+                }
+                if (matches == 1) restore_end = pair.end;
+            };
+            at = pair.end; continue;
+        }
+        // The retained parser output repairs bare UL restoration runs emitted
+        // immediately after a complete note. This recognizes only the source
+        // parent shape; captured immediate DIV edges are checked independently,
+        // and no UL style, list action or native box is granted here.
+        if (!tag.is("ul") or tag.attrs.len != 0 or tag.self_closing or restore_end != at) return false;
+        restore_end = tag.end; at = tag.end;
+    }
+    return at == selected.range.anchor_start;
+}
+fn noteInlineText(a: A, raw: []const u8) !?[]const u8 {
+    const value = decodedAttribute(a, raw) catch |err| switch (err) { error.OutOfMemory => return err, else => return null };
+    if (!std.unicode.utf8ValidateSlice(value) or std.mem.indexOfAny(u8, value, "<>[]{}\\\x00") != null or
+        std.mem.indexOf(u8, value, "''") != null or std.mem.indexOf(u8, value, "://") != null or std.mem.indexOf(u8, value, "__") != null) return null;
+    // Neutral literal identity cannot conceal a magic action behind raw or
+    // entity-decoded whitespace. Decline every such prefix conservatively,
+    // including punctuation-adjacent forms and ISBN's nonbreaking whitespace.
+    for (value, 0..) |_, at| for ([_][]const u8{ "ISBN", "RFC", "PMID" }) |magic| {
+        if (value.len - at >= magic.len and std.ascii.eqlIgnoreCase(value[at..][0..magic.len], magic)) return null;
+    };
+    var result: std.ArrayList(u8) = .empty; var space = false;
+    for (value) |byte| {
+        if (std.ascii.isWhitespace(byte)) { if (!space) try result.append(a, ' '); space = true; }
+        else { if (byte < 0x20 or byte == 0x7f) return null; try result.append(a, byte); space = false; }
+    }
+    return try result.toOwnedSlice(a);
+}
+fn noteUrlDecoded(a: A, raw: []const u8) !?[]const u8 {
+    var at: usize = 0;
+    while (at < raw.len) : (at += 1) if (raw[at] == '%') {
+        if (raw.len - at < 3 or !std.ascii.isHex(raw[at + 1]) or !std.ascii.isHex(raw[at + 2])) return null;
+        at += 2;
+    };
+    const decoded = std.Uri.percentDecodeInPlace(try a.dupe(u8, raw));
+    if (!std.unicode.utf8ValidateSlice(decoded) or std.mem.indexOfAny(u8, decoded, "\x00\r\n\t\\") != null) return null;
+    return decoded;
+}
+fn noteRemoteHrefMatches(a: A, expected: []const u8, actual: []const u8) !bool {
+    // Keep authority/query/fragment boundaries exact before percent decoding;
+    // an encoded path separator must not hide a different URL component.
+    if (!std.mem.startsWith(u8, expected, "https://") or !std.mem.startsWith(u8, actual, "https://") or
+        std.mem.indexOfAny(u8, expected, "?\\\r\n\t") != null or std.mem.indexOfAny(u8, actual, "?\\\r\n\t") != null) return false;
+    const expected_path = std.mem.indexOfScalarPos(u8, expected, 8, '/') orelse return false;
+    const actual_path = std.mem.indexOfScalarPos(u8, actual, 8, '/') orelse return false;
+    if (!equal(expected[0..expected_path], actual[0..actual_path])) return false;
+    const eh = std.mem.indexOfScalar(u8, expected, '#') orelse expected.len;
+    const ah = std.mem.indexOfScalar(u8, actual, '#') orelse actual.len;
+    if ((eh == expected.len) != (ah == actual.len) or eh < expected_path or ah < actual_path) return false;
+    if (!equal((try noteUrlDecoded(a, expected[expected_path..eh])) orelse return false,
+        (try noteUrlDecoded(a, actual[actual_path..ah])) orelse return false)) return false;
+    if (eh != expected.len) {
+        if (std.mem.indexOfScalar(u8, expected[eh + 1..], '#') != null or std.mem.indexOfScalar(u8, actual[ah + 1..], '#') != null) return false;
+        if (!equal((try noteUrlDecoded(a, expected[eh + 1..])) orelse return false,
+            (try noteUrlDecoded(a, actual[ah + 1..])) orelse return false)) return false;
+    }
+    return true;
+}
+fn noteLinkCorresponds(a: A, ns: *const namespaces.Registry, target: []const u8, inv: Inventory) !bool {
+    for (inv.attributes) |attr| if (!equal(attr.name, "href") and !equal(attr.name, "class") and !equal(attr.name, "title")) return false;
+    const href = inv.get("href") orelse return false;
+    const title = inv.get("title") orelse return false;
+    const resolved = (try compiler.literalSourceLinkDestinationAlloc(a, ns, target)) orelse return false;
+    const source_hash = std.mem.indexOfScalar(u8, target, '#') orelse target.len;
+    const source_page = ns.normalizeTitle(a, target[0..source_hash], 0, .any) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
+    if (resolved.external) {
+        if (!equal(inv.get("class") orelse return false, "extiw") or !equal(title, source_page)) return false;
+        return noteRemoteHrefMatches(a, resolved.target, href);
+    }
+    const rh = std.mem.indexOfScalar(u8, resolved.target, '#') orelse resolved.target.len;
+    const expected_page = ns.normalizeTitle(a, resolved.target[0..rh], 0, .any) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
+    var page: []const u8 = undefined; var fragment: ?[]const u8 = null; var red = false;
+    if (std.mem.startsWith(u8, href, "/wiki/")) {
+        if (std.mem.indexOfScalar(u8, href, '?') != null) return false;
+        const hash = std.mem.indexOfScalar(u8, href, '#') orelse href.len;
+        page = (try noteUrlDecoded(a, href[6..hash])) orelse return false;
+        if (hash != href.len) fragment = (try noteUrlDecoded(a, href[hash + 1..])) orelse return false;
+    } else if (std.mem.startsWith(u8, href, "/w/index.php?title=") and std.mem.endsWith(u8, href, "&action=edit&redlink=1")) {
+        const raw = href["/w/index.php?title=".len .. href.len - "&action=edit&redlink=1".len];
+        if (std.mem.indexOfAny(u8, raw, "&#?") != null) return false;
+        page = (try noteUrlDecoded(a, raw)) orelse return false; red = true;
+    } else return false;
+    const normalized = ns.normalizeTitle(a, page, 0, .any) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
+    if (!equal(normalized, expected_page) or (rh == resolved.target.len) != (fragment == null)) return false;
+    if (fragment) |value| if (!equal(value, resolved.target[rh + 1..])) return false;
+    if (red) {
+        if (!equal(inv.get("class") orelse return false, "new") or !std.mem.startsWith(u8, title, expected_page)) return false;
+        const suffix = title[expected_page.len..];
+        // The returned localized missing-page tooltip is metadata only. Its
+        // exact page identity is required; it grants no A paint/font property.
+        if (suffix.len < 4 or !std.mem.startsWith(u8, suffix, " (") or suffix[suffix.len - 1] != ')' or
+            std.mem.indexOfAny(u8, suffix[2..suffix.len - 1], "()\r\n") != null) return false;
+    } else if (inv.get("class") != null or !equal(title, expected_page)) return false;
+    return true;
+}
+fn noteInlineCorresponds(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8, depth: usize, in_link: bool) anyerror!bool {
+    if (depth >= 32 or source.len > 32768 or html.len > 65536) return false;
+    var at: usize = 0; var observed: usize = 0;
+    while (at < source.len) {
+        if (std.mem.startsWith(u8, source[at..], "[[")) {
+            if (in_link) return false;
+            const pair = syntax.balanced(source, at) orelse return false;
+            var iterator: encoder.document_ir.InlineIterator = .{ .input = source[at..pair.end], .renderer_boundaries = true };
+            const link = iterator.next() orelse return false;
+            if (link.kind != .link or !link.link_has_pipe or link.link_empty_label or link.link_label_restored_close or
+                link.trail.len != 0 or iterator.cursor != pair.end - at) return false;
+            const tag = currentLiteralHtmlTagAt(html, observed) orelse return false;
+            if (!tag.is("a") or tag.closing or tag.self_closing) return false;
+            const close = syntax.matchingTag(html, tag) orelse return false;
+            const closing = currentLiteralHtmlTagAt(html, close.inner_end) orelse return false;
+            if (!closing.closing or closing.attrs.len != 0) return false;
+            const attrs = inventory(a, tag) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
+            if (!try noteLinkCorresponds(a, ns, link.target, attrs) or
+                !try noteInlineCorresponds(a, ns, link.text, html[tag.end..close.inner_end], depth + 1, true)) return false;
+            at = pair.end; observed = close.end;
+        } else if (source[at] == '<') {
+            const tag = syntax.tagAt(source, at) orelse return false;
+            const actual = currentLiteralHtmlTagAt(html, observed) orelse return false;
+            if (tag.closing or actual.closing or !std.ascii.eqlIgnoreCase(tag.name, actual.name)) return false;
+            var allowed = false;
+            for ([_][]const u8{ "span", "b", "i", "em", "strong", "small", "sup", "sub", "abbr", "u", "s", "mark", "ruby", "rt", "rp", "br" }) |name| if (tag.is(name)) { allowed = true; break; };
+            if (!allowed) return false;
+            const expected_attrs = sourceInventoryWithRepeatedClass(a, tag, false) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
+            const actual_attrs = inventory(a, actual) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
+            if (!sameSiblingAttributes(expected_attrs, actual_attrs)) return false;
+            if (tag.is("br")) { at = tag.end; observed = actual.end; continue; }
+            if (tag.self_closing or actual.self_closing) return false;
+            const pair = syntax.matchingTag(source, tag) orelse return false;
+            const actual_pair = syntax.matchingTag(html, actual) orelse return false;
+            const source_close = syntax.tagAt(source, pair.inner_end) orelse return false;
+            const actual_close = currentLiteralHtmlTagAt(html, actual_pair.inner_end) orelse return false;
+            if (!source_close.closing or !actual_close.closing or source_close.attrs.len != 0 or actual_close.attrs.len != 0) return false;
+            if (!try noteInlineCorresponds(a, ns, source[tag.end..pair.inner_end], html[actual.end..actual_pair.inner_end], depth + 1, in_link)) return false;
+            at = pair.end; observed = actual_pair.end;
+        } else {
+            var end = at + 1;
+            while (end < source.len and source[end] != '<' and !std.mem.startsWith(u8, source[end..], "[[")) : (end += 1) {}
+            const actual_end = std.mem.indexOfScalarPos(u8, html, observed, '<') orelse html.len;
+            const expected_text = (try noteInlineText(a, source[at..end])) orelse return false;
+            const actual_text = (try noteInlineText(a, html[observed..actual_end])) orelse return false;
+            if (!equal(expected_text, actual_text)) return false;
+            at = end; observed = actual_end;
+        }
+    }
+    return observed == html.len;
+}
+
+fn noteUlRestoration(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
+    nodes: []const ObservedSiblingNode, note: SourceCustomAnchor, observed: usize, parent_start: ?usize) !?profile.SourceLiteralUlRestoration
+{
+    const parent_opening = syntax.tagAt(source, parent_start orelse return null) orelse return null;
+    const parent_pair = syntax.matchingTag(source, parent_opening) orelse return null;
+    var run_end = note.range.anchor_end; var depth: usize = 0;
+    while (std.mem.startsWith(u8, source[run_end..], "<ul>")) { run_end += 4; depth += 1; if (depth > 8) return null; }
+    if (depth == 0 or run_end > parent_pair.inner_end) return null;
+    var paths: std.ArrayList(u8) = .empty;
+    var labels: std.ArrayList([]const u8) = .empty;
+    var body_end = run_end;
+    if (run_end != parent_pair.inner_end) {
+        if (source[run_end] != '\n') return null;
+        body_end += 1;
+        var previous = depth;
+        while (body_end < parent_pair.inner_end and source[body_end] == '*') {
+            const line_end = std.mem.indexOfScalarPos(u8, source, body_end, '\n') orelse return null;
+            if (line_end > parent_pair.inner_end) return null;
+            const line = source[body_end..line_end]; var prefix: usize = 0;
+            while (prefix < line.len and line[prefix] == '*') : (prefix += 1) {}
+            if (prefix < depth or prefix > 8 or prefix > previous + 1 or paths.items.len == 4096) return null;
+            // The ordinary inline parser still owns every child and action.
+            // This grammar excludes blocks/opaque/generated frames which could
+            // change the list boundary rather than just its rendered label.
+            styleSourceLabel(a, ns, std.mem.trim(u8, line[prefix..], " \t"), false, 0, false) catch |err| switch (err) { error.OutOfMemory => return err, else => return null };
+            try paths.append(a, @intCast(prefix));
+            try labels.append(a, std.mem.trim(u8, line[prefix..], " \t"));
+            previous = prefix; body_end = line_end + 1;
+        }
+        if (paths.items.len == 0) return null;
+        if (body_end != parent_pair.inner_end and (try sourceCustomAnchor(a, source, body_end)) == null) return null;
+    }
+    const note_close = currentLiteralHtmlTagAt(html, nodes[observed].inner_end orelse return null) orelse return null;
+    var outer: ?usize = null;
+    for (nodes, 0..) |node, index| if (node.start == note_close.end) { outer = index; break; };
+    const first = outer orelse return null;
+    const top = nodes[first];
+    if (!top.tag.is("ul") or top.parent != nodes[observed].parent or top.attributes.attributes.len != 0) return null;
+    const top_end = top.inner_end orelse return null;
+    const top_close = currentLiteralHtmlTagAt(html, top_end) orelse return null;
+    var run_cursor = first;
+    for (1..depth) |_| {
+        const child = nodes[run_cursor].first_child orelse return null;
+        if (child <= run_cursor or child >= nodes.len or nodes[child].parent != run_cursor or
+            nodes[child].start != nodes[run_cursor].tag.end or !nodes[child].tag.is("ul") or nodes[child].attributes.attributes.len != 0) return null;
+        run_cursor = child;
+    }
+    if (paths.items.len == 0) {
+        if (depth != 1 or top.first_child != null or top.tag.end != top_end or
+            top_close.end != nodes[top.parent orelse return null].inner_end) return null;
+    } else if (body_end == parent_pair.inner_end) {
+        if (top_close.end != nodes[top.parent orelse return null].inner_end) return null;
+    } else {
+        const next_note = (try sourceCustomAnchor(a, source, body_end)) orelse return null;
+        const next_identity = (try sourceNoteBodyIdentity(a, source, next_note)) orelse return null;
+        var next_at = top_close.end;
+        while (next_at < html.len and std.ascii.isWhitespace(html[next_at])) : (next_at += 1) {}
+        var next_index: ?usize = null;
+        for (nodes, 0..) |node, index| if (node.start == next_at) { next_index = index; break; };
+        const next = nodes[next_index orelse return null];
+        if (next.parent != top.parent or !sameSiblingAttributes(next.attributes, next_note.attributes)) return null;
+        if (!equal(next_identity, (try observedNoteBodyIdentity(a, html, next)) orelse return null)) return null;
+    }
+    var items: usize = 0;
+    for (nodes[first..], first..) |node, index| {
+        if (node.start > top_end) break;
+        if (node.tag.is("ul")) {
+            if (node.attributes.attributes.len != 0) return null;
+            var cursor = node.tag.end;
+            for (nodes[index + 1..]) |child| {
+                if (child.start >= (node.inner_end orelse return null)) break;
+                if (child.parent != index) continue;
+                if ((!child.tag.is("ul") and !child.tag.is("li")) or
+                    std.mem.trim(u8, html[cursor..child.start], " \t\r\n").len != 0) return null;
+                const close = currentLiteralHtmlTagAt(html, child.inner_end orelse return null) orelse return null;
+                cursor = close.end;
+            }
+            if (std.mem.trim(u8, html[cursor..node.inner_end.?], " \t\r\n").len != 0) return null;
+        } else if (node.tag.is("li")) {
+            if (node.attributes.attributes.len != 0 or items >= paths.items.len) return null;
+            var actual_depth: usize = 0; var cursor = node.parent;
+            while (cursor) |parent| {
+                if (parent < first) break;
+                if (!nodes[parent].tag.is("ul") and !nodes[parent].tag.is("li")) return null;
+                if (nodes[parent].tag.is("ul")) actual_depth += 1;
+                cursor = nodes[parent].parent;
+            }
+            if (actual_depth != paths.items[items]) return null;
+            const inner_end = node.inner_end orelse return null;
+            var label_end = inner_end; var nested = false;
+            for (nodes[index + 1..]) |child| {
+                if (child.start >= inner_end) break;
+                if (child.parent != index or !child.tag.is("ul")) continue;
+                if (nested) return null;
+                nested = true; label_end = child.start;
+                const close = currentLiteralHtmlTagAt(html, child.inner_end orelse return null) orelse return null;
+                if (close.end > inner_end or std.mem.trim(u8, html[close.end..inner_end], " \t\r\n").len != 0) return null;
+            }
+            if (!try noteInlineCorresponds(a, ns, labels.items[items],
+                std.mem.trim(u8, html[node.tag.end..label_end], " \t\r\n"), 0, false)) return null;
+            items += 1;
+        } else {
+            var inline_tag = false;
+            for ([_][]const u8{ "a", "span", "b", "i", "em", "strong", "small", "sup", "sub", "abbr", "u", "s", "mark", "ruby", "rt", "rp", "br" }) |name| if (node.tag.is(name)) { inline_tag = true; break; };
+            if (!inline_tag) return null;
+        }
+    }
+    if (items != paths.items.len) return null;
+    return .{ .end = run_end, .body_end = body_end, .depth = @intCast(depth), .items = @intCast(items) };
+}
+
+fn appendObservedNoteDivParents(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
+    nodes: []const ObservedSiblingNode, proofs: *std.ArrayList(profile.SourceLiteralDivProof)) !void
+{
+    const anchors = try ordinaryCustomAnchors(a, source);
+    if (anchors.len == 0) return;
+    var divs: std.ArrayList(NoteLiteralDiv) = .empty;
+    var at: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, source, at, '<')) |start| {
+        at = start + 1;
+        if (syntax.protectedEnd(source, start)) |end| { at = end; continue; }
+        const tag = syntax.tagAt(source, start) orelse continue;
+        at = tag.end;
+        if (!tag.is("div") or tag.closing) continue;
+        const pair = syntax.matchingTag(source, tag) orelse continue;
+        try divs.append(a, .{ .tag = tag, .end = pair.end, .attrs = try literalDivAttributes(a, tag) });
+        if (divs.items.len > 4096) return;
+    }
+    for (divs.items, 0..) |*div, index| {
+        const start = @intFromPtr(div.tag.name.ptr) - @intFromPtr(source.ptr) - 1;
+        var nearest = source.len + 1;
+        for (divs.items[0..index], 0..) |parent, parent_index| if (parent.end > div.end and parent.end < nearest) {
+            const parent_start = @intFromPtr(parent.tag.name.ptr) - @intFromPtr(source.ptr) - 1;
+            if (parent_start < start) { div.parent = parent_index; nearest = parent.end; }
+        };
+    }
+    for (anchors) |anchor_value| {
+        const identity = (try sourceNoteBodyIdentity(a, source, anchor_value)) orelse continue;
+        authoredElementPrefix(a, ns, source, .{ .start = anchor_value.range.anchor_start, .end = anchor_value.range.anchor_end }, true) catch |err| switch (err) { error.OutOfMemory => return err, else => continue };
+        if (!try noteSourceParentShape(a, ns, source, anchor_value, html, nodes)) continue;
+        var own: ?usize = null;
+        for (divs.items, 0..) |div, index| if (@intFromPtr(div.tag.name.ptr) - @intFromPtr(source.ptr) == anchor_value.range.name_start) { own = index; break; };
+        const own_index = own orelse continue;
+        var observed: ?usize = null; var matches: usize = 0;
+        for (nodes, 0..) |node, index| {
+            if (!node.tag.is("div") or !sameSiblingAttributes(anchor_value.attributes, node.attributes)) continue;
+            const captured = (try observedNoteBodyIdentity(a, html, node)) orelse continue;
+            if (equal(identity, captured)) { matches += 1; observed = index; }
+        }
+        if (matches != 1) continue;
+        var same_source: usize = 0;
+        for (anchors) |other| {
+            if (!sameSiblingAttributes(anchor_value.attributes, other.attributes)) continue;
+            const other_identity = (try sourceNoteBodyIdentity(a, source, other)) orelse continue;
+            if (equal(identity, other_identity)) same_source += 1;
+        }
+        if (same_source != 1) continue;
+        var chain: [256]usize = undefined; var count: usize = 0; var cursor: ?usize = own_index;
+        while (cursor) |index| {
+            if (count == chain.len) break;
+            chain[count] = index; count += 1; cursor = divs.items[index].parent;
+        }
+        if (cursor != null) continue;
+        var captured_cursor = observed.?; var valid = true;
+        for (chain[0..count], 0..) |index, level| {
+            const div = divs.items[index]; const attrs = div.attrs orelse { valid = false; break; };
+            if (captured_cursor == 0 or !nodes[captured_cursor].tag.is("div") or !sameSiblingAttributes(attrs, nodes[captured_cursor].attributes)) { valid = false; break; }
+            const captured_parent = nodes[captured_cursor].parent orelse { valid = false; break; };
+            if (level != 0) {
+                var source_count: usize = 0; var captured_count: usize = 0;
+                for (divs.items) |other| if (other.parent == div.parent) if (other.attrs) |other_attrs| {
+                    if (sameSiblingAttributes(attrs, other_attrs)) source_count += 1;
+                };
+                for (nodes) |other| if (other.parent == captured_parent and other.tag.is("div") and sameSiblingAttributes(attrs, other.attributes)) { captured_count += 1; };
+                if (source_count != 1 or captured_count != 1) { valid = false; break; }
+                const start = @intFromPtr(div.tag.name.ptr) - @intFromPtr(source.ptr) - 1;
+                authoredElementPrefix(a, ns, source, .{ .start = start, .end = div.tag.end }, false) catch |err| switch (err) { error.OutOfMemory => return err, else => { valid = false; break; } };
+            }
+            captured_cursor = captured_parent;
+        }
+        if (!valid or captured_cursor != 0) continue;
+        // Only exact captured DIV edges are lent to the existing native custody
+        // check. The complete note body selects its occurrence; a unique child
+        // under each already matched parent selects the enclosing DIVs.
+        var remaining = count;
+        while (remaining != 0) {
+            remaining -= 1;
+            const div = divs.items[chain[remaining]];
+            const start = @intFromPtr(div.tag.name.ptr) - @intFromPtr(source.ptr) - 1;
+            const parent_start: ?usize = if (div.parent) |parent| @intFromPtr(divs.items[parent].tag.name.ptr) - @intFromPtr(source.ptr) - 1 else null;
+            const restoration = if (chain[remaining] == own_index)
+                try noteUlRestoration(a, ns, source, html, nodes, anchor_value, observed.?, parent_start) else null;
+            var exists = false;
+            for (proofs.items) |*proof| if (proof.range.anchor_start == start) {
+                if (restoration) |value| proof.restored_ul = value;
+                exists = true; break;
+            };
+            if (exists) continue;
+            try proofs.append(a, .{ .range = .{ .anchor_start = start, .anchor_end = div.end,
+                .name_start = @intFromPtr(div.tag.name.ptr) - @intFromPtr(source.ptr), .name_len = div.tag.name.len,
+                .attrs_start = @intFromPtr(div.tag.attrs.ptr) - @intFromPtr(source.ptr), .attrs_len = div.tag.attrs.len }, .parent_start = parent_start, .restored_ul = restoration });
+        }
+    }
+}
+
 fn observedLiteralDivParents(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
     nodes: []const ObservedSiblingNode) ![]const profile.SourceLiteralDivProof
 {
@@ -11273,7 +11755,7 @@ fn observedLiteralDivParents(a: A, ns: *const namespaces.Registry, source: []con
             .name_start = @intFromPtr(candidate.tag.name.ptr) - @intFromPtr(source.ptr), .name_len = candidate.tag.name.len,
             .attrs_start = @intFromPtr(candidate.tag.attrs.ptr) - @intFromPtr(source.ptr), .attrs_len = candidate.tag.attrs.len }, .parent_start = source_parent });
     }
-    _ = html;
+    try appendObservedNoteDivParents(a, ns, source, html, nodes, &result);
     return try result.toOwnedSlice(a);
 }
 
@@ -15476,5 +15958,184 @@ test "source parent returned HTML retains genuine quoted metadata without wideni
     for ([_][]const u8{ "<span title='x>y' title='duplicate'>", "<span title=unquoted>" }) |bad| {
         const tag = currentLiteralHtmlTagAt(bad, 0) orelse return error.TestUnexpectedResult;
         try std.testing.expectError(invalid, outerInventoryReturned(a, tag, true));
+    }
+}
+
+test "retained TH repeated notes bind their complete distinct bodies and exact captured DIV parent chain" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const document = try std.json.parseFromSliceLeaky(Document, a, @embedFile("testdata/th-missing-figure-style/figure-page-observations.json"), .{ .allocate = .alloc_always });
+    const supplied = try responseSource(a, &ns, document.pages[2]);
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    try std.testing.expectEqualStrings(source, supplied.source);
+    try std.testing.expectEqual(@as(usize, 60551), source.len);
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
+    var proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+    try appendObservedNoteDivParents(a, &ns, source, supplied.html, nodes.items, &proofs);
+    try std.testing.expectEqual(@as(usize, 6), proofs.items.len);
+    for ([_]struct { start: usize, parent: ?usize }{
+        .{ .start = 5614, .parent = null }, .{ .start = 5702, .parent = 5614 }, .{ .start = 8544, .parent = 5702 },
+        .{ .start = 18077, .parent = 8544 }, .{ .start = 19048, .parent = 8544 }, .{ .start = 20243, .parent = 8544 },
+    }) |expected| {
+        var found: usize = 0;
+        for (proofs.items) |proof| if (proof.range.anchor_start == expected.start) {
+            found += 1;
+            try std.testing.expectEqual(expected.parent, proof.parent_start);
+            const opening = syntax.tagAt(source, expected.start) orelse return error.TestUnexpectedResult;
+            const pair = syntax.matchingTag(source, opening) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(pair.end, proof.range.anchor_end);
+            try std.testing.expectEqual(@intFromPtr(opening.attrs.ptr) - @intFromPtr(source.ptr), proof.range.attrs_start);
+        };
+        try std.testing.expectEqual(@as(usize, 1), found);
+    }
+    for ([_]struct { start: usize, end: usize, body_end: usize, depth: u8, items: u16 }{
+        .{ .start = 18077, .end = 18401, .body_end = 19048, .depth = 2, .items = 4 },
+        .{ .start = 19048, .end = 19334, .body_end = 20243, .depth = 1, .items = 6 },
+        .{ .start = 20243, .end = 20490, .body_end = 20490, .depth = 1, .items = 0 },
+    }) |expected| {
+        var count: usize = 0;
+        for (proofs.items) |proof| if (proof.range.anchor_start == expected.start) {
+            count += 1;
+            try std.testing.expectEqualDeep(profile.SourceLiteralUlRestoration{ .end = expected.end,
+                .body_end = expected.body_end, .depth = expected.depth, .items = expected.items }, proof.restored_ul orelse return error.TestUnexpectedResult);
+        };
+        try std.testing.expectEqual(@as(usize, 1), count);
+    }
+    // No generic correspondence or CSS result is fabricated for other DIVs.
+    const all = try observedLiteralDivParents(a, &ns, source, supplied.html, nodes.items);
+    for ([_]usize{ 18077, 19048, 20243 }) |start| {
+        var count: usize = 0;
+        for (all) |proof| if (proof.range.anchor_start == start) { count += 1; };
+        try std.testing.expectEqual(@as(usize, 1), count);
+    }
+}
+
+const NoteIdentityTesting = struct {
+    const outer = "<div class='parent'>\n";
+    const source_one = "<div style='padding:4px'>'''Note''':\n*one ''term''\n**tail.</div>";
+    const source_two = "<div style='padding:4px'>'''Note''':\n*two.</div>";
+    const captured_one = "<div style='padding:4px'><b>Note</b>:<ul><li>one <i>term</i><ul><li>tail.</li></ul></li></ul></div>";
+    const captured_two = "<div style='padding:4px'><b>Note</b>:<ul><li>two.</li></ul></div>";
+    const root = "<div class='mw-content-ltr mw-parser-output' lang='th' dir='ltr'>";
+    fn issue(a: A, ns: *const namespaces.Registry, source: []const u8, body: []const u8) ![]const profile.SourceLiteralDivProof {
+        const html = try std.mem.concat(a, u8, &.{ root, body, "</div>" });
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, ns, html, &nodes);
+        var proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+        try appendObservedNoteDivParents(a, ns, source, html, nodes.items, &proofs);
+        return proofs.toOwnedSlice(a);
+    }
+    fn has(proofs: []const profile.SourceLiteralDivProof, start: usize) bool {
+        for (proofs) |proof| if (proof.range.anchor_start == start) return true;
+        return false;
+    }
+};
+test "repeated note identity refuses altered bodies actions emphasis ambiguous occurrences and repaired foreign parents" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = NoteIdentityTesting;
+    const source = T.outer ++ T.source_one ++ "\n" ++ T.source_two ++ "</div>";
+    const html = T.outer ++ T.captured_one ++ T.captured_two ++ "</div>";
+    const good = try T.issue(a, &ns, source, html);
+    try std.testing.expectEqual(@as(usize, 3), good.len);
+    try std.testing.expect(T.has(good, T.outer.len));
+    // DOM order is not the occurrence certificate: the complete distinct body
+    // and its immediate parent still identify both source operations.
+    const reordered = try T.issue(a, &ns, source, T.outer ++ T.captured_two ++ T.captured_one ++ "</div>");
+    try std.testing.expectEqualDeep(good, reordered);
+    for ([_][]const u8{
+        T.outer ++ T.captured_two ++ T.captured_two ++ "</div>",
+        T.outer ++ T.captured_one ++ T.captured_one ++ T.captured_two ++ "</div>",
+        T.outer ++ "<div class='foreign'>" ++ T.captured_one ++ "</div>" ++ T.captured_two ++ "</div>",
+        T.outer ++ "<div style='padding:4px'><b>Note</b>:<ul><li>one term<ul><li>tail.</li></ul></li></ul></div>" ++ T.captured_two ++ "</div>",
+        T.outer ++ "<div style='padding:4px'><b>Note</b>:<ul><li>one <a href='/wiki/term'>term</a><ul><li>tail.</li></ul></li></ul></div>" ++ T.captured_two ++ "</div>",
+        T.outer ++ "<div style='padding:4px'><b>Note</b>:<ul><li>one <i style='color:red'>term</i><ul><li>tail.</li></ul></li></ul></div>" ++ T.captured_two ++ "</div>",
+    }) |changed| try std.testing.expect(!T.has(try T.issue(a, &ns, source, changed), T.outer.len));
+    for ([_][]const u8{
+        T.outer ++ T.source_one ++ "\n" ++ T.source_one ++ "</div>",
+        T.outer ++ "<div style='padding:4px'>'''Note''':\n*one [[term]]\n**tail.</div>\n" ++ T.source_two ++ "</div>",
+        T.outer ++ "<div style='padding:4px'>'''Note''':\n*one https://example.test\n**tail.</div>\n" ++ T.source_two ++ "</div>",
+        T.outer ++ "<li>\n" ++ T.source_one ++ "</li>\n" ++ T.source_two ++ "</div>",
+        T.outer ++ "<nowiki>" ++ T.source_one ++ "</nowiki>\n" ++ T.source_two ++ "</div>",
+    }) |changed| {
+        const selected = try T.issue(a, &ns, changed, html);
+        const start = std.mem.indexOf(u8, changed, "<div style=").?;
+        try std.testing.expect(!T.has(selected, start));
+    }
+}
+
+test "note UL restoration requires the exact captured sibling skeleton and complete ordinary source list interval" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = NoteIdentityTesting;
+    const source = T.outer ++ T.source_one ++ "<ul>\n* [[Next|kept]]\n" ++ T.source_two ++ "</div>";
+    const list = "<ul><li><a href='/wiki/Next' title='Next'>kept</a></li></ul>";
+    const captured = T.outer ++ T.captured_one ++ list ++ T.captured_two ++ "</div>";
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    try std.testing.expect(try noteInlineCorresponds(a, &ns, "<small><i>[[w:Peng'im|Peng'im]]</i></small>: <span class='IPA' style='white-space: nowrap;'>x</span>",
+        "<small><i><a href='https://th.wikipedia.org/wiki/Peng%27im' class='extiw' title='w:Peng&#39;im'>Peng'im</a></i></small>: <span style='white-space: nowrap;' class='IPA'>x</span>", 0, false));
+    for ([_][]const u8{
+        "<a href='https://other.invalid/wiki/Peng%27im' class='extiw' title='w:Peng&#39;im'>Peng'im</a>",
+        "<a href='https://th.wikipedia.org/wiki/Other' class='extiw' title='w:Peng&#39;im'>Peng'im</a>",
+        "<a href='https://th.wikipedia.org/wiki/Peng%27im' class='extiw' title='w:Peng&#39;im'><b>Peng'im</b></a>",
+    }) |changed| try std.testing.expect(!try noteInlineCorresponds(a, &ns, "[[w:Peng'im|Peng'im]]", changed, 0, false));
+    try std.testing.expect(try noteInlineCorresponds(a, &ns, "[[Wiktionary:About Chinese/Wu|Wugniu]]",
+        "<a href='/w/index.php?title=Wiktionary:About_Chinese/Wu&amp;action=edit&amp;redlink=1' class='new' title='วิกิพจนานุกรม:About Chinese/Wu (ไม่มีหน้านี้)'>Wugniu</a>", 0, false));
+    try std.testing.expect(!try noteInlineCorresponds(a, &ns, "[[Next#part|kept]]", "<a href='/wiki/Next#other' title='Next'>kept</a>", 0, false));
+    for ([_]struct { source: []const u8, captured: []const u8 }{
+        .{ .source = "RFC\t123", .captured = "RFC 123" },
+        .{ .source = "RFC&#9;123", .captured = "RFC 123" },
+        .{ .source = "(RFC\t123)", .captured = "(RFC 123)" },
+        .{ .source = "PMID&#x9;123", .captured = "PMID 123" },
+        .{ .source = "ISBN&nbsp;9780306406157", .captured = "ISBN&nbsp;9780306406157" },
+    }) |magic| {
+        try std.testing.expect(!try noteInlineCorresponds(a, &ns, magic.source, magic.captured, 0, false));
+        const changed_source = try std.mem.concat(a, u8, &.{ T.outer, T.source_one, "<ul>\n* ", magic.source, "\n", T.source_two, "</div>" });
+        const changed_html = try std.mem.concat(a, u8, &.{ T.outer, T.captured_one, "<ul><li>", magic.captured, "</li></ul>", T.captured_two, "</div>" });
+        const proofs = try T.issue(a, &ns, changed_source, changed_html);
+        for (proofs) |proof| if (proof.range.anchor_start == T.outer.len) try std.testing.expect(proof.restored_ul == null);
+    }
+    const good = try T.issue(a, &ns, source, captured);
+    var found: usize = 0;
+    for (good) |proof| if (proof.range.anchor_start == T.outer.len) {
+        const restore = proof.restored_ul orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualDeep(profile.SourceLiteralUlRestoration{
+            .end = T.outer.len + T.source_one.len + 4,
+            .body_end = source.len - T.source_two.len - "</div>".len, .depth = 1, .items = 1,
+        }, restore);
+        found += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), found);
+    for ([_][]const u8{
+        T.outer ++ T.captured_one ++ "<ul><li><a href='/wiki/Other' title='Other'>changed</a></li></ul>" ++ T.captured_two ++ "</div>",
+        T.outer ++ T.captured_one ++ "<ul><li><a href='/wiki/Other' title='Next'>kept</a></li></ul>" ++ T.captured_two ++ "</div>",
+        T.outer ++ T.captured_one ++ "<ul><li><span style='font-size:500px'>kept</span></li></ul>" ++ T.captured_two ++ "</div>",
+        T.outer ++ T.captured_one ++ "<ul><li><a href='/wiki/Next' title='Next' style='font-size:500px'>kept</a></li></ul>" ++ T.captured_two ++ "</div>",
+        T.outer ++ T.captured_one ++ "<ul class='other'><li><a href='/wiki/Next' title='Next'>kept</a></li></ul>" ++ T.captured_two ++ "</div>",
+        T.outer ++ T.captured_one ++ "<ul><ul><li>kept</li></ul></ul>" ++ T.captured_two ++ "</div>",
+        T.outer ++ T.captured_one ++ "<ul><li>one</li><li>two</li></ul>" ++ T.captured_two ++ "</div>",
+        T.outer ++ T.captured_one ++ "<ul>text<li>kept</li></ul>" ++ T.captured_two ++ "</div>",
+        T.outer ++ T.captured_one ++ "<ul><li><div>kept</div></li></ul>" ++ T.captured_two ++ "</div>",
+        T.outer ++ T.captured_one ++ "<div>" ++ list ++ "</div>" ++ T.captured_two ++ "</div>",
+        T.outer ++ T.captured_one ++ list ++ "<p>foreign</p>" ++ T.captured_two ++ "</div>",
+    }) |changed| {
+        const proofs = try T.issue(a, &ns, source, changed);
+        var note_found = false;
+        for (proofs) |proof| if (proof.range.anchor_start == T.outer.len) {
+            note_found = true; try std.testing.expect(proof.restored_ul == null);
+        };
+        try std.testing.expect(note_found);
+    }
+    for ([_][]const u8{
+        T.outer ++ T.source_one ++ "<ul>\n* {{unknown}}\n" ++ T.source_two ++ "</div>",
+        T.outer ++ T.source_one ++ "<ul>\n* <div>kept</div>\n" ++ T.source_two ++ "</div>",
+        T.outer ++ T.source_one ++ "<ul>\n*** kept\n" ++ T.source_two ++ "</div>",
+        T.outer ++ T.source_one ++ "<ul>\n* kept\n\n" ++ T.source_two ++ "</div>",
+        T.outer ++ T.source_one ++ "<ul>\n* kept\nforeign\n" ++ T.source_two ++ "</div>",
+    }) |changed| {
+        const proofs = try T.issue(a, &ns, changed, captured);
+        for (proofs) |proof| if (proof.range.anchor_start == T.outer.len) try std.testing.expect(proof.restored_ul == null);
     }
 }

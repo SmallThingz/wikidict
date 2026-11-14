@@ -581,9 +581,13 @@ pub const SourceRootParentProof = struct {
     anchor: SourceRootChildProof,
     candidate_count: u16,
 };
+// Build-only captured repair of a bare UL run immediately after an exact note.
+// The following ordinary wiki list remains responsible for its body/actions.
+pub const SourceLiteralUlRestoration = struct { end: usize, body_end: usize, depth: u8, items: u16 };
 pub const SourceLiteralDivProof = struct {
     range: SourceRootChildProof,
     parent_start: ?usize,
+    restored_ul: ?SourceLiteralUlRestoration = null,
 };
 pub const TextElement = struct {
     source_literal_div: ?*const SourceLiteralDivProof = null,
@@ -6017,6 +6021,9 @@ const ContainerCompound = struct {
     direct_parent: bool = false,
 };
 const ContainerSelector = struct {
+    // Exact single-compound inner-control pseudo: absence on a known non-control
+    // host refutes only this candidate, without granting attribute or ancestry facts.
+    control_pseudo_host: bool = false,
     chain: []const ContainerCompound = &.{},
     fallback: ?TextSelector = null,
     necessary_chain: []const ContainerCompound = &.{},
@@ -6112,6 +6119,7 @@ const ContainerSelector = struct {
         // sibling authority; the parser-root proof does not add adjacency.
         if (self.adjacent_sibling != null) return self.match(element);
         if (!page_scoped) return self.match(element);
+        if (self.control_pseudo_host and knownNonControlHost(element.tag)) return .no;
         if (self.fallback) |fallback| {
             if (self.necessary_chain.len != 0) {
                 if (!self.necessary_chain[self.necessary_chain.len - 1].compound.matches(element)) return .no;
@@ -9663,7 +9671,8 @@ const Builder = struct {
             one[0] = .{ .compound = .{ .tag = compound.tag, .classes = compound.classes, .ids = compound.ids } };
             necessary = one;
         };
-        var result: ContainerSelector = .{ .fallback = fallback, .necessary_chain = necessary, .specificity = std.math.maxInt(u64), .uncertain = true };
+        var result: ContainerSelector = .{ .fallback = fallback, .necessary_chain = necessary, .specificity = std.math.maxInt(u64), .uncertain = true,
+            .control_pseudo_host = try self.figureControlPseudo(raw) };
         // Parsing this extra factual shape does not alter any global caller.
         const text = trim(raw);
         if (std.mem.indexOfScalar(u8, text, '+')) |plus| {
@@ -23292,4 +23301,71 @@ test "selected Container necessary ancestry keeps functional sibling and present
         try std.testing.expectEqual(ContainerSelectorMatch.unknown, rules.rules[0].match);
         try std.testing.expect((try page.resolveContainerIn(a, &clear, "clear:both")).unresolved);
     }
+}
+
+test "selected Container control pseudo excludes exact impossible hosts without losing authored DE borders" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const pseudo = "[type='button']::-moz-focus-inner,[type='reset']::-moz-focus-inner,[type='submit']::-moz-focus-inner{border-style:none;padding:0}";
+    const authored = ".mw-parser-output .uetabelle__head{border-top:1px dotted #aaa;border-bottom:1px dotted #aaa;padding-left:5px;padding-top:1px;padding-bottom:1px;min-height:1.6em;font-size:100%;background-color:#eff5fb;color:#000}";
+    var global = try parseForTargetAlloc(a, "", .screen); defer global.deinit();
+    var plain = try parseForTargetAlloc(a, authored, .screen); defer plain.deinit(); plain.page_style_parent = &global;
+    var page = try parseForTargetAlloc(a, pseudo ++ authored, .screen); defer page.deinit(); page.page_style_parent = &global;
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const frame: TextElement = .{ .tag = "div", .classes = "NavFrame uetabelle", .parent = &root, .page_style_root = &root };
+    const head: TextElement = .{ .tag = "div", .classes = "NavHead uetabelle__head", .parent = &frame, .page_style_root = &root };
+    // Exact observed owner classes; neither complete ancestors nor absent
+    // attributes are fabricated to reject this impossible pseudo-element host.
+    try std.testing.expect(!head.physical_ancestry_complete and head.attribute_presence == null);
+    const original_rules = page.container_rules.len;
+    const rules = try page.containerRuleMatchesIn(a, &head); defer a.free(rules.rules);
+    try std.testing.expect(!rules.unresolved and rules.rules.len == 1);
+    try std.testing.expectEqual(ContainerSelectorMatch.known, rules.rules[0].match);
+    const expected = try plain.resolveContainerIn(a, &head, "");
+    const actual = try page.resolveContainerIn(a, &head, "");
+    try std.testing.expect(!expected.unresolved and !actual.unresolved);
+    try std.testing.expect(expected.style.border != null and expected.style.padding != null and expected.style.background != null);
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqual(original_rules, page.container_rules.len);
+    for (page.container_rules[0..3]) |rule| try std.testing.expect(rule.selector.control_pseudo_host);
+    var missing = head; missing.page_style_root = null;
+    try std.testing.expect((try page.resolveContainerIn(a, &missing, "")).unresolved);
+    // Generic legacy matching has not acquired a new host-domain proof.
+    page.page_style_parent = null;
+    try std.testing.expect((try page.resolveContainerIn(a, &head, "")).unresolved);
+}
+
+test "selected Container control pseudo keeps real controls malformed ancestry and divergent hosts uncertain" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var global = try parseForTargetAlloc(a, "", .screen); defer global.deinit();
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const div: TextElement = .{ .tag = "div", .parent = &root, .page_style_root = &root };
+    var page = try parseForTargetAlloc(a, "[type='button']::-moz-focus-inner{border-style:none;padding:0}", .screen); defer page.deinit(); page.page_style_parent = &global;
+    for ([_][]const u8{ "button", "input", "BUTTON", "INPUT", "", "?" }) |tag| {
+        var subject = div; subject.tag = tag;
+        const rules = try page.containerRuleMatchesIn(a, &subject); defer a.free(rules.rules);
+        try std.testing.expect(!rules.unresolved and rules.rules.len == 1);
+        try std.testing.expectEqual(ContainerSelectorMatch.unknown, rules.rules[0].match);
+        try std.testing.expect((try page.resolveContainerIn(a, &subject, "")).unresolved);
+    }
+    var control = div; control.tag = "button";
+    var divergent = div; divergent.alternative_ancestry = &control;
+    try std.testing.expect((try page.resolveContainerIn(a, &divergent, "")).unresolved);
+    for ([_][]const u8{
+        "[type='button']::-moz-focus-inner:hover", "[type='button']::-moz-focus-inner::before",
+        "[type='button']::-moz-focus-inne", ":not(button)::-moz-focus-inner",
+        ":is(button,div)::-moz-focus-inner", "div [type='button']::-moz-focus-inner",
+        "div>[type='button']::-moz-focus-inner", "[type='button']::unknown", "[type='button']",
+    }) |selector| {
+        const css = try std.fmt.allocPrint(a, "{s}{{border-style:none;padding:0}}", .{selector});
+        var uncertain = try parseForTargetAlloc(a, css, .screen); defer uncertain.deinit(); uncertain.page_style_parent = &global;
+        try std.testing.expectEqual(@as(usize, 1), uncertain.container_rules.len);
+        try std.testing.expect(!uncertain.container_rules[0].selector.control_pseudo_host);
+        const rules = try uncertain.containerRuleMatchesIn(a, &div); defer a.free(rules.rules);
+        try std.testing.expect(!rules.unresolved and rules.rules.len == 1);
+        try std.testing.expectEqual(ContainerSelectorMatch.unknown, rules.rules[0].match);
+        try std.testing.expect((try uncertain.resolveContainerIn(a, &div, "")).unresolved);
+    }
+    var folded = try parseForTargetAlloc(a, "[type='button']::-MOZ-FOCUS-INNER{padding:0}", .screen); defer folded.deinit(); folded.page_style_parent = &global;
+    const folded_rules = try folded.containerRuleMatchesIn(a, &div); defer a.free(folded_rules.rules);
+    try std.testing.expect(folded_rules.rules.len == 0 and !folded_rules.unresolved);
 }

@@ -1871,6 +1871,18 @@ pub fn figureObservationStageOptionsAlloc(a: A, options: []const u8, context: Co
 // The observation scanner uses the ordinary File target stage, including its
 // single entity decode and the already-qualified File-only percent decode.
 // This yields no Figure admission and never promotes an explicit text link.
+// Build-only correspondence query; use the same maintained interwiki resolver
+// as ordinary link emission. This does not render a label or authorize its CSS.
+pub fn literalSourceLinkDestinationAlloc(a: A, ns: *const @import("namespace_registry").Registry, raw: []const u8) Error!?struct { target: []const u8, external: bool } {
+    if (raw.len == 0 or std.mem.indexOfAny(u8, raw, "<>[]{}|%?\\\r\n\x00") != null or !safeInternalTarget(raw)) return null;
+    const title = ns.normalizeTitle(a, raw, 0, .any) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
+    var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = ns } };
+    if (renderer.namespaceOfTarget(title)) |id| if (id == 6 or id == 14) return null;
+    const selected = try renderer.interwikiDestination(renderer.currentWikiTarget(title), 0);
+    if (selected.target.len == 0 or renderer.fallbacks.any()) return null;
+    return .{ .target = selected.target, .external = selected.external };
+}
+
 pub fn figureObservationFileTargetAlloc(a: A, raw: []const u8, context: Context) Error!?[]const u8 {
     if (context.namespace_catalog == null) return null;
     var renderer: Renderer = .{ .a = a, .context = context };
@@ -4820,6 +4832,51 @@ pub const Renderer = struct {
             return .{ .proof = proof, .opening = owner_whole[0..own.end], .current_operation = current_whole };
         }
         return null;
+    }
+
+    fn literalUlRestoration(self: *const Renderer, tag: syntax.Tag, parent: ?*const table_style_profile.TextElement) bool {
+        if (!tag.is("ul") or tag.closing or tag.self_closing or tag.html_pre or tag.attrs.len != 0 or !self.wikiClassOrdinaryDomain()) return false;
+        const domain = self.pageStyleDomain() orelse return false;
+        const binding = self.source_element_binding orelse return false;
+        const tracked = self.inline_missing orelse return false;
+        const opening = projectedTrackedTagOpening(tracked, tag) orelse return false;
+        if (!std.mem.eql(u8, opening, "<ul>") or !noLiParentSourceRange(tracked, opening)) return false;
+        const current_start = @intFromPtr(opening.ptr) - @intFromPtr(tracked.bytes.ptr);
+        if (!binding.projection.ordinaryRange(tracked, current_start, current_start + opening.len)) return false;
+        const original = self.registeredCaptionOriginal(opening) orelse return false;
+        if (!wikiClassContains(domain.source, original) or !std.mem.eql(u8, original, opening)) return false;
+        const original_start = @intFromPtr(original.ptr) - @intFromPtr(domain.source.ptr);
+        const body = self.body_missing orelse return false;
+        const original_body = self.registeredCaptionOriginal(body.bytes) orelse return false;
+        if (!wikiClassContains(domain.source, original_body) or !std.mem.eql(u8, original_body, body.bytes)) return false;
+        const body_start = @intFromPtr(original_body.ptr) - @intFromPtr(domain.source.ptr);
+        for (domain.scope.source_literal_divs) |*proof| {
+            const restore = proof.restored_ul orelse continue;
+            const start = proof.range.anchor_end;
+            if (restore.depth == 0 or restore.depth > 8 or restore.end <= start or restore.end > domain.source.len or
+                restore.end - start != @as(usize, restore.depth) * 4 or restore.body_end < restore.end or restore.body_end > domain.source.len or
+                (restore.items == 0) != (restore.body_end == restore.end) or
+                original_start < start or original_start + opening.len > restore.end or (original_start - start) % 4 != 0) continue;
+            var at = start;
+            while (at < restore.end) : (at += 4) if (!std.mem.eql(u8, domain.source[at..][0..4], "<ul>")) return false;
+            if (start < body_start or restore.body_end - body_start > body.bytes.len) return false;
+            const local_start = start - body_start; const local_end = restore.body_end - body_start;
+            if (!noLiParentSourceRange(body, body.bytes[local_start..local_end]) or
+                !noLiParentSourceRange(binding.projection.original, domain.source[start..restore.body_end]) or
+                !binding.projection.ordinaryRange(body, local_start, local_end) or
+                !binding.projection.ordinaryRange(binding.projection.original, start, restore.body_end)) return false;
+            if (proof.range.anchor_start >= start or start > domain.source.len) return false;
+            const owner_note = binding.ownerRange(proof.range.anchor_start, start - proof.range.anchor_start) orelse return false;
+            const note_tag = syntax.tagAt(owner_note, 0) orelse return false;
+            const known = self.literalDivContextForTrackedTag(note_tag, binding.owner) orelse return false;
+            if (known.proof != proof or !self.literalDivParent(known, parent)) return false;
+            // Book proved the restored UL/LI skeleton against the captured
+            // sibling list. renderBody has already cut this bare opener run
+            // away from the following wiki lines, which retain their normal
+            // list paths, content, actions and independent style checks.
+            return true;
+        }
+        return false;
     }
 
     fn literalDivParent(self: *const Renderer, known: LiteralDivContext, parent: ?*const table_style_profile.TextElement) bool {
@@ -18892,6 +18949,7 @@ pub const Renderer = struct {
         // and semantic HTML that must pass through the inline compiler.
         if (tag.is("li") and syntax.matchingTag(input, tag) == null) return tag.end;
         const matched: ?syntax.Pair = if (tag.is("p")) optionalParagraphEnd(input, tag, self.behaviorControlMatcher()) else syntax.matchingTag(input, tag);
+        if (matched == null and self.literalUlRestoration(tag, style.text_element)) return tag.end;
         if (matched == null) self.markUnclosed(input, tag, "known-html");
         // Unclosed layout containers have no inline style to scope. Consume
         // them iteratively, including long runs of malformed openers.
@@ -27812,14 +27870,53 @@ pub const Renderer = struct {
         return null;
     }
 
+    fn containerQueryClasses(self: *Renderer, tag: syntax.Tag, profile: *const table_style_profile.Profile,
+        element: *const table_style_profile.TextElement) Error!?[]const u8
+    {
+        if (!tag.is("div") or tag.closing or tag.self_closing) return null;
+        const domain = self.pageStyleDomain() orelse return null;
+        if (domain.scope.page_styles != profile or !wikiClassContains(domain.owner, tag.name)) return null;
+        const name_at = @intFromPtr(tag.name.ptr) - @intFromPtr(domain.owner.ptr);
+        if (name_at == 0) return null;
+        const opening = syntax.tagAt(domain.owner, name_at - 1) orelse return null;
+        if (opening.name.ptr != tag.name.ptr or opening.name.len != tag.name.len or
+            opening.attrs.ptr != tag.attrs.ptr or opening.attrs.len != tag.attrs.len or
+            opening.closing != tag.closing or opening.self_closing != tag.self_closing or opening.html_pre != tag.html_pre or
+            !self.pageStyleSourceRange(domain.owner[name_at - 1..opening.end])) return null;
+        // Both query views describe this same source token. No alternative is
+        // discarded, and no complete physical parent relation is manufactured.
+        for ([_]?*const table_style_profile.TextElement{ element, element.alternative_ancestry }) |maybe| if (maybe) |view| {
+            if (view != element and view.alternative_ancestry != null) return null;
+            const source = view.page_style_source orelse return null;
+            if (view.source_key != @intFromPtr(tag.name.ptr) or !std.ascii.eqlIgnoreCase(view.tag, tag.name) or
+                view.page_style_root != domain.scope.page_style_root or
+                source.ptr != domain.source.ptr or source.len != domain.source.len or !self.currentAncestorScope(view) or
+                self.pageStyleRootForTag(tag, view.parent) != domain.scope.page_style_root) return null;
+        };
+        return self.negativePaintQueryClasses(domain.scope.complete_ancestor_class_superset, element);
+    }
+
     fn containerResolution(self: *Renderer, tag: syntax.Tag, parent: Style, scoped: Style) Error!table_style_profile.ContainerResolution {
         if (!tag.is("div")) return .{};
         const css = (try self.semanticAttribute(tag, "style")) orelse "";
         const element = scoped.text_element orelse try self.textElement(tag, parent.text_element, parent.language);
         const consumed = scoped.table_inheritance_scoped and scoped.table_collapse != null and scoped.table_collapse.? != .unknown;
-        return if (self.textPaintProfile()) |profile|
-            try profile.resolveContainerInWithInheritance(self.a, element, css, scoped.custom_properties, consumed)
-        else try table_style_profile.resolveInlineContainerWithInheritanceAlloc(self.a, css, consumed);
+        if (self.textPaintProfile()) |profile| {
+            const classes = try self.containerQueryClasses(tag, profile, element);
+            defer if (classes) |owned| self.a.free(owned);
+            var query = element.*;
+            var alternative: table_style_profile.TextElement = undefined;
+            if (classes) |complete| {
+                query.complete_ancestor_classes = complete;
+                if (element.alternative_ancestry) |other| {
+                    alternative = other.*;
+                    alternative.complete_ancestor_classes = complete;
+                    query.alternative_ancestry = &alternative;
+                }
+            }
+            return try profile.resolveContainerInWithInheritance(self.a, &query, css, scoped.custom_properties, consumed);
+        }
+        return try table_style_profile.resolveInlineContainerWithInheritanceAlloc(self.a, css, consumed);
     }
 
     fn containerNeedsOwnedBox(value: presentation_types.ContainerStyle) bool {
@@ -92177,4 +92274,229 @@ test "retained KU table opener custody preserves all ten exact physical attribut
     // This is the complete original page, not a reduced table fixture. Its
     // stored full-body/color oracle remains a separate ordinary-output check.
     try std.testing.expectEqual(@as(usize, 26592), source.len);
+}
+
+const ContainerClassQueryTest = struct {
+    const source = "<div class='printNav'><div class='NavFrame uetabelle'><div class='NavHead uetabelle__head'>kept [[Target|label]]</div></div></div>";
+    const css = ".client-js body.skin-minerva .mw-parser-output .ambox div{margin:0!important;padding:0!important}";
+    renderer: Renderer,
+    scope: *table_style_profile.BoundedTextClassScope,
+    tag: syntax.Tag,
+    parent: *const table_style_profile.TextElement,
+    node: *const table_style_profile.TextElement,
+    fn init(a: A, profile: *const table_style_profile.Profile) !@This() {
+        const root = try a.create(table_style_profile.TextElement);
+        root.* = .{ .tag = "div", .classes = "mw-parser-output" };
+        const scope = try a.create(table_style_profile.BoundedTextClassScope);
+        scope.* = .{ .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "printNav NavFrame uetabelle NavHead uetabelle__head",
+            .complete_ancestor_class_superset = "client-js skin-vector mw-parser-output printNav NavFrame uetabelle NavHead uetabelle__head",
+            .page_styles = profile, .page_style_root = root };
+        const projection = try a.create(SourceElementProjection);
+        const tracked = MissingText.untracked(source);
+        projection.* = .{ .original = tracked, .prepared = source, .copies = &.{.{ .original_start = 0, .prepared_start = 0, .len = source.len }},
+            .observed_source = .{ .source = source, .scope = scope } };
+        var context = try FigureProducerTest.context(a); context.observe_source_elements = true;
+        context.table_styles = profile; context.figure_sizing.?.text_class_scope = .{ .source = source, .scope = scope };
+        var renderer: Renderer = .{ .a = a, .context = context, .content_root = .parser_output, .body_missing = tracked,
+            .source_element_binding = .{ .scope = scope, .projection = projection, .owner = tracked, .page_start = 0 } };
+        const first = syntax.tagAt(source, 0).?;
+        const second = syntax.tagAt(source, first.end).?;
+        const third = syntax.tagAt(source, second.end).?;
+        const outer = try renderer.textElement(first, null, "");
+        const parent = try renderer.textElement(second, outer, "");
+        const node = try renderer.textElement(third, parent, "");
+        return .{ .renderer = renderer, .scope = scope, .tag = third, .parent = parent, .node = node };
+    }
+};
+
+test "source bound Container query refutes absent DE ancestor classes without physical ancestry or node mutation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var global = try table_style_profile.parseForTargetAlloc(a, "", .screen); defer global.deinit();
+    var profile = try table_style_profile.parseForTargetAlloc(a, ContainerClassQueryTest.css, .screen); defer profile.deinit(); profile.page_style_parent = &global;
+    var fixture = try ContainerClassQueryTest.init(a, &profile);
+    const before = fixture.node.*;
+    try std.testing.expect(fixture.node.page_style_root != null and fixture.node.complete_ancestor_classes == null);
+    try std.testing.expect(!fixture.node.physical_ancestry_complete and !fixture.node.ancestry_complete);
+    try std.testing.expect(fixture.renderer.bounded_text_class_source == null);
+    const ordinary = try profile.resolveContainerIn(a, fixture.node, "");
+    try std.testing.expect(ordinary.unresolved);
+    const result = try fixture.renderer.containerResolution(fixture.tag, .{ .text_element = fixture.parent }, .{ .text_element = fixture.node });
+    try std.testing.expect(!result.unresolved and !result.specified);
+    try std.testing.expectEqualDeep(before, fixture.node.*);
+    try std.testing.expectEqualStrings(ContainerClassQueryTest.source, fixture.renderer.source_element_binding.?.owner.bytes);
+    // An unclassed possible ancestor has no absent required class to refute.
+    var unknown = try table_style_profile.parseForTargetAlloc(a, "body div{padding:0}", .screen); defer unknown.deinit(); unknown.page_style_parent = &global;
+    var uncertain = try ContainerClassQueryTest.init(a, &unknown);
+    try std.testing.expect((try uncertain.renderer.containerResolution(uncertain.tag, .{ .text_element = uncertain.parent }, .{ .text_element = uncertain.node })).unresolved);
+}
+
+test "source bound Container absence keeps present generated alternative stale and incomplete domains unresolved" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var global = try table_style_profile.parseForTargetAlloc(a, "", .screen); defer global.deinit();
+    var profile = try table_style_profile.parseForTargetAlloc(a, ContainerClassQueryTest.css, .screen); defer profile.deinit(); profile.page_style_parent = &global;
+    var foreign = try table_style_profile.parseForTargetAlloc(a, "", .screen); defer foreign.deinit();
+    for (0..13) |mode| {
+        var fixture = try ContainerClassQueryTest.init(a, &profile);
+        var node = fixture.node.*;
+        var generated = fixture.parent.*;
+        var alternative = node;
+        switch (mode) {
+            0 => fixture.scope.complete_ancestor_class_superset = "client-js skin-minerva mw-parser-output ambox printNav NavFrame uetabelle NavHead uetabelle__head",
+            1 => fixture.scope.complete_ancestor_class_superset = null,
+            2 => { generated.classes = "client-js skin-minerva ambox"; node.parent = &generated; },
+            3 => { generated.classes = "client-js skin-minerva ambox"; alternative.parent = &generated; node.alternative_ancestry = &alternative; },
+            4 => { generated.parent = &generated; node.parent = &generated; },
+            5 => fixture.renderer.source_element_binding = null,
+            6 => fixture.scope.page_styles = &foreign,
+            7 => node.source_key += 1,
+            8 => node.page_style_source = try a.dupe(u8, ContainerClassQueryTest.source),
+            9 => fixture.renderer.source_element_binding.?.owner.bytes = try a.dupe(u8, ContainerClassQueryTest.source),
+            10 => { generated.page_style_source = try a.dupe(u8, ContainerClassQueryTest.source); node.parent = &generated; },
+            11 => { alternative.source_key += 1; node.alternative_ancestry = &alternative; },
+            12 => fixture.scope.complete_ancestor_class_superset = try a.alloc(u8, 65537),
+            else => unreachable,
+        }
+        const original = node;
+        const result = try fixture.renderer.containerResolution(fixture.tag, .{ .text_element = node.parent }, .{ .text_element = &node });
+        try std.testing.expect(result.unresolved);
+        // Compare field and pointer identities without walking the deliberate ancestry cycle.
+        try std.testing.expect(std.meta.eql(original, node));
+    }
+    var fixture = try ContainerClassQueryTest.init(a, &profile);
+    const copied = try a.dupe(u8, ContainerClassQueryTest.source);
+    const copied_tag = syntax.tagAt(copied, @intFromPtr(fixture.tag.name.ptr) - @intFromPtr(ContainerClassQueryTest.source.ptr) - 1).?;
+    try std.testing.expect((try fixture.renderer.containerQueryClasses(copied_tag, &profile, fixture.node)) == null);
+    var truncated = fixture.tag; truncated.attrs = truncated.attrs[0 .. truncated.attrs.len - 1];
+    try std.testing.expect((try fixture.renderer.containerQueryClasses(truncated, &profile, fixture.node)) == null);
+    var marked = fixture.renderer.source_element_binding.?.owner;
+    const at = @intFromPtr(fixture.tag.name.ptr) - @intFromPtr(marked.bytes.ptr);
+    marked.unknown = true; marked.ranges = &.{.{ .start = @intCast(at), .end = @intCast(at + 1), .occurrence = 1 }};
+    fixture.renderer.source_element_binding.?.owner = marked;
+    try std.testing.expect((try fixture.renderer.containerQueryClasses(fixture.tag, &profile, fixture.node)) == null);
+}
+
+const LiteralUlRestoreTest = struct {
+    const note = "<div class='note'>'''Note''':\n*first ''item''</div>";
+    const suffix = "\n* [[Next#part|kept]]\n</div>";
+    renderer: Renderer,
+    source: []const u8,
+    outer: syntax.Tag,
+    ul: syntax.Tag,
+    scope: *table_style_profile.BoundedTextClassScope,
+    projection: *SourceElementProjection,
+    proof: *table_style_profile.SourceLiteralDivProof,
+    fn init(a: A, styles: *const table_style_profile.Profile, closed: bool, empty: bool) !@This() {
+        const body = try std.mem.concat(a, u8, &.{ "<div class='outer'>\n", note, if (closed) "<ul></ul>" else "<ul>", if (empty) "</div>" else suffix });
+        const source = try std.mem.concat(a, u8, &.{ body, "\nmissing" });
+        const root = try a.create(table_style_profile.TextElement);
+        root.* = .{ .tag = "div", .classes = "mw-parser-output", .ancestry_complete = true, .physical_ancestry_complete = true };
+        const alternate = try a.create(table_style_profile.TextElement); alternate.* = root.*; root.alternative_ancestry = alternate;
+        const scope = try a.create(table_style_profile.BoundedTextClassScope);
+        scope.* = .{ .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "outer note",
+            .complete_ancestor_class_superset = "mw-parser-output outer note", .complete_ancestor_id_superset = "",
+            .page_styles = styles, .page_style_root = root, .page_style_complete_root = root, .source_literal_divs_source = source };
+        const outer = syntax.tagAt(source, 0).?;
+        const own = syntax.tagAt(source, outer.end + 1).?;
+        const own_pair = syntax.matchingTag(source, own).?;
+        const ul = syntax.tagAt(source, own_pair.end).?;
+        const proofs = try a.alloc(table_style_profile.SourceLiteralDivProof, 2);
+        for ([_]syntax.Tag{ outer, own }, proofs, 0..) |tag, *proof, index| {
+            const start = @intFromPtr(tag.name.ptr) - @intFromPtr(source.ptr) - 1;
+            proof.* = .{ .range = .{ .anchor_start = start, .anchor_end = syntax.matchingTag(source, tag).?.end,
+                .name_start = start + 1, .name_len = tag.name.len, .attrs_start = @intFromPtr(tag.attrs.ptr) - @intFromPtr(source.ptr), .attrs_len = tag.attrs.len },
+                .parent_start = if (index == 0) null else 0 };
+        }
+        if (!closed) proofs[1].restored_ul = .{ .end = ul.end, .body_end = syntax.matchingTag(source, outer).?.inner_end, .depth = 1, .items = if (empty) 0 else 1 };
+        scope.source_literal_divs = proofs;
+        const ranges = try a.alloc(missing_dependency.Range, 1); ranges[0] = .{ .start = @intCast(body.len + 1), .end = @intCast(source.len), .occurrence = 1 };
+        const tracked: MissingText = .{ .bytes = source, .unknown = true, .ranges = ranges };
+        const copies = try a.alloc(SourceElementProjection.Copy, 1); copies[0] = .{ .original_start = 0, .prepared_start = 0, .len = source.len };
+        const projection = try a.create(SourceElementProjection);
+        projection.* = .{ .original = tracked, .prepared = source, .copies = copies, .observed_source = .{ .source = source, .scope = scope } };
+        var context = try FigureProducerTest.context(a); context.observe_source_elements = true;
+        context.table_styles = styles; context.figure_sizing.?.text_class_scope = .{ .source = source, .scope = scope };
+        const renderer: Renderer = .{ .a = a, .context = context, .content_root = .parser_output, .body_missing = tracked,
+            .source_element_binding = .{ .scope = scope, .projection = projection, .owner = tracked, .page_start = 0 },
+            .figure_class_source_binding = .{ .scope = scope, .projection = projection, .owner = tracked, .page_start = 0 } };
+        return .{ .renderer = renderer, .source = source, .outer = outer, .ul = ul, .scope = scope, .projection = projection, .proof = &proofs[1] };
+    }
+    const Witness = struct { notes: usize = 0, items: usize = 0, links: usize = 0, boxes: usize = 0 };
+    fn inspect(blocks: []const Block, witness: *Witness) !void {
+        for (blocks) |block| {
+            if (block.container) |container| {
+                if (container.style.background != null and container.style.border != null and container.style.padding != null and container.style.margins != null) {
+                    try std.testing.expectApproxEqAbs(@as(f32, 0.85), container.style.owner_font_scale orelse return error.TestUnexpectedResult, 0.000001);
+                    witness.boxes += 1;
+                }
+                try inspect(container.blocks, witness);
+            }
+            for (block.spans) |span| {
+                if (std.mem.eql(u8, span.text, "Note")) { try std.testing.expect(span.flags.bold); witness.notes += 1; }
+                if (std.mem.eql(u8, span.text, "item")) { try std.testing.expect(span.flags.italic); witness.items += 1; }
+                if (span.kind == .link) {
+                    try std.testing.expectEqualStrings("kept", span.text);
+                    try std.testing.expectEqualStrings("Next", span.target);
+                    try std.testing.expectEqualStrings("part", span.target_fragment orelse return error.TestUnexpectedResult);
+                    try std.testing.expectEqualStrings("*", block.list_path);
+                    witness.links += 1;
+                }
+            }
+        }
+    }
+};
+test "source bound UL restoration retains normal list body links note style empty list and Stored codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try table_style_profile.parseForTargetAlloc(a, ".note{border:1px solid #235923;padding:4px;margin:8px;background:#ffffe0;font-size:85%}", .screen); defer styles.deinit();
+    for ([_]bool{ false, true }) |empty| {
+        var actual = try LiteralUlRestoreTest.init(a, &styles, false, empty);
+        var reference = try LiteralUlRestoreTest.init(a, &styles, true, empty);
+        const body_end = syntax.matchingTag(actual.source, actual.outer).?.end;
+        const reference_end = syntax.matchingTag(reference.source, reference.outer).?.end;
+        const blocks = try actual.renderer.renderBody(actual.source[0..body_end]);
+        const expected = try reference.renderer.renderBody(reference.source[0..reference_end]);
+        try std.testing.expect(!actual.renderer.fallbacks.any() and !reference.renderer.fallbacks.any());
+        try std.testing.expectEqualDeep(expected, blocks);
+        try std.testing.expect(blocks.len != 0);
+        var witness: LiteralUlRestoreTest.Witness = .{};
+        try LiteralUlRestoreTest.inspect(blocks, &witness);
+        try std.testing.expectEqualDeep(LiteralUlRestoreTest.Witness{ .notes = 1, .items = 1, .links = if (empty) 0 else 1, .boxes = 1 }, witness);
+        try FigureProducerTest.roundtrip(a, &actual.renderer, blocks);
+        try FigureProducerTest.roundtrip(a, &reference.renderer, expected);
+        var missing_proof = try LiteralUlRestoreTest.init(a, &styles, false, empty);
+        missing_proof.proof.restored_ul = null;
+        _ = try missing_proof.renderer.renderBody(missing_proof.source[0..syntax.matchingTag(missing_proof.source, missing_proof.outer).?.end]);
+        try std.testing.expect(missing_proof.renderer.fallbacks.unclosed_formatting);
+    }
+}
+
+test "UL restoration refuses detached provenance foreign copies taint parent loss and changed list certificates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try table_style_profile.parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    for (0..12) |mode| {
+        var fixture = try LiteralUlRestoreTest.init(a, &styles, false, false);
+        const parent = try fixture.renderer.textElement(fixture.outer, null, "");
+        const start = fixture.proof.range.anchor_end;
+        const raw = fixture.source[start..fixture.ul.end];
+        fixture.renderer.inline_missing = .{ .bytes = raw };
+        fixture.renderer.body_missing = .{ .bytes = fixture.source[fixture.outer.end..syntax.matchingTag(fixture.source, fixture.outer).?.inner_end] };
+        const tag = syntax.tagAt(raw, 0).?;
+        try std.testing.expect(fixture.renderer.literalUlRestoration(tag, parent));
+        var selected = tag;
+        switch (mode) {
+            0 => fixture.proof.restored_ul = null,
+            1 => fixture.projection.observed_source = null,
+            2 => fixture.scope.source_literal_divs_source = try a.dupe(u8, fixture.source),
+            3 => fixture.renderer.inline_missing.?.lost_missing_range = true,
+            4 => fixture.renderer.body_missing.?.generated_source = fixture.renderer.body_missing.?.bytes,
+            5 => fixture.proof.restored_ul.?.end += 1,
+            6 => fixture.proof.restored_ul.?.items = 0,
+            7 => { const copy = try a.dupe(u8, raw); selected = syntax.tagAt(copy, 0).?; fixture.renderer.inline_missing = .{ .bytes = copy }; },
+            8 => fixture.proof.parent_start = null,
+            9 => { const ranges = try a.alloc(missing_dependency.Range, 1); ranges[0] = .{ .start = @intCast(start), .end = @intCast(start + 1), .occurrence = 2 }; fixture.projection.original.ranges = ranges; },
+            10 => fixture.projection.original.lost_missing_range = true,
+            11 => fixture.projection.original.generated_source = fixture.projection.original.bytes,
+            else => unreachable,
+        }
+        try std.testing.expect(!fixture.renderer.literalUlRestoration(selected, parent));
+    }
 }
