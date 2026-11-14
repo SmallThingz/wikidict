@@ -12026,3 +12026,88 @@ class InitialSealedSplitTargetTests(InitialSealedRoleSuccessorTests):
                     else:
                         f.target_rows[role]['result']['artifacts'][role]['reference']['sha256']='0'*64;self.rewrite_target(f,role)
                     with self.assertRaises(ValueError):b.initial_sealed_role_successor(f.original,f.roles)
+
+
+class InitialSealedBlobTargetTests(InitialSealedSplitTargetTests):
+    def blob_fixture(self,root):
+        f=self.split_fixture(root)
+        f.current['dict-bundle-build']=copy.deepcopy(f.original['dict-bundle-build'])
+        import extraction_cache as cache
+        live=Path(cache.__file__).absolute()
+        f.current['dict-bundle-build']['dependencies']['extraction_helper']=dict(_initial_sealed_reference(live),mode=stat.S_IMODE(live.stat().st_mode))
+        source=b.prepared_metadata(f.current['dict-blob-build']['source'])
+        for role in ('dict-blob-merge','dict-blob-verify'):
+            f.original[role].update(source=f.original['dict-blob-build']['source'],source_paths=f.original['dict-blob-build']['source_paths'],source_payload_files=f.original['dict-blob-build']['source_payload_files'],producer_source=f.original['dict-blob-build']['producer_source'])
+            f.current[role]=copy.deepcopy(f.original[role])
+            target=root/'writer-install/bin'/role;target.write_bytes(('new '+role).encode());target.chmod(0o555)
+            f.current[role].update(artifact=dict(_initial_sealed_reference(target),mode=0o555),source=f.current['dict-blob-build']['source'],producer_source=f.current['dict-blob-build']['producer_source'],source_payload_files=f.current['dict-blob-build']['source_payload_files'])
+        previous=_initial_sealed_write(root/'blob-original-roles.json',f.original)
+        row=f.current['dict-blob-build'];state=f.target_rows['dict-blob-build']
+        if 'qualified_source_handoff' in f.original['dict-blob-build']:
+            row['qualified_source_handoff']=copy.deepcopy(f.original['dict-blob-build']['qualified_source_handoff'])
+        else:row.pop('qualified_source_handoff',None)
+        text=state['stderr'].read_text().replace('(1 failed)','(3 failed)').replace('test-bundle success','test-bundle failure')
+        text=text.replace('+- install dict-blob-build success','+- install dict-blob-build success\n+- install dict-blob-merge success\n+- install dict-blob-verify success')
+        state['stderr'].write_text(text)
+        owner=_initial_sealed_write(root/'owner-configuration.json',dict(bindings=dict(INPUT_REF=row['compilation_recipe'])))
+        state['closed'].update(emission_pass=True,owner_configuration=owner,production_roles={})
+        f.blob_owner=owner;f.blob_previous=previous
+        for role in b.BLOB_TOOL_NAMES:
+            f.current[role].update(previous_role_binding=previous,compilation_recipe=row['compilation_recipe'])
+        self.rewrite_blob_target(f)
+        return f
+
+    def rewrite_blob_target(self,f):
+        state=f.target_rows['dict-blob-build'];row=f.current['dict-blob-build']
+        state['result']['commands'][0]['stderr']=_initial_sealed_reference(state['stderr'])
+        result=_initial_sealed_write(f.root/'blob-result.json',state['result'])
+        state['closed'].update(result=result,commands=copy.deepcopy(state['result']['commands']))
+        # The actual captured identities are not regenerated on mutation tests.
+        if not state['closed']['production_roles']:
+            for role,key in (('dict-blob-build','writer'),('dict-blob-merge','merge'),('dict-blob-verify','verify')):
+                artifact=f.current[role]['artifact'];s=Path(artifact['path']).stat()
+                state['closed']['production_roles'][key]=dict(reference={k:v for k,v in artifact.items()if k!='mode'},mode=artifact['mode'],successful_graph_target=True,source_manifest=row['source'],origin_configuration=f.blob_owner,device=s.st_dev,inode=s.st_ino,mtime_ns=s.st_mtime_ns,ctime_ns=s.st_ctime_ns,nlink=s.st_nlink)
+        closure=_initial_sealed_write(f.root/'blob-closure.json',state['closed'])
+        for role in b.BLOB_TOOL_NAMES:f.current[role].update(actual_emission_result=result,qualification_closure=closure)
+
+    def test_prepared_current_blob_targets_preserve_unrelated_failures_and_old_worker(self):
+        with tempfile.TemporaryDirectory()as tmp:
+            f=self.blob_fixture(Path(tmp));before=(f.expander/'.completed-expander.json').read_bytes();driver=copy.deepcopy(f.current['dict-bundle-build'])
+            b.initial_sealed_role_successor(f.original,f.roles)
+            self.assertFalse(f.target_rows['dict-blob-build']['result']['passed']);self.assertFalse(f.target_rows['dict-blob-build']['closed']['full_graph_passed'])
+            self.assertEqual(driver,f.current['dict-bundle-build']);self.assertEqual(before,(f.expander/'.completed-expander.json').read_bytes())
+            self.assertNotEqual(f.original['dict-blob-verify']['artifact'],f.current['dict-blob-verify']['artifact'])
+            for call in (lambda:f.roles.install_role('dict-bundle-build',f.root/'install'),lambda:f.roles.require_command('dict-bundle-build',['dump','out','--expander-only']),lambda:f.roles.prepare(['dump','out','--expander-only'],'testwiktionary','20261001')):
+                with self.assertRaises(ValueError):call()
+
+    def test_prepared_blob_target_refusals_preserve_requested_source_artifact_and_driver(self):
+        for mode in ('target-failure','missing-artifact','wrong-source','failed-capture','artifact-bytes','artifact-inode','runtime','old-driver','foreign-helper','codec','missing-target','duplicate-target','late-authority'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory()as tmp:
+                f=self.blob_fixture(Path(tmp));state=f.target_rows['dict-blob-build'];captured=state['closed']['production_roles']
+                if mode=='late-authority':
+                    f.roles.inputs={};f.roles.input_identities={}
+                    f.roles.bind_input=lambda path,retain=True:b.RetainedNativeToolRoles.bind_input(f.roles,path,retain=retain)
+                    f.roles.require_unchanged=lambda:b.RetainedNativeToolRoles.require_inputs_unchanged(f.roles)
+                    b.initial_sealed_role_successor(f.original,f.roles)
+                    path=Path(f.current['dict-blob-build']['qualification_closure']['path'])
+                    path.write_bytes(path.read_bytes()+b' ')
+                    with self.assertRaises(ValueError):f.roles.require_unchanged()
+                    continue
+                if mode=='target-failure':state['stderr'].write_text(state['stderr'].read_text().replace('prepare-blob-tools success','prepare-blob-tools failure'))
+                elif mode=='missing-artifact':captured.pop('verify')
+                elif mode=='wrong-source':captured['verify']['source_manifest']=f.blob_previous
+                elif mode=='failed-capture':captured['verify']['successful_graph_target']=False
+                elif mode in ('artifact-bytes','artifact-inode'):
+                    p=Path(f.current['dict-blob-verify']['artifact']['path']);raw=p.read_bytes()
+                    if mode=='artifact-inode':p.unlink();p.write_bytes(raw)
+                    else:p.chmod(0o755);p.write_bytes(b'x'*len(raw))
+                    p.chmod(0o555)
+                elif mode=='runtime':f.current['dict-blob-verify']['dependencies']=dict(f.current['dict-blob-verify']['dependencies'],worker_object=dict(path='/foreign',bytes=1,sha256='0'*64,mode=0o555))
+                elif mode=='old-driver':f.current['dict-bundle-build']['artifact']=f.current['dict-blob-build']['artifact']
+                elif mode=='foreign-helper':f.current['dict-bundle-build']['dependencies']['extraction_helper']['path']=str(f.root/'not-imported.py')
+                elif mode=='codec':
+                    role=f.current['dict-blob-verify'];source=b.prepared_metadata(role['source']);source['files']['src/encoder/presentation_codec.zig']=dict(source['files']['src/encoder/presentation_codec.zig'],sha256='0'*64);role['source']=_initial_sealed_write(f.root/'foreign-codec-source.json',source)
+                elif mode=='missing-target':state['stderr'].write_text(state['stderr'].read_text().replace('prepare-blob-tools success\n',''))
+                else:state['stderr'].write_text(state['stderr'].read_text()+'prepare-blob-tools success\n')
+                self.rewrite_blob_target(f)
+                with self.assertRaises((ValueError,OSError)):b.initial_sealed_role_successor(f.original,f.roles)

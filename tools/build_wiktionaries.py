@@ -3465,23 +3465,28 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
             or command['cwd'] != row['source_root'] or argv.count('--summary') != 1
             or argv[argv.index('--summary') + 1] != 'all' or argv.count('--prefix') != 1):
         raise ValueError('Initial sealed target command differs')
-    if full_graph:
-        targets = ['test', 'test-bundle', 'prepare-blob-tools', 'prepare-bundle-driver', 'cli', 'ffi']
-        if (argv[2:8] != targets or command.get('returncode') != 1 or emitted.get('passed') is not False
-                or closed.get('outcome') != 'FAILED-PHYSICALLY-SOURCE-CLOSED'
-                or closed.get('full_native_pass') is not False or closed.get('full_graph_passed') is not False):
-            raise ValueError('Initial sealed target is not the retained failed-test full graph')
-    else:
-        targets = [target]
-        if (argv[2] != target or command.get('returncode') != 0 or emitted.get('passed') is not True
-                or closed.get('outcome') != 'PASSED-PHYSICALLY-SOURCE-CLOSED'):
-            raise ValueError('Initial sealed driver target did not pass')
+    targets = []
+    for value in argv[2:]:
+        if value.startswith('-'): break
+        targets.append(value)
+    if (not targets or len(targets) != len(set(targets)) or target not in targets
+            or (not full_graph and targets != [target])):
+        raise ValueError('Initial sealed target was not requested exactly once')
+    failed = command.get('returncode') != 0
+    if (type(command.get('returncode')) is not int
+            or emitted.get('passed') is not (not failed)
+            or closed.get('outcome') != ('FAILED' if failed else 'PASSED')+'-PHYSICALLY-SOURCE-CLOSED'
+            or (failed and (closed.get('full_native_pass') is not False or closed.get('full_graph_passed') is not False))):
+        raise ValueError('Initial sealed target graph verdict differs')
     fingerprint = '-Dcaptured-source-fingerprint=' + row['producer_source']
     if ([arg for arg in argv if arg.startswith('-Dcaptured-source-fingerprint=')] != [fingerprint]
             or '-Doptimize=safe' not in argv or '-Dtarget=x86_64-native' not in argv or '-Dcpu=baseline' not in argv):
         raise ValueError('Initial sealed target source/optimization flags differ')
     prefix = Path(argv[argv.index('--prefix') + 1])
-    role = 'dict-blob-build' if full_graph else 'dict-bundle-build'
+    role = Path(row['artifact']['path']).name
+    allowed_roles = {'prepare-blob-tools': BLOB_TOOL_NAMES, 'prepare-bundle-driver': ('dict-bundle-build',)}
+    if role not in allowed_roles.get(target, ()):
+        raise ValueError('Initial sealed target has another role')
     if Path(row['artifact']['path']) != prefix / 'bin' / role:
         raise ValueError('Initial sealed target installed another artifact')
     stderr = command.get('stderr')
@@ -3492,14 +3497,15 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
         raise ValueError('Initial sealed target summary changed')
     text = Path(stderr['path']).read_text()
     summaries = list(re.finditer(r'^Build Summary: (\d+)/(\d+) steps succeeded(?: \((\d+) failed\))?\s*$', text, re.MULTILINE))
-    if (len(summaries) != 1 or (full_graph and summaries[0].group(3) != '1')
-            or (not full_graph and summaries[0].group(3) not in (None, '0'))):
+    if (len(summaries) != 1
+            or (int(summaries[0].group(3) or 0) > 0) is not failed):
         raise ValueError('Initial sealed target summary is ambiguous')
     summary = text[summaries[0].end():]
     top = re.findall(r'^([a-z][a-z-]*) (success|failure|transitive failure)(?:[^\n]*)$', summary, re.MULTILINE)
-    expected = {name: ('transitive failure' if full_graph and name == 'test' else 'success') for name in targets}
-    if len(top) != len(expected) or dict(top) != expected:
-        raise ValueError('Initial sealed target has a failed or missing install/bundle target')
+    if (len(top) != len(targets) or {name for name,_ in top} != set(targets)
+            or len(dict(top)) != len(top) or dict(top).get(target) != 'success'
+            or (not failed and any(status != 'success' for _,status in top))):
+        raise ValueError('Initial sealed target has a failed or missing requested target')
     start = re.search(r'^' + re.escape(target) + r' success[^\n]*\n', summary, re.MULTILINE)
     if start is None:
         raise ValueError('Initial sealed target is absent')
@@ -3507,8 +3513,31 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
     block = summary[start.end():start.end()+end.start()] if end is not None else summary[start.end():]
     if re.search(r'^\s*\+- install ' + role + r' success\s*$', block, re.MULTILINE) is None:
         raise ValueError('Initial sealed install did not succeed')
-    if full_graph:
-        # Full07's failed aggregate cannot contain a success-only artifact table.
+    production = closed.get('production_roles')
+    if production is not None:
+        # A closed partial graph may authenticate successful production targets
+        # independently of unrelated failed tests; its whole verdict is retained.
+        key = {'dict-blob-build':'writer', 'dict-blob-merge':'merge',
+               'dict-blob-verify':'verify', 'dict-bundle-build':'driver'}[role]
+        captured = production.get(key)
+        if (closed.get('emission_pass') is not True or not isinstance(captured,dict)
+                or captured.get('successful_graph_target') is not True
+                or captured.get('source_manifest') != row['source']
+                or dict(captured.get('reference',{}),mode=captured.get('mode')) != row['artifact']):
+            raise ValueError('Initial sealed target lacks its closed production artifact')
+        origin = prepared_metadata(captured['origin_configuration'])
+        if (closed.get('owner_configuration') != captured['origin_configuration']
+                or origin.get('bindings',{}).get('INPUT_REF') != row['compilation_recipe']):
+            raise ValueError('Initial sealed production artifact configuration differs')
+        path = Path(row['artifact']['path']); info = path.stat()
+        observed_stamp = dict(device=info.st_dev,inode=info.st_ino,mode=stat.S_IMODE(info.st_mode),
+            mtime_ns=info.st_mtime_ns,ctime_ns=info.st_ctime_ns,nlink=info.st_nlink)
+        if any(captured.get(name) != value for name,value in observed_stamp.items()):
+            raise ValueError('Initial sealed production artifact custody differs')
+        references.append(captured['origin_configuration'])
+    elif full_graph:
+        # Historical post-closure observations retain their original authority.
+
         # Consume its existing post-closure actual-native/source handoff instead.
         handoff_reference = row.get('qualified_source_handoff')
         if not isinstance(handoff_reference,dict):
@@ -3539,9 +3568,66 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
     return argv, [*references, stderr]
 
 
+def initial_sealed_blob_successor(original, native_roles):
+    """Resume a closed worker with current blob tools; never execute its old driver."""
+    import copy
+    import extraction_cache as cache
+    current = native_roles.records
+    old_driver, driver = [copy.deepcopy(value['dict-bundle-build']) for value in (original,current)]
+    old_driver['dependencies'].pop('extraction_helper',None)
+    live = driver['dependencies'].pop('extraction_helper',None)
+    if (old_driver != driver or not isinstance(live,dict)
+            or Path(live['path']) != Path(cache.__file__).absolute()
+            or native_roles.bind_input(Path(live['path'])) != live):
+        raise ValueError('Initial sealed execution changed its original unused driver or live helper')
+    allowed = {'artifact','source','producer_source','compiled_source_authority','source_payload_files',
+        'source_payload_git','compilation_recipe','actual_emission_result','qualification_closure',
+        'qualification_scope','previous_role_binding'}
+    shared = None
+    references = []
+    for name in BLOB_TOOL_NAMES:
+        before, after = original[name], current[name]
+        if ({k:v for k,v in before.items() if k not in allowed} !=
+                {k:v for k,v in after.items() if k not in allowed}
+                or prepared_metadata(after['previous_role_binding']) != original):
+            raise ValueError('Initial sealed blob successor changed native dependencies or role policy')
+        authority = tuple(after[key] for key in ('source','compilation_recipe','actual_emission_result','qualification_closure'))
+        if shared is not None and authority != shared:
+            raise ValueError('Initial sealed blob tools have different emission origins')
+        shared = authority
+        _, target_references = initial_sealed_target_emission(after,native_roles,target='prepare-blob-tools',full_graph=True)
+        references.extend([after['previous_role_binding'],*target_references])
+        source = prepared_metadata(after['source']); inventory = source.get('files',source)
+        for relative in after['source_paths']:
+            identity = native_roles.compilation_identity(after,relative)
+            if (any(identity[key] != inventory[relative][key] for key in ('bytes','sha256'))
+                    or identity['mode'] != source.get('modes',{}).get(relative,inventory[relative].get('mode',0o644))):
+                raise ValueError('Initial sealed blob successor compiled payload changed')
+    for interface,members,paths in RETAINED_NATIVE_ROLE_ABI_INTERFACES:
+        identities = []
+        for name in members:
+            source = prepared_metadata(current[name]['source']); inventory = source.get('files',source)
+            identities.append({path:(inventory[path]['bytes'],inventory[path]['sha256']) for path in paths})
+        if any(value != identities[0] for value in identities[1:]):
+            raise ValueError('Initial sealed blob successor changed '+interface+' ABI')
+    for reference in references:
+        actual = native_roles.bind_input(Path(reference['path']))
+        if any(actual[key] != reference[key] for key in ('path','bytes','sha256')):
+            raise ValueError('Initial sealed blob successor authority changed')
+    native_roles.require_unchanged()
+
+
 def initial_sealed_role_successor(original, native_roles):
     """Keep the closed worker's origin while authenticating a later blob-stage emission."""
     current = native_roles.records
+    import copy
+    drivers = [copy.deepcopy(value.get('dict-bundle-build')) for value in (original,current)]
+    if all(isinstance(value,dict) and isinstance(value.get('dependencies'),dict) for value in drivers):
+        for value in drivers:value['dependencies'].pop('extraction_helper',None)
+        if drivers[0] == drivers[1] and any(original.get(name) != current.get(name) for name in BLOB_TOOL_NAMES):
+            if set(original) != set(RETAINED_NATIVE_ROLE_NAMES) or set(current) != set(original):
+                raise ValueError('Initial sealed execution role membership differs')
+            return initial_sealed_blob_successor(original,native_roles)
     if (set(original) != set(RETAINED_NATIVE_ROLE_NAMES) or set(current) != set(original)
             or any(current[name] != original[name] for name in ('dict-blob-merge','dict-blob-verify'))):
         raise ValueError('Initial sealed successor changed a retained role')
