@@ -12358,4 +12358,58 @@ class ClosedWholePreparedCustodyTests(unittest.TestCase):
                 self.assertEqual(index.call_args.args[0],f.native/'page-index.tsv');prepare.assert_not_called();remove.assert_not_called()
 
 
+
+
+class SuccessfulPreparedArtifactTests(unittest.TestCase):
+    def fixture(self,root):
+        f=InitialSealedBlobTargetTests().blob_fixture(root);state=f.target_rows['dict-blob-build'];row=f.current['dict-blob-build']
+        command=state['result']['commands'][0];argv=command['argv'];stop=next(i for i,value in enumerate(argv[2:],2)if value.startswith('-'))
+        command['argv']=argv[:2]+['prepare-blob-tools','cli','ffi']+argv[stop:];command['returncode']=0;state['result']['passed']=True
+        recipe=b.prepared_metadata(row['compilation_recipe']);recipe['commands'][0]['argv']=command['argv']
+        f.prepared_recipe=_initial_sealed_write(root/'prepared-recipe.json',recipe)
+        for name in b.BLOB_TOOL_NAMES:f.current[name]['compilation_recipe']=f.prepared_recipe
+        state['result']['source_authority']=f.prepared_recipe
+        state['stderr'].write_text('Build Summary: 8/8 steps succeeded\nprepare-blob-tools success\n+- install dict-blob-build success\n+- install dict-blob-merge success\n+- install dict-blob-verify success\ncli success\n+- install wikidict success\nffi success\n+- install dictffi success\n')
+        f.prepared_owner=_initial_sealed_write(root/'prepared-owner.json',dict(bindings=dict(INPUT_REF=f.prepared_recipe)))
+        captured=state['closed'].pop('production_roles');state['closed'].pop('emission_pass')
+        state['result']['artifacts']={key:{k:v for k,v in value.items()if k not in ('source_manifest','origin_configuration','successful_graph_target')}for key,value in captured.items()}
+        state['closed'].update(outcome='PASSED-PHYSICALLY-SOURCE-CLOSED',production_roles_passed=True,owner_configuration=f.prepared_owner,prepared_artifacts=copy.deepcopy(state['result']['artifacts']))
+        self.republish(f)
+        return f
+
+    def republish(self,f):
+        state=f.target_rows['dict-blob-build'];state['result']['commands'][0]['stderr']=_initial_sealed_reference(state['stderr'])
+        result=_initial_sealed_write(f.root/'prepared-result.json',state['result']);state['closed'].update(result=result,commands=copy.deepcopy(state['result']['commands']))
+        closed=_initial_sealed_write(f.root/'prepared-closure.json',state['closed'])
+        for role in b.BLOB_TOOL_NAMES:f.current[role].update(actual_emission_result=result,qualification_closure=closed)
+
+    def test_successful_prepared_roles_keep_original_handoff_driver_and_all_authorities(self):
+        with tempfile.TemporaryDirectory()as tmp:
+            f=self.fixture(Path(tmp));driver=copy.deepcopy(f.current['dict-bundle-build']);old=copy.deepcopy(f.original['dict-blob-build'].get('qualified_source_handoff'))
+            f.roles.inputs={};f.roles.input_identities={};f.roles.bind_input=lambda path,retain=True:b.RetainedNativeToolRoles.bind_input(f.roles,path,retain=retain)
+            f.roles.require_unchanged=lambda:b.RetainedNativeToolRoles.require_inputs_unchanged(f.roles)
+            b.initial_sealed_role_successor(f.original,f.roles)
+            self.assertEqual(driver,f.current['dict-bundle-build']);self.assertEqual(old,f.current['dict-blob-build'].get('qualified_source_handoff'))
+            self.assertIn(Path(f.prepared_owner['path']),f.roles.inputs)
+            Path(f.prepared_owner['path']).write_bytes(Path(f.prepared_owner['path']).read_bytes()+b' ')
+            with self.assertRaises(ValueError):f.roles.require_unchanged()
+
+    def test_prepared_success_schema_refuses_wrong_target_source_artifact_config_and_ambiguity(self):
+        for change in ('target','source','missing','stat','capture','configuration','ambiguous','failed-emission'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory()as tmp:
+                f=self.fixture(Path(tmp));state=f.target_rows['dict-blob-build']
+                if change=='target':state['stderr'].write_text(state['stderr'].read_text().replace('prepare-blob-tools success','prepare-blob-tools failure'))
+                elif change=='source':state['closed']['source_manifest']=f.blob_previous
+                elif change=='missing':
+                    state['closed']['prepared_artifacts'].pop('writer');state['result']['artifacts'].pop('writer')
+                elif change=='stat':
+                    for value in (state['closed']['prepared_artifacts'],state['result']['artifacts']):value['writer']['inode']+=1
+                elif change=='capture':state['closed']['prepared_artifacts']['writer']['nlink']+=1
+                elif change=='configuration':state['closed']['owner_configuration']=_initial_sealed_write(f.root/'foreign-owner.json',dict(bindings=dict(INPUT_REF=f.blob_previous)))
+                elif change=='ambiguous':state['closed']['production_roles']={}
+                else:state['closed']['production_roles_passed']=False
+                self.republish(f)
+                with self.assertRaises((ValueError,OSError)):b.initial_sealed_role_successor(f.original,f.roles)
+
+
 if __name__=='__main__':unittest.main()

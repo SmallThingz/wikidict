@@ -3519,19 +3519,30 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
     if re.search(r'^\s*\+- install ' + role + r' success\s*$', block, re.MULTILINE) is None:
         raise ValueError('Initial sealed install did not succeed')
     production = closed.get('production_roles')
-    if production is not None:
-        # A closed partial graph may authenticate successful production targets
-        # independently of unrelated failed tests; its whole verdict is retained.
+    prepared = closed.get('prepared_artifacts')
+    if production is not None or prepared is not None:
+        # Both existing closure schemas authenticate actual production outputs;
+        # successful requested targets never promote unrelated test verdicts.
         key = {'dict-blob-build':'writer', 'dict-blob-merge':'merge',
                'dict-blob-verify':'verify', 'dict-bundle-build':'driver'}[role]
-        captured = production.get(key)
-        if (closed.get('emission_pass') is not True or not isinstance(captured,dict)
-                or captured.get('successful_graph_target') is not True
-                or captured.get('source_manifest') != row['source']
+        if production is not None and prepared is not None:
+            raise ValueError('Ambiguous closed production artifact schema')
+        artifacts=production if production is not None else prepared
+        captured=artifacts.get(key) if isinstance(artifacts,dict) else None
+        if (not isinstance(captured,dict)
                 or dict(captured.get('reference',{}),mode=captured.get('mode')) != row['artifact']):
             raise ValueError('Initial sealed target lacks its closed production artifact')
-        origin = prepared_metadata(captured['origin_configuration'])
-        if (closed.get('owner_configuration') != captured['origin_configuration']
+        if production is not None:
+            if (closed.get('emission_pass') is not True or captured.get('successful_graph_target') is not True
+                    or captured.get('source_manifest') != row['source']):
+                raise ValueError('Initial sealed target lacks its successful production observation')
+            origin_reference=captured['origin_configuration']
+        else:
+            if failed or closed.get('production_roles_passed') is not True or prepared!=emitted.get('artifacts'):
+                raise ValueError('Prepared production artifacts lack a successful complete emission')
+            origin_reference=closed.get('owner_configuration')
+        origin = prepared_metadata(origin_reference)
+        if (closed.get('owner_configuration') != origin_reference
                 or origin.get('bindings',{}).get('INPUT_REF') != row['compilation_recipe']):
             raise ValueError('Initial sealed production artifact configuration differs')
         path = Path(row['artifact']['path']); info = path.stat()
@@ -3539,7 +3550,7 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
             mtime_ns=info.st_mtime_ns,ctime_ns=info.st_ctime_ns,nlink=info.st_nlink)
         if any(captured.get(name) != value for name,value in observed_stamp.items()):
             raise ValueError('Initial sealed production artifact custody differs')
-        references.append(captured['origin_configuration'])
+        references.append(origin_reference)
     elif full_graph:
         # Historical post-closure observations retain their original authority.
 
