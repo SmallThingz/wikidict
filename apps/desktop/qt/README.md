@@ -351,6 +351,36 @@ The manifest names current Reader controls, retained histories, source component
 real-page captures and original failures. Source promotion reuses these earned
 results without claiming another build or a full-suite replay.
 
+## Complete grapheme character rectangles
+
+The maintained native patch queries the complete same-line grapheme when a
+character uses multiple UTF-16 units. Singleton characters retain their previous
+mapping. Cursor positions, source offsets, link actions, drawing and layout are
+unchanged. The strict native control covers Syriac combining marks, Latin
+combining marks and supplementary characters in both directions and after resize.
+
+Native124's failed independent-reference alignment assertion is preserved.
+Native125 passed the corrected physical-alignment control; the other Native124
+owner/source control retains its separate pass. The genuine EN Reader observation
+confirms both Syriac code units receive the full character rectangle.
+
+The later actual widget paint observation did not reproduce horizontal glyph-ink
+clipping at wide, narrow or restored width. The native font engine's glyph bounds
+remain within the viewport; narrow home-position clipping was vertical because
+the Noun was below the viewport. This is bounded paint evidence, not pixel-level
+or whole-frontend acceptance. Original screenshots and pending manual records
+remain immutable and the later Root disposition is linked in the manifest.
+
+The prior normal154 delivery retains its separate centered peili-table views,
+strict heading/table allocation and overlap checks, and malformed-content
+refusal/recovery results. Those scoped results are not rerun or expanded by this
+character-rectangle change; broader CENTER and corpus-wide acceptance remain
+outside this qualification.
+
+Only these maintained native patches and their manifest are delivered here.
+The private responsive DE Table changes are excluded by exact inverse sparse
+reconstruction. No application source, data, build, or test is changed or rerun.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,

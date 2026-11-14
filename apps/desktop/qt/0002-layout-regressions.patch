@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,12638 @@
+@@ -3,24 +3,12717 @@
  
  
  #include <QTest>
@@ -728,6 +728,85 @@
      Q_OBJECT
  
  private slots:
++    void logicalCharacterRectKeepsCompleteGraphemeWithinItsLine()
++    {
++        // The first two UTF-16 units are one grapheme: Syriac base/mark,
++        // Latin base/mark, or a supplementary scalar. They are not two cells.
++        const QStringList clusters = {QStringLiteral("\u0717\u0732"),
++            QStringLiteral("A\u0308"), QString::fromUcs4(U"\U0001f600")};
++        for (const auto &cluster : clusters) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++            QCOMPARE(cluster.size(), 2);
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0);
++            doc.setDefaultFont(QFont("DejaVu Sans", 16));
++            auto option = doc.defaultTextOption(); option.setTextDirection(direction);
++            // Both independent layouts use the declared physical alignment.
++            option.setAlignment(Qt::AlignAbsolute | (direction == Qt::RightToLeft ? Qt::AlignRight : Qt::AlignLeft));
++            option.setWrapMode(QTextOption::WordWrap); doc.setDefaultTextOption(option);
++            QTextCursor cursor(&doc); QTextBlockFormat block;
++            block.setLayoutDirection(direction); block.setAlignment(option.alignment()); cursor.setBlockFormat(block);
++            QTextCharFormat action; action.setAnchor(true); action.setAnchorHref("dict:Cluster");
++            cursor.insertText(cluster, action); cursor.insertText(QStringLiteral(" plain ffi words").repeated(8), QTextCharFormat());
++            const QString source = doc.toRawText(); const int count = doc.characterCount(), revision = doc.revision();
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            const QVariantMap owner{{"first", 0}, {"last", int(source.size())}, {"direction", int(direction)},
++                {"joins", QVariantList{}}, {"parts", QVariantList{QVariantMap{{"kind", "text"}, {"first", 0}, {"last", int(source.size())}}}}};
++            QVERIFY(native->wikidictSetLogicalFlows({owner})); doc.setLayoutEnabled(true);
++            QRectF firstWide;
++            for (qreal width : {620.0, 115.0, 620.0}) {
++                doc.setTextWidth(width); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                const auto base = native->wikidictLogicalPosition(0), mark = native->wikidictLogicalPosition(1);
++                QVERIFY(base.value("handled").toBool()); QVERIFY(mark.value("handled").toBool());
++                QCOMPARE(base.value("error").toInt(), 0); QCOMPARE(mark.value("error").toInt(), 0);
++                const QRectF bounds = base.value("characterRect").toRectF();
++                QVERIFY(bounds.width() > 0 && bounds.height() > 0);
++                QCOMPARE(mark.value("characterRect").toRectF(), bounds);
++                QVERIFY(bounds.left() >= base.value("contentLeft").toReal() - .02);
++                QVERIFY(bounds.right() <= base.value("contentRight").toReal() + .02);
++                QVERIFY(bounds.left() >= base.value("lineNaturalLeft").toReal() - .02);
++                QVERIFY(bounds.right() <= base.value("lineNaturalRight").toReal() + .02);
++                QCOMPARE(base.value("lineNumber"), mark.value("lineNumber"));
++                QVERIFY(base.value("lineCount").toInt() > 1);
++                const QPointF origin(native->blockBoundingRect(doc.firstBlock()).left(), base.value("layoutY").toReal());
++                QTextLayout reference(source, doc.defaultFont(), native->paintDevice()); reference.setTextOption(option);
++                reference.beginLayout(); qreal y = 0;
++                while (true) {
++                    auto line = reference.createLine(); if (!line.isValid()) break;
++                    line.setLeadingIncluded(true); line.setLineWidth(width); line.setPosition(QPointF(0, y)); y += line.height();
++                }
++                reference.endLayout(); const auto line = reference.lineAt(0);
++                QVERIFY(reference.isValidCursorPosition(0)); QVERIFY(!reference.isValidCursorPosition(1));
++                QVERIFY(reference.isValidCursorPosition(2));
++                QRectF whole; bool found = false;
++                for (const auto &run : line.glyphRuns(0, 2)) {
++                    whole = found ? whole.united(run.boundingRect()) : run.boundingRect(); found = true;
++                }
++                QVERIFY(found);
++                const QRectF expected(origin.x() + whole.left(), origin.y() + line.y(), whole.width(), line.height());
++                qInfo().nospace() << "RTL124_REFERENCE direction=" << int(direction)
++                    << " source_utf8_hex=" << cluster.toUtf8().toHex() << " width=" << width
++                    << " utf16_interval=[0,2) actual=" << bounds << " reference=" << expected;
++                QVERIFY(qAbs(bounds.left() - expected.left()) < .02);
++                QVERIFY(qAbs(bounds.right() - expected.right()) < .02);
++                QCOMPARE(bounds.top(), expected.top()); QCOMPARE(bounds.height(), expected.height());
++                for (int i : {0, 1}) {
++                    const auto value = native->wikidictLogicalPosition(i);
++                    QCOMPARE(value.value("cursorRect").toRectF().x(), origin.x() + line.cursorToX(i));
++                }
++                QCOMPARE(native->anchorAt(bounds.center()), QString("dict:Cluster"));
++                const int hit = native->hitTest(bounds.center(), Qt::ExactHit); QVERIFY(hit >= 0 && hit < 2);
++                // A later wrapped line must retain its own vertical interval.
++                const auto last = native->wikidictLogicalPosition(source.size() - 1);
++                QVERIFY(last.value("lineNumber").toInt() > 0);
++                QVERIFY(last.value("characterRect").toRectF().top() >= bounds.bottom());
++                if (width == 620) {
++                    if (firstWide.isNull()) firstWide = bounds;
++                    else QCOMPARE(bounds, firstWide);
++                }
++                QCOMPARE(doc.toRawText(), source); QCOMPARE(doc.characterCount(), count); QCOMPARE(doc.revision(), revision);
++            }
++        }
++    }
++
 +    void importedHorizontalRuleRetainsOnlyItsOwnUserState()
 +    {
 +        const int state = std::numeric_limits<int>::max() / 2;
