@@ -5032,10 +5032,25 @@ class RetainedNativeToolRoles:
                 application=metadata(descriptor)
                 rows=[row for row in application['rows']if row['path']=='tools/extraction_cache.py']
                 if (application.get('applied')is not True or len(rows)!=1
-                        or any(rows[0]['before'][key]!=cursor[key]for key in ('path','bytes','sha256'))
                         or rows[0]['mode']!=live['mode']):
                     raise ValueError('Closed whole live helper application differs')
-                cursor=dict(rows[0]['actual_post'],mode=rows[0]['mode'])
+                row=rows[0];before=row['before'];after=row['actual_post']
+                if (after.get('path')!=cursor['path']
+                        or any(before.get(key)!=cursor[key]for key in ('bytes','sha256'))
+                        or before.get('mode',row['mode'])!=row['mode']
+                        or after.get('mode',row['mode'])!=row['mode']):
+                    raise ValueError('Closed whole live helper application chain differs')
+                if before.get('path')!=cursor['path']:
+                    # Applied receipts may retain their exact preimage separately
+                    # from the canonical target; authenticate that owned snapshot.
+                    preimage=Path(before['path'])
+                    if (not preimage.is_absolute() or str(preimage)!=os.path.normpath(before['path'])
+                            or preimage.stat().st_uid!=os.geteuid()):
+                        raise ValueError('Unsafe closed whole helper preimage')
+                    observed=self.bind_input(auth(before))
+                    if observed['mode']!=row['mode']:
+                        raise ValueError('Closed whole helper preimage mode differs')
+                cursor=dict(after,mode=row['mode'])
             if cursor!=live:raise ValueError('Closed whole helper chain does not reach loaded helper')
         else:
             for descriptor in applications:metadata(descriptor)

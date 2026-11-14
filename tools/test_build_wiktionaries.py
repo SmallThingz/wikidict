@@ -13011,4 +13011,69 @@ class RetainedCompilationEnvelopeTests(unittest.TestCase):
             with self.assertRaises(ValueError): b.retained_compilation_source(f.current['dict-blob-build'], f.roles)
 
 
+
+
+class ClosedWholeRetainedPreimageTests(unittest.TestCase):
+    def fixture(self, root):
+        f = RetainedNativeRoleTests().closed_whole_fixture(root)
+        refs = []; snapshots = []; applications = []
+        for number in range(2):
+            snapshot = root/('retained-preimage-'+str(number)+'.py')
+            snapshot.write_bytes(f.helper.read_bytes()); snapshot.chmod(0o644)
+            application = f.update_helper()
+            row = copy.deepcopy(application['rows'][0])
+            row['before'] = _initial_sealed_reference(snapshot)
+            # Actual applied receipts retain before/after source snapshots but
+            # identify the live canonical target separately in actual_post.
+            post = root/('qualified-post-'+str(number)+'.py'); post.write_bytes(f.helper.read_bytes())
+            row['after'] = _initial_sealed_reference(post)
+            # The consumed shape matches the applied singleton/LF receipts:
+            # retained before/after snapshots, canonical row.path/actual_post.
+            shaped = dict(applied=True,rows=[row])
+            refs.append(_initial_sealed_write(root/('snapshot-application-'+str(number)+'.json'),shaped))
+            applications.append(shaped); snapshots.append(snapshot)
+        f.selection['live_helper_application'] = refs; f.republish()
+        return SimpleNamespace(f=f,refs=refs,snapshots=snapshots,applications=applications)
+
+    def test_actual_applied_shapes_bind_snapshots_and_preserve_canonical_helper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = self.fixture(Path(tmp)); f = c.f
+            with patch.dict(sys.modules,extraction_cache=f.cache),patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None):
+                roles = b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler))
+                roles.require_unchanged()
+                self.assertEqual(roles.records['dict-bundle-build']['dependencies']['extraction_helper']['path'],str(f.helper))
+                for snapshot in c.snapshots: self.assertIn(snapshot, roles.inputs)
+                self.assertEqual(len(c.refs),2)
+
+    def test_wrong_target_preimage_hash_mode_and_broken_chain_refuse(self):
+        for change in ('target','post-target','preimage-hash','mode','broken-chain','missing','symlink'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); c = self.fixture(root); f = c.f
+                first = c.applications[0]
+                if change=='target': first['rows'][0]['path']='tools/other.py'
+                elif change=='post-target': first['rows'][0]['actual_post']['path']=str(root/'other-helper.py')
+                elif change=='preimage-hash': first['rows'][0]['before']['sha256']='0'*64
+                elif change=='mode': c.snapshots[0].chmod(0o600)
+                elif change=='missing': c.snapshots[0].unlink()
+                elif change=='symlink':
+                    target=root/'foreign-alias.py'; target.write_bytes(c.snapshots[0].read_bytes())
+                    c.snapshots[0].unlink(); c.snapshots[0].symlink_to(target)
+                if change=='broken-chain': f.selection['live_helper_application']=c.refs[1:]
+                else:
+                    c.refs[0]=_initial_sealed_write(root/'changed-application.json',first)
+                    f.selection['live_helper_application']=c.refs
+                f.republish()
+                with patch.dict(sys.modules,extraction_cache=f.cache),patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None):
+                    with self.assertRaises((ValueError,OSError)):
+                        b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler))
+
+    def test_retained_preimage_drift_is_rechecked_at_later_existing_guard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = self.fixture(Path(tmp)); f = c.f
+            with patch.dict(sys.modules,extraction_cache=f.cache),patch.object(b.RetainedNativeToolRoles,'closed_execution_resolution',return_value=None):
+                roles=b.RetainedNativeToolRoles(f.roles,zig_sha256=b.sha256_file(f.compiler));roles.require_unchanged()
+                c.snapshots[0].write_bytes(c.snapshots[0].read_bytes()+b'changed')
+                with self.assertRaises(ValueError): roles.require_unchanged()
+
+
 if __name__=='__main__':unittest.main()
