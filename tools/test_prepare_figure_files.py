@@ -5020,7 +5020,7 @@ class FigureOutputDigestTests(unittest.TestCase):
             transport=lambda *_: (200, {}, figure.encoded(self.fixture.response())), sleep=lambda _: None)
         self.paths = {role: self.args.output / name for role, name in figure.output_roles(self.args.output).items()}
 
-    def test_output_digests_use_one_fresh_payload_and_tuple_keeps_second_full_guard(self):
+    def test_output_digests_use_one_fresh_payload_and_tuple_keeps_exact_final_guard(self):
         legacy = self.fixture.stage('legacy-four-role-capture')
         original_replay, original_fingerprint, original_payload = figure.replay, figure.evidence.fingerprint, figure.payload
         for root in (self.args.output, legacy):
@@ -5050,7 +5050,7 @@ class FigureOutputDigestTests(unittest.TestCase):
                             result = figure.verify(root)
                             self.assertEqual(set(result['outputs']), set(paths))
                     semantic.assert_called_once()
-                    expected = 2 if tuple_boundary else 1
+                    expected = 1
                     # Legacy occurrence replay still hashes its membership
                     # before returning. The changed boundary begins afterward.
                     legacy_membership = [(root, False)] if root == legacy else []
@@ -5318,7 +5318,7 @@ class FigureStreamDigestTests(unittest.TestCase):
                 patch.object(figure.evidence, 'fingerprint', side_effect=fingerprint):
             with self.assertRaisesRegex(ValueError, 'Figure source capture changed during validation'):
                 figure.verify_tuple(self.paths, self.fixture.wiki, self.fixture.date)
-        self.assertEqual(final_reads, [self.raw])
+        self.assertEqual(final_reads, [])
 
 
 
@@ -10890,6 +10890,108 @@ class FigureMaterializationPhaseProgressTests(unittest.TestCase):
         self.assertNotIn('event',custody)
         self.assertEqual(len(custody['linked_members']),4)
         self.assertEqual(len(log.flushed),13)
+
+
+class FigureTupleFinalIdentityTests(unittest.TestCase):
+    setUp = FigureOutputDigestTests.setUp
+
+    def test_tuple_refuses_late_file_marker_membership_and_root_identity_changes(self):
+        root = self.args.output
+        target = self.paths['file-metadata']
+        saved = {path.name: path.read_bytes() for path in root.iterdir()}
+        original_verify = figure.verify
+        root_mode = root.stat().st_mode & 0o777
+        target_mode = target.stat().st_mode & 0o777
+        mutations = ('content', 'restored-content', 'inode', 'missing', 'extra',
+                     'symlink', 'directory', 'mode', 'hardlink', 'root', 'root-mode',
+                     'manifest', 'marker')
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                reached = []
+                old_root = root.with_name('tuple-old-root')
+                replacement = root.with_name('tuple-replacement-provider')
+                def verify(*values, **options):
+                    result = original_verify(*values, **options)
+                    reached.append(mutation)
+                    if mutation in ('content', 'restored-content'):
+                        target.write_bytes(saved[target.name] + b'changed')
+                        if mutation == 'restored-content':
+                            target.write_bytes(saved[target.name])
+                    elif mutation == 'inode':
+                        replacement.write_bytes(saved[target.name])
+                        replacement.replace(target)
+                    elif mutation == 'missing':
+                        target.unlink()
+                    elif mutation == 'extra':
+                        (root / 'unexpected-member').write_bytes(b'extra')
+                    elif mutation == 'symlink':
+                        replacement.write_bytes(saved[target.name])
+                        target.unlink()
+                        target.symlink_to(replacement)
+                    elif mutation == 'directory':
+                        target.unlink()
+                        target.mkdir()
+                    elif mutation == 'mode':
+                        target.chmod(target_mode ^ 0o100)
+                    elif mutation == 'hardlink':
+                        os.link(target, replacement)
+                    elif mutation == 'root':
+                        root.rename(old_root)
+                        root.mkdir(mode=root_mode)
+                        for name, raw in saved.items():
+                            (root / name).write_bytes(raw)
+                    elif mutation == 'root-mode':
+                        root.chmod(root_mode ^ 0o100)
+                    elif mutation == 'manifest':
+                        (root / figure.MANIFEST).write_bytes(saved[figure.MANIFEST] + b' ')
+                    else:
+                        (root / figure.COMPLETE).write_bytes(saved[figure.COMPLETE] + b' ')
+                    return result
+                try:
+                    with patch.object(figure, 'verify', side_effect=verify):
+                        with self.assertRaises((ValueError, OSError)):
+                            figure.verify_tuple(self.paths, self.fixture.wiki, self.fixture.date)
+                    self.assertEqual(reached, [mutation])
+                finally:
+                    root.chmod(root_mode)
+                    for path in root.iterdir():
+                        if path.is_dir() and not path.is_symlink():
+                            path.rmdir()
+                        else:
+                            path.unlink()
+                    if old_root.exists():
+                        root.rmdir()
+                        old_root.rename(root)
+                    else:
+                        for name, raw in saved.items():
+                            (root / name).write_bytes(raw)
+                    target.chmod(target_mode)
+                    if replacement.exists():
+                        replacement.unlink()
+
+    def test_tuple_refuses_replaced_contained_origin_directory_after_full_verification(self):
+        fixture = OfflineFigureMaterializationTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        args, _ = fixture.epoch_complete()
+        output, _ = fixture.materialize(args)
+        paths = {role: output / name for role, name in figure.output_roles(output).items()}
+        origin = next(path for path in output.iterdir() if path.is_dir())
+        old_origin = output.parent / 'tuple-old-origin'
+        original_verify = figure.verify
+        reached = []
+        def verify(*values, **options):
+            result = original_verify(*values, **options)
+            origin.rename(old_origin)
+            origin.mkdir()
+            for path in old_origin.iterdir():
+                (origin / path.name).write_bytes(path.read_bytes())
+            reached.append(origin)
+            return result
+        with patch.object(figure, 'verify', side_effect=verify):
+            with self.assertRaises((ValueError, OSError)):
+                figure.verify_tuple(paths, fixture.fixture.wiki, fixture.fixture.date)
+        self.assertEqual(reached, [origin])
 
 
 if __name__ == '__main__':

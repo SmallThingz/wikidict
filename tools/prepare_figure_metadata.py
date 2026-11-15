@@ -2140,17 +2140,33 @@ def verify_tuple(paths, wiki=None, date=None, *, retained_cache=None, inventory_
     if len(parents) != 1:
         raise ValueError('Figure input roles belong to different source captures')
     root = parents.pop()
+    def capture_identity():
+        members, directories = capture_member_paths(root, include_markers=True)
+        identities = {}
+        for name, path in members.items():
+            value = path.lstat()
+            if not stat.S_ISREG(value.st_mode):
+                raise ValueError('Figure source capture changed during validation')
+            identities[name] = (str(path.resolve(strict=True)), value.st_dev, value.st_ino,
+                value.st_mode, value.st_nlink, value.st_uid, value.st_gid, value.st_size,
+                value.st_mtime_ns, value.st_ctime_ns)
+        if any(complete_capture_directory_stamp(path) != before
+               for path, before in directories.items()):
+            raise ValueError('Figure source capture changed during validation')
+        return identities, directories
+
+    before = capture_identity()
     manifest_raw = small(root / MANIFEST)
     manifest = verify(root, retained_cache=retained_cache, inventory_cache=inventory_cache)
     if set(paths) != set(manifest['outputs']):
         raise ValueError('Shared file capture requires its Provider TSV and all four Figure roles')
     if (wiki is not None and manifest['wiki'] != wiki) or (date is not None and manifest['date'] != date):
         raise ValueError('Figure capture edition/date mismatch')
-    # Recheck every immutable source byte after the semantic replay. The local
-    # result is shared only by this selected tuple at this boundary.
+    # verify already authenticated every payload byte after semantic replay.
+    # Reuse that result only while every exact member and directory stays fixed.
     marker_raw = encoded({'schema': SCHEMA, 'manifest_sha256': digest(manifest_raw)})
     if (small(root / MANIFEST) != manifest_raw or decode(manifest_raw) != manifest or
-            payload(root) != manifest['artifacts'] or small(root / COMPLETE) != marker_raw):
+            small(root / COMPLETE) != marker_raw or capture_identity() != before):
         raise ValueError('Figure source capture changed during validation')
     inventory = {**{name: row['sha256'] for name, row in manifest['artifacts'].items()},
                  MANIFEST: digest(manifest_raw), COMPLETE: digest(marker_raw)}
