@@ -3748,9 +3748,46 @@ class SealedFrontendBuildPolicyTests(SealedFrontendTests):
         self.assertEqual(seal, cache.read_marker(root / cache.COMPLETED_EXPANDER))
         old, current = self.policy_sources()
         self.assertEqual(cache._native_build_policy_projection(old), cache._native_build_policy_projection(current))
+        # The real canonical build may already contain either exact install
+        # selection. Exercise exactly one tools block, never a duplicate graph.
+        plain = current.replace(cache._INSTALL_ONLY_SOURCE + cache._RUNTIME_ONLY_SOURCE, '', 1)
+        plain = plain.replace(cache._INSTALL_ONLY_SOURCE, '', 1)
         self.assertEqual(cache._native_build_policy_projection(current), cache._native_build_policy_projection(
-            current.replace('    const worker_object = bundleWorkerObject(b);\n',
-                            '    const worker_object = bundleWorkerObject(b);\n' + cache._INSTALL_ONLY_SOURCE, 1)))
+            plain.replace('    const worker_object = bundleWorkerObject(b);\n',
+                          '    const worker_object = bundleWorkerObject(b);\n' + cache._INSTALL_ONLY_SOURCE, 1)))
+
+    def test_runtime_only_install_reuses_original_worker_graph_and_refuses_other_edges(self):
+        old, current = self.policy_sources()
+        plain = current.replace(cache._INSTALL_ONLY_SOURCE + cache._RUNTIME_ONLY_SOURCE, '', 1)
+        plain = plain.replace(cache._INSTALL_ONLY_SOURCE, '', 1)
+        anchor = '    const worker_object = bundleWorkerObject(b);\n'
+        self.assertEqual(plain.count(anchor), 1)
+        exact = cache._INSTALL_ONLY_SOURCE + cache._RUNTIME_ONLY_SOURCE
+        runtime = plain.replace(anchor, anchor + exact, 1)
+        baseline = cache._native_build_policy_projection(old)
+        self.assertEqual(baseline, cache._native_build_policy_projection(runtime))
+        # Run the maintained selection on this proposed real build source too;
+        # a token-only positive is not the original role/identity guard.
+        with mock.patch.object(self, 'policy_sources', return_value=(old, runtime)):
+            root, seal, path, data, reference, roles, proof_path, proof = self.policy_prepared()
+            self.assertEqual(seal, self.selected(reference)[3])
+            self.assertEqual(seal, cache.read_marker(root / cache.COMPLETED_EXPANDER))
+        for label, wrong in (
+            ('LLVM dependency', cache._RUNTIME_ONLY_SOURCE.replace('&install_worker_object.step', '&llvm_exe.step')),
+            ('extractor dependency', cache._RUNTIME_ONLY_SOURCE.replace('&install_worker_object.step', '&module_extract_exe.step')),
+            ('different target', cache._RUNTIME_ONLY_SOURCE.replace('prepare-expander-runtime', 'foreign-runtime')),
+            ('duplicate target', cache._RUNTIME_ONLY_SOURCE * 2),
+            ('missing shared install', cache._RUNTIME_ONLY_SOURCE),
+        ):
+            with self.subTest(label=label):
+                block = wrong if label == 'missing shared install' else cache._INSTALL_ONLY_SOURCE + wrong
+                changed = plain.replace(anchor, anchor + block, 1)
+                try: projected = cache._native_build_policy_projection(changed)
+                except ValueError: continue
+                self.assertNotEqual(baseline, projected)
+        moved = plain.replace('    const target = b.standardTargetOptions(.{});',
+            exact + '    const target = b.standardTargetOptions(.{});', 1)
+        with self.assertRaises(ValueError): cache._native_build_policy_projection(moved)
 
     def test_build_policy_native_flags_functions_graph_and_scheduler_changes_refuse(self):
         old, current = self.policy_sources()

@@ -2504,6 +2504,8 @@ _INSTALL_ONLY_SOURCE = '''    const prepare_expander_tools = b.step("prepare-exp
     prepare_expander_tools.dependOn(&install_worker_object.step);
 '''
 
+_RUNTIME_ONLY_SOURCE = '    b.step("prepare-expander-runtime", "Install only the shared expansion runtime").dependOn(&install_worker_object.step);\n'
+
 def _build_policy_tokens(source):
     if not isinstance(source, str) or len(source.encode()) > 512 * 1024 or '\0' in source:
         raise ValueError('Invalid native build policy source')
@@ -2564,8 +2566,13 @@ def _native_build_policy_projection(source):
     if _INSTALL_ONLY_SOURCE:
         prefix = _build_policy_tokens('const worker_object = bundleWorkerObject(b);')
         suffix = _build_policy_tokens('pipeline_paths.addOptionPath("worker_object", worker_object.getEmittedBin());')
-        before = prefix + _build_policy_tokens(_INSTALL_ONLY_SOURCE) + suffix
-        tokens, count = _policy_replace(tokens, before, prefix + suffix)
+        count = 0
+        # Both exact public install selections share the original worker node.
+        # No producer, flag, dependency or arbitrary target is projected away.
+        for install in (_INSTALL_ONLY_SOURCE + _RUNTIME_ONLY_SOURCE, _INSTALL_ONLY_SOURCE):
+            before = prefix + _build_policy_tokens(install) + suffix
+            tokens, found = _policy_replace(tokens, before, prefix + suffix)
+            count += found
         if count > 1: raise ValueError('Duplicate native install-only graph')
     test_step = _build_policy_tokens('const test_step = b.step("test", "Run bundle encoder, data reader, Lua, and tooling tests");')
     locations = [i for i in range(len(tokens)) if tokens[i:i + len(test_step)] == test_step]
