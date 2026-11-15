@@ -22,12 +22,15 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,13540 @@
- 
- 
+@@ -3,24 +3,13565 @@
+
+
  #include <QTest>
 +#include <QtGui/private/qtextdocumentlayout_p.h>
 +#include <QtGui/private/qtextengine_p.h>
++#include <QtGui/private/qtextrubylayout_p.h>
++#include <QtGui/private/qtextrubyrangemap_p.h>
++#include <QtGui/private/qtextlogicalflow_p.h>
 +#include <QtGui/private/qtextcursor_p.h>
 +#include <QtGui/private/qtextformat_p.h>
 +#include <QtCore/qscopeguard.h>
@@ -61,7 +64,7 @@
 +#include <limits>
 +#include <stdexcept>
 +#include <optional>
- 
+
  #include <qtextdocument.h>
  #include <qabstracttextdocumentlayout.h>
  #include <qdebug.h>
@@ -74,7 +77,7 @@
 +#include <qtextbrowser.h>
  #include <qscrollbar.h>
  #endif
- 
+
  using namespace Qt::StringLiterals;
 +
 +// Exercise the same query an image intrinsic-size handler uses while its
@@ -747,12 +750,34 @@
 +    }
 +    void layout(qreal width) { document.setTextWidth(width * scale); native->documentSize(); }
 +};
- 
+
  class tst_QTextDocumentLayout : public QObject
  {
      Q_OBJECT
- 
+
  private slots:
++    void rubyColumnsKeepDisjointSourceRanges();
++    void rubyRangeMapOwnsNestedDescriptionAndRejectsSurrogateCuts();
++    void rubyGapDoesNotConsumeNonbreakingBaseContent();
++    void rubyCollapsedGapKeepsLogicalTextAndNeighborRanges();
++    void rubyInteriorGapSelectionKeepsExactLogicalCopy();
++    void rubySpanningWidthsProcessShorterRangesFirst();
++    void rubyDistributionAndLeadingKeepBaseMetricsSeparate();
++    void rubyAlternatingLevelsUseMeasuredBoxes();
++    void rubyEmptyReadingHasOwnerMetricsWithoutLogicalText();
++    void rubyFlatShapingPreservesOwnerAndScalarBoundaries();
++    void rubyFlatShapingUsesNativeDirectionWithoutControlText();
++    void projectedRubyUsesResolvedBaseMetricsOnly();
++    void projectedRubyRejectsMalformedMetrics();
++    void projectedRubyKeepsOnlyAdmittedOrdinaryBoundaries();
++    void projectedRubyMetadataSurvivesUnrelatedFormatAndPreeditClears();
++    void rubyMultipleOwnersPaintAndKeepChildOffsets();
++    void rubyMixedOrdinaryLinesReserveAnnotationSides();
++    void rubyGapGeometryAndDeviceLifetime();
++    void rubyJustificationRejectsUnrepresentableGlyphAdvance();
++    void rubyJointBreaksRequireEveryVisibleInterior();
++    void rubyVerticalEntryKeepsPreferredChildCaret();
++    void rubyAppliesCommonAndReadingShiftExactlyOnce();
 +    void logicalCharacterRectKeepsCompleteGraphemeWithinItsLine()
 +    {
 +        // The first two UTF-16 units are one grapheme: Syriac base/mark,
@@ -13563,3 +13588,1273 @@
      void init();
      void cleanup();
      void cleanupTestCase();
+@@ -648,5 +14189,1269 @@
+     }
+ }
+
++// Future methods for the EXISTING tst_QTextDocumentLayout class.
++// Source-only: no target, test runner, build, or current source registration.
++// Include the candidate qtextrubyrangemap_p.h when the complete Ruby seam is reviewed.
++
++void tst_QTextDocumentLayout::rubyColumnsKeepDisjointSourceRanges()
++{
++    using Map = QTextRubyRangeMap;
++    QTextDocument document;
++    document.setPlainText(QStringLiteral("ABxy"));
++    Map::Segment segment;
++    segment.gap = {0, 0};
++    segment.bases = {{{0, 0}, {{0, 1}, {}}}, {{1, 1}, {{1, 2}, {}}}};
++    segment.annotations = {
++        {0, 1, 0, false, {2, 2}, {{2, 3}, {}}},
++        {1, 1, 0, false, {3, 3}, {{3, 4}, {}}}
++    };
++    Map::Owner owner{{0, 4}, {segment}};
++    QString error;
++    auto map = Map::create(&document, owner, 100, &error);
++    QVERIFY2(map, qPrintable(error));
++    const auto first = map->columnSources(0, 0);
++    const auto second = map->columnSources(0, 1);
++    QCOMPARE(first.size(), 2);
++    QCOMPARE(second.size(), 2);
++    QCOMPARE(first[0].range.first, 0);
++    QCOMPARE(first[0].range.last, 1);
++    QCOMPARE(first[1].range.first, 2);
++    QCOMPARE(first[1].range.last, 3);
++    QCOMPARE(second[0].range.first, 1);
++    QCOMPARE(second[1].range.first, 3);
++    // Selecting B is inside the bounding envelope of column A/x, but is not
++    // part of either child: it must not highlight A or x.
++    QVERIFY(Map::selected(first[0].range, 1, 2).empty());
++    QVERIFY(Map::selected(first[1].range, 1, 2).empty());
++    QCOMPARE(Map::selected(second[0].range, 1, 2).first, 1);
++    QCOMPARE(Map::selected(second[0].range, 1, 2).last, 2);
++    QCOMPARE(document.toPlainText(), QStringLiteral("ABxy"));
++    QCOMPARE(document.characterCount(), 5);
++    auto invalid = owner;
++    invalid.segments[0].annotations[0].body.range = {1, 3};
++    QVERIFY(!Map::create(&document, invalid, 100, &error));
++    invalid = owner;
++    invalid.segments[0].annotations[1].baseStart = 0;
++    QVERIFY(!Map::create(&document, invalid, 100, &error));
++    invalid = owner;
++    invalid.segments[0].annotations[0].level = -1;
++    QVERIFY(!Map::create(&document, invalid, 100, &error));
++    QVERIFY(!Map::create(&document, owner, 1, &error));
++    QTextCursor cursor(&document);
++    cursor.insertText(QStringLiteral("!"));
++    QVERIFY(!map->current());
++    QVERIFY(map->columnSources(0, 0).isEmpty());
++    QVERIFY(!map->owner());
++}
++
++void tst_QTextDocumentLayout::rubyRangeMapOwnsNestedDescriptionAndRejectsSurrogateCuts()
++{
++    using Map = QTextRubyRangeMap;
++    QTextDocument document;
++    document.setPlainText(QStringLiteral("AB"));
++    Map::Segment inside;
++    inside.gap = {0, 0};
++    inside.bases = {{{0, 0}, {{0, 1}, {}}}};
++    inside.annotations = {{0, 1, 0, false, {1, 1}, {{1, 2}, {}}}};
++    auto nested = std::make_shared<Map::Owner>(Map::Owner{{0, 2}, {inside}});
++    Map::Segment outside;
++    outside.gap = {0, 0};
++    outside.bases = {{{0, 0}, {{0, 2}, {nested}}}};
++    QString error;
++    auto map = Map::create(&document, Map::Owner{{0, 2}, {outside}}, 100, &error);
++    QVERIFY2(map, qPrintable(error));
++    nested->segments[0].annotations[0].baseCount = 99;
++    QCOMPARE(map->owner()->segments[0].bases[0].body.nested[0]
++             ->segments[0].annotations[0].baseCount, 1);
++    const char32_t scalar[] = {0x1f9d1, 0};
++    document.setPlainText(QString::fromUcs4(scalar));
++    Map::Segment cut;
++    cut.gap = {0, 0};
++    cut.bases = {{{0, 0}, {{0, 1}, {}}}, {{1, 1}, {{1, 2}, {}}}};
++    QVERIFY(!Map::create(&document, Map::Owner{{0, 2}, {cut}}, 100, &error));
++}
++
++void tst_QTextDocumentLayout::rubyGapDoesNotConsumeNonbreakingBaseContent()
++{
++    using Map = QTextRubyRangeMap;
++    QTextDocument document;
++    document.setPlainText(QStringLiteral("A B"));
++    Map::Segment segment;
++    segment.gap = {0, 0};
++    segment.bases = {{{0, 0}, {{0, 1}, {}}}, {{1, 2}, {{2, 3}, {}}}};
++    QString error;
++    QVERIFY(Map::create(&document, Map::Owner{{0, 3}, {segment}}, 100, &error));
++    // NBSP is ordinary base text, not a CSS inter-base gap. Refuse a map
++    // that discards it from base measurement, while admitting it in the body.
++    document.setPlainText(QStringLiteral("A") + QChar(0x00a0) + QStringLiteral("B"));
++    QVERIFY(!Map::create(&document, Map::Owner{{0, 3}, {segment}}, 100, &error));
++    segment.bases[1].gap = {1, 1};
++    segment.bases[1].body.range = {1, 3};
++    auto map = Map::create(&document, Map::Owner{{0, 3}, {segment}}, 100, &error);
++    QVERIFY2(map, qPrintable(error));
++    const QString raw = QStringLiteral("A") + QChar(0x00a0) + QStringLiteral("B");
++    QCOMPARE(document.toRawText(), raw);
++    QCOMPARE(map->text(0, 3), raw);
++    // Qt's public plain-text convenience deliberately normalizes NBSP. Neither
++    // the Ruby source map nor its native shaping/break/selection path uses it.
++    QCOMPARE(document.toPlainText(), QStringLiteral("A B"));
++    const auto selected = map->selectionToDocument(1, 2);
++    QCOMPARE(selected.first, 1); QCOMPARE(selected.last, 2);
++    QTextCursor cursor(&document); cursor.setPosition(selected.first);
++    cursor.setPosition(selected.last, QTextCursor::KeepAnchor);
++    QCOMPARE(cursor.selectedText(), QString(QChar(0x00a0)));
++    QTextRubyLayout::Description ruby;
++    QTextRubyLayout::Child child; child.source = {0, 3}; child.ownerFont = document.defaultFont();
++    child.usedAbove = 12; child.usedBelow = 4; ruby.bases = {child}; ruby.gaps = {0};
++    auto shaped = QTextRubyLayout::create(&document, ruby); QVERIFY(shaped);
++    QVERIFY(!shaped->characterRect(1).isEmpty());
++    QVERIFY(shaped->cursorRect(2).left() > shaped->cursorRect(1).left());
++    auto fragments = QTextRubyLayout::fragments(&document, ruby, 1);
++    QVERIFY(fragments); QCOMPARE(fragments->size(), 1);
++    QCOMPARE(fragments->first().bases.first().source.first, 0);
++    QCOMPARE(fragments->first().bases.first().source.last, 3);
++}
++
++void tst_QTextDocumentLayout::rubyCollapsedGapKeepsLogicalTextAndNeighborRanges()
++{
++    using Map = QTextRubyRangeMap;
++    const auto before = Map::Bias::Before, after = Map::Bias::After;
++    const QString logical = QStringLiteral("A\r\nBxy");
++    Map::Segment segment;
++    segment.gap = {0, 0};
++    segment.bases = {{{0, 0}, {{0, 1}, {}}}, {{1, 3}, {{3, 4}, {}}}};
++    segment.annotations = {{0, 1, 0, false, {4, 4}, {{4, 5}, {}}},
++                           {1, 1, 0, false, {5, 5}, {{5, 6}, {}}}};
++    const Map::Owner owner{{0, 6}, {segment}};
++    for (bool omit : {false, true}) {
++        QTextDocument document;
++        document.setPlainText(omit ? QStringLiteral("ABxy") : QStringLiteral("A Bxy"));
++        const int storedGap = omit ? 0 : 1;
++        const QList<Map::Piece> pieces{{{0, 1}, {0, 1}, false},
++            {{1, 3}, {1, 1 + storedGap}, true}, {{3, 6}, {1 + storedGap, 4 + storedGap}, false}};
++        QString error;
++        auto map = Map::create(&document, logical, pieces, owner, 100, &error);
++        QVERIFY2(map, qPrintable(error));
++        QCOMPARE(map->logicalCount(), 6);
++        QCOMPARE(map->text(0, 6), logical);
++        QCOMPARE(map->text(1, 3), QStringLiteral("\r\n"));
++        QCOMPARE(map->toDocument(2, before), 1);
++        QCOMPARE(map->toDocument(2, after), 1 + storedGap);
++        // These are the future action/selection ranges, not URL matching. The
++        // CRLF belongs to neither adjacent base, including at a shared caret.
++        const auto left = map->columnSources(0, 0)[0].range;
++        const auto right = map->columnSources(0, 1)[0].range;
++        QVERIFY(Map::selected(left, 1, 3).empty());
++        QVERIFY(Map::selected(right, 1, 3).empty());
++        QCOMPARE(map->toDocument(left.first, after), 0);
++        QCOMPARE(map->toDocument(left.last, before), 1);
++        QCOMPARE(map->toDocument(right.first, after), 1 + storedGap);
++        QCOMPARE(map->toDocument(right.last, before), 2 + storedGap);
++        QCOMPARE(map->toLogical(1, before), 1);
++        QCOMPARE(map->toLogical(1 + storedGap, after), 3);
++        if (omit) {
++            QCOMPARE(map->toLogical(1, after), 3);
++            QCOMPARE(map->toLogical(1, before), 1);
++        }
++        auto changed = pieces;
++        changed[2].logical.first = 2;
++        QVERIFY(!Map::create(&document, logical, changed, owner, 100, &error));
++        auto wrongOwner = owner;
++        wrongOwner.segments[0].bases[1].gap = {1, 1};
++        wrongOwner.segments[0].bases[1].body.range = {1, 4};
++        QVERIFY(!Map::create(&document, logical, pieces, wrongOwner, 100, &error));
++        QTextCursor cursor(&document);
++        cursor.insertText(QStringLiteral("!"));
++        QCOMPARE(map->logicalCount(), -1);
++        QCOMPARE(map->toDocument(0, before), -1);
++        QVERIFY(map->text(0, 6).isEmpty());
++    }
++    QTextDocument changedBody;
++    changedBody.setPlainText(QStringLiteral("A Cxy"));
++    QString error;
++    const QList<Map::Piece> pieces{{{0, 1}, {0, 1}, false}, {{1, 3}, {1, 2}, true},
++                                   {{3, 6}, {2, 5}, false}};
++    QVERIFY(!Map::create(&changedBody, logical, pieces, owner, 100, &error));
++    // Normalizing into a real QTextDocument paragraph is not the chosen inline
++    // storage projection. An adapter must explicitly emit a collapsed gap.
++    changedBody.setPlainText(logical);
++    QVERIFY(!Map::create(&changedBody, owner, 100, &error));
++}
++
++// Future include: qtextrubygeometry_p.h. These numeric controls supplement,
++void tst_QTextDocumentLayout::rubyInteriorGapSelectionKeepsExactLogicalCopy()
++{
++    using Map = QTextRubyRangeMap;
++    QTextDocument document;
++    document.setPlainText(QStringLiteral("A B"));
++    const QString logical = QStringLiteral("A \r\n\tB");
++    Map::Segment segment;
++    segment.gap = {0, 0};
++    segment.bases = {{{0, 0}, {{0, 1}, {}}}, {{1, 5}, {{5, 6}, {}}}};
++    const QList<Map::Piece> pieces{{{0, 1}, {0, 1}, false}, {{1, 5}, {1, 2}, true},
++                                   {{5, 6}, {2, 3}, false}};
++    QString error;
++    const auto map = Map::create(&document, logical, pieces, Map::Owner{{0, 6}, {segment}}, 100, &error);
++    QVERIFY2(map, qPrintable(error));
++    const auto interior = map->selectionToDocument(2, 3);
++    QCOMPARE(interior.first, 2);
++    QCOMPARE(interior.last, 2);
++    QCOMPARE(map->text(2, 3), QStringLiteral("\r"));
++    const auto whole = map->selectionToDocument(1, 5);
++    QCOMPARE(whole.first, 1);
++    QCOMPARE(whole.last, 2);
++    QCOMPARE(map->text(1, 5), QStringLiteral(" \r\n\t"));
++    QCOMPARE(map->selectionToDocument(2, 2).first, 2);
++    QCOMPARE(map->selectionToDocument(2, 2).last, 2);
++    QCOMPARE(map->sourceDocument(), &document);
++    document.setPlainText(QStringLiteral("replaced"));
++    QVERIFY(!map->sourceDocument());
++    QCOMPARE(map->selectionToDocument(2, 3).first, -1);
++}
++
++// Future include: qtextrubygeometry_p.h. These numeric controls supplement,
++// rather than replace, actual shaping/paint/line and cursor integration cases.
++void tst_QTextDocumentLayout::rubySpanningWidthsProcessShorterRangesFirst()
++{
++    using namespace QTextRubyGeometry;
++    const QList<AnnotationWidth> annotations{{0, 3, 60, false}, {1, 2, 50, false},
++                                            {0, 1, 1000, true}};
++    const auto result = columns({10, 10, 10}, {0, 0, 0}, annotations);
++    QVERIFY(result);
++    QCOMPARE(result->widths, QList<qreal>({10, 25, 25}));
++    QCOMPARE(result->starts, QList<qreal>({0, 10, 35}));
++    QCOMPARE(result->advance, qreal(60));
++    const auto gap = columns({10, 10}, {0, 4}, {{0, 2, 30, false}});
++    QVERIFY(gap);
++    QCOMPARE(gap->widths, QList<qreal>({13, 13}));
++    QCOMPARE(gap->starts, QList<qreal>({0, 17}));
++    QCOMPARE(gap->advance, qreal(30));
++    QVERIFY(!columns({10}, {0}, {{0, 2, 30, false}}));
++    QVERIFY(!columns({10}, {-1}, {}));
++}
++
++void tst_QTextDocumentLayout::rubyDistributionAndLeadingKeepBaseMetricsSeparate()
++{
++    using namespace QTextRubyGeometry;
++    const auto cjk = spaceAround(6, 18, 2);
++    QVERIFY(cjk);
++    QCOMPARE(cjk->edgeBefore, qreal(2));
++    QCOMPARE(cjk->between, qreal(4));
++    QCOMPARE(cjk->edgeAfter, qreal(2));
++    const auto latin = spaceAround(6, 18, 0);
++    QVERIFY(latin);
++    QCOMPARE(latin->edgeBefore, qreal(6));
++    QCOMPARE(latin->edgeAfter, qreal(6));
++    QVERIFY(!spaceAround(18, 6, 1));
++    const auto over = additionalLeading(10, 3, -20, 3);
++    QVERIFY(over);
++    QCOMPARE(over->above, qreal(10));
++    QCOMPARE(over->below, qreal(0));
++    const qreal distance = 10 + 3 + over->above + over->below;
++    // Three identical measured stacks just touch; base ascent/descent remain
++    // 10/3 for baseline alignment rather than becoming an image 20/3 strut.
++    QVERIFY(3 <= distance - 20);
++    QVERIFY(distance + 3 <= 2 * distance - 20);
++    const auto both = additionalLeading(10, 3, -18, 9);
++    QVERIFY(both);
++    QCOMPARE(both->above, qreal(8));
++    QCOMPARE(both->below, qreal(6));
++    const auto overflow = additionalLeading(10, 10, -20, 0);
++    QVERIFY(overflow);
++    QCOMPARE(overflow->above + overflow->below, qreal(0));
++    QVERIFY(!additionalLeading(10, 3, 3, -20));
++}
++
++void tst_QTextDocumentLayout::rubyAlternatingLevelsUseMeasuredBoxes()
++{
++    using namespace QTextRubyGeometry;
++    const QList<AnnotationBox> boxes{{0, false, -4, 1}, {0, false, -3, 1},
++        {1, false, -3, 2}, {2, false, -2, 1}, {2, true, -1000, 1000}};
++    const auto result = stack(10, 3, -10, 3, boxes);
++    QVERIFY(result);
++    QCOMPARE(result->baselines, QList<qreal>({-11, -11, 6, -16, 0}));
++    QCOMPARE(result->top, qreal(-18));
++    QCOMPARE(result->bottom, qreal(8));
++    QCOMPARE(result->leading.above, qreal(8));
++    QCOMPARE(result->leading.below, qreal(5));
++    QVERIFY(result->baselines[0] + boxes[0].bottom <= -10);
++    QVERIFY(result->baselines[2] + boxes[2].top >= 3);
++    QVERIFY(result->baselines[3] + boxes[3].bottom
++            <= result->baselines[0] + boxes[0].top);
++    // A nested Ruby extends base content above its original used metrics. The
++    // next annotation starts beyond that measured extent, not at ascent -10.
++    const auto nested = stack(10, 3, -22, 3, {{0, false, -4, 1}});
++    QVERIFY(nested);
++    QCOMPARE(nested->baselines[0], qreal(-23));
++    QCOMPARE(nested->top, qreal(-27));
++    const auto hidden = stack(10, 3, -10, 3,
++        {{0, true, -999, 999}, {1, false, -3, 2}});
++    QVERIFY(hidden);
++    QCOMPARE(hidden->top, qreal(-10));
++    QCOMPARE(hidden->bottom, qreal(8));
++    const auto ordinaryShort = stack(5, 2, -10, 3, {});
++    const auto allHiddenShort = stack(5, 2, -10, 3, {{0, true, -4, 1}});
++    QVERIFY(ordinaryShort);
++    QVERIFY(allHiddenShort);
++    QCOMPARE(ordinaryShort->top, qreal(-10));
++    QCOMPARE(ordinaryShort->bottom, qreal(3));
++    QCOMPARE(allHiddenShort->top, ordinaryShort->top);
++    QCOMPARE(allHiddenShort->bottom, ordinaryShort->bottom);
++    QCOMPARE(ordinaryShort->leading.above + ordinaryShort->leading.below, qreal(0));
++    QCOMPARE(allHiddenShort->leading.above + allHiddenShort->leading.below, qreal(0));
++    const auto visibleShort = stack(5, 2, -10, 3, {{0, false, -4, 1}});
++    QVERIFY(visibleShort);
++    QVERIFY(visibleShort->leading.above + visibleShort->leading.below > 0);
++    QVERIFY(!stack(10, 3, -10, 3, {{1, false, -4, 1}}));
++    QVERIFY(!stack(10, 3, -10, 3, {{0, false, 2, 1}}));
++}
++
++void tst_QTextDocumentLayout::rubyEmptyReadingHasOwnerMetricsWithoutLogicalText()
++{
++    using Map = QTextRubyRangeMap;
++    using namespace QTextRubyGeometry;
++    QTextDocument document;
++    document.setPlainText(QStringLiteral("base"));
++    Map::Segment segment;
++    segment.gap = {0, 0};
++    segment.bases = {{{0, 0}, {{0, 4}, {}}}};
++    segment.annotations = {{0, 1, 0, false, {4, 4}, {{4, 4}, {}}}};
++    QString error;
++    auto map = Map::create(&document, Map::Owner{{0, 4}, {segment}}, 100, &error);
++    QVERIFY2(map, qPrintable(error));
++    QCOMPARE(map->logicalCount(), 4);
++    QVERIFY(map->columnSources(0, 0)[1].range.empty());
++    const QFont baseFont = document.defaultFont();
++    QFont readingFont = baseFont;
++    readingFont.setPointSizeF(7);
++    const QFontMetricsF baseMetrics(baseFont), readingMetrics(readingFont);
++    const auto widths = columns({baseMetrics.horizontalAdvance(QStringLiteral("base"))},
++        {0}, {{0, 1, 0, false}});
++    QVERIFY(widths);
++    QCOMPARE(widths->advance, baseMetrics.horizontalAdvance(QStringLiteral("base")));
++    const auto positioned = stack(baseMetrics.ascent(), baseMetrics.descent(),
++        -baseMetrics.ascent(), baseMetrics.descent(),
++        {{0, false, -readingMetrics.ascent(), readingMetrics.descent()}});
++    QVERIFY(positioned);
++    QCOMPARE(positioned->top,
++        -baseMetrics.ascent() - readingMetrics.descent() - readingMetrics.ascent());
++    QCOMPARE(document.toRawText(), QStringLiteral("base"));
++    QCOMPARE(document.characterCount(), 5);
++    QCOMPARE(map->text(0, 4), QStringLiteral("base"));
++}
++
++// Future methods in the EXISTING tst_QTextDocumentLayout class, after the
++// complete native Ruby seam is registered. Uncompiled and UNRUN source controls.
++
++void tst_QTextDocumentLayout::rubyFlatShapingPreservesOwnerAndScalarBoundaries()
++{
++    using namespace QTextRubyGeometry;
++    QFont original;
++    original.setPointSizeF(20);
++    QFont child = original;
++    child.setPointSizeF(8);
++    child.setBold(false);
++    child.setItalic(false);
++    QFont owner = original;
++    owner.setBold(true);
++    owner.setItalic(true);
++    QTextCharFormat childFormat;
++    childFormat.setFont(child);
++    const QString text = QStringLiteral("A e\u0301 \U0001f9d1");
++    QCOMPARE(text.size(), 7);
++    const QList<QTextLayout::FormatRange> formats{{0, int(text.size()), childFormat}};
++    QTextOption option;
++    option.setTextDirection(Qt::LeftToRight);
++    const auto shaped = measureFlatChild(text, owner, formats, option, nullptr);
++    QVERIFY(shaped);
++    QCOMPARE(shaped->layout->text(), text);
++    QCOMPARE(shaped->layout->lineCount(), 1);
++    QVERIFY(shaped->advance > 0);
++    QVERIFY(!shaped->layout->isValidCursorPosition(3)); // combining mark
++    QVERIFY(!shaped->layout->isValidCursorPosition(6)); // low surrogate
++    QVERIFY(shaped->layout->isValidCursorPosition(5));
++    const QFontMetricsF declaring(owner);
++    QVERIFY(shaped->fontTop <= -declaring.ascent());
++    QVERIFY(shaped->fontBottom >= declaring.descent());
++    QVERIFY(!shaped->layout->formats()[0].format.font().bold());
++    QVERIFY(!shaped->layout->formats()[0].format.font().italic());
++    // The helper never resolves a small child from a small owner again. It
++    // retains the complete native format supplied by the original-basis adapter.
++    QCOMPARE(shaped->layout->formats()[0].format.font().pointSizeF(), qreal(8));
++    auto split = formats;
++    split[0].length = 6;
++    split.append({6, 1, childFormat});
++    QVERIFY(!measureFlatChild(text, owner, split, option, nullptr));
++    auto object = childFormat;
++    object.setObjectType(QTextFormat::ImageObject);
++    QVERIFY(!measureFlatChild(text, owner, {{0, int(text.size()), object}}, option, nullptr));
++    QVERIFY(!measureFlatChild(QStringLiteral("A\r\nB"), owner,
++        {{0, 4, childFormat}}, option, nullptr));
++    const auto empty = measureFlatChild({}, owner, {}, option, nullptr);
++    QVERIFY(empty);
++    QCOMPARE(empty->advance, qreal(0));
++    QCOMPARE(empty->fontTop, -declaring.ascent());
++    QCOMPARE(empty->fontBottom, declaring.descent());
++    QVERIFY(!empty->hasInk);
++    QVERIFY(empty->layout->text().isEmpty());
++    QCOMPARE(empty->layout->lineCount(), 0);
++}
++
++void tst_QTextDocumentLayout::rubyFlatShapingUsesNativeDirectionWithoutControlText()
++{
++    using namespace QTextRubyGeometry;
++    QFont font;
++    font.setPointSizeF(14);
++    QTextCharFormat format;
++    format.setFont(font);
++    const QString text = QStringLiteral("\u05d0\u05d1");
++    QTextOption option;
++    option.setTextDirection(Qt::RightToLeft);
++    const auto shaped = measureFlatChild(text, font, {{0, 2, format}}, option, nullptr);
++    QVERIFY(shaped);
++    QCOMPARE(shaped->layout->text(), text);
++    QCOMPARE(shaped->layout->text().size(), 2);
++    const auto line = shaped->layout->lineAt(0);
++    QVERIFY(line.cursorToX(0) > line.cursorToX(2));
++    const auto runs = shaped->layout->glyphRuns(0, 2, QTextLayout::RetrieveAll);
++    QVERIFY(!runs.isEmpty());
++    for (const auto &run : runs) {
++        QVERIFY(run.isRightToLeft());
++        for (qsizetype index : run.stringIndexes()) QVERIFY(index >= 0 && index < 2);
++    }
++}
++
++// Source-only test slots for the existing native QTextDocumentLayout test class.
++// Requires existing private qtextengine_p.h include. Not inserted or compiled.
++// These are engine metric/boundary controls, not Ruby paint/copy/AX acceptance.
++void tst_QTextDocumentLayout::projectedRubyUsesResolvedBaseMetricsOnly()
++{
++    QTextDocument source;
++    source.setPlainText(QStringLiteral("base reading"));
++    const QString original = source.toRawText();
++    qreal firstHeight = -1;
++    for (int occupied = 0; occupied != 2; ++occupied) {
++        QTextLayout layout(QString(QChar::ObjectReplacementCharacter), source.defaultFont());
++        // Raw engine inspection below requires shaped data to survive endLayout().
++        layout.setCacheEnabled(true);
++        auto *engine = layout.engine();
++        engine->projectedDocument = &source;
++        engine->projectedSourcePositions = QList<int>{-1};
++        QTextEngine::ProjectedRubyMetrics ruby;
++        ruby.advance = QFixed(40);
++        ruby.minimumWidth = QFixed(40);
++        ruby.baseAscent = QFixed(9);
++        ruby.baseDescent = QFixed(3);
++        ruby.baseLeading = QFixed();
++        ruby.occupiedTop = QFixed(occupied ? -70 : -9);
++        ruby.occupiedBottom = QFixed(occupied ? 50 : 3);
++        ruby.visibleAnnotation = occupied;
++        QVERIFY(ruby.valid());
++        engine->mutableProjectedRubyMetrics().insert(0, ruby);
++        layout.beginLayout();
++        auto line = layout.createLine();
++        QVERIFY(line.isValid());
++        line.setLineWidth(200);
++        layout.endLayout();
++        QVERIFY(layout.cacheEnabled());
++        QVERIFY(engine->layoutData);
++        QVERIFY(!engine->projectedRubyMetricsInvalid());
++        const int index = engine->findItem(0);
++        QVERIFY(index >= 0);
++        const auto &item = engine->layoutData->items.at(index);
++        QCOMPARE(item.width, ruby.advance);
++        QCOMPARE(item.ascent, ruby.baseAscent);
++        QCOMPARE(item.descent, ruby.baseDescent);
++        QCOMPARE(item.leading, QFixed());
++        QVERIFY(!engine->format(&item).isImageFormat());
++        QVERIFY(!engine->hasDocumentObject(0));
++        if (!occupied) firstHeight = line.height();
++        else QCOMPARE(line.height(), firstHeight); // Annotation reserve belongs to qdoc only.
++        QCOMPARE(source.toRawText(), original);
++    }
++}
++
++void tst_QTextDocumentLayout::projectedRubyRejectsMalformedMetrics()
++{
++    QTextEngine::ProjectedRubyMetrics good;
++    good.advance = good.minimumWidth = QFixed(40);
++    good.baseAscent = QFixed(3);
++    good.baseDescent = QFixed(-3); // Legitimate zero used-height half-leading.
++    good.occupiedTop = QFixed(-9);
++    good.occupiedBottom = QFixed(3);
++    QVERIFY(good.valid());
++    QList<QTextEngine::ProjectedRubyMetrics> invalid;
++    auto value = good; value.advance = QFixed(-1); invalid.append(value);
++    value = good; value.minimumWidth = QFixed(41); invalid.append(value);
++    value = good; value.occupiedTop = QFixed(4); invalid.append(value);
++    value = good; value.baseLeading = QFixed(1); invalid.append(value);
++    value = good; value.baseDescent = QFixed(-4); invalid.append(value);
++    value = good; value.baseAscent = QFixed::fromFixed(int(qint64(QFIXED_MAX) * 64 - 1));
++    value.baseDescent = QFixed(1); invalid.append(value);
++    QTextDocument source;
++    source.setPlainText(QStringLiteral("base reading"));
++    const QString original = source.toRawText();
++    for (const auto &ruby : invalid) {
++        QVERIFY(!ruby.valid());
++        QTextLayout layout(QString(QChar::ObjectReplacementCharacter), source.defaultFont());
++        auto *engine = layout.engine();
++        engine->projectedDocument = &source;
++        engine->projectedSourcePositions = QList<int>{-1};
++        engine->mutableProjectedRubyMetrics().insert(0, ruby);
++        engine->itemize();
++        const int item = engine->findItem(0);
++        QVERIFY(item >= 0);
++        engine->shape(item);
++        QVERIFY(engine->projectedRubyMetricsInvalid());
++        QCOMPARE(engine->layoutData->items.at(item).width, QFixed());
++        QCOMPARE(engine->layoutData->items.at(item).ascent, QFixed());
++        QCOMPARE(engine->layoutData->items.at(item).descent, QFixed());
++        QCOMPARE(source.toRawText(), original);
++    }
++}
++
++void tst_QTextDocumentLayout::projectedRubyKeepsOnlyAdmittedOrdinaryBoundaries()
++{
++    QTextDocument source;
++    source.setPlainText(QStringLiteral("abBASEreadingcd"));
++    const QString original = source.toRawText();
++    const QString projected = QStringLiteral("ab\u2066\ufffc\u2069cd");
++    for (bool allow : {false, true}) {
++        for (auto wrap : {QTextOption::WordWrap, QTextOption::NoWrap}) {
++            QTextLayout layout(projected, source.defaultFont());
++            // Raw engine inspection below requires shaped data to survive endLayout().
++            layout.setCacheEnabled(true);
++            auto option = layout.textOption(); option.setWrapMode(wrap); layout.setTextOption(option);
++            auto *engine = layout.engine();
++            engine->projectedDocument = &source;
++            engine->projectedSourcePositions = QList<int>{0,1,-1,-1,-1,13,14};
++            QTextEngine::ProjectedRubyMetrics ruby;
++            ruby.advance = ruby.minimumWidth = QFixed(90);
++            ruby.baseAscent = QFixed(9); ruby.baseDescent = QFixed(3);
++            ruby.occupiedTop = QFixed(-20); ruby.occupiedBottom = QFixed(3);
++            ruby.visibleAnnotation = true;
++            ruby.breakBefore = ruby.breakAfter = allow;
++            engine->mutableProjectedRubyMetrics().insert(3, ruby);
++            layout.beginLayout();
++            int consumed = 0;
++            for (int count = 0; count < projected.size() + 1; ++count) {
++                auto line = layout.createLine();
++                if (!line.isValid()) break;
++                line.setLineWidth(QFontMetricsF(source.defaultFont()).horizontalAdvance(QStringLiteral("ab")) + 45);
++                QVERIFY(line.textLength() > 0);
++                consumed += line.textLength();
++            }
++            layout.endLayout();
++            QVERIFY(layout.cacheEnabled());
++            QVERIFY(engine->layoutData);
++            QVERIFY(!engine->projectedRubyMetricsInvalid());
++            QCOMPARE(consumed, projected.size());
++            for (int at : {2,3,4,5})
++                QCOMPARE(engine->projectedRubyBoundaryAllowed(at), allow);
++            if (!allow || wrap == QTextOption::NoWrap)
++                QCOMPARE(layout.lineCount(), 1);
++            else QVERIFY(layout.lineCount() > 1);
++            QCOMPARE(source.toRawText(), original);
++        }
++    }
++}
++
++void tst_QTextDocumentLayout::projectedRubyMetadataSurvivesUnrelatedFormatAndPreeditClears()
++{
++    QTextDocument source;
++    source.setPlainText(QStringLiteral("base reading"));
++    QTextLayout layout(QString(QChar::ObjectReplacementCharacter), source.defaultFont());
++    auto *engine = layout.engine();
++    engine->projectedDocument = &source;
++    engine->projectedSourcePositions = QList<int>{-1};
++    QTextEngine::ProjectedRubyMetrics ruby;
++    ruby.advance = ruby.minimumWidth = QFixed(40);
++    ruby.baseAscent = QFixed(9); ruby.baseDescent = QFixed(3);
++    ruby.occupiedTop = QFixed(-20); ruby.occupiedBottom = QFixed(3);
++    ruby.visibleAnnotation = true;
++    engine->mutableProjectedRubyMetrics().insert(0, ruby);
++    layout.setFormats({});
++    QCOMPARE(engine->projectedRubyMetrics().size(), 1);
++    QCOMPARE(engine->projectedRubyMetrics().value(0).advance, ruby.advance);
++    layout.setPreeditArea(0, QStringLiteral("x"));
++    layout.setPreeditArea(-1, QString());
++    QCOMPARE(engine->projectedRubyMetrics().size(), 1);
++    QCOMPARE(layout.preeditAreaPosition(), -1);
++    QVERIFY(layout.preeditAreaText().isEmpty());
++    engine->setProjectedRubyMetricsInvalid(true);
++    engine->mutableProjectedRubyMetrics().clear();
++    layout.setFormats({});
++    layout.setPreeditArea(-1, QString());
++    QVERIFY(engine->projectedRubyMetricsInvalid());
++    engine->setProjectedRubyMetricsInvalid(false);
++    layout.setFormats({});
++    QVERIFY(engine->projectedRubyMetrics().isEmpty());
++    QVERIFY(!engine->projectedRubyMetricsInvalid());
++    QCOMPARE(source.toRawText(), QStringLiteral("base reading"));
++}
++
++// Future slots in the existing tst_QTextDocumentLayout target. These exercise
++// actual registration, native shaping/drawing and original-offset geometry.
++// Source-only candidate: not compiled or run.
++// Includes: qtextrubylayout_p.h, qtextlogicalflow_p.h, qtextdocumentlayout_p.h.
++
++void tst_QTextDocumentLayout::rubyMultipleOwnersPaintAndKeepChildOffsets()
++{
++    QTextDocument document;
++    QFont baseFont; baseFont.setPixelSize(20);
++    QFont readingFont = baseFont; readingFont.setPixelSize(12);
++    document.setDefaultFont(baseFont);
++    document.setTextWidth(480);
++    QVERIFY(document.documentLayout()->setProperty("cursorWidth", 4));
++    QTextCursor cursor(&document);
++    QTextCharFormat ordinary; ordinary.setFont(baseFont);
++    QTextCharFormat link = ordinary; link.setAnchor(true); link.setAnchorHref(QStringLiteral("dict:dog"));
++    QTextCharFormat reading = link; reading.setFont(readingFont);
++    cursor.insertText(QStringLiteral("prefix "), ordinary);
++    const int a = cursor.position(); cursor.insertText(QStringLiteral("AB"), link);
++    const int ar = cursor.position(); cursor.insertText(QStringLiteral("reading"), reading);
++    const int middle = cursor.position(); cursor.insertText(QStringLiteral(" middle "), ordinary);
++    const int b = cursor.position(); cursor.insertText(QStringLiteral("C"), link);
++    const int br = cursor.position(); cursor.insertText(QStringLiteral("see"), reading);
++    const int suffix = cursor.position(); cursor.insertText(QStringLiteral(" suffix"), ordinary);
++    const int end = cursor.position();
++    const QString original = document.toRawText();
++    const int revision = document.revision();
++    const auto description = [&](int baseFirst, int baseLast, int readingFirst, int readingLast) {
++        QTextRubyLayout::Description value;
++        QTextRubyLayout::Child base;
++        base.source = {baseFirst, baseLast}; base.ownerFont = baseFont;
++        base.usedAbove = 16; base.usedBelow = 4;
++        QTextRubyLayout::Child annotation;
++        annotation.source = {readingFirst, readingLast}; annotation.ownerFont = readingFont;
++        value.bases.append(base); value.readings.append({annotation, 0, 1, 0});
++        value.gaps = {0}; value.breakBefore = value.breakAfter = true;
++        return value;
++    };
++    const auto text = [](int first, int last) {
++        return QVariantMap{{"kind", QStringLiteral("text")}, {"first", first}, {"last", last}};
++    };
++    const auto ruby = [&](int anchor, const QTextRubyLayout::Description &value) {
++        return QVariantMap{{"kind", QStringLiteral("ruby")}, {"anchor", anchor}, {"value", QVariant::fromValue(value)}};
++    };
++    const QVariantList parts{text(0, a), ruby(a, description(a, ar, ar, middle)),
++        text(middle, b), ruby(b, description(b, br, br, suffix)), text(suffix, end)};
++    const QVariantList owners{QVariantMap{{"first", 0}, {"last", end},
++        {"direction", int(Qt::LeftToRight)}, {"joins", QVariantList{}}, {"parts", parts}}};
++    bool accepted = false;
++    QVERIFY(QMetaObject::invokeMethod(document.documentLayout(), "wikidictSetLogicalFlows",
++        Qt::DirectConnection, Q_RETURN_ARG(bool, accepted), Q_ARG(QVariantList, owners)));
++    QVERIFY(accepted);
++    QVERIFY(document.documentLayout()->documentSize().height() > 0);
++    const auto geometry = [&](int offset) {
++        QVariantMap result;
++        const bool invoked = QMetaObject::invokeMethod(document.documentLayout(), "wikidictLogicalPosition",
++            Qt::DirectConnection, Q_RETURN_ARG(QVariantMap, result), Q_ARG(int, offset));
++        if (!invoked) return QVariantMap();
++        return result;
++    };
++    // Bounded native observation in the existing owned test cwd. Save before
++    // the geometry assertions so a failing layout remains independently visible.
++    const QString capturePath = QStringLiteral(".tmp/ui-screenshots/native-inline-list-ruby-multiple.png");
++    QDir().mkpath(QStringLiteral(".tmp/ui-screenshots"));
++    QImage raster(520, 220, QImage::Format_ARGB32_Premultiplied); raster.fill(Qt::white);
++    {
++        QPainter rasterPainter(&raster);
++        QAbstractTextDocumentLayout::PaintContext rasterContext;
++        document.documentLayout()->draw(&rasterPainter, rasterContext);
++    }
++    const bool captureSaved = raster.save(capturePath);
++    qInfo() << "Ruby native capture" << capturePath << "saved" << captureSaved;
++    const auto base = geometry(a), annotation = geometry(ar), second = geometry(b), secondReading = geometry(br);
++    for (const auto &value : {base, annotation, second, secondReading}) {
++        QCOMPARE(value.value("error", -1).toInt(), 0);
++        QVERIFY(!value.value("characterRect").toRectF().isEmpty());
++    }
++    QVERIFY(annotation.value("characterRect").toRectF().bottom() <= base.value("characterRect").toRectF().top() + 1.0 / 64);
++    QVERIFY(secondReading.value("characterRect").toRectF().bottom() <= second.value("characterRect").toRectF().top() + 1.0 / 64);
++    QCOMPARE(annotation.value("cursorRect").toRectF().width(), qreal(4));
++    QVERIFY(second.value("characterRect").toRectF().left() > base.value("characterRect").toRectF().right());
++    const QPointF hit = annotation.value("characterRect").toRectF().center();
++    const int target = document.documentLayout()->hitTest(hit, Qt::ExactHit);
++    qInfo() << "Ruby hit geometry" << annotation << "hit" << hit << "target" << target << "expected" << ar << middle;
++    QVERIFY(target >= ar && target < middle);
++    QTextCursor targetCursor(&document); targetCursor.setPosition(target);
++    targetCursor.setPosition(target + 1, QTextCursor::KeepAnchor);
++    QCOMPARE(targetCursor.charFormat().anchorHref(), QStringLiteral("dict:dog"));
++    QImage image(500, 180, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
++    QPainter painter(&image);
++    QAbstractTextDocumentLayout::PaintContext context;
++    QAbstractTextDocumentLayout::Selection selection;
++    selection.cursor = QTextCursor(&document); selection.cursor.setPosition(ar);
++    selection.cursor.setPosition(middle, QTextCursor::KeepAnchor);
++    selection.format.setBackground(QColor(0, 255, 0)); context.selections.append(selection);
++    document.documentLayout()->draw(&painter, context); painter.end();
++    int selectedPixels = 0;
++    for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x)
++        selectedPixels += image.pixelColor(x, y) == QColor(0, 255, 0);
++    QVERIFY(selectedPixels > 0);
++    QCOMPARE(document.toRawText(), original); QCOMPARE(document.revision(), revision);
++    QCOMPARE(geometry(ar), annotation); // Existing cached-layout path.
++    cursor.movePosition(QTextCursor::End); cursor.insertText(QStringLiteral("!"));
++    QVERIFY(geometry(ar).value("error", -1).toInt() != 0);
++    QVERIFY(captureSaved);
++    // Allocated edge padding is not a neighboring action. Exact hit testing
++    // uses shaped characters; fuzzy caret placement may still reach the end.
++    QTextDocument padded; padded.setDefaultFont(baseFont);
++    QTextCursor pc(&padded);
++    auto baseLink = link; baseLink.setAnchorHref(QStringLiteral("dict:base"));
++    auto readingLink = reading; readingLink.setAnchorHref(QStringLiteral("dict:reading"));
++    pc.insertText(QStringLiteral("WWWW"), baseLink); pc.insertText(QStringLiteral("x"), readingLink);
++    for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++        auto value = description(0, 4, 4, 5); value.direction = direction;
++        value.bases[0].option.setTextDirection(direction);
++        value.readings[0].child.option.setTextDirection(direction);
++        auto measured = QTextRubyLayout::create(&padded, value); QVERIFY(measured);
++        const auto box = measured->characterRect(4); QVERIFY(!box.isEmpty());
++        QCOMPARE(measured->hitTest(box.center(), Qt::ExactHit), 4);
++        const auto width = measured->metrics().advance.toReal();
++        QVERIFY(width > box.width() + 1);
++        for (qreal x : {qreal(.25), width - .25}) {
++            QCOMPARE(measured->hitTest(QPointF(x, box.center().y()), Qt::ExactHit), -1);
++            const int caret = measured->hitTest(QPointF(x, box.center().y()), Qt::FuzzyHit);
++            QVERIFY(caret >= 4 && caret <= 5);
++        }
++        QTextCursor action(&padded); action.setPosition(4); action.setPosition(5, QTextCursor::KeepAnchor);
++        QCOMPARE(action.charFormat().anchorHref(), QStringLiteral("dict:reading"));
++    }
++}
++
++void tst_QTextDocumentLayout::rubyMixedOrdinaryLinesReserveAnnotationSides()
++{
++    // CSS Ruby 3.6 guarantees room for three equivalent Ruby lines. It does
++    // not require arbitrary fixed-height ordinary FONT envelopes to exclude
++    // annotations. Cold146 retains that stronger failed oracle and its raster.
++    // Here mixed-line ink is observed independently; equivalent Ruby containers
++    // retain the actual no-overlap requirement below.
++    QFont baseFont; baseFont.setPixelSize(20);
++    QFont readingFont = baseFont; readingFont.setPixelSize(12);
++    QTextBlockFormat fixed; fixed.setLineHeight(20, QTextBlockFormat::FixedHeight);
++    const auto native = [&](int start, int readingStart, int end) {
++        QTextRubyLayout::Description ruby;
++        QTextRubyLayout::Child b; b.source = {start, readingStart}; b.ownerFont = baseFont;
++        b.usedAbove = 16; b.usedBelow = 4;
++        QTextRubyLayout::Child a; a.source = {readingStart, end}; a.ownerFont = readingFont;
++        ruby.bases = {b}; ruby.readings = {{a, 0, 1, 0}}; ruby.gaps = {0};
++        return ruby;
++    };
++    const auto flow = [&](int start, int readingStart, int end) {
++        return QVariantMap{{"first", start}, {"last", end}, {"direction", int(Qt::LeftToRight)},
++            {"joins", QVariantList{}}, {"parts", QVariantList{QVariantMap{{"kind", QStringLiteral("ruby")},
++                {"anchor", start}, {"value", QVariant::fromValue(native(start, readingStart, end))}}}}};
++    };
++    const auto geometry = [](QTextDocument &document, int position) {
++        QVariantMap value;
++        if (!QMetaObject::invokeMethod(document.documentLayout(), "wikidictLogicalPosition",
++                Qt::DirectConnection, Q_RETURN_ARG(QVariantMap, value), Q_ARG(int, position)))
++            return QVariantMap();
++        return value;
++    };
++    const auto save = [](QTextDocument &document, const QString &name) {
++        QDir().mkpath(QStringLiteral(".tmp/ui-screenshots"));
++        const QString path = QStringLiteral(".tmp/ui-screenshots/native-inline-list-ruby-") + name + QStringLiteral(".png");
++        QImage image(520, 260, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
++        { QPainter painter(&image); QAbstractTextDocumentLayout::PaintContext context;
++          document.documentLayout()->draw(&painter, context); }
++        const bool saved = image.save(path); qInfo() << "Ruby native capture" << path << "saved" << saved;
++        return saved;
++    };
++    // Actual native glyph positions, not a relocated block bounding rectangle.
++    // These fixtures have no authored shift, decoration, outline or transform.
++    const auto ordinaryInk = [](const QTextBlock &block) -> std::optional<QRectF> {
++        const auto *layout = block.layout(); QRectF result; bool found = false;
++        for (int lineIndex = 0; lineIndex < layout->lineCount(); ++lineIndex) {
++            const auto runs = layout->lineAt(lineIndex).glyphRuns(-1, -1,
++                QTextLayout::RetrieveGlyphIndexes | QTextLayout::RetrieveGlyphPositions);
++            for (const auto &run : runs) {
++                const auto glyphs = run.glyphIndexes(); const auto positions = run.positions();
++                const auto font = run.rawFont();
++                if (!font.isValid() || glyphs.size() != positions.size()) return {};
++                for (qsizetype i = 0; i < glyphs.size(); ++i) {
++                    const auto glyph = font.boundingRect(glyphs[i]).translated(positions[i] + layout->position());
++                    if (glyph.isEmpty()) continue;
++                    result = found ? result.united(glyph) : glyph; found = true;
++                }
++            }
++        }
++        return found ? std::optional<QRectF>(result) : std::nullopt;
++    };
++    const QStringList beforeTexts{QStringLiteral("ordinary before"), QString::fromUtf8("gyp ÉÅ ordinary before")};
++    const QStringList readingTexts{QStringLiteral("above"), QString::fromUtf8("Égj")};
++    bool mixedCaptureSaved = false;
++    for (int sample = 0; sample < beforeTexts.size(); ++sample) {
++        QTextDocument document; document.setDefaultFont(baseFont); document.setTextWidth(400);
++        QTextCursor cursor(&document); cursor.setBlockFormat(fixed);
++        cursor.insertText(beforeTexts[sample]); cursor.insertBlock(fixed);
++        const int start = cursor.position();
++        QTextCharFormat base; base.setFont(baseFont); cursor.insertText(QStringLiteral("X"), base);
++        const int readingStart = cursor.position();
++        QTextCharFormat reading; reading.setFont(readingFont); cursor.insertText(readingTexts[sample], reading);
++        const int end = cursor.position(); cursor.insertBlock(fixed);
++        cursor.insertText(QString::fromUtf8("ÉÅ gyp ordinary after"), base);
++        bool accepted = false; const QVariantList owners{flow(start, readingStart, end)};
++        QVERIFY(QMetaObject::invokeMethod(document.documentLayout(), "wikidictSetLogicalFlows",
++            Qt::DirectConnection, Q_RETURN_ARG(bool, accepted), Q_ARG(QVariantList, owners)));
++        QVERIFY(accepted); document.documentLayout()->documentSize();
++        if (sample == 1) mixedCaptureSaved = save(document, QStringLiteral("mixed"));
++        const auto annotation = geometry(document, readingStart);
++        QCOMPARE(annotation.value("error", -1).toInt(), 0);
++        const auto prior = document.begin(), following = document.findBlock(end).next();
++        const auto priorInk = ordinaryInk(prior), nextInk = ordinaryInk(following);
++        QVERIFY(priorInk); QVERIFY(nextInk);
++        const auto priorLine = prior.layout()->lineAt(0), nextLine = following.layout()->lineAt(0);
++        const auto priorFont = priorLine.naturalTextRect().translated(prior.layout()->position());
++        const auto nextFont = nextLine.naturalTextRect().translated(following.layout()->position());
++        const auto readingBox = annotation.value("characterRect").toRectF(); QVERIFY(!readingBox.isEmpty());
++        // The reading has one unshifted format. Native glyph bounds are relative
++        // to its measured baseline; the actual layout supplies that baseline.
++        QTextOption option; option.setTextDirection(Qt::LeftToRight);
++        const QList<QTextLayout::FormatRange> formats{{0, int(readingTexts[sample].size()), reading}};
++        auto shaped = QTextRubyGeometry::measureFlatChild(readingTexts[sample], readingFont, formats,
++            option, document.documentLayout()->paintDevice());
++        QVERIFY(shaped && shaped->hasInk);
++        const auto readingInk = shaped->ink.translated(QPointF(readingBox.left(), readingBox.top() - shaped->fontTop));
++        qInfo() << "Ruby mixed sample" << sample << "prior allocation" << document.documentLayout()->blockBoundingRect(prior)
++                << "prior positioned font" << priorFont << "prior ink" << *priorInk
++                << "reading font" << readingBox << "reading ink" << readingInk
++                << "next positioned font" << nextFont << "next ink" << *nextInk << annotation;
++        // Mixed authored fixed-height neighbors have no Ruby non-overlap
++        // guarantee. Preserve their measured ink-envelope gaps as diagnostics;
++        // only equivalent Ruby containers carry that requirement below.
++        qInfo() << "Ruby mixed ink-envelope gaps" << readingInk.top() - priorInk->bottom()
++                << nextInk->top() - readingInk.bottom();
++        const auto size = document.documentLayout()->documentSize();
++        QCOMPARE(document.documentLayout()->documentSize(), size);
++    }
++
++    QTextDocument equivalent; equivalent.setDefaultFont(baseFont); equivalent.setTextWidth(400);
++    QTextCursor cursor(&equivalent); cursor.setBlockFormat(fixed);
++    QList<QPair<int, int>> ranges; QVariantList owners;
++    for (int row = 0; row < 3; ++row) {
++        if (row) cursor.insertBlock(fixed);
++        const int start = cursor.position();
++        QTextCharFormat base; base.setFont(baseFont); cursor.insertText(QStringLiteral("X"), base);
++        const int readingStart = cursor.position();
++        QTextCharFormat reading; reading.setFont(readingFont); cursor.insertText(QStringLiteral("above"), reading);
++        const int end = cursor.position();
++        owners.append(flow(start, readingStart, end)); ranges.append(qMakePair(start, end));
++    }
++    bool accepted = false;
++    QVERIFY(QMetaObject::invokeMethod(equivalent.documentLayout(), "wikidictSetLogicalFlows",
++        Qt::DirectConnection, Q_RETURN_ARG(bool, accepted), Q_ARG(QVariantList, owners)));
++    QVERIFY(accepted); equivalent.documentLayout()->documentSize();
++    const bool equivalentCaptureSaved = save(equivalent, QStringLiteral("equivalent"));
++    QList<QRectF> occupied;
++    for (const auto &range : ranges) {
++        QRectF bounds; bool found = false;
++        for (int position = range.first; position < range.second; ++position) {
++            const auto value = geometry(equivalent, position);
++            QCOMPARE(value.value("error", -1).toInt(), 0);
++            const auto box = value.value("characterRect").toRectF(); QVERIFY(!box.isEmpty());
++            bounds = found ? bounds.united(box) : box; found = true;
++        }
++        QVERIFY(found); occupied.append(bounds);
++    }
++    qInfo() << "Ruby equivalent occupied containers" << occupied;
++    QCOMPARE(occupied.size(), 3);
++    QVERIFY(occupied[1].top() >= occupied[0].bottom() - 1.0 / 64);
++    QVERIFY(occupied[2].top() >= occupied[1].bottom() - 1.0 / 64);
++    QCOMPARE(occupied[0].size(), occupied[1].size()); QCOMPARE(occupied[1].size(), occupied[2].size());
++    const auto size = equivalent.documentLayout()->documentSize();
++    QCOMPARE(equivalent.documentLayout()->documentSize(), size);
++    QVERIFY(mixedCaptureSaved); QVERIFY(equivalentCaptureSaved);
++}
++
++// Additional slots for the same existing tst_QTextDocumentLayout target.
++// Source-only, uncompiled/unrun.
++void tst_QTextDocumentLayout::rubyGapGeometryAndDeviceLifetime()
++{
++    QImage device(400, 200, QImage::Format_ARGB32_Premultiplied);
++    QTextDocument document;
++    document.documentLayout()->setPaintDevice(&device);
++    QFont baseFont; baseFont.setPixelSize(20);
++    QFont readingFont = baseFont; readingFont.setPixelSize(12);
++    document.setDefaultFont(baseFont);
++    QTextCursor cursor(&document);
++    QTextCharFormat base; base.setFont(baseFont);
++    QTextCharFormat reading; reading.setFont(readingFont);
++    cursor.insertText(QStringLiteral("A B "), base);
++    cursor.insertText(QStringLiteral("r s"), reading);
++    QTextRubyLayout::Description ruby;
++    const auto child = [](int first, int last, QFont font, qreal above, qreal below) {
++        QTextRubyLayout::Child c; c.source = {first, last}; c.ownerFont = font;
++        c.usedAbove = above; c.usedBelow = below; return c;
++    };
++    ruby.bases = {child(0, 1, baseFont, 16, 4), child(2, 3, baseFont, 16, 4)};
++    ruby.readings = {{child(4, 5, readingFont, 0, 0), 0, 1, 0},
++        {child(6, 7, readingFont, 0, 0), 1, 1, 0}};
++    ruby.gaps = {0, QFontMetricsF(baseFont, &device).horizontalAdvance(QChar(' '))};
++    ruby.gapSources = {{child(1, 2, baseFont, 16, 4), 1, -1},
++        {child(5, 6, readingFont, 0, 0), -1, 1}};
++    auto measured = QTextRubyLayout::create(&document, ruby);
++    QVERIFY(measured); QVERIFY(measured->current());
++    for (const int position : {1, 5}) {
++        QVERIFY(measured->contains(position));
++        const auto box = measured->characterRect(position);
++        QVERIFY(!box.isEmpty());
++        QCOMPARE(measured->hitTest(box.center(), Qt::ExactHit), position);
++        QVERIFY(!measured->cursorRect(position).isEmpty());
++    }
++    QVERIFY(measured->characterRect(5).bottom() <= measured->characterRect(1).top() + 1.0 / 64);
++    const int revision = document.revision();
++    document.documentLayout()->setPaintDevice(nullptr);
++    QCOMPARE(document.revision(), revision);
++    QVERIFY(!measured->current());
++    QVERIFY(measured->characterRect(1).isEmpty());
++    QCOMPARE(measured->hitTest(QPointF(0, 0), Qt::FuzzyHit), -1);
++
++    // A large anonymous row gap must reserve real shared column spacing and
++    // retain its own Ruby-origin shift, independently of either reading owner.
++    for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++        for (const int level : {0, 1}) {
++            QTextDocument gapsDocument;
++            gapsDocument.setDefaultFont(baseFont);
++            QTextCursor insert(&gapsDocument);
++            QFont baseGapFont = baseFont; baseGapFont.setPixelSize(28);
++            QFont rowGapFont = baseFont; rowGapFont.setPixelSize(48);
++            QTextCharFormat baseGapFormat; baseGapFormat.setFont(baseGapFont);
++            QTextCharFormat rowGapFormat; rowGapFormat.setFont(rowGapFont);
++            QTextCharFormat readingLink = reading;
++            readingLink.setAnchor(true); readingLink.setAnchorHref(QStringLiteral("dict:r"));
++            insert.insertText(QStringLiteral("A"), base);
++            insert.insertText(QStringLiteral(" "), baseGapFormat);
++            insert.insertText(QStringLiteral("B"), base);
++            insert.insertText(QStringLiteral("r"), readingLink);
++            insert.insertText(QStringLiteral(" "), rowGapFormat);
++            readingLink.setAnchorHref(QStringLiteral("dict:s"));
++            insert.insertText(QStringLiteral("s"), readingLink);
++            const QString original = gapsDocument.toRawText();
++            const int originalRevision = gapsDocument.revision();
++            QTextRubyLayout::Description spaced;
++            spaced.direction = direction; spaced.baselineOrigin = 11;
++            spaced.bases = {child(0, 1, baseFont, 16, 4), child(2, 3, baseFont, 16, 4)};
++            auto firstReading = child(3, 4, readingFont, 0, 0);
++            auto secondReading = child(5, 6, readingFont, 0, 0);
++            firstReading.baselineDelta = secondReading.baselineDelta = spaced.baselineOrigin;
++            if (level == 1) {
++                auto hidden = firstReading; hidden.source.last = hidden.source.first;
++                spaced.readings.append({hidden, 0, 2, 0, true});
++            }
++            const int firstReadingIndex = spaced.readings.size();
++            spaced.readings.append({firstReading, 0, 1, level});
++            spaced.readings.append({secondReading, 1, 1, level});
++            const int secondReadingIndex = firstReadingIndex + 1;
++            spaced.gaps = {0, 0}; // Measured source gaps, not guessed base spacing.
++            auto baseGap = child(1, 2, baseGapFont, 22, 6);
++            auto rowGap = child(4, 5, rowGapFont, 0, 0);
++            rowGap.baselineDelta = spaced.baselineOrigin + 3;
++            spaced.gapSources = {{baseGap, 1, -1}, {rowGap, -1, secondReadingIndex}};
++            auto actual = QTextRubyLayout::create(&gapsDocument, spaced); QVERIFY(actual);
++            const qreal baseGapWidth = QFontMetricsF(baseGapFont).horizontalAdvance(QChar(' '));
++            const qreal rowGapWidth = QFontMetricsF(rowGapFont).horizontalAdvance(QChar(' '));
++            QVERIFY(rowGapWidth > baseGapWidth);
++            const QRectF baseA = actual->characterRect(0), baseB = actual->characterRect(2);
++            const QRectF baseSpace = actual->characterRect(1), rowSpace = actual->characterRect(4);
++            QVERIFY(!baseSpace.isEmpty()); QVERIFY(!rowSpace.isEmpty());
++            QVERIFY(qAbs(baseSpace.width() - baseGapWidth) <= 1.0 / 64);
++            QVERIFY(qAbs(rowSpace.width() - rowGapWidth) <= 1.0 / 64);
++            const qreal separation = direction == Qt::LeftToRight
++                ? baseB.left() - baseA.right() : baseA.left() - baseB.right();
++            QVERIFY(qAbs(separation - rowGapWidth) <= 1.0 / 64);
++            QVERIFY(qAbs(actual->metrics().advance.toReal()
++                - (baseA.width() + rowGapWidth + baseB.width())) <= 1.0 / 64);
++            QCOMPARE(actual->hitTest(rowSpace.center(), Qt::ExactHit), 4);
++            for (const auto &linkBox : actual->linkBoxes()) {
++                QVERIFY(!linkBox.rect.intersects(rowSpace));
++            }
++            // Move only the neighboring annotation. Its own local shift must
++            // move that child, not the anonymous gap or the shared row baseline.
++            auto shiftedReading = spaced;
++            shiftedReading.readings[secondReadingIndex].child.baselineDelta += 9;
++            auto movedReading = QTextRubyLayout::create(&gapsDocument, shiftedReading); QVERIFY(movedReading);
++            QCOMPARE(movedReading->characterRect(4), rowSpace);
++            QVERIFY(qAbs(movedReading->characterRect(5).top()
++                - actual->characterRect(5).top() - 9) <= 1.0 / 64);
++            // Conversely, a gap's local shift moves only that anonymous box.
++            auto shiftedGap = spaced; shiftedGap.gapSources[1].child.baselineDelta += 5;
++            auto movedGap = QTextRubyLayout::create(&gapsDocument, shiftedGap); QVERIFY(movedGap);
++            QVERIFY(qAbs(movedGap->characterRect(4).top() - rowSpace.top() - 5) <= 1.0 / 64);
++            QCOMPARE(movedGap->characterRect(3), actual->characterRect(3));
++            QCOMPARE(movedGap->characterRect(5), actual->characterRect(5));
++            // Recover the actual row baseline from its reading, then apply the
++            // anonymous box's own font ascent and Ruby-origin shift.
++            const qreal rowBaseline = actual->characterRect(3).top() + QFontMetricsF(readingFont).ascent();
++            QVERIFY(qAbs(rowSpace.top() - (rowBaseline + 3 - QFontMetricsF(rowGapFont).ascent())) <= 1.0 / 64);
++            QVERIFY(actual->metrics().occupiedTop.toReal() <= rowSpace.top() + 1.0 / 64);
++            QVERIFY(actual->metrics().occupiedBottom.toReal() >= rowSpace.bottom() - 1.0 / 64);
++            auto malformed = spaced; malformed.gaps[1] = -1;
++            QVERIFY(!QTextRubyLayout::create(&gapsDocument, malformed));
++            malformed = spaced; malformed.gapSources[1].beforeReading = firstReadingIndex;
++            QVERIFY(!QTextRubyLayout::create(&gapsDocument, malformed)); // No prior same-level span.
++            QCOMPARE(gapsDocument.toRawText(), original);
++            QCOMPARE(gapsDocument.revision(), originalRevision);
++        }
++    }
++
++    // A reading may span several columns: a gap at the adjacent span boundary
++    // still constrains one shared separator. Nonadjacent spans explicitly refuse.
++    QTextDocument spanningDocument; spanningDocument.setDefaultFont(baseFont);
++    QTextCursor spanningInsert(&spanningDocument);
++    spanningInsert.insertText(QStringLiteral("ABC"), base);
++    spanningInsert.insertText(QStringLiteral("r s"), reading);
++    QTextRubyLayout::Description spanning;
++    spanning.bases = {child(0, 1, baseFont, 16, 4), child(1, 2, baseFont, 16, 4),
++        child(2, 3, baseFont, 16, 4)};
++    spanning.readings = {{child(3, 4, readingFont, 0, 0), 0, 2, 0},
++        {child(5, 6, readingFont, 0, 0), 2, 1, 0}};
++    spanning.gaps = {0, 0, 0};
++    spanning.gapSources = {{child(4, 5, readingFont, 0, 0), -1, 1}};
++    auto spanningLayout = QTextRubyLayout::create(&spanningDocument, spanning); QVERIFY(spanningLayout);
++    const QRectF spanningGap = spanningLayout->characterRect(4);
++    QVERIFY(!spanningGap.isEmpty());
++    QCOMPARE(spanningLayout->hitTest(spanningGap.center(), Qt::ExactHit), 4);
++    spanning.readings[0].baseCount = 1; // Unannotated intervening column.
++    QVERIFY(!QTextRubyLayout::create(&spanningDocument, spanning));
++}
++
++void tst_QTextDocumentLayout::rubyJustificationRejectsUnrepresentableGlyphAdvance()
++{
++    QTextDocument document;
++    QFont baseFont; baseFont.setPixelSize(20);
++    QFont readingFont = baseFont; readingFont.setPixelSize(100);
++    document.setDefaultFont(baseFont);
++    QTextCursor cursor(&document);
++    QTextCharFormat base; base.setFont(baseFont);
++    QTextCharFormat reading; reading.setFont(readingFont);
++    cursor.insertText(QString::fromUtf16(u"\u4e00\u4e8c"), base);
++    cursor.insertText(QString(30000, QChar('W')), reading);
++    QTextRubyLayout::Description ruby;
++    QTextRubyLayout::Child b; b.source = {0, 2}; b.ownerFont = baseFont; b.usedAbove = 16; b.usedBelow = 4;
++    QTextRubyLayout::Child a; a.source = {2, 30002}; a.ownerFont = readingFont;
++    ruby.bases = {b}; ruby.readings = {{a, 0, 1, 0}}; ruby.gaps = {0};
++    const auto measuredBase = QTextRubyGeometry::measureFlatChild(QString::fromUtf16(u"\u4e00\u4e8c"),
++        baseFont, {{0, 2, base}}, QTextOption(), nullptr);
++    const auto measuredReading = QTextRubyGeometry::measureFlatChild(QString(30000, QChar('W')),
++        readingFont, {{0, 30000, reading}}, QTextOption(), nullptr);
++    QVERIFY(measuredBase); QVERIFY(measuredReading);
++    QVERIFY(measuredReading->advance < qreal(QFIXED_MAX));
++    QVERIFY((measuredReading->advance - measuredBase->advance) * 32 > ((1 << 24) - 1));
++    QSet<int> baseClusters;
++    for (const auto &run : measuredBase->layout->glyphRuns(0, 2, QTextLayout::RetrieveStringIndexes))
++        for (auto index : run.stringIndexes()) baseClusters.insert(int(index));
++    QVERIFY(baseClusters.contains(0)); QVERIFY(baseClusters.contains(1));
++    QVERIFY(measuredBase->layout->isValidCursorPosition(1));
++    // QFixed can represent this width, but one glyph's justification field is
++    // only 24 bits. Refuse rather than paint and hit-test different advances.
++    QVERIFY(!QTextRubyLayout::create(&document, ruby));
++    ruby.readings[0].child.source.last = 5;
++    QVERIFY(QTextRubyLayout::create(&document, ruby));
++}
++
++void tst_QTextDocumentLayout::rubyJointBreaksRequireEveryVisibleInterior()
++{
++    QTextDocument document;
++    QFont font; font.setPixelSize(20); document.setDefaultFont(font);
++    QFont small = font; small.setPixelSize(12);
++    QTextCursor cursor(&document); QTextCharFormat base; base.setFont(font);
++    QTextCharFormat reading; reading.setFont(small);
++    const QString baseText = QString::fromUtf16(u"\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b");
++    const QString readingText = QString::fromUtf16(u"\u3042\u3044\u3046\u3048\u304a\u304b\u304d\u304f");
++    cursor.insertText(baseText, base); cursor.insertText(readingText, reading);
++    QTextRubyLayout::Description source;
++    QTextRubyLayout::Child b; b.source = {0, 8}; b.ownerFont = font; b.usedAbove = 16; b.usedBelow = 4;
++    QTextRubyLayout::Child a; a.source = {8, 16}; a.ownerFont = small;
++    source.bases = {b}; source.readings = {{a, 0, 1, 0}}; source.gaps = {0};
++    auto fragments = QTextRubyLayout::fragments(&document, source, 55);
++    QVERIFY(fragments); QVERIFY(fragments->size() > 1);
++    int nextBase = 0, nextReading = 8;
++    for (const auto &fragment : *fragments) {
++        QCOMPARE(fragment.bases[0].source.first, nextBase);
++        QCOMPARE(fragment.readings[0].child.source.first, nextReading);
++        QVERIFY(fragment.bases[0].source.last > nextBase);
++        QVERIFY(fragment.readings[0].child.source.last > nextReading);
++        nextBase = fragment.bases[0].source.last;
++        nextReading = fragment.readings[0].child.source.last;
++        QVERIFY(QTextRubyLayout::create(&document, fragment));
++    }
++    QCOMPARE(nextBase, 8); QCOMPARE(nextReading, 16);
++    source.readings[0].child.source.last = 8; // Visible empty reading is real.
++    fragments = QTextRubyLayout::fragments(&document, source, 55);
++    QVERIFY(fragments); QCOMPARE(fragments->size(), 1);
++    source.readings[0].child.source.last = 16;
++    source.bases[0].option.setWrapMode(QTextOption::NoWrap);
++    fragments = QTextRubyLayout::fragments(&document, source, 55);
++    QVERIFY(fragments); QCOMPARE(fragments->size(), 1);
++    source.bases[0].option.setWrapMode(QTextOption::WordWrap);
++    auto hidden = a; hidden.source.last = hidden.source.first;
++    hidden.background = QBrush(Qt::magenta); hidden.baselineDelta = -1000;
++    source.readings = {{hidden, 0, 1, 0, true}};
++    auto allHidden = QTextRubyLayout::create(&document, source); QVERIFY(allHidden);
++    auto plainSource = source; plainSource.readings.clear();
++    auto ordinary = QTextRubyLayout::create(&document, plainSource); QVERIFY(ordinary);
++    QVERIFY(!allHidden->metrics().visibleAnnotation);
++    QCOMPARE(allHidden->metrics().advance, ordinary->metrics().advance);
++    QCOMPARE(allHidden->metrics().occupiedTop, ordinary->metrics().occupiedTop);
++    QCOMPARE(allHidden->metrics().occupiedBottom, ordinary->metrics().occupiedBottom);
++    auto invalidHidden = source; invalidHidden.readings[0].child.source.last += 1;
++    QVERIFY(!QTextRubyLayout::create(&document, invalidHidden));
++    // Put the hidden paint inside the raster; the metric stress offset above
++    // must not make this paint-negative assertion vacuous.
++    source.readings[0].child.baselineDelta = 0;
++    auto paintHidden = QTextRubyLayout::create(&document, source); QVERIFY(paintHidden);
++    QImage hiddenPaint(300, 100, QImage::Format_ARGB32_Premultiplied), plainPaint = hiddenPaint;
++    hiddenPaint.fill(Qt::white); plainPaint.fill(Qt::white);
++    { QPainter painter(&hiddenPaint); paintHidden->draw(&painter, QPointF(10, 40), {}); }
++    { QPainter painter(&plainPaint); ordinary->draw(&painter, QPointF(10, 40), {}); }
++    QCOMPARE(hiddenPaint, plainPaint);
++    source.readings.append({a, 0, 1, 1, false});
++    auto lower = QTextRubyLayout::create(&document, source); QVERIFY(lower);
++    QVERIFY(lower->characterRect(8).top() >= lower->characterRect(0).bottom() - 1.0 / 64);
++    fragments = QTextRubyLayout::fragments(&document, source, 55);
++    QVERIFY(fragments); QVERIFY(fragments->size() > 1); // Hidden empty row cannot block a real joint split.
++}
++
++// Source-only slot for the existing tst_QTextDocumentLayout target.
++// This calls the real native vertical-entry API at an interior child caret;
++// the original atom-only inverse returns a Ruby boundary instead.
++void tst_QTextDocumentLayout::rubyVerticalEntryKeepsPreferredChildCaret()
++{
++    for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++        QTextDocument document;
++        QFont baseFont; baseFont.setPixelSize(20);
++        QFont readingFont = baseFont; readingFont.setPixelSize(12);
++        document.setDefaultFont(baseFont);
++        document.setDocumentMargin(9);
++        document.setTextWidth(400);
++        QTextCursor cursor(&document);
++        cursor.insertText(QStringLiteral("ordinary before"));
++        cursor.insertBlock();
++        QTextBlockFormat block = cursor.blockFormat();
++        block.setLeftMargin(37); block.setRightMargin(13);
++        block.setLayoutDirection(direction); cursor.setBlockFormat(block);
++        const int first = cursor.position();
++        QTextCharFormat base; base.setFont(baseFont);
++        QTextCharFormat reading; reading.setFont(readingFont);
++        const QString baseText = direction == Qt::LeftToRight
++            ? QStringLiteral("ABCDE") : QString::fromUtf16(u"\u05d0\u05d1\u05d2\u05d3\u05d4");
++        cursor.insertText(baseText, base);
++        const int readingFirst = cursor.position();
++        cursor.insertText(QStringLiteral("annotation reading"), reading);
++        const int last = cursor.position();
++        cursor.insertBlock(); cursor.insertText(QStringLiteral("ordinary after"), base);
++        const QString original = document.toRawText();
++        const int originalRevision = document.revision();
++        QTextRubyLayout::Child b;
++        b.source = {first, readingFirst}; b.ownerFont = baseFont;
++        b.usedAbove = 16; b.usedBelow = 4;
++        b.option.setTextDirection(direction); b.option.setWrapMode(QTextOption::NoWrap);
++        QTextRubyLayout::Child a;
++        a.source = {readingFirst, last}; a.ownerFont = readingFont;
++        a.option.setTextDirection(Qt::LeftToRight); a.option.setWrapMode(QTextOption::NoWrap);
++        QTextRubyLayout::Description ruby;
++        ruby.bases = {b}; ruby.readings = {{a, 0, 1, 0}}; ruby.gaps = {0};
++        ruby.direction = direction;
++        const QVariantMap part{{"kind", QStringLiteral("ruby")}, {"anchor", first},
++            {"value", QVariant::fromValue(ruby)}};
++        const QVariantList owners{QVariantMap{{"first", first}, {"last", last},
++            {"direction", int(direction)}, {"joins", QVariantList{}},
++            {"parts", QVariantList{part}}}};
++        bool accepted = false;
++        QVERIFY(QMetaObject::invokeMethod(document.documentLayout(), "wikidictSetLogicalFlows",
++            Qt::DirectConnection, Q_RETURN_ARG(bool, accepted), Q_ARG(QVariantList, owners)));
++        QVERIFY(accepted);
++        for (const qreal width : {qreal(400), qreal(260), qreal(400)}) {
++            document.setTextWidth(width);
++            QVERIFY(document.documentLayout()->documentSize().height() > 0);
++            const int wanted = first + 2;
++            QVariantMap geometry;
++            QVERIFY(QMetaObject::invokeMethod(document.documentLayout(), "wikidictLogicalPosition",
++                Qt::DirectConnection, Q_RETURN_ARG(QVariantMap, geometry), Q_ARG(int, wanted)));
++            QCOMPARE(geometry.value("error", -1).toInt(), 0);
++            const QRectF caret = geometry.value("cursorRect").toRectF();
++            const QRectF character = geometry.value("characterRect").toRectF();
++            QVERIFY(!caret.isEmpty()); QVERIFY(!character.isEmpty());
++            QVERIFY(qIsFinite(caret.left()));
++            QVERIFY(wanted > first && wanted < readingFirst);
++            // This is document X, including the document and authored block
++            // margins. Both vertical entry directions must preserve it.
++            const qreal documentX = caret.left();
++            for (const bool fromAbove : {true, false}) {
++                int entered = -999;
++                QVERIFY(QMetaObject::invokeMethod(document.documentLayout(), "wikidictLogicalVerticalEntry",
++                    Qt::DirectConnection, Q_RETURN_ARG(int, entered), Q_ARG(int, first),
++                    Q_ARG(bool, fromAbove), Q_ARG(qreal, documentX)));
++                QCOMPARE(entered, wanted);
++                QVERIFY(entered != first); // The old placeholder-anchor result.
++                QVariantMap enteredGeometry;
++                QVERIFY(QMetaObject::invokeMethod(document.documentLayout(), "wikidictLogicalPosition",
++                    Qt::DirectConnection, Q_RETURN_ARG(QVariantMap, enteredGeometry), Q_ARG(int, entered)));
++                QCOMPARE(enteredGeometry.value("error", -1).toInt(), 0);
++                QVERIFY(qAbs(enteredGeometry.value("cursorRect").toRectF().left() - documentX) <= 1.0 / 64);
++            }
++            QCOMPARE(document.toRawText(), original);
++            QCOMPARE(document.revision(), originalRevision);
++        }
++    }
++}
++
++// Existing native layout target; actual shaped child coordinates, not only policy arithmetic.
++void tst_QTextDocumentLayout::rubyAppliesCommonAndReadingShiftExactlyOnce()
++{
++    QTextDocument document;
++    QFont baseFont; baseFont.setPixelSize(24);
++    QFont readingFont = baseFont; readingFont.setPixelSize(12);
++    document.setDefaultFont(baseFont);
++    QTextCursor cursor(&document);
++    QTextCharFormat base; base.setFont(baseFont);
++    QTextCharFormat reading; reading.setFont(readingFont);
++    cursor.insertText(QStringLiteral("Base"), base);
++    cursor.insertText(QStringLiteral("read"), reading);
++    cursor.insertText(QStringLiteral("low"), reading);
++    cursor.insertText(QStringLiteral("outer"), reading);
++    QTextRubyLayout::Child b; b.source = {0, 4}; b.ownerFont = baseFont; b.usedAbove = 19; b.usedBelow = 5;
++    QTextRubyLayout::Child a; a.source = {4, 8}; a.ownerFont = readingFont;
++    QTextRubyLayout::Description plain;
++    plain.bases = {b}; plain.readings = {{a, 0, 1, 0}}; plain.gaps = {0};
++    auto ordinary = QTextRubyLayout::create(&document, plain); QVERIFY(ordinary);
++    const QRectF originalBase = ordinary->characterRect(0), originalReading = ordinary->characterRect(4);
++    QVERIFY(!originalBase.isEmpty() && !originalReading.isEmpty());
++    QCOMPARE(ordinary->cursorRect(4).top(), originalReading.top());
++    QCOMPARE(ordinary->cursorRect(8).top(), originalReading.top());
++    QCOMPARE(ordinary->cursorRect(4, 4).width(), qreal(4));
++    auto common = plain;
++    common.baselineOrigin = -7;
++    common.bases[0].baselineDelta = -7;
++    common.readings[0].child.baselineDelta = -7;
++    auto moved = QTextRubyLayout::create(&document, common); QVERIFY(moved);
++    QCOMPARE(moved->characterRect(0), originalBase.translated(0, -7));
++    QCOMPARE(moved->characterRect(4), originalReading.translated(0, -7));
++    for (const qreal local : {-5.0, 3.0}) {
++        auto shifted = common; shifted.readings[0].child.baselineDelta += local;
++        auto measured = QTextRubyLayout::create(&document, shifted); QVERIFY(measured);
++        QCOMPARE(measured->characterRect(0), moved->characterRect(0));
++        QCOMPARE(measured->characterRect(4), moved->characterRect(4).translated(0, local));
++        QCOMPARE(measured->cursorRect(4).top(), moved->cursorRect(4).top() + local);
++        const auto ink = measured->characterRect(4);
++        QCOMPARE(measured->hitTest(ink.center(), Qt::ExactHit), 4);
++    }
++    // Later levels must reserve the actually shifted preceding row, not its old
++    // unshifted box or a cancelled baseline delta.
++    auto stacked = common;
++    stacked.readings[0].child.baselineDelta -= 9;
++    auto low = a; low.source = {8, 11}; low.baselineDelta = -7;
++    auto top = a; top.source = {11, 16}; top.baselineDelta = -7;
++    stacked.readings.append({low, 0, 1, 1}); stacked.readings.append({top, 0, 1, 2});
++    auto measured = QTextRubyLayout::create(&document, stacked); QVERIFY(measured);
++    QVERIFY(measured->characterRect(11).bottom() <= measured->characterRect(4).top() + 1.0 / 64);
++    QVERIFY(measured->metrics().occupiedTop.toReal() <= measured->characterRect(11).top() + 1.0 / 64);
++    QVERIFY(measured->metrics().occupiedBottom.toReal() >= measured->characterRect(8).bottom() - 1.0 / 64);
++    QCOMPARE(document.toRawText(), QStringLiteral("Basereadlowouter"));
++}
++
+ QTEST_MAIN(tst_QTextDocumentLayout)
+ #include "tst_qtextdocumentlayout.moc"

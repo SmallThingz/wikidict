@@ -26,12 +26,12 @@ The qualified source is QtBase commit
 `025bdad181de241e81bf853c8a2d7bf3d19261a9` (module version 6.12.0, development
 version alpha1). This is an upstream source pin, not a claim that a distribution's
 Qt source archive or binaries have been reproduced. `manifest.json` records each
-upstream and qualified file hash. The two new private headers are included in the
+upstream and qualified file hash. The new private logical-flow, inline-style and Ruby headers are included in the
 renderer patch.
 
 Apply these three patches, in order, to that QtBase source:
 
-1. `0001-logical-flow-renderer.patch`: the 21 renderer source files.
+1. `0001-logical-flow-renderer.patch`: the 27 renderer source files.
 2. `0002-layout-regressions.patch`: the native regression target and tests.
 3. `0003-bounded-gcc-link-policy.patch`: the separately maintained GNU LTO policy.
 
@@ -472,6 +472,58 @@ updates the existing renderer and CMake policy patches, manifest and README, and
 twenty-seven registered native patch targets forward and backward against the
 pinned upstream. It performs no build or test.
 
+## Compiled Ruby base and reading owners
+
+The maintained native patches preserve separate logical base and reading ranges,
+font owners, shaping, paint, hit testing, selection and caret geometry. The app
+imports typed Ruby through the normal composition transaction; ordinary rich-text
+fragment boundaries do not erase its owner. Ruby-only paragraphs, heading edges
+and table cells retain their semantic content. Generated metadata has a dedicated
+marker, so ordinary authored tooltips cannot impersonate an importer anchor.
+
+The four new Ruby private headers and the existing inline-style header use Qt's
+normal generated-header/install path. The desktop product links Qt6::GuiPrivate;
+no copied private headers or hardcoded versioned include paths are required.
+The cumulative three-patch QtBase series now verifies 31 source targets forward
+and backward against the pinned upstream revision. Existing GNU IPO and companion
+module policies remain unchanged.
+
+Native qualification comprises one current corrected spacing method and 21
+separately retained passing methods with source/dependency proofs. It is not a
+rerun of 22 methods as one suite. Three equivalent Ruby-line containers remain
+separate. Mixed fixed-height font/ink envelopes can overlap: the retained 146/147
+failures and 0.1875-pixel ink-envelope observation are not rewritten as painted
+pixel collisions, and product spacing was not inflated to satisfy that oracle.
+The actual equivalent-line and mixed accent/descender captures remain legible.
+
+Both focused App190 host methods passed. Genuine normal176 Writer/Reader output
+for Japanese `たびぢ` matched every byte of FFI177's JSON and rendered through the
+same App190 at 900x700 and 640x600. The reading `たびじ` appears above `旅路`.
+Separate live Link descriptions retain the same internal destination, and real
+Tab input selects base and reading as distinct UTF-16 ranges. One internal Press
+reports the absent `旅路` record; ordinary search restores the source entry. Back
+remains disabled, so successful destination content and Back traversal are not
+claimed. Normal Quit, selected data, settings and process cleanup passed.
+
+The subsequent full Reader run exposed a layout-enabled temporary document in
+Flow construction. Keeping that structural staging document unlaid out fixes the
+actual table-copy crash without changing destination layout or assertions. The
+completed App192 run reached cleanup with 365 passing observations, three failing
+fixture oracles and two optional diagnostic skips. App193 corrected only those
+three test methods and passed them through the existing direct QTest route.
+The combined evidence covers 368 passing observations and two optional skips;
+it is not a new complete Reader run. The separate impact review authenticates
+unchanged product bytes and source outside those methods, and carries the six
+other historical CTest targets. Original crashes, failures and run scopes remain
+recorded. The genuine App190 flow above was not replayed or relabeled App193.
+
+The source entry still reports unresolved table style. Hypertext and spoken
+assistive technology, general nested Ruby, general joint fragmentation, arbitrary
+owner policies, whole frontend and phone acceptance remain outside this result.
+Unsupported importer combinations refuse explicitly. Historical full-suite and
+failed-run evidence keeps its original scope; this source delivery performs no
+new build or runtime execution.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,
@@ -553,8 +605,16 @@ makes the actual compiler invocation visible.
 
 ## Native validation
 
-Build the existing target and run the 27-method suite. Use a fresh owned
-settings directory; do not point tests at user dictionaries or preferences.
+The command below reproduces the historical 27-method baseline. For the scoped
+Ruby controls, pass the 22 exact names in `manifest.json` at
+`qualification.native_qualification.combined_methods` to the same
+`tst_qtextdocumentlayout` executable with the same isolated environment. The
+recorded Ruby result comprises one current method plus 21 retained passes,
+not a new 22-method replay. The complete desktop CTest build/run instructions
+remain in [the desktop README](../README.md#native-validation).
+
+Use a fresh owned settings directory; do not point tests at user dictionaries
+or preferences.
 
 ```sh
 cmake --build "$qt_build/qtbase" --target tst_qtextdocumentlayout --parallel 4

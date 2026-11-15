@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 project(DictQt VERSION 0.1.0 LANGUAGES CXX)
 
-find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Concurrent Network Multimedia Svg)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui GuiPrivate Widgets Concurrent Network Multimedia Svg)
 qt_standard_project_setup()
 
 # Compile product code once under the shipped GUI's compilation contract.
@@ -46,7 +46,7 @@ set_target_properties(wikidict-product PROPERTIES
 )
 # PRIVATE static-library dependencies remain link requirements without adding
 # their compile definitions to the existing test-driver translation units.
-target_link_libraries(wikidict-product PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Concurrent Qt6::Network Qt6::Multimedia Qt6::Svg "${DICT_FFI_LIBRARY}")
+target_link_libraries(wikidict-product PRIVATE Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Widgets Qt6::Concurrent Qt6::Network Qt6::Multimedia Qt6::Svg "${DICT_FFI_LIBRARY}")
 
 target_link_libraries(wikidict-gui PRIVATE wikidict-product Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Concurrent Qt6::Network Qt6::Multimedia Qt6::Svg "${DICT_FFI_LIBRARY}")
 get_filename_component(dict_ffi_directory "${DICT_FFI_LIBRARY}" DIRECTORY)

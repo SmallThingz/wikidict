@@ -2726,6 +2726,7 @@ inline void normalizeImages(QTextDocument *document) {
     }
 }
 
+inline constexpr int rubyImportProperty = QTextFormat::UserProperty + 0x5813;
 inline constexpr int inlineStyleProperty = QTextFormat::UserProperty + 0x5804;
 inline constexpr int inlineEmptyOwnersProperty = QTextFormat::UserProperty + 0x5805;
 inline const QString inlineStyleCapability = QStringLiteral("wikidict.inline-text/1");
@@ -2929,7 +2930,9 @@ inline bool hasInlineText(const QTextDocument *document) {
 inline QString scaledText(const QString &html, double scale, const QString &tooltip,
                           Basis basis = Basis::Context, qreal normalBodyPoints = 0,
                           bool small = false, bool superscript = false, bool subscript = false, qreal contextPoints = 0,
-                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}, bool ordinaryLink = false, const QJsonObject &inlineSpan = {}, qreal inlineBodyPoints = 0, qreal inlineContextPoints = 0, const QString &inlineOwnerHtml = {}, const QJsonValue &fontFamily = {}) {
+                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}, bool ordinaryLink = false, const QJsonObject &inlineSpan = {}, qreal inlineBodyPoints = 0, qreal inlineContextPoints = 0, const QString &inlineOwnerHtml = {}, const QJsonValue &fontFamily = {}, const QJsonObject &compiledRuby = {}) {
+    if (!compiledRuby.isEmpty() && (!inlineSpan.isEmpty() || !linkPaint.isEmpty()))
+        throw std::runtime_error("Ruby import metadata cannot enter an ordinary inline split");
     if (present(inlineSpan.value("inline_style").toObject().value("wrap"))) {
         inlineTextStyle(inlineSpan);
         const auto source = inlineSpan.value("text").toString(), trail = inlineSpan.value("trail").toString();
@@ -2955,6 +2958,11 @@ inline QString scaledText(const QString &html, double scale, const QString &tool
         }
     }
     QJsonObject metadata{{"scale", scale}, {"tooltip", tooltip}};
+    if (!compiledRuby.isEmpty()) {
+        if (html != QStringLiteral("&#xe000;") || !metadataOnly || !inlineSpan.isEmpty())
+            throw std::runtime_error("invalid generated Ruby import anchor");
+        metadata.insert("compiled_ruby", compiledRuby);
+    }
     CompiledContent::containerFontFamily(fontFamily);
     if (present(fontFamily)) metadata.insert("font_family", fontFamily);
     if (!inlineSpan.isEmpty()) {
@@ -3017,6 +3025,7 @@ struct ScaleInfo {
     bool ordinaryLink = false;
     FontFeaturePolicy fontFeatures = FontFeaturePolicy::Legacy;
     QJsonObject inlineSpan;
+    QJsonObject compiledRuby;
     qreal inlineBodyPoints = 0;
     qreal inlineContextPoints = 0;
     QString inlineOwnerHtml;
@@ -3057,6 +3066,7 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
         const bool hasSourceRun = !sourceRun.isUndefined();
         const bool hasLinkPaint = present(value.value("link_paint"));
         const bool hasInline = present(value.value("inline_span"));
+        const bool hasRuby = value.contains("compiled_ruby");
         const auto fontFamily = CompiledContent::containerFontFamily(value.value("font_family"));
         const bool hasFamily = present(fontFamily);
         const auto fontFeatures = fontFeaturePolicy(value.value("font_features"));
@@ -3068,12 +3078,18 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
             || (present(advisory) && !advisory.isString())
             || (hasSourceRun && (!sourceRun.isDouble() || !std::isfinite(run)
                 || run < 0 || run > std::numeric_limits<int>::max() || std::floor(run) != run))
-            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && !hasInline && !hasFamily && fontFeatures == FontFeaturePolicy::Legacy)
+            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && !hasInline && !hasRuby && !hasFamily && fontFeatures == FontFeaturePolicy::Legacy)
                 || value.contains(QStringLiteral("context_points")) || value.contains(QStringLiteral("legacy_flags"))))
             || (!basisValue.isUndefined() && (!basisValue.isString()
                 || (basisValue.toString() != QStringLiteral("context") && !absolute))))
             throw std::runtime_error("invalid renderer font-scale metadata");
         ScaleInfo info{scale, value.value(QStringLiteral("tooltip")).toString()};
+        if (hasRuby) {
+            if (!metadataOnly || !value.value("compiled_ruby").isObject()
+                || value.value("compiled_ruby").toObject().isEmpty() || hasInline || hasLinkPaint)
+                throw std::runtime_error("invalid generated Ruby metadata");
+            info.compiledRuby = value.value("compiled_ruby").toObject();
+        }
         if (hasLinkPaint) {
             const auto owner = value.value("link_owner"); const auto em = value.value("link_em");
             const double id = owner.toDouble(-1);
@@ -3364,6 +3380,11 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                         ? QTextCharFormat::SingleUnderline : QTextCharFormat::NoUnderline);
                 }
                 if (marker->sourceRun >= 0) format.setProperty(sourceRunProperty, marker->sourceRun);
+                if (!marker->compiledRuby.isEmpty()) {
+                    for (QChar c : fragment.text()) if (c != QChar(0xe000))
+                        throw std::runtime_error("generated Ruby anchor changed during HTML import");
+                    format.setProperty(rubyImportProperty, QVariant::fromValue(marker->compiledRuby));
+                }
                 if (present(marker->advisory)) {
                     format.setProperty(spanAdvisoryProperty, marker->advisory.toString());
                     format.setProperty(spanExpansionProperty, marker->tooltip);

@@ -1,10 +1,16 @@
 --- a/src/gui/CMakeLists.txt
 +++ b/src/gui/CMakeLists.txt
-@@ -261,9 +261,11 @@
+@@ -260,10 +260,17 @@
+         text/qtextformat.cpp text/qtextformat.h text/qtextformat_p.h
          text/qtexthtmlparser.cpp text/qtexthtmlparser_p.h
          text/qtextimagehandler.cpp text/qtextimagehandler_p.h
++        text/qtextinlinestyle_p.h
          text/qtextlayout.cpp text/qtextlayout.h
 +        text/qtextlogicalflow_p.h
++        text/qtextrubygeometry_p.h
++        text/qtextrubyrangemap_p.h
++        text/qtextrubyshaping_p.h
++        text/qtextrubylayout_p.h
          text/qtextlist.cpp text/qtextlist.h
          text/qtextobject.cpp text/qtextobject.h text/qtextobject_p.h
          text/qtextoption.cpp text/qtextoption.h
@@ -12,10 +18,10 @@
          text/qtexttable.cpp text/qtexttable.h text/qtexttable_p.h
          util/qabstractlayoutstyleinfo.cpp util/qabstractlayoutstyleinfo_p.h
          util/qastchandler.cpp util/qastchandler_p.h
-@@ -316,6 +318,22 @@
+@@ -316,6 +323,22 @@
          QtGui.dynlist.in
  )
- 
+
 +# Bound module LTO while preserving unrelated object compile flags.
 +if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND QT_FEATURE_ltcg)
 +    target_link_options(Gui PRIVATE "-flto=4" "-v")

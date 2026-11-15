@@ -759,6 +759,10 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
         owner.prefixEnd.clearSelection(); owner.prefixEnd.setPosition(insertion.selectionStart());
         owner.prefixEnd.setKeepPositionOnInsert(true);
         QTextDocument temporary;
+        // This document supplies structure and formats, never geometry. Keep
+        // imported table owners unlaid out through normalization and copying;
+        // cursor positioning must not measure their incomplete layout vectors.
+        temporary.setLayoutEnabled(false);
         QFont contextFont = insertion.charFormat().font().resolve(document->defaultFont());
         const auto typography = item.metadata.value(QStringLiteral("container_typography"));
         const bool typedFont = CompiledContent::present(typography);

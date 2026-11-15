@@ -80,6 +80,10 @@
 #include <QTextBlock>
 #include <QTextBoundaryFinder>
 #include <QTextDocument>
+#include <QtGui/private/qtextrubyrangemap_p.h>
+#include "CompiledRuby.hpp"
+#include <QMimeData>
+#include <QClipboard>
 #include <QPlainTextEdit>
 #include <QTextFragment>
 #include <QTextOption>
@@ -595,6 +599,130 @@ class ReadingBrowser final : public QTextBrowser {
     CompiledHelpCursor inlineHelpCursor_;
 public:
     explicit ReadingBrowser(QWidget *parent);
+    using RubyMap = QTextRubyRangeMap;
+    std::shared_ptr<const RubyMap> rubyProjection;
+    QPointer<QTextDocument> rubyProjectionDocument;
+    struct LogicalSelection { int anchor, position, documentAnchor, documentPosition; };
+    std::optional<LogicalSelection> rubySelection;
+    bool rubyProjectionCurrent() const {
+        return !rubyProjection || (rubyProjectionDocument == document() && rubyProjection->current());
+    }
+    void installRubyProjection(std::unique_ptr<RubyMap> projection) {
+        if (projection && projection->sourceDocument() != document()) throw DictApiError("stale or foreign Ruby logical projection");
+        rubySelection.reset();
+        rubyProjection = std::move(projection);
+        rubyProjectionDocument = rubyProjection ? document() : nullptr;
+        accessibleLinkRevision = -1;
+        requestAccessibleLinks();
+    }
+    int semanticCount() const {
+        return !rubyProjection ? qMax(0, document()->characterCount() - 1)
+            : rubyProjectionCurrent() ? rubyProjection->logicalCount() : -1;
+    }
+    int semanticOffset(int offset, RubyMap::Bias bias = RubyMap::Bias::After) const {
+        if (offset < 0 || offset >= document()->characterCount() || !rubyProjectionCurrent()) return -1;
+        return rubyProjection ? rubyProjection->toLogical(offset, bias) : offset;
+    }
+    int documentOffset(int offset, RubyMap::Bias bias = RubyMap::Bias::After) const {
+        if (offset < 0 || offset > semanticCount()) return -1;
+        return rubyProjection ? rubyProjection->toDocument(offset, bias) : offset;
+    }
+    QString semanticText(int first, int last) const {
+        if (first < 0 || last < first || last > semanticCount()) return {};
+        QString result = rubyProjection ? rubyProjection->text(first, last)
+            : document()->toRawText().mid(first, last - first);
+        for (QChar &character : result)
+            if (character == QChar::ParagraphSeparator || character.unicode() == 0xfdd0 || character.unicode() == 0xfdd1)
+                character = QChar('\n');
+        return result;
+    }
+    bool hasLogicalSelection() const {
+        if (!rubySelection || !rubyProjection || !rubyProjectionCurrent()) return false;
+        const auto cursor = textCursor();
+        return cursor.anchor() == rubySelection->documentAnchor
+            && cursor.position() == rubySelection->documentPosition;
+    }
+    int semanticCursor() const {
+        return hasLogicalSelection() ? rubySelection->position : semanticOffset(textCursor().position());
+    }
+    void selectSemanticRange(int anchor, int position) {
+        const int first = qMin(anchor, position), last = qMax(anchor, position);
+        if (first < 0 || last > semanticCount()) return;
+        const auto native = rubyProjection ? rubyProjection->selectionToDocument(first, last)
+            : RubyMap::Range{first, last};
+        const int start = native.first, end = native.last;
+        if (start < 0 || end < start) return;
+        const QPointer<ReadingBrowser> self(this);
+        const QPointer<QTextDocument> doc(document());
+        const auto map = rubyProjection;
+        rubySelection.reset();
+        QTextCursor cursor(doc);
+        cursor.setPosition(anchor <= position ? start : end);
+        cursor.setPosition(anchor <= position ? end : start, QTextCursor::KeepAnchor);
+        setTextCursor(cursor);
+        if (!self || !doc || self->document() != doc || self->rubyProjection != map
+            || !self->rubyProjectionCurrent()) return;
+        if (map) self->rubySelection = LogicalSelection{anchor, position, cursor.anchor(), cursor.position()};
+    }
+    QList<std::pair<int,int>> semanticSelectionRanges() const {
+        if (!rubyProjectionCurrent()) return {};
+        if (hasLogicalSelection()) {
+            const int a = rubySelection->anchor, p = rubySelection->position;
+            return a == p ? QList<std::pair<int,int>>{} : QList<std::pair<int,int>>{{qMin(a,p),qMax(a,p)}};
+        }
+        auto ranges = selectedDocumentRanges();
+        for (auto &range : ranges) {
+            range.first = semanticOffset(range.first, RubyMap::Bias::After);
+            range.second = semanticOffset(range.second, RubyMap::Bias::Before);
+            if (range.first < 0 || range.second < range.first) return {};
+        }
+        return ranges;
+    }
+    QMimeData *createMimeDataFromSelection() const override {
+        if (!rubyProjection) return QTextBrowser::createMimeDataFromSelection();
+        auto *data = new QMimeData;
+        QStringList text;
+        for (const auto &range : semanticSelectionRanges()) text.append(semanticText(range.first, range.second));
+        data->setText(text.join(QChar('\n')));
+        // HTML from document storage cannot encode the raw logical gap selection.
+        return data;
+    }
+    QList<std::pair<int, int>> selectedDocumentRanges() const {
+        const auto cursor = textCursor();
+        if (!cursor.hasSelection()) return {};
+        if (!cursor.hasComplexSelection()) return {{cursor.selectionStart(), cursor.selectionEnd()}};
+        auto *table = cursor.currentTable();
+        if (!table) return {};
+        int firstRow = -1, rows = 0, firstColumn = -1, columns = 0;
+        cursor.selectedTableCells(&firstRow, &rows, &firstColumn, &columns);
+        if (firstRow < 0 || firstColumn < 0 || rows <= 0 || columns <= 0) return {};
+        QList<std::pair<int, int>> cells;
+        QSet<int> seen;
+        for (int row = firstRow; row < firstRow + rows; ++row) {
+            for (int column = firstColumn; column < firstColumn + columns; ++column) {
+                const auto cell = table->cellAt(row, column);
+                // Match native cell copying: a spanning cell contributes at
+                // its own origin, once, rather than at each covered grid slot.
+                if (!cell.isValid() || cell.row() != row || cell.column() != column || seen.contains(cell.firstPosition())) continue;
+                seen.insert(cell.firstPosition());
+                cells.append({cell.firstPosition(), cell.lastPosition()});
+            }
+        }
+        std::sort(cells.begin(), cells.end());
+        QList<std::pair<int, int>> ranges;
+        for (const auto &cell : cells) {
+            bool adjacent = !ranges.isEmpty() && cell.first <= ranges.last().second;
+            if (!ranges.isEmpty() && cell.first == ranges.last().second + 1) {
+                const auto separator = document()->characterAt(ranges.last().second);
+                // Include only the structural boundary between selected cells.
+                // A skipped cell, even empty, leaves a larger source gap.
+                adjacent = separator == QChar::ParagraphSeparator || separator.unicode() == 0xfdd0 || separator.unicode() == 0xfdd1;
+            }
+            if (adjacent) ranges.last().second = qMax(ranges.last().second, cell.second);
+            else ranges.append(cell);
+        }
+        return ranges;
+    }
     QList<ReadingLink *> accessibleLinks;
     QPointer<QTextDocument> accessibleLinkDocument;
     int accessibleLinkRevision = -1;
@@ -1130,6 +1258,10 @@ protected:
         // modality here even when a pointer-focused browser already has focus.
         if (event->type() == QEvent::KeyPress) {
             const auto *key = static_cast<QKeyEvent *>(event);
+            // Preserve logical-only selections while modifiers precede a shortcut.
+            const bool modifierOnly = key->key() == Qt::Key_Control || key->key() == Qt::Key_Shift
+                || key->key() == Qt::Key_Alt || key->key() == Qt::Key_Meta || key->key() == Qt::Key_AltGr;
+            if (!modifierOnly && !key->matches(QKeySequence::Copy)) rubySelection.reset();
             if ((key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab)
                 && !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
                 missingState.focusVisible = true;
@@ -1149,6 +1281,8 @@ protected:
         return QTextBrowser::event(event);
     }
     bool viewportEvent(QEvent *event) override {
+        if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick)
+            rubySelection.reset();
         const QPointer<ReadingBrowser> helpGuard(this);
         const bool pointerEvent = compiledHelpPointerEvent(event->type());
         const bool leaving = event->type() == QEvent::Leave;
@@ -1201,6 +1335,10 @@ protected:
         }
     }
     void keyPressEvent(QKeyEvent *event) override {
+        if (rubyProjection && event->matches(QKeySequence::Copy) && !semanticSelectionRanges().isEmpty()) {
+            QApplication::clipboard()->setMimeData(createMimeDataFromSelection());
+            event->accept(); return;
+        }
         missingState.focusVisible = true;
         if (!event->isAutoRepeat() && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter))
             missingState.pressed = focusedMissingOwner();
@@ -1374,7 +1512,7 @@ public:
     bool current() const {
         return active && browser && document && browser->document() == document
             && document->revision() == revision && start >= 0 && end > start
-            && end < document->characterCount();
+            && end < document->characterCount() && browser->rubyProjectionCurrent();
     }
     bool focused() const {
         if (!current() || !browser->hasFocus()) return false;
@@ -1384,6 +1522,8 @@ public:
 };
 
 static QVariant accessibleAnchorOwner(const QTextCharFormat &format) {
+    const auto ruby = QCompiledInline::rubyAnchorOwner(format);
+    if (ruby.isValid()) return ruby;
     const QString policy = format.stringProperty(MissingFigurePaint::policyProperty);
     if (policy != QStringLiteral("wikidict.figure-link-state/1")
         && policy != QStringLiteral("wikidict.ordinary-link-state/1")) return {};
@@ -1475,8 +1615,8 @@ public:
     }
     QString anchor() const override { return text(QAccessible::Name); }
     QString anchorTarget() const override { return text(QAccessible::Value); }
-    int startIndex() const override { return isValid() ? item()->start : -1; }
-    int endIndex() const override { return isValid() ? item()->end : -1; }
+    int startIndex() const override { return isValid() ? item()->browser->semanticOffset(item()->start, ReadingBrowser::RubyMap::Bias::After) : -1; }
+    int endIndex() const override { return isValid() ? item()->browser->semanticOffset(item()->end, ReadingBrowser::RubyMap::Bias::Before) : -1; }
     QRect rect() const override {
         const QPointer<ReadingLink> link(item());
         if (!link || !link->current()) return {};
@@ -1484,7 +1624,7 @@ public:
         auto *text = reader ? reader->textInterface() : nullptr;
         if (!text) return {};
         QRect bounds;
-        for (int offset = link->start; offset < link->end; ++offset) {
+        for (int offset = startIndex(), last = endIndex(); offset >= 0 && offset < last; ++offset) {
             bounds = bounds.united(text->characterRect(offset));
             if (!link || !link->current()) return {};
         }
@@ -1517,6 +1657,7 @@ public:
         if (!browser->isVisible() || !browser->isEnabled()) return;
         browser->setFocus(Qt::ShortcutFocusReason);
         if (!browser || !link || !link->current()) return;
+        browser->rubySelection.reset();
         QTextCursor cursor(browser->document());
         cursor.setPosition(link->start); cursor.setPosition(link->end, QTextCursor::KeepAnchor);
         browser->setTextCursor(cursor);
@@ -1811,8 +1952,10 @@ public:
         }
         if (!browser) return nullptr;
         browser->syncAccessibleLinks();
-        const int offset = offsetAtPoint(QPoint(x, y));
-        if (!browser || offset < 0) return nullptr;
+        const int logicalOffset = offsetAtPoint(QPoint(x, y));
+        if (!browser || logicalOffset < 0) return nullptr;
+        const int offset = browser->documentOffset(logicalOffset);
+        if (offset < 0) return nullptr;
         for (auto *link : browser->accessibleLinks)
             if (link->current() && offset >= link->start && offset < link->end)
                 return QAccessible::queryAccessibleInterface(link);
@@ -1835,21 +1978,14 @@ public:
         return result;
     }
     QString text(QAccessible::Text type) const override {
-        if (type == QAccessible::Value) return browser_->toPlainText();
+        if (type == QAccessible::Value) return browser_->rubyProjection ? browser_->semanticText(0, browser_->semanticCount()) : browser_->toPlainText();
         return ReadingAccessibleBase::text(type);
     }
-    int characterCount() const override { return qMax(0, browser_->document()->characterCount() - 1); }
+    int characterCount() const override { return qMax(0, browser_->semanticCount()); }
     QString text(int start, int end) const override {
         if (end == -1) end = characterCount();
         if (!validRange(start, end)) return {};
-        // A QTextCursor spanning cells selects complete cells, so it cannot
-        // implement a source-offset text slice. Keep every UTF-16 position.
-        QString result = browser_->document()->toRawText().mid(start, end - start);
-        for (QChar &character : result) {
-            if (character == QChar::ParagraphSeparator || character.unicode() == 0xfdd0 || character.unicode() == 0xfdd1)
-                character = QChar('\n');
-        }
-        return result;
+        return browser_->semanticText(start, end);
     }
     QString textAtOffset(int offset, QAccessible::TextBoundaryType boundary, int *start, int *end) const override {
         if (boundary == QAccessible::LineBoundary) return visualLine(offset, 0, start, end);
@@ -1866,10 +2002,10 @@ public:
         if (boundary == QAccessible::ParagraphBoundary) return paragraphText(offset, 1, start, end);
         return QAccessibleTextInterface::textAfterOffset(offset == -2 ? cursorPosition() : offset, boundary, start, end);
     }
-    int cursorPosition() const override { return browser_->textCursor().position(); }
+    int cursorPosition() const override { return qMax(0, browser_->semanticCursor()); }
     void setCursorPosition(int offset) override {
         if (!validRange(offset, offset)) return;
-        QTextCursor cursor(browser_->document()); cursor.setPosition(offset); browser_->setTextCursor(cursor);
+        browser_->selectSemanticRange(offset, offset);
     }
     int selectionCount() const override { return int(selectedSourceRanges().size()); }
     void selection(int index, int *start, int *end) const override {
@@ -1882,23 +2018,26 @@ public:
         // Disjoint text ranges project one native cell rectangle. Per-range
         // mutation is unsupported: it must not silently change the other ranges.
         if (index != 0 || selectionCount() > 1 || !validRange(start, end)) return;
-        QTextCursor cursor(browser_->document()); cursor.setPosition(start);
-        cursor.setPosition(end, QTextCursor::KeepAnchor); browser_->setTextCursor(cursor);
+        browser_->selectSemanticRange(start, end);
     }
     void addSelection(int start, int end) override {
         // Qt supports one native selection: this explicit operation replaces it.
         if (!validRange(start, end)) return;
-        QTextCursor cursor(browser_->document()); cursor.setPosition(start);
-        cursor.setPosition(end, QTextCursor::KeepAnchor); browser_->setTextCursor(cursor);
+        browser_->selectSemanticRange(start, end);
     }
     void removeSelection(int index) override {
         if (index != 0 || selectionCount() != 1) return;
-        auto cursor = browser_->textCursor(); cursor.clearSelection(); browser_->setTextCursor(cursor);
+        browser_->selectSemanticRange(cursorPosition(), cursorPosition());
     }
     QRect characterRect(int offset) const override {
         const QPointer<ReadingBrowser> browser(browser_);
         if (!browser) return {};
         const QPointer<QTextDocument> document(browser->document());
+        if (browser->rubyProjection && browser->rubyProjectionCurrent()) {
+            const auto gap = browser->rubyProjection->logicalGap(offset);
+            if (gap.first >= 0 && browser->documentOffset(gap.first) == browser->documentOffset(gap.last)) return {};
+        }
+        offset = browser->documentOffset(offset, ReadingBrowser::RubyMap::Bias::Before);
         if (!browser || !document || browser->document() != document
             || offset < 0 || offset >= document->characterCount() - 1) return {};
         const int revision = document->revision();
@@ -1990,10 +2129,13 @@ public:
         const QPoint point = local + QPoint(horizontal, browser->verticalScrollBar()->value());
         const int originalOffset = layout->hitTest(point, Qt::ExactHit);
         return browser && document && layout && browser->document() == document
-            && document->documentLayout() == layout && document->revision() == revision ? originalOffset : -1;
+            && document->documentLayout() == layout && document->revision() == revision ? browser->semanticOffset(originalOffset) : -1;
     }
     void scrollToSubstring(int start, int end) override {
         if (!validRange(start, end)) return;
+        start = browser_->documentOffset(start, ReadingBrowser::RubyMap::Bias::After);
+        end = browser_->documentOffset(end, ReadingBrowser::RubyMap::Bias::Before);
+        if (start < 0 || end < start) return;
         const QPointer<ReadingBrowser> guard(browser_);
         if (!guard->revealLocalPosition(start) || !guard || !guard->revealLocalPosition(end) || !guard) return;
         QTextCursor first(browser_->document()); first.setPosition(start);
@@ -2013,9 +2155,16 @@ public:
         const int count = characterCount();
         if (offset == -1 || offset == count) offset = count - 1;
         if (offset < 0 || offset >= count) return {};
+        if (browser_->rubyProjection && browser_->rubyProjectionCurrent()) {
+            const auto gap = browser_->rubyProjection->logicalGap(offset);
+            if (gap.first >= 0) { *start = gap.first; *end = gap.last; return {}; }
+        }
+        offset = browser_->documentOffset(offset);
+        if (offset < 0) return {};
+        const int documentCount = browser_->document()->characterCount() - 1;
         QTextCursor cursor(browser_->document()); cursor.setPosition(offset);
         const auto block = cursor.block(); auto format = block.charFormat();
-        *start = block.position(); *end = qMin(count, block.position() + block.length());
+        *start = block.position(); *end = qMin(documentCount, block.position() + block.length());
         for (auto it = block.begin(); !it.atEnd(); ++it) {
             const auto fragment = it.fragment();
             if (fragment.contains(offset)) {
@@ -2027,6 +2176,9 @@ public:
             // A paragraph separator uses the block format and excludes prior styled runs.
             *start = fragment.position() + fragment.length();
         }
+        *start = browser_->semanticOffset(*start, ReadingBrowser::RubyMap::Bias::After);
+        *end = browser_->semanticOffset(*end, ReadingBrowser::RubyMap::Bias::Before);
+        if (*start < 0 || *end < *start) { *start = *end = -1; return {}; }
         const QFont font = format.font().resolve(browser_->document()->defaultFont());
         QString family = font.family();
         family.replace(QStringLiteral("\\"), QStringLiteral("\\\\"));
@@ -2100,46 +2252,13 @@ public:
     void deleteText(int start, int end) override { replaceText(start, end, {}); }
     void insertText(int offset, const QString &value) override { replaceText(offset, offset, value); }
     void replaceText(int start, int end, const QString &value) override {
-        if (browser_->isReadOnly() || !validRange(start, end)) return;
+        if (browser_->isReadOnly() || browser_->rubyProjection || !validRange(start, end)) return;
         QTextCursor cursor(browser_->document()); cursor.setPosition(start);
         cursor.setPosition(end, QTextCursor::KeepAnchor); cursor.insertText(value);
     }
 private:
     QList<std::pair<int, int>> selectedSourceRanges() const {
-        const auto cursor = browser_->textCursor();
-        if (!cursor.hasSelection()) return {};
-        if (!cursor.hasComplexSelection()) return {{cursor.selectionStart(), cursor.selectionEnd()}};
-        auto *table = cursor.currentTable();
-        if (!table) return {};
-        int firstRow = -1, rows = 0, firstColumn = -1, columns = 0;
-        cursor.selectedTableCells(&firstRow, &rows, &firstColumn, &columns);
-        if (firstRow < 0 || firstColumn < 0 || rows <= 0 || columns <= 0) return {};
-        QList<std::pair<int, int>> cells;
-        QSet<int> seen;
-        for (int row = firstRow; row < firstRow + rows; ++row) {
-            for (int column = firstColumn; column < firstColumn + columns; ++column) {
-                const auto cell = table->cellAt(row, column);
-                // Match native cell copying: a spanning cell contributes at
-                // its own origin, once, rather than at each covered grid slot.
-                if (!cell.isValid() || cell.row() != row || cell.column() != column || seen.contains(cell.firstPosition())) continue;
-                seen.insert(cell.firstPosition());
-                cells.append({cell.firstPosition(), cell.lastPosition()});
-            }
-        }
-        std::sort(cells.begin(), cells.end());
-        QList<std::pair<int, int>> ranges;
-        for (const auto &cell : cells) {
-            bool adjacent = !ranges.isEmpty() && cell.first <= ranges.last().second;
-            if (!ranges.isEmpty() && cell.first == ranges.last().second + 1) {
-                const auto separator = browser_->document()->characterAt(ranges.last().second);
-                // Include only the structural boundary between selected cells.
-                // A skipped cell, even empty, leaves a larger source gap.
-                adjacent = separator == QChar::ParagraphSeparator || separator.unicode() == 0xfdd0 || separator.unicode() == 0xfdd1;
-            }
-            if (adjacent) ranges.last().second = qMax(ranges.last().second, cell.second);
-            else ranges.append(cell);
-        }
-        return ranges;
+        return browser_->semanticSelectionRanges();
     }
     std::optional<QString> logicalBoundaryText(int offset, int step, QAccessible::TextBoundaryType boundary,
                                                int *start, int *end) const {
@@ -2160,8 +2279,9 @@ private:
         const auto inventory = LogicalFlow::inventory(document);
         if (!current() || inventory == LogicalFlow::Status::Refused) return QString();
         if (inventory == LogicalFlow::Status::Stock) return std::nullopt;
-        if (offset == -2) offset = browser->textCursor().position();
-        if (offset == -1) offset = count;
+        if (offset == -2) offset = browser->semanticCursor();
+        if (offset == -1) offset = browser->semanticCount();
+        offset = browser->documentOffset(offset, ReadingBrowser::RubyMap::Bias::Before);
         if (offset < 0 || offset > count) return QString();
         QTextCursor cursor(document); cursor.setPosition(offset);
         const auto at = [&] {
@@ -2204,9 +2324,12 @@ private:
             }
         }
         if (!current()) return QString();
-        const QString result = text(range.first, range.second);
+        const int logicalStart = browser->semanticOffset(range.first, ReadingBrowser::RubyMap::Bias::Before);
+        const int logicalEnd = browser->semanticOffset(range.second, ReadingBrowser::RubyMap::Bias::Before);
+        if (logicalStart < 0 || logicalEnd < logicalStart) return QString();
+        const QString result = text(logicalStart, logicalEnd);
         if (!current()) return QString();
-        *start = range.first; *end = range.second;
+        *start = logicalStart; *end = logicalEnd;
         return result;
     }
     QString paragraphText(int offset, int step, int *start, int *end) const {
@@ -2216,11 +2339,14 @@ private:
         if (offset == -2) offset = cursorPosition();
         if (offset == -1) offset = characterCount();
         if (offset < 0 || offset > characterCount()) return {};
+        offset = browser_->documentOffset(offset, ReadingBrowser::RubyMap::Bias::Before);
+        if (offset < 0) return {};
         auto block = browser_->document()->findBlock(offset);
         if (step < 0) block = block.previous();
         else if (step > 0) block = block.next();
         if (!block.isValid()) return {};
-        *start = block.position(); *end = qMin(characterCount(), *start + block.length() - 1);
+        *start = browser_->semanticOffset(block.position(), ReadingBrowser::RubyMap::Bias::Before);
+        *end = browser_->semanticOffset(block.position() + block.length() - 1, ReadingBrowser::RubyMap::Bias::Before);
         return text(*start, *end);
     }
     QString visualLine(int offset, int step, int *start, int *end) const {
@@ -2230,6 +2356,8 @@ private:
         if (offset == -2) offset = cursorPosition();
         if (offset == -1) offset = characterCount();
         if (offset < 0 || offset > characterCount()) return {};
+        offset = browser_->documentOffset(offset, ReadingBrowser::RubyMap::Bias::Before);
+        if (offset < 0) return {};
         auto block = browser_->document()->findBlock(offset);
         if (!block.isValid()) return {};
         browser_->document()->documentLayout()->blockBoundingRect(block);
@@ -2245,8 +2373,10 @@ private:
         }
         if (index < 0 || index >= layout->lineCount()) return {};
         line = layout->lineAt(index);
-        *start = block.position() + line.textStart();
-        *end = qMin(characterCount(), *start + line.textLength());
+        const int documentStart = block.position() + line.textStart();
+        const int documentEnd = qMin(browser_->document()->characterCount() - 1, documentStart + line.textLength());
+        *start = browser_->semanticOffset(documentStart, ReadingBrowser::RubyMap::Bias::Before);
+        *end = browser_->semanticOffset(documentEnd, ReadingBrowser::RubyMap::Bias::Before);
         return text(*start, *end);
     }
     bool validRange(int start, int end) const { return 0 <= start && start <= end && end <= characterCount(); }
@@ -2442,7 +2572,8 @@ QVector<HeadingDestination> headingDestinations(const QJsonObject &entry) {
 // ordinary depth-zero paragraph it must not manufacture another empty block.
 // Explicit code/Poem/NBSP/bidi/media metadata never takes this display path.
 bool ordinaryLayoutWhitespaceSpan(const QJsonObject &span, bool allowBreak) {
-    if (SemanticHtml::present(span.value(QStringLiteral("image")))) return false;
+    if (SemanticHtml::present(span.value(QStringLiteral("image")))
+        || SemanticHtml::present(span.value(QStringLiteral("ruby")))) return false;
     if (SemanticHtml::present(span.value(QStringLiteral("tooltip")))) return false;
     if (SemanticHtml::present(span.value(QStringLiteral("inline_style"))) || SemanticHtml::present(span.value(QStringLiteral("font_family")))) return false;
     const QString kind = span.value(QStringLiteral("kind")).toString();
@@ -3735,6 +3866,8 @@ bool MainWindow::clearReadingProjection() {
     if (!unchanged()) return false;
     if (inventory != LogicalFlow::Status::Stock
         && (!LogicalFlow::registerOwners(document, {}) || !unchanged())) return false;
+    static_cast<ReadingBrowser *>(reading_)->installRubyProjection({});
+    if (!unchanged()) return false;
     readingLogicalDocument_.clear(); readingLogicalOwners_.clear(); readingLogicalRevision_ = -1;
     return true;
 }
@@ -4508,6 +4641,10 @@ bool MainWindow::refreshReading() {
     CompiledContent::require(current());
     SemanticHtml::requireBrowserInlineSupport(browser);
     CompiledContent::require(current());
+    // Expand compiled Ruby only after all frame/source-run copies exist and
+    // before any body boundary positions are bound. No import anchor is painted.
+    const auto rubyExpansion = CompiledRuby::expand(document);
+    CompiledContent::require(current() && !document->isLayoutEnabled());
     // The real first metadata block ends the one shared semantic-body flow.
     // No wrapper frame may change the containing interval of existing floats.
     constexpr int bodyBoundary = QTextFormat::UserProperty + 0x5806;
@@ -4605,6 +4742,8 @@ bool MainWindow::refreshReading() {
     }
     QVariantList descriptors = SemanticHtml::inlineTableOwners(document);
     for (const auto &owner : owners) descriptors.append(FlowConstruction::descriptor(owner));
+    auto rubyFinal = CompiledRuby::finalize(rubyExpansion, std::move(descriptors));
+    descriptors = std::move(rubyFinal.descriptors);
     const bool checkedNativeLayout = bodyEnd >= 0 || !descriptors.isEmpty() || !containers.isEmpty() || SemanticHtml::hasTableBoxes(document) || SemanticHtml::hasInlineText(document);
     const QString source = document->toRawText();
     const int revision = document->revision(), count = document->characterCount();
@@ -4616,6 +4755,8 @@ bool MainWindow::refreshReading() {
         return false;
     };
     CompiledContent::require(endEdit() && sameSource());
+    static_cast<ReadingBrowser *>(browser.data())->installRubyProjection(std::move(rubyFinal.map));
+    CompiledContent::require(sameSource());
     if (!descriptors.isEmpty()) {
         const bool registered = LogicalFlow::registerOwners(document, descriptors);
         CompiledContent::require(sameSource() && registered);
@@ -4908,6 +5049,12 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
         QString out;
         for (const QJsonValue &value : parts) {
             const QJsonObject span = value.toObject();
+            if (SemanticHtml::present(span.value("ruby"))) {
+                if (zeroFontContext || !linkPaint.isEmpty() || reading_->document()->isLayoutEnabled())
+                    throw DictApiError("Ruby outside the owned Reading transaction or in zero-font/link-paint context is not yet installed");
+                out += CompiledRuby::marker(span, readingPointSize_, contextPointSize, sourceRun, contextFamily, egyptianFamily());
+                continue;
+            }
             const auto ownFamily = CompiledContent::containerFontFamily(span.value(QStringLiteral("font_family")));
             // Explicit requests win family heuristics. Null retains code/script selection;
             // other descendants inherit the actual source owner, not a UI default.
