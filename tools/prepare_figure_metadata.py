@@ -1235,7 +1235,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             raise ValueError('Figure source batch exceeds URL bound')
         if record_limit is not None and len(seen) > record_limit:
             raise ValueError('Figure file inventory exceeds bounded capacity')
-        data = decode(response_raw)
+        data = registration if type(site_raw) is bytes and type(response_raw) is bytes and response_raw == site_raw else decode(response_raw)
         require_edition(data, wiki)
         general = data['query']['general']
         batch_core = general.get('git-hash')

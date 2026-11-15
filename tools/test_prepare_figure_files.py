@@ -10994,5 +10994,261 @@ class FigureTupleFinalIdentityTests(unittest.TestCase):
         self.assertEqual(reached, [origin])
 
 
+class FigureRegistrationDecodeReuseTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = FigureFileTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.namespace = self.fixture.namespace.read_bytes()
+
+    def reduce(self, batches, site):
+        return figure.file_records(iter(batches), self.namespace, self.fixture.wiki,
+            self.fixture.date, site, has_batches=True, record_limit=100)
+
+    def test_equal_registration_response_is_read_only_and_keeps_both_validations(self):
+        batch = self.fixture.batch()
+        raw = batch['response'].encode()
+        original_decode = figure.decode
+        decoded, snapshots = [], []
+        def decode(value):
+            result = original_decode(value)
+            if value == raw:
+                decoded.append(result)
+                snapshots.append(copy.deepcopy(result))
+            return result
+        with patch.object(figure, 'decode', side_effect=decode), \
+                patch.object(figure, '_figure_site_registration', wraps=figure._figure_site_registration) as checked:
+            actual = self.reduce([batch], raw)
+        self.assertEqual(len(decoded), 1)
+        self.assertEqual(decoded, snapshots)
+        self.assertEqual(checked.call_count, 2)
+        self.assertIs(checked.call_args_list[0].args[0], decoded[0])
+        self.assertIs(checked.call_args_list[1].args[0], decoded[0])
+        self.assertEqual(actual['records'], self.fixture.project([batch])['records'])
+        self.assertEqual(batch['response'].encode(), raw)
+
+    def test_distinct_second_response_is_decoded_and_validated_independently(self):
+        batches = [self.fixture.batch('ملف:DecodeA.svg'), self.fixture.batch('ملف:DecodeB.svg')]
+        raw = [batch['response'].encode() for batch in batches]
+        original_decode = figure.decode
+        calls = []
+        def decode(value):
+            if value in raw:
+                calls.append(value)
+            return original_decode(value)
+        with patch.object(figure, 'decode', side_effect=decode), \
+                patch.object(figure, '_figure_site_registration', wraps=figure._figure_site_registration) as checked:
+            actual = self.reduce(batches, raw[0])
+        self.assertEqual(calls, raw)
+        self.assertEqual(checked.call_count, 3)
+        self.assertEqual(actual['records'], self.fixture.project(batches)['records'])
+        bad = copy.deepcopy(batches)
+        response = json.loads(bad[1]['response'])
+        response['query']['extensions'][0]['vcs-version'] = '0' * 40
+        bad[1]['response'] = figure.encoded(response).decode()
+        with self.assertRaises(ValueError):
+            self.reduce(bad, raw[0])
+
+    def test_equal_and_distinct_responses_keep_malformed_and_nonfinite_refusals(self):
+        original = self.fixture.response()
+        for mutation in ('wiki', 'registration', 'timestamp', 'width', 'duplicate', 'nonfinite'):
+            with self.subTest(mutation=mutation):
+                response = copy.deepcopy(original)
+                if mutation == 'wiki':
+                    response['query']['general']['wikiid'] = 'enwiktionary'
+                elif mutation == 'registration':
+                    response['query']['extensions'][0]['vcs-version'] = '0' * 40
+                elif mutation == 'timestamp':
+                    del response['query']['pages'][0]['imageinfo'][0]['timestamp']
+                elif mutation == 'width':
+                    response['query']['pages'][0]['imageinfo'][0]['width'] = '250'
+                raw = figure.encoded(response)
+                if mutation == 'duplicate':
+                    raw = b'{"query":null,' + raw[1:]
+                elif mutation == 'nonfinite':
+                    response['query']['pages'][0]['imageinfo'][0]['width'] = float('nan')
+                    raw = (json.dumps(response, ensure_ascii=False, sort_keys=True) + '\n').encode()
+                batch = {'requests': ['ملف:Example.svg'], 'response': raw.decode()}
+                for site in (raw, figure.encoded(self.fixture.site_api)):
+                    with self.subTest(equal=(site == raw)), self.assertRaises((ValueError, KeyError, TypeError)):
+                        self.reduce([batch], site)
+
+
+    def test_mutable_site_inputs_keep_independent_decode_and_generator_mutation_refusal(self):
+        batch = self.fixture.batch()
+        original = batch['response'].encode()
+        for site in (bytearray(original),):
+            with self.subTest(site_type=type(site).__name__):
+                with patch.object(figure, 'decode', wraps=figure.decode) as decoded, \
+                        patch.object(figure, '_figure_site_registration', wraps=figure._figure_site_registration) as checked:
+                    actual = self.reduce([batch], site)
+                self.assertEqual(decoded.call_count, 2)
+                self.assertIsNot(checked.call_args_list[0].args[0], checked.call_args_list[1].args[0])
+                self.assertEqual(actual['records'], self.fixture.project([batch])['records'])
+        # The existing fixed-site digest requires bytes; strings already failed.
+        with self.assertRaises(TypeError):
+            self.reduce([batch], original.decode())
+        site = bytearray(original)
+        response = json.loads(batch['response'])
+        response['query']['extensions'][0]['vcs-version'] = '0' * 40
+        changed = figure.encoded(response)
+        reached = []
+        def batches():
+            site[:] = changed
+            reached.append(True)
+            yield dict(batch, response=changed.decode())
+        with self.assertRaises(ValueError):
+            self.reduce(batches(), site)
+        self.assertEqual(reached, [True])
+
+
+    def test_nonbytes_response_encoding_keeps_original_decode_domain(self):
+        original = self.fixture.batch()
+        raw = original['response'].encode()
+        class BytesSubclass(bytes):
+            pass
+        for kind in (bytearray, BytesSubclass, memoryview):
+            with self.subTest(encoded_type=kind.__name__):
+                transformed = kind(raw)
+                class Response(str):
+                    def encode(self, *values, **options):
+                        return transformed
+                batch = dict(original, response=Response(original['response']))
+                if kind is memoryview:
+                    with self.assertRaises(TypeError):
+                        self.reduce([batch], raw)
+                else:
+                    with patch.object(figure, 'decode', wraps=figure.decode) as decoded, \
+                            patch.object(figure, '_figure_site_registration', wraps=figure._figure_site_registration) as checked:
+                        actual = self.reduce([batch], raw)
+                    self.assertEqual(decoded.call_count, 2)
+                    self.assertIsNot(checked.call_args_list[0].args[0], checked.call_args_list[1].args[0])
+                    self.assertEqual(actual['records'], self.fixture.project([original])['records'])
+                self.assertEqual(bytes(transformed), raw)
+
+
+def measure_figure_registration_decode(baseline, candidate, selection):
+    """Bounded actual retained full-metadata frames, not a whole-FR timing claim."""
+    import gc
+    import tracemalloc
+    if tracemalloc.is_tracing():
+        raise ValueError('Registration decode measurement requires unprofiled entry')
+    raw_path = Path(selection['raw_path'])
+    namespace_path = Path(selection['namespace']['path'])
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid',
+              'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    def physical(path):
+        value = path.lstat()
+        return tuple(getattr(value, name) for name in fields)
+    before = physical(raw_path)
+    if list(before) != selection['raw_stamp']:
+        raise ValueError('Selected retained response stream identity changed')
+    namespace = namespace_path.read_bytes()
+    if (len(namespace) != selection['namespace']['bytes'] or
+            hashlib.sha256(namespace).hexdigest() != selection['namespace']['sha256']):
+        raise ValueError('Selected retained namespace changed')
+    batches = []
+    with raw_path.open('rb') as source:
+        header = source.readline(baseline.STREAM_HEADER_LIMIT + 1)
+        if hashlib.sha256(header).hexdigest() != selection['header_sha256']:
+            raise ValueError('Selected retained response header changed')
+        encoding = baseline.raw_record_encoding(baseline.stream_decode(header))
+        for row in selection['frames']:
+            source.seek(row['offset'])
+            raw = source.read(row['bytes'])
+            if len(raw) != row['bytes'] or hashlib.sha256(raw).hexdigest() != row['sha256']:
+                raise ValueError('Selected retained response frame changed')
+            batches.append(baseline.raw_record_decode(raw, encoding))
+    if physical(raw_path) != before:
+        raise ValueError('Selected retained response stream changed during setup')
+    snapshots = copy.deepcopy(batches)
+    response_bytes = [batch['response'].encode() for batch in batches]
+    def run(helper, values=batches):
+        return [helper.file_records(iter((batch,)), namespace, selection['wiki'],
+            selection['date'], batch['response'].encode(), has_batches=True, record_limit=50,
+            profile_kind=helper.FIGURE_PROFILE_V4, allow_compatible_epochs=True,
+            allow_tiff_companion=True, allow_decimal_tiff_axes=True, allow_default_tiff_page=False)
+            for batch in values]
+    expected = run(baseline)
+    actual = run(candidate)
+    if actual != expected or batches != snapshots:
+        raise AssertionError('Retained full-caller output or input parity differs')
+    census = []
+    targets = set(response_bytes)
+    for name, helper in (('baseline', baseline), ('candidate', candidate)):
+        original_decode = helper.decode
+        counts = {'calls': 0, 'bytes': 0}
+        def decode(raw):
+            if raw in targets:
+                counts['calls'] += 1
+                counts['bytes'] += len(raw)
+            return original_decode(raw)
+        with patch.object(helper, 'decode', side_effect=decode):
+            result = run(helper)
+        if result != expected:
+            raise AssertionError('Instrumented full-caller parity differs')
+        census.append(dict(arm=name, **counts))
+        del result
+    if (census[0]['calls'] != 2 * len(batches) or census[1]['calls'] != len(batches) or
+            census[0]['bytes'] != 2 * sum(map(len, response_bytes)) or
+            census[1]['bytes'] != sum(map(len, response_bytes))):
+        raise AssertionError('Actual retained response decode census differs')
+    errors = []
+    for mutation in ('wrong-wiki', 'missing-file-timestamp', 'duplicate-key', 'nonfinite'):
+        batch = copy.deepcopy(batches[0])
+        response = json.loads(batch['response'])
+        if mutation == 'wrong-wiki':
+            response['query']['general']['wikiid'] = 'invalidwiktionary'
+        elif mutation == 'missing-file-timestamp':
+            del response['query']['pages'][0]['imageinfo'][0]['timestamp']
+        raw = baseline.encoded(response)
+        if mutation == 'duplicate-key':
+            raw = b'{"query":null,' + raw[1:]
+        elif mutation == 'nonfinite':
+            response['query']['pages'][0]['imageinfo'][0]['width'] = float('nan')
+            raw = (json.dumps(response, ensure_ascii=False, sort_keys=True) + '\n').encode()
+        batch['response'] = raw.decode()
+        observed = []
+        for helper in (baseline, candidate):
+            try:
+                run(helper, [batch])
+            except Exception as error:
+                observed.append((type(error).__name__, str(error)))
+            else:
+                raise AssertionError('Malformed actual retained response was accepted')
+        if observed[0] != observed[1]:
+            raise AssertionError('Malformed retained response error parity differs')
+        errors.append(dict(mutation=mutation, error=observed[0]))
+    del actual
+    rows, allocation_rows = [], []
+    for traced, output in ((False, rows), (True, allocation_rows)):
+        for name, helper in (('baseline', baseline), ('candidate', candidate),
+                             ('candidate', candidate), ('baseline', baseline)):
+            gc.collect()
+            if traced:
+                tracemalloc.start()
+            try:
+                wall, cpu = time.perf_counter_ns(), time.process_time_ns()
+                result = run(helper)
+                cpu, wall = time.process_time_ns() - cpu, time.perf_counter_ns() - wall
+                if traced:
+                    current, peak = tracemalloc.get_traced_memory()
+            finally:
+                if traced:
+                    tracemalloc.stop()
+            output.append(dict(arm=name, cpu_ns=cpu, wall_ns=wall,
+                **(dict(current_bytes=current, peak_bytes=peak) if traced else {})))
+            # Equality and result disposal stay outside both clocks.
+            if result != expected:
+                raise AssertionError('Timed full-caller output parity differs')
+            del result
+    if batches != snapshots or physical(raw_path) != before or namespace_path.read_bytes() != namespace:
+        raise AssertionError('Retained measurement input changed')
+    return dict(scope='32 retained FR full-metadata response frames through complete file_records per-frame caller; full-metadata sensitivity, not lean distribution or whole-FR phase attribution',
+        frames=len(batches), request_titles=sum(len(batch['requests']) for batch in batches),
+        response_bytes=sum(map(len, response_bytes)), parity=True, input_after=True,
+        census=census, error_parity=errors, rows=rows, allocation_rows=allocation_rows)
+
+
 if __name__ == '__main__':
     unittest.main()
