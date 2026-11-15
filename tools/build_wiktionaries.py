@@ -4334,8 +4334,28 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     providers = seal['identity']['providers']
     worker_hashes = initial_sealed_writer_book(expected, build_identity, auxiliary_snapshots, providers, native_roles)
     snapshots = {auxiliary_snapshot_filename(name): digest for name, digest in worker_hashes.items()}
-    # The native preparation registry is namespaces; shard registry_sha256 is languages.
-    if (plan['registry']['sha256'] != expected.get('auxiliary_snapshot_sha256', {}).get('namespace-registry')
+    # Historical preparations used either registry role. The authenticated
+    # original command, not hash membership, determines which one was named.
+    registry = plan.get('registry')
+    arguments = plan.get('expander_args')
+    if (not isinstance(registry, dict) or not isinstance(registry.get('path'), str)
+            or not registry['path'] or not isinstance(arguments, list)
+            or any(not isinstance(value, str) for value in arguments)):
+        raise ValueError('Initial sealed registry role is not bound by original arguments')
+    registry_roles = []
+    for name in ('namespace-registry', 'language-registry'):
+        flag = '--' + name + '-snapshot'
+        positions = [index for index, value in enumerate(arguments) if value == flag]
+        if (len(positions) != 1 or positions[0] + 1 >= len(arguments)
+                or not arguments[positions[0] + 1]
+                or arguments[positions[0] + 1].startswith('--')
+                or any(value.startswith(flag + '=') for value in arguments)):
+            raise ValueError('Initial sealed registry role is not bound by original arguments')
+        if arguments[positions[0] + 1] == registry['path']:
+            registry_roles.append(name)
+    if len(registry_roles) != 1:
+        raise ValueError('Initial sealed registry role is not bound by original arguments')
+    if (registry.get('sha256') != expected.get('auxiliary_snapshot_sha256', {}).get(registry_roles[0])
             or expected.get('registry_sha256') != expected.get('auxiliary_snapshot_sha256', {}).get('language-registry')
             or plan['interwiki']['sha256'] != expected.get('interwiki_map_sha256')):
         raise ValueError('Initial sealed registry or interwiki source differs')
