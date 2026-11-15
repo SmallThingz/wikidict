@@ -2667,7 +2667,8 @@ def _frontend_restored_source(selection, result, plan, seal, *, previous=None):
         return None
     chosen = selection['restored_dump']
     if (type(chosen) is not dict or set(chosen) != {'dump', 'custody'} or
-            type(chosen['dump']) is not dict or chosen['dump'].get('path') != plan['dump']['path']):
+            type(chosen['dump']) is not dict or
+            any(chosen['dump'].get(key) != plan['dump'].get(key) for key in ('bytes', 'sha256'))):
         raise ValueError('Invalid restored frontend source selection')
     old_root = Path(result['expander'])
     binding = restored_dump_binding(old_root, chosen['dump'], result['completed_expander_seal']['sha256'], previous=previous)
@@ -2974,7 +2975,8 @@ def _restore_frontend_objects(cache_root, llvm, snapshot, ordered, project, refe
 
 def probe_sealed_frontend(cache_root, executable, dump_sha, index_sha, output, dump, graph, reference):
     selection, result, plan, seal, observation, producer, graph_stamps = _frontend_selection(reference, graph, validate_roles=True)
-    if (str(dump) != plan['dump']['path'] or seal['identity']['verified_input'] != [dump_sha, index_sha]):
+    selected_dump = selection.get('restored_dump', {}).get('dump', plan['dump'])
+    if (str(dump) != selected_dump['path'] or seal['identity']['verified_input'] != [dump_sha, index_sha]):
         raise ValueError('Sealed frontend dump/index selection changed')
     old_root = Path(result['expander'])
     if output != Path(selection['workspace']) / 'expander' / '.bundle-expander' or cache_root != Path(selection['cache']['path']):

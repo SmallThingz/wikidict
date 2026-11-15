@@ -3874,12 +3874,16 @@ class SealedFrontendBuildPolicyTests(SealedFrontendTests):
 
 
 class SealedFrontendRestoredSourceTests(SealedFrontendTests):
-    def restored_prepared(self):
+    def restored_prepared(self, *, relocated=False):
         root, dump, snapshots, seal, path, data, reference = self.prepared()
         expected = cache._frontend_extraction_identity(self.graph['extractor'], cache.sha256(dump), 'b' * 64, root)
         self.assertEqual(0, cache.publish(self.root, expected, root))
         raw = dump.read_bytes(); retired = dump.with_name(dump.name + '.original-inode')
-        dump.rename(retired); dump.write_bytes(raw)
+        dump.rename(retired)
+        if relocated:
+            dump = self.base / ('restored-input-' + str(self.sequence)) / 'pages.xml.zst'
+            dump.parent.mkdir()
+        dump.write_bytes(raw)
         self.assertNotEqual(retired.stat().st_ino, dump.stat().st_ino)
         chosen = dict(dump=self.reference(dump), custody=json.loads(json.dumps(cache._restored_dump_custody(dump))))
         data['sealed_frontend']['restored_dump'] = chosen
@@ -3904,7 +3908,16 @@ class SealedFrontendRestoredSourceTests(SealedFrontendTests):
         return output
 
     def test_frontend_restored_dump_runs_real_probe_and_seals_original_source_identity(self):
-        root, dump, snapshots, seal, path, data, reference = self.restored_prepared()
+        self.run_restored_probe_and_seal(relocated=False)
+
+    def test_frontend_relocated_dump_runs_real_probe_and_seals_original_source_identity(self):
+        self.run_restored_probe_and_seal(relocated=True)
+
+    def run_restored_probe_and_seal(self, *, relocated):
+        root, dump, snapshots, seal, path, data, reference = self.restored_prepared(relocated=relocated)
+        if relocated:
+            self.assertNotEqual(str(dump), data["dump"]["path"])
+            self.assertFalse(Path(data["dump"]["path"]).exists())
         original_seal = (root / cache.COMPLETED_EXPANDER).read_bytes()
         original_receipt = (root / 'extraction-source.json').read_bytes()
         with self.assertRaises(ValueError): cache.completed_source_binding(root, dump)
@@ -3944,6 +3957,22 @@ class SealedFrontendRestoredSourceTests(SealedFrontendTests):
         self.assertEqual(original_seal, (root / cache.COMPLETED_EXPANDER).read_bytes())
         self.assertFalse(any((output / 'llvm').glob('module_batch*.bc')))
 
+    def test_frontend_relocated_dump_refuses_cli_disagreement_and_late_parent_replacement(self):
+        root, dump, snapshots, seal, path, data, reference = self.restored_prepared(relocated=True)
+        binding = self.selected(reference)[0]['_restored_dump_binding']
+        output = self.restored_output(data, snapshots)
+        with self.frontend_calls(), mock.patch.object(cache, 'validate', wraps=cache.validate) as validation:
+            with self.assertRaisesRegex(ValueError, 'dump/index selection changed'):
+                cache.probe_sealed_frontend(self.root, self.graph['extractor'], cache.sha256(dump),
+                    'b' * 64, output, Path(data['dump']['path']), self.graph, reference)
+        self.assertEqual(0, validation.call_count)
+        raw = dump.read_bytes()
+        parent = dump.parent
+        parent.rename(parent.with_name(parent.name + '.selected-parent'))
+        parent.mkdir(); dump.write_bytes(raw)
+        with self.assertRaises(ValueError): self.selected(reference)
+        with self.assertRaises(ValueError): cache._frontend_completed_source(root, dump, binding)
+
     def test_frontend_restored_selection_refuses_wrong_bytes_size_custody_source_and_foreign_proof(self):
         for case in ('hash', 'size', 'custody', 'path', 'null', 'source receipt', 'index', 'seal'):
             with self.subTest(case=case):
@@ -3955,7 +3984,7 @@ class SealedFrontendRestoredSourceTests(SealedFrontendTests):
                 elif case == 'path':
                     foreign = self.base / ('foreign-dump-' + str(self.sequence)); foreign.write_bytes(dump.read_bytes())
                     chosen['dump'] = self.reference(foreign)
-                    chosen['custody'] = json.loads(json.dumps(cache._restored_dump_custody(foreign)))
+                    # A path change without its selected physical custody must refuse.
                 elif case == 'null': data['sealed_frontend']['restored_dump'] = None
                 elif case == 'source receipt': (root / 'extraction-source.json').write_bytes(b'{}')
                 elif case == 'index': (root / 'page-index.tsv').write_bytes(b'foreign index')
