@@ -12473,6 +12473,108 @@ class SuccessfulPreparedArtifactTests(unittest.TestCase):
                 with self.assertRaises((ValueError,OSError)):b.initial_sealed_role_successor(f.original,f.roles)
 
 
+    def private_source_fixture(self, root):
+        f = self.fixture(root)
+        state = f.target_rows['dict-blob-build']
+        original_source = b.prepared_metadata(f.current['dict-blob-build']['source'])
+        flat = {name: dict(value, mode=original_source.get('modes', {}).get(name, value.get('mode', 0o644)))
+                for name, value in original_source['files'].items()}
+        source = _initial_sealed_write(root / 'private-source.json', flat)
+        baseline = dict(original_source, head='a' * 40)
+        f.private_baseline = _initial_sealed_write(root / 'private-baseline.json', baseline)
+        source_root = f.current['dict-blob-build']['source_root']
+        info = Path(source_root).stat()
+        identity = dict(device=info.st_dev, inode=info.st_ino, mode=stat.S_IMODE(info.st_mode), uid=info.st_uid)
+        f.private_binding = dict(private_manifest=source, canonical_source=f.private_baseline,
+            source_path=source_root, source_identity=identity, canonical_source_changed=False)
+        f.private_source = source
+        f.private_recipe = b.prepared_metadata(f.prepared_recipe)
+        f.private_recipe.update(source_manifest=source, native_compilation_source_manifest=source,
+            source_head='a' * 40, baseline_source_manifest=f.private_baseline,
+            source_root=dict(identity, path=source_root))
+        for row in (f.current[name] for name in b.BLOB_TOOL_NAMES):
+            row.update(source=source, compiled_source_authority=source, producer_source=source['sha256'])
+        command = state['result']['commands'][0]
+        argv = command['argv']
+        stop = next(i for i, value in enumerate(argv[2:], 2) if value.startswith('-'))
+        command['argv'] = [('-Dcaptured-source-fingerprint=' + source['sha256'])
+            if value.startswith('-Dcaptured-source-fingerprint=') else value
+            for value in argv[:2] + ['prepare-blob-tools', 'cli'] + argv[stop:]]
+        state['stderr'].write_text('Build Summary: 6/6 steps succeeded\nprepare-blob-tools success\n'
+            '+- install dict-blob-build success\n+- install dict-blob-merge success\n'
+            '+- install dict-blob-verify success\ncli success\n+- install wikidict success\n')
+        self.publish_private_source(f)
+        f.roles.inputs = {}
+        f.roles.input_identities = {}
+        f.roles.bind_input = lambda path, retain=True: b.RetainedNativeToolRoles.bind_input(f.roles, path, retain=retain)
+        f.roles.require_unchanged = lambda: b.RetainedNativeToolRoles.require_inputs_unchanged(f.roles)
+        return f
+
+    def publish_private_source(self, f):
+        binding = _initial_sealed_write(f.root / 'private-binding.json', f.private_binding)
+        f.private_recipe['private_source_binding'] = binding
+        command = f.target_rows['dict-blob-build']['result']['commands'][0]
+        f.private_recipe['commands'] = [dict(argv=command['argv'], cwd=command['cwd'])]
+        recipe = _initial_sealed_write(f.root / 'private-recipe.json', f.private_recipe)
+        state = f.target_rows['dict-blob-build']
+        state['result']['source_authority'] = recipe
+        state['closed'].update(source_manifest=f.private_source, private_source_binding=binding,
+            owner_configuration=_initial_sealed_write(f.root / 'private-owner.json', dict(bindings=dict(INPUT_REF=recipe))))
+        for name in b.BLOB_TOOL_NAMES:
+            f.current[name]['compilation_recipe'] = recipe
+        self.republish(f)
+
+    def test_flat_private_source_keeps_actual_blob_cli_targets_baseline_and_original_worker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            f = self.private_source_fixture(Path(temporary))
+            driver = copy.deepcopy(f.current['dict-bundle-build'])
+            seal = (f.expander / '.completed-expander.json').read_bytes()
+            b.initial_sealed_role_successor(f.original, f.roles)
+            self.assertEqual(f.current['dict-bundle-build'], driver)
+            self.assertEqual((f.expander / '.completed-expander.json').read_bytes(), seal)
+            self.assertIn(Path(f.private_baseline['path']), f.roles.inputs)
+            self.assertIn(Path(f.private_recipe['private_source_binding']['path']), f.roles.inputs)
+
+    def test_flat_private_source_refuses_missing_foreign_path_baseline_head_and_closed_binding(self):
+        for change in ('missing-binding', 'missing-baseline', 'foreign-manifest', 'foreign-baseline',
+                       'foreign-path', 'foreign-root', 'canonical-changed', 'head', 'missing-head', 'closed-binding'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
+                f = self.private_source_fixture(Path(temporary))
+                if change == 'foreign-manifest': f.private_binding['private_manifest'] = f.private_baseline
+                elif change == 'foreign-baseline': f.private_binding['canonical_source'] = f.private_source
+                elif change == 'foreign-path': f.private_binding['source_path'] += '-foreign'
+                elif change == 'foreign-root': f.private_recipe['source_root']['inode'] += 1
+                elif change == 'canonical-changed': f.private_binding['canonical_source_changed'] = True
+                elif change == 'head': f.private_recipe['source_head'] = 'b' * 40
+                elif change == 'missing-head':
+                    baseline = b.prepared_metadata(f.private_baseline)
+                    baseline.pop('head')
+                    f.private_baseline = _initial_sealed_write(f.root / 'private-baseline.json', baseline)
+                    f.private_binding['canonical_source'] = f.private_baseline
+                    f.private_recipe['baseline_source_manifest'] = f.private_baseline
+                self.publish_private_source(f)
+                if change in ('missing-binding', 'missing-baseline'):
+                    key = 'private_source_binding' if change == 'missing-binding' else 'baseline_source_manifest'
+                    f.private_recipe.pop(key)
+                    recipe = _initial_sealed_write(f.root / 'private-recipe.json', f.private_recipe)
+                    f.current['dict-blob-build']['compilation_recipe'] = recipe
+                elif change == 'closed-binding':
+                    f.target_rows['dict-blob-build']['closed']['private_source_binding'] = f.private_baseline
+                    self.republish(f)
+                with self.assertRaises(ValueError):
+                    b.initial_sealed_target_emission(f.current['dict-blob-build'], f.roles,
+                        target='prepare-blob-tools', full_graph=True)
+
+    def test_flat_private_source_late_binding_and_baseline_mutations_refuse(self):
+        for key in ('private_source_binding', 'baseline_source_manifest'):
+            with self.subTest(authority=key), tempfile.TemporaryDirectory() as temporary:
+                f = self.private_source_fixture(Path(temporary))
+                b.initial_sealed_role_successor(f.original, f.roles)
+                path = Path(f.private_recipe[key]['path'])
+                path.write_bytes(path.read_bytes() + b' ')
+                with self.assertRaises(ValueError): f.roles.require_unchanged()
+
+
 class InitialSealedWriterOnlyTests(unittest.TestCase):
     def fixture(self, root):
         f = SuccessfulPreparedArtifactTests().fixture(root)

@@ -3692,12 +3692,35 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
     references = [row[key] for key in ('compilation_recipe', 'actual_emission_result', 'qualification_closure', 'source')]
     recipe, emitted, closed, source = [prepared_metadata(reference) for reference in references]
     retained_compilation_source(row, native_roles)
+    source_head = source.get('head')
+    if source_head is None:
+        binding_reference = recipe.get('private_source_binding')
+        baseline_reference = recipe.get('baseline_source_manifest')
+        if ('files' in source or 'head' in source
+                or not isinstance(binding_reference, dict)
+                or not isinstance(baseline_reference, dict)):
+            raise ValueError('Initial sealed private source authority is missing')
+        binding = prepared_metadata(binding_reference)
+        baseline = prepared_metadata(baseline_reference)
+        identity = binding.get('source_identity')
+        source_head = baseline.get('head')
+        if (closed.get('private_source_binding') != binding_reference
+                or binding.get('private_manifest') != row['source']
+                or binding.get('canonical_source') != baseline_reference
+                or binding.get('source_path') != row['source_root']
+                or binding.get('canonical_source_changed') is not False
+                or not isinstance(identity, dict)
+                or recipe.get('source_root') != dict(identity, path=row['source_root'])
+                or not isinstance(source_head, str)
+                or re.fullmatch('[0-9a-f]{40}', source_head) is None):
+            raise ValueError('Initial sealed private source authority differs')
+        references.extend((binding_reference, baseline_reference))
     commands = emitted.get('commands', [])
     if (len(commands) != 1 or len(recipe.get('commands', [])) != 1
             or closed.get('commands') != commands or closed.get('result') != row['actual_emission_result']
             or emitted.get('source_authority') != row['compilation_recipe']
             or recipe.get('source_manifest') != row['source'] or closed.get('source_manifest') != row['source']
-            or recipe.get('source_head') != source.get('head')
+            or recipe.get('source_head') != source_head
             or any(closed.get(key) is not True for key in ('source_after', 'whole_source_guard_after',
                 'source_lease_released', 'allocation_released', 'reaped', 'local_proc_absent'))):
         raise ValueError('Initial sealed target lacks its actual closed source/command authority')
