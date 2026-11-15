@@ -150,7 +150,7 @@ class ObservationContractTest(unittest.TestCase):
 
     def test_encoded_form_boundary_preserves_complete_echo_and_html(self):
         # Both sides of the old64KiB boundary, Mai's actual form length, new max.
-        for length in (65536, 65537, 98608, 131072):
+        for length in (65536, 65537, 98608, 131072, 131073, 131913, 262144):
             with self.subTest(length=length):
                 doc, namespace, defaults = self.framed_form(length)
                 accepted = observed.validate_document(observed.encoded(doc), namespace, defaults)
@@ -161,7 +161,7 @@ class ObservationContractTest(unittest.TestCase):
                 self.assertIsNone(observed.decode(page['response'])['parse'].get('revid'))
 
     def test_encoded_form_empty_over_max_and_malformed_escape_refuse(self):
-        doc, namespace, defaults = self.framed_form(131073)
+        doc, namespace, defaults = self.framed_form(262145)
         with self.assertRaisesRegex(ValueError, 'form body'):
             observed.validate_document(observed.encoded(doc), namespace, defaults)
         for form in ('', '%zz'):
@@ -789,6 +789,100 @@ class MissingObservationContract(unittest.TestCase):
             self.helper.validate_document(self.helper.encoded(document), namespace + b'\n', defaults)
         with self.assertRaises(ValueError):
             self.helper.validate_document(self.helper.encoded(document), namespace, defaults + b'\n')
+
+
+class SelectedFullGetRootContract(unittest.TestCase):
+    def actual(self):
+        folder = FIXTURES / 'ku-missing-served-set'
+        doc = observed.decode((folder / 'figure-page-observations.json').read_bytes())
+        raw = (folder / 'mismatched-53658-page.json').read_bytes()
+        self.assertEqual((len(raw), observed.digest(raw)),
+                         (337870, 'ee49c199da0719aaab7b6b63d3b20f171190bb4099fdd3ed30c66c19ac801bca'))
+        page = observed.decode(raw)
+        page['outer_context']['selected_body'] = 'full_get_root'
+        page['page_styles'] = copy.deepcopy(doc['missing_link_styles']['served_set'])
+        page['figure_style_operations'] = [{'start': 25780, 'end': 26121, 'media_kind': 'missing'}]
+        doc['pages'] = [page]
+        doc['schema'] = 'wikidict.figure-page-observations.v8'
+        return doc, (folder / 'namespace-registry.tsv').read_bytes(), doc['missing_link_styles']['defaults'].encode()
+
+    @staticmethod
+    def changed_get(page, change):
+        outer = page['outer_context']
+        outer['response'] = change(outer['response'])
+        receipt = observed.decode(outer['receipt'])
+        receipt['sources'][0].update(bytes=len(outer['response'].encode()), sha256=observed.digest(outer['response'].encode()))
+        outer['receipt'] = observed.encoded(receipt).decode()
+
+    def test_actual_full_get_view_preserves_every_original_capture_and_complete_root_bytes(self):
+        doc, namespace, defaults = self.actual()
+        before = copy.deepcopy(doc)
+        self.assertEqual(observed.validate_document(observed.encoded(doc), namespace, defaults), before)
+        page = doc['pages'][0]
+        parsed = observed.decode(page['response'])['parse']
+        view = observed.validate_outer_context(page['outer_context'], page, doc['wiki'], parsed)
+        self.assertEqual((len(view['text'].encode()), observed.digest(view['text'].encode())),
+                         (76038, '72866b7e71bb94a5ba773a06324a24d26bd2e1611134f20211a6f9894cdb0a33'))
+        self.assertNotEqual(view['text'], parsed['text'])
+        self.assertIn('mw-editsection', view['text'])
+        self.assertIn('vector-feature-custom-font-size-clientpref--excluded', view['headhtml'])
+        self.assertEqual(view['wikitext'], parsed['wikitext'])
+        self.assertEqual(doc, before)
+
+    def test_changed_oldid_root_state_tail_and_source_operations_refuse(self):
+        def relocated_config(html, destination):
+            start = html.index('<script>')
+            stop = html.index('</script>', start) + len('</script>')
+            original = html[start:stop]
+            self.assertIn('RLCONF=', original)
+            # Preserve the original head's other bytes and every receipt field;
+            # only the configuration's actual ancestry is changed.
+            changed = html[:start] + original.replace('RLCONF=', 'RLFAKE=', 1) + html[stop:]
+            if destination == 'body':
+                return changed.replace('</body>', '<head>' + original + '</head></body>', 1)
+            if destination == 'nested-head':
+                return changed.replace('</head>', '<div><head>' + original + '</head></div></head>', 1)
+            if destination == 'nested-script':
+                return changed.replace('</head>', '<div>' + original + '</div></head>', 1)
+            raise AssertionError(destination)
+
+        mutations = [
+            lambda p: self.changed_get(p, lambda h: h.replace('"wgRevisionId":5884328', '"wgRevisionId":5884327')),
+            lambda p: self.changed_get(p, lambda h: h.replace('"wgArticleId":53658', '"wgArticleId":53659')),
+            lambda p: self.changed_get(p, lambda h: h.replace('"wgNamespaceNumber":100', '"wgNamespaceNumber":0')),
+            lambda p: self.changed_get(p, lambda h: h.replace('"wgAction":"view"', '"wgAction":"edit"')),
+            lambda p: self.changed_get(p, lambda h: h.replace('custom-font-size-clientpref--excluded', 'custom-font-size-clientpref-1', 1)),
+            lambda p: self.changed_get(p, lambda h: h.replace('<div class="mw-content-ltr mw-parser-output" lang="ku" dir="ltr">', '<div class="mw-content-ltr mw-parser-output" lang="en" dir="ltr">')),
+            lambda p: self.changed_get(p, lambda h: h + '<style>.vector-body{font-size:99px}</style>'),
+            lambda p: self.changed_get(p, lambda h: h + '<div class="mw-parser-output"></div>'),
+            lambda p: self.changed_get(p, lambda h: relocated_config(h, 'body')),
+            lambda p: self.changed_get(p, lambda h: relocated_config(h, 'nested-head')),
+            lambda p: self.changed_get(p, lambda h: relocated_config(h, 'nested-script')),
+            lambda p: self.changed_get(p, lambda h: h.replace('<head>', '<head data-forged="true">', 1)),
+            lambda p: p['figure_style_operations'][0].update(start=25781),
+            lambda p: p.pop('figure_style_operations'),
+            lambda p: p.pop('page_styles'),
+            lambda p: p['outer_context'].update(selected_body=None),
+        ]
+        for mutate_page in mutations:
+            with self.subTest(mutation=mutate_page):
+                doc, namespace, defaults = self.actual()
+                mutate_page(doc['pages'][0])
+                with self.assertRaises(ValueError):
+                    observed.validate_document(observed.encoded(doc), namespace, defaults)
+
+    def test_absent_selection_keeps_default_validation_view_and_immutable_api(self):
+        doc, namespace, defaults = self.actual()
+        page = doc['pages'][0]
+        page['outer_context'].pop('selected_body')
+        parsed = observed.decode(page['response'])['parse']
+        before = copy.deepcopy(parsed)
+        self.assertIsNone(observed.validate_outer_context(page['outer_context'], page, doc['wiki'], parsed))
+        self.assertEqual(parsed, before)
+        # Packaging remains a transport check. Native's unchanged default API
+        # constructor still rejects this unequal paired font state.
+        self.assertEqual(observed.validate_document(observed.encoded(doc), namespace, defaults), doc)
+
 
 
 if __name__ == '__main__':
