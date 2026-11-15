@@ -243,7 +243,15 @@ def _figure_utc_key(value):
     if match is None:
         raise ValueError('Noncanonical figure source UTC timestamp')
     base = match.group(1)
-    datetime.strptime(base, '%Y-%m-%dT%H:%M:%S')
+    if base[11:13] >= '24' or base[14:16] >= '60' or base[17:19] >= '60':
+        # Native ISO parsing can accept 24:00; retain the strict legacy clock domain.
+        datetime.strptime(base, '%Y-%m-%dT%H:%M:%S')
+    else:
+        try:
+            datetime.fromisoformat(base)
+        except ValueError:
+            # Preserve the existing invalid-calendar diagnostics and acceptance fallback.
+            datetime.strptime(base, '%Y-%m-%dT%H:%M:%S')
     # Fixed-width calendar base sorts chronologically. Decimal digit strings
     # compare exactly after insignificant trailing zeros are removed.
     return base, (match.group(2) or '').rstrip('0')

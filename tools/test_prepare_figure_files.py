@@ -11250,5 +11250,260 @@ def measure_figure_registration_decode(baseline, candidate, selection):
         census=census, error_parity=errors, rows=rows, allocation_rows=allocation_rows)
 
 
+class FigureUtcKeyTests(unittest.TestCase):
+    @staticmethod
+    def legacy(value):
+        import re
+        from datetime import datetime
+        match = re.fullmatch(r'([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.([0-9]+))?Z', value) if isinstance(value, str) else None
+        if match is None:
+            raise ValueError('Noncanonical figure source UTC timestamp')
+        base = match.group(1)
+        datetime.strptime(base, '%Y-%m-%dT%H:%M:%S')
+        return base, (match.group(2) or '').rstrip('0')
+
+    @staticmethod
+    def outcome(function, value):
+        try:
+            return 'value', function(value)
+        except Exception as error:
+            return 'error', type(error), str(error)
+
+    def test_native_utc_key_preserves_exact_calendar_fraction_keys_and_errors(self):
+        for base in ('0001-01-01T00:00:00', '1900-02-28T23:59:59',
+                     '2000-02-29T00:00:00', '2400-02-29T12:34:56', '9999-12-31T23:59:59'):
+            for fraction in ('', '.0', '.000000000', '.1', '.0100', '.123456789012345678900'):
+                value = base + fraction + 'Z'
+                self.assertEqual(figure._figure_utc_key(value), self.legacy(value))
+                self.assertEqual(figure._figure_utc_key(value), (base, fraction.lstrip('.').rstrip('0')))
+        base = '2026-10-01T00:00:00'
+        self.assertLess(figure._figure_utc_key(base+'.000099999999999Z'), figure._figure_utc_key(base+'.0001Z'))
+        self.assertEqual(figure._figure_utc_key(base+'.100000000Z'), figure._figure_utc_key(base+'.1Z'))
+        values = [None, False, 0, b'2026-10-01T00:00:00Z', [], {}, '',
+            '0000-01-01T00:00:00Z', '1900-02-29T00:00:00Z', '2026-02-30T00:00:00Z',
+            '2026-00-01T00:00:00Z', '2026-13-01T00:00:00Z', '2026-01-00T00:00:00Z',
+            '2026-01-32T00:00:00Z', '2026-01-01T24:00:00Z', '2026-01-01T00:60:00Z',
+            '2026-01-01T24:00:00.0Z', '2026-01-01T24:00:00.000000000000Z',
+            '2026-01-01T24:00:00.1234567890123456789Z', '2026-12-31T24:00:00Z',
+            '0001-01-01T24:00:00Z', '9999-12-31T24:00:00.0Z',
+            '2000-02-28T24:00:00Z', '2000-02-29T24:00:00Z',
+            '2026-01-01T24:00:01Z', '2026-01-01T24:01:00Z',
+            '2026-01-01T99:00:00Z', '2026-01-01T00:99:00Z', '2026-01-01T00:00:99Z',
+            '2026-01-01T00:00:60Z', '2026-01-01T00:00:61Z', '2026-01-01T00:00:00.Z',
+            '2026-01-01 00:00:00Z', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00z',
+            '2026-01-01T00:00:00Z\n', '２０２６-01-01T00:00:00Z', '-001-01-01T00:00:00Z']
+        for value in values:
+            with self.subTest(value=value):
+                expected = self.outcome(self.legacy, value)
+                self.assertEqual(expected[0], 'error')
+                self.assertEqual(self.outcome(figure._figure_utc_key, value), expected)
+
+    def test_native_utc_key_uses_fast_parser_only_after_syntax_and_preserves_fallback(self):
+        from types import SimpleNamespace
+        native = figure.datetime
+        direct = unittest.mock.Mock(wraps=native.fromisoformat)
+        legacy = unittest.mock.Mock(wraps=native.strptime)
+        calendar = SimpleNamespace(fromisoformat=direct, strptime=legacy)
+        with patch.object(figure, 'datetime', calendar):
+            self.assertEqual(figure._figure_utc_key('2026-10-01T00:00:00.123456789Z'),
+                             ('2026-10-01T00:00:00', '123456789'))
+            self.assertEqual((direct.call_count, legacy.call_count), (1, 0))
+            direct.reset_mock();legacy.reset_mock()
+            expected = self.outcome(self.legacy, '1900-02-29T00:00:00Z')
+            self.assertEqual(self.outcome(figure._figure_utc_key, '1900-02-29T00:00:00Z'), expected)
+            self.assertEqual((direct.call_count, legacy.call_count), (1, 1))
+            direct.reset_mock();legacy.reset_mock()
+            with self.assertRaisesRegex(ValueError, 'Noncanonical figure source UTC timestamp'):
+                figure._figure_utc_key('2026-10-01T00:00:00+00:00')
+            self.assertEqual((direct.call_count, legacy.call_count), (0, 0))
+            direct.side_effect = ValueError('native parser rejection')
+            self.assertEqual(figure._figure_utc_key('2026-10-01T00:00:00Z'),
+                             self.legacy('2026-10-01T00:00:00Z'))
+            self.assertEqual((direct.call_count, legacy.call_count), (1, 1))
+            direct.reset_mock();legacy.reset_mock()
+            failure = MemoryError('native parser allocation')
+            direct.side_effect = failure
+            with self.assertRaises(MemoryError) as caught:
+                figure._figure_utc_key('2026-10-01T00:00:00Z')
+            self.assertIs(caught.exception, failure)
+            self.assertEqual((direct.call_count, legacy.call_count), (1, 0))
+
+    def test_native_utc_key_preserves_real_file_document_provider_and_future_refusal(self):
+        fixture = FigureFileTests();fixture.setUp();self.addCleanup(fixture.doCleanups)
+        for timestamp, valid in (('2000-02-29T00:00:00Z', True),
+                                 ('2026-10-05T22:59:59.1234567890123456789Z', True),
+                                 ('2026-10-06T00:00:00Z', False),
+                                 ('1900-02-29T00:00:00Z', False)):
+            value = fixture.response()
+            value['query']['pages'][0]['imageinfo'][0]['timestamp'] = timestamp
+            batch = fixture.batch(response=value)
+            before = copy.deepcopy(batch)
+            def project(_):
+                document = fixture.project([batch])
+                return document, b''.join(figure.provider_chunks(document))
+            with patch.object(figure, '_figure_utc_key', new=self.legacy):
+                expected = self.outcome(project, None)
+            actual = self.outcome(project, None)
+            self.assertEqual(actual, expected)
+            self.assertEqual(actual[0], 'value' if valid else 'error')
+            if valid:
+                self.assertEqual(actual[1][0]['records'][0]['file_timestamp'], timestamp)
+            self.assertEqual(batch, before)
+
+
+def measure_figure_utc_key(baseline, candidate, selection):
+    """Two authentic lean frames per fresh replay walk; no corpus extrapolation."""
+    import gc
+    import tempfile
+    import tracemalloc
+    if tracemalloc.is_tracing():
+        raise ValueError('UTC key measurement requires unprofiled entry')
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid',
+              'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    def physical(path):
+        value = path.lstat()
+        return tuple(getattr(value, name) for name in fields)
+    originals, stamps = {}, {}
+    for row in [selection['namespace'], *selection['files']]:
+        path = Path(row['path'])
+        before = physical(path)
+        raw = path.read_bytes()
+        if (len(raw) != row['bytes'] or hashlib.sha256(raw).hexdigest() != row['sha256'] or
+                physical(path) != before):
+            raise ValueError('Retained lean replay input changed')
+        originals[path], stamps[path] = raw, before
+    namespace = originals[Path(selection['namespace']['path'])]
+    operations = 16
+    with tempfile.TemporaryDirectory(prefix='figure-utc-key-') as temporary:
+        root = Path(temporary)
+        for row in selection['files']:
+            path = Path(row['path'])
+            (root/path.name).write_bytes(originals[path])
+        pairs = []
+        for reference in selection['references']:
+            names, raw, artifacts, accepted = baseline.captured_http_stage(root, reference,
+                selection['wiki'], light=True)
+            # Only this task's temporary raw copy is retired. Original evidence stays intact.
+            accepted[0].unlink()
+            source = dict(kind='http-archived-lean', batch=reference, artifacts=artifacts)
+            pairs.append((source, dict(requests=names, response=raw.decode())))
+        if len(pairs) != 2 or any(len(batch['requests']) != 50 for _, batch in pairs):
+            raise AssertionError('Retained two-frame task shape changed')
+        before_pairs = copy.deepcopy(pairs)
+        files_before = {path.name:(path.read_bytes(), physical(path)) for path in root.iterdir()}
+        def run(helper, count=operations):
+            results = []
+            for _ in range(count):
+                files, archives = set(), {}
+                for source, batch in pairs:
+                    helper.replay_source(root, source, batch, selection['wiki'], selection['date'],
+                        namespace, files, profile_kind=helper.FIGURE_PROFILE_V4,
+                        allow_compatible_epochs=True, origin_plan={})
+                    helper.record_http_archive(root, source, batch, archives, origin_plan={})
+                results.append((files, archives))
+            return results
+        expected = run(baseline)
+        actual = run(candidate)
+        if actual != expected or pairs != before_pairs:
+            raise AssertionError('Retained replay authority/output/input parity differs')
+        del actual
+        documents, census = [], []
+        for name, helper in (('baseline', baseline), ('candidate', candidate)):
+            captured = []
+            original_records = helper.file_records
+            def records(*args, **options):
+                result = original_records(*args, **options)
+                captured.append((result, b''.join(helper.provider_chunks(result))))
+                return result
+            with patch.object(helper, 'file_records', side_effect=records):
+                result = run(helper, 1)
+            if result != expected[:1]:
+                raise AssertionError('Retained semantic census changes replay result')
+            documents.append(captured)
+            del result
+            from types import SimpleNamespace
+            original_calendar = helper.datetime
+            counts = dict(native=0, legacy=0)
+            def native(value):
+                counts['native'] += 1
+                return original_calendar.fromisoformat(value)
+            def legacy(value, format):
+                counts['legacy'] += 1
+                return original_calendar.strptime(value, format)
+            with patch.object(helper, 'datetime', SimpleNamespace(fromisoformat=native, strptime=legacy)):
+                result = run(helper, 1)
+            if result != expected[:1]:
+                raise AssertionError('Calendar-call census changes replay result')
+            census.append(dict(arm=name, **counts))
+            del result
+        if documents[0] != documents[1] or len(documents[0]) != 2:
+            raise AssertionError('Complete semantic records/provider parity differs')
+        if census != [dict(arm='baseline', native=0, legacy=106), dict(arm='candidate', native=102, legacy=4)]:
+            raise AssertionError('Actual two-frame Figure calendar-call census differs')
+        del documents
+        errors = []
+        source, batch = pairs[-1]
+        receipt_path = root/source['batch']['accepted_receipt']
+        receipt_original = receipt_path.read_bytes()
+        response_original = batch['response']
+        for mutation in ('wrong-wiki', 'missing-timestamp', 'unrequested-metadata', 'duplicate-key'):
+            data = baseline.decode(response_original.encode())
+            if mutation == 'wrong-wiki': data['query']['general']['wikiid'] = 'invalidwiktionary'
+            elif mutation == 'missing-timestamp': del data['query']['pages'][0]['imageinfo'][0]['timestamp']
+            elif mutation == 'unrequested-metadata': data['query']['pages'][0]['imageinfo'][0]['metadata'] = []
+            raw = baseline.encoded(data)
+            if mutation == 'duplicate-key': raw = b'{"query":null,' + raw[1:]
+            batch['response'] = raw.decode()
+            receipt = baseline.decode(receipt_original)
+            receipt.update(response_bytes=len(raw), response_sha256=baseline.digest(raw))
+            receipt_path.write_bytes(baseline.encoded(receipt))
+            observed = []
+            for helper in (baseline, candidate):
+                try:
+                    run(helper, 1)
+                except Exception as error:
+                    observed.append((type(error).__name__, str(error)))
+                else:
+                    raise AssertionError('Invalid retained replay response accepted')
+            if observed[0] != observed[1]:
+                raise AssertionError('Retained replay error parity differs')
+            errors.append(dict(mutation=mutation, error=observed[0]))
+            batch['response'] = response_original
+            receipt_path.write_bytes(receipt_original)
+        # Fixture mutations are fully restored and revalidated before all clocks.
+        if run(baseline) != expected or run(candidate) != expected or pairs != before_pairs:
+            raise AssertionError('Restored retained replay differs')
+        files_before = {path.name:(path.read_bytes(), physical(path)) for path in root.iterdir()}
+        rows, allocation_rows = [], []
+        for traced, output in ((False, rows), (True, allocation_rows)):
+            for name, helper in (('baseline', baseline), ('candidate', candidate),
+                                 ('candidate', candidate), ('baseline', baseline)):
+                gc.collect()
+                if traced: tracemalloc.start()
+                try:
+                    wall, cpu = time.perf_counter_ns(), time.process_time_ns()
+                    result = run(helper)
+                    cpu, wall = time.process_time_ns()-cpu, time.perf_counter_ns()-wall
+                    if traced: current, peak = tracemalloc.get_traced_memory()
+                finally:
+                    if traced: tracemalloc.stop()
+                output.append(dict(arm=name, cpu_ns=cpu, wall_ns=wall,
+                    **(dict(current_bytes=current, peak_bytes=peak) if traced else {})))
+                if result != expected:
+                    raise AssertionError('Timed retained replay output parity differs')
+                del result
+        if (pairs != before_pairs or
+                {path.name:(path.read_bytes(), physical(path)) for path in root.iterdir()} != files_before):
+            raise AssertionError('Retained replay task mutated its inputs')
+    for path, raw in originals.items():
+        if physical(path) != stamps[path] or path.read_bytes() != raw:
+            raise AssertionError('Original retained input changed during qualification')
+    return dict(scope='16 independent ordinary replay_source walks over the same two authentic FR lean HTTP frames; isolated UTC validation change, not full verify or whole-FR timing',
+        operations=operations, frames_per_operation=len(pairs), unique_request_titles=100,
+        response_bytes_per_operation=sum(len(batch['response'].encode()) for _, batch in pairs),
+        parity=True, input_after=True, census=census, error_parity=errors,
+        rows=rows, allocation_rows=allocation_rows)
+
+
 if __name__ == '__main__':
     unittest.main()
