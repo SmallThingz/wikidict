@@ -3460,7 +3460,7 @@ def writer_figure_adopt_workspace(workspace, expected, now_unix, build_identity,
 
 
 def retained_compilation_source(row, native_roles):
-    """Join a closed current guard to its unchanged native compilation inventory."""
+    """Join a closed guard to exact native bytes and recorded helper changes."""
     source = prepared_metadata(row['source'])
     if source.get('fingerprint', row['source']['sha256']) == row['producer_source']:
         return source
@@ -3473,12 +3473,13 @@ def retained_compilation_source(row, native_roles):
             or closed.get('source_manifest') != row['source']
             or recipe.get('native_compilation_source_manifest') != refs[0]
             or closed.get('native_compilation_source_manifest') != refs[0]
+            or source.get('native_compilation_origin', refs[0]) != refs[0]
             or compiled.get('fingerprint', refs[0]['sha256']) != row['producer_source']
-            or recipe.get('compiled_projection_preserved') is not True
             or emitted.get('source_authority') != row['compilation_recipe']
             or closed.get('result') != row['actual_emission_result']
             or emitted.get('passed') is not True
-            or closed.get('outcome') != 'PASSED-PHYSICALLY-SOURCE-CLOSED'):
+            or closed.get('outcome') != 'PASSED-PHYSICALLY-SOURCE-CLOSED'
+            or recipe.get('source_head') != source.get('head')):
         raise ValueError('Retained native compilation envelope differs')
     commands = recipe.get('commands', [])
     if (len(commands) != 1 or len(emitted.get('commands', [])) != 1
@@ -3489,15 +3490,17 @@ def retained_compilation_source(row, native_roles):
             or emitted['commands'][0].get('returncode') != 0):
         raise ValueError('Retained native compilation command differs')
     argv = commands[0]['argv']
-    if (argv[:2] != [row['dependencies']['zig']['path'], 'build']
-            or argv[2:3] not in (['prepare-blob-tools'], ['prepare-captured-writer'])):
+    if argv[:2] != [row['dependencies']['zig']['path'], 'build']:
         raise ValueError('Retained native compilation target differs')
-    # These native-only targets consume unchanged Zig inputs and the explicit
-    # captured fingerprint. No Python source exclusion or implicit build option
-    # is allowed to change the selected compilation.
+    stop = next((i for i,value in enumerate(argv[2:], 2) if value.startswith('-')), len(argv))
+    targets = argv[2:stop]
+    if targets not in (['prepare-blob-tools'], ['prepare-captured-writer'], ['prepare-blob-tools', 'cli']):
+        raise ValueError('Retained native compilation target differs')
+    # These exact native-only targets do not execute the changed orchestration
+    # helpers. No cache-report/Python invocation or unknown build option is admitted.
     required = {'-Doptimize=safe', '-Dtarget=x86_64-native', '-Dcpu=baseline',
                 '-Dcaptured-source-fingerprint=' + row['producer_source']}
-    arguments = argv[3:]
+    arguments = argv[stop:]
     seen = set()
     index = 0
     while index < len(arguments):
@@ -3518,99 +3521,100 @@ def retained_compilation_source(row, native_roles):
             raise ValueError('Unreviewed retained native compilation option')
     if not required <= seen:
         raise ValueError('Retained native compilation flags differ')
-    applications = recipe.get('python_production_bridge')
-    if applications != closed.get('python_production_bridge'):
-        raise ValueError('Retained helper application authority differs')
-    applications = applications if isinstance(applications, list) else [applications]
-    if not applications or any(not isinstance(ref, dict) for ref in applications):
-        raise ValueError('Retained helper application authority is missing')
-    development_ref = recipe.get('development_commit_authority')
-    if not isinstance(development_ref, dict) or development_ref != closed.get('development_commit_authority'):
-        raise ValueError('Retained development commit authority differs')
-    development = prepared_metadata(development_ref)
-    development_source = prepared_metadata(development['inventory'])
-    refs.extend([development_ref, development['inventory'], *applications])
-    expected_names = {'tools/build_wiktionaries.py', 'tools/test_build_wiktionaries.py'}
-    files, modes = dict(compiled['files']), dict(compiled['modes'])
-    if (set(files) != set(modes) or set(files) != set(source['files'])
-            or set(files) != set(source['modes'])):
-        raise ValueError('Retained compilation source membership differs')
-    head = compiled['head']
-    committed = False
+    def manifest(value):
+        files, modes = value['files'], value['modes']
+        if (set(files) != set(modes)
+                or any(type(mode) is not int or not 0 <= mode <= 0o777 for mode in modes.values())):
+            raise ValueError('Retained compilation source membership or modes differ')
+        normalized = {}
+        for name,descriptor in files.items():
+            if (not isinstance(descriptor,dict)
+                    or set(descriptor) not in ({'path', 'bytes', 'sha256'}, {'path', 'bytes', 'sha256', 'mode'})
+                    or ('mode' in descriptor and descriptor['mode'] != modes[name])):
+                raise ValueError('Retained compilation source mode differs')
+            normalized[name] = {key: descriptor[key] for key in ('path', 'bytes', 'sha256')}
+        return normalized, modes
+    files, modes = manifest(compiled)
+    final, final_modes = manifest(source)
+    if set(files) != set(final) or modes != final_modes:
+        raise ValueError('Retained compilation source membership or modes differ')
+    bridge = source.get('helper_head_bridge', {}).get('application')
+    if bridge is not None:
+        applications = [bridge]
+    else:
+        applications = recipe.get('python_production_bridge')
+        if applications != closed.get('python_production_bridge'):
+            raise ValueError('Retained helper application authority differs')
+        applications = applications if isinstance(applications, list) else [applications]
+    if any(files[name] != final[name] for name in files):
+        if not applications or any(not isinstance(ref, dict) for ref in applications):
+            raise ValueError('Retained helper application authority is missing')
+    elif applications == [None]:
+        applications = []
+    allowed = {
+        'tools/build_wiktionaries.py', 'tools/test_build_wiktionaries.py',
+        'tools/prepare_figure_metadata.py', 'tools/test_prepare_figure_files.py',
+    }
 
-    def advance_development():
-        nonlocal head, committed
-        if committed or head != development.get('parent'):
-            return
-        if (development.get('native_source_changed_by_commit') is not False
-                or development.get('all_selected_bytes_modes_exact') is not True
-                or development_source.get('head') != development.get('head')
-                or files != development_source.get('files') or modes != development_source.get('modes')):
-            raise ValueError('Retained development checkpoint differs')
-        head = development['head']
-        committed = True
-
+    def authority(reference, *, relative=False):
+        if not isinstance(reference, dict) or set(reference) not in (
+                {'path', 'bytes', 'sha256'}, {'path', 'bytes', 'sha256', 'mode'}):
+            raise ValueError('Invalid retained qualification descriptor')
+        path = Path(reference['path'])
+        if '..' in path.parts or path.as_posix() != reference['path']:
+            raise ValueError('Unsafe retained qualification path')
+        if not path.is_absolute():
+            if not relative:
+                raise ValueError('Relative retained qualification is not supported')
+            path = Path(row['source_root']) / path
+        selected = dict(reference, path=str(path))
+        if 'mode' in selected and (type(selected['mode']) is not int or
+                not 0 <= selected['mode'] <= 0o777 or stat.S_IMODE(path.stat().st_mode) != selected['mode']):
+            raise ValueError('Retained qualification mode differs')
+        return selected, prepared_metadata({key: selected[key] for key in ('path', 'bytes', 'sha256')})
     for reference in applications:
-        advance_development()
         application = prepared_metadata(reference)
-        rows = application.get('rows', [])
-        if (application.get('schema') != 'qualified-owned-python-application.v1'
-                or application.get('canonical_native_bytes_changed') is not False
-                or application.get('diff_check_passed') is not True
-                or application.get('parent') != head
-                or len(rows) != 2 or {entry.get('relative') for entry in rows} != expected_names):
-            raise ValueError('Retained helper application is not the exact qualified pair')
-        def authority_edge(reference, *, relative=False):
-            if not isinstance(reference, dict) or set(reference) not in (
-                    {'path', 'bytes', 'sha256'}, {'path', 'bytes', 'sha256', 'mode'}):
-                raise ValueError('Invalid retained qualification descriptor')
-            path = Path(reference['path'])
-            if (not isinstance(reference['path'], str) or '..' in path.parts
-                    or path.as_posix() != reference['path']):
-                raise ValueError('Unsafe retained qualification path')
-            if not path.is_absolute():
-                if not relative:
-                    raise ValueError('Relative retained qualification is not supported')
-                path = Path(row['source_root']) / path
-            normalized = dict(reference, path=str(path))
-            if 'mode' in normalized:
-                mode = normalized['mode']
-                if (type(mode) is not int or not 0 <= mode <= 0o777
-                        or stat.S_IMODE(path.stat().st_mode) != mode):
-                    raise ValueError('Retained qualification mode differs')
-            value = prepared_metadata({key:normalized[key] for key in ('path', 'bytes', 'sha256')})
-            return normalized, value
-
-        qualification_ref, qualification = authority_edge(application['qualification'])
-        owner_ref, owner = authority_edge(qualification['owner_configuration'], relative=True)
-        if (qualification.get('outcome') != 'PASSED-PHYSICALLY-SOURCE-CLOSED'
-                or any(qualification.get(key) is not True for key in ('source_after', 'source_lease_released', 'reaped'))
-                or qualification.get('errors') != 0 or qualification.get('failures') != 0
-                or not isinstance(qualification.get('tests_executed'), int)
-                or qualification['tests_executed'] <= 0
-                or qualification.get('tests_passed') != qualification['tests_executed']):
-            raise ValueError('Retained helper application lacks its actual qualification')
-        refs.extend([qualification_ref, owner_ref])
-        for entry in rows:
-            name = entry['relative']
-            before, after = entry['before'], entry['after']
+        refs.append(reference)
+        entries = application.get('rows', [])
+        names = []
+        if not entries:
+            raise ValueError('Retained helper application has no source changes')
+        # Preserve the qualifications supplied by older active receipts. Native
+        # byte equality below never comes from a declared qualification boolean.
+        qualified = None
+        if 'qualification' in application:
+            qualification_ref, qualification = authority(application['qualification'])
+            owner_ref, owner = authority(qualification['owner_configuration'], relative=True)
+            if (qualification.get('outcome') != 'PASSED-PHYSICALLY-SOURCE-CLOSED'
+                    or any(qualification.get(key) is not True for key in ('source_after', 'source_lease_released', 'reaped'))
+                    or qualification.get('errors') != 0 or qualification.get('failures') != 0
+                    or not isinstance(qualification.get('tests_executed'), int) or qualification['tests_executed'] <= 0
+                    or qualification.get('tests_passed') != qualification['tests_executed']):
+                raise ValueError('Retained helper application lacks its actual qualification')
+            refs.extend([qualification_ref, owner_ref])
+            qualified = owner.get('source_refs', [])
+        for entry in entries:
+            name = entry.get('relative', entry.get('path'))
+            before = entry['before']
+            after = entry.get('actual_post', entry.get('after'))
+            if name not in allowed or name in names or name not in files or not isinstance(after, dict):
+                raise ValueError('Retained helper application changed an unreviewed source')
+            names.append(name)
             path = str(Path(row['source_root']) / name)
-            if (before.get('path') != path or after.get('path') != path
-                    or {key:before[key] for key in ('path', 'bytes', 'sha256')} != files[name]
-                    or before.get('mode') != modes[name]
-                    or after.get('mode') != modes[name]):
+            if (files[name]['path'] != path or final[name]['path'] != path or after.get('path') != path
+                    or before.get('path') != path
+                    or any(before.get(key) != files[name][key] for key in ('bytes', 'sha256'))
+                    or before.get('mode') != modes[name] or after.get('mode') != modes[name]):
                 raise ValueError('Retained helper application continuity differs')
-            qualified = [ref for ref in owner.get('source_refs', [])
-                         if all(ref.get(key) == after.get(key) for key in ('bytes', 'sha256', 'mode'))]
-            if len(qualified) != 1:
-                raise ValueError('Retained helper application endpoints were not qualified')
-            refs.append(qualified[0])
-            files[name] = {key:after[key] for key in ('path', 'bytes', 'sha256')}
-        head = application['head']
-    advance_development()
-    if (not committed or head != source.get('head') or recipe.get('source_head') != head
-            or files != source['files'] or modes != source['modes']):
-        raise ValueError('Retained native inputs or helper history differ')
+            if qualified is not None:
+                matches = [item for item in qualified
+                           if all(item.get(key) == after.get(key) for key in ('bytes', 'sha256', 'mode'))]
+                if len(matches) != 1:
+                    raise ValueError('Retained helper application endpoints were not qualified')
+                refs.append(matches[0])
+            files[name] = {key: after[key] for key in ('path', 'bytes', 'sha256')}
+    if files != final:
+        raise ValueError('Retained native inputs or helper changes differ')
     for reference in [row['source'], *refs]:
         observed = native_roles.bind_input(Path(reference['path']))
         if any(observed[key] != reference[key] for key in ('path', 'bytes', 'sha256')):

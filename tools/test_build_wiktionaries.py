@@ -13068,6 +13068,115 @@ class RetainedCompilationEnvelopeTests(unittest.TestCase):
             with self.assertRaises(ValueError): b.retained_compilation_source(f.current['dict-blob-build'], f.roles)
 
 
+    def native_only_fixture(self, root):
+        f = self.fixture(root)
+        f.native_application = dict(rows=[dict(path=row['relative'], before=row['before'], actual_post=row['after']) for row in f.application['rows']], head_before='native-head', head_after=f.guard['head'])
+        f.native_targets = ['prepare-blob-tools', 'cli']
+        f.native_extra_options = []
+        self.publish_native_only(f)
+        return f
+
+    def publish_native_only(self, f):
+        application = _initial_sealed_write(f.root / 'native-helper-application.json', f.native_application)
+        f.guard['native_compilation_origin'] = f.compiled_ref
+        if getattr(f, 'native_no_application', False):
+            f.guard.pop('helper_head_bridge', None)
+        else:
+            f.guard['helper_head_bridge'] = dict(application=application, native_bytes_changed=False)
+        for entry in f.native_application['rows']:
+            name = entry['path']
+            if name in f.guard['files']:
+                f.guard['files'][name]['mode'] = f.guard['modes'][name]
+        f.application_ref = application
+        self.publish(f)
+        state = f.target_rows['dict-blob-build']
+        command = state['result']['commands'][0]
+        argv = command['argv']
+        stop = next((i for i, value in enumerate(argv[2:], 2) if value.startswith('-')))
+        command['argv'] = argv[:2] + f.native_targets + argv[stop:] + f.native_extra_options
+        state['stderr'].write_text('Build Summary: 6/6 steps succeeded\nprepare-blob-tools success\n+- install dict-blob-build success\n+- install dict-blob-merge success\n+- install dict-blob-verify success\ncli success\n+- install wikidict success\n')
+        recipe = b.prepared_metadata(f.current['dict-blob-build']['compilation_recipe'])
+        for name in ('compiled_projection_preserved', 'development_commit_authority', 'python_production_bridge'):
+            recipe.pop(name, None)
+            state['closed'].pop(name, None)
+        recipe['commands'] = [dict(argv=command['argv'], cwd=command['cwd'])]
+        reference = _initial_sealed_write(f.root / 'native-only-recipe.json', recipe)
+        for role in b.BLOB_TOOL_NAMES:
+            f.current[role]['compilation_recipe'] = reference
+        state['result']['source_authority'] = reference
+        state['closed']['owner_configuration'] = _initial_sealed_write(f.root / 'native-only-owner.json', dict(bindings=dict(INPUT_REF=reference)))
+        SuccessfulPreparedArtifactTests().republish(f)
+
+    def test_native_blob_cli_guard_bridge_uses_exact_bytes_without_legacy_boolean_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.native_only_fixture(Path(tmp))
+            row = f.current['dict-blob-build']
+            recipe = b.prepared_metadata(row['compilation_recipe'])
+            self.assertNotIn('compiled_projection_preserved', recipe)
+            self.assertNotIn('development_commit_authority', recipe)
+            self.assertNotIn('python_production_bridge', recipe)
+            before = (f.expander / '.completed-expander.json').read_bytes()
+            driver = copy.deepcopy(f.current['dict-bundle-build'])
+            self.assertEqual(b.retained_compilation_source(row, f.roles), b.prepared_metadata(f.compiled_ref))
+            b.initial_sealed_role_successor(f.original, f.roles)
+            self.assertEqual((f.expander / '.completed-expander.json').read_bytes(), before)
+            self.assertEqual(f.current['dict-bundle-build'], driver)
+            self.assertEqual(recipe['commands'][0]['argv'][2:4], ['prepare-blob-tools', 'cli'])
+
+    def test_native_blob_cli_guard_rejects_unbound_native_helper_mode_target_and_python_options(self):
+        for mode in ('native', 'helper-before', 'helper-after', 'helper-path', 'helper-unreviewed', 'inline-mode', 'duplicate-cli', 'foreign-target', 'python-report', 'missing-application'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                f = self.native_only_fixture(Path(tmp))
+                if mode == 'native':
+                    f.guard['files']['src/encoder/presentation_codec.zig']['sha256'] = '0' * 64
+                elif mode == 'helper-before':
+                    f.native_application['rows'][0]['before']['sha256'] = '0' * 64
+                elif mode == 'helper-after':
+                    f.native_application['rows'][0]['actual_post']['sha256'] = '0' * 64
+                elif mode == 'helper-path':
+                    f.native_application['rows'][0]['before']['path'] = str(f.root / 'foreign.py')
+                elif mode == 'helper-unreviewed':
+                    f.native_application['rows'][0]['path'] = 'tools/generate_unicode_bidi.py'
+                elif mode == 'inline-mode':
+                    self.publish_native_only(f)
+                    guard = b.prepared_metadata(f.current['dict-blob-build']['source'])
+                    guard['files']['tools/build_wiktionaries.py']['mode'] = 493
+                    source = _initial_sealed_write(f.root / 'wrong-inline-mode.json', guard)
+                    f.current['dict-blob-build']['source'] = source
+                    recipe = b.prepared_metadata(f.current['dict-blob-build']['compilation_recipe'])
+                    recipe['source_manifest'] = source
+                    f.current['dict-blob-build']['compilation_recipe'] = _initial_sealed_write(f.root / 'wrong-inline-recipe.json', recipe)
+                    state = f.target_rows['dict-blob-build']
+                    state['closed']['source_manifest'] = source
+                    state['result']['source_authority'] = f.current['dict-blob-build']['compilation_recipe']
+                    SuccessfulPreparedArtifactTests().republish(f)
+                elif mode == 'missing-application':
+                    f.native_no_application = True
+                elif mode == 'duplicate-cli':
+                    f.native_targets.append('cli')
+                elif mode == 'foreign-target':
+                    f.native_targets.append('test')
+                else:
+                    f.native_extra_options = ['-Dcache-report=/foreign', '-Dcache-report-owner=/foreign', '-Dcache-report-output=/foreign', '-Dcache-report-root=/foreign']
+                if mode != 'inline-mode':
+                    self.publish_native_only(f)
+                with self.assertRaises(ValueError):
+                    b.retained_compilation_source(f.current['dict-blob-build'], f.roles)
+
+    def test_native_blob_cli_guard_late_bridge_and_origin_identity_changes_refuse(self):
+        for mode in ('bridge', 'origin'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                f = self.native_only_fixture(Path(tmp))
+                b.retained_compilation_source(f.current['dict-blob-build'], f.roles)
+                reference = f.guard['helper_head_bridge']['application'] if mode == 'bridge' else f.compiled_ref
+                path = Path(reference['path'])
+                raw = path.read_bytes()
+                path.unlink()
+                path.write_bytes(raw)
+                with self.assertRaises(ValueError):
+                    f.roles.require_unchanged()
+
+
 class ClosedWholeRetainedPreimageTests(unittest.TestCase):
     def fixture(self, root, mode_schema='top'):
         f = RetainedNativeRoleTests().closed_whole_fixture(root)
