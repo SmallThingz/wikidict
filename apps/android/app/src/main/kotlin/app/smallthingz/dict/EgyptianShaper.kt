@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.fonts.Font
-import androidx.annotation.RequiresApi
 import java.nio.ByteBuffer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -16,7 +15,6 @@ internal object EgyptianNative {
     external fun shape(font: ByteBuffer, text: String): FloatArray
 }
 
-@RequiresApi(31)
 internal class EgyptianGlyphRun internal constructor(
     private val font: Font,
     internal val glyphIds: IntArray,
@@ -70,7 +68,6 @@ internal class EgyptianGlyphRun internal constructor(
     }
 }
 
-@RequiresApi(31)
 internal object EgyptianShaper {
     private data class LoadedFont(val font: Font, val bytes: ByteBuffer)
     @Volatile private var loaded: LoadedFont? = null

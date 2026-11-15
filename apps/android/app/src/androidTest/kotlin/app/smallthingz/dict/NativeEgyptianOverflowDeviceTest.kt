@@ -11,7 +11,6 @@ import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.style.ReplacementSpan
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
@@ -20,7 +19,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NativeEgyptianOverflowDeviceTest {
-    @Test @SdkSuppress(minSdkVersion = 31)
+    @Test
     fun zeroContainingWidthRetainsOriginalShapedEgyptianInkTrackingAndBaseline() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val text = "\ud80c\udc00\ud80c\udc01"

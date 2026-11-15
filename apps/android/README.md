@@ -68,7 +68,7 @@ Requirements:
 - Android build-tools 37.0.0
 - Android NDK 29.0.14206865 and CMake 3.22.1
 
-The application targets Android 37 and supports Android 28+. Run these commands
+The application targets API 37 and supports Android 12 (API 31) or newer. Run these commands
 from the repository root; the wrapper and Gradle project remain app-local:
 
 ```sh

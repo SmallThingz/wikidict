@@ -112,10 +112,8 @@ class NestedTableDeviceTest {
                     link.performTouchInput { click(layout.getBoundingBox(annotation.start).center) }
                     compose.runOnIdle { assertEquals("target-$index", followed) }
                     // A native shaping descendant is actually measured by the same custom Layout.
-                    val signs = if (android.os.Build.VERSION.SDK_INT >= 31)
-                        SemanticsMatcher.expectValue(EgyptianShapedRunCount, 1) and hasAnyAncestor(hasTestTag(gridTag))
-                    else hasText("\u2066\uD80C\uDC00\u2069") and hasAnyAncestor(hasTestTag(gridTag))
-                    if (android.os.Build.VERSION.SDK_INT >= 31) compose.waitUntil(10000) {
+                    val signs = SemanticsMatcher.expectValue(EgyptianShapedRunCount, 1) and hasAnyAncestor(hasTestTag(gridTag))
+                    compose.waitUntil(10000) {
                         compose.onAllNodes(signs, useUnmergedTree = true).fetchSemanticsNodes().size == 1
                     }
                     compose.onNode(signs, useUnmergedTree = true).performScrollTo().assertIsDisplayed()
@@ -209,10 +207,8 @@ class NestedTableDeviceTest {
                 compose.runOnIdle { request.value = EntryAnchorRequest(entry.key, "#Cell_ID") }
                 heading.assertIsDisplayed()
                 compose.runOnIdle { assertEquals(prior + 2, consumed) }
-                val signs = if (android.os.Build.VERSION.SDK_INT >= 31)
-                    SemanticsMatcher.expectValue(EgyptianShapedRunCount, 1) and hasAnyAncestor(hasTestTag("compiled-table-grid-root/2/block-0"))
-                else hasText("\u2066\uD80C\uDC00\u2069")
-                if (android.os.Build.VERSION.SDK_INT >= 31) compose.waitUntil(10000) {
+                val signs = SemanticsMatcher.expectValue(EgyptianShapedRunCount, 1) and hasAnyAncestor(hasTestTag("compiled-table-grid-root/2/block-0"))
+                compose.waitUntil(10000) {
                     compose.onAllNodes(signs, useUnmergedTree = true).fetchSemanticsNodes().size == 1
                 }
                 compose.onNode(signs, useUnmergedTree = true).performScrollTo().assertIsDisplayed()

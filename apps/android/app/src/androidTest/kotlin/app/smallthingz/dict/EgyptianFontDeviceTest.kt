@@ -1,6 +1,5 @@
 package app.smallthingz.dict
 
-import android.os.Build
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import android.view.accessibility.AccessibilityNodeInfo
@@ -44,7 +43,6 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
-import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import java.security.MessageDigest
 import java.util.Locale
@@ -92,7 +90,7 @@ class EgyptianFontDeviceTest {
         }
         val node = compose.onNodeWithText(expected, useUnmergedTree = true)
         node.assertIsDisplayed()
-        if (Build.VERSION.SDK_INT >= 31) awaitShaped(expected, 1)
+        awaitShaped(expected, 1)
         val text = node.fetchSemanticsNode().config[SemanticsProperties.Text].single()
         assertEquals(expected, text.text)
         val family = FontFamily(Font(R.font.egyptian_hieroglyphs))
@@ -121,8 +119,7 @@ class EgyptianFontDeviceTest {
         assertEquals(ordinary.length, code.end)
         assertEquals(TextUnit.Unspecified, code.item.letterSpacing)
         assertTrue(ordinary.spanStyles.all { it.item.letterSpacing == TextUnit.Unspecified })
-        val glyphRect = if (Build.VERSION.SDK_INT >= 31) layouts.single().placeholderRects.single()!!
-            else layouts.single().getBoundingBox(before.length + 1)
+        val glyphRect = layouts.single().placeholderRects.single()!!
         node.performTouchInput { click(glyphRect.center) }
         compose.waitUntil(10000) { clicked.get() == "jwtj-n.f" }
         val recording = checkNotNull(clipboard.get())
@@ -131,7 +128,6 @@ class EgyptianFontDeviceTest {
         copyThroughVisibleToolbar(ordinaryNode, textLayout(ordinaryNode), "Near-match / code", recording)
     }
 
-    @SdkSuppress(minSdkVersion = 31)
     @Test fun bundledFontShapesTheActualVerticalAndHorizontalWitnessOnAndroid() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val bytes = context.resources.openRawResource(R.font.egyptian_hieroglyphs).use { it.readBytes() }
@@ -228,7 +224,6 @@ class EgyptianFontDeviceTest {
     }
 
     @Test
-    @SdkSuppress(minSdkVersion = 31)
     fun privateShaperRejectsInvalidBuffersUtf16AndOverflowingMetrics() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         // Load through the production path first, binding the selected engine and resource font.
@@ -259,7 +254,6 @@ class EgyptianFontDeviceTest {
 
 
     @Test
-    @SdkSuppress(minSdkVersion = 31)
     fun nativeInlineLayoutPreservesOriginalParagraphDirectionAndFitsNarrowRuns() {
         data class Case(val spans: List<Span>, val expected: String,
                         val directions: List<ResolvedTextDirection>, val fallback: LayoutDirection = LayoutDirection.Ltr,
@@ -364,7 +358,6 @@ class EgyptianFontDeviceTest {
 
 
     @Test
-    @SdkSuppress(minSdkVersion = 31)
     fun nativeSuperscriptAndSubscriptMoveActualRenderedInk() {
         val entry = Entry("Egyptian shifted ink", emptyList(), "language", "Egyptian", "egy",
             listOf(Section(3, "Noun", listOf(Block("definition", 1, listOf(
@@ -415,7 +408,6 @@ class EgyptianFontDeviceTest {
 
     /** Renderer fixture uses the exact two authored AR MdC outputs, not Arabic corpus acceptance. */
     @Test
-    @SdkSuppress(minSdkVersion = 31)
     fun authoredOverlayAndCartoucheControlsKeepMixedArabicInkLinksAndToolbarCopy() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val cases = listOf(
@@ -1064,7 +1056,6 @@ class EgyptianFontDeviceTest {
     private fun ownedToolbarWindows(): List<AccessibilityWindowInfo> {
         val activity = compose.activity // The shared provider verifies our package and physical display.
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        if (android.os.Build.VERSION.SDK_INT < 30) return emptyList()
         return automation.windowsOnAllDisplays.get(android.view.Display.DEFAULT_DISPLAY).orEmpty()
             .filter { it.displayId == android.view.Display.DEFAULT_DISPLAY &&
                 it.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
@@ -1162,7 +1153,7 @@ class EgyptianFontDeviceTest {
             val owner = compose.activity.packageName
             val windows = ownedToolbarWindows()
             diagnostics.append("owned-windows=${windows.size} truncated-windows=${windows.size > 8}")
-            for (window in windows.take(8)) diagnostics.append("owned-window id=${window.id} display=${if (android.os.Build.VERSION.SDK_INT >= 30) window.displayId else -1} type=${window.type} active=${window.isActive} focused=${window.isFocused}")
+            for (window in windows.take(8)) diagnostics.append("owned-window id=${window.id} display=${window.displayId} type=${window.type} active=${window.isActive} focused=${window.isFocused}")
             diagnostics.append("owned-roots=${roots.size} truncated-roots=${roots.size > 8}")
             for (root in roots.take(8)) {
                 diagnostics.append("root " + diagnosticNode(root))

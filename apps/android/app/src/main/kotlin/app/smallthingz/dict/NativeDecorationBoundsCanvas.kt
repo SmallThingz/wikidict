@@ -6,12 +6,11 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.text.MeasuredText
-import android.os.Build
 
 /**
- * Observe native TextLine decoration rectangles and, on API29+, exact draw-run text bounds.
+ * Observe native TextLine decoration rectangles and exact draw-run text bounds.
  * There is no raster or replacement owner. The same Layout facade supplies the original
- * lines, bidi, tabs and indents; API28 retains decoration observation and conservative text.
+ * lines, bidi, tabs and indents; unsupported paint retains conservative text bounds.
  */
 internal class NativeDecorationBoundsCanvas(private val observeTextBounds: Boolean = false,
     private val ignoreTransparent: Boolean = false) : Canvas() {
@@ -21,7 +20,7 @@ internal class NativeDecorationBoundsCanvas(private val observeTextBounds: Boole
         private set
     var textBounds: NativeFloatBounds? = null
         private set
-    var textBoundsComplete = observeTextBounds && Build.VERSION.SDK_INT >= 29
+    var textBoundsComplete = observeTextBounds
         private set
     override fun save(): Int = saved.size.also { saved += saved.last() }
     override fun getSaveCount(): Int = saved.size
@@ -73,7 +72,6 @@ internal class NativeDecorationBoundsCanvas(private val observeTextBounds: Boole
 
     private fun observeRun(context: CharArray, start: Int, end: Int, x: Float, y: Float,
         isRtl: Boolean, paint: Paint) {
-        if (Build.VERSION.SDK_INT < 29) { textBoundsComplete = false; return }
         if (start == end) return
         if (paint.textAlign != Paint.Align.LEFT || paint.style != Paint.Style.FILL ||
             paint.shadowLayerRadius != 0f || paint.startHyphenEdit != 0 || paint.endHyphenEdit != 0) {

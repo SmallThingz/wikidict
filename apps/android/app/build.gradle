@@ -25,7 +25,7 @@ android {
     ndkVersion = '29.0.14206865'
     defaultConfig {
         applicationId 'app.smallthingz.dict'
-        minSdk = 28
+        minSdk = 31
         targetSdk = 37
         versionCode 4
         versionName '0.4.0'

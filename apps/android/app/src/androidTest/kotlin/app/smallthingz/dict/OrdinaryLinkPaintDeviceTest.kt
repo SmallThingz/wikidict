@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.graphics.RectF
-import android.os.Build
 import android.os.SystemClock
 import android.text.TextPaint
 import android.text.style.MetricAffectingSpan
@@ -41,7 +40,6 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.junit.Assert.*
-import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import kotlin.math.ceil
@@ -476,7 +474,6 @@ class OrdinaryLinkPaintDeviceTest {
     }
 
     @Test fun api31ActualPreparedEgyptianLinksRemoveDynamicUnderlineWithoutLosingGlyphStrikeCopyOrFocus() {
-        assumeTrue(Build.VERSION.SDK_INT >= 31)
         val glyph = "\uD80C\uDC00"
         val value = policy()
         val struck = link(glyph, "Egyptian-struck", value = value).copy(classes = "Egyp", strike = true)

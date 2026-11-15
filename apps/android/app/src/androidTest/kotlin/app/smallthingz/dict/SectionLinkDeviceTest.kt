@@ -1228,7 +1228,6 @@ class OrdinaryReaderAccessibilityTest {
             return frame
         }
         fun registerFirstShiftCopy(state: List<Int>) {
-            check(android.os.Build.VERSION.SDK_INT >= 29)
             check(submittedCommit == null && submittedFrames.size < 3)
             val frame = SubmittedFrame("sr-main-ipa-submitted-first-shift", touchPaintCount.get(),
                 android.os.SystemClock.uptimeMillis(), state.toList())
@@ -1372,7 +1371,6 @@ class OrdinaryReaderAccessibilityTest {
                 recordTouchAncestry(owner)
                 touchViewport = origin.toList() + listOf(owner.width, owner.height, owner.scrollX, owner.scrollY)
                 touchHadInputFocus = owner.hasFocus()
-                check(android.os.Build.VERSION.SDK_INT >= 29) { "Submitted-frame diagnostic requires API29" }
                 assertSubmittedWindow()
                 val windowRect = android.graphics.Rect(0, 0, submittedWindowSize[0], submittedWindowSize[1])
                 fun crop(name: String, screenRect: android.graphics.Rect) {

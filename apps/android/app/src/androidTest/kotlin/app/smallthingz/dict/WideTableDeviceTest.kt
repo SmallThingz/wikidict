@@ -27,7 +27,6 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.text.TextLayoutResult
-import androidx.test.filters.SdkSuppress
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.*
 import org.junit.Rule
@@ -55,7 +54,6 @@ class WideTableDeviceTest {
         return "DPR2".toByteArray() + u32(0) + u32(1) + byteArrayOf(3) + string("Noun") + u32(1) + block + ByteArray(20)
     }
     @Test
-    @SdkSuppress(minSdkVersion = 31)
     fun sixInflatedCellsDecodeAndDisplayEveryLinkIncludingNativeEgyptianText() {
         val entry = BlobDecoder.decode(fixture(), "Wide table", "language", "English", "en")
         val table = checkNotNull(entry.sections.single().blocks.single().table)

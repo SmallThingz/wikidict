@@ -169,16 +169,14 @@ internal fun ownedLayoutState(view: android.view.View): String {
     val config = view.resources.configuration
     val visible = android.graphics.Rect().also(view::getWindowVisibleDisplayFrame)
     val insets = view.rootWindowInsets
-    val ime = if (android.os.Build.VERSION.SDK_INT >= 30)
-        "visible=${insets?.isVisible(android.view.WindowInsets.Type.ime())},insets=${insets?.getInsets(android.view.WindowInsets.Type.ime())}"
-    else "unavailable-before-api30;visibleFrame-is-not-an-IME-inference"
+    val ime = "visible=${insets?.isVisible(android.view.WindowInsets.Type.ime())},insets=${insets?.getInsets(android.view.WindowInsets.Type.ime())}"
     val focused = view.findFocus()
     return "ownedRoot=${view.width}x${view.height}; windowFocus=${view.hasWindowFocus()}; " +
         "focusedView=${focused?.javaClass?.name},id=${focused?.id}; visibleFrame=$visible; ime=$ime; " +
         "configFontScale=${config.fontScale}; densityDpi=${config.densityDpi}; " +
         "screenDp=${config.screenWidthDp}x${config.screenHeightDp}; orientation=${config.orientation}; " +
         "layoutDirection=${config.layoutDirection}; fontWeightAdjustment=" +
-        if (android.os.Build.VERSION.SDK_INT >= 31) config.fontWeightAdjustment else "unavailable-before-api31"
+        config.fontWeightAdjustment
 }
 
 /** The original assertion remains primary even when diagnostic reads/capture fail. */
@@ -3405,7 +3403,7 @@ class RendererDeviceTest {
             } }
             for (theme in listOf("light", "dark")) for (value in listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl)) {
                 compose.runOnIdle { mode.value = theme; direction.value = value; clicked.clear() }
-                if (android.os.Build.VERSION.SDK_INT >= 31) compose.waitUntil(10000) {
+                compose.waitUntil(10000) {
                     compose.onAllNodes(SemanticsMatcher.expectValue(EgyptianShapedRunCount, 2), useUnmergedTree = true)
                         .fetchSemanticsNodes().isNotEmpty()
                 }
@@ -3542,7 +3540,6 @@ class RendererDeviceTest {
         compose.onNodeWithTag("entry-scroll").assertExists()
     }
 
-    @androidx.test.filters.SdkSuppress(minSdkVersion = 31)
     @Test fun realSystemClipboardCopiesReaderTextAndPastesIntoSearchWithoutClobberingNewerClip() {
         // No LocalClipboard override: both toolbar actions use Android's actual clipboard.
         search("cat")

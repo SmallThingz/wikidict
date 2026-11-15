@@ -2,8 +2,6 @@ package app.smallthingz.dict
 
 import android.graphics.Paint
 import android.graphics.RectF
-import android.os.Build
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -124,17 +122,15 @@ internal val EgyptianVisibleScales = SemanticsPropertyKey<List<Float>>("Egyptian
 @Composable
 internal fun EgyptianInlineText(original: AnnotatedString, runs: List<EgyptianTextRun>, modifier: Modifier, style: TextStyle, linkColor: Color,
     extraInlineContent: Map<String, InlineTextContent> = emptyMap()) {
-    if (Build.VERSION.SDK_INT < 31 || runs.isEmpty()) {
+    if (runs.isEmpty()) {
         Text(original, modifier = modifier, style = style, inlineContent = extraInlineContent)
         return
     }
     EgyptianInlineTextApi31(original, runs, modifier, style, linkColor, extraInlineContent)
 }
 
-@RequiresApi(31)
 private data class EgyptianLine(val position: Float, val thickness: Float)
 
-@RequiresApi(31)
 private data class EgyptianInk(val glyphs: EgyptianGlyphRun, val left: Float, val top: Float, val width: Float, val height: Float,
                                val bold: Boolean, val italic: Boolean, val ascent: Int, val descent: Int,
                                val baselineShift: Int, val decorations: List<EgyptianLine>)
@@ -145,10 +141,8 @@ private fun glyphPaint(size: Float, bold: Boolean, italic: Boolean) = Paint(Pain
     textSkewX = if (italic) -0.25f else 0f
 }
 
-@RequiresApi(31)
 private data class PreparedEgyptianText(val request: Any, val runs: Map<String, Result<EgyptianInk>>)
 
-@RequiresApi(31)
 @Composable
 private fun EgyptianInlineTextApi31(original: AnnotatedString, runs: List<EgyptianTextRun>, modifier: Modifier, style: TextStyle, linkColor: Color,
     extraInlineContent: Map<String, InlineTextContent>) {

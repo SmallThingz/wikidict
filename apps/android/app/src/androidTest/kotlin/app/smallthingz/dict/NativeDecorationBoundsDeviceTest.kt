@@ -123,7 +123,6 @@ class NativeDecorationBoundsDeviceTest {
     }
 
     @Test fun actualNativeRunContextsKeepWrappedInkWithoutWholePrefixExpansion() {
-        org.junit.Assume.assumeTrue(android.os.Build.VERSION.SDK_INT >= 29)
         val texts = listOf("\u00c5ffiaffiaffiaffi cafe\u0301 retained caption",
             "caption \u0633\u0644\u0627\u0645\u0644\u0627\u0633\u0644\u0627\u0645\tlink retained",
             "\u0915\u094d\u0937\u093f\u0924\u093f\u091c\u0915\u094d\u0937\u093f\u0924\u093f\u091c caption retained")
@@ -184,7 +183,6 @@ class NativeDecorationBoundsDeviceTest {
     }
 
     @Test fun exactRunBoundsSkipCursorScanWhileReplacementAndUnsupportedRunsRetainIt() {
-        org.junit.Assume.assumeTrue(android.os.Build.VERSION.SDK_INT >= 29)
         for (mode in 0..2) {
             var replacementSizes = 0
             var replacementDraws = 0

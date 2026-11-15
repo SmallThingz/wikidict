@@ -28,8 +28,8 @@ internal interface NativeParagraphPaintBounds {
 
 /**
  * A conservative allocation envelope, never an advance, intrinsic width or hit-test rectangle.
- * On API29+, the native painter supplies the actual run context and draw origin for bounds.
- * Older/unsupported paths retain conservative paragraph-range bounds.
+ * The native painter supplies the actual run context and draw origin for bounds.
+ * Unsupported paint paths retain conservative paragraph-range bounds.
  * Bound all piece prefixes by retained advances and all visual origins by native cursor positions.
  * Native shaping/bidi/tabs remain in the same compatible PrecomputedText/StaticLayout pair.
  */
@@ -94,7 +94,7 @@ internal fun nativeTextInkBounds(layout: Layout, placements: List<NativeLinePain
                 span is NativeParagraphPaintBounds -> include(span.nativePaintBounds(layout, line)
                     ?.translated(position.originX, baseline - layout.getLineBaseline(line)))
                 span is LeadingMarginSpan.Standard -> Unit // Its native draw callback is empty.
-                android.os.Build.VERSION.SDK_INT >= 29 && span is LineBackgroundSpan.Standard -> include(checkedBounds(position.originX.toDouble(),
+                span is LineBackgroundSpan.Standard -> include(checkedBounds(position.originX.toDouble(),
                     baseline + top.toDouble(), layout.width.toDouble() + position.originX, baseline + bottom.toDouble()))
                 span is LeadingMarginSpan || span is LineBackgroundSpan ->
                     throw UnsupportedFloatLayout("Native paragraph decoration requires its own paint bounds")
@@ -102,7 +102,7 @@ internal fun nativeTextInkBounds(layout: Layout, placements: List<NativeLinePain
         }
     }
     // The owned native paints are FILL/no-shadow. Observe the exact platform decorations,
-    // including dynamic Missing underline, without hidden API28 font-metric calls.
+    // including dynamic Missing underline, through public platform paint callbacks.
     return enclosingBounds(result, observed.decorations)
 }
 

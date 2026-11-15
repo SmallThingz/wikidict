@@ -41,7 +41,6 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.filters.SdkSuppress
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Rule
@@ -204,7 +203,7 @@ class FontFeaturePolicyDeviceTest {
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle() }
     }
 
-    @Test @SdkSuppress(minSdkVersion = 31)
+    @Test
     fun unsupportedExplicitEgyptianFeaturesKeepOriginalTextAndActionWithVisibleRefusal() {
         val policy = mutableStateOf(FontFeaturePolicy.SevenOn)
         val actions = mutableListOf<EntryLink>()

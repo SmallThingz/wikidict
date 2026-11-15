@@ -4,10 +4,8 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
-import android.os.Build
 import android.text.TextPaint
 import android.text.style.ReplacementSpan
-import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -50,7 +48,6 @@ internal suspend fun prepareNativeEgyptianSpan(
     }
     return try {
         requireEgyptianFeatureSupport(run.fontFeatures)
-        if (Build.VERSION.SDK_INT < 31) throw UnsupportedOperationException("Egyptian glyph layout requires Android 12")
         val ink = prepareInk(context, run, capturedPaint, baselineShiftMultiplier, underline, strike)
         NativeEgyptianSpanPreparation(true, null) { width, linkPaint -> GlyphSpan(ink, capturedPaint, background, width, linkPaint) }
     } catch (cancelled: CancellationException) { throw cancelled }
@@ -63,7 +60,6 @@ internal suspend fun prepareNativeEgyptianSpan(
 
 private data class NativeEgyptianDecoration(val position: Float, val thickness: Float)
 
-@RequiresApi(31)
 private data class NativeEgyptianInk(
     val glyphs: EgyptianGlyphRun,
     val bounds: RectF,
@@ -74,7 +70,6 @@ private data class NativeEgyptianInk(
     val decorations: List<NativeEgyptianDecoration>,
 )
 
-@RequiresApi(31)
 private suspend fun prepareInk(context: Context, run: EgyptianTextRun, paint: TextPaint,
     baselineShiftMultiplier: Float, underline: Boolean, strike: Boolean): NativeEgyptianInk {
     val glyphs = EgyptianShaper.shape(context.applicationContext, run.text, paint.textSize)
@@ -103,7 +98,6 @@ private suspend fun prepareInk(context: Context, run: EgyptianTextRun, paint: Te
     }
 }
 
-@RequiresApi(31)
 private class GlyphSpan(
     private val ink: NativeEgyptianInk,
     private val inkPaint: TextPaint,
