@@ -298,6 +298,45 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
 
 
 class PresentationRetryPolicyTests(unittest.TestCase):
+    def test_pre_page_failure_reports_requested_path_without_claiming_a_receipt(self):
+        for existing in (None, b'{"error_name":"unrecognized"}'):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp); shard=root/'00000000'; calls=[]; errors=[]; checked=[]
+                def run(argv, *args, **kwargs):
+                    calls.append(argv)
+                    receipt=Path(argv[argv.index('--failure-receipt')+1])
+                    if existing is not None:
+                        receipt.write_bytes(existing)
+                    error=subprocess.CalledProcessError(1,argv,output=b'exact original stdout',stderr=b'error: InvalidFigurePageObservations')
+                    errors.append(error)
+                    raise error
+                with patch.object(b,'timed_run',side_effect=run), patch.object(b,'phase_event',wraps=b.phase_event) as phases:
+                    with self.assertRaises(subprocess.CalledProcessError) as failed:
+                        b.build_shard_with_retries(fixture_blob_tool(root),['dump',str(shard)],shard,
+                            root/'failures','srwiktionary','20261001',0,100000,lambda:checked.append(True),
+                            lambda:self.fail('failed pre-page command must not validate or publish'))
+                self.assertIs(errors[0],failed.exception); self.assertEqual(1,len(calls)); self.assertEqual([True],checked)
+                self.assertNotIsInstance(failed.exception,b.DeterministicPresentationFailure)
+                self.assertNotIsInstance(failed.exception,b.DeterministicBuildInputFailure)
+                self.assertEqual(b'exact original stdout',failed.exception.output)
+                self.assertEqual(b'error: InvalidFigurePageObservations',failed.exception.stderr)
+                suppressed=[call for call in phases.call_args_list if call.args[3]=='retry_suppressed']
+                self.assertEqual(1,len(suppressed)); event=suppressed[0].kwargs
+                self.assertIsNone(event['failure_receipt'])
+                requested=Path(calls[0][calls[0].index('--failure-receipt')+1])
+                self.assertEqual(str(requested),event['requested_failure_receipt'])
+                self.assertEqual('no-positive-transient-evidence',event['reason']); self.assertEqual(1,event['returncode'])
+                self.assertEqual(existing is not None,requested.exists())
+                if existing is not None:
+                    self.assertEqual(existing,requested.read_bytes())
+                evidence=requested.parent
+                self.assertTrue((evidence/'invocation.json').is_file())
+                self.assertEqual(1,json.loads((evidence/'exit.json').read_text())['returncode'])
+                self.assertEqual(dict(deterministic_presentation=False,deterministic_build_input=False),json.loads((evidence/'classification.json').read_text()))
+                self.assertEqual('absent',json.loads((evidence/'payload-cleanup.json').read_text())['status'])
+                self.assertFalse(shard.exists())
+
+
     def exercise(self, mode):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);shard=root/'00000000';calls=[];validated=[]
@@ -13520,6 +13559,199 @@ class RetainedPreparationContextReuseTests(unittest.TestCase):
                         observations.append(dict(writable=writable, context_calls=len(calls),
                             artifacts={name: {key: row['artifact'][key] for key in ('bytes', 'sha256')} for name, row in records.items()}))
         return observations
+
+
+class RetainedRuntimeSourceTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def fixture(self, root, *, whole=False):
+        import build_python_tooling
+        import extraction_cache
+        roles, compiler = RetainedNativeRoleTests().fixture(root)
+        selected = b.RetainedNativeToolRoles(roles, zig_sha256=b.sha256_file(compiler))
+        selected.initial_sealed_generation = None if whole else dict(path='original-initial.json', bytes=1, sha256='a'*64)
+        selected.closed_whole_execution = dict(path='original-whole.json', bytes=2, sha256='b'*64) if whole else None
+        selected.initial_sealed_context = (root/'sealed-worker', root/'dump', 'c'*64)
+        selected._closed_native_context = selected.initial_sealed_context
+        selected.closed_native_origin = {}
+        selected.closed_execution_resolution = lambda root: None
+        live = root/'live'; (live/'src').mkdir(parents=True); (live/'tools').mkdir()
+        unused = live/'src/unused.zig'; unused.write_text('original unused compiler source')
+        helper = live/'tools/runtime_fixture_helper.py'; helper.write_text('VALUE = 17\n')
+        helper.chmod(0o644)
+        selector = live/'selector.py'; selector.write_text('# exact selected tooling fixture\n')
+        def reference(path):
+            return dict(path=str(path), bytes=path.stat().st_size, sha256=b.sha256_file(path), mode=stat.S_IMODE(path.stat().st_mode))
+        st=live.stat();directory=dict(path=str(live),device=st.st_dev,inode=st.st_ino,uid=st.st_uid,mode=stat.S_IMODE(st.st_mode))
+        import corpus_controller
+        spec=dict(source_root=directory,workspace_root=directory,selector=reference(selector),modules={
+            'build_wiktionaries':reference(Path(b.__file__)),
+            'corpus_controller':reference(Path(corpus_controller.__file__)),
+            'runtime_fixture_helper':reference(helper)})
+        module=SimpleNamespace(__file__=str(helper))
+        with patch.dict(sys.modules,{'runtime_fixture_helper':module}), \
+             patch.object(extraction_cache,'frozen_runtime_context',return_value={}), \
+             patch.object(b,'PROJECT',live):
+            tooling=build_python_tooling.PythonTooling(spec)
+            with patch.object(b,'_PYTHON_TOOLING',tooling):
+                yield SimpleNamespace(roles=selected,compiler=compiler,live=live,unused=unused,helper=helper,tooling=tooling,original=copy.deepcopy(roles))
+
+    def identity(self, f):
+        return b.build_input_identity([],str(f.compiler),{},None,60000,native_roles=f.roles)
+
+    def test_retained_identity_and_shard_state_ignore_unused_native_edits_but_keep_original_origin(self):
+        for whole in (False,True):
+            with self.subTest(whole=whole),tempfile.TemporaryDirectory() as directory:
+                with self.fixture(Path(directory),whole=whole) as f:
+                    with patch.object(b,'source_fingerprint',side_effect=AssertionError('unused full tree read')):
+                        identity=self.identity(f)
+                        f.unused.write_text('changed unused native source')
+                        b.require_build_source(identity)
+                        self.assertEqual(self.identity(f),identity)
+                        registry=f.live/'registry';registry.write_text('en\tEnglish\n')
+                        items=[dict(wiki='testwiktionary',date='20261001',name='source',size=1,sha1='a'*40)]
+                        state=b.shard_state(items,registry,build_identity=identity)
+                    self.assertEqual(state['source'],identity['source'])
+                    self.assertEqual(state['production_source'],b.retained_runtime_fingerprints(identity['retained_runtime_source'],identity['native_tool_roles'])[1])
+                    self.assertEqual(identity['native_tool_roles'],f.original)
+                    self.assertEqual(identity['retained_runtime_source']['kind'],'closed_whole_execution' if whole else 'initial_sealed_generation')
+                    self.assertEqual(f.roles.records,f.original)
+
+    def test_used_helper_byte_mode_and_import_changes_refuse_final_publication(self):
+        for change in ('bytes','mode','foreign-import'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as directory:
+                with self.fixture(Path(directory)) as f:
+                    identity=self.identity(f)
+                    staging=f.live/'staging';staging.mkdir();target=f.live/'published'
+                    (staging/b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+                    b.persist_build_identity(staging,identity)
+                    with contextlib.ExitStack() as stack:
+                        if change=='bytes':f.helper.write_text('VALUE = 18\n')
+                        elif change=='mode':f.helper.chmod(0o600)
+                        else:
+                            foreign=f.live/'tools/foreign.py';foreign.write_text('VALUE = 1\n')
+                            stack.enter_context(patch.dict(sys.modules,{'unbound_runtime_fixture':SimpleNamespace(__file__=str(foreign))}))
+                        with patch.object(b,'compress_many',side_effect=AssertionError('publication reached compression')):
+                            with self.assertRaisesRegex(ValueError,'Selected Python source identity changed|Unbound project Python module'):
+                                b._publish_verified_staging(staging,target,'testwiktionary','20261001',build_identity=identity)
+                    self.assertFalse(target.exists())
+                    self.assertTrue(staging.is_dir())
+
+    def test_changed_original_native_artifact_and_provenance_refuse_retained_prepare(self):
+        for change in ('artifact','provenance'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as directory:
+                with self.fixture(Path(directory)) as f:
+                    identity=self.identity(f)
+                    if change=='artifact':
+                        writer=Path(f.roles.records['dict-blob-build']['artifact']['path']);writer.chmod(0o755);writer.write_bytes(b'changed native tool')
+                    else:f.roles.records['dict-blob-build']['producer_source']='f'*64
+                    with patch.object(b,'run_checked',side_effect=AssertionError('unexpected compiler')),patch.object(b,'timed_run',side_effect=AssertionError('unexpected native process')):
+                        with self.assertRaises(ValueError):
+                            b.prepare_blob_tools(f.live/'workspace',str(f.compiler),'testwiktionary','20261001',identity,retained_roles=f.roles)
+
+    def test_retained_prepare_forbids_expander_requests_and_keeps_exact_native_origin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.fixture(Path(directory)) as f:
+                identity=self.identity(f);events=[]
+                with patch.object(b,'run_checked',side_effect=AssertionError('unexpected compiler')),patch.object(b,'timed_run',side_effect=AssertionError('unexpected native process')),patch.object(b,'phase_event',side_effect=lambda *a,**kw:events.append(kw)):
+                    tools=b.prepare_blob_tools(f.live/'workspace',str(f.compiler),'testwiktionary','20261001',identity,retained_roles=f.roles)
+                    self.assertEqual(set(tools),set(b.BLOB_TOOL_NAMES))
+                    self.assertEqual(events[-1]['native_role_provenance'],f.original)
+                    self.assertEqual(events[-1]['orchestration_source'],identity['source'])
+                    with self.assertRaisesRegex(ValueError,'cannot compile or relink'):
+                        b.prepare_blob_tools(f.live/'workspace',str(f.compiler),'testwiktionary','20261001',identity,expander_args=['dump','out','--expander-only'],retained_roles=f.roles)
+                self.assertEqual(f.roles.records,f.original)
+                self.assertFalse((f.live/'workspace').exists())
+
+    def test_unsealed_or_no_catalog_route_keeps_whole_source_guard(self):
+        for mode in ('unsealed','no-catalog'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as directory:
+                with self.fixture(Path(directory)) as f:
+                    if mode=='unsealed':f.roles.initial_sealed_generation=None;f.roles.initial_sealed_context=None
+                    with patch.object(b,'_PYTHON_TOOLING',None if mode=='no-catalog' else f.tooling):
+                        identity=self.identity(f)
+                        self.assertNotIn('retained_runtime_source',identity)
+                        f.unused.write_text('changed compiler source')
+                        with self.assertRaisesRegex(ValueError,'Compiler source changed'):
+                            b.require_build_source(identity)
+
+    def test_scope_change_and_lost_worker_refuse_without_current_compile_fallback(self):
+        for change in ('scope','lost-context','catalog'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as directory:
+                with self.fixture(Path(directory)) as f:
+                    identity=self.identity(f)
+                    with contextlib.ExitStack() as stack:
+                        if change=='scope':f.roles.initial_sealed_generation=dict(path='foreign.json',bytes=1,sha256='f'*64)
+                        elif change=='lost-context':f.roles._closed_native_context=None
+                        else:stack.enter_context(patch.object(b,'_PYTHON_TOOLING',None))
+                        with patch.object(b,'run_checked',side_effect=AssertionError('compiler fallback')),patch.object(b,'timed_run',side_effect=AssertionError('native fallback')):
+                            with self.assertRaises(ValueError):
+                                b.prepare_blob_tools(f.live/'workspace',str(f.compiler),'testwiktionary','20261001',identity,retained_roles=f.roles)
+                self.assertFalse((f.live/'workspace').exists())
+
+
+    def test_missing_sealed_worker_refuses_before_compile_or_workspace_reset(self):
+        factory=InitialSealedWriterBookTests()
+        with tempfile.TemporaryDirectory() as directory:
+            f=factory.book_fixture(Path(directory))
+            with factory.contexts(f)[0],factory.contexts(f)[1],factory.contexts(f)[2],patch.object(b,'validated_auxiliary_capture',return_value=f.capture):
+                factory.adopt(f,auxiliary_snapshots={'figure-page-observations':f.book})
+                with patch.object(b._PREPARED_SOURCE,'request',None,create=True),patch.object(b._PREPARED_SOURCE,'value',None,create=True),patch.object(b,'expander_ready',return_value=False),patch.object(b,'prepare_blob_tools',side_effect=AssertionError('unexpected native compile')) as prepare,patch.object(b,'remove_artifact_tree',side_effect=AssertionError('unexpected workspace reset')) as remove:
+                    with self.assertRaisesRegex(ValueError,'Selected initial sealed worker inputs changed'):
+                        b.build_sharded(f.dump,f.root/'staging',f.destination,f.root/'registry','zig',1,[dict(wiki=f.expected['edition'],date='20261001')],123,compress_shards=True,build_identity=f.identity,auxiliary_hashes=f.aux,interwiki_sha=f.interwiki,retained_roles=f.roles)
+                    prepare.assert_not_called();remove.assert_not_called()
+                self.assertTrue((f.expander/'.completed-expander.json').exists())
+
+
+    def assert_fresh_lifecycle(self, roles, compiler, identity, expected, workspace, adopt):
+        self.assertIsNone(roles.initial_sealed_context)
+        original_context=roles._closed_native_context
+        self.assertIsNotNone(original_context)
+        self.assertIsNotNone(roles.closed_native_origin)
+        original_records=roles.provenance()
+        whole = roles.closed_whole_execution is not None
+        original_worker = b.closed_whole_worker_inputs(identity) if whole else None
+        runtime=b.build_input_identity([],str(compiler),{},None,60000,native_roles=roles)
+        for key in ('source','python_tooling','native_tool_roles','retained_runtime_source'):
+            identity[key]=runtime[key]
+        if whole:
+            self.assertEqual(b.closed_whole_worker_inputs(identity), original_worker)
+        self.assertIn('retained_runtime_source', identity)
+        expected['source']=runtime['source']
+        expected['production_source']=b.retained_runtime_fingerprints(runtime['retained_runtime_source'],runtime['native_tool_roles'])[1]
+        before_scope=copy.deepcopy(runtime['retained_runtime_source'])
+        self.assertEqual(adopt(),123)
+        self.assertEqual(roles.initial_sealed_context,original_context)
+        self.assertEqual(b.retained_runtime_scope(roles),before_scope)
+        b.require_build_source(identity)
+        with patch.object(b,'run_checked',side_effect=AssertionError('unexpected compiler')),patch.object(b,'timed_run',side_effect=AssertionError('unexpected native process')):
+            tools=b.prepare_blob_tools(workspace/'unused-install',str(compiler),'testwiktionary','20261001',identity,retained_roles=roles)
+        self.assertEqual(set(tools),set(b.BLOB_TOOL_NAMES))
+        self.assertEqual(roles.provenance(),original_records)
+        self.assertFalse((workspace/'unused-install').exists())
+        conflicting=(original_context[0].parent/'foreign',*original_context[1:])
+        roles.initial_sealed_context=conflicting
+        with self.assertRaisesRegex(ValueError,'validated sealed worker'):
+            b.retained_runtime_scope(roles)
+        roles.initial_sealed_context=original_context
+        b.require_build_source(identity)
+
+    def test_fresh_initial_constructor_identity_adoption_prepare_keeps_one_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.fixture(Path(directory)):
+                with ReadonlyPreparedRetainedTests().fixture() as f:
+                    roles=b.RetainedNativeToolRoles(copy.deepcopy(f.selection),zig_sha256=f.identity['zig_sha256'])
+                    fresh=copy.copy(f.f)
+                    fresh.identity=copy.deepcopy(f.identity);fresh.expected=copy.deepcopy(f.expected)
+                    fresh.destination=f.root/'future-output/viwiktionary/20261001.shards'
+                    adopt=lambda:InitialSealedGenerationTests().adopt(fresh,native_roles=roles)
+                    self.assert_fresh_lifecycle(roles,f.compiler,fresh.identity,fresh.expected,fresh.destination,adopt)
+
+    def test_fresh_closed_whole_constructor_identity_adoption_prepare_keeps_one_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.fixture(Path(directory)):
+                factory=ClosedWholePreparedCustodyTests()
+                with factory.fixture() as f:
+                    self.assert_fresh_lifecycle(f.roles,f.f.compiler,f.identity,f.expected,f.workspace,lambda:factory.adopt(f))
 
 
 if __name__=='__main__':unittest.main()

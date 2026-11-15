@@ -284,7 +284,13 @@ COMPLETED_EXPANDER_PROOF = '.completed-expander.json'
 def require_build_source(identity):
     generation = getattr(_PREPARED_SOURCE, 'value', None)
     if generation is None:
-        if source_fingerprint() != identity['source']:
+        scope = identity.get('retained_runtime_source')
+        if scope is not None:
+            source, production, selected = retained_runtime_fingerprints(scope, identity['native_tool_roles'])
+            if selected != identity.get('python_tooling') or source != identity['source']:
+                raise ValueError('Retained production Python source changed; refusing publication')
+            return source, production
+        elif source_fingerprint() != identity['source']:
             raise ValueError('Compiler source changed during build; refusing publication')
     elif generation.retired:
         generation.require_python(force=True)
@@ -2497,6 +2503,49 @@ SHARD_SOURCE_EXCLUSIONS = frozenset((
 ))
 
 
+def retained_runtime_scope(native_roles):
+    """Use the selected Python closure only when native compilation is forbidden."""
+    if (_PYTHON_TOOLING is None or native_roles is None
+            or getattr(_PREPARED_SOURCE, 'value', None) is not None
+            or getattr(_PREPARED_SOURCE, 'request', None) is not None):
+        return None
+    if not isinstance(native_roles, RetainedNativeToolRoles):
+        raise ValueError('Invalid retained native role selection')
+    initial = native_roles.initial_sealed_generation
+    whole = getattr(native_roles, 'closed_whole_execution', None)
+    if initial is None and whole is None:
+        return None
+    original_context = getattr(native_roles, '_closed_native_context', None)
+    adopted_context = native_roles.initial_sealed_context
+    if (original_context is None or getattr(native_roles, 'closed_native_origin', None) is None
+            or (adopted_context is not None and adopted_context != original_context)
+            or native_roles.sealed_expander_recovery is not None
+            or native_roles.writer_figure_transition is not None):
+        raise ValueError('Retained runtime source requires its validated sealed worker')
+    import copy
+    return dict(schema='wikidict.retained-runtime-source.v1',
+                kind='closed_whole_execution' if whole is not None else 'initial_sealed_generation',
+                reference=copy.deepcopy(whole if whole is not None else initial))
+
+
+def retained_runtime_fingerprints(scope, native_provenance):
+    if (_PYTHON_TOOLING is None or not isinstance(scope, dict)
+            or set(scope) != {'schema', 'kind', 'reference'}
+            or scope['schema'] != 'wikidict.retained-runtime-source.v1'
+            or scope['kind'] not in ('initial_sealed_generation', 'closed_whole_execution')
+            or not isinstance(scope['reference'], dict) or not scope['reference']
+            or not isinstance(native_provenance, dict) or not native_provenance):
+        raise ValueError('Invalid retained runtime source identity')
+    selected = _PYTHON_TOOLING.require_unchanged()
+    payload = json.dumps(dict(scope=scope, python_tooling=selected,
+                              native_tool_roles=native_provenance),
+                         sort_keys=True, separators=(',', ':')).encode()
+    # Native provenance describes the original immutable producer, never live src/.
+    source = hashlib.sha256(b'wikidict.retained-runtime-source.v1\0' + payload).hexdigest()
+    production = hashlib.sha256(b'wikidict.retained-runtime-production.v1\0' + payload).hexdigest()
+    return source, production, selected
+
+
 def _source_fingerprints(include_production=False):
     generation=getattr(_PREPARED_SOURCE,'value',None)
     if generation is not None:
@@ -2541,16 +2590,27 @@ def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_
         raise ValueError('Fresh auxiliary validation does not accept supplied hashes')
     executable=shutil.which(zig)
     if executable is None:raise ValueError('Zig compiler executable is unavailable')
-    identity=dict(version=1, source=source_fingerprint(),
+    if native_roles is not None and not isinstance(native_roles, RetainedNativeToolRoles):
+        raise ValueError('Invalid retained native role selection')
+    runtime_scope = retained_runtime_scope(native_roles)
+    provenance = native_roles.provenance() if native_roles is not None else None
+    runtime_source = (retained_runtime_fingerprints(runtime_scope, provenance)
+                      if runtime_scope is not None else None)
+    source = runtime_source[0] if runtime_source is not None else source_fingerprint()
+    identity=dict(version=1, source=source,
                 files=sorted([[i['wiki'],i['date'],i['name'],i['size'],i['sha1']] for i in items]),
                 zig_sha256=sha256_file(Path(executable)),
                 auxiliary_snapshot_sha256=auxiliary_hashes or {},
                 interwiki_map_sha256=interwiki_sha, expansion_timeout_ms=expansion_timeout_ms)
-    if _PYTHON_TOOLING is not None:identity['python_tooling']=_PYTHON_TOOLING.require_unchanged()
+    if _PYTHON_TOOLING is not None:
+        identity['python_tooling']=(runtime_source[2] if runtime_source is not None
+                                    else _PYTHON_TOOLING.require_unchanged())
     if native_roles is not None:
         if not isinstance(native_roles, RetainedNativeToolRoles):
             raise ValueError('Invalid retained native role selection')
-        identity['native_tool_roles']=native_roles.provenance()
+        identity['native_tool_roles']=provenance
+    if runtime_scope is not None:
+        identity['retained_runtime_source']=runtime_scope
     if validate_auxiliary:
         # Source/toolchain hashing above may take time. Validate current auxiliary
         # bytes afterwards, then derive both identities within this same boundary.
@@ -2993,8 +3053,11 @@ def cleanup_dead_private_shards(shards_root):
         remove_artifact_tree(partial)
 
 
-def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxiliary_snapshots=None, reviewed_nonlexical=None):
-    source,production_source=_source_fingerprints(include_production=True)
+def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxiliary_snapshots=None, reviewed_nonlexical=None, *, build_identity=None):
+    if build_identity is not None and 'retained_runtime_source' in build_identity:
+        source, production_source = require_build_source(build_identity)
+    else:
+        source,production_source=_source_fingerprints(include_production=True)
     state={
         'version':SHARD_STATE_VERSION,
         'edition':items[0]['wiki'],
@@ -3250,7 +3313,7 @@ WRITER_OBSERVATION_ROLES = frozenset(('figure-sizing', 'figure-sizing-raw'))
 def writer_figure_worker_inputs(value, *, state=False):
     """Project only the inputs actually consumed by the sealed worker."""
     result = json.loads(json.dumps(value))
-    ignored = ('source', 'production_source', 'now_unix', 'native_generation') if state else ('source', 'python_tooling', 'native_tool_roles')
+    ignored = ('source', 'production_source', 'now_unix', 'native_generation') if state else ('source', 'python_tooling', 'native_tool_roles', 'retained_runtime_source')
     for name in ignored:
         result.pop(name, None)
     for field, excluded in (('auxiliary_snapshot_sha256', WRITER_OBSERVATION_ROLES),
@@ -5842,7 +5905,17 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
         started=time.monotonic()
         command_started=post_started=None
         try:
-            source=source_fingerprint()
+            runtime_scope = retained_runtime_scope(retained_roles)
+            if runtime_scope is not None:
+                if (expander_args is not None or build_identity is None
+                        or build_identity.get('retained_runtime_source') != runtime_scope):
+                    raise ValueError('Retained runtime selection cannot compile or relink')
+                selected_provenance = retained_roles.provenance()
+                source = retained_runtime_fingerprints(runtime_scope, selected_provenance)[0]
+            else:
+                if build_identity is not None and 'retained_runtime_source' in build_identity:
+                    raise ValueError('Retained runtime selection lost its sealed worker')
+                source=source_fingerprint()
             compiler=shutil.which(zig)
             if compiler is None:raise ValueError('Zig compiler executable is unavailable')
             compiler=Path(compiler).resolve(strict=True)
@@ -5853,7 +5926,8 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
                 if (not isinstance(retained_roles, RetainedNativeToolRoles)
                         or retained_roles.zig_sha256 != compiler_sha
                         or build_identity is None
-                        or build_identity.get('native_tool_roles') != retained_roles.provenance()):
+                        or build_identity.get('native_tool_roles') != (selected_provenance
+                            if runtime_scope is not None else retained_roles.provenance())):
                     raise ValueError('Retained roles do not match this ordinary preparation')
                 request=getattr(_PREPARED_SOURCE,'request',None)
                 if request is not None:
@@ -5863,10 +5937,17 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
                 command_started=time.monotonic()
                 tools=retained_roles.prepare(expander_args, edition, date, workspace=workspace,figure_inputs=figure_inputs)
                 post_started=time.monotonic()
-                if source_fingerprint()!=source or sha256_file(compiler)!=compiler_sha:
+                if runtime_scope is not None:
+                    selected_provenance = retained_roles.provenance()
+                    current = retained_runtime_fingerprints(
+                        retained_runtime_scope(retained_roles), selected_provenance)[0]
+                else:
+                    current = source_fingerprint()
+                if current!=source or sha256_file(compiler)!=compiler_sha:
                     raise ValueError('Source or compiler changed during retained role selection')
                 outcome.update(preparation='retained-role-selection', orchestration_source=source,
-                    zig_sha256=compiler_sha, native_role_provenance=retained_roles.provenance(),
+                    zig_sha256=compiler_sha, native_role_provenance=(selected_provenance
+                        if runtime_scope is not None else retained_roles.provenance()),
                     selected_native_artifacts={name:dict(path=str(tool.path),bytes=tool.stamp[2],
                         mode=stat.S_IMODE(tool.stamp[-1]),sha256=tool.sha256)
                         for name,tool in retained_roles.tools.items() if tool is not None})
@@ -6216,7 +6297,7 @@ def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, d
             # never permission to repeat the same command or audit more pages.
             phase_event(edition,date,'shard_build','retry_suppressed',start_page=start,
                         pages=limit,attempt=attempt,reason='no-positive-transient-evidence',
-                        failure_receipt=str(receipt),returncode=error.returncode)
+                        failure_receipt=None,requested_failure_receipt=str(receipt),returncode=error.returncode)
             raise error
         check_identity()
         try:
@@ -7156,7 +7237,11 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
     with borrowed_staged_input(items,staged_input_root,output,raw_shard_root,extraction_cache_root) as (borrowed,check):
         def input_guard():
             if check is not None:check()
-            if retained_roles is not None:retained_roles.require_inputs_unchanged()
+            if retained_roles is not None:
+                if retained_runtime_scope(retained_roles) is not None:
+                    retained_roles.require_unchanged()
+                else:
+                    retained_roles.require_inputs_unchanged()
         try:
             return _build_locked(items,downloads,output,zig,compression_workers,expansion_workers,
             interwiki_snapshot,auxiliary_snapshots,expansion_timeout_ms,now_unix,raw_shard_root,
@@ -7316,7 +7401,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     provider_update={}
     with build_phase(phase_edition,phase_date,'workspace_setup'):
         workspace=target.with_name(date+'.shards')
-        expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots,reviewed_nonlexical=reviewed)
+        expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots,reviewed_nonlexical=reviewed,**({'build_identity':build_identity} if 'retained_runtime_source' in build_identity else {}))
         raw_shards_path=(Path(raw_shard_root).absolute()/edition/(date+'.raw-shards')) if raw_shard_root is not None else None
         update_args={}
         if (getattr(_PREPARED_SOURCE,'value',None) is None and getattr(_PREPARED_SOURCE,'request',None) is None
