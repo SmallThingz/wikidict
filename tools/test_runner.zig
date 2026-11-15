@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 pub const panic = std.debug.FullPanic(panicHandler);
 
 var is_child_mode: bool = false;
+var dumping_panic_trace: bool = false;
 
 pub fn fuzz(
     context: anytype,
@@ -87,6 +88,7 @@ pub fn main(init: std.process.Init) !void {
     defer init.gpa.free(argv0);
 
     var child_test_name: ?[]const u8 = null;
+    var list_tests = false;
     var filter: ?[]const u8 = null;
     var jobs: ?usize = null;
     var seed: ?u32 = null;
@@ -96,6 +98,8 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, arg, "--dict-run-test")) {
             const name_z = arg_it.next() orelse return error.MissingTestName;
             child_test_name = try init.gpa.dupe(u8, name_z[0..name_z.len]);
+        } else if (std.mem.eql(u8, arg, "--dict-list-tests")) {
+            list_tests = true;
         } else if (std.mem.eql(u8, arg, "--test-filter")) {
             const f_z = arg_it.next() orelse return error.MissingFilter;
             filter = try init.gpa.dupe(u8, f_z[0..f_z.len]);
@@ -113,20 +117,41 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    defer if (child_test_name) |name| init.gpa.free(name);
+    defer if (filter) |f| init.gpa.free(f);
+    if (list_tests) {
+        if (child_test_name != null) return error.IncompatibleTestModes;
+        var tests = try selectedTestNames(init.gpa, filter);
+        defer tests.deinit(init.gpa);
+        var buffer: [4096]u8 = undefined;
+        var stdout = std.Io.File.stdout().writerStreaming(init.io, &buffer);
+        try std.json.Stringify.value(.{
+            .schema = "dict.test-inventory.v1",
+            .compiled_test_count = builtin.test_functions.len,
+            .tests = tests.items,
+        }, .{}, &stdout.interface);
+        try stdout.interface.writeByte('\n');
+        try stdout.interface.flush();
+        return;
+    }
+
     if (child_test_name) |name| {
         is_child_mode = true;
-        defer init.gpa.free(name);
         runSingleTest(name, seed);
         return;
     }
 
-    defer if (filter) |f| init.gpa.free(f);
     try runAllTests(init.gpa, init.io, argv0, filter, jobs, seed);
 }
 
 fn panicHandler(msg: []const u8, first_trace_addr: ?usize) noreturn {
     if (is_child_mode) {
         std.debug.print("{s}\n", .{msg});
+        // Keep the original panic site; a diagnostic panic must not recurse.
+        if (!dumping_panic_trace) {
+            dumping_panic_trace = true;
+            std.debug.dumpCurrentStackTrace(.{ .first_address = first_trace_addr });
+        }
         std.debug.print("{s}", .{ReturnedFailure.panic_trailer});
         std.process.exit(1);
     }
@@ -135,7 +160,8 @@ fn panicHandler(msg: []const u8, first_trace_addr: ?usize) noreturn {
 
 fn printHelp() void {
     std.debug.print(
-        "Usage: test-runner [--test-filter <str>] [--jobs <n>] [--seed <n>]\n",
+        "Usage: test-runner [--dict-list-tests] [--test-filter <str>] [--jobs <n>] [--seed <n>]\n" ++
+            "  --dict-list-tests  Write the compiled test inventory as JSON without running tests.\n",
         .{},
     );
 }
@@ -156,6 +182,18 @@ const Summary = struct {
     crash: usize = 0,
 };
 
+fn selectedTestNames(gpa: std.mem.Allocator, filter: ?[]const u8) !std.ArrayList([]const u8) {
+    var tests: std.ArrayList([]const u8) = .empty;
+    errdefer tests.deinit(gpa);
+    for (builtin.test_functions) |t| {
+        if (filter) |f| {
+            if (std.mem.indexOf(u8, t.name, f) == null) continue;
+        }
+        try tests.append(gpa, t.name);
+    }
+    return tests;
+}
+
 fn runAllTests(
     gpa: std.mem.Allocator,
     io: std.Io,
@@ -164,15 +202,8 @@ fn runAllTests(
     jobs: ?usize,
     seed: ?u32,
 ) !void {
-    var tests: std.ArrayList([]const u8) = .empty;
+    var tests = try selectedTestNames(gpa, filter);
     defer tests.deinit(gpa);
-
-    for (builtin.test_functions) |t| {
-        if (filter) |f| {
-            if (std.mem.indexOf(u8, t.name, f) == null) continue;
-        }
-        try tests.append(gpa, t.name);
-    }
 
     if (tests.items.len == 0) {
         std.debug.print("0 tests selected\n", .{});
