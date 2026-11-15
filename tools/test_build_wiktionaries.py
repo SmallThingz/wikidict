@@ -13856,4 +13856,162 @@ class RetainedRuntimeSourceTests(unittest.TestCase):
                     self.assert_fresh_lifecycle(f.roles,f.f.compiler,f.identity,f.expected,f.workspace,lambda:factory.adopt(f))
 
 
+class InitialSealedToolLayoutTests(unittest.TestCase):
+    def fixture(self, root, copied):
+        from types import MethodType
+        case = InitialSealedGenerationTests()
+        f = case.fixture(root)
+        origins = root/'original-tools'
+        origins.mkdir()
+        for name in b.RETAINED_NATIVE_ROLE_NAMES:
+            old = f.workspace/'native-blob-tools/bin'/name
+            path = origins/name
+            old.rename(path)
+            path.chmod(0o755 if name in copied else 0o555)
+            f.records[name]['artifact'] = dict(_initial_sealed_reference(path), mode=stat.S_IMODE(path.stat().st_mode))
+        (f.workspace/'native-blob-tools/bin').rmdir()
+        (f.workspace/'native-blob-tools').rmdir()
+        f.roles.inputs = {}
+        f.roles.input_identities = {}
+        f.roles.tools = {}
+        f.roles.initial_sealed_generation = None
+        f.roles.bind_input = MethodType(b.RetainedNativeToolRoles.bind_input, f.roles)
+        f.roles.require_unchanged = MethodType(b.RetainedNativeToolRoles.require_unchanged, f.roles)
+        f.roles.provenance = MethodType(b.RetainedNativeToolRoles.provenance, f.roles)
+        for name, record in f.records.items():
+            path = Path(record['artifact']['path'])
+            self.assertEqual(f.roles.bind_input(path), record['artifact'])
+            f.roles.tools[name] = None if name in copied else f.roles.bind_tool(name, path)
+        # Exercise the ordinary direct/copy selection without executing any tool.
+        with patch.object(b.PreparedBlobTool, 'run', side_effect=AssertionError('fixture must not execute native code')):
+            tools = f.roles.prepare(None, f.expected['edition'], f.expected['date'], workspace=f.workspace)
+            if f.roles.tools['dict-bundle-build'] is None:
+                f.roles.install_role('dict-bundle-build', f.workspace)
+        f.result['installed_tools'] = {name:_initial_sealed_reference(tool.path) for name, tool in tools.items()}
+        f.identity['native_tool_roles'] = copy.deepcopy(f.records)
+        f.case = case
+        f.copied = set(copied)
+        self.reseal(f)
+        return f
+
+    def reseal(self, f):
+        f.role_ref = _initial_sealed_write(f.root/'roles.json', f.records)
+        f.plan['roles'] = f.role_ref
+        f.result.update(role_map=f.role_ref,
+            input_authority=_initial_sealed_write(f.root/'preparation-data.json', f.plan))
+        f.result_ref = _initial_sealed_write(f.root/'preparation-result.json', f.result)
+        f.closed.update(preparation_result=f.result_ref, installed_tools=copy.deepcopy(f.result['installed_tools']))
+        closure = _initial_sealed_write(f.root/'closure.json', f.closed)
+        f.selection = _initial_sealed_write(f.root/'selection.json',
+            dict(preparation_result=f.result_ref, preparation_closure=closure))
+        f.roles.initial_sealed_generation = f.selection
+
+    def test_initial_sealed_direct_copied_mixed_and_driver_only_layouts_preserve_state(self):
+        layouts = ((), b.RETAINED_NATIVE_ROLE_NAMES, b.BLOB_TOOL_NAMES,
+            ('dict-blob-build', 'dict-blob-verify'), ('dict-bundle-build',))
+        for copied in layouts:
+            with self.subTest(copied=copied), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp), copied)
+                worker = Path(f.outputs['worker']['path'])
+                before = (worker.read_bytes(), worker.stat().st_ino, (f.expander/'.completed-expander.json').read_bytes())
+                self.assertEqual({path.name for path in f.workspace.iterdir()},
+                    {'expander', 'native-blob-tools'} if copied else {'expander'})
+                if copied:
+                    self.assertEqual({p.name for p in (f.workspace/'native-blob-tools/bin').iterdir()}, set(copied))
+                for name, descriptor in f.result['installed_tools'].items():
+                    expected = f.workspace/'native-blob-tools/bin'/name if name in copied else Path(f.records[name]['artifact']['path'])
+                    self.assertEqual(descriptor['path'], str(expected))
+                with f.case.contexts(f)[0], f.case.contexts(f)[1], f.case.contexts(f)[2], \
+                     patch.object(b.PreparedBlobTool, 'run', side_effect=AssertionError('adoption executed native code')):
+                    self.assertEqual(f.case.adopt(f), 123)
+                    self.assertEqual(f.case.adopt(f), 123)
+                    f.roles.require_unchanged()
+                state = b.read_build_envelope(f.destination/'state.json')
+                self.assertEqual(state, dict(f.expected, now_unix=123, native_generation=dict(
+                    seal_sha256=f.seal_ref['sha256'], dump=str(f.dump), build_inputs=f.identity,
+                    retained_expander_root=str(f.expander))))
+                self.assertEqual(before, (worker.read_bytes(), worker.stat().st_ino, (f.expander/'.completed-expander.json').read_bytes()))
+
+    def test_initial_sealed_tool_descriptor_refuses_foreign_equal_bytes_and_unclosed_roles(self):
+        for mode in ('foreign-equal-bytes', 'writable-origin', 'wrong-size', 'wrong-hash', 'missing-role', 'closure-disagrees'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                copied = ('dict-blob-build',) if mode == 'writable-origin' else ()
+                f = self.fixture(Path(tmp), copied)
+                row = f.result['installed_tools']['dict-blob-build']
+                if mode == 'foreign-equal-bytes':
+                    path = f.root/'unselected-tool'
+                    path.write_bytes(Path(row['path']).read_bytes())
+                    path.chmod(0o555)
+                    row['path'] = str(path)
+                elif mode == 'writable-origin': row['path'] = f.records['dict-blob-build']['artifact']['path']
+                elif mode == 'wrong-size': row['bytes'] += 1
+                elif mode == 'wrong-hash': row['sha256'] = '0'*64
+                elif mode == 'missing-role': del f.result['installed_tools']['dict-blob-build']
+                self.reseal(f)
+                if mode == 'closure-disagrees':
+                    f.closed['installed_tools']['dict-blob-build']['sha256'] = '0'*64
+                    closure = _initial_sealed_write(f.root/'closure.json', f.closed)
+                    f.selection = _initial_sealed_write(f.root/'selection.json',
+                        dict(preparation_result=f.result_ref, preparation_closure=closure))
+                    f.roles.initial_sealed_generation = f.selection
+                with f.case.contexts(f)[0], f.case.contexts(f)[1], f.case.contexts(f)[2]:
+                    reason = ('Initial sealed preparation is not independently closed' if mode == 'closure-disagrees'
+                        else 'Initial sealed installed role inventory differs' if mode == 'missing-role'
+                        else 'Initial sealed installed role differs')
+                    with self.assertRaisesRegex(ValueError, reason): f.case.adopt(f)
+                self.assertFalse((f.destination/'state.json').exists())
+
+    def test_initial_sealed_tool_layout_refuses_foreign_missing_and_symlink_members(self):
+        for mode in ('direct-extra-tree', 'direct-extra-driver', 'foreign-output', 'extra-bin-role', 'missing-copy', 'symlink-bin', 'symlink-direct', 'symlink-copy'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                copied = () if mode in ('direct-extra-tree', 'direct-extra-driver', 'foreign-output', 'symlink-direct') else ('dict-blob-build',)
+                f = self.fixture(Path(tmp), copied)
+                if mode == 'direct-extra-tree': (f.workspace/'native-blob-tools/bin').mkdir(parents=True)
+                elif mode == 'direct-extra-driver':
+                    path = f.workspace/'native-blob-tools/bin/dict-bundle-build'
+                    path.parent.mkdir(parents=True)
+                    path.write_bytes(f.roles.tools['dict-bundle-build'].path.read_bytes());path.chmod(0o555)
+                elif mode == 'foreign-output': (f.workspace/'foreign.part').write_bytes(b'partial')
+                elif mode == 'extra-bin-role': (f.workspace/'native-blob-tools/bin/unselected').write_bytes(b'foreign')
+                elif mode == 'missing-copy': (f.workspace/'native-blob-tools/bin/dict-blob-build').unlink()
+                elif mode == 'symlink-bin':
+                    path = f.workspace/'native-blob-tools/bin'
+                    other = f.root/'moved-bin';path.rename(other);path.symlink_to(other, target_is_directory=True)
+                else:
+                    path = Path(f.result['installed_tools']['dict-blob-build']['path'])
+                    other = f.root/'moved-tool';path.rename(other);path.symlink_to(other)
+                with f.case.contexts(f)[0], f.case.contexts(f)[1], f.case.contexts(f)[2]:
+                    with self.assertRaises((ValueError, OSError)): f.case.adopt(f)
+                self.assertFalse((f.destination/'state.json').exists())
+
+    def test_initial_sealed_tool_layout_rechecks_bound_artifacts_and_directory_before_publication(self):
+        for copied in ((), b.RETAINED_NATIVE_ROLE_NAMES):
+            for change in ('bytes', 'mode', 'same-byte-replacement', 'foreign-entry'):
+                with self.subTest(copied=copied, change=change), tempfile.TemporaryDirectory() as tmp:
+                    f = self.fixture(Path(tmp), copied)
+                    driver = f.roles.tools['dict-bundle-build'].path
+                    target = f.roles.tools['dict-blob-build'].path
+                    original_bind = f.roles.bind_input
+                    seen = []
+                    def bind(path, **options):
+                        result = original_bind(path, **options)
+                        if path == driver:
+                            seen.append(path)
+                            self.assertEqual(len(seen), 1)
+                            if change == 'bytes':
+                                target.chmod(0o755);target.write_bytes(b'changed');target.chmod(0o555)
+                            elif change == 'mode': target.chmod(0o755)
+                            elif change == 'same-byte-replacement':
+                                replacement = target.with_name(target.name+'.replacement')
+                                replacement.write_bytes(target.read_bytes());replacement.chmod(0o555)
+                                os.replace(replacement, target)
+                            else: (f.workspace/'foreign-after-bind').write_bytes(b'partial')
+                        return result
+                    f.roles.bind_input = bind
+                    with f.case.contexts(f)[0], f.case.contexts(f)[1], f.case.contexts(f)[2]:
+                        with self.assertRaises(ValueError): f.case.adopt(f)
+                    self.assertEqual(seen, [driver])
+                    self.assertFalse((f.destination/'state.json').exists())
+
+
 if __name__=='__main__':unittest.main()

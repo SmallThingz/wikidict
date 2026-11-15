@@ -4330,18 +4330,21 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     if state_path.is_symlink():
         raise ValueError('Unsafe initial sealed state')
     binding = dict(seal_sha256=seal_reference['sha256'], dump=str(dump), build_inputs=build_identity, retained_expander_root=str(root))
-    # Before the initial publication, only the two actual preparation products
-    # are owned here. A partial blob/output or foreign entry cannot be adopted.
+    # Only the expander and the exact required tool copies belong to this
+    # preparation. Read-only origins remain outside its owned inventory.
     def inventory():
         found = {}
-        for path in (selected_workspace, selected_workspace / 'native-blob-tools', selected_workspace / 'native-blob-tools' / 'bin'):
+        directories = [selected_workspace]
+        if copied_roles:
+            directories.extend((selected_workspace / 'native-blob-tools', selected_workspace / 'native-blob-tools' / 'bin'))
+        for path in directories:
             st = path.lstat()
             if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
                 raise ValueError('Unsafe initial sealed preparation directory')
             found[str(path)] = (st.st_dev, st.st_ino, st.st_mode, st.st_mtime_ns, st.st_ctime_ns)
-        if ({p.name for p in selected_workspace.iterdir()} != {'expander', 'native-blob-tools'}
-                or {p.name for p in (selected_workspace / 'native-blob-tools').iterdir()} != {'bin'}
-                or {p.name for p in (selected_workspace / 'native-blob-tools' / 'bin').iterdir()} != set(RETAINED_NATIVE_ROLE_NAMES)):
+        if ({p.name for p in selected_workspace.iterdir()} != ({'expander', 'native-blob-tools'} if copied_roles else {'expander'})
+                or (copied_roles and ({p.name for p in (selected_workspace / 'native-blob-tools').iterdir()} != {'bin'}
+                    or {p.name for p in (selected_workspace / 'native-blob-tools' / 'bin').iterdir()} != copied_roles))):
             raise ValueError('Initial sealed workspace has partial or unexpected output')
         return found
     raw_path = expected.get('raw_shards_path')
@@ -4352,17 +4355,31 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
         raw = external_raw_shards(workspace, raw_path)
         if not state_path.exists() and raw.exists() and any(p.name != RAW_SHARD_OWNER for p in raw.iterdir()):
             raise ValueError('Initial sealed adoption has partial raw shards')
-    before = inventory()
     if set(result['installed_tools']) != set(BLOB_TOOL_NAMES):
         raise ValueError('Initial sealed installed role inventory differs')
-    # These installed files belong to the original closed preparation.
+    # The closed result names each Blob tool. The original role map binds its
+    # read-only origin; writable origins require the exact owned install copy.
     original_roles = prepared_metadata(plan['roles'])
+    installed_tools, copied_roles = {}, set()
     for name in RETAINED_NATIVE_ROLE_NAMES:
         expected_artifact = original_roles[name]['artifact']
-        descriptor = result['installed_tools'].get(name, dict(expected_artifact, path=str(selected_workspace / 'native-blob-tools' / 'bin' / name)))
-        if (descriptor['path'] != str(selected_workspace / 'native-blob-tools' / 'bin' / name)
-                or any(descriptor[k] != expected_artifact[k] for k in ('bytes', 'sha256'))):
+        private_path = selected_workspace / 'native-blob-tools' / 'bin' / name
+        descriptor = result['installed_tools'].get(name)
+        if descriptor is None:
+            # Older closed all-copied preparations omit the Driver descriptor.
+            # Preserve that exact legacy copy, not arbitrary extra tool paths.
+            legacy_copy = copied_roles == set(BLOB_TOOL_NAMES) and os.path.lexists(private_path)
+            path = private_path if expected_artifact['mode'] != 0o555 or legacy_copy else Path(expected_artifact['path'])
+            descriptor = dict(expected_artifact, path=str(path))
+        if any(descriptor[k] != expected_artifact[k] for k in ('bytes', 'sha256')):
             raise ValueError('Initial sealed installed role differs')
+        if descriptor['path'] == str(private_path):
+            copied_roles.add(name)
+        elif descriptor['path'] != expected_artifact['path'] or expected_artifact['mode'] != 0o555:
+            raise ValueError('Initial sealed installed role differs')
+        installed_tools[name] = descriptor
+    before = inventory()
+    for descriptor in installed_tools.values():
         actual = native_roles.bind_input(Path(descriptor['path']))
         if any(actual[k] != descriptor[k] for k in ('path', 'bytes', 'sha256')) or actual['mode'] != 0o555:
             raise ValueError('Initial sealed installed role bytes or mode changed')
