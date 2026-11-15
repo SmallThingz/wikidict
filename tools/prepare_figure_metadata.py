@@ -1298,7 +1298,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                                 default_tiff_page = True
                             except ValueError:
                                 pass
-                record.update(canonical_file=registry.file_title(row['canonicaltitle']),
+                record.update(canonical_file=row['canonicaltitle'],
                     state='eligible' if eligible else 'tiff_default_page' if default_tiff_page else 'unsupported', file_sha1=row['file_sha1'],
                     file_timestamp=row['file_timestamp'], original_width=row['width'],
                     original_height=row['height'], mime=mime, mediatype=row['mediatype'])

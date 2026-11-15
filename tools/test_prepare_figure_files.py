@@ -10004,5 +10004,284 @@ class VerifiedContainedHttpReuseTests(unittest.TestCase):
         self.assertFalse(figure._verified_contained_http_leaf(node,0,{}, {},b'',{}))
 
 
+class FigureCanonicalTitleReuseTests(unittest.TestCase):
+    write_projection = FigureFileTests.write_projection
+    response = FigureFileTests.response
+    batch = FigureFileTests.batch
+
+    def setUp(self):
+        from test_prepare_file_metadata import registry_bytes
+        FigureFileTests.setUp(self)
+        self.namespace.write_bytes(registry_bytes(media_case='first-letter', file_case='first-letter'))
+
+    def run_records(self, batches, site, function=None, *, record_limit=100000):
+        return (figure.file_records if function is None else function)(
+            batches, self.namespace.read_bytes(), self.wiki, self.date, site,
+            has_batches=True, record_limit=record_limit, profile_kind=figure.FIGURE_PROFILE_V4,
+            allow_compatible_epochs=True)
+
+    def normalization_fixture(self):
+        response=self.response()
+        response['query']['general']['git-hash']=figure.FIGURE_CURRENT_CORE
+        positive=copy.deepcopy(response['query']['pages'][0])
+        positive['title']='Media:response_name.svg'
+        positive['imageinfo'][0]['canonicaltitle']=': File:canon_name\u200e.svg'
+        unsupported=copy.deepcopy(positive)
+        unsupported['title']='fIlE:unsupported_body.bin'
+        unsupported['imageinfo'][0].update(canonicaltitle='Media:unsupported_body.bin',
+            mime='application/octet-stream',mediatype='UNKNOWN')
+        requests=['\u0645\u0644\u0641:Positive.svg','\u0645\u0644\u0641:Alias.svg','\u0645\u0644\u0641:Unsupported.bin']
+        mappings=[{'from':name,'to':positive['title']} for name in requests[:2]]
+        mappings.append({'from':requests[2],'to':unsupported['title']})
+        pages=[positive,unsupported]
+        expected={requests[0]:('eligible','\u0645\u0644\u0641:Canon name.svg'),
+                  requests[1]:('eligible','\u0645\u0644\u0641:Canon name.svg'),
+                  requests[2]:('unsupported','\u0645\u0644\u0641:Unsupported body.bin')}
+        for index,(raw,canonical) in enumerate((
+                ('Media:negative_name.svg','Negative name.svg'),
+                ('fIlE:lower_case.svg','Lower case.svg'),
+                ('\u0645\u0644\u0641:\u200eghost_\u200fentry.svg','Ghost entry.svg'),
+                (': File:  spaced_file.svg','Spaced file.svg'),
+                ('Media:e\u0301cho.svg','\u00c9cho.svg'))):
+            title=f'\u0645\u0644\u0641:Missing{index}.svg'
+            requests.append(title);mappings.append({'from':title,'to':raw})
+            pages.append(dict(title=raw,ns=6,missing=True,imagerepository=''))
+            expected[title]=('missing','\u0645\u0644\u0641:'+canonical)
+        response['query'].update(pages=pages,redirects=mappings)
+        return [dict(requests=requests,response=figure.encoded(response).decode())],figure.encoded(response),expected
+
+    def refusal_cases(self):
+        batches,site,_=self.normalization_fixture()
+        for mode,message in (
+                ('positive-response-title','Unsupported or invalid File/Media title: Article'),
+                ('missing-response-title','Unsupported or invalid File/Media title: Article'),
+                ('unstable-positive-canonical','Unstable or unsafe canonical file title'),
+                ('invalid-positive-canonical','Unsupported or invalid File/Media title: File:bad|name.svg'),
+                ('oversized-positive-canonical','Invalid or oversized file title'),
+                ('wrong-mediatype','Source handler and MediaWiki type conflict')):
+            changed=copy.deepcopy(batches)
+            response=json.loads(changed[0]['response'])
+            if mode.endswith('response-title'):
+                selected=0 if mode.startswith('positive') else 2
+                old=response['query']['pages'][selected]['title']
+                response['query']['pages'][selected]['title']='Article'
+                for mapping in response['query']['redirects']:
+                    if mapping['to']==old:mapping['to']='Article'
+            elif mode=='unstable-positive-canonical':
+                response['query']['pages'][0]['imageinfo'][0]['canonicaltitle']='File:e\u200e\u0301.svg'
+            elif mode=='invalid-positive-canonical':
+                response['query']['pages'][0]['imageinfo'][0]['canonicaltitle']='File:bad|name.svg'
+            elif mode=='oversized-positive-canonical':
+                response['query']['pages'][0]['imageinfo'][0]['canonicaltitle']='File:'+'x'*4096
+            elif mode=='wrong-mediatype':
+                response['query']['pages'][0]['imageinfo'][0]['mediatype']='BITMAP'
+            changed[0]['response']=figure.encoded(response).decode()
+            yield mode,changed,site,message
+
+    def title_call_census(self, helper, batches, site):
+        original=helper.evidence.Registry.file_title
+        calls=[]
+        def counted(registry,title):
+            calls.append(title)
+            return original(registry,title)
+        with patch.object(helper.evidence.Registry,'file_title',new=counted):
+            result=self.run_records(batches,site,helper.file_records)
+        return result,calls
+
+    def test_positive_canonical_title_reuses_validated_result_and_preserves_missing_normalization(self):
+        batches,site,expected=self.normalization_fixture()
+        before=copy.deepcopy(batches)
+        result,calls=self.title_call_census(figure,batches,site)
+        self.assertEqual({row['requested_file']:(row['state'],row['canonical_file']) for row in result['records']},expected)
+        self.assertEqual(len(calls),3*6+5*3)
+        self.assertNotIn('-',calls)
+        self.assertEqual(result['base_batches'],1)
+        self.assertEqual(result['observed_batches'],0)
+        self.assertTrue(all(row['canonical_file']!='-' for row in result['records']))
+        raw=figure.encoded({'schema':figure.RAW_BATCHES_SCHEMA,'batches':batches})
+        document=figure.figure_file_document(raw,self.namespace.read_bytes(),self.wiki,self.date,site,
+            profile_kind=figure.FIGURE_PROFILE_V4)
+        self.assertEqual(document['records'],result['records'])
+        self.assertEqual(figure.verify_figure_file_document(document,raw,self.namespace.read_bytes(),self.wiki,self.date,site),document)
+        provider=b''.join(figure.provider_chunks(result)).decode()
+        for title,(state,canonical) in expected.items():
+            fields=next(line.split('\t') for line in provider.splitlines() if line.startswith(title+'\t'))
+            self.assertEqual(fields[-1],'-' if state=='missing' else canonical)
+        self.assertEqual(batches,before)
+
+    def test_positive_canonical_reuse_keeps_response_title_stability_and_source_refusals(self):
+        for mode,batches,site,message in self.refusal_cases():
+            before=copy.deepcopy(batches)
+            with self.subTest(mode=mode),self.assertRaises(ValueError) as refused:
+                self.run_records(batches,site)
+            self.assertEqual(str(refused.exception),message)
+            self.assertEqual(batches,before)
+        batches,site,_=self.normalization_fixture()
+        for field,value in (('wiki','enwiktionary'),('date','20261002'),
+                ('namespace',self.namespace.read_bytes()+b'bad\n'),('site',b'{}'),
+                ('record_limit',1),('profile_kind','unproved')):
+            args=[batches,self.namespace.read_bytes(),self.wiki,self.date,site]
+            options=dict(has_batches=True,record_limit=100000,profile_kind=figure.FIGURE_PROFILE_V4,allow_compatible_epochs=True)
+            if field in ('wiki','date','namespace','site'):
+                args[{'namespace':1,'wiki':2,'date':3,'site':4}[field]]=value
+            else:options[field]=value
+            with self.subTest(field=field),self.assertRaises((ValueError,KeyError)):
+                figure.file_records(*args,**options)
+
+    def test_positive_canonical_reuse_keeps_final_alias_join_and_failure_propagation(self):
+        a,b,c=('\u0645\u0644\u0641:'+name+'.svg' for name in ('A','B','C'))
+        first,second=self.response(b),self.response(a)
+        for response in (first,second):response['query']['general']['git-hash']=figure.FIGURE_CURRENT_CORE
+        first['query']['redirects']=[{'from':a,'to':b}]
+        second['query']['redirects']=[{'from':c,'to':a}]
+        selected=[self.batch(a,first),self.batch(c,second)]
+        for rows in (selected,list(reversed(selected))):
+            with self.assertRaisesRegex(ValueError,'^Requested file conflicts with an authenticated canonical alias$'):
+                self.run_records(rows,figure.encoded(first))
+        batches,site,_=self.normalization_fixture()
+        before=copy.deepcopy(batches)
+        failure=MemoryError('classifier allocation refused')
+        with patch.object(figure.metadata,'classify_response',side_effect=failure):
+            with self.assertRaises(MemoryError) as refused:self.run_records(batches,site)
+        self.assertIs(refused.exception,failure)
+        def interrupted():
+            yield from batches
+            raise ValueError('late source iteration failed')
+        with self.assertRaisesRegex(ValueError,'^late source iteration failed$'):self.run_records(interrupted(),site)
+        self.assertEqual(batches,before)
+        self.assertEqual(len(self.run_records(batches,site)['records']),8)
+
+    def select_ascii_namespace_fixture(self):
+        # A synthetic ASCII File namespace keeps the measured task from relying
+        # on the Arabic namespace's mandatory native NFC work. This is no capture.
+        self.wiki='frwiktionary'
+        raw=self.namespace.read_bytes().replace(b'# wiki\tarwiktionary',b'# wiki\tfrwiktionary')
+        raw=raw.replace(b'# content-language\tar',b'# content-language\tfr')
+        raw=raw.replace('\u0645\u0644\u0641'.encode(),b'Fichier')
+        self.namespace.write_bytes(raw)
+        for response in (self.api,self.site_api):
+            response['query']['general'].update(wikiid=self.wiki,lang='fr',server='https://fr.wiktionary.org',rtl=False,
+                **{'git-hash':figure.FIGURE_CURRENT_CORE})
+
+    def many_record_fixture(self, *, count=8192, missing=0, mapped=0):
+        response=self.response('Fichier:Seed.svg')
+        pages=[];requests=[];mappings=[]
+        for index in range(count):
+            requested=f'Fichier:Entry{index:05d}.svg'
+            response_title=requested
+            canonical=requested
+            if index<mapped:
+                requested=f'Fichier:Alias{index:05d}.svg'
+                response_title=f'Media:source_e\u0301_{index:05d}.svg'
+                canonical=f': File:e\u0301preuve_{index:05d}.svg'
+                mappings.append({'from':requested,'to':response_title})
+            if index>=count-missing:
+                page=dict(title=response_title,ns=6,missing=True,imagerepository='')
+            else:
+                page=copy.deepcopy(response['query']['pages'][0]);page['title']=response_title
+                page['imageinfo'][0].update(canonicaltitle=canonical,sha1=f'{index+1:040x}')
+            requests.append(requested);pages.append(page)
+        batches=[]
+        for offset in range(0,count,50):
+            selected=copy.deepcopy(response)
+            selected['query']['pages']=pages[offset:offset+50]
+            requested=requests[offset:offset+50]
+            redirects=[row for row in mappings if row['from'] in requested]
+            if redirects:selected['query']['redirects']=redirects
+            batches.append(dict(requests=requested,response=figure.encoded(selected).decode()))
+        return batches,figure.encoded(response)
+
+    def stream_fixture(self, helper, batches, site, label):
+        namespace=self.namespace.read_bytes()
+        document=self.run_records(batches,site,helper.file_records)
+        header={'schema':helper.RAW_STREAM_SCHEMA,**{key:document[key] for key in
+            ('wiki','core_revision','namespace_registry_sha256')},'records_count':len(document['records']),
+            'base_batches':document['base_batches'],'observed_batches':document['observed_batches'],
+            'record_encoding':helper.RAW_RECORD_ENCODING}
+        raw,projection=self.root/(label+'.raw'),self.root/(label+'.projection')
+        with raw.open('wb') as output:
+            output.write(helper.stream_encoded(header))
+            for batch in batches:output.write(helper.raw_record_encoded(batch))
+        expected=helper.figure_stream_document(raw,namespace,self.wiki,self.date,site,profile_kind=helper.FIGURE_PROFILE_V4)
+        helper.write_projection_stream(projection,expected)
+        self.assertEqual(helper.verify_stream_document(projection,raw,namespace,self.wiki,self.date,site),expected)
+        return raw,projection,expected
+
+    def test_positive_canonical_reuse_keeps_full_stream_projection_comparison(self):
+        self.select_ascii_namespace_fixture()
+        batches,site=self.many_record_fixture(count=64,missing=5,mapped=8)
+        raw,projection,expected=self.stream_fixture(figure,batches,site,'canonical-stream')
+        before=(raw.read_bytes(),projection.read_bytes())
+        self.assertEqual(sum(row['state']=='missing' for row in expected['records']),5)
+        self.assertEqual(sum(row['requested_file']!=row['canonical_file'] for row in expected['records']),8)
+        self.assertEqual(figure.verify_stream_document(projection,raw,self.namespace.read_bytes(),self.wiki,self.date,site),expected)
+        self.assertEqual((raw.read_bytes(),projection.read_bytes()),before)
+        changed=copy.deepcopy(expected);changed['records'][0]['canonical_file']='Fichier:Forged.svg'
+        projection.unlink();figure.write_projection_stream(projection,changed)
+        with self.assertRaisesRegex(ValueError,'Figure projection stream record differs from exact raw replay'):
+            figure.verify_stream_document(projection,raw,self.namespace.read_bytes(),self.wiki,self.date,site)
+
+
+def measure_canonical_title_reuse(baseline,candidate):
+    """Explicit paired full-verifier task; never substitutes candidate for baseline."""
+    if baseline is candidate or baseline.file_records.__code__ is candidate.file_records.__code__:
+        raise AssertionError('paired measurement requires distinct authenticated source endpoints')
+    case=FigureCanonicalTitleReuseTests('test_positive_canonical_reuse_keeps_full_stream_projection_comparison')
+    rows,errors,census=[],[],{}
+    try:
+        case.setUp()
+        batches,site,_=case.normalization_fixture()
+        expected=None
+        for arm,helper,wanted in (('baseline',baseline,3*7+5*3),('candidate',candidate,3*6+5*3)):
+            result,calls=case.title_call_census(helper,batches,site)
+            case.assertEqual(len(calls),wanted)
+            if expected is None:expected=result
+            else:case.assertEqual(result,expected)
+            census[arm]=dict(positive_rows=3,missing_rows=5,title_calls=len(calls))
+        del result,expected
+        for mode,batches,site,message in case.refusal_cases():
+            before=copy.deepcopy(batches);outcomes=[]
+            for helper in (baseline,candidate):
+                with case.assertRaises(ValueError) as refused:case.run_records(batches,site,helper.file_records)
+                outcomes.append((type(refused.exception).__name__,str(refused.exception)))
+                case.assertEqual(batches,before)
+            case.assertEqual(outcomes,[('ValueError',message)]*2)
+            errors.append(dict(case=mode,exception=outcomes[0]))
+        case.select_ascii_namespace_fixture()
+        namespace=case.namespace.read_bytes();fixtures=[]
+        # Validate all synthetic fixtures under both real sources before clocks.
+        for label,missing,mapped in (('ascii-positive',0,0),('current-positive-missing-ratio',59,0),('ratio-with-unicode-mapped-aliases',59,64)):
+            batches,site=case.many_record_fixture(missing=missing,mapped=mapped)
+            raw,projection,expected=case.stream_fixture(baseline,batches,site,label)
+            case.assertEqual(candidate.verify_stream_document(projection,raw,namespace,case.wiki,case.date,site),expected)
+            fixtures.append((label,batches,site,raw,projection,expected,missing,mapped))
+        for label,batches,site,raw,projection,expected,missing,mapped in fixtures:
+            before=copy.deepcopy(batches)
+            raw_before,projection_before=raw.read_bytes(),projection.read_bytes()
+            stamps=tuple(figure.evidence.stamp(path) for path in (raw,projection,case.namespace))
+            output=figure.encoded(expected);provider=b''.join(figure.provider_chunks(expected))
+            for arm,helper in (('baseline',baseline),('candidate',candidate),('candidate',candidate),('baseline',baseline)):
+                wall,cpu=time.perf_counter_ns(),time.process_time_ns()
+                result=helper.verify_stream_document(projection,raw,namespace,case.wiki,case.date,site)
+                cpu,wall=time.process_time_ns()-cpu,time.perf_counter_ns()-wall
+                case.assertEqual(result,expected)
+                case.assertEqual(figure.encoded(result),output)
+                case.assertEqual(b''.join(figure.provider_chunks(result)),provider)
+                case.assertEqual(batches,before)
+                case.assertEqual((raw.read_bytes(),projection.read_bytes(),case.namespace.read_bytes()),(raw_before,projection_before,namespace))
+                case.assertEqual(tuple(figure.evidence.stamp(path) for path in (raw,projection,case.namespace)),stamps)
+                rows.append(dict(case=label,arm=arm,cpu_ns=cpu,wall_ns=wall,records=len(result['records']),
+                    missing=missing,positive=len(result['records'])-missing,mapped_unicode_titles=mapped,
+                    output_sha256=figure.digest(output),provider_sha256=figure.digest(provider)))
+                del result
+        return dict(rows=rows,errors=errors,untimed_title_call_census=census,output_and_input_parity=True,
+            scope='Unprofiled verify_stream_document; raw decode, full file semantics and exact projection comparison. Fixture validation, comparisons and disposal excluded.',
+            retained_fr_counts=dict(files=1316399,positive=1306861,missing=9538),
+            fixture_scope='Synthetic ASCII canonical namespace; missing ratio rounded to59/8192; Unicode/alias rate is explicit stress coverage, not a measured FR distribution.',
+            whole_fr_timing_claimed=False)
+    finally:
+        case.doCleanups()
+
+
 if __name__ == '__main__':
     unittest.main()
