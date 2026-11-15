@@ -10735,5 +10735,162 @@ def measure_figure_inventory_source_handoff(baseline,candidate):
     finally:case.doCleanups()
 
 
+class FigureMaterializationPhaseProgressTests(unittest.TestCase):
+    setUp = OfflineFigureMaterializationTests.setUp
+    complete = OfflineFigureMaterializationTests.complete
+    phases = ('metadata_ancestry_load','source_verify','frame_resolution',
+              'output_write','output_verify','publish_final_custody')
+
+    class FlushedLog(io.StringIO):
+        def __init__(self):
+            super().__init__()
+            self.flushed=[]
+        def flush(self):
+            self.flushed.append(self.getvalue())
+            return super().flush()
+
+    class BrokenLog:
+        def write(self,value):raise OSError('diagnostic pipe closed')
+        def flush(self):pass
+
+    def events(self,log):
+        return [json.loads(line) for line in log.getvalue().splitlines()]
+
+    def assert_events(self,events,finished,active=None):
+        expected=[]
+        for name in finished:
+            expected.extend((('phase-start',name),('phase-end',name)))
+        if active is not None:expected.append(('phase-start',active))
+        self.assertEqual([(row['event'],row['phase']) for row in events],expected)
+        for row in events:
+            self.assertEqual(row['operation'],'materialize-complete')
+            keys={'operation','event','phase'}
+            if row['event']=='phase-end':
+                keys.update(('wall_seconds','process_cpu_seconds'))
+                for key in ('wall_seconds','process_cpu_seconds'):
+                    self.assertIs(type(row[key]),float)
+                    self.assertGreaterEqual(row[key],0)
+            self.assertEqual(set(row),keys)
+
+    def source_snapshot(self,args):
+        members=figure.capture_member_paths(args.output,include_markers=True)[0]
+        paths=tuple(members.values())+tuple(Path(path) for path in args.sql)
+        return {str(path):(figure.evidence.stamp(path),figure.digest(path.read_bytes())) for path in paths}
+
+    def test_default_off_and_fixed_stage_progress_preserve_output_and_inputs(self):
+        args=self.complete();before=self.source_snapshot(args)
+        quiet=self.root/'quiet-materialized';output=self.root/'progress-materialized'
+        silent=io.StringIO()
+        with contextlib.redirect_stderr(silent), patch.object(figure.time,'process_time',side_effect=AssertionError('disabled progress read CPU clock')):
+            expected=figure.materialize_complete_capture(args.output/figure.MANIFEST,quiet)
+        self.assertEqual(silent.getvalue(),'')
+        self.assertEqual(self.source_snapshot(args),before)
+        log=self.FlushedLog();stdout=io.StringIO()
+        with contextlib.redirect_stderr(log),contextlib.redirect_stdout(stdout):
+            actual=figure.materialize_complete_capture(args.output/figure.MANIFEST,output,phase_progress=True)
+        self.assertEqual(actual,expected)
+        self.assertEqual(figure.verify(output),expected)
+        self.assertEqual(figure.payload(output),figure.payload(quiet))
+        self.assertEqual(self.source_snapshot(args),before)
+        self.assertEqual(stdout.getvalue(),'')
+        self.assert_events(self.events(log),self.phases)
+        self.assertEqual(len(log.flushed),12)
+        self.assertTrue(all(len(value.splitlines())==index+1 for index,value in enumerate(log.flushed)))
+        for invalid in (1,None,'yes'):
+            with self.assertRaisesRegex(ValueError,'^Invalid Figure phase progress selection$'):
+                figure.materialize_complete_capture(args.output/figure.MANIFEST,self.root/'invalid-progress',phase_progress=invalid)
+        self.assertFalse((self.root/'invalid-progress').exists())
+
+    def test_source_failure_keeps_flushed_start_and_original_exception_without_output(self):
+        args=self.complete();before=self.source_snapshot(args)
+        original=figure.read_complete_capture
+        failure=MemoryError('owned complete verification allocation refused')
+        log=self.FlushedLog();observations={};output=self.root/'refused-before-output'
+        def refuse(*values,**options):
+            self.assert_events(self.events(log),self.phases[:1],self.phases[1])
+            self.assertEqual(len(log.flushed),3)
+            raise failure
+        with contextlib.redirect_stderr(log),patch.object(figure,'read_complete_capture',new=refuse):
+            with self.assertRaises(MemoryError) as caught:
+                figure.materialize_complete_capture(args.output/figure.MANIFEST,output,
+                    observations=observations,phase_progress=True)
+        self.assertIs(caught.exception,failure)
+        self.assertFalse(output.exists())
+        self.assertFalse(observations['complete'])
+        self.assertFalse(observations['source_complete_verified'])
+        self.assert_events(self.events(log),self.phases[:1],self.phases[1])
+        self.assertEqual(self.source_snapshot(args),before)
+        # Logging cannot replace that same primary validator failure.
+        with contextlib.redirect_stderr(self.BrokenLog()),patch.object(figure,'read_complete_capture',side_effect=failure):
+            with self.assertRaises(MemoryError) as caught:
+                figure.materialize_complete_capture(args.output/figure.MANIFEST,self.root/'broken-log-refusal',phase_progress=True)
+        self.assertIs(caught.exception,failure)
+        self.assertFalse((self.root/'broken-log-refusal').exists())
+        self.assertEqual(self.source_snapshot(args),before)
+        self.assertIs(figure.read_complete_capture,original)
+
+    def test_output_failure_keeps_owned_cleanup_and_broken_diagnostics_do_not_change_success(self):
+        args=self.complete();source=args.output/figure.MANIFEST
+        names=(*figure.ROLES.values(),figure.PROVIDER,figure.INVENTORY)
+        contents={name:(args.output/name).read_bytes() for name in names}
+        identities={name:(args.output/name).stat() for name in names}
+        original_verify=figure.verify
+        outcomes=[]
+        for enabled in (False,True):
+            output=self.root/('failed-output-'+str(enabled));observations={};log=self.FlushedLog()
+            failure=ValueError('owned fresh output verification refused')
+            def verify(root,*values,**options):
+                if Path(root)==output:raise failure
+                return original_verify(root,*values,**options)
+            with contextlib.redirect_stderr(log),patch.object(figure,'verify',new=verify):
+                with self.assertRaises(ValueError) as caught:
+                    figure.materialize_complete_capture(source,output,link_current_payloads=True,
+                        cleanup_failed_links=True,observations=observations,phase_progress=enabled)
+            self.assertIs(caught.exception,failure)
+            self.assertFalse((output/figure.COMPLETE).exists())
+            self.assertFalse(observations['complete'])
+            self.assertTrue(observations['source_complete_verified'])
+            self.assertTrue(observations['failed_link_recovery_verified'])
+            self.assertFalse(observations['new_output_adoption_allowed'])
+            self.assertEqual(len(observations['linked_members']),4)
+            self.assertEqual(len(observations['removed_owned_links']),4)
+            self.assertEqual(observations['remaining_owned_links'],[])
+            self.assertEqual(observations['custody_errors'],[])
+            outcomes.append({key:observations[key] for key in ('complete','source_complete_verified',
+                'failed_link_recovery_verified','new_output_adoption_allowed','custody_errors')})
+            if enabled:self.assert_events(self.events(log),self.phases[:4],self.phases[4])
+            else:self.assertEqual(log.getvalue(),'')
+            self.assertEqual({name:(args.output/name).read_bytes() for name in names},contents)
+            for name,before in identities.items():
+                after=(args.output/name).stat()
+                self.assertEqual((after.st_dev,after.st_ino,after.st_mode,after.st_size,after.st_mtime_ns,after.st_nlink),
+                                 (before.st_dev,before.st_ino,before.st_mode,before.st_size,before.st_mtime_ns,before.st_nlink))
+        self.assertEqual(outcomes[0],outcomes[1])
+        output=self.root/'closed-diagnostic-pipe'
+        with contextlib.redirect_stderr(self.BrokenLog()):
+            manifest=figure.materialize_complete_capture(source,output,phase_progress=True)
+        self.assertEqual(figure.verify(output),manifest)
+
+    def test_cli_progress_preserves_stdout_summary_and_final_custody_record(self):
+        args=self.complete();output=self.root/'cli-progress';stdout=io.StringIO();log=self.FlushedLog()
+        argv=['prepare_figure_metadata.py','materialize-complete','--source',str(args.output/figure.MANIFEST),
+              '--output',str(output),'--link-current-payloads','--phase-progress']
+        with patch.object(figure.sys,'argv',argv),contextlib.redirect_stdout(stdout),contextlib.redirect_stderr(log):
+            figure.main()
+        manifest=figure.verify(output)
+        self.assertEqual(json.loads(stdout.getvalue()),{key:manifest[key] for key in ('schema','wiki','date','coverage')})
+        records=self.events(log)
+        self.assert_events(records[:-1],self.phases)
+        custody=records[-1]
+        self.assertEqual(custody['operation'],'materialize-complete')
+        self.assertTrue(custody['complete'])
+        self.assertTrue(custody['new_output_adoption_allowed'])
+        self.assertFalse(custody['failed_link_recovery_verified'])
+        self.assertNotIn('phase',custody)
+        self.assertNotIn('event',custody)
+        self.assertEqual(len(custody['linked_members']),4)
+        self.assertEqual(len(log.flushed),13)
+
+
 if __name__ == '__main__':
     unittest.main()

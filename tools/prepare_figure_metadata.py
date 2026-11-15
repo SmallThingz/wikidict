@@ -5311,7 +5311,7 @@ def validate_materialized_echo(state, plan, wiki, date, namespace, *, root_recor
 
 
 def materialize_complete_capture(source, output, *, max_batches=64, max_input_bytes=64*1024*1024,
-                                 link_current_payloads=False, cleanup_failed_links=False, observations=None):
+                                 link_current_payloads=False, cleanup_failed_links=False, observations=None, phase_progress=False):
     """Offline, bounded materialization of verified stream ancestry.
 
     Original request/receipt bytes and per-origin plans remain immutable. The
@@ -5324,6 +5324,8 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
     separately admitted caller selects explicit larger bounds.
     """
     import copy
+    if type(phase_progress) is not bool:
+        raise ValueError('Invalid Figure phase progress selection')
     if (type(max_batches) is not int or not 0<=max_batches<=0xffffffff or
             type(max_input_bytes) is not int or max_input_bytes<=0):
         raise ValueError('Invalid offline Figure materialization bounds')
@@ -5346,6 +5348,24 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
     observations.update(operation='materialize-complete', complete=False, linked_members=[],
         original_members=[],remaining_owned_links=[],removed_owned_links=[],
         source_complete_verified=False,new_output_adoption_allowed=False,failed_link_recovery_verified=False)
+    active_phase=None
+    def phase(name):
+        nonlocal active_phase
+        if not phase_progress:return
+        wall,cpu=time.monotonic(),time.process_time()
+        events=[]
+        if active_phase is not None:
+            previous,started_wall,started_cpu=active_phase
+            events.append(dict(operation='materialize-complete',event='phase-end',phase=previous,
+                               wall_seconds=wall-started_wall,process_cpu_seconds=cpu-started_cpu))
+        if name is not None:
+            events.append(dict(operation='materialize-complete',event='phase-start',phase=name))
+        active_phase=(name,wall,cpu) if name is not None else None
+        for event in events:
+            # Progress is diagnostic only; a closed pipe must not replace a
+            # validator exception or trigger failed-link cleanup.
+            try:print(json.dumps(event,sort_keys=True),file=sys.stderr,flush=True)
+            except (OSError,ValueError):pass
     link_names={ROLES['figure-sizing'],ROLES['figure-sizing-raw'],PROVIDER,INVENTORY}
     fields=('st_dev','st_ino','st_mode','st_uid','st_gid','st_size','st_mtime_ns','st_nlink','st_ctime_ns')
     linked={}; source_identities={}; owned_output=None
@@ -5582,6 +5602,7 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
             container=container,container_reference=dict(container_reference))
         by_reference[key]=identifier
         return identifier
+    phase('metadata_ancestry_load')
     manifest_raw=saved(source)
     original_manifest=decode(manifest_raw)
     if original_manifest.get('capture_format')!=FILES_STREAM_SCHEMA:
@@ -5589,6 +5610,7 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
     root_id=load({'kind':'complete-stream','path':str(source),'sha256':digest(manifest_raw)})
     top=nodes[root_id];root=top['root'];wiki,date=top['plan']['wiki'],top['plan']['date']
     # Bounds and all ancestry locators were checked before any full payload replay.
+    phase('source_verify')
     complete=read_complete_capture(source,cache,include_document=False)
     if complete['manifest_sha256']!=digest(manifest_raw):raise ValueError('Offline complete Figure identity differs')
     observations.update(source_complete_verified=True,source_manifest_sha256=digest(manifest_raw))
@@ -5601,6 +5623,7 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
                 node['pending']=([terminal_pending(node['root'],prefix['lookahead'],node['plan']['wiki'],lean=False)] if prefix['lookahead'] is not None else [])
             node['frame_map']=[None]*(node['committed']+len(node['pending']))
     if len(complete['offsets'])!=len(top['frame_map']):raise ValueError('Offline Figure source count differs')
+    phase('frame_resolution')
     frames=[];planned=[]
     def scoped(identifier, value):
         result=copy.deepcopy(value)
@@ -5672,6 +5695,7 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
     if (len({value[:2] for value in expected_links.values()})!=len(expected_links) or
             any(stamp(value)!=complete['stamps'][root/name] for name,value in expected_links.items())):
         raise ValueError('Linked Figure payload identities are aliased or changed')
+    phase('output_write')
     output.parent.mkdir(parents=True,exist_ok=True)
     if any(value[0]!=output.parent.stat().st_dev for value in expected_links.values()):
         raise ValueError('Linked Figure payloads require the same filesystem')
@@ -5767,6 +5791,7 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         evidence.document(output/MANIFEST,manifest)
         # Authenticate the fresh output once. Publication adds only its exact
         # marker; retain all verified files and origin directories across it.
+        phase('output_verify')
         members, directories = capture_member_paths(output,include_markers=True)
         output_stamps = {name:evidence.stamp(path) for name,path in members.items()}
         sql_paths = tuple(Path(row['path']) for row in complete['inventory']['sources'])
@@ -5780,6 +5805,7 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         if inventory_physical_authority(sql_paths) != external_authority:
             raise ValueError('Materialized Figure external authority changed during verification')
         check()
+        phase('publish_final_custody')
         marker = {'schema':SCHEMA,'manifest_sha256':digest(small(output/MANIFEST))}
         evidence.document(output/COMPLETE,marker)
         ready, ready_directories = capture_member_paths(output,include_markers=True)
@@ -5802,6 +5828,7 @@ def materialize_complete_capture(source, output, *, max_batches=64, max_input_by
         observations.update(complete=True,source_manifest_sha256=digest(manifest_raw),
                             source_complete_verified=True,source_content_mode_inode_preserved=True,
                             new_output_adoption_allowed=True,failed_link_recovery_verified=False)
+        phase(None)
         return manifest
     except Exception:
         if link_current_payloads and owned_output is not None:
@@ -6039,7 +6066,8 @@ def materialize_command(args):
     try:
         return materialize_complete_capture(args.source,args.output,max_batches=args.max_batches,
             max_input_bytes=args.max_input_bytes,link_current_payloads=args.link_current_payloads,
-            cleanup_failed_links=getattr(args,'cleanup_failed_links',False),observations=observations)
+            cleanup_failed_links=getattr(args,'cleanup_failed_links',False),observations=observations,
+            phase_progress=getattr(args,'phase_progress',False))
     finally:
         if args.link_current_payloads:
             # The caller retains this small stderr record on success or failure;
@@ -6065,6 +6093,8 @@ def main():
         help='share the four unchanged payload inodes and emit exact custody observations on stderr')
     materialize.add_argument('--cleanup-failed-links',action='store_true',
         help='on failure remove only verified links created by this operation, retaining explicit cleanup evidence')
+    materialize.add_argument('--phase-progress',action='store_true',
+        help='flush fixed stage start/end diagnostics with wall and process CPU seconds on stderr')
     prepare = commands.add_parser('stage', help='offline replay of retained source captures')
     for name in ('wiki', 'date'):
         prepare.add_argument('--' + name, required=True)
