@@ -1186,7 +1186,7 @@ class AffinityAdmissionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             root=Path(tmp)
             def supervised(**kwargs):
-                self.assertEqual({'wall_seconds':123,'disk_paths':(root/'.tmp',root/'data/dictionaries')},kwargs)
+                self.assertEqual({'wall_seconds':123,'disk_paths':(root/'.tmp',root/'data/dictionaries'),'child_nice':max(0,os.getpriority(os.PRIO_PROCESS,0))},kwargs)
                 with self.assertRaises(limits.ContainmentUnavailable):
                     b.acquire_build_resource_lock(root/'.tmp/build-resources.lock')
                 return 0
@@ -1664,14 +1664,14 @@ class BuildTest(PreparedToolsFixture):
         with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             root=Path(tmp)
             def supervised(**kwargs):
-                self.assertEqual(kwargs,{'wall_seconds':7200,'disk_paths':(root/'.tmp',root/'data/dictionaries')})
+                self.assertEqual(kwargs,{'wall_seconds':7200,'disk_paths':(root/'.tmp',root/'data/dictionaries'),'child_nice':max(0,os.getpriority(os.PRIO_PROCESS,0))})
                 with self.assertRaises(limits.ContainmentUnavailable):
                     b.acquire_build_resource_lock(root/'.tmp/build-resources.lock')
                 return 0
             with patch.object(b,'PROJECT',root),patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog']),patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',side_effect=supervised) as watchdog,patch.object(limits,'supervise') as strict,patch.object(b,'main') as main:
                 with self.assertRaises(SystemExit) as result:b.cli()
                 self.assertEqual(result.exception.code,0)
-            watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',root/'data/dictionaries'))
+            watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',root/'data/dictionaries'),child_nice=max(0,os.getpriority(os.PRIO_PROCESS,0)))
             strict.assert_not_called();main.assert_not_called()
 
     def test_eight_expansion_workers_request_eight_cpu_watchdog(self):
@@ -1682,7 +1682,7 @@ class BuildTest(PreparedToolsFixture):
                  patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
                 with self.assertRaises(SystemExit) as result:b.cli()
                 self.assertEqual(result.exception.code,0)
-            watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(Path(tmp)/'.tmp',Path(tmp)/'data/dictionaries'),max_cpus=8)
+            watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(Path(tmp)/'.tmp',Path(tmp)/'data/dictionaries'),max_cpus=8,child_nice=max(0,os.getpriority(os.PRIO_PROCESS,0)))
 
     def test_high_expansion_count_keeps_single_job_and_four_build_workers(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -4220,7 +4220,7 @@ class ExternalRawShardTests(PreparedToolsFixture):
                  patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
                 with self.assertRaises(SystemExit) as done:b.cli()
                 self.assertEqual(done.exception.code,0)
-            watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',output,raw))
+            watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',output,raw),child_nice=max(0,os.getpriority(os.PRIO_PROCESS,0)))
             write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',
                 url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
             with patch.object(sys,'argv',argv+['--downloads',str(root),'--threads','1','--jobs','1']), \
@@ -4346,7 +4346,7 @@ class WatchdogAddressSpaceCliTests(unittest.TestCase):
                      patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
                     with self.assertRaises(SystemExit) as result:b.cli()
                     self.assertEqual(result.exception.code,0)
-                watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',root/'data/dictionaries'))
+                watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',root/'data/dictionaries'),child_nice=max(0,os.getpriority(os.PRIO_PROCESS,0)))
 
     def test_verified_child_accepts_flag_without_resupervision(self):
         with patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog','--watchdog-address-space=unlimited']), \
@@ -4648,7 +4648,7 @@ class LongBuildDeadlineTest(unittest.TestCase):
             with patch.object(b,'PROJECT',Path(tmp)),patch.object(sys,'argv',['build_wiktionaries.py','--resource-mode=watchdog','--build-timeout-seconds','14400']),patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
                 with self.assertRaises(SystemExit) as result:b.cli()
                 self.assertEqual(result.exception.code,0)
-            watchdog.assert_called_once_with(wall_seconds=14400,disk_paths=(Path(tmp)/'.tmp',Path(tmp)/'data/dictionaries'))
+            watchdog.assert_called_once_with(wall_seconds=14400,disk_paths=(Path(tmp)/'.tmp',Path(tmp)/'data/dictionaries'),child_nice=max(0,os.getpriority(os.PRIO_PROCESS,0)))
     def test_long_deadlines_remain_explicit_finite_and_watchdog_only(self):
         for argv in [ ['--build-timeout-seconds','14400'], ['--resource-mode=watchdog','--build-timeout-seconds','0'], ['--resource-mode=watchdog','--build-timeout-seconds',str(limits.MAX_WATCHDOG_WALL_SECONDS+1)] ]:
             with self.subTest(argv=argv),patch.object(sys,'argv',['build_wiktionaries.py',*argv]),patch.object(limits,'supervise_watchdog') as run:
@@ -5499,7 +5499,7 @@ class ExplicitExtractionCacheTests(PreparedToolsFixture):
                  patch.object(limits,'inside_watchdog',return_value=False),patch.object(limits,'supervise_watchdog',return_value=0) as watchdog:
                 with self.assertRaises(SystemExit) as done:b.cli()
                 self.assertEqual(done.exception.code,0)
-            watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',output,cache))
+            watchdog.assert_called_once_with(wall_seconds=7200,disk_paths=(root/'.tmp',output,cache),child_nice=max(0,os.getpriority(os.PRIO_PROCESS,0)))
 
 class ExplicitLlvmWorkerTests(PreparedToolsFixture):
     def test_invalid_llvm_workers_refuse_before_artifact_side_effects(self):
@@ -6457,6 +6457,18 @@ class PresentationContinuationTests(PreparedToolsFixture):
                     self.exercise(mode,99,input_error=error_name)
 
 class PreparedSourceCallerTests(unittest.TestCase):
+    def test_corpus_watchdog_cli_preserves_inherited_niceness_and_caps(self):
+        for inherited in (0, 7, 19, -5):
+            with self.subTest(inherited=inherited), tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+                root = Path(tmp)
+                argv = ['build_wiktionaries.py', '--resource-mode=watchdog', '--build-timeout-seconds=123', '--watchdog-memory-limit-mib=512']
+                with patch.object(b, 'PROJECT', root), patch.object(sys, 'argv', argv), patch.object(os, 'getpriority', return_value=inherited), patch.object(limits, 'inside_watchdog', return_value=False), patch.object(limits, 'supervise_watchdog', return_value=0) as watchdog, patch.object(b, 'main') as main:
+                    with self.assertRaises(SystemExit) as stopped:
+                        b.cli()
+                    self.assertEqual(0, stopped.exception.code)
+                watchdog.assert_called_once_with(wall_seconds=123, disk_paths=(root / '.tmp', root / 'data/dictionaries'), memory_limit_bytes=512 * 1024**2, child_nice=max(0, inherited))
+                main.assert_not_called()
+
     @contextlib.contextmanager
     def generation_fixture(self):
         import copy

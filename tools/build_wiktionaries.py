@@ -7791,7 +7791,8 @@ def cli():
                 else:
                     with selected_build_resource_lock(routing,workspace,execution):
                         options={'wall_seconds':routing.build_timeout_seconds if routing.build_timeout_seconds is not None else 7200,
-                                 'disk_paths':(workspace/'.tmp', routing.output)}
+                                 'disk_paths':(workspace/'.tmp', routing.output),
+                                 'child_nice':max(0,os.getpriority(os.PRIO_PROCESS,0))}
                         if requested_memory is not None: options['memory_limit_bytes']=requested_memory
                         if routing.watchdog_address_space=='unlimited': options['address_space_limit_bytes']='unlimited'
                         if routing.raw_shard_root is not None: options['disk_paths']+=(routing.raw_shard_root,)
