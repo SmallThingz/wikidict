@@ -759,9 +759,9 @@ def watchdog_open_files_limit(requested, inherited_hard):
 
 
 def _watchdog_child_nice(requested, inherited):
-    """Preserve legacy relative +15, or require an explicit nonnegative target."""
+    """Inherit caller priority by default; explicit targets may only lower it."""
     if requested is None:
-        return min(19, inherited + 15)
+        return inherited
     if type(requested) is not int or not 0 <= requested <= 19:
         raise ContainmentUnavailable('Watchdog child nice priority must be an integer from 0 through 19')
     if requested < inherited:
@@ -909,7 +909,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
             os.sched_setaffinity(0, cpus)
             inherited = os.getpriority(os.PRIO_PROCESS, 0)
             target_nice = _watchdog_child_nice(child_nice, inherited)
-            adjustment = 15 if child_nice is None else target_nice - inherited
+            adjustment = target_nice - inherited
             if os.nice(adjustment) != target_nice:
                 os._exit(125)
             def bound_rlimit(name, requested):

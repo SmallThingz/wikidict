@@ -216,7 +216,9 @@ supervisor and must be launched with appropriate external limits.
 When a user explicitly accepts sampled limits instead of a kernel aggregate cap,
 `--resource-mode=watchdog` runs without cgroup delegation. It samples owned-process
 PSS and task counts, stops the build above 8 GiB or 256 tasks, restricts it to four
-CPUs at low priority, and imposes a two-hour deadline. PSS excludes unmapped file
+CPUs and imposes a two-hour deadline. It preserves the caller's CPU nice priority
+by default and does not change I/O priority. An explicit watchdog child-priority
+target can lower priority but cannot raise it. PSS excludes unmapped file
 cache, and sampling can overshoot between checks. This mode cannot disable build
 swap. It retains per-process address-space limits and records peaks and the stop
 reason in `.tmp/build-watchdog-report.json`. A separate bounded guardian watches

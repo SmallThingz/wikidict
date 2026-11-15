@@ -762,7 +762,7 @@ class ResourceLimitsTest(unittest.TestCase):
 
 
     def test_watchdog_child_nice_preserves_default_and_absolute_targets(self):
-        for requested,inherited,expected in [(None,0,15),(None,15,19),(None,19,19),(0,0,0),(15,0,15),(15,15,15),(19,15,19)]:
+        for requested,inherited,expected in [(None,0,0),(None,7,7),(None,15,15),(None,19,19),(None,-5,-5),(0,0,0),(0,-5,0),(15,0,15),(15,15,15),(19,15,19)]:
             with self.subTest(requested=requested,inherited=inherited):
                 self.assertEqual(expected,limits._watchdog_child_nice(requested,inherited))
         with self.assertRaises(limits.ContainmentUnavailable):
@@ -781,7 +781,7 @@ class ResourceLimitsTest(unittest.TestCase):
 
     def test_watchdog_reports_actual_default_child_priority_without_weakening_limits(self):
         inherited=os.getpriority(os.PRIO_PROCESS,0)
-        expected=min(19,inherited+15)
+        expected=inherited
         with tempfile.TemporaryDirectory() as tmp:
             report_path=Path(tmp)/'watchdog.json'
             code='import os,resource,build_resource_limits as l; assert l.inside_watchdog(); assert os.getpriority(os.PRIO_PROCESS,0)=='+str(expected)+'; assert resource.getrlimit(resource.RLIMIT_AS)[0]==128*1024**2'
