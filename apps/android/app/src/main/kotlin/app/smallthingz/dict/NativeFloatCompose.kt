@@ -82,7 +82,7 @@ internal data class NativeHeadingAction(val label: String, val collapsed: Boolea
 private data class NativeStyleRange(val start: Int, val end: Int, val paint: TextPaint, val bold: Boolean, val italic: Boolean,
     val baselineShiftMultiplier: Float, val letterSpacingPixels: Float?, val familyFailure: String? = null)
 private data class NativeInlineSourceRange(val span: Span, val start: Int, val end: Int,
-    val declaringPaint: TextPaint?, val emptyPaint: TextPaint?)
+    val declaringPaint: TextPaint?, val emptyPaint: TextPaint?, val rubyParentPath: String? = null)
 private data class NativeResolvedInlineStyle(val source: NativeInlineSourceRange,
     val height: Float?, val shift: Float?, val thickness: Float?)
 private class NativePaintSpan(private val value: TextPaint, private val missingLink: NativeMissingLinkPaint? = null) : MetricAffectingSpan(), NativeMayUnderline, NativeInlineSafePaintSpan {
@@ -163,7 +163,7 @@ private fun nativeStyleRanges(text: AnnotatedString, effective: TextStyle, linkC
 /** Match the ordinary inline-image alt policy without changing the occurrence's em basis or Ready image. */
 internal fun nativeFloatImageFallbackLayout(image: InlineImage, state: InlineImageAssetState,
     occurrencePaint: TextPaint, parentPaint: TextPaint, baselineShiftMultiplier: Float = 0f,
-    letterSpacingPixels: Float? = null): StaticLayout? {
+    letterSpacingPixels: Float? = null, knownWidth: Float? = null): StaticLayout? {
     val alt = inlineImageFallbackText(image, state) ?: return null
     val fallbackPaint = TextPaint().apply {
         set(occurrencePaint)
@@ -175,30 +175,37 @@ internal fun nativeFloatImageFallbackLayout(image: InlineImage, state: InlineIma
             if (letterSpacingPixels != null && textSize > 0f) letterSpacing = letterSpacingPixels / textSize
         }
     }
-    return StaticLayout.Builder.obtain(alt, 0, alt.length, fallbackPaint, MaxComputedFontPixels.toInt())
+    return StaticLayout.Builder.obtain(alt, 0, alt.length, fallbackPaint,
+        knownWidth?.let { ceil(it).toInt().coerceAtLeast(1) } ?: MaxComputedFontPixels.toInt())
         .setIncludePad(true).build()
 }
 
 private data class NativeImage(
     val id: Int, val offset: Int, val span: Span, val state: InlineImageAssetState,
-    val paint: TextPaint, val pixels: InlineImagePixels, val ink: NativeFloatBounds,
+    val paint: TextPaint, val pixels: InlineImagePixels, val ink: NativeFloatBounds, val fallbackWidth: Float?,
     val draw: (Canvas, RectF) -> Unit,
 )
 
-private class NativeInlineImageSpan(private val image: NativeImage) : ReplacementSpan(), NativeAtomicInlineMetrics, NativeReplacementPaintBounds, NativeNoWrapInlineImage {
+private data class NativeImageActions(val onClick: (() -> Unit)?, val onDetails: () -> Unit)
+
+private class NativeInlineImageSpan(private val image: NativeImage) : ReplacementSpan(), NativeAtomicInlineMetrics, NativeReplacementPaintBounds, NativeNoWrapInlineImage, NativeAlignedImageSelection {
+    override val nativeImageSelectionBounds: NativeFloatBounds? get() =
+        if (image.span.image?.verticalAlign == null && image.span.linkPaint == null) null else nativeUsedMetrics.let {
+            NativeFloatBounds(0f, it.top, image.pixels.width, it.bottom)
+        }
     override fun nativePaintBounds(lineTop: Float, lineBottom: Float): NativeFloatBounds =
         image.ink.translated(0f, nativeUsedMetrics.top)
     override val nativeUsedMetrics: NativeUsedLineMetrics get() {
         val metrics = image.paint.fontMetricsInt
         val bounds = Rect(); image.paint.getTextBounds("x", 0, 1, bounds)
         val top = inlineImageInkTop(InlineImageFontMetrics(metrics.ascent, metrics.descent,
-            bounds.height().toFloat(), image.paint.baselineShift), image.pixels.height)
+            bounds.height().toFloat(), image.paint.baselineShift), image.pixels.height, image.span.image?.verticalAlign)
         return NativeUsedLineMetrics(top, top + image.pixels.height)
     }
     override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
         val metrics = image.paint.fontMetricsInt
         val bounds = Rect(); image.paint.getTextBounds("x", 0, 1, bounds)
-        val top = inlineImageInkTop(InlineImageFontMetrics(metrics.ascent, metrics.descent, bounds.height().toFloat(), image.paint.baselineShift), image.pixels.height)
+        val top = inlineImageInkTop(InlineImageFontMetrics(metrics.ascent, metrics.descent, bounds.height().toFloat(), image.paint.baselineShift), image.pixels.height, image.span.image?.verticalAlign)
         fm?.let { it.ascent = min(metrics.ascent, kotlin.math.floor(top).toInt()); it.top = it.ascent
             it.descent = max(metrics.descent, ceil(top + image.pixels.height).toInt()); it.bottom = it.descent }
         return ceil(image.pixels.width).toInt()
@@ -207,7 +214,7 @@ private class NativeInlineImageSpan(private val image: NativeImage) : Replacemen
         val metrics = image.paint.fontMetricsInt
         val bounds = Rect(); image.paint.getTextBounds("x", 0, 1, bounds)
         val inkTop = y + inlineImageInkTop(InlineImageFontMetrics(metrics.ascent, metrics.descent,
-            bounds.height().toFloat(), image.paint.baselineShift), image.pixels.height)
+            bounds.height().toFloat(), image.paint.baselineShift), image.pixels.height, image.span.image?.verticalAlign)
         image.draw(canvas, RectF(x, inkTop, x + image.pixels.width, inkTop + image.pixels.height))
     }
 }
@@ -237,12 +244,26 @@ internal fun prepareNativeFloatText(
     authoredHeading: Boolean = false, ownerDirection: BidiResolvedDirection? = null,
     headingLabel: String? = null, ownerWrap: TextWrap? = null,
     ownerFont: NativeDeclaringFont? = null,
+    rubyWeight: FontWeight? = null,
 ): PreparedNativeFloatText {
     val context = LocalContext.current
     val density = LocalDensity.current
     val uri = LocalUriHandler.current
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val effective = LocalTextStyle.current.merge(style)
+    val ruby = rubyStyledTextContexts(spans, rubyWeight, effective)
+    val visibleSpans = ruby?.leaves?.map { checkNotNull(it.range.span) } ?: spans
+    check(ruby == null || ruby.projection.text == annotated.text) { "Ruby annotations must retain original UTF-16 offsets" }
+    fun sourceLength(span: Span): Int = if (ruby == null) listOf(span).nativeLogicalLength() else
+        (if (span.image != null || span.kind == "line_break") 1 else span.text.length) + span.trail.length
+    fun hasDirectionControls(span: Span): Boolean = ruby == null && span.usesInlineDirectionIsolate()
+    val rubyGaps = ruby?.projection?.ranges.orEmpty().filter {
+        it.role == RubyTextRole.SegmentGap || it.role == RubyTextRole.BaseGap || it.role == RubyTextRole.AnnotationGap
+    }
+    val rubyOwnerRanges = ruby?.projection?.ranges.orEmpty().filter { it.role == RubyTextRole.Owner }
+    val paragraphBreaks = annotated.text.indices.filter { offset ->
+        annotated.text[offset] == '\n' && rubyGaps.none { offset in it.start until it.end }
+    }
     require(effective.fontSize.isSp)
     val captionScope = LocalFigureCaptionLinkScope.current.takeIf { !figureImageActions && missingLinkPaint == null }
     val captionOwner = remember { Any() }
@@ -250,10 +271,16 @@ internal fun prepareNativeFloatText(
     val documentTitle = LocalMissingLinkDocument.current
     val documentOwner = LocalMissingLinkOwner.current ?: captionOwner
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
-    val paintUnavailable = ordinaryLinkPaintUnavailable(spans)
-    val paintedLinks = remember(spans, captionScope) {
-        if (captionScope == null && spans.none { it.linkPaint != null }) emptyList()
-        else nativeCaptionLinkRanges(spans).filter { it.span.linkPaint != null || captionScope != null }
+    val paintUnavailable = ordinaryLinkPaintUnavailable(visibleSpans, edition)
+    val paintedLinks = remember(visibleSpans, captionScope, ruby?.projection) {
+        if (captionScope == null && visibleSpans.none { it.linkPaint != null }) emptyList()
+        else (ruby?.leaves?.mapIndexedNotNull { index, leaf ->
+            val range = leaf.range
+            val span = checkNotNull(range.span)
+            if (range.start < range.end && span.image == null &&
+                (span.hasInternalAction() || externalLinkUrl(span) != null))
+                NativeCaptionLinkRange(index, span, range.start, range.end) else null
+        } ?: nativeCaptionLinkRanges(visibleSpans)).filter { it.span.linkPaint != null || captionScope != null }
     }
     val ordinaryPolicies = paintedLinks.associate { (it.start to it.end) to it.span.linkPaint }
     val linkPaints = paintedLinks.associate { range ->
@@ -279,19 +306,34 @@ internal fun prepareNativeFloatText(
     fun linkPaintAt(start: Int, end: Int): NativeMissingLinkPaint? = missingLinkPaint ?: linkPaints.entries
         .firstOrNull { (range, _) -> range.first <= start && range.second >= end }?.value
     var familyOffset = 0
-    val familyRanges = spans.map { span ->
+    val familyRanges = visibleSpans.mapIndexed { index, span ->
         val start = familyOffset
-        familyOffset += listOf(span).nativeLogicalLength()
-        NativeSourceFamilyRange(start, familyOffset, span.fontFamily, span.legacyFontFamily())
+        familyOffset += sourceLength(span)
+        val inherited = ruby?.leaves?.get(index)
+        NativeSourceFamilyRange(start, familyOffset, span.fontFamily ?: inherited?.sourceFamily,
+            span.legacyFontFamily() ?: inherited?.legacyFamily.takeIf { span.fontFamily == null })
     }
     check(familyOffset == annotated.length) { "Authored family offsets must retain the original logical string" }
-    val hasInlineFamily = spans.hasAuthoredFontFamily()
-    val sourceLineStarts = if (ownerWrap == TextWrap.NoWrap) nativeNoWrapSourceLineStarts(spans) else null
+    val hasInlineFamily = visibleSpans.hasAuthoredFontFamily()
+    val sourceLineStarts = if (ownerWrap != TextWrap.NoWrap) null
+        else if (ruby == null) nativeNoWrapSourceLineStarts(visibleSpans) else buildSet {
+            var paragraphStart = 0
+            annotated.text.indices.forEach { offset ->
+                add(paragraphStart)
+                if (offset in paragraphBreaks) paragraphStart = offset + 1
+            }
+        }.toList()
+    fun sourceRangeHasLine(start: Int, end: Int): Boolean {
+        val starts = sourceLineStarts ?: return true
+        if (ruby == null) return nativeSourceRangeHasLine(annotated.text, start, end, starts)
+        val paragraphStart = paragraphBreaks.lastOrNull { it < start }?.let { it + 1 } ?: 0
+        return paragraphStart in starts || starts.any { it > start && it < end }
+    }
     val noSourceLines = sourceLineStarts?.isEmpty() == true
     val emptyInlineOwner = if (sourceLineStarts != null) sourceLineStarts.isEmpty() &&
         prefix.isEmpty() && !heading && headingActions.isEmpty() else
         (hasInlineFamily || sourceFamily is ContainerFontFamily.Stack) &&
-            !spans.hasCompiledInlineContent() && prefix.isEmpty() && !heading && headingActions.isEmpty()
+            !visibleSpans.hasCompiledInlineContent() && prefix.isEmpty() && !heading && headingActions.isEmpty()
     val preformattedOwner = ownerFont == null && LocalNativePreformattedText.current
     val inheritedFamily = sourceFamily.takeUnless { emptyInlineOwner ||
         preformattedOwner && sourceFamily is ContainerFontFamily.Stack }
@@ -305,31 +347,39 @@ internal fun prepareNativeFloatText(
         return run.paint
     }
     var inlineOffset = 0
-    val inlineSources = spans.mapNotNull { span ->
+    val inlineSources = visibleSpans.mapIndexedNotNull { index, span ->
         val start = inlineOffset
-        inlineOffset += listOf(span).nativeLogicalLength()
-        val hasSourceLine = sourceLineStarts == null ||
-            nativeSourceRangeHasLine(annotated.text, start, inlineOffset, sourceLineStarts)
+        inlineOffset += sourceLength(span)
+        val rubyLeaf = ruby?.leaves?.get(index)
+        val hasSourceLine = sourceRangeHasLine(start, inlineOffset)
         span.inlineStyle?.takeIf { hasSourceLine }?.let { authored ->
             val declaring = (authored.lineHeight as? InlineLineHeight.FontRelative)?.let {
-                familyPaint(nativeStyleRanges(inlineFontSnapshotAnnotation(it.font, effective), effective, linkColor,
+                if (rubyLeaf != null && it.font.language.isNotEmpty() && nativeTableOwnerLanguageTag(it.font.language) == null)
+                    familyFailure = "Ruby line-height language is unavailable for this layout."
+                if (rubyLeaf == null) familyPaint(nativeStyleRanges(inlineFontSnapshotAnnotation(it.font, effective), effective, linkColor,
                     sourceFamily = inheritedFamily, familyRanges = listOf(NativeSourceFamilyRange(0, 1,
                         it.font.fontFamily, inlineFontSnapshotSpan(it.font).legacyFontFamily())),
                     legacyOwnerFamily = legacyOwnerFamily).single())
+                else familyPaint(nativeStyleRanges(AnnotatedString(" "),
+                    rubyFontSnapshotStyle(it.font, rubyLeaf.enclosingStyle, rubyLeaf.fontBasisStyle), linkColor,
+                    sourceFamily = rubyLeaf.sourceFamily,
+                    familyRanges = listOf(NativeSourceFamilyRange(0, 1, it.font.fontFamily,
+                        inlineFontSnapshotSpan(it.font).legacyFontFamily()))).single())
             }
             val empty = if (start == inlineOffset) familyPaint(nativeStyleRanges(
-                inlineMetricOwnerAnnotation(span, effective), effective, linkColor, sourceFamily = inheritedFamily,
-                familyRanges = listOf(NativeSourceFamilyRange(0, 1, span.fontFamily, span.legacyFontFamily())),
+                inlineMetricOwnerAnnotation(span, rubyLeaf?.enclosingStyle ?: effective), rubyLeaf?.enclosingStyle ?: effective,
+                linkColor, sourceFamily = rubyLeaf?.sourceFamily ?: inheritedFamily,
+                familyRanges = listOf(NativeSourceFamilyRange(0, 1, span.fontFamily,
+                    span.legacyFontFamily() ?: rubyLeaf?.legacyFamily)),
                 legacyOwnerFamily = legacyOwnerFamily).single()) else null
-            NativeInlineSourceRange(span, start, inlineOffset, declaring, empty)
+            NativeInlineSourceRange(span, start, inlineOffset, declaring, empty, rubyLeaf?.parentGroupPath)
         }
     }
     check(inlineOffset == annotated.length) { "Authored inline metric offsets must retain the original logical string" }
-    val inlineParagraphCuts = if (inlineSources.isEmpty()) emptyList() else annotated.text.indices
-        .filter { annotated.text[it] == '\n' }.map { it + 1 }
+    val inlineParagraphCuts = if (inlineSources.isEmpty()) emptyList() else paragraphBreaks.map { it + 1 }
     val styles = if (noSourceLines) emptyList() else nativeStyleRanges(annotated, effective, linkColor,
         inlineSources.flatMap { listOf(it.start, it.end) } + inlineParagraphCuts, inheritedFamily, familyRanges,
-        legacyOwnerFamily, sourceLineStarts)
+        legacyOwnerFamily, sourceLineStarts.takeIf { ruby == null })
     styles.forEach { familyPaint(it) }
     val basePaint = if (noSourceLines) TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 0f }
         else if (ownerFont == null) familyPaint(nativeStyleRanges(AnnotatedString(" "), effective, linkColor,
@@ -377,7 +427,15 @@ internal fun prepareNativeFloatText(
             "No-wrap marker or heading line ownership is unavailable."
         ownerFont != null && nativeLineHeight !is NativeLineHeightPolicy.Pixels ->
             "Absolute declaring line height is unavailable."
-        spans.any { it.isUnsupportedAuthoredWhitespaceOwner() } ->
+        visibleSpans.withIndex().any { (index, span) ->
+            val role = ruby?.leaves?.get(index)?.range?.role
+            val gap = role == RubyTextRole.SegmentGap || role == RubyTextRole.BaseGap ||
+                role == RubyTextRole.AnnotationGap
+            val wrapOnly = span.inlineStyle?.wrap?.let { span.inlineStyle == InlineTextStyle(wrap = it) } == true
+            // The native gap owner verifies a uniform source context before collapsing.
+            // Ordinary/body whitespace retains the existing explicit refusal.
+            span.isUnsupportedAuthoredWhitespaceOwner() && !(gap && wrapOnly)
+        } ->
             "Authored inline whitespace effects require a retained collapsed source owner"
         else -> null
     }
@@ -386,6 +444,75 @@ internal fun prepareNativeFloatText(
             normalBodySize, density, cssPixelTextZoom)
         if (magnitude > TablePixelLimit) throw UnsupportedFloatLayout("Authored inline length exceeds native geometry")
         return if (value.value < 0f) -magnitude else magnitude
+    }
+    val rubyTableTextDirection = LocalCompiledTableTextDirection.current
+    val rubyFormats = linkedMapOf<String, NativeRubyGroupFormat>()
+    ruby?.groups?.forEach { (path, group) ->
+        val range = group.range
+        val owner = range.base?.owner ?: range.annotation?.owner
+        val authored = owner?.inlineStyle ?: range.span?.inlineStyle
+        val language = owner?.font?.language ?: range.span?.language.orEmpty()
+        if (language.isNotEmpty() && nativeTableOwnerLanguageTag(language) == null)
+            familyFailure = "Ruby declaring language is unavailable for this layout."
+        val relativeLanguage = (authored?.lineHeight as? InlineLineHeight.FontRelative)?.font?.language.orEmpty()
+        if (relativeLanguage.isNotEmpty() && nativeTableOwnerLanguageTag(relativeLanguage) == null)
+            familyFailure = "Ruby line-height language is unavailable for this layout."
+        val paint = familyPaint(nativeStyleRanges(AnnotatedString(" "), group.style, linkColor,
+            sourceFamily = group.sourceFamily,
+            familyRanges = listOf(NativeSourceFamilyRange(0, 1, group.sourceFamily, group.legacyFamily))).single())
+        val parentPolicy = group.parentGroupPath?.let { rubyFormats[it]?.lineHeight }
+            ?: nativeLineHeight ?: when {
+                effective.lineHeight.isSp -> NativeLineHeightPolicy.Pixels(with(density) { effective.lineHeight.toPx() })
+                effective.lineHeight.isEm -> NativeLineHeightPolicy.Pixels(layoutPaint.textSize * effective.lineHeight.value)
+                else -> NativeLineHeightPolicy.Normal
+            }
+        val relativeFont = (authored?.lineHeight as? InlineLineHeight.FontRelative)?.let { value ->
+            familyPaint(nativeStyleRanges(AnnotatedString(" "),
+                rubyFontSnapshotStyle(value.font, group.enclosingStyle, group.fontBasisStyle), linkColor,
+                sourceFamily = group.sourceFamily,
+                familyRanges = listOf(NativeSourceFamilyRange(0, 1, value.font.fontFamily,
+                    inlineFontSnapshotSpan(value.font).legacyFontFamily()))).single())
+        }
+        try {
+            val height = when (val value = authored?.lineHeight) {
+                null -> parentPolicy
+                is InlineLineHeight.Computed -> NativeLineHeightPolicy.Pixels(inlineLength(value.value))
+                is InlineLineHeight.FontRelative -> {
+                    val pixels = checkNotNull(relativeFont).textSize.toDouble() * value.factor
+                    if (!pixels.isFinite() || pixels < 0.0 || pixels > TablePixelLimit)
+                        throw UnsupportedFloatLayout("Ruby declaring line height exceeds native geometry")
+                    NativeLineHeightPolicy.Pixels(pixels.toFloat())
+                }
+            }
+            val shift = paint.baselineShift.toFloat()
+            val localShift = authored?.baselineShift?.let { -inlineLength(it) }
+            paint.baselineShift = 0
+            val underline = authored?.decoration?.let { decoration ->
+                paint.isUnderlineText = false
+                val thickness = decoration.thickness?.let { value ->
+                    val pixels = value.value.toDouble() * if (value.unit == StyleLengthUnit.Px) density.density else bodyPixels
+                    if (!pixels.isFinite() || pixels < 0.0 || pixels > TablePixelLimit)
+                        throw UnsupportedFloatLayout("Ruby decoration exceeds native geometry")
+                    pixels.toFloat()
+                }
+                NativeAuthoredUnderline(decoration.style, decoration.color?.let { canonicalColorArgb(it)!!.toInt() }, thickness)
+            }
+            val sourceDirection = owner?.direction ?: range.span?.direction.orEmpty()
+            val groupDirection = when (sourceDirection) {
+                "ltr" -> TextDirectionHeuristics.LTR
+                "rtl" -> TextDirectionHeuristics.RTL
+                else -> group.parentGroupPath?.let { rubyFormats[it]?.direction }
+                    ?: when (ownerDirection) {
+                        BidiResolvedDirection.Ltr -> TextDirectionHeuristics.LTR
+                        BidiResolvedDirection.Rtl -> TextDirectionHeuristics.RTL
+                        null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection)
+                    }
+            }
+            rubyFormats[path] = NativeRubyGroupFormat(paint, groupDirection, height, shift,
+                authored?.wrap, underline, authored?.cursor, sourceDirection, localBaselineShift = localShift)
+        } catch (failure: UnsupportedFloatLayout) {
+            inlineFailure = failure.message ?: "Ruby declaring geometry is unavailable"
+        }
     }
     val inlineStyles = try {
         inlineSources.map { source ->
@@ -428,7 +555,7 @@ internal fun prepareNativeFloatText(
             source.declaringPaint?.typeface, source.declaringPaint?.textSize, source.declaringPaint?.baselineShift,
             source.emptyPaint?.typeface, source.emptyPaint?.textSize, source.emptyPaint?.baselineShift)
     }
-    val usesRunMetrics = ownerFont != null || cellOwner != null || nativeLineHeight != null || inlineStyles.any { it.height != null || it.shift != null }
+    val usesRunMetrics = ruby != null || ownerFont != null || cellOwner != null || nativeLineHeight != null || inlineStyles.any { it.height != null || it.shift != null }
     val prefixPaint = if (noSourceLines) TextPaint(basePaint) else familyPaint(nativeStyleRanges(
         AnnotatedString(" "), prefixStyle ?: effective, linkColor,
         sourceFamily = inheritedFamily.takeIf { prefix.isNotEmpty() }).single())
@@ -446,15 +573,16 @@ internal fun prepareNativeFloatText(
         return RectF(left, band.top, left + actionSize, band.top + actionSize)
     }
     fun paintAt(offset: Int) = TextPaint().apply { set(styles.firstOrNull { offset in it.start until it.end }?.paint ?: basePaint) }
-    val owner = imageOwnerOverride ?: LocalInlineImageOwner.current ?: rememberInlineImageViewOwner(spans.mapNotNull { it.image }, media, settings, edition)
-    spans.mapNotNull { it.image }.filter { it.staticPoster == null || figureImageActions }
+    val owner = imageOwnerOverride ?: LocalInlineImageOwner.current ?: rememberInlineImageViewOwner(visibleSpans.mapNotNull { it.image }, media, settings, edition)
+    visibleSpans.mapNotNull { it.image }.filter { it.staticPoster == null || figureImageActions }
         .distinctBy(::inlineImageAssetKey).forEach { image -> LaunchedEffect(owner, image) { owner.ensure(image) } }
     var details by remember { mutableStateOf<NativeImage?>(null) }
     val images = mutableListOf<NativeImage>()
+    val imageActions = mutableMapOf<Int, NativeImageActions>()
     val imageDarkTheme = LocalReaderDarkTheme.current
     var offset = 0
-    spans.forEachIndexed { id, span ->
-        if (span.usesInlineDirectionIsolate()) offset++
+    visibleSpans.forEachIndexed { id, span ->
+        if (hasDirectionControls(span)) offset++
         span.image?.let { image ->
             val bitmapColorFilter = rememberInlineImageColorFilter(image)
             check(annotated.text.getOrNull(offset) == '\ufffc') { "Compiled image offset drift" }
@@ -462,17 +590,18 @@ internal fun prepareNativeFloatText(
             val asset = if (image.staticPoster != null && !figureImageActions) InlineImageAssetState.LayoutUnavailable else
                 owner.states[inlineImageAssetKey(image)] ?: if (settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
             val ready = asset as? InlineImageAssetState.Ready
-            val dimensions = ready?.let { inlineImagePixels(image, it.originalWidth, it.originalHeight, density.density, it.mime) }
+            val dimensions = if (ready != null) inlineImagePixels(image, ready.originalWidth, ready.originalHeight, density.density, ready.mime)
+                else if (asset == InlineImageAssetState.LayoutUnavailable) null else owner.knownPixels(image, density.density)
             val state = if (ready != null && dimensions == null) InlineImageAssetState.GeometryUnavailable(ready) else asset
             val occurrenceStyle = styles.firstOrNull { offset in it.start until it.end }
             val fallbackLayout = nativeFloatImageFallbackLayout(image, state, paint, basePaint,
-                occurrenceStyle?.baselineShiftMultiplier ?: 0f, occurrenceStyle?.letterSpacingPixels)
+                occurrenceStyle?.baselineShiftMultiplier ?: 0f, occurrenceStyle?.letterSpacingPixels, dimensions?.width)
             val side = (image.widthPx ?: image.heightPx)?.let {
                 (it.toDouble() * density.density).coerceAtMost(MaxComputedFontPixels.toDouble()).toFloat()
             } ?: paint.textSize.coerceAtLeast(1f)
-            val pixels = fallbackLayout?.let { layout -> InlineImagePixels(
+            val pixels = dimensions ?: fallbackLayout?.let { layout -> InlineImagePixels(
                 (0 until layout.lineCount).maxOfOrNull { layout.getLineWidth(it) }?.coerceAtLeast(1f) ?: 1f,
-                layout.height.coerceAtLeast(1).toFloat()) } ?: dimensions ?: InlineImagePixels(side, side)
+                layout.height.coerceAtLeast(1).toFloat()) } ?: InlineImagePixels(side, side)
             val borderWidth = if (image.border) density.density else 0f
             val outerPixels = inlineImageOuterPixels(pixels, image.border, density.density)
             val draw: (Canvas, RectF) -> Unit = { canvas, outer ->
@@ -500,15 +629,40 @@ internal fun prepareNativeFloatText(
                 (0.5f - borderWidth).coerceAtLeast(0f) else 0f
             val imageInk = NativeFloatBounds(-markerOverflow, -markerOverflow,
                 outerPixels.width + markerOverflow, outerPixels.height + markerOverflow)
-            images += NativeImage(id, offset, span, state, paint, outerPixels, imageInk, draw)
+            val nativeImage = NativeImage(id, offset, span, state, paint, outerPixels, imageInk, dimensions?.width, draw)
+            images += nativeImage
+            if (span.linkPaint != null) {
+                // Keep one action for this source occurrence across size/asset-state remeasure.
+                // A changed caller or source gets new callbacks; details read the current asset.
+                key(documentOwner, captionOwner, id, offset, span, edition, uri, onLink) {
+                    val currentImage by rememberUpdatedState(nativeImage)
+                    imageActions[id] = remember {
+                        val url = inlineImageLinkUrl(span, edition)
+                        val unresolved = span.kind == "link" && span.target.startsWith("File:") && url == null
+                        val click: (() -> Unit)? = when {
+                            url != null -> { { uri.openUri(url) } }
+                            span.kind == "link" && !unresolved -> { { onLink(span.entryLink()) } }
+                            else -> null
+                        }
+                        NativeImageActions(click, { details = currentImage })
+                    }
+                }
+            }
         }
         offset += if (span.image != null) 1 else if (span.kind == "line_break") 1 else span.text.length
         offset += span.trail.length
-        if (span.usesInlineDirectionIsolate()) offset++
+        if (hasDirectionControls(span)) offset++
     }
     check(offset == annotated.length) { "Native context must retain the original logical string" }
     // Shape once per text/font request, then resize the immutable ink without reshaping it.
-    val shapeKey = listOf(annotated, runs, effective, density.density, density.fontScale, inlineRevision, familyFailure, sourceFamily, familyRanges, legacyOwnerFamily, ownerFont, cellMetricRevision, sourceLineStarts,
+    val rubyMetricRevision = rubyFormats.map { (path, group) ->
+        val paint = group.paint
+        listOf(path, paint.typeface, paint.textSize, paint.textLocales, paint.fontFeatureSettings,
+            paint.letterSpacing, paint.textScaleX, paint.textSkewX, paint.color, paint.bgColor,
+            paint.isUnderlineText, paint.isStrikeThruText, group.direction, group.lineHeight,
+            group.baselineShift, group.localBaselineShift, group.wrap, group.underline, group.cursor, group.sourceDirection)
+    }
+    val shapeKey = listOf(annotated, runs, effective, ruby, rubyMetricRevision, density.density, density.fontScale, inlineRevision, familyFailure, sourceFamily, familyRanges, legacyOwnerFamily, ownerFont, cellMetricRevision, sourceLineStarts,
         paintedLinks.filter { it.span.linkPaint != null }.map { it.start to it.end },
         styles.map { listOf(it.start, it.end, it.paint.typeface, it.paint.textSize, it.paint.color, it.paint.bgColor, it.paint.baselineShift) })
     val shaped by produceState<Pair<Any, Map<Int, NativeEgyptianSpanPreparation>>?>(null, shapeKey) {
@@ -547,10 +701,10 @@ internal fun prepareNativeFloatText(
                     if (native.isEmpty()) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 styles.forEach { native.setSpan(NativePaintSpan(it.paint, linkPaintAt(it.start, it.end)), it.start, it.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
                 val inlineParentPolicies = mutableListOf<Triple<Int, Int, NativeLineHeightPolicy>>()
-                val paragraphStarts = listOf(0) + annotated.text.indices.filter {
-                    annotated.text[it] == '\n' && (it + 1 < annotated.length || inlineSources.any { owner ->
+                val paragraphStarts = listOf(0) + paragraphBreaks.filter {
+                    it + 1 < annotated.length || inlineSources.any { owner ->
                         owner.start == annotated.length && owner.end == owner.start
-                    })
+                    }
                 }.map { it + 1 }
                 paragraphStarts.forEachIndexed { index, start ->
                     if (sourceLineStarts != null && start !in sourceLineStarts) return@forEachIndexed
@@ -601,8 +755,11 @@ internal fun prepareNativeFloatText(
                                 // Images contribute their actual replaced box. Egyptian replacements
                                 // remain text and retain the original style's primary-font strut.
                                 val cuts = (listOf(first, last) + images.filter { it.offset in first until last }
-                                    .flatMap { listOf(it.offset, it.offset + 1) }).distinct().sorted()
+                                    .flatMap { listOf(it.offset, it.offset + 1) } + rubyOwnerRanges.flatMap {
+                                        listOf(it.start, it.end).filter { cut -> cut > first && cut < last }
+                                    }).distinct().sorted()
                                 cuts.zipWithNext().filter { (a, b) -> a < b && images.none { it.offset == a } }
+                                    .filterNot { (a, b) -> rubyOwnerRanges.any { it.start <= a && it.end >= b } }
                                     .filterNot { (a, b) -> inlineStyles.any { authored ->
                                         (authored.height != null || authored.shift != null) &&
                                             authored.source.start <= a && authored.source.end >= b
@@ -641,7 +798,11 @@ internal fun prepareNativeFloatText(
                     native.setSpan(prepared.getValue(run.start).spanForWidth(width.toFloat(), linkPaintAt(run.start, run.end)), run.start, run.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
                 images.forEach { image ->
-                    val replacementPaint = paintAt(image.offset).apply { baselineShift = 0 }
+                    val replacementPaint = paintAt(image.offset).apply {
+                        baselineShift = 0
+                        // The policy's normal underline is a checksum, not bitmap decoration.
+                        if (image.span.linkPaint != null) isUnderlineText = false
+                    }
                     native.setSpan(NativePaintSpan(replacementPaint), image.offset, image.offset + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     native.setSpan(NativeInlineImageSpan(image), image.offset, image.offset + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
@@ -649,7 +810,7 @@ internal fun prepareNativeFloatText(
                     val source = resolved.source
                     val authored = checkNotNull(source.span.inlineStyle)
                     authored.wrap?.let { wrap ->
-                        val textStart = source.start + if (source.span.usesInlineDirectionIsolate()) 1 else 0
+                        val textStart = source.start + if (hasDirectionControls(source.span)) 1 else 0
                         val textEnd = textStart + source.span.text.length
                         if (textStart < source.start || textEnd > source.end || textStart >= textEnd)
                             throw UnsupportedFloatLayout("Authored wrap lost its exact source text range")
@@ -668,6 +829,7 @@ internal fun prepareNativeFloatText(
                                 }
                             }
                             val policy = resolved.height?.let { NativeLineHeightPolicy.Pixels(it) }
+                                ?: source.rubyParentPath?.let { rubyFormats[it]?.lineHeight }
                                 ?: inlineParentPolicies.lastOrNull { it.first <= start && it.second >= end }?.third
                                 ?: NativeLineHeightPolicy.Normal
                             native.setSpan(NativeAuthoredInlineMetrics(primary, policy, declaring), start, end, flags)
@@ -679,6 +841,11 @@ internal fun prepareNativeFloatText(
                         }
                         authored.cursor?.let { native.setSpan(NativeAuthoredCursor(it), start, end, flags) }
                     }
+                }
+                ruby?.let { context ->
+                    if (inlineFailure != null) throw UnsupportedFloatLayout(checkNotNull(inlineFailure))
+                    native.setSpan(NativeRubyPreparedSource(context.projection, native, layoutPaint, direction, rubyFormats),
+                        0, native.length, if (native.isEmpty()) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
                 native
         }
@@ -708,7 +875,8 @@ internal fun prepareNativeFloatText(
                             val model = image.span.image!!
                             val url = inlineImageLinkUrl(image.span, edition)
                             val unresolved = image.span.kind == "link" && image.span.target.startsWith("File:") && url == null
-                            val click: (() -> Unit)? = when {
+                            val authoredActions = imageActions[image.id]
+                            val click: (() -> Unit)? = if (authoredActions != null) authoredActions.onClick else when {
                                 url != null -> { { uri.openUri(url) } }
                                 image.span.kind == "link" && !unresolved -> { { onLink(image.span.entryLink()) } }
                                 else -> null
@@ -721,12 +889,17 @@ internal fun prepareNativeFloatText(
                                 hasDetails -> "Image details"
                                 else -> null
                             })
+                            val fragments = geometry.rectsForRange(image.offset, image.offset + 1)
+                            val focus = image.span.linkPaint?.let {
+                                ordinaryLinkFocusPaint(it, fragments, density.density, bodyPixels)
+                            }
                             add(FloatInteractionNode(firstImage + image.id, FloatInteractionKind.IMAGE, image.offset, image.offset + 1,
-                                geometry.rectsForRange(image.offset, image.offset + 1), accessibilityLabel, advice, click,
+                                fragments, accessibilityLabel, advice, click,
                                 imageStatus(image.state) + if (unresolved) " Image link source unavailable" else "",
-                                if (hasDetails) ({ details = image }) else null))
+                                if (hasDetails) authoredActions?.onDetails ?: ({ details = image }) else null,
+                                focusPaint = focus, sourceFocusVisible = image.span.linkPaint != null))
                         }
-                        val afterImages = firstImage + spans.size
+                        val afterImages = firstImage + visibleSpans.size
                         if (prefix.isNotEmpty()) {
                             val band = (geometry as NativeFloatGeometry).firstLineBand()
                             val markerBounds = if (rtl) RectF(band.right, band.top, band.right + prefixWidth, band.bottom)
@@ -803,7 +976,7 @@ internal fun prepareNativeFloatText(
 
 
         } }
-    val revision = remember(spans, annotated, effective, shapeKey, prepared, images.map { it.state }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts) { Any() }
+    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { Triple(it.state, it.pixels, it.fallbackWidth) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts) { Any() }
     return PreparedNativeFloatText(annotated.text, layoutUnavailable ?: textState, revision, factory, {
         val detail = details
         DropdownMenu(expanded = detail != null, onDismissRequest = { details = null }) {
@@ -824,11 +997,11 @@ internal fun prepareNativeFloatText(
         insets.left + insets.right + insets.extraLeft + insets.extraRight, breakWordMinimum = authoredHeading && ownerWrap == null) }, fallback = {
         // The normal float owner already holds this image state. Failure UI reuses it.
         CompositionLocalProvider(LocalInlineImageOwner provides owner, LocalOrdinaryLinkPaintNative provides false,
-            LocalAuthoredInlineNative provides false) {
+            LocalAuthoredInlineNative provides false, LocalRubyNative provides (ruby == null)) {
             Column(Modifier.padding(start = with(density) { indentPixels.toDp() })) {
                 Row {
                     if (prefix.isNotEmpty()) Text(prefix, Modifier.width(with(density) { prefixWidth.toDp() }), style = prefixStyle ?: effective)
-                    StyledText(spans, style = style, onLink = onLink, preserveWhitespace = ownerFont != null || authoredHeading || hasInlineFamily || sourceFamily is ContainerFontFamily.Stack)
+                    StyledText(spans, weight = rubyWeight.takeIf { ruby != null }, style = style, onLink = onLink, preserveWhitespace = ruby != null || ownerFont != null || authoredHeading || hasInlineFamily || sourceFamily is ContainerFontFamily.Stack)
                 }
                 if (!authoredHeading) headingActions.forEach { action -> TextButton(onClick = action.onClick) { Text(action.label) } }
             }

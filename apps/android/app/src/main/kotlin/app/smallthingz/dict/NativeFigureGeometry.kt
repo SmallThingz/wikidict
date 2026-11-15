@@ -49,7 +49,7 @@ internal class NativeFigureGeometry(
             nativeBoundsOf(nodes.flatMap { it.bounds })).including(caption.extents, captionX, captionY)
     }
     override fun containsInteraction(x: Float, y: Float): Boolean =
-        nodes.any { node -> node.bounds.any { it.contains(x, y) } } ||
+        nodes.any { node -> if (node.preciseClip == null) node.bounds.any { it.contains(x, y) } else node.contains(x, y) } ||
             caption.containsInteraction(x - captionX, y - captionY)
 
     private val deferredMedia = metrics.tableCaption?.prepared?.layout?.media?.positioning == ContainerPositioning.RelativeAuto
@@ -120,6 +120,13 @@ internal class NativeFigureGeometry(
     override fun revealOffset(offset: Int, onRevealed: () -> Unit) = caption.revealOffset(offset, onRevealed)
     override fun clipForOffset(offset: Int): RectF? = caption.clipForOffset(offset)
         ?.let { RectF(it).apply { offset(captionX, captionY) } }
+    override val hasPreciseClips: Boolean get() = caption.hasPreciseClips
+    override fun preciseClipForOffset(offset: Int): NativeTextClip? = caption.preciseClipForOffset(offset)?.translated(captionX, captionY)
+    override fun paintSelection(canvas: Canvas, start: Int, end: Int, paint: Paint) {
+        val saved = canvas.save()
+        try { canvas.translate(captionX, captionY); caption.paintSelection(canvas, start, end, paint) }
+        finally { canvas.restoreToCount(saved) }
+    }
     override fun cursorAt(x: Float, y: Float): InlineCursor? {
         val localX = x - captionX; val localY = y - captionY
         if (caption.positionedGroups.any { it.contains(localX, localY) }) return caption.cursorAt(localX, localY)
@@ -136,6 +143,8 @@ internal class NativeFigureGeometry(
     }
     override fun caretRect(offset: Int): RectF = caption.caretRect(offset).apply { offset(captionX, captionY) }
     override fun lineRange(offset: Int): Pair<Int, Int> = caption.lineRange(offset)
+    override fun visualLineRanges(offset: Int): List<Pair<Int, Int>> = caption.visualLineRanges(offset)
+    override fun isHardLineBreak(offset: Int): Boolean = caption.isHardLineBreak(offset)
     override fun visualOffset(offset: Int, direction: Int): Int = caption.visualOffset(offset, direction)
     override fun rectsForRange(start: Int, end: Int): List<RectF> = caption.rectsForRange(start, end)
         .map { RectF(it).apply { offset(captionX, captionY) } }

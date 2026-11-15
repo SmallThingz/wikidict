@@ -60,7 +60,8 @@ internal class NativeTableMarginMeasureInput(val table: Table) {
     private var intrinsicWidths: ContainerWidths? = null
     val blockIntrinsicQuery: Any? get() = intrinsicQuery
     fun beginBlockIntrinsicQuery(): Any {
-        if (table.blockViewport == null || table.floatViewport == null || binding == null)
+        if (table.blockViewport == null ||
+            table.floatViewport == null && table.blockViewport.intrinsicContainingDirection == null || binding == null)
             throw UnsupportedFloatLayout("Paired table intrinsic owner is unavailable")
         clear()
         request = null

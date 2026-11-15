@@ -187,4 +187,79 @@ class InlineImageTest {
         assertEquals(InlineImageReplacement, mapped.text.substring(marker.start, marker.end))
         assertEquals(listOf(span, span), compactSpans(listOf(span, span)))
     }
+
+    @Test fun retainedOriginalAxesUseCurrentBoundsDensityAndMimeWithoutInventingInitialGeometry() {
+        val source = InlineImage("Controlled.png", 120, 90, alt = "Complete alternative", border = true)
+        val original = InlineImageKnownGeometry(310, 157, "image/png")
+        assertEquals(InlineImagePixels(120f, 61f), original.pixels(source, 1f))
+        assertEquals(InlineImagePixels(150f, 76.25f), original.pixels(source, 1.25f))
+        assertEquals(InlineImagePixels(152.5f, 78.75f), inlineImageOuterPixels(
+            checkNotNull(original.pixels(source, 1.25f)), source.border, 1.25f))
+        assertEquals(InlineImagePixels(30f, 15f), original.pixels(source.copy(widthPx = 30, heightPx = 30), 1f))
+        assertEquals(InlineImagePixels(33f, 90f), InlineImageKnownGeometry(90, 240, "image/png").pixels(source, 1f))
+        val heightOnly = InlineImage("Ratio.svg", heightPx = 80)
+        assertNull(InlineImageKnownGeometry(20, 40, null).pixels(heightOnly, 1f))
+        assertEquals(InlineImagePixels(40f, 80f), InlineImageKnownGeometry(20, 40, "image/svg+xml").pixels(heightOnly, 1f))
+        assertEquals(InlineImagePixels(20f, 40f), InlineImageKnownGeometry(20, 40, "image/png").pixels(heightOnly, 1f))
+        for ((width, height) in listOf(0L to 157L, 310L to 0L, -1L to 157L)) {
+            assertThrows(IllegalArgumentException::class.java) { InlineImageKnownGeometry(width, height, "image/png") }
+        }
+        val unknown = InlineImageGeometryState()
+        assertNull(unknown[inlineImageAssetKey(source)])
+        for (state in listOf(InlineImageAssetState.Disabled, InlineImageAssetState.Loading, InlineImageAssetState.Failed)) {
+            assertEquals("Complete alternative", inlineImageFallbackText(source, state))
+            assertNull(unknown[inlineImageAssetKey(source)])
+        }
+        assertEquals(120L, source.widthPx); assertEquals(90L, source.heightPx)
+        assertEquals("Complete alternative", source.alt)
+    }
+
+    @Test fun retainedAxesSurviveRequestClosureButStaleRequestsCannotReplaceNewAssetMetadata() {
+        val known = InlineImageGeometryState()
+        val key = inlineImageAssetKey(InlineImage("Controlled.png"))
+        val first = Any(); val replacement = Any()
+        val original = InlineImageKnownGeometry(310, 157, "image/png")
+        val updated = InlineImageKnownGeometry(90, 240, "image/png")
+        known.start(key, first)
+        assertTrue(known.accept(key, first, original))
+        known.start(key, replacement)
+        known.finish(key, first) // Closing an older settings/density owner cannot cancel its replacement.
+        assertFalse(known.accept(key, first, updated))
+        assertEquals(original, known[key])
+        assertTrue(known.isCurrent(key, replacement))
+        assertTrue(known.accept(key, replacement, updated))
+        assertEquals(updated, known[key])
+        known.finish(key, replacement)
+        assertFalse(known.isCurrent(key, replacement))
+        assertFalse(known.accept(key, replacement, original))
+        assertEquals(updated, known[key])
+        val retry = Any()
+        known.start(key, retry)
+        assertEquals(updated, known[key])
+        assertTrue(known.accept(key, retry, original))
+        assertEquals(original, known[key])
+    }
+
+    @Test fun retainedAxesStayWithinExactAssetAndCompositionSourceIdentity() {
+        val known = InlineImageGeometryState()
+        val first = InlineImage("Controlled.svg", 120, svgLanguage = "en")
+        val translated = first.copy(svgLanguage = "fr")
+        val other = first.copy(file = "Other.svg")
+        val key = inlineImageAssetKey(first)
+        val token = Any()
+        known.start(key, token)
+        val original = InlineImageKnownGeometry(310, 157, "image/svg+xml")
+        assertTrue(known.accept(key, token, original))
+        assertEquals(original, known[inlineImageAssetKey(first.copy(widthPx = 30, heightPx = 30))])
+        assertNull(known[inlineImageAssetKey(translated)])
+        assertNull(known[inlineImageAssetKey(other)])
+        val newSource = InlineImageGeometryState()
+        assertNull(newSource[key])
+        assertFalse(newSource.accept(key, token, original))
+        val next = Any(); newSource.start(key, next)
+        val changed = InlineImageKnownGeometry(90, 240, "image/svg+xml")
+        assertTrue(newSource.accept(key, next, changed))
+        assertEquals(changed, newSource[key])
+        assertEquals(original, known[key])
+    }
 }

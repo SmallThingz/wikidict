@@ -36,7 +36,7 @@ internal class NativeLinePainter private constructor(
     private var selectedLine = 0
     private var selectionEndLine: Int? = null
 
-    /** Public native TextLine dispatch exposes exact decoration rectangles even on API28. */
+    /** Public native TextLine dispatch exposes exact decoration rectangles on the supported platform versions. */
     fun decorationBounds(positions: List<NativeLinePaintPlacement>): NativeFloatBounds? {
         return observedPaintBounds(positions, false).decorations
     }
@@ -126,7 +126,7 @@ internal class NativeLinePainter private constructor(
         }
     }
 
-    private fun horizontalShift(position: NativeLinePaintPlacement): Float {
+    internal fun horizontalShift(position: NativeLinePaintPlacement): Float {
         val (line, _, leftIndent, rightIndent) = position
         val ltr = shaped.getParagraphDirection(line) == 1
         return when (shaped.getParagraphAlignment(line)) {
@@ -135,6 +135,16 @@ internal class NativeLinePainter private constructor(
             Layout.Alignment.ALIGN_CENTER -> (leftIndent - rightIndent) shr 1
             else -> error("Unsupported native paragraph alignment")
         }.toFloat() + position.originX
+    }
+
+    /** Ruby fragment endpoints keep the selected native line's affinity. The public
+     * Layout query otherwise assigns a soft-wrap end to the following line. */
+    internal fun caretHorizontalOnLine(line: Int, offset: Int, position: NativeLinePaintPlacement): Float {
+        require(line == position.line && offset in shaped.getLineStart(line)..shaped.getLineEnd(line))
+        check(selectionEndLine == null)
+        selectionEndLine = line
+        try { return getPrimaryHorizontal(offset) + horizontalShift(position) }
+        finally { selectionEndLine = null }
     }
 
     /** Keep source range fragments on this actual native line, including a soft-wrap end. */
@@ -233,7 +243,7 @@ private class NativeLinePaintSource(private val shaped: Layout, val decorationPr
         }
     }
 
-    // Layout's background/text split is hidden on API28. Invoke the public span contract in
+    // Layout's background/text split is not public on API31-33. Invoke the public span contract in
     // its original order, then let Layout paint all text and margin decorations normally.
     fun paintBackgrounds(canvas: Canvas, paint: TextPaint, positions: List<NativeLinePaintPlacement>) {
         if (backgrounds.isEmpty()) return

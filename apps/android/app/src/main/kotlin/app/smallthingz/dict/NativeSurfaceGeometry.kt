@@ -1,6 +1,7 @@
 package app.smallthingz.dict
 
 import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.RectF
 
 /**
@@ -36,6 +37,13 @@ internal class NativeSurfaceGeometry(val content: FloatTextGeometry,
         try { canvas.translate(dx, dy); content.paintOrdinary(canvas) }
         finally { canvas.restoreToCount(saved) }
     }
+    override val hasPreciseClips: Boolean get() = content.hasPreciseClips
+    override fun preciseClipForOffset(offset: Int): NativeTextClip? = content.preciseClipForOffset(offset)?.translated(dx, dy)
+    override fun paintSelection(canvas: Canvas, start: Int, end: Int, paint: Paint) {
+        val saved = canvas.save()
+        try { canvas.translate(dx, dy); content.paintSelection(canvas, start, end, paint) }
+        finally { canvas.restoreToCount(saved) }
+    }
     override fun offsetForPosition(x: Float, y: Float): Int = content.offsetForPosition(x - dx, y - dy)
     override fun rectsForRange(start: Int, end: Int): List<RectF> = content.rectsForRange(start, end)
         .map { RectF(it).apply { offset(dx, dy) } }
@@ -49,5 +57,7 @@ internal class NativeSurfaceGeometry(val content: FloatTextGeometry,
         content.horizontalScrollTargetAt(x - dx, y - dy)
     override fun caretRect(offset: Int): RectF = RectF(content.caretRect(offset)).apply { offset(dx, dy) }
     override fun lineRange(offset: Int): Pair<Int, Int> = content.lineRange(offset)
+    override fun visualLineRanges(offset: Int): List<Pair<Int, Int>> = content.visualLineRanges(offset)
+    override fun isHardLineBreak(offset: Int): Boolean = content.isHardLineBreak(offset)
     override fun visualOffset(offset: Int, direction: Int): Int = content.visualOffset(offset, direction)
 }

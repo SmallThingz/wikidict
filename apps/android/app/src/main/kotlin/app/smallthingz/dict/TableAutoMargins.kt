@@ -9,7 +9,6 @@ internal data class NativeTableAutoMargins(
     val rightAuto: Boolean,
 ) {
     init {
-        require(leftAuto || rightAuto)
         require(!leftAuto || fixed.left == 0f)
         require(!rightAuto || fixed.right == 0f)
     }
@@ -70,7 +69,7 @@ internal fun solveTableAutoMargins(availableWidth: Float, finalBorderWidth: Floa
     var right = fixed.right.toDouble()
     if (flow == NativeTableMarginFlow.Block) {
         val remaining = availableWidth.toDouble() - finalBorderWidth - left - right
-        if (remaining >= 0.0) {
+        if (remaining >= 0.0 && (margins.leftAuto || margins.rightAuto)) {
             when {
                 margins.leftAuto && margins.rightAuto -> { left = remaining / 2.0; right = remaining / 2.0 }
                 margins.leftAuto -> left = remaining

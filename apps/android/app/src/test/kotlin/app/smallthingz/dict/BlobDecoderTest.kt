@@ -66,6 +66,10 @@ class BlobDecoderTest {
                     ImageDarkModeFilter.InvertHueRotate180 -> "invert_hue_rotate_180"
                 } }
                 image.svgLanguage?.let { values["svg_language"] = it }
+                image.verticalAlign?.let { values["vertical_align"] = when (it) {
+                    InlineImageVerticalAlign.Middle -> "middle"
+                    InlineImageVerticalAlign.Baseline -> "baseline"
+                } }
             } }
         }
     private fun producerMapAction(value: ImageMapAction): Map<String, Any?> = linkedMapOf(
@@ -668,6 +672,93 @@ class BlobDecoderTest {
             assertEquals(absent, present.filterKeys { it != "frame_min_width" })
             assertEquals("{\"unit\":\"px\",\"value\":${value.toDouble()}}", producerJson(present["frame_min_width"]))
         }
+    }
+
+    @Test fun genuineJapaneseTabijiBlobPreservesTypedRubyAndCompleteBody() {
+        // Exact ordinary Writer output; provenance and the independent Reader oracle are in FIXTURES.md.
+        val bytes = checkNotNull(javaClass.getResourceAsStream("/zh-tabiji-typed-ruby.wikblb"))
+            .use { it.readBytes() }
+        assertEquals(1852, bytes.size)
+        assertEquals("5a674511ec65701532d90c002e9285d76dcbe806c050a488c463b79a24bfcce4", producerDigest(bytes))
+        val entry = CountingInput(bytes.inputStream()).use { input ->
+            assertEquals("WIKBLB08", input.bytes(8).decodeToString())
+            val kind = blobKind(input.read())
+            val code = input.nul()
+            val language = input.nul()
+            val title = input.nul()
+            assertEquals("language", kind)
+            assertEquals("ja", code)
+            assertEquals("日語", language)
+            assertEquals("たびぢ", title)
+            val length = input.varuint()
+            require(length in 4L..(bytes.size.toLong() - input.position))
+            val payload = input.bytes(length.toInt())
+            assertEquals("DPRS", payload.copyOfRange(0, 4).decodeToString())
+            BlobDecoder.decode(payload, title, kind, language, code).also {
+                assertEquals(-1, input.read())
+                assertEquals(bytes.size.toLong(), input.position)
+            }
+        }
+        val baseFont = InlineFontSnapshot(fontScale = 1.5f, fontScaleBasis = FontScaleBasis.NormalBody,
+            language = "ja", classes = "Jpan")
+        val readingFont = baseFont.copy(fontScale = 0.75f)
+        val base = Span("link", "旅路", target = "旅路#日語", language = "ja", classes = "Jpan",
+            fontScale = 1.5f, fontScaleBasis = FontScaleBasis.NormalBody)
+        val reading = base.copy(text = "たびじ", fontScale = 0.75f)
+        val ruby = Ruby(listOf(RubySegment(emptyList(),
+            listOf(RubyBase(RubyOwner(baseFont), emptyList(), listOf(base))),
+            listOf(RubyAnnotation(0, 1, 0, RubyOwner(readingFont,
+                inlineStyle = InlineTextStyle(lineHeight = InlineLineHeight.FontRelative(1f, readingFont))),
+                emptyList(), listOf(reading), emptyList(), emptyList(), false)))))
+        val rubySpans = listOf(
+            Span("text", "【", language = "ja", classes = "Jpan", fontScale = 1.5f,
+                fontScaleBasis = FontScaleBasis.NormalBody),
+            Span("text", "", language = "ja", classes = "Jpan", fontScale = 1.5f,
+                fontScaleBasis = FontScaleBasis.NormalBody, ruby = ruby),
+            Span("text", "】", language = "ja", classes = "Jpan", fontScale = 1.5f,
+                fontScaleBasis = FontScaleBasis.NormalBody))
+        val meaning = listOf(
+            Span("text", "[名词]", fontScale = 0.8f, fontScaleBasis = FontScaleBasis.NormalBody),
+            Span("text", " "),
+            Span("text", "(", classes = "usage-label-sense ib-brac label-brac"),
+            Span("link", "詩歌", target = "詩歌", classes = "usage-label-sense ib-content label-content", role = "label"),
+            Span("text", ")", classes = "usage-label-sense ib-brac label-brac"),
+            Span("text", " "), Span("link", "旅途", target = "旅途"), Span("text", "，"),
+            Span("link", "旅程", target = "旅程"))
+        val inner = Table(emptyList(), listOf(listOf(
+            Cell(rubySpans, false, 1, 1, style = CellStyle(
+                width = StyleWidth(StyleWidthUnit.Percent, 15f), verticalAlign = CellVerticalAlign.Top)),
+            Cell(meaning, false, 1, 1))), style = TableStyle(width = StyleWidth(StyleWidthUnit.Percent, 100f)))
+        val introduction = listOf(
+            Span("text", "對於 ", bold = true),
+            Span("text", "たびぢ", language = "ja", classes = "Jpan", bold = true),
+            Span("text", " 的發音和釋義，請參見下方詞條。", bold = true))
+        val historicalNote = listOf(
+            Span("text", "(本詞條「"),
+            Span("text", "たびぢ", language = "ja", classes = "Jpan mention Jpan", italic = true),
+            Span("text", " "), Span("text", "(", classes = "mention-gloss-paren annotation-paren"),
+            Span("text", "tabidi", classes = "tr"),
+            Span("text", ")", classes = "mention-gloss-paren annotation-paren"),
+            Span("text", "」是上方詞條的歷史假名表記。)"))
+        // Preserve the absent outer style: the producer reports unresolved_table_style, not complete CSS fidelity.
+        val outer = Table(emptyList(), listOf(
+            listOf(Cell(introduction, false, 1, 1)),
+            listOf(Cell(emptyList(), false, 1, 1,
+                blocks = listOf(Block("table", 0, emptyList(), table = inner)))),
+            listOf(Cell(historicalNote, false, 1, 1))))
+        val expected = Entry("たびぢ", emptyList(), "language", "日語", "ja",
+            listOf(Section(2, "日语", listOf(Block("table", 0, emptyList(), table = outer)),
+                anchor = "日语", anchorFallback = ".E6.97.A5.E8.AF.AD")), emptyList(),
+            organization = PresentationOrganization(emptyList(), listOf(0)))
+        assertEquals("Complete decoded body, owners, actions and absent optional fields", expected, entry)
+
+        val decodedRubySpans = checkNotNull(checkNotNull(entry.sections.single().blocks.single().table)
+            .rows[1].single().blocks).single().table!!.rows.single().first().spans
+        val projection = rubyGraphicalProjection(decodedRubySpans)
+        assertEquals("【旅路たびじ】", projection.text)
+        assertEquals(listOf(Triple(1, 3, "旅路#日語"), Triple(3, 6, "旅路#日語")),
+            projection.ranges.filter { it.span?.kind == "link" }.map { Triple(it.start, it.end, it.span!!.target) })
+        assertEquals("【旅路（たびじ）】", rubyFallbackText(decodedRubySpans))
     }
 
     @Test fun everyRealCorpusRecordDecodesDirectly() {

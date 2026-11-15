@@ -366,7 +366,7 @@ class SectionHeadingModelCodecTest {
         }
         val noFeatures = "DPRO".encodeToByteArray() + ByteArray(28)
         assertNull(read(noFeatures).bodyAdjoining)
-        val future = runCatching { read(header(noFeatures, 'Q')) }.exceptionOrNull()
+        val future = runCatching { read(header(noFeatures, 'T')) }.exceptionOrNull()
         assertEquals("Unsupported presentation format", future!!.message)
         val malformed = runCatching { read(header(noFeatures, 'P') + byteArrayOf(0)) }.exceptionOrNull()
         assertEquals("Unsupported body adjoining policy", malformed!!.message)

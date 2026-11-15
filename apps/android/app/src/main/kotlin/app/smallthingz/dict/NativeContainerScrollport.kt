@@ -156,11 +156,29 @@ internal fun nativeScrollportAllocation(viewport: Int, usedHeight: Float, layout
  * screen clip, including nested owners, instead of assuming the Android host window is the clip. */
 internal class NativeScrollClip(private val parent: NativeScrollClip?) {
     private var screen: RectF? = null
-    fun update(bounds: Rect, view: View) {
+    private var preciseScreen: NativeTextClip? = null
+    fun update(bounds: Rect, view: View, precise: NativeTextClip? = null) {
         val window = IntArray(2); val global = IntArray(2)
         view.getLocationInWindow(window); view.getLocationOnScreen(global)
         screen = RectF(bounds.left + global[0] - window[0], bounds.top + global[1] - window[1],
             bounds.right + global[0] - window[0], bounds.bottom + global[1] - window[1])
+        preciseScreen = precise?.translated((global[0] - window[0]).toFloat(), (global[1] - window[1]).toFloat())
+    }
+    fun preciseInScreen(): NativeTextClip? {
+        val inherited = parent?.preciseInScreen()
+        val own = preciseScreen
+        val result = if (own == null) inherited else if (inherited == null) own else own.intersected(inherited)
+        return result?.intersected(inScreen())
+    }
+    fun preciseInView(view: View): NativeTextClip? = preciseInScreen()?.let { clip ->
+        when (view) {
+            is NativeTableScrollFocusView -> view.tableScreenToLocal(clip)
+            is NativeFloatTextView -> view.tableScreenToLocal(clip)
+            else -> null
+        } ?: run {
+            val at = IntArray(2); view.getLocationOnScreen(at)
+            clip.translated(-at[0].toFloat(), -at[1].toFloat())
+        }
     }
     fun inScreen(): RectF {
         val result = screen?.let(::RectF) ?: return RectF()

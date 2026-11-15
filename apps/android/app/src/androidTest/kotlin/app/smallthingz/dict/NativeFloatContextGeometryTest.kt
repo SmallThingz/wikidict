@@ -787,10 +787,26 @@ class NativeFloatContextGeometryTest {
             fun focus() {
                 assertTrue(action(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS))
                 assertTrue(action(AccessibilityNodeInfo.ACTION_FOCUS))
+                assertTrue(view.isFocused)
+                val focused = checkNotNull(provider.createAccessibilityNodeInfo(id))
+                assertTrue(focused.isFocused)
+                assertTrue(focused.isAccessibilityFocused)
             }
-            fun clearFocus() {
+            fun clearFocus(keyboardAlreadyCleared: Boolean = false) {
+                val before = checkNotNull(provider.createAccessibilityNodeInfo(id))
+                assertTrue(before.isAccessibilityFocused)
+                assertEquals(!keyboardAlreadyCleared, before.isFocused)
                 assertTrue(action(AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS))
-                assertTrue(action(AccessibilityNodeInfo.ACTION_CLEAR_FOCUS))
+                if (keyboardAlreadyCleared) {
+                    // Disabling the host already delivered onFocusChanged(false).
+                    assertFalse(view.isFocused)
+                    assertFalse(action(AccessibilityNodeInfo.ACTION_CLEAR_FOCUS))
+                } else {
+                    assertTrue(action(AccessibilityNodeInfo.ACTION_CLEAR_FOCUS))
+                }
+                val cleared = checkNotNull(provider.createAccessibilityNodeInfo(id))
+                assertFalse(cleared.isFocused)
+                assertFalse(cleared.isAccessibilityFocused)
             }
             bind("old"); measure(); activate("old"); focus()
             // Keep the same text, range and virtual ID: callback ownership still changes.
@@ -801,12 +817,12 @@ class NativeFloatContextGeometryTest {
             measure(); activate("new"); focus()
             view.isEnabled = false
             assertFalse(checkNotNull(provider.createAccessibilityNodeInfo(id)).isEnabled)
-            rejectActivation(); clearFocus()
+            rejectActivation(); clearFocus(keyboardAlreadyCleared = true)
             assertEquals(listOf("old:click", "old:long", "new:click", "new:long"), callbacks)
             view.isEnabled = true
             activate("new"); focus()
             view.isEnabled = false
-            bind("third"); rejectActivation(); clearFocus()
+            bind("third"); rejectActivation(); clearFocus(keyboardAlreadyCleared = true)
             measure(); rejectActivation()
             view.isEnabled = true
             activate("third")
@@ -814,4 +830,249 @@ class NativeFloatContextGeometryTest {
                 "new:click", "new:long", "third:click", "third:long"), callbacks)
         }
     }
+
+    /** Real View dispatch and GestureDetector timers; this fixture does not claim window attachment. */
+    private class CancellationInputFixture(context: android.content.Context) {
+        val text = "Action\nSelection stays here"
+        val nodeId = 91
+        val callbacks = mutableListOf<String>()
+        val linkPaint = NativeMissingLinkPaint(MissingLinkPaint.VectorNewLinkV1, dark = false, visited = false,
+            actionIdentity = MissingLinkActionIdentity(Any(), MissingLinkTarget("en", "link", "Action", null)))
+        val view = NativeFloatTextView(context)
+        lateinit var geometry: NativeFloatGeometry
+        private var downTime = 0L
+        init {
+            view.setPadding(7, 11, 9, 13)
+            view.bind({ width ->
+                NativeFloatGeometry.build(SpannableString(text), TextPaint().apply { textSize = 20f },
+                    width, emptyList(), nodeFactory = { layout -> listOf(
+                        FloatInteractionNode(nodeId, FloatInteractionKind.LINK, 0, 6,
+                            layout.rectsForRange(0, 6), "Action", null, { callbacks += "click" },
+                            onLongClick = { callbacks += "long" }, missingLinkPaint = linkPaint))
+                    }).also { geometry = it }
+            }, 0x6633b5e5, 0xff1686c7.toInt())
+            view.measure(View.MeasureSpec.makeMeasureSpec(280, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+            view.layout(0, 0, view.measuredWidth, view.measuredHeight)
+            assertSame(geometry, view.currentMeasuredGeometry)
+        }
+        fun touch(action: Int): Boolean {
+            check(android.os.Looper.myLooper() == android.os.Looper.getMainLooper())
+            val now = android.os.SystemClock.uptimeMillis()
+            if (action == android.view.MotionEvent.ACTION_DOWN) downTime = now
+            val bounds = geometry.nodes.single().bounds.single()
+            val event = android.view.MotionEvent.obtain(downTime, now, action,
+                view.paddingLeft + bounds.centerX(), view.paddingTop + bounds.centerY(), 0)
+            event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+            return try { view.dispatchTouchEvent(event) } finally { event.recycle() }
+        }
+        fun key(action: Int): Boolean = view.dispatchKeyEvent(KeyEvent(action, KeyEvent.KEYCODE_ENTER))
+        fun focus() {
+            val provider = view.accessibilityNodeProvider
+            val accessibilityFocus = provider.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            if (accessibilityFocus == null)
+                assertTrue(provider.performAction(nodeId, AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null))
+            else try { assertEquals("Action", accessibilityFocus.text.toString()) } finally { accessibilityFocus.recycle() }
+            assertTrue(provider.performAction(nodeId, AccessibilityNodeInfo.ACTION_FOCUS, null))
+        }
+        fun assertFocusedSource(inputFocused: Boolean = true) {
+            assertEquals(inputFocused, view.hasFocus())
+            val provider = view.accessibilityNodeProvider
+            if (!inputFocused) assertNull(provider.findFocus(AccessibilityNodeInfo.FOCUS_INPUT))
+            val kinds = if (inputFocused) listOf(AccessibilityNodeInfo.FOCUS_INPUT, AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+                else listOf(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+            for (kind in kinds) {
+                val info = requireNotNull(provider.findFocus(kind))
+                try { assertEquals("Action", info.text.toString()) } finally { info.recycle() }
+            }
+            val node = requireNotNull(provider.createAccessibilityNodeInfo(nodeId))
+            try {
+                assertEquals("Action", node.text.toString())
+                assertEquals(view.isEnabled, node.isEnabled)
+            } finally { node.recycle() }
+            assertSame(geometry, view.currentMeasuredGeometry)
+            assertEquals(text, view.logicalText.toString())
+        }
+    }
+
+    private fun withCancellationInputFixture(body: (CancellationInputFixture) -> Unit) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        var fixture: CancellationInputFixture? = null
+        var primary: Throwable? = null
+        try {
+            instrumentation.runOnMainSync { fixture = CancellationInputFixture(instrumentation.targetContext) }
+            body(checkNotNull(fixture))
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                instrumentation.runOnMainSync {
+                    fixture?.let {
+                        it.view.cancelPendingInputEvents()
+                        it.view.isEnabled = true
+                        it.touch(android.view.MotionEvent.ACTION_CANCEL)
+                        it.view.clearFocus()
+                    }
+                }
+            } catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (cleanup !== failure) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
+    private fun awaitCancellationLongPressDeadline() {
+        check(android.os.Looper.myLooper() != android.os.Looper.getMainLooper())
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        val ready = java.util.concurrent.CountDownLatch(1)
+        val barrier = Runnable { ready.countDown() }
+        val delay = android.view.ViewConfiguration.getLongPressTimeout().toLong() +
+            android.view.ViewConfiguration.getTapTimeout().toLong() + 100L
+        instrumentation.runOnMainSync { assertTrue(handler.postDelayed(barrier, delay)) }
+        var primary: Throwable? = null
+        try {
+            assertTrue("The main looper must process the real long-press deadline",
+                ready.await(delay + 2000L, java.util.concurrent.TimeUnit.MILLISECONDS))
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                instrumentation.runOnMainSync { handler.removeCallbacks(barrier) }
+            } catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (cleanup !== failure) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
+    @Test fun disabledDispatchAndCancelledHeldKeysPreserveSourceStateUntilFreshInput() =
+        withCancellationInputFixture { fixture ->
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                val view = fixture.view
+                fun refocus() { fixture.focus(); view.setSelection(9, 9) }
+                fun unchanged(expectedClicks: Int, inputFocused: Boolean) {
+                    assertEquals(List(expectedClicks) { "click" }, fixture.callbacks)
+                    assertEquals(9, view.selectionStart); assertEquals(9, view.selectionEnd)
+                    assertFalse(fixture.linkPaint.active)
+                    fixture.assertFocusedSource(inputFocused)
+                }
+                refocus()
+                view.isEnabled = false
+                assertFalse(fixture.touch(android.view.MotionEvent.ACTION_DOWN))
+                assertFalse(fixture.touch(android.view.MotionEvent.ACTION_UP))
+                unchanged(0, false)
+                val provider = view.accessibilityNodeProvider
+                assertTrue(provider.performAction(fixture.nodeId, AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS, null))
+                assertNull(provider.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY))
+                view.isEnabled = true
+                refocus()
+
+                assertTrue(fixture.touch(android.view.MotionEvent.ACTION_DOWN))
+                assertTrue(fixture.linkPaint.active)
+                view.isEnabled = false
+                assertFalse(fixture.touch(android.view.MotionEvent.ACTION_UP))
+                unchanged(0, false)
+                view.isEnabled = true
+
+                assertTrue(fixture.touch(android.view.MotionEvent.ACTION_DOWN))
+                view.isEnabled = false
+                view.isEnabled = true
+                fixture.touch(android.view.MotionEvent.ACTION_UP)
+                unchanged(0, false)
+                // Disabling legitimately clears input focus; reacquisition is a separate action.
+                refocus()
+                assertTrue(fixture.touch(android.view.MotionEvent.ACTION_DOWN))
+                assertTrue(fixture.touch(android.view.MotionEvent.ACTION_UP))
+                unchanged(1, true)
+
+                // This fixed-palette link defers keyboard activation to UP, unlike a plain link.
+                assertTrue(fixture.key(KeyEvent.ACTION_DOWN))
+                assertTrue(fixture.linkPaint.active)
+                val focusedRect = android.graphics.Rect().also(view::getFocusedRect)
+                view.cancelPendingInputEvents()
+                assertFalse(fixture.linkPaint.active)
+                fixture.key(KeyEvent.ACTION_UP)
+                unchanged(1, true)
+                assertEquals(focusedRect, android.graphics.Rect().also(view::getFocusedRect))
+                view.isEnabled = false
+                assertFalse(fixture.key(KeyEvent.ACTION_DOWN))
+                assertFalse(fixture.key(KeyEvent.ACTION_UP))
+                view.isEnabled = true
+                unchanged(1, false)
+                refocus()
+                assertTrue(fixture.key(KeyEvent.ACTION_DOWN))
+                view.isEnabled = false
+                view.isEnabled = true
+                fixture.key(KeyEvent.ACTION_UP)
+                unchanged(1, false)
+                refocus()
+                assertTrue(fixture.key(KeyEvent.ACTION_DOWN))
+                assertTrue(fixture.key(KeyEvent.ACTION_UP))
+                unchanged(2, true)
+                assertTrue(provider.performAction(fixture.nodeId, AccessibilityNodeInfo.ACTION_CLICK, null))
+                unchanged(3, true)
+            }
+        }
+
+    @Test fun publicCancellationAndDisableStopRealDelayedLongPressThenFreshInputRecovers() =
+        withCancellationInputFixture { fixture ->
+            val instrumentation = InstrumentationRegistry.getInstrumentation()
+            val view = fixture.view
+            instrumentation.runOnMainSync {
+                view.setSelection(9, 9)
+                assertFalse(view.hasFocus())
+                assertTrue(fixture.touch(android.view.MotionEvent.ACTION_DOWN))
+                assertTrue(fixture.linkPaint.active)
+                view.cancelPendingInputEvents()
+                view.cancelPendingInputEvents()
+                assertFalse(fixture.linkPaint.active)
+            }
+            awaitCancellationLongPressDeadline()
+            instrumentation.runOnMainSync {
+                assertTrue(fixture.callbacks.isEmpty()); assertFalse(view.hasFocus())
+                assertEquals(9, view.selectionStart); assertEquals(9, view.selectionEnd)
+                fixture.touch(android.view.MotionEvent.ACTION_UP)
+                assertTrue(fixture.callbacks.isEmpty())
+                assertTrue(fixture.touch(android.view.MotionEvent.ACTION_DOWN))
+                view.isEnabled = false
+                // Re-enable before the timer: an enabled check alone cannot satisfy this oracle.
+                view.isEnabled = true
+                assertFalse(fixture.linkPaint.active)
+            }
+            awaitCancellationLongPressDeadline()
+            instrumentation.runOnMainSync {
+                assertTrue(fixture.callbacks.isEmpty()); assertFalse(view.hasFocus())
+                assertEquals(9, view.selectionStart); assertEquals(9, view.selectionEnd)
+                fixture.touch(android.view.MotionEvent.ACTION_UP)
+                assertTrue(fixture.callbacks.isEmpty())
+                assertTrue(fixture.touch(android.view.MotionEvent.ACTION_DOWN))
+            }
+            awaitCancellationLongPressDeadline()
+            instrumentation.runOnMainSync {
+                assertEquals(listOf("long"), fixture.callbacks)
+                assertTrue(view.hasFocus())
+                assertEquals(9, view.selectionStart); assertEquals(9, view.selectionEnd)
+                assertFalse(fixture.linkPaint.active)
+                assertTrue(fixture.touch(android.view.MotionEvent.ACTION_UP))
+                assertEquals(listOf("long"), fixture.callbacks)
+                assertTrue(fixture.touch(android.view.MotionEvent.ACTION_DOWN))
+                assertTrue(fixture.touch(android.view.MotionEvent.ACTION_UP))
+                assertEquals(listOf("long", "click"), fixture.callbacks)
+                fixture.focus()
+                view.setSelection(7, fixture.text.length)
+                val focusedRect = android.graphics.Rect().also(view::getFocusedRect)
+                view.cancelPendingInputEvents()
+                assertEquals("Selection stays here", view.selectedTextForCopy())
+                assertEquals(7, view.selectionStart); assertEquals(fixture.text.length, view.selectionEnd)
+                assertEquals(focusedRect, android.graphics.Rect().also(view::getFocusedRect))
+                fixture.assertFocusedSource()
+                assertEquals(listOf("long", "click"), fixture.callbacks)
+            }
+        }
+
 }

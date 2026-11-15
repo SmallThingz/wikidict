@@ -2949,7 +2949,17 @@ class RendererDeviceTest {
             compose.onAllNodes(images, useUnmergedTree = true)[2].performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus) { assertTrue(it()) }
             compose.onAllNodes(images, useUnmergedTree = true)[2].assertIsFocused()
             compose.onAllNodes(images, useUnmergedTree = true)[2].performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
-            compose.onNodeWithText("Retry image").assertIsDisplayed().performClick()
+            val retryAction = compose.onNode(hasText("Retry image") and hasAnyAncestor(isPopup()))
+            retryAction.assertIsDisplayed().assertIsEnabled().assertHasClickAction()
+            retryAction.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus) { assertTrue(it()) }
+            retryAction.assertIsFocused()
+            compose.runOnIdle {
+                assertEquals(androidx.compose.ui.input.InputMode.Keyboard, manager.inputMode)
+                assertEquals(1, metadataCalls.get()); assertEquals(0, downloads.get())
+                assertEquals(1, opened.size); assertTrue(links.isEmpty())
+            }
+            retryAction.performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+            compose.onNode(isPopup()).assertDoesNotExist()
             compose.runOnIdle { assertEquals(1, opened.size); assertTrue(links.isEmpty()) }
             compose.waitUntil(15000) {
                 val nodes = compose.onAllNodes(images, useUnmergedTree = true).fetchSemanticsNodes(atLeastOneRootRequired = false)

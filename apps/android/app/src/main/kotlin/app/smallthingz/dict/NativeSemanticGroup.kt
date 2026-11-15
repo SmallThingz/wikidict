@@ -1,6 +1,7 @@
 package app.smallthingz.dict
 
 import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.RectF
 
 internal data class PositionedSemanticChild(val geometry: FloatTextGeometry, val x: Float, val y: Float,
@@ -82,6 +83,24 @@ internal class NativeSemanticGroup(
         return segment.child.geometry.clipForOffset((offset - segment.start).coerceIn(0, segment.end - segment.start))
             ?.let { RectF(it).apply { offset(segment.child.x, segment.child.y) } }
     }
+    override val hasPreciseClips: Boolean get() = children.any { it.geometry.hasPreciseClips }
+    override fun preciseClipForOffset(offset: Int): NativeTextClip? {
+        val segment = at(offset) ?: segments.firstOrNull { it.start >= offset } ?: return null
+        return segment.child.geometry.preciseClipForOffset((offset - segment.start).coerceIn(0, segment.end - segment.start))
+            ?.translated(segment.child.x, segment.child.y)
+    }
+    override fun paintSelection(canvas: Canvas, start: Int, end: Int, paint: Paint) {
+        require(start in 0..text.length && end in start..text.length)
+        segments.forEach { segment ->
+            val first = maxOf(start, segment.start); val last = minOf(end, segment.end)
+            if (first < last) {
+                val saved = canvas.save()
+                try { canvas.translate(segment.child.x, segment.child.y)
+                    segment.child.geometry.paintSelection(canvas, first - segment.start, last - segment.start, paint) }
+                finally { canvas.restoreToCount(saved) }
+            }
+        }
+    }
     override fun cursorAt(x: Float, y: Float): InlineCursor? {
         val positioned = children.asReversed().firstOrNull { child ->
             child.geometry.positionedGroups.any { it.contains(x - child.x, y - child.y) }
@@ -136,6 +155,18 @@ internal class NativeSemanticGroup(
         val segment = at(offset) ?: return offset to offset
         val range = segment.child.geometry.lineRange(offset - segment.start)
         return segment.start + range.first to segment.start + range.second
+    }
+    override fun visualLineRanges(offset: Int): List<Pair<Int, Int>> {
+        val segment = at(offset) ?: return listOf(offset to offset)
+        return segment.child.geometry.visualLineRanges(offset - segment.start).map { range ->
+            segment.start + range.first to segment.start + range.second
+        }
+    }
+    override fun isHardLineBreak(offset: Int): Boolean {
+        require(offset in 0 until text.length)
+        val segment = segments.firstOrNull { offset >= it.start && offset < it.end }
+        return segment?.let { it.child.geometry.isHardLineBreak(offset - it.start) }
+            ?: (text[offset] == '\n') // Explicit separatorBefore, outside every child.
     }
     override fun visualOffset(offset: Int, direction: Int): Int {
         require(direction in listOf(-1, 1))

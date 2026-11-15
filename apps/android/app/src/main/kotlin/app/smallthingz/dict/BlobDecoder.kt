@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRP decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRS decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table", "container")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,12 +13,12 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..80) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..80) 57 else magicVersion
-        r.fontScales = magicVersion in 65..80
-        r.fontScaleBases = magicVersion in 66..80
-        r.tableStyles = magicVersion in 67..80
-        r.inlineImages = magicVersion in 67..80
+        require(magicVersion in 50..57 || magicVersion in 65..83) { "Unsupported presentation format" }
+        val version = if (magicVersion in 65..83) 57 else magicVersion
+        r.fontScales = magicVersion in 65..83
+        r.fontScaleBases = magicVersion in 66..83
+        r.tableStyles = magicVersion in 67..83
+        r.inlineImages = magicVersion in 67..83
         r.imageBorders = magicVersion >= 68
         r.blockLayouts = magicVersion >= 69
         r.targetFragments = magicVersion >= 70
@@ -30,13 +30,18 @@ object BlobDecoder {
         r.containers = magicVersion >= 76
         r.containerFonts = magicVersion >= 77
         r.ruleStyles = magicVersion >= 78
+        r.rubySpans = magicVersion == 83
+        r.ruleClears = magicVersion >= 82
+        r.imageLinkPaints = magicVersion >= 82
         r.inlineStyles = magicVersion >= 79
-        r.extendedFontFamilies = magicVersion == 80
-        r.tableFloatClears = magicVersion == 80
-        r.textFlow = magicVersion == 80
-        r.tableScrollPairs = magicVersion == 80
-        r.absoluteText = magicVersion == 80
-        r.cellOwnerFonts = magicVersion == 80
+        r.extendedFontFamilies = magicVersion >= 80
+        r.tableFloatClears = magicVersion >= 80
+        r.textFlow = magicVersion >= 80
+        r.tableScrollPairs = magicVersion >= 80
+        r.absoluteText = magicVersion >= 80
+        r.cellOwnerFonts = magicVersion >= 80
+        r.tableCorners = magicVersion >= 81
+        r.tableIntrinsicViewports = magicVersion >= 82
         r.explanations = version >= 51
         r.colors = version >= 52
         r.anchors = version >= 53
@@ -95,8 +100,8 @@ object BlobDecoder {
             Reference(number, groupNumber, group, spans, referenceKind, blocks)
         }
         val media = List(r.count(9)) { Media(r.string(), r.enum(listOf("image", "audio")), r.string()) }
-        val features = if (magicVersion == 80) r.byte().also {
-            require(it != 0) { "Unsupported body adjoining policy" }
+        val features = if (magicVersion >= 80) r.byte().also {
+            require(magicVersion >= 81 || it != 0) { "Unsupported body adjoining policy" }
             // All eight P features have exact recursive payload census checks below.
         } else 0
         val bodyAdjoining = if (features and 1 != 0) BodyAdjoiningPolicy.Ordinary else null
@@ -119,6 +124,13 @@ object BlobDecoder {
         require((features and 32 != 0) == r.hasTableScrollFeature) { "Table scroll feature does not match payload" }
         require((features and 64 != 0) == r.hasAbsoluteTextFeature) { "Absolute text feature does not match payload" }
         require((features and 128 != 0) == r.hasCellOwnerFontFeature) { "Cell owner font feature does not match payload" }
+        require(r.tableIntrinsicViewports || r.tableCorners == (r.hasTableCorners || r.hasInlineImageAlignment)) {
+            "Q version does not match corner or image alignment payload"
+        }
+        require(r.rubySpans || r.tableIntrinsicViewports == (r.hasTableIntrinsicViewport || r.hasRuleClearFeature || r.hasImageLinkPaintFeature)) {
+            "R version does not match intrinsic table viewport, rule clear, or image link paint payload"
+        }
+        require(r.rubySpans == r.hasRuby) { "S version does not match ruby payload" }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, styledSections, references, preamble, media,
             etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
@@ -135,6 +147,8 @@ object BlobDecoder {
         private val utf8 = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
         var remainingItems = 1_000_000
+        var rubySpans = false
+        var hasRuby = false
         var explanations = false
         var colors = false
         var anchors = false
@@ -156,6 +170,10 @@ object BlobDecoder {
         var containers = false
         var containerFonts = false
         var ruleStyles = false
+        var ruleClears = false
+        var hasRuleClearFeature = false
+        var imageLinkPaints = false
+        var hasImageLinkPaintFeature = false
         var inlineStyles = false
         var extendedFontFamilies = false
         var tableFloatClears = false
@@ -163,6 +181,11 @@ object BlobDecoder {
         var hasTextFlowFeature = false
         var absoluteText = false
         var hasAbsoluteTextFeature = false
+        var tableCorners = false
+        var hasTableCorners = false
+        var hasInlineImageAlignment = false
+        var tableIntrinsicViewports = false
+        var hasTableIntrinsicViewport = false
         var cellOwnerFonts = false
         var hasCellOwnerFontFeature = false
         private var positionedParent = false
@@ -203,7 +226,7 @@ object BlobDecoder {
             return List(size) { index(Int.MAX_VALUE) }
         }
         fun blockPaths(): List<List<Int>> = List(count(4)) { blockPath() }
-        fun spans(): List<Span> = List(count(if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) { span() }
+        fun spans(): List<Span> = List(count(if (rubySpans) 38 else if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) { span() }
         private fun span(): Span {
             val kind = enum(inline); val role = enum(roles); val f = byte()
             val text = string(); val target = string(); val trail = string()
@@ -241,7 +264,8 @@ object BlobDecoder {
             val fontFamily = if (fontFields and 16 != 0) inlineFontFamily() else null
             val fontScale = rawScale?.takeUnless { it == 1f && basis == FontScaleBasis.Context }
             val imageTag = if (inlineImages) byte() else 0
-            require(imageTag in 0..1 || containerFonts && imageTag == 2) { "Unsupported inline image tag" }
+            require(imageTag in 0..1 || containerFonts && imageTag == 2 ||
+                tableCorners && containerFonts && imageTag == 3) { "Unsupported inline image tag" }
             val image = if (imageTag != 0) {
                 val file = string(); val flags = byte()
                 require(flags and (if (imageDarkFilters) 0 else if (imageMaps) 0xc0 else if (imageBorders) 0xe0 else 0xf0) == 0) { "Unknown inline image flags" }
@@ -253,13 +277,42 @@ object BlobDecoder {
                     svgLanguage = if (flags and 0x80 != 0) string() else null,
                     staticPoster = if (imageTag == 2) StaticPoster(
                         StaticPosterPolicy.entries.getOrNull(byte()) ?: error("Unknown static poster policy"),
-                        string(), string(), string()) else null)
+                        string(), string(), string()) else null,
+                    verticalAlign = if (imageTag == 3) {
+                        (InlineImageVerticalAlign.entries.getOrNull(byte()) ?: error("Unknown inline image alignment"))
+                            .also { hasInlineImageAlignment = true }
+                    } else null)
             } else null
             val targetFragment = if (targetFragments && presence()) string() else null
             val tooltip = if (tooltips && presence()) string() else null
+            val ruby = if (rubySpans && presence()) ruby() else null
+            if (image != null && linkPaint != null) {
+                require(imageLinkPaints) { "Image link paint requires R" }
+                hasImageLinkPaintFeature = true
+            }
             return Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint, inlineStyle=inlineStyle, fontFamily=fontFamily)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint, inlineStyle=inlineStyle, fontFamily=fontFamily, ruby=ruby)
+        }
+        private fun ruby(): Ruby = content {
+            val segments = List(count(38)) {
+                val gap = spans()
+                val bases = List(count(26)) {
+                    val before = spans()
+                    RubyBase(rubyOwner(), before, spans())
+                }
+                val annotations = List(count(47)) {
+                    RubyAnnotation(u32(), u32(), u32(), rubyOwner(), spans(), spans(), spans(), spans(), presence())
+                }
+                RubySegment(gap, bases, annotations)
+            }
+            Ruby(segments).also { hasRuby = true }
+        }
+        private fun rubyOwner(): RubyOwner {
+            require(remainingItems > 0 && buffer.remaining() >= 18) { "Ruby owner exceeds the presentation budget" }
+            remainingItems--
+            return RubyOwner(inlineFontSnapshot(), string(), if (presence()) inlineTextStyle() else null,
+                if (presence()) styleRgb() else null, if (presence()) styleRgb() else null)
         }
         private fun inlineComputedLength(): InlineComputedLength = InlineComputedLength(buffer.float, cellMetricBasis())
         private fun inlineFontSnapshot(requireOmittedSize: Boolean = false): InlineFontSnapshot {
@@ -733,10 +786,13 @@ object BlobDecoder {
             if (!tableStyles || !presence()) return null
             val flags = byte()
             val extension = if (tableFlows) byte() else 0
-            require(extension in 0..(if (containerFonts) 31 else 7) && flags in 0..(if (imageMaps) 255 else if (blockLayouts) 31 else 15) &&
+            require(extension in 0..(if (tableCorners) 63 else if (containerFonts) 31 else 7) && flags in 0..(if (imageMaps) 255 else if (blockLayouts) 31 else 15) &&
                 (flags != 0 || extension != 0)) { "Invalid table style flags" }
             val marginFlags = extension and 0x18
-            require(marginFlags == 0 || marginFlags == 0x18) { "Unpaired table margins and containing direction" }
+            val numericCornerDirection = tableCorners && extension and 0x20 != 0 && flags and 8 != 0 && marginFlags == 0x10
+            require(marginFlags == 0 || marginFlags == 0x18 || numericCornerDirection) {
+                "Unpaired table margins and containing direction"
+            }
             val background = if (flags and 1 != 0) styleRgb() else null
             val border = if (flags and 2 != 0) styleBorder() else null
             val collapse = if (flags and 4 != 0) when (byte()) {
@@ -769,19 +825,31 @@ object BlobDecoder {
             val marginValues = if (extension and 8 != 0) containerMargins() else null
             val containingDirection = if (extension and 16 != 0)
                 TableContainingDirection.entries.getOrNull(byte()) ?: error("Unknown table containing direction") else null
+            val corners = if (extension and 0x20 != 0) {
+                TableCornerRadii(styleLength(), styleLength(), styleLength(), styleLength()).also { hasTableCorners = true }
+            } else null
             return TableStyle(background, border, collapse, margins, floatSide, width, padding, clear, display, align,
-                lineHeight, marginValues, containingDirection)
+                lineHeight, marginValues, containingDirection, corners)
         }
-        private fun tableBlockViewport(paired: Boolean): TableBlockViewport {
+        private fun tableBlockViewport(paired: Boolean, intrinsic: Boolean): TableBlockViewport {
             require(containerFonts && (!paired || tableScrollPairs)) { "Table paired viewport requires P" }
-            return TableBlockViewport(u32(), tableStyle() ?: error("Missing table viewport box style"),
-                ContainerBoxSizing.entries.getOrNull(byte()) ?: error("Unknown table viewport box sizing"),
-                StyleWidth(StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown table viewport max-width unit"), buffer.float),
-                tableStyle() ?: error("Missing anonymous table grid style"),
-                TableContainingDirection.entries.getOrNull(byte()) ?: error("Unknown anonymous table grid direction"),
-                string(), if (paired) TableScrollFocusPaint(
-                    TableScrollFocusMode.entries.getOrNull(byte()) ?: error("Unknown table scroll focus mode"),
-                    if (presence()) figureColor() else null) else null)
+            val threshold = u32()
+            val boxStyle = tableStyle() ?: error("Missing table viewport box style")
+            val boxSizing = ContainerBoxSizing.entries.getOrNull(byte()) ?: error("Unknown table viewport box sizing")
+            val maxWidth = StyleWidth(
+                StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown table viewport max-width unit"), buffer.float)
+            val gridStyle = tableStyle() ?: error("Missing anonymous table grid style")
+            val gridDirection = TableContainingDirection.entries.getOrNull(byte()) ?: error("Unknown anonymous table grid direction")
+            val language = string()
+            val intrinsicDirection = if (intrinsic)
+                TableContainingDirection.entries.getOrNull(byte()) ?: error("Unknown intrinsic table containing direction") else null
+            val hasFocus = paired || intrinsic || tableCorners && tableSeparateCornerViewportShape(
+                threshold, boxStyle, maxWidth, gridStyle, language)
+            val focus = if (hasFocus) TableScrollFocusPaint(
+                TableScrollFocusMode.entries.getOrNull(byte()) ?: error("Unknown table scroll focus mode"),
+                if (presence()) figureColor() else null) else null
+            return TableBlockViewport(threshold, boxStyle, boxSizing, maxWidth, gridStyle, gridDirection, language, focus,
+                intrinsicDirection)
         }
         private fun tableFloatViewport(hasNarrowClear: Boolean): TableFloatViewport {
             require(containerFonts) { "Table float viewport requires M" }
@@ -800,7 +868,8 @@ object BlobDecoder {
             val tableFlags = byte()
             if (tableFlags == 0) return@positionedRoot null
             require(tableFlags == 1 || containerFonts && (tableFlags == 3 || tableFlags == 5) ||
-                tableFloatClears && tableFlags == 13 || tableScrollPairs && tableFlags == 7) { "Invalid table presence flags" }
+                tableFloatClears && tableFlags == 13 || tableScrollPairs && tableFlags == 7 ||
+                tableIntrinsicViewports && tableFlags == 19) { "Invalid table presence flags" }
             require(depth <= MaxTableDepth) { "Table nesting is too deep" }
             val geometry = if (!nestedTables) null else {
                 val flags = byte()
@@ -830,8 +899,10 @@ object BlobDecoder {
             } }
             val style = tableStyle(); val rich = captionBlocks(caption, depth)
             val paired = tableFlags == 7
-            val blockViewport = if (tableFlags and 2 != 0) tableBlockViewport(paired) else null
+            val intrinsic = tableFlags == 19
+            val blockViewport = if (tableFlags and 2 != 0) tableBlockViewport(paired, intrinsic) else null
             if (paired) hasTableScrollFeature = true
+            if (intrinsic) hasTableIntrinsicViewport = true
             val floatViewport = if (tableFlags and 4 != 0) tableFloatViewport(tableFlags and 8 != 0) else null
             require(containerFonts || style?.isInline != true || rows.all { row ->
                 row.all { cell -> cell.spans.none { it.image != null } }
@@ -853,8 +924,17 @@ object BlobDecoder {
             } else null
             val style = blockStyle(); val figure = figure(tableDepth); val flow = flow(tableDepth)
             val container = if (kind == "container") container(tableDepth) else null
-            val ruleStyle = if (ruleStyles && kind == "rule" && presence())
-                RuleStyle(styleLength(), containerColor(), styleEdges()) else null
+            val ruleStyle = if (ruleStyles && kind == "rule") {
+                val marker = byte()
+                require(marker == 0 || marker == 1 || ruleClears && marker == 2) { "Invalid rule style marker" }
+                if (marker == 0) null else {
+                    val height = styleLength(); val fill = containerColor(); val margins = styleEdges()
+                    val clear = if (marker == 2)
+                        FigureClear.entries.getOrNull(byte()) ?: error("Unknown rule clear") else null
+                    if (clear != null) hasRuleClearFeature = true
+                    RuleStyle(height, fill, margins, clear)
+                }
+            } else null
             return Block(kind, depth, spans, path, number, table, feature, level, anchor, fallback, textAlign,
                 style, figure, flow, container, ruleStyle)
         }

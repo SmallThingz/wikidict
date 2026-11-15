@@ -46,11 +46,20 @@ internal fun nativeInlineStyleSpanCopy(span: Any): Any = when (span) {
     is NativeAuthoredUnderline -> span.copy()
     is NativeAuthoredCursor -> span.copy()
     is NativeAuthoredTextWrap -> span.copy()
+    is NativeRubyPreparedSource -> NativeRubyPreparedSource(span.projection, span.source, span.paint,
+        span.direction, span.groups, span.parentScript, span.visualOmissions, span.visualSpaces,
+        span.visualSpaceNeighbors, span.protectedSpaces)
     else -> span
 }
 
 internal fun hasNativeAuthoredInlineMetrics(source: CharSequence): Boolean = source is Spanned &&
     source.getSpans(0, source.length, NativeAuthoredInlineMetrics::class.java).isNotEmpty()
+
+/** Empty semantic owners can still supply a real line/box. This is admission only;
+ * their native metric owners continue to determine the actual used geometry. */
+internal fun hasNativeInlineLayoutOwner(source: CharSequence): Boolean = source is Spanned &&
+    (hasNativeAuthoredInlineMetrics(source) ||
+        source.getSpans(0, source.length, NativeRubyPreparedSource::class.java).isNotEmpty())
 
 /** Native layout callers supply getLineForOffset affinity, including soft wraps and trailing LF. */
 internal fun nativeInlinePointInRange(source: CharSequence, offset: Int, start: Int, end: Int): Boolean =

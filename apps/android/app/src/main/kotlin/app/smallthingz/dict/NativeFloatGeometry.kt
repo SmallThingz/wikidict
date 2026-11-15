@@ -51,6 +51,12 @@ internal data class NativeFloatOccurrence(
 internal data class PlacedNativeFloat(val occurrence: NativeFloatOccurrence, val outer: RectF, val content: RectF)
 internal class UnsupportedFloatLayout(message: String) : IllegalArgumentException(message)
 
+/** Only explicitly aligned ordinary images replace the legacy line-band selection. */
+internal interface NativeAlignedImageSelection {
+    /** Outer image box relative to its native replacement X and the used line baseline. */
+    val nativeImageSelectionBounds: NativeFloatBounds?
+}
+
 /**
  * Owns a single full-context Layout: paragraph bidi, shaping and UTF-16 offsets
  * remain native. Only a float's existing object character gets a zero-width span.
@@ -67,8 +73,9 @@ internal class NativeFloatGeometry private constructor(
     private val decoration: (Canvas, NativeFloatGeometry) -> Unit,
     private val decorationBounds: (NativeFloatGeometry) -> NativeFloatBounds?,
     private val lineOrigins: FloatArray? = null,
+    private val ruby: NativeRubyPlacedProjection? = null,
 ) : FloatTextGeometry {
-    val floats: List<PlacedNativeFloat> get() = flow.floats
+    val floats: List<PlacedNativeFloat> get() = ruby?.floats ?: flow.floats
     /** Includes inherited margin boxes; only [floats] belong to this segment's paint/nodes. */
     val exclusions: List<NativeFloatExclusion> get() = flow.exclusions
     val textBottom: Float get() = flow.bottom
@@ -78,6 +85,8 @@ internal class NativeFloatGeometry private constructor(
         .filter { it.start < it.end }
     private val authoredMetrics = nativeInlineRanges(text as Spanned, NativeAuthoredInlineMetrics::class.java)
     private val authoredCursors = nativeInlineRanges(text as Spanned, NativeAuthoredCursor::class.java)
+    private val alignedImages = nativeInlineRanges(text as Spanned, NativeAlignedImageSelection::class.java)
+        .filter { it.start < it.end && it.value.nativeImageSelectionBounds != null }
     private val linePainter = NativeLinePainter(layout)
     override val nodes: List<FloatInteractionNode> = nodeFactory(this)
     private fun linePresent(line: Int): Boolean = flow.sourceLinePresent?.get(line) ?: true
@@ -117,14 +126,22 @@ internal class NativeFloatGeometry private constructor(
     private val selectableLineBounds by lazy { linePaintPositions.map {
         if (linePresent(it.line)) linePainter.selectableBounds(it) else null
     } }
+    private fun hasAlignedImage(line: Int): Boolean = alignedImages.any {
+        it.start < layout.getLineEnd(line) && it.end > layout.getLineStart(line)
+    }
     private val selectableFragments by lazy {
-        if (authoredBaselines.isEmpty()) selectableLineBounds.filterNotNull()
-        else rectsForRange(0, text.length)
+        if (ruby != null) ruby.rects(0, text.length)
+        else if (authoredBaselines.isNotEmpty()) rectsForRange(0, text.length)
+        else selectableLineBounds.flatMapIndexed { line, bounds ->
+            if (hasAlignedImage(line)) authoredRangeRects(layout.getLineStart(line), layout.getLineEnd(line))
+            else listOfNotNull(bounds)
+        }
     }
 
     /** Native glyph advances use each exact authored line box, not its ceil View allocation
      * or the taller font/selection ink. Floated replacements contribute their real margin boxes. */
     val scrollableBounds: NativeFloatBounds by lazy {
+        ruby?.let { return@lazy it.scrollableBounds }
         if (flow.sourceLinePresent?.none { it } == true) return@lazy NativeFloatBounds(0f, 0f, 0f, 0f)
         var bounds = NativeFloatBounds(0f, 0f, width.toFloat(), textBottom)
         selectableLineBounds.forEachIndexed { line, rect ->
@@ -137,6 +154,7 @@ internal class NativeFloatGeometry private constructor(
     }
 
     override val ordinaryPaintBounds: List<NativeFloatBounds> by lazy {
+        ruby?.let { return@lazy it.ordinaryPaintBounds + listOfNotNull(decorationBounds(this)) }
         listOfNotNull(nativeTextInkBounds(layout, paintedLinePositions),
             nativeBoundsOf(floats.map { it.content }), if (paintedLinePositions.isNotEmpty()) decorationBounds(this) else null)
     }
@@ -152,6 +170,13 @@ internal class NativeFloatGeometry private constructor(
             nodes.any { node -> node.bounds.any { it.contains(x, y) } }
 
     override fun paint(canvas: Canvas) {
+        ruby?.let {
+            it.paintGapBackgrounds(canvas)
+            it.raw.paint(canvas)
+            it.paintGapDecorations(canvas)
+            decoration(canvas, this)
+            return
+        }
         // Paint the complete shaped flow in one batch. A zero containing width or a short
         // line box must not clip its glyphs, and all native backgrounds precede the text.
         if (paintedLinePositions.isEmpty()) return
@@ -161,24 +186,31 @@ internal class NativeFloatGeometry private constructor(
     }
 
     override fun offsetForPosition(x: Float, y: Float): Int {
+        ruby?.let { return it.offset(x, y) }
         floats.lastOrNull { it.content.contains(x, y) }?.let { return it.occurrence.offset }
         val line = lineForPosition(x, y)
         return layout.getOffsetForHorizontal(line, x - originX(line)).coerceIn(0, text.length)
     }
 
     internal fun baselineForOffset(offset: Int): Float {
+        ruby?.let { return it.baseline(offset) }
         require(offset in 0..text.length)
         val line = layout.getLineForOffset(offset)
         return flow.baselines[line] + (authoredBaselineAt(offset)?.value?.shift ?: 0f)
     }
 
     override fun caretRect(offset: Int): RectF {
+        ruby?.let { return it.caret(offset) }
         require(offset in 0..text.length)
         val line = layout.getLineForOffset(offset)
         val x = layout.getPrimaryHorizontal(offset) + originX(line)
         if (!linePresent(line)) return RectF(x, flow.tops[line], x, flow.tops[line])
         if (text.isEmpty() && hasNativeAuthoredInlineMetrics(text))
             return RectF(x, flow.tops[line], x + 1f, flow.bottoms[line])
+        alignedImages.firstOrNull { offset >= it.start && offset < it.end }
+            ?.value?.nativeImageSelectionBounds?.let { own ->
+                return RectF(x, flow.baselines[line] + own.top, x + 1f, flow.baselines[line] + own.bottom)
+            }
         authoredSelectionMetrics(offset)?.let { own ->
             return RectF(x, flow.baselines[line] + own.top, x + 1f, flow.baselines[line] + own.bottom)
         }
@@ -187,20 +219,35 @@ internal class NativeFloatGeometry private constructor(
     }
 
     override fun visualOffset(offset: Int, direction: Int): Int {
+        ruby?.let { return it.visualOffset(offset, direction) }
         require(offset in 0..text.length && direction in listOf(-1, 1))
         return if (direction < 0) layout.getOffsetToLeftOf(offset) else layout.getOffsetToRightOf(offset)
     }
 
+    override fun visualLineRanges(offset: Int): List<Pair<Int, Int>> =
+        ruby?.visualLineRanges(offset) ?: listOf(lineRange(offset))
+
     override fun lineRange(offset: Int): Pair<Int, Int> {
+        ruby?.let { projection ->
+            val fragments = projection.visualLineRanges(offset)
+            return fragments.firstOrNull { offset >= it.first && offset < it.second }
+                ?: fragments.lastOrNull { offset == it.second } ?: (offset to offset)
+        }
         require(offset in 0..text.length)
         val line = layout.getLineForOffset(offset)
         return layout.getLineStart(line) to layout.getLineEnd(line)
     }
 
     override fun rectsForRange(start: Int, end: Int): List<RectF> {
+        ruby?.let { return it.rects(start, end) }
         require(start in 0..text.length && end in start..text.length)
         if (start == end) return emptyList()
-        if (authoredBaselines.any { it.start < end && it.end > start }) return authoredRangeRects(start, end)
+        if (authoredBaselines.any { it.start < end && it.end > start } ||
+            alignedImages.any { it.start < end && it.end > start }) return authoredRangeRects(start, end)
+        return legacyRangeRects(start, end)
+    }
+
+    private fun legacyRangeRects(start: Int, end: Int, includeFloats: Boolean = true): List<RectF> {
         val path = Path()
         layout.getSelectionPath(start, end, path)
         val result = mutableListOf<RectF>()
@@ -218,7 +265,7 @@ internal class NativeFloatGeometry private constructor(
             val iterator = RegionIterator(region)
             while (iterator.next(rect)) result += RectF(rect).apply { offset(originX(line), flow.baselines[line] - layout.getLineBaseline(line)) }
         }
-        floats.filter { it.occurrence.offset in start until end }.forEach { result += RectF(it.content) }
+        if (includeFloats) floats.filter { it.occurrence.offset in start until end }.forEach { result += RectF(it.content) }
         return result
     }
 
@@ -244,11 +291,33 @@ internal class NativeFloatGeometry private constructor(
             val last = minOf(end, layout.getLineEnd(line))
             val cuts = (listOf(first, last) + authoredBaselines.flatMap {
                 listOf(it.start.coerceIn(first, last), it.end.coerceIn(first, last))
+            } + alignedImages.flatMap {
+                listOf(it.start.coerceIn(first, last), it.end.coerceIn(first, last))
             }).distinct().sorted()
             for ((a, b) in cuts.zipWithNext()) {
                 if (a == b) continue
+                val image = alignedImages.firstOrNull { it.start == a && it.end == b }
+                    ?.value?.nativeImageSelectionBounds
+                if (image == null && alignedImages.isNotEmpty() &&
+                    (authoredBaselines.isEmpty() || hasAlignedImage(line)) &&
+                    authoredBaselines.none { it.start < b && it.end > a }) {
+                    // Newly partitioned ordinary text keeps the original StaticLayout's
+                    // indented fragments. The enclosing range appends each float once.
+                    addAll(legacyRangeRects(a, b, includeFloats = false))
+                    continue
+                }
                 val path = linePainter.selectionPathForRange(line, a, b)
                 val bounds = RectF().also { path.computeBounds(it, true) }
+                if (image != null) {
+                    // A one-character replacement's native selection supplies its bidi X.
+                    // Its occurrence metrics already include the image's baseline shift;
+                    // authored text baseline effects cannot overlap a replacement span.
+                    val x = bounds.left + linePainter.horizontalShift(NativeLinePaintPlacement(
+                        line, flow.baselines[line], flow.left[line], flow.right[line], originX(line)))
+                    if (!path.isEmpty) add(RectF(x + image.left, flow.baselines[line] + image.top,
+                        x + image.right, flow.baselines[line] + image.bottom))
+                    continue
+                }
                 val region = Region()
                 region.setPath(path, Region(floor(bounds.left).toInt(), layout.getLineTop(line),
                     ceil(bounds.right).toInt(), layout.getLineBottom(line)))
@@ -280,6 +349,7 @@ internal class NativeFloatGeometry private constructor(
     }
 
     override fun cursorAt(x: Float, y: Float): InlineCursor? {
+        ruby?.let { return it.cursor(x, y) }
         if (authoredCursors.isEmpty() || floats.any { it.content.contains(x, y) }) return null
         val line = exactSelectableLineAt(x, y) ?: return null
         val start = layout.getLineStart(line)
@@ -295,7 +365,7 @@ internal class NativeFloatGeometry private constructor(
         // Later lines own only their native selectable advance. A narrower overlapping
         // line cannot hide an earlier line's exposed range; glyph ink holes do not matter.
         for (line in layout.lineCount - 1 downTo 0) {
-            val hit = if (authoredBaselines.isEmpty()) selectableLineBounds[line]?.contains(x, y) == true
+            val hit = if (authoredBaselines.isEmpty() && !hasAlignedImage(line)) selectableLineBounds[line]?.contains(x, y) == true
                 else authoredRangeRects(layout.getLineStart(line), layout.getLineEnd(line)).any { it.contains(x, y) }
             if (hit) return line
         }
@@ -323,7 +393,7 @@ internal class NativeFloatGeometry private constructor(
 
     private fun originX(line: Int): Float = lineOrigins?.get(line) ?: 0f
     internal val hasColumnFragments: Boolean get() = lineOrigins != null
-    internal fun distanceForPosition(x: Float, y: Float): Double = (0 until layout.lineCount).filter(::linePresent).minOfOrNull { line ->
+    internal fun distanceForPosition(x: Float, y: Float): Double = ruby?.distance(x, y) ?: (0 until layout.lineCount).filter(::linePresent).minOfOrNull { line ->
         val box = selectableLineBounds[line] ?: RectF(originX(line), flow.tops[line],
             originX(line) + width, flow.bottoms[line])
         val dx = maxOf(box.left - x, 0f, x - box.right).toDouble()
@@ -336,6 +406,7 @@ internal class NativeFloatGeometry private constructor(
     /** Reuse the original full-context native shaping and source offsets. Every geometry
      * consumer, including the node factory and marker painter, observes this same map. */
     internal fun inColumns(origins: List<Pair<Float, Float>>): NativeFloatGeometry {
+        ruby?.let { return it.raw.inColumns(origins).withRubyProjection(it.compiled, nodeFactory, decoration, decorationBounds) }
         require(origins.size == layout.lineCount)
         if (floats.isNotEmpty() || exclusions.isNotEmpty() || lineOrigins != null)
             throw UnsupportedFloatLayout("Column fragments require an unfragmented text owner without floats")
@@ -357,6 +428,235 @@ internal class NativeFloatGeometry private constructor(
                 bottom = bottoms.maxOrNull() ?: 0f), nodeFactory, decoration, decorationBounds, xs)
     }
 
+    /** Ruby keeps this native view private; all public owner queries use original UTF-16. */
+    internal val nativeRubyRaw: NativeFloatGeometry get() = ruby?.raw ?: this
+    internal val nativeRubyColumns: List<NativeRubyPiece.Column> get() =
+        ruby?.compiled?.pieces?.filterIsInstance<NativeRubyPiece.Column>().orEmpty()
+    internal val nativeRubyCollapsedText: List<NativeRubyPiece.Text> get() =
+        ruby?.compiled?.pieces?.filterIsInstance<NativeRubyPiece.Text>()?.filter { it.collapsed }.orEmpty()
+    internal val nativeRubyShapingSource: Spanned get() = layout.text as Spanned
+    internal val nativeRubyShapingPaint: TextPaint get() = TextPaint(layout.paint)
+    internal val nativeRubyParagraphDirection: Int get() = layout.getParagraphDirection(0)
+    internal fun nativeRubyRawOffset(publicOffset: Int): Int = ruby?.compiled?.nativeOffset(publicOffset) ?: publicOffset
+    internal fun nativeRubyLineSourceStart(line: Int): Int = layout.getLineStart(line)
+    internal fun nativeRubyLineAdvanceBounds(line: Int): RectF? = selectableLineBounds[line]?.let(::RectF)
+    internal fun nativeRubyLineBaseline(line: Int): Float = flow.baselines[line]
+    internal fun nativeRubyLineTop(line: Int): Float = flow.tops[line]
+    internal fun nativeRubyLineDirection(line: Int): Int = layout.getParagraphDirection(line)
+    internal fun nativeRubyLinePaintBounds(line: Int): List<NativeFloatBounds> {
+        ruby?.let { return it.raw.nativeRubyLinePaintBounds(line) + it.gapPaintBounds(line) }
+        return if (linePresent(line)) listOfNotNull(nativeTextInkBounds(layout, listOf(linePaintPositions[line]))) else emptyList()
+    }
+    /** Horizontal allocation comes from this actual shaped line, before integer region rounding. */
+    internal fun nativeRubyGapAllocations(start: Int, end: Int): List<NativeRubyGapAllocation> {
+        require(ruby == null && start in 0..text.length && end in start..text.length)
+        if (start == end) return emptyList()
+        return (layout.getLineForOffset(start)..layout.getLineForOffset(end - 1)).mapNotNull { line ->
+            if (!linePresent(line)) return@mapNotNull null
+            val first = maxOf(start, layout.getLineStart(line))
+            val last = minOf(end, layout.getLineVisibleEnd(line))
+            if (first >= last) return@mapNotNull null
+            val path = linePainter.selectionPathForRange(line, first, last)
+            val bounds = RectF().also { path.computeBounds(it, true) }
+            val shift = linePainter.horizontalShift(linePaintPositions[line])
+            if (bounds.width() <= 0f) null else NativeRubyGapAllocation(line,
+                bounds.left + shift, bounds.right + shift, flow.baselines[line])
+        }
+    }
+    internal fun nativeRubyLineCaret(line: Int, publicOffset: Int): RectF? {
+        ruby?.let { return it.caretOnLine(line, publicOffset) }
+        if (publicOffset !in layout.getLineStart(line)..layout.getLineEnd(line)) return null
+        val x = linePainter.caretHorizontalOnLine(line, publicOffset, linePaintPositions[line])
+        if (!linePresent(line)) return RectF(x, flow.tops[line], x, flow.tops[line])
+        val affinity = if (publicOffset == layout.getLineEnd(line) && publicOffset > layout.getLineStart(line))
+            publicOffset - 1 else publicOffset
+        val original = caretRect(affinity)
+        return RectF(x, original.top, x + 1f, original.bottom)
+    }
+    override fun isHardLineBreak(offset: Int): Boolean = ruby?.isHardLineBreak(offset)
+        ?: (text[offset] == '\n')
+    internal fun nativeRubyLineOffsetForPosition(line: Int, x: Float, y: Float): Int {
+        ruby?.let { return it.offsetOnLine(line, x, y) }
+        return layout.getOffsetForHorizontal(line, x - originX(line)).coerceIn(0, text.length)
+    }
+    internal fun nativeRubyLineCursorAt(line: Int, x: Float, y: Float): InlineCursor? {
+        ruby?.let { return it.cursorOnLine(line, x, y) }
+        return authoredCursors.lastOrNull { owner ->
+            nativeRubyLineRects(line, owner.start, owner.end).any { it.contains(x, y) }
+        }?.value?.cursor
+    }
+    /** Probe only the already-lowered private shaping buffer. The row planner
+     * separately checks source policy; these are actual native fitted endpoints. */
+    internal fun nativeRubyEmergencyLineEnds(): Set<Int> {
+        val source = SpannableString(layout.text)
+        check(source.getSpans(0, source.length, NativeRubyPreparedSource::class.java).isEmpty())
+        source.getSpans(0, source.length, NativeRubyLinePlan::class.java).forEach(source::removeSpan)
+        if (source.getSpans(0, source.length, NativeAuthoredTextWrap::class.java).any { it.wrap == TextWrap.NoWrap })
+            return emptySet()
+        // Endpoint discovery must not run authored Normal's width-zero fitting
+        // policy before the caller has selected its ordinary outcome. This is
+        // the same initial full-source native fitter, without policy correction.
+        val measured = PrecomputedText.create(source, (layout.text as PrecomputedText).params)
+        val params = measured.params
+        val hasRunMetrics = source.getSpans(0, source.length, NativeRunLineMetrics::class.java).isNotEmpty() ||
+            hasNativeAuthoredInlineMetrics(source)
+        val fitted = StaticLayout.Builder.obtain(measured, 0, measured.length, TextPaint(layout.paint), 0)
+            .setAlignment(layout.alignment).setTextDirection(params.textDirection).setIncludePad(false)
+            .setLineSpacing(layout.spacingAdd, layout.spacingMultiplier)
+            .setUseLineSpacingFromFallbacks(hasRunMetrics)
+            .setBreakStrategy(params.breakStrategy).setHyphenationFrequency(params.hyphenationFrequency)
+            .build()
+        return (0 until fitted.lineCount).map { fitted.getLineEnd(it) }
+            .filter { it > 0 && it < source.length }.toSet()
+    }
+    internal fun nativeRubyMeasuredAdvance(start: Int, end: Int): Float =
+        (layout.text as PrecomputedText).getWidth(start, end).also {
+            if (!it.isFinite() || it < 0f) throw UnsupportedFloatLayout("Ruby native advance is unavailable")
+        }
+    internal fun nativeRubyAvailableAt(offset: Int, considerPreviousLine: Boolean): Float {
+        val line = layout.getLineForOffset(offset)
+        val start = layout.getLineStart(line)
+        val before = nativeRubyMeasuredAdvance(start, offset)
+        val available = (nativeLineAvailableWidth(line) - before).coerceAtLeast(0f)
+        if (considerPreviousLine && line > 0 && before == 0f && start > 0 && layout.text[start - 1] != '\n') {
+            val previousStart = layout.getLineStart(line - 1)
+            val forced = (layout.text as Spanned).getSpans(previousStart, start, NativeRubyColumn::class.java)
+                .any { it.continues }
+            val remaining = nativeLineAvailableWidth(line - 1) - layout.getLineWidth(line - 1)
+            if (!forced && remaining > 0f) return remaining
+        }
+        return available
+    }
+    internal fun validateRubyFloatBands() {
+        for (line in 0 until layout.lineCount) if (flow.constrainedByFloat[line] &&
+            layout.getLineMax(line) > nativeLineAvailableWidth(line) + 1f)
+            throw UnsupportedFloatLayout("Native ruby text exceeds the remaining float lane")
+    }
+    internal fun nativeRubyColumnView(nativeStart: Int, column: NativeRubyColumn): FloatTextGeometry {
+        val projection = ruby ?: throw UnsupportedFloatLayout("Ruby column lost its source projection")
+        if (projection.compiled.pieces.filterIsInstance<NativeRubyPiece.Column>().none { it.nativeStart == nativeStart })
+            throw UnsupportedFloatLayout("Ruby column lost its native occurrence")
+        return NativeRubyColumnView(projection.compiled.source, nativeStart, column, projection.raw)
+    }
+    internal fun nativeRubyReflowColumns(replacements: Map<Int, List<NativeRubyColumn>>,
+        ends: List<Int>, advances: List<Float>): NativeFloatGeometry {
+        require(ends.isNotEmpty() && ends.size == advances.size)
+        if (replacements.isEmpty()) return if (ends.size == 1) this else nativeRubyReflow(ends, advances)
+        val projection = ruby ?: throw UnsupportedFloatLayout("Ruby fragments lost their original source map")
+        val compiled = projection.compiled.replacingColumns(replacements)
+        require(ends.last() == compiled.native.length)
+        val source = SpannableString(compiled.native)
+        source.setSpan(NativeRubyLinePlan(ends, advances), 0, source.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val shaped = build(source, layout.paint, width, emptyList(),
+            textDirection = if (layout.getParagraphDirection(0) < 0) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+            includeFontPadding = false)
+        return reprojectRubyReflow(compiled, shaped)
+    }
+    internal fun nativeRubyReflow(ends: List<Int>, advances: List<Float>): NativeFloatGeometry {
+        require(ends.size == advances.size && ends.isNotEmpty() && ends.last() == layout.text.length)
+        val source = SpannableString(layout.text)
+        source.getSpans(0, source.length, NativeRubyLinePlan::class.java).forEach(source::removeSpan)
+        source.setSpan(NativeRubyLinePlan(ends, advances), 0, source.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val shaped = build(source, layout.paint, width, emptyList(),
+            textDirection = if (layout.getParagraphDirection(0) < 0) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+            includeFontPadding = false)
+        return ruby?.let { reprojectRubyReflow(it.compiled, shaped) } ?: shaped
+    }
+    internal fun nativeRubyTrimSourceSpaces(offsets: Set<Int>): NativeFloatGeometry {
+        val projection = ruby ?: return this
+        val trimmed = projection.compiled.trimLineEdges(projection.raw, offsets) ?: return this
+        val shaped = build(trimmed.native, layout.paint, width, emptyList(),
+            textDirection = if (layout.getParagraphDirection(0) < 0) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+            includeFontPadding = false)
+        return shaped.withRubyProjection(trimmed)
+    }
+    private fun reprojectRubyReflow(compiled: NativeRubyLayout, shaped: NativeFloatGeometry): NativeFloatGeometry {
+        val trimmed = compiled.trimLineEdges(shaped) ?: return shaped.withRubyProjection(compiled)
+        val actual = build(trimmed.native, layout.paint, width, emptyList(),
+            textDirection = if (layout.getParagraphDirection(0) < 0) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+            includeFontPadding = false)
+        return actual.withRubyProjection(trimmed)
+    }
+    internal fun nativeRubyLineRects(line: Int, start: Int, end: Int): List<RectF> {
+        ruby?.let { return it.rectsOnLine(line, start, end) }
+        require(start in 0..text.length && end in start..text.length)
+        if (!linePresent(line)) return emptyList()
+        val first = maxOf(start, layout.getLineStart(line))
+        val last = minOf(end, layout.getLineEnd(line))
+        if (first >= last) return emptyList()
+        val cuts = (listOf(first, last) + authoredBaselines.flatMap {
+            listOf(it.start.coerceIn(first, last), it.end.coerceIn(first, last))
+        }).distinct().sorted()
+        val position = linePaintPositions[line]
+        return buildList {
+            for ((a, b) in cuts.zipWithNext()) {
+                val path = linePainter.selectionPathForRange(line, a, b)
+                val bounds = RectF().also { path.computeBounds(it, true) }
+                val region = Region().apply { setPath(path, Region(floor(bounds.left).toInt(),
+                    layout.getLineTop(line), ceil(bounds.right).toInt(), layout.getLineBottom(line))) }
+                val iterator = RegionIterator(region)
+                val rect = Rect()
+                val own = authoredSelectionMetrics(a)
+                while (iterator.next(rect)) add(RectF(rect).apply {
+                    offset(linePainter.horizontalShift(position), flow.baselines[line] - layout.getLineBaseline(line))
+                    if (own != null) {
+                        top = flow.baselines[line] + own.top
+                        bottom = flow.baselines[line] + own.bottom
+                    }
+                })
+            }
+        }
+    }
+    internal fun nativeRubyLineBaseText(line: Int): String = ruby?.baseTextOnLine(line)
+        ?: layout.text.subSequence(layout.getLineStart(line), layout.getLineEnd(line)).toString()
+
+    internal fun nativeRubyLineRanges(line: Int): List<Pair<Int, Int>> = ruby?.lineRanges(line)
+        ?: listOf(layout.getLineStart(line) to layout.getLineEnd(line))
+    internal fun paintRubyNativeLine(canvas: Canvas, line: Int) {
+        ruby?.let {
+            it.paintGapBackgrounds(canvas, line)
+            it.raw.paintRubyNativeLine(canvas, line)
+            it.paintGapDecorations(canvas, line)
+            return
+        }
+        require(floats.isEmpty() && exclusions.isEmpty())
+        if (linePresent(line)) linePainter.paint(canvas, listOf(linePaintPositions[line]))
+    }
+    internal val nativeRubyAdvanceBounds: RectF? get() = selectableLineBounds.firstOrNull()?.let(::RectF)
+    internal fun nativeLineAt(offset: Int): Int = layout.getLineForOffset(offset)
+    internal fun nativeRangeOfLine(line: Int): Pair<Int, Int> = layout.getLineStart(line) to layout.getLineEnd(line)
+    internal fun nativeLineAvailableWidth(line: Int): Float = width - flow.left[line].toFloat() - flow.right[line]
+    internal fun nativeSingleLineAdvance(): Float {
+        check(layout.lineCount == 1)
+        return nativeLineAdvance(0)
+    }
+    internal fun nativeLineAdvance(line: Int): Float = layout.getLineWidth(line)
+    internal fun nativeUsedLineMetrics(line: Int): NativeUsedLineMetrics =
+        NativeUsedLineMetrics(flow.tops[line] - flow.baselines[line], flow.bottoms[line] - flow.baselines[line])
+    internal fun nativeContentLineMetrics(line: Int): NativeUsedLineMetrics {
+        val baseline = layout.getLineBaseline(line)
+        var result = NativeUsedLineMetrics((layout.getLineTop(line) - baseline).toFloat(),
+            (layout.getLineBottom(line) - baseline).toFloat())
+        (layout.text as Spanned).getSpans(layout.getLineStart(line), layout.getLineEnd(line), NativeRubyColumn::class.java)
+            .forEach { result = result.including(it.container) }
+        return result
+    }
+    internal fun nativeReplacementOrigin(offset: Int): Pair<Float, Float> {
+        val line = layout.getLineForOffset(offset)
+        val path = linePainter.selectionPathForRange(line, offset, offset + 1)
+        val bounds = RectF().also { path.computeBounds(it, true) }
+        return (bounds.left + linePainter.horizontalShift(NativeLinePaintPlacement(line,
+            flow.baselines[line], flow.left[line], flow.right[line], originX(line)))) to flow.baselines[line]
+    }
+    internal fun withRubyProjection(compiled: NativeRubyLayout,
+        nodes: (NativeFloatGeometry) -> List<FloatInteractionNode> = { emptyList() },
+        paintDecoration: (Canvas, NativeFloatGeometry) -> Unit = { _, _ -> },
+        paintBounds: (NativeFloatGeometry) -> NativeFloatBounds? = { null }): NativeFloatGeometry {
+        check(ruby == null && text.toString() == compiled.native.toString())
+        return NativeFloatGeometry(compiled.source, width, layout, flow, nodes, paintDecoration,
+            paintBounds, lineOrigins, compiled.placed(this))
+    }
+
     companion object {
         fun build(
             source: Spanned, paint: TextPaint, width: Int,
@@ -371,6 +671,8 @@ internal class NativeFloatGeometry private constructor(
             usedLineMetrics: ((start: Int, end: Int) -> NativeUsedLineMetrics)? = null,
             decoration: (Canvas, NativeFloatGeometry) -> Unit = { _, _ -> },
             decorationBounds: (NativeFloatGeometry) -> NativeFloatBounds? = { null },
+            includeFontPadding: Boolean = true,
+            rubyProbe: Boolean = false,
         ): NativeFloatGeometry {
             require(width >= 0 && width <= Int.MAX_VALUE / 4)
             require(lineSpacingExtra.isFinite() && lineSpacingExtra >= 0f)
@@ -382,6 +684,36 @@ internal class NativeFloatGeometry private constructor(
                 if (listOf(box.left, box.top, box.right, box.bottom).any { kotlin.math.abs(it) > Int.MAX_VALUE / 4 }) {
                     throw UnsupportedFloatLayout("Carried float exceeds native geometry")
                 }
+            }
+            if (source.getSpans(0, source.length, NativeRubyPreparedSource::class.java).isNotEmpty()) {
+                if (usedLineMetrics != null)
+                    throw UnsupportedFloatLayout("Ruby needs source-owned metrics rather than an external single-range callback")
+                val available = (width - ceil((insets.left + insets.extraLeft).toDouble()).toFloat() -
+                    ceil((insets.right + insets.extraRight).toDouble()).toFloat()).coerceAtLeast(0f)
+                var bands = NativeRubyBands(available)
+                val seenBands = mutableSetOf<Map<NativeRubyFragmentKey, Float>>()
+                repeat(64) {
+                    if (!seenBands.add(bands.observed))
+                        throw UnsupportedFloatLayout("Ruby fragment and native float bands cycle")
+                    var compiled = checkNotNull(nativeRubyLayout(source, paint, textDirection, bands))
+                    val nativeOccurrences = occurrences.map { it.copy(offset = compiled.nativeOffset(it.offset)) }
+                    var raw = build(compiled.native, paint, width, nativeOccurrences, alignment, textDirection,
+                        lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, carriedExclusions,
+                        insets = insets, includeFontPadding = includeFontPadding, rubyProbe = true)
+                    compiled.trimLineEdges(raw)?.let { trimmed ->
+                        compiled = trimmed
+                        raw = build(trimmed.native, paint, width, nativeOccurrences, alignment, textDirection,
+                            lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, carriedExclusions,
+                            insets = insets, includeFontPadding = includeFontPadding, rubyProbe = true)
+                    }
+                    val observed = compiled.observedBands(raw)
+                    if (observed.all { (key, value) -> bands.widthAt(key) == value }) {
+                        raw.validateRubyFloatBands()
+                        return raw.withRubyProjection(compiled, nodeFactory, decoration, decorationBounds)
+                    }
+                    bands = NativeRubyBands(available, bands.observed + observed)
+                }
+                throw UnsupportedFloatLayout("Ruby fragments did not converge with native float bands")
             }
             validateNativeInlineStyle(source, paint)
             val original = SpannedString(source)
@@ -401,14 +733,17 @@ internal class NativeFloatGeometry private constructor(
             val measured = PrecomputedText.create(native, PrecomputedText.Params.Builder(TextPaint(paint))
                 .setTextDirection(textDirection).setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
                 .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE).build())
-            var left = intArrayOf(0)
-            var right = intArrayOf(0)
+            val rubyLinePlan = original.getSpans(0, original.length, NativeRubyLinePlan::class.java).singleOrNull()
+            val rubyFragments = NativeRubyFragmentLines(original)
+            val rubyIndents = rubyLinePlan?.indents(width, textDirection.isRtl(measured, 0, measured.length))
+            var left = rubyIndents?.first ?: intArrayOf(0)
+            var right = rubyIndents?.second ?: intArrayOf(0)
             val seen = mutableSetOf<List<Int>>()
             repeat(64) {
                 val signature = left.toList() + listOf(-1) + right.toList()
                 if (!seen.add(signature)) throw UnsupportedFloatLayout("Float line exclusions cycle")
                 val nativeLayout = StaticLayout.Builder.obtain(measured, 0, measured.length, TextPaint(paint), width)
-                    .setAlignment(alignment).setTextDirection(textDirection).setIncludePad(true)
+                    .setAlignment(alignment).setTextDirection(textDirection).setIncludePad(includeFontPadding)
                     .setLineSpacing(lineSpacingExtra, lineSpacingMultiplier)
                     .setUseLineSpacingFromFallbacks(hasRunMetrics)
                     .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
@@ -416,13 +751,17 @@ internal class NativeFloatGeometry private constructor(
                     .setIndents(left, right).build()
                 val flow = position(nativeLayout, width, ordered, carriedExclusions, insets, usedLineMetrics,
                     wrapPlan?.noWrap?.let { plan -> { start -> plan.hasLineAt(start) } })
-                val fit = wrapPlan?.fit(nativeLayout, measured, flow.left, flow.right, flow.constrainedByFloat)
+                val fit = if (rubyLinePlan == null) rubyFragments.fit(nativeLayout, measured, flow.left, flow.right,
+                    wrapPlan?.fit(nativeLayout, measured, flow.left, flow.right,
+                        if (rubyProbe) BooleanArray(flow.constrainedByFloat.size) else flow.constrainedByFloat)) else rubyIndents
                 val nextLeft = fit?.first ?: flow.left
                 val nextRight = fit?.second ?: flow.right
                 if (left.contentEquals(nextLeft) && right.contentEquals(nextRight)) {
-                    wrapPlan?.validateResult(nativeLayout)
+                    if (rubyLinePlan != null) rubyLinePlan.validate(nativeLayout)
+                    else wrapPlan?.validateResult(nativeLayout)
+                    rubyFragments.validate(nativeLayout)
                     for (line in 0 until nativeLayout.lineCount) {
-                        if (flow.constrainedByFloat[line] &&
+                        if (!rubyProbe && flow.constrainedByFloat[line] &&
                             nativeLayout.getLineMax(line) > width - flow.left[line] - flow.right[line] + 1f) {
                             throw UnsupportedFloatLayout("Native text exceeds the remaining float lane")
                         }
@@ -479,10 +818,12 @@ private fun position(layout: StaticLayout, width: Int, occurrences: List<NativeF
         val nativeBaseline = layout.getLineBaseline(line)
         val natural = NativeUsedLineMetrics((layout.getLineTop(line) - nativeBaseline).toFloat(),
             (layout.getLineBottom(line) - nativeBaseline).toFloat())
-        val metrics = usedLineMetrics?.invoke(layout.getLineStart(line), layout.getLineEnd(line))
+        val ordinaryMetrics = usedLineMetrics?.invoke(layout.getLineStart(line), layout.getLineEnd(line))
             ?: nativeRunLineMetrics(layout.text as Spanned, layout.getLineStart(line), layout.getLineEnd(line), natural,
                 pointOnLine = { offset -> layout.getLineForOffset(offset) == line })
             ?: natural
+        val metrics = nativeRubyLineMetrics(layout.text as Spanned, layout.getLineStart(line),
+            layout.getLineEnd(line), ordinaryMetrics)
         val lineHeight = metrics.height
         for (occurrence in anchors[line].orEmpty()) {
             val clearBottom = exclusions.filter { previous ->

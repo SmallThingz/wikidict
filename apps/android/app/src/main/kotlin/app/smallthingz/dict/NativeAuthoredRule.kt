@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.constrainWidth
 
 internal const val NativeRuleAccessibilityLabel = "Separator"
+internal const val NativeRuleClearOwnerUnavailable = "Authored rule clearance requires its shared native flow owner"
 
 /** A real empty separator has no glyph, object character, baseline, or action. */
 internal class NativeRuleGeometry(val contentWidth: Float, val metrics: NativeRuleMetrics,
@@ -66,6 +67,11 @@ internal fun AuthoredRule(style: RuleStyle, modifier: Modifier = Modifier,
 @Composable
 internal fun AuthoredRuleSurface(metrics: NativeRuleMetrics, modifier: Modifier = Modifier,
     sink: SelectionGeometrySink? = null, includeVerticalMargins: Boolean = true) {
+    if (metrics.requiresClearanceOwner) {
+        if (sink != null) UnavailableSelectionContent(NativeRuleClearOwnerUnavailable, sink)
+        else ReaderLayoutUnavailable(NativeRuleClearOwnerUnavailable)
+        return
+    }
     val semantic = rememberNativeSemanticMeasurement()
     val message = remember { NativeLayoutInput<String?>(null) }
     val painted = remember(metrics) { arrayOfNulls<FloatTextGeometry>(1) }

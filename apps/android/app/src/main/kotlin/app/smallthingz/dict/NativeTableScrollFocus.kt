@@ -2,6 +2,7 @@ package app.smallthingz.dict
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.RectF
 import android.view.InputDevice
@@ -265,13 +266,32 @@ internal class NativeTableScrollFocusView(context: Context, internal val owner: 
         return RectF(points.minOf { it.x }, points.minOf { it.y }, points.maxOf { it.x }, points.maxOf { it.y })
     }
 
-    private fun insideAncestor(x: Float, y: Float): Boolean = ancestorBounds()?.contains(x, y) ?: true
+    internal fun tableScreenToLocal(clip: NativeTextClip): NativeTextClip {
+        val at = coordinates?.takeIf { it.isAttached && isAttachedToWindow }
+            ?: return NativeTextClip.rectangle(RectF())
+        val origin = at.screenToLocal(Offset.Zero)
+        val horizontal = at.screenToLocal(Offset(1f, 0f))
+        val vertical = at.screenToLocal(Offset(0f, 1f))
+        val last = at.screenToLocal(Offset(1f, 1f))
+        val values = floatArrayOf(horizontal.x - origin.x, vertical.x - origin.x, origin.x,
+            horizontal.y - origin.y, vertical.y - origin.y, origin.y, 0f, 0f, 1f)
+        if (values.any { !it.isFinite() } || !last.x.isFinite() || !last.y.isFinite() ||
+            kotlin.math.abs(last.x - (horizontal.x + vertical.x - origin.x)) > .01f ||
+            kotlin.math.abs(last.y - (horizontal.y + vertical.y - origin.y)) > .01f)
+            return NativeTextClip.rectangle(RectF())
+        return clip.transformed(Matrix().apply { setValues(values) })
+    }
+
+    private fun insideAncestor(x: Float, y: Float): Boolean =
+        (ancestorBounds()?.contains(x, y) ?: true) &&
+            (owner.ancestorClip?.preciseInView(this)?.contains(x, y) ?: true)
 
     override fun draw(canvas: Canvas) {
         if (!owner.paintsFocus) return
         val saved = canvas.save()
         try {
             ancestorBounds()?.let { canvas.clipRect(it) }
+            owner.ancestorClip?.preciseInView(this)?.clip(canvas)
             // The platform highlight is drawn after onDraw, so the ancestor clip wraps
             // the entire View draw. The source content clip must not clip its outline.
             super.draw(canvas)

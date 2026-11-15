@@ -1,6 +1,9 @@
 package app.smallthingz.dict
 
 import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 
 internal data class NativeTextBaselines(val first: Float?, val last: Float?) {
@@ -34,6 +37,57 @@ internal interface NativeHorizontalScrollTarget {
     fun cancel()
 }
 
+/** Immutable precise clipping accompanies the existing rectangular bounds. Only explicit
+ * rounded Table overflow creates one; path bounds are for rectangular platform APIs. */
+internal class NativeTextClip private constructor(private val path: Path, private val envelope: RectF,
+    private val point: (Float, Float) -> Boolean) {
+    fun contains(x: Float, y: Float): Boolean = point(x, y)
+    fun clip(canvas: Canvas) { canvas.clipPath(path) }
+    fun bounds(rectangle: RectF): RectF? {
+        if (rectangle.isEmpty) return null
+        val result = Path(path)
+        if (!result.op(Path().apply { addRect(rectangle, Path.Direction.CW) }, Path.Op.INTERSECT))
+            throw UnsupportedFloatLayout("Rounded text clip intersection is unavailable")
+        if (result.isEmpty) return null
+        // Public Path bounds enclose control points, not analytic arc extrema. Platform AX
+        // receives a conservative visible envelope, bounded by every rectangular limit.
+        return RectF().also { result.computeBounds(it, true) }.takeIf {
+            it.intersect(rectangle) && it.intersect(envelope) && !it.isEmpty
+        }
+    }
+    fun intersected(other: NativeTextClip): NativeTextClip {
+        val result = Path(path)
+        if (!result.op(other.path, Path.Op.INTERSECT))
+            throw UnsupportedFloatLayout("Rounded text clip intersection is unavailable")
+        val bounds = RectF(envelope).apply { if (!intersect(other.envelope)) setEmpty() }
+        return NativeTextClip(result, bounds) { x, y -> contains(x, y) && other.contains(x, y) }
+    }
+    fun intersected(rectangle: RectF): NativeTextClip = intersected(NativeTextClip.rectangle(rectangle))
+    fun translated(x: Float, y: Float): NativeTextClip = NativeTextClip(Path(path).apply { offset(x, y) }, RectF(envelope).apply { offset(x, y) }) {
+        px, py -> contains(px - x, py - y)
+    }
+    fun transformed(matrix: Matrix): NativeTextClip {
+        val inverse = Matrix()
+        if (!matrix.invert(inverse)) return rectangle(RectF())
+        return NativeTextClip(Path(path).apply { transform(matrix) }, RectF(envelope).apply { matrix.mapRect(this) }) { x, y ->
+            val point = floatArrayOf(x, y); inverse.mapPoints(point)
+            point.all(Float::isFinite) && contains(point[0], point[1])
+        }
+    }
+    companion object {
+        fun rectangle(value: RectF): NativeTextClip {
+            val copy = RectF(value)
+            return NativeTextClip(Path().apply { if (!copy.isEmpty) addRect(copy, Path.Direction.CW) }, copy) { x, y -> copy.contains(x, y) }
+        }
+        internal fun table(shape: NativeTableCornerShape, content: RectF): NativeTextClip =
+            NativeTextClip(nativeTableCornerPath(shape, padding = true), shape.paddingBox?.let {
+                RectF(it.left, it.top, it.right, it.bottom)
+            } ?: RectF()) { x, y -> shape.contains(x, y, padding = true) }.intersected(content)
+    }
+}
+internal fun nativeTableContentClip(shape: NativeTableCornerShape, contentRect: RectF): NativeTextClip =
+    NativeTextClip.table(shape, contentRect)
+
 /** All offsets are UTF-16 indices in [text]; layout must never insert line breaks. */
 internal interface FloatTextGeometry {
     val text: CharSequence
@@ -47,6 +101,11 @@ internal interface FloatTextGeometry {
     }
     /** Null is unbounded; an empty rectangle is completely clipped. Caret positions stay logical. */
     fun clipForOffset(offset: Int): RectF? = null
+    fun preciseClipForOffset(offset: Int): NativeTextClip? = null
+    val hasPreciseClips: Boolean get() = false
+    fun paintSelection(canvas: Canvas, start: Int, end: Int, paint: Paint) {
+        rectsForRange(start, end).forEach { canvas.drawRect(it, paint) }
+    }
     fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? = null
     /** The concrete text owner resolves source pointer policy through its actual hit layout. */
     fun cursorAt(x: Float, y: Float): InlineCursor? = null
@@ -80,8 +139,40 @@ internal interface FloatTextGeometry {
     fun caretRect(offset: Int): RectF
     /** Logical bounds of the visual line containing offset; the end is exclusive. */
     fun lineRange(offset: Int): Pair<Int, Int>
+    /** A source LF can be a retained Ruby gap rather than a native paragraph break. */
+    fun isHardLineBreak(offset: Int): Boolean = text[offset] == '\n'
+    /** Original UTF-16 fragments on the queried visual row, in logical order. Fragments
+     * never include characters from another row; generated layout tokens have no range.
+     * Legacy owners retain their single contiguous line, including its terminal LF. */
+    fun visualLineRanges(offset: Int): List<Pair<Int, Int>> = listOf(lineRange(offset))
     /** direction -1 means visual left; +1 means visual right. */
     fun visualOffset(offset: Int, direction: Int): Int
+}
+
+/** Movement reports one real contiguous fragment, never the envelope of disjoint rows.
+ * Shared boundaries belong to the following fragment; the final end belongs to the last. */
+internal fun FloatTextGeometry.visualLineFragment(offset: Int): Pair<Int, Int>? {
+    require(offset in 0..text.length)
+    val ranges = visualLineRanges(offset)
+    return ranges.firstOrNull { offset >= it.first && offset < it.second }
+        ?: ranges.lastOrNull { offset == it.second }
+}
+
+internal fun FloatTextGeometry.visualLineEnd(offset: Int): Int {
+    require(offset in 0..text.length)
+    val end = visualLineRanges(offset).lastOrNull()?.second ?: offset
+    return if (end > 0 && isHardLineBreak(end - 1)) end - 1 else end
+}
+
+/** Accessibility paragraph movement uses authored hard breaks, not retained Ruby gap LFs. */
+internal fun FloatTextGeometry.paragraphBoundary(offset: Int, forward: Boolean): Int {
+    require(offset in 0..text.length)
+    if (forward) {
+        for (index in offset until text.length) if (isHardLineBreak(index)) return index + 1
+        return text.length
+    }
+    for (index in offset - 2 downTo 0) if (isHardLineBreak(index)) return index + 1
+    return 0
 }
 
 internal fun nativeBoundsOf(rectangles: List<RectF>): NativeFloatBounds? = rectangles
@@ -108,14 +199,19 @@ internal data class FloatInteractionNode(
     val onReveal: ((() -> Unit) -> Unit)? = null,
     val clipBounds: RectF? = null,
     val customActions: List<NativeHeadingAction> = emptyList(),
+    val preciseClip: NativeTextClip? = null,
+    /** Image source policy uses input-focus modality without text-link key/state handling. */
+    val sourceFocusVisible: Boolean = false,
 ) {
     fun contains(x: Float, y: Float): Boolean = (clipBounds?.contains(x, y) ?: true) &&
+        (preciseClip?.contains(x, y) ?: true) &&
         bounds.any { it.contains(x, y) } && (hitTest?.invoke(x, y) ?: true)
     fun translated(x: Float, y: Float): FloatInteractionNode = copy(
         bounds = bounds.map { RectF(it).apply { offset(x, y) } },
         hitTest = hitTest?.let { test -> { px, py -> test(px - x, py - y) } },
         focusPaint = focusPaint?.translated(x, y),
         clipBounds = clipBounds?.let { RectF(it).apply { offset(x, y) } },
+        preciseClip = preciseClip?.translated(x, y),
     )
 }
 
@@ -149,10 +245,11 @@ internal fun nativeFocusInk(nodes: List<FloatInteractionNode>): NativeFloatBound
     }.reduceOrNull { a, b -> a.enclosing(b) }
     // Enclose this owner's connected outline before clipping, so a bridge crossing the
     // viewport remains covered even when its endpoint outlines lie outside the clip.
-    if (ink == null || node.clipBounds == null) ink else {
-        val clipped = RectF(ink.left, ink.top, ink.right, ink.bottom)
-        if (!clipped.intersect(node.clipBounds) || clipped.isEmpty) null
-        else NativeFloatBounds(clipped.left, clipped.top, clipped.right, clipped.bottom)
+    if (ink == null || node.clipBounds == null && node.preciseClip == null) ink else {
+        var clipped = RectF(ink.left, ink.top, ink.right, ink.bottom)
+        node.clipBounds?.let { if (!clipped.intersect(it)) clipped.setEmpty() }
+        node.preciseClip?.let { clipped = it.bounds(clipped) ?: RectF() }
+        if (clipped.isEmpty) null else NativeFloatBounds(clipped.left, clipped.top, clipped.right, clipped.bottom)
     }
 }.reduceOrNull { a, b -> a.enclosing(b) }
 
@@ -194,11 +291,11 @@ private fun nativeLinkFocusPaint(outline: FigureFocusOutline?, fragments: List<R
 }
 
 internal data class NativePositionedGroup(val bounds: List<RectF>, val nodeIds: Set<Int>,
-    val sourceOffset: Int, val paint: (Canvas) -> Unit) {
-    fun contains(x: Float, y: Float): Boolean = bounds.any { it.contains(x, y) }
+    val sourceOffset: Int, val paint: (Canvas) -> Unit, val preciseClip: NativeTextClip? = null) {
+    fun contains(x: Float, y: Float): Boolean = (preciseClip?.contains(x, y) ?: true) && bounds.any { it.contains(x, y) }
     fun translated(x: Float, y: Float, textOffset: Int = 0, nodeId: (Int) -> Int = { it }): NativePositionedGroup =
         copy(bounds = bounds.map { RectF(it).apply { offset(x, y) } }, nodeIds = nodeIds.map(nodeId).toSet(),
-            sourceOffset = sourceOffset + textOffset, paint = { canvas ->
+            sourceOffset = sourceOffset + textOffset, preciseClip = preciseClip?.translated(x, y), paint = { canvas ->
                 val save = canvas.save()
                 try { canvas.translate(x, y); paint(canvas) } finally { canvas.restoreToCount(save) }
             })

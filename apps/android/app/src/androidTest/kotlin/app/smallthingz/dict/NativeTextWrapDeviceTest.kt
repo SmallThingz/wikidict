@@ -195,4 +195,95 @@ class NativeTextWrapDeviceTest {
         assertTrue(recovered.shapedLineCount > 1)
         assertEquals(1, source.getSpans(0, source.length, NativeAuthoredTextWrap::class.java).size)
     }
+
+    @Test fun emergencyPolicyFiltersActualNativeEndpointsWithoutChangingOriginalOffsets() {
+        val root = paint()
+        val raw = "e\u0301".repeat(4) + "\ud83d\udc69\u200d\ud83d\udd2c".repeat(2) + "abcdefghij"
+        val source = SpannableString(raw)
+        val authored = policy(source, TextWrap.BreakWord)
+        val plan = checkNotNull(NativeTextWrapPlan.create(source, root))
+        fun endpoints(geometry: NativeFloatGeometry): Set<Int> = (1 until raw.length).filter {
+            geometry.baselineForOffset(it) != geometry.baselineForOffset(it - 1)
+        }.toSet()
+        val narrow = NativeFloatGeometry.build(source, root, 0, emptyList())
+        val actual = endpoints(narrow)
+        val admitted = actual.filter { plan.permitsEmergencyBreak(it) }.toSet()
+        assertTrue(admitted.isNotEmpty())
+        assertTrue(2 in admitted)
+        assertTrue(raw.indexOf("abcdefghij") + 1 in admitted)
+        val graphemes = android.icu.text.BreakIterator.getCharacterInstance(root.textLocale).apply { setText(raw) }
+        assertTrue(actual.all(graphemes::isBoundary))
+        for (offset in 1 until raw.length) if (!graphemes.isBoundary(offset))
+            assertFalse(plan.permitsEmergencyBreak(offset))
+        assertFalse(plan.permitsEmergencyBreak(0))
+        assertFalse(plan.permitsEmergencyBreak(raw.length))
+        assertFalse(plan.permitsEmergencyBreak(1)) // Inside the first combining sequence.
+        assertTrue(runCatching { plan.permitsEmergencyBreak(-1) }.exceptionOrNull() is IllegalArgumentException)
+        assertTrue(runCatching { plan.permitsEmergencyBreak(raw.length + 1) }.exceptionOrNull() is IllegalArgumentException)
+        val wide = NativeFloatGeometry.build(source, root, 2000, emptyList())
+        assertEquals(1, wide.shapedLineCount)
+        assertTrue(endpoints(wide).filter { plan.permitsEmergencyBreak(it) }.isEmpty())
+        assertEquals(raw, narrow.text.toString()); assertEquals(raw, wide.text.toString())
+        assertSame(authored, source.getSpans(0, source.length, NativeAuthoredTextWrap::class.java).single())
+        assertEquals(0, source.getSpanStart(authored)); assertEquals(raw.length, source.getSpanEnd(authored))
+
+        val normal = SpannableString(raw); policy(normal, TextWrap.Normal)
+        val normalPlan = checkNotNull(NativeTextWrapPlan.create(normal, root))
+        assertTrue(actual.none { normalPlan.permitsEmergencyBreak(it) })
+        val nowrap = SpannableString(raw)
+        nowrap.setSpan(NativeAuthoredTextWrap(TextWrap.NoWrap, inheritedOwner = true, sourceLineStarts = listOf(0)),
+            0, nowrap.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        assertFalse(checkNotNull(NativeTextWrapPlan.create(nowrap, root)).permitsEmergencyBreak(2))
+        assertNull(NativeTextWrapPlan.create(SpannableString("legacy"), root))
+
+        // Policy-only replacement guard; this atom is never measured or painted.
+        val atomic = SpannableString("abcdef")
+        atomic.setSpan(NativeRubyBreaks(listOf(0, atomic.length)), 0, atomic.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        atomic.setSpan(object : android.text.style.ReplacementSpan() {
+            override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int,
+                fm: Paint.FontMetricsInt?): Int = error("Boundary fixture must not be measured")
+            override fun draw(canvas: Canvas, text: CharSequence, start: Int, end: Int,
+                x: Float, top: Int, y: Int, bottom: Int, paint: Paint) {
+                error("Boundary fixture must not be painted")
+            }
+        }, 2, 4, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val atomicPlan = checkNotNull(NativeTextWrapPlan.create(atomic, root))
+        assertTrue(atomicPlan.permitsEmergencyBreak(1))
+        assertFalse(atomicPlan.permitsEmergencyBreak(3))
+        assertTrue(atomicPlan.permitsEmergencyBreak(5))
+        assertEquals("abcdef", atomic.toString())
+    }
+
+    @Test fun emergencyPolicyKeepsAuthoredMinimumAndOnlyAdmitsTheLegacyMinimumRequest() {
+        val root = paint()
+        val raw = "ab abcdefghij"
+        val source = SpannableString(raw)
+        val authored = policy(source, TextWrap.BreakWord, 0, 2)
+        val plan = checkNotNull(NativeTextWrapPlan.create(source, root))
+        assertTrue(plan.permitsEmergencyBreak(1))
+        assertFalse(plan.permitsEmergencyBreak(1, forLegacyIntrinsicMinimum = true))
+        assertTrue(plan.permitsEmergencyBreak(4))
+        assertTrue(plan.permitsEmergencyBreak(4, forLegacyIntrinsicMinimum = true))
+        assertFalse(plan.permitsEmergencyBreak(3)) // Ordinary word start is not an emergency cut.
+        val ordinary = nativeTextWidthRange(source, root)
+        val emergency = nativeTextWidthRange(source, root, breakWordMinimum = true)
+        assertEquals(nativeTextWidthRange(SpannableString(raw), root), ordinary)
+        assertTrue(emergency.minimum < ordinary.minimum)
+        assertEquals(nativeTextWidthRange(SpannableString("ab"), root).minimum, emergency.minimum)
+        assertEquals(ordinary.maximum, emergency.maximum)
+        assertEquals(raw, source.toString()); assertSame(authored,
+            source.getSpans(0, source.length, NativeAuthoredTextWrap::class.java).single())
+
+        val partial = SpannableString("abcdefgh")
+        val partialPolicy = policy(partial, TextWrap.BreakWord, 2, 6)
+        val partialPlan = checkNotNull(NativeTextWrapPlan.create(partial, root))
+        assertTrue(partialPlan.permitsEmergencyBreak(3))
+        assertTrue(runCatching { partialPlan.permitsEmergencyBreak(3, forLegacyIntrinsicMinimum = true) }
+            .exceptionOrNull() is UnsupportedFloatLayout)
+        partial.removeSpan(partialPolicy); policy(partial, TextWrap.BreakWord)
+        val recovered = checkNotNull(NativeTextWrapPlan.create(partial, root))
+        assertTrue(recovered.permitsEmergencyBreak(3))
+        assertFalse(recovered.permitsEmergencyBreak(3, forLegacyIntrinsicMinimum = true))
+        assertEquals("abcdefgh", partial.toString())
+    }
 }

@@ -30,11 +30,19 @@ data class Span(
     val linkPaint: LinkPaint? = null,
     val inlineStyle: InlineTextStyle? = null,
     val fontFamily: ContainerFontFamily? = null,
+    val ruby: Ruby? = null,
 ) {
     init {
+        require(ruby == null || kind == "text" && text.isEmpty() && target.isEmpty() && trail.isEmpty() &&
+            targetFragment == null && image == null) { "Ruby requires a sole ordinary text owner" }
+        require(ruby == null || validRubyChild(this)) { "Invalid ruby owner" }
         require(tooltip == null || validPresentationString(tooltip)) { "Invalid span tooltip" }
-        require(linkPaint == null || kind in setOf("link", "external_link") && target.isNotEmpty() && image == null) {
-            "Source link paint requires an ordinary text link action"
+        require(linkPaint == null || kind in setOf("link", "external_link") && target.isNotEmpty()) {
+            "Source link paint requires an ordinary link action"
+        }
+        require(linkPaint == null || image == null ||
+            image.alt.isNullOrEmpty() && image.map == null && image.staticPoster == null) {
+            "Image link paint requires a simple image without alternative text"
         }
         require(linkPaint == null || (foreground == null || foreground == linkPaint.normal.foreground) &&
             underline == linkPaint.normal.underline) { "Source link paint conflicts with its static normal state" }
@@ -55,12 +63,12 @@ data class Span(
         require(image == null || (text.isEmpty() && trail.isEmpty())) { "Inline image occurrences cannot also contain text" }
         inlineStyle?.let { policy ->
             require(image == null && when (kind) {
-                "text" -> target.isEmpty() && (text.isNotEmpty() || policy.lineHeight != null)
+                "text" -> target.isEmpty() && (text.isNotEmpty() || policy.lineHeight != null || ruby != null)
                 "link", "external_link" -> target.isNotEmpty() && text.isNotEmpty()
                 else -> false
             }) { "Inline effects require an ordinary text owner or an empty line-height strut" }
-            require(policy.cursor == null || text.isNotEmpty()) { "Empty inline struts cannot own a cursor" }
-            require(policy.wrap == null || text.isNotEmpty()) { "Empty inline struts cannot own wrapping" }
+            require(policy.cursor == null || text.isNotEmpty() || ruby != null) { "Empty inline struts cannot own a cursor" }
+            require(policy.wrap == null || text.isNotEmpty() || ruby != null) { "Empty inline struts cannot own wrapping" }
             require(fontScale == null || fontScale.isFinite() && fontScale >= 0f) { "Invalid inline owner font scale" }
             require(!policy.fontNormalized || fontScale != null && fontScaleBasis != FontScaleBasis.Context) {
                 "Normalized inline font requires an explicit non-context scale"
@@ -72,6 +80,97 @@ data class Span(
         }
     }
 }
+
+/** Compiled base/annotation associations. Graphical and fallback text are separate projections. */
+data class Ruby(val segments: List<RubySegment>) {
+    init {
+        require(segments.isNotEmpty()) { "Ruby requires a segment" }
+        require(segments.first().gapBefore.isEmpty()) { "First ruby segment cannot have a gap" }
+        PresentationSpanVisitor { _, _ -> }.ruby(this)
+    }
+}
+data class RubySegment(val gapBefore: List<Span>, val bases: List<RubyBase>,
+    val annotations: List<RubyAnnotation>) {
+    init {
+        require(bases.isNotEmpty()) { "Ruby segment requires a base" }
+        require(bases.first().gapBefore.isEmpty()) { "First ruby base cannot have a gap" }
+        var level = -1L
+        var end = 0L
+        for (annotation in annotations) {
+            require(annotation.baseStart < bases.size.toLong() &&
+                annotation.baseCount <= bases.size.toLong() - annotation.baseStart) { "Ruby annotation range is outside its segment" }
+            if (annotation.level != level) {
+                require(annotation.level == level + 1L) { "Ruby annotation levels must be ordered and dense" }
+                require(annotation.gapBefore.isEmpty()) { "First ruby annotation at a level cannot have a gap" }
+                level = annotation.level
+                end = 0L
+            }
+            require(annotation.baseStart >= end) { "Ruby annotations overlap or are out of order" }
+            end = annotation.baseStart + annotation.baseCount
+        }
+    }
+}
+/** Declaring group context contributes metrics and policy, never a synthetic text run. */
+data class RubyOwner(val font: InlineFontSnapshot, val direction: String = "",
+    val inlineStyle: InlineTextStyle? = null, val foreground: String? = null, val background: String? = null) {
+    init {
+        require(direction in setOf("", "ltr", "rtl", "auto")) { "Invalid ruby owner direction" }
+        require(foreground == null || Regex("#[0-9a-f]{6}").matches(foreground)) { "Invalid ruby owner foreground" }
+        require(background == null || Regex("#[0-9a-f]{6}").matches(background)) { "Invalid ruby owner background" }
+        inlineStyle?.let { policy ->
+            require(!policy.fontNormalized || font.fontNormalized) { "Ruby owner normalized font differs from its style" }
+            val height = policy.lineHeight
+            if (height is InlineLineHeight.FontRelative) {
+                require(sameRubyFont(font, height.font)) { "Ruby line-height font differs from its declaring owner" }
+                require(policy.baselineShift == null || policy.fontNormalized == font.fontNormalized) {
+                    "Shifted ruby line-height owner differs from its normalized font"
+                }
+            }
+        }
+    }
+}
+private fun sameRubyFont(a: InlineFontSnapshot, b: InlineFontSnapshot): Boolean {
+    val aScale = a.fontScale?.takeUnless { it == 1f && a.fontScaleBasis == FontScaleBasis.Context }
+    val bScale = b.fontScale?.takeUnless { it == 1f && b.fontScaleBasis == FontScaleBasis.Context }
+    return (if (aScale == null) bScale == null else bScale != null && aScale.toDouble() == bScale.toDouble()) &&
+        a.fontScaleBasis == b.fontScaleBasis && a.fontNormalized == b.fontNormalized &&
+        a.small == b.small && a.superscript == b.superscript && a.subscript == b.subscript &&
+        a.bold == b.bold && a.italic == b.italic && a.code == b.code &&
+        a.language == b.language && a.classes == b.classes && a.role == b.role &&
+        a.fontFeatures == b.fontFeatures && a.fontFamily == b.fontFamily
+}
+data class RubyBase(val owner: RubyOwner, val gapBefore: List<Span>, val spans: List<Span>)
+data class RubyAnnotation(val baseStart: Long, val baseCount: Long, val level: Long, val owner: RubyOwner,
+    val gapBefore: List<Span>, val spans: List<Span>, val fallbackBefore: List<Span>,
+    val fallbackAfter: List<Span>, val explicitFallback: Boolean) {
+    init {
+        require(baseStart in 0L..0xffff_ffffL && baseCount in 1L..0xffff_ffffL &&
+            level in 0L..0xffff_ffffL) { "Invalid ruby annotation association" }
+        require(explicitFallback || fallbackBefore.isEmpty() && fallbackAfter.isEmpty()) {
+            "Implicit ruby fallback cannot carry explicit runs"
+        }
+    }
+}
+
+/** Gap runs use the ordinary Ruby child domain before their whitespace-only check. */
+internal fun validRubyChild(span: Span): Boolean = span.image == null && when (span.kind) {
+    "text" -> span.target.isEmpty()
+    "link", "external_link" -> span.target.isNotEmpty()
+    else -> false
+} && span.classes.split(' ', '\t', '\r', '\n', '\u000c').none {
+    it == "wikidict-media" || it.startsWith("wikidict-media-file-")
+} && validPresentationString(span.text) && validPresentationString(span.trail) &&
+    validPresentationString(span.target) && validPresentationString(span.language) &&
+    validPresentationString(span.classes) && validPresentationString(span.direction) &&
+    validPresentationString(span.explanation) &&
+    (span.foreground == null || Regex("#[0-9a-f]{6}").matches(span.foreground)) &&
+    (span.background == null || Regex("#[0-9a-f]{6}").matches(span.background)) &&
+    (span.fontScale == null || span.fontScale.isFinite() && span.fontScale >= 0f)
+
+/** Source normalization has already resolved body controls; gaps retain their separate CSS domain. */
+internal fun validRubyBodyChild(span: Span): Boolean = validRubyChild(span) &&
+    span.text.none { it == '\t' || it == '\n' || it == '\r' || it == '\u000c' } &&
+    span.trail.none { it == '\t' || it == '\n' || it == '\r' || it == '\u000c' }
 
 typealias LinkState = FigureLinkState
 
@@ -184,10 +283,11 @@ data class StaticPoster(val policy: StaticPosterPolicy, val label: String, val f
     }
 }
 
+enum class InlineImageVerticalAlign { Middle, Baseline }
 data class InlineImage(val file: String, val widthPx: Long? = null, val heightPx: Long? = null,
     val alt: String? = null, val tooltip: String? = null, val border: Boolean = false, val map: ImageMap? = null,
     val darkModeFilter: ImageDarkModeFilter? = null, val svgLanguage: String? = null,
-    val staticPoster: StaticPoster? = null) {
+    val staticPoster: StaticPoster? = null, val verticalAlign: InlineImageVerticalAlign? = null) {
     init {
         require(file.isNotEmpty() && validPresentationString(file) && file.first() != ' ' && file.last() != ' ' &&
             file.none { it.code < 32 || it.code == 127 || it.code in 0x80..0x9f || it in "[]{}<>|#_" }) { "Invalid inline image file" }
@@ -199,7 +299,9 @@ data class InlineImage(val file: String, val widthPx: Long? = null, val heightPx
         if (staticPoster != null) {
             require(file.endsWith(".stl", ignoreCase = true) && widthPx != null && heightPx != null &&
                 heightPx == (widthPx * 3L + 2L) / 4L) { "Invalid static poster axes or file" }
-            require(map == null && darkModeFilter == null && svgLanguage == null) { "Unsupported static poster image policy" }
+            require(map == null && darkModeFilter == null && svgLanguage == null && verticalAlign == null) {
+                "Unsupported static poster image policy"
+            }
         }
     }
 }
@@ -296,7 +398,8 @@ data class StyleLength(override val unit: StyleLengthUnit, override val value: F
 }
 data class StyleEdges(override val top: StyleLength, override val right: StyleLength,
     override val bottom: StyleLength, override val left: StyleLength) : ContainerMarginEdges
-data class RuleStyle(val height: StyleLength, val fill: ContainerColor, val margins: StyleEdges)
+data class RuleStyle(val height: StyleLength, val fill: ContainerColor, val margins: StyleEdges,
+    val clear: FigureClear? = null)
 data class BlockStyle(val margins: StyleEdges? = null, val padding: StyleEdges? = null) {
     init { require(margins != null || padding != null) { "Empty block style" } }
 }
@@ -470,6 +573,7 @@ data class Figure(val content: FigureContent, val format: FigureFormat, val plac
         val span = content.span
         if (content is FigureContent.Image) {
             require(span.image != null && span.text.isEmpty() && span.trail.isEmpty()) { "Figure requires one image span" }
+            require(span.image.verticalAlign == null) { "Inline image alignment is unavailable for Figure media" }
             require(validFigureSizingContext(format, content.sizing, span.image.widthPx, span.image.heightPx)) { "Invalid figure sizing context" }
             require(span.image.staticPoster == null || format == FigureFormat.Thumbnail &&
                 content.sizing == FigureSizingPolicy.RequestedFit) { "Unsupported static poster figure mode" }
@@ -490,8 +594,9 @@ data class Figure(val content: FigureContent, val format: FigureFormat, val plac
             }
         }
         tableCaptionLayout?.captionLinkPaint?.let { policy ->
-            val visitor = PresentationSpanVisitor { spans, _ ->
-                spans.filter { it.image == null && it.kind in setOf("link", "external_link") }.forEach { link ->
+            val visitor = PresentationSpanVisitor { _, _ -> }
+            visitor.onSpan = { link ->
+                if (link.image == null && link.kind in setOf("link", "external_link")) {
                     require(link.linkPaint == null) { "Caption-link paint has two owners" }
                     require(link.foreground == null || link.foreground == policy.normal.foreground) {
                         "Source caption-link paint conflicts with its static foreground"
@@ -522,23 +627,36 @@ enum class StyleWidthUnit { Px, Em, Percent }
 data class StyleWidth(val unit: StyleWidthUnit, val value: Float) {
     init { require(value.isFinite() && value >= 0f) { "Invalid style width" } }
 }
+/** Physical circular CSS-pixel corners; source lengths remain unrounded. */
+data class TableCornerRadii(val topLeft: StyleLength, val topRight: StyleLength,
+    val bottomRight: StyleLength, val bottomLeft: StyleLength) {
+    init {
+        require(listOf(topLeft, topRight, bottomRight, bottomLeft).all {
+            it.unit == StyleLengthUnit.Px && it.value.isFinite() && it.value in 0f..16777216f
+        }) { "Unsupported table corner radius" }
+    }
+}
 data class TableStyle(val background: String? = null, val border: StyleBorder? = null,
     val collapse: TableCollapse? = null, val margins: StyleEdges? = null, val floatSide: TableFloatSide? = null,
     val width: StyleWidth? = null, val padding: StyleEdges? = null, val clear: FigureClear? = null,
     val display: TableDisplay? = null, val verticalAlign: InlineBoxVerticalAlign? = null,
     val lineHeight: ComputedLineHeight? = null, val marginValues: ContainerMargins? = null,
-    val containingDirection: TableContainingDirection? = null) {
+    val containingDirection: TableContainingDirection? = null, val cornerRadii: TableCornerRadii? = null) {
     val isInline: Boolean get() = display == TableDisplay.InlineBlock || display == TableDisplay.InlineTable
     init {
         require(background != null || border != null || collapse != null || margins != null || floatSide != null ||
             width != null || padding != null || clear != null || display != null || verticalAlign != null ||
-            lineHeight != null || marginValues != null) { "Empty table style" }
+            lineHeight != null || marginValues != null || cornerRadii != null) { "Empty table style" }
         require(margins == null || marginValues == null) { "Conflicting table margin representations" }
-        require((marginValues != null) == (containingDirection != null)) { "Table automatic margins require containing direction" }
+        val numericCornerDirection = cornerRadii != null && margins != null && marginValues == null
+        require((marginValues != null) == (containingDirection != null) ||
+            numericCornerDirection && containingDirection != null) { "Table automatic margins require containing direction" }
         marginValues?.let(::validateTableAutoMargins)
         require(!isInline || floatSide == null) { "Inline table cannot also float" }
         require(verticalAlign != InlineBoxVerticalAlign.Top || isInline) { "Top alignment requires an inline table" }
         require(background == null || Regex("#[0-9a-f]{6}").matches(background)) { "Invalid table background RGB" }
+        require(cornerRadii == null || !isInline && (border == StyleBorder.None || border is StyleBorder.Solid) &&
+            collapse != TableCollapse.Collapse) { "Table corners require explicit uniform separate-border paint" }
     }
 }
 /** Table's M extension is narrower than the reusable ContainerMargin wire domain. */
@@ -607,26 +725,55 @@ data class TableScrollFocusPaint(val mode: TableScrollFocusMode, val color: Figu
     } }
 }
 
+/** Closed Q payload shape, independent of the required focus tail that follows it. */
+internal fun tableSeparateCornerViewportShape(maxViewportWidthPx: Long, boxStyle: TableStyle,
+    maxWidth: StyleWidth, gridStyle: TableStyle, language: String): Boolean =
+    maxViewportWidthPx in 0L..0xffff_ffffL && language.isNotEmpty() && validPresentationString(language) &&
+        boxStyle.cornerRadii != null && boxStyle.margins != null &&
+        boxStyle.width == StyleWidth(StyleWidthUnit.Percent, 100f) &&
+        maxWidth == StyleWidth(StyleWidthUnit.Percent, 100f) && boxStyle.marginValues == null &&
+        boxStyle.containingDirection != null && boxStyle.floatSide == null && boxStyle.display == null &&
+        boxStyle.verticalAlign == null && boxStyle.collapse == null && boxStyle.lineHeight == null &&
+        gridStyle.collapse == TableCollapse.Separate && gridStyle.background == null &&
+        gridStyle.border == null && gridStyle.padding == null && gridStyle.width == null &&
+        gridStyle.margins == null && gridStyle.marginValues == null && gridStyle.containingDirection == null &&
+        gridStyle.floatSide == null && gridStyle.clear == null && gridStyle.display == null &&
+        gridStyle.verticalAlign == null && gridStyle.lineHeight == null && gridStyle.cornerRadii == null
+
 /** One source block viewport around this Table's existing anonymous grid and caption. */
 data class TableBlockViewport(val maxViewportWidthPx: Long, val boxStyle: TableStyle,
     val boxSizing: ContainerBoxSizing, val maxWidth: StyleWidth, val gridStyle: TableStyle,
     val gridDirection: TableContainingDirection, val language: String,
-    val focusPaint: TableScrollFocusPaint? = null) {
+    val focusPaint: TableScrollFocusPaint? = null,
+    val intrinsicContainingDirection: TableContainingDirection? = null) {
+    /** A separate source grid has explicit geometry on its enclosing Table. */
+    internal val isSeparateCornerGrid: Boolean get() = tableSeparateCornerViewportShape(
+        maxViewportWidthPx, boxStyle, maxWidth, gridStyle, language)
     init {
         require(language.isNotEmpty() && validPresentationString(language)) { "Invalid table source language" }
         require(maxViewportWidthPx in 0L..0xffff_ffffL) { "Invalid table viewport threshold" }
-        val widthAndMargins = if (focusPaint != null)
-            boxStyle.width == null && boxStyle.margins != null && boxStyle.marginValues == null && boxStyle.containingDirection == null
-        else boxStyle.width != null && boxStyle.width.value > 0f && boxStyle.marginValues != null && boxStyle.margins == null
-        require(widthAndMargins && boxStyle.floatSide == null && boxStyle.display == null &&
-            boxStyle.verticalAlign == null && boxStyle.collapse == null && boxStyle.lineHeight == null) {
-            "Unsupported table viewport box style"
+        if (intrinsicContainingDirection != null) {
+            require(maxViewportWidthPx > 0L && maxWidth == StyleWidth(StyleWidthUnit.Percent, 100f) &&
+                focusPaint != null && boxStyle.cornerRadii == null && gridStyle.lineHeight == null) {
+                "Unsupported intrinsic table viewport"
+            }
         }
-        require(gridStyle.collapse == TableCollapse.Collapse && gridStyle.background == null &&
-            gridStyle.border == null && gridStyle.padding == null && gridStyle.width == null &&
-            gridStyle.margins == null && gridStyle.marginValues == null && gridStyle.containingDirection == null &&
-            gridStyle.floatSide == null && gridStyle.clear == null && gridStyle.display == null &&
-            gridStyle.verticalAlign == null) { "Unsupported anonymous table grid style" }
+        if (isSeparateCornerGrid) {
+            require(focusPaint != null) { "Separate corner viewport requires source scroll focus paint" }
+        } else {
+            val widthAndMargins = if (focusPaint != null)
+                boxStyle.width == null && boxStyle.margins != null && boxStyle.marginValues == null && boxStyle.containingDirection == null
+            else boxStyle.width != null && boxStyle.width.value > 0f && boxStyle.marginValues != null && boxStyle.margins == null
+            require(widthAndMargins && boxStyle.floatSide == null && boxStyle.display == null &&
+                boxStyle.verticalAlign == null && boxStyle.collapse == null && boxStyle.lineHeight == null) {
+                "Unsupported table viewport box style"
+            }
+            require(gridStyle.collapse == TableCollapse.Collapse && gridStyle.background == null &&
+                gridStyle.border == null && gridStyle.padding == null && gridStyle.width == null &&
+                gridStyle.margins == null && gridStyle.marginValues == null && gridStyle.containingDirection == null &&
+                gridStyle.floatSide == null && gridStyle.clear == null && gridStyle.display == null &&
+                gridStyle.verticalAlign == null && gridStyle.cornerRadii == null) { "Unsupported anonymous table grid style" }
+        }
     }
 }
 
@@ -644,7 +791,39 @@ data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geomet
     val style: TableStyle? = null, val captionBlocks: List<Block>? = null,
     val blockViewport: TableBlockViewport? = null, val floatViewport: TableFloatViewport? = null) {
     init {
-        if (blockViewport != null && floatViewport != null) {
+        require(style?.cornerRadii == null || style.collapse == TableCollapse.Separate) {
+            "Ordinary table corners require explicit separate borders"
+        }
+        if (blockViewport?.intrinsicContainingDirection != null) {
+            val border = geometry?.border
+            val spacing = geometry?.cellSpacing
+            val padding = geometry?.cellPadding
+            require(floatViewport == null && geometry != null && geometry.width == null &&
+                border != null && border in 0..65535 && spacing != null && spacing in 0..65535 &&
+                padding != null && padding in 0..65535) {
+                "Intrinsic table viewport requires nonfloating explicit border spacing and padding geometry"
+            }
+            require(style != null && style.width == null && style.floatSide == null && style.display == null &&
+                style.verticalAlign == null && style.lineHeight == null && style.collapse == TableCollapse.Collapse &&
+                style.cornerRadii == null && style.margins != null && style.marginValues == null &&
+                style.containingDirection == null) {
+                "Intrinsic table viewport requires its ordinary automatic-width table"
+            }
+        } else if (blockViewport?.isSeparateCornerGrid == true) {
+            val spacing = geometry?.cellSpacing
+            val padding = geometry?.cellPadding
+            require(geometry != null && geometry.border == null && geometry.width == null &&
+                spacing != null && spacing in 0..65535 && padding != null && padding in 0..65535) {
+                "Separate corner grid requires explicit spacing and padding geometry"
+            }
+            require(floatViewport == null && blockViewport.focusPaint != null && style != null &&
+                style.cornerRadii != null && style.collapse == TableCollapse.Separate &&
+                !style.isInline && style.floatSide == null && style.margins != null &&
+                style.marginValues == null && style.containingDirection != null &&
+                style.width == StyleWidth(StyleWidthUnit.Percent, 100f)) {
+                "Separate corner viewport requires its nonfloating wide corner table"
+            }
+        } else if (blockViewport != null && floatViewport != null) {
             require(blockViewport.focusPaint != null && floatViewport.narrowClear == null &&
                 blockViewport.maxViewportWidthPx == floatViewport.maxViewportWidthPx &&
                 blockViewport.gridDirection == floatViewport.gridDirection && blockViewport.language == floatViewport.language) {
@@ -692,7 +871,8 @@ internal fun Table.effectiveFloatStyle(documentViewportCssPx: Double): TableStyl
 /** Cells whose existing text/image layout exposes actual intrinsic widths. Wire versions gate new shapes separately. */
 internal fun inlineTableCellShape(cell: Cell): Boolean = cell.blocks == null && cell.nestedTable == null &&
     cell.spans.all { span ->
-        (span.image == null || span.image.map == null && span.image.staticPoster == null && span.image.darkModeFilter == null) &&
+        (span.image == null || span.image.map == null && span.image.staticPoster == null && span.image.darkModeFilter == null &&
+            span.image.verticalAlign == null) &&
             !(span.kind != "line_break" && !span.code && span.fontScale != 0f &&
             span.hasClassToken("Egyp") && span.text.codePoints().anyMatch { it in 0x13000..0x13455 })
     }
@@ -724,6 +904,8 @@ internal fun Block.acceptsAnonymousContent(): Boolean = kind in setOf(
 /** Authoritative content only. Table depth and content depth never reset at a sink. */
 internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) -> Unit) {
     var visitFigures = true
+    /** Raw semantic validation includes hidden readings and fallback runs; display callbacks stay whole. */
+    var onSpan: (Span) -> Unit = {}
     var onTable: (Table, Int, Int) -> Unit = { _, _, _ -> }
     var onContainer: (Container) -> Unit = {}
     var onFigure: (Figure) -> Unit = {}
@@ -731,7 +913,44 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     private var remaining = 1 shl 20
     private fun charge(count: Int) { require(count <= remaining) { "Presentation item budget exceeded" }; remaining -= count }
     private fun descend(depth: Int): Int { require(depth < MaxContentDepth) { "Content nesting is too deep" }; return depth + 1 }
-    fun spans(value: List<Span>, preformatted: Boolean = false) { charge(value.size); visit(value, preformatted) }
+    fun spans(value: List<Span>, preformatted: Boolean = false, contentDepth: Int = 0) {
+        spanList(value, preformatted, contentDepth, display = true, rubyChild = false)
+    }
+    private fun spanList(value: List<Span>, preformatted: Boolean, contentDepth: Int,
+        display: Boolean, rubyChild: Boolean, gap: Boolean = false) {
+        charge(value.size)
+        for (span in value) {
+            if (rubyChild) require(if (gap) validRubyChild(span) else validRubyBodyChild(span)) {
+                "Invalid ruby child for its body or gap context"
+            }
+            if (gap) require(span.kind == "text" && span.target.isEmpty() && span.targetFragment == null &&
+                span.image == null && span.ruby == null && span.trail.isEmpty() && span.text.all {
+                    it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == '\u000c'
+                }) { "Ruby gaps require CSS whitespace text without actions" }
+            onSpan(span)
+            span.ruby?.let { ruby(it, contentDepth) }
+        }
+        if (display) visit(value, preformatted)
+    }
+    fun ruby(value: Ruby, contentDepth: Int = 0) {
+        val depth = descend(contentDepth)
+        charge(value.segments.size)
+        fun runs(spans: List<Span>, gap: Boolean = false) =
+            spanList(spans, false, depth, display = false, rubyChild = true, gap = gap)
+        for (segment in value.segments) {
+            runs(segment.gapBefore, gap = true)
+            charge(segment.bases.size)
+            for (base in segment.bases) {
+                runs(base.gapBefore, gap = true); charge(1); runs(base.spans)
+            }
+            charge(segment.annotations.size)
+            for (annotation in segment.annotations) {
+                charge(1)
+                runs(annotation.gapBefore, gap = true); runs(annotation.spans)
+                runs(annotation.fallbackBefore); runs(annotation.fallbackAfter)
+            }
+        }
+    }
     fun blocks(value: List<Block>, tableDepth: Int = 0, contentDepth: Int = 0) {
         charge(value.size); value.forEach { block(it, tableDepth, contentDepth) }
     }
@@ -744,22 +963,28 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
             value.table != null -> table(value.table, tableDepth + 1, contentDepth)
             value.figure != null -> figure(value.figure, tableDepth, contentDepth)
             value.flow != null -> parts(value.flow, tableDepth, descend(contentDepth))
-            value.kind != "rule" -> spans(value.spans, value.kind == "preformatted")
+            value.kind != "rule" -> spans(value.spans, value.kind == "preformatted", contentDepth)
         }
     }
     fun figure(value: Figure, tableDepth: Int, contentDepth: Int) {
         if (!visitFigures) return
         onFigure(value)
         val contentVisitor = visitFigureContent
-        if (contentVisitor == null) spans(listOf(value.content.span))
-        else { charge(1); contentVisitor(value.content) }
+        if (contentVisitor == null) spans(listOf(value.content.span), contentDepth = contentDepth)
+        else {
+            charge(1)
+            // The custom callback owns the root image occurrence, including Figure sizing.
+            // Descendants still share this visitor's budget without displaying them twice.
+            value.content.span.ruby?.let { ruby(it, contentDepth) }
+            contentVisitor(value.content)
+        }
         val rich = value.captionBlocks
-        if (rich == null) spans(value.caption) else blocks(rich, tableDepth, descend(contentDepth))
+        if (rich == null) spans(value.caption, contentDepth = contentDepth) else blocks(rich, tableDepth, descend(contentDepth))
     }
     fun parts(value: List<FlowPart>, tableDepth: Int, contentDepth: Int) {
         charge(value.size)
         value.forEach { part -> when (part) {
-            is FlowPart.Inline -> spans(part.spans)
+            is FlowPart.Inline -> spans(part.spans, contentDepth = contentDepth)
             is FlowPart.ImageFigure -> figure(part.figure, tableDepth, contentDepth)
             is FlowPart.Scope -> parts(part.scope.parts, tableDepth, descend(contentDepth))
         } }
@@ -768,13 +993,13 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         require(tableDepth <= MaxTableDepth) { "Table nesting is too deep" }
         onTable(value, tableDepth, contentDepth)
         val rich = value.captionBlocks
-        if (rich == null) spans(value.caption) else blocks(rich, tableDepth, descend(contentDepth))
+        if (rich == null) spans(value.caption, contentDepth = contentDepth) else blocks(rich, tableDepth, descend(contentDepth))
         charge(value.rows.size)
         value.rows.forEach { row -> charge(row.size); row.forEach { cell ->
             when {
                 cell.blocks != null -> blocks(cell.blocks, tableDepth, contentDepth)
                 cell.nestedTable != null -> table(cell.nestedTable, tableDepth + 1, contentDepth)
-                else -> spans(cell.spans)
+                else -> spans(cell.spans, contentDepth = contentDepth)
             }
         } }
     }
@@ -871,9 +1096,10 @@ data class Section(val level: Int, val title: String, val blocks: List<Block>, v
                 companion.table == null && companion.flow == null && companion.container == null &&
                 companion.figure == null && companion.style == null && companion.ruleStyle == null &&
                 companion.textAlign == null && companion.spans.isNotEmpty() && companion.spans.all {
-                    it.kind in setOf("text", "link", "external_link") && it.text.isNotEmpty() &&
-                        it.trail.isEmpty() && it.direction.isEmpty()
-                } && companion.spans.joinToString("") { it.text } == title) { "Invalid authored heading companion" }
+                    it.kind in setOf("text", "link", "external_link") && (it.text.isNotEmpty() || it.ruby != null) &&
+                        it.trail.isEmpty() && (it.ruby != null || it.direction.isEmpty())
+                } && (if (companion.spans.any { it.ruby != null }) rubyFallbackText(companion.spans)
+                    else companion.spans.joinToString("") { it.text }) == title) { "Invalid authored heading companion" }
         }
     }
 }
@@ -1028,11 +1254,10 @@ private fun Block.cluePreview(): String {
 }
 
 /** Every serialized span sink participates in asset validation, even an empty
- * occurrence. Plain text/heading authority still uses Span.text and trail only. */
+ * occurrence. Ruby descendants are validated even when graphical projection hides them. */
 internal fun rasterImageOccurrences(entry: Entry): List<RasterImageOccurrence> = buildList {
-    val visitor = PresentationSpanVisitor { spans, _ -> spans.forEach { span ->
-        span.image?.let { add(RasterImageOccurrence(it)) }
-    } }
+    val visitor = PresentationSpanVisitor { _, _ -> }
+    visitor.onSpan = { span -> span.image?.let { add(RasterImageOccurrence(it)) } }
     visitor.visitFigureContent = { content ->
         if (content is FigureContent.Image) add(RasterImageOccurrence(checkNotNull(content.span.image), content.sizing))
     }
@@ -1079,8 +1304,9 @@ internal fun Entry.isInstalled(installed: (String) -> Boolean): Boolean =
 
 private val previewClassWhitespace = Regex("\\s+")
 
-fun textOf(spans: List<Span>): String = spans.joinToString("") { it.text + it.trail }
-    .replace(Regex("\\s+"), " ").trim()
+fun textOf(spans: List<Span>): String =
+    (if (spans.any { it.ruby != null }) rubyFallbackText(spans) else spans.joinToString("") { it.text + it.trail })
+        .replace(Regex("\\s+"), " ").trim()
 
 
 /** Compiled annotations only: never parse label/source text into explanations. */
@@ -1097,6 +1323,7 @@ private fun entryTextDetails(entry: Entry): List<TextDetail> {
     val explanations = linkedSetOf<TextDetail>()
     val advisories = linkedSetOf<TextDetail>()
     visitEntryAnnotationRuns(entry) { spans, location ->
+        val graphical = rubyGraphicalSpans(spans)
         var cachedContext: String? = null
         fun context(): String = cachedContext ?: run {
             val plain = textOf(spans)
@@ -1118,7 +1345,7 @@ private fun entryTextDetails(entry: Entry): List<TextDetail> {
                 }
                 label.setLength(0)
             }
-            for (span in spans) {
+            for (span in graphical) {
                 val value = if (advisory) span.imageTooltip else span.explanation
                 val owned = if (!advisory && !value.isNullOrEmpty()) owners.media(span) else null
                 val nextKind = if (advisory) TextDetailKind.Advisory else if (owned != null) TextDetailKind.MediaDescription else TextDetailKind.Abbreviation
@@ -1153,6 +1380,7 @@ private fun entryTextDetails(entry: Entry): List<TextDetail> {
 private fun entryAnnotations(entry: Entry, kind: TextDetailKind, valueOf: (Span) -> String): List<TextDetail> {
     val result = linkedSetOf<TextDetail>()
     fun include(spans: List<Span>, location: String) {
+        val graphical = rubyGraphicalSpans(spans)
         var cachedContext: String? = null
         fun context(): String = cachedContext ?: run {
             val plain = textOf(spans)
@@ -1169,7 +1397,7 @@ private fun entryAnnotations(entry: Entry, kind: TextDetailKind, valueOf: (Span)
                 result.add(TextDetail(kind, label.toString(), annotation, context()))
             label.setLength(0)
         }
-        for (span in spans) {
+        for (span in graphical) {
             if (span.kind == "line_break") {
                 finish()
                 annotation = valueOf(span)
@@ -1219,6 +1447,7 @@ private fun visitEntryAnnotationRuns(entry: Entry, include: (List<Span>, String)
             is FlowPart.Scope -> includeParts(part.scope.parts, at)
         } } }
         includeBlock = { block, blockLocation -> when {
+            block.container != null -> block.container.blocks.forEach { includeBlock(it, blockLocation) }
             block.figure != null -> includeFigure(block.figure, blockLocation)
             block.flow != null -> includeParts(block.flow, blockLocation)
             block.table != null -> includeTable(block.table, blockLocation)

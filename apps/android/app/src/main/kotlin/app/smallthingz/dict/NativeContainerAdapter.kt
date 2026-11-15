@@ -2,6 +2,7 @@ package app.smallthingz.dict
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -14,9 +15,25 @@ import kotlin.math.floor
 /** Paint belongs to the solved border box, not to its margin allocation or descendant ink. */
 internal data class NativeContainerPaintEdge(val width: Float, val color: Int?, val dotted: Boolean = false)
 internal data class NativeContainerDecoration(val background: Int?, val borderColor: Int?, val borderWidth: Float,
-    val edges: List<NativeContainerPaintEdge>? = null) {
+    val edges: List<NativeContainerPaintEdge>? = null,
+    val nativeCorners: NativeCornerRadii? = null) {
     init { require(edges == null || edges.size == 4) }
-    fun paint(canvas: Canvas, box: RectF) {
+    private val roundedBorder = if (nativeCorners == null) null else {
+        val sides = edges ?: List(4) { NativeContainerPaintEdge(borderWidth, borderColor) }
+        val first = sides.first()
+        if (sides.any { !it.width.isFinite() || it.width < 0f || it.dotted ||
+                it.width != first.width || it.color != first.color })
+            throw UnsupportedFloatLayout("Rounded table borders require one uniform solid edge")
+        first
+    }
+    private class RoundedPaint(val box: RectF, val outer: Path, val ring: Path?)
+    private var roundedPaint: RoundedPaint? = null
+
+    fun paint(canvas: Canvas, box: RectF, paintBackground: Boolean = true, paintBorder: Boolean = true) {
+        if (nativeCorners != null) {
+            paintRounded(canvas, box, paintBackground, paintBorder)
+            return
+        }
         if (box.isEmpty) return
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         background?.let { paint.color = it; canvas.drawRect(box, paint) }
@@ -45,6 +62,89 @@ internal data class NativeContainerDecoration(val background: Int?, val borderCo
             }
         }
     }
+
+    /** Called by the existing owner before successful geometry publication. No draw-time solving. */
+    fun prepareCorners(box: RectF) {
+        val corners = nativeCorners ?: return
+        if (roundedPaint?.box == box) return
+        roundedPaint = null
+        val border = checkNotNull(roundedBorder)
+        if (listOf(box.left, box.top, box.right, box.bottom).any { !it.isFinite() } ||
+            box.right < box.left || box.bottom < box.top)
+            throw UnsupportedFloatLayout("Table corner owner bounds are unavailable")
+        val shape = NativeTableCornerShape(NativeFloatBounds(box.left, box.top, box.right, box.bottom),
+            corners, border.width)
+        val outer = nativeTableCornerPath(shape)
+        val ring = if (border.width <= 0f || border.color == null) null else Path(outer).apply {
+            val inner = nativeTableCornerPath(shape, padding = true)
+            if (!inner.isEmpty && !op(inner, Path.Op.DIFFERENCE))
+                throw UnsupportedFloatLayout("Table corner border path is unavailable")
+        }
+        roundedPaint = RoundedPaint(RectF(box), outer, ring)
+    }
+
+    private fun paintRounded(canvas: Canvas, box: RectF, paintBackground: Boolean, paintBorder: Boolean) {
+        val prepared = checkNotNull(roundedPaint?.takeIf { it.box == box }) {
+            "Rounded table paint requires its measured corner preparation"
+        }
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        if (paintBackground) background?.let { paint.color = it; canvas.drawPath(prepared.outer, paint) }
+        if (paintBorder) prepared.ring?.let {
+            paint.color = checkNotNull(roundedBorder?.color); canvas.drawPath(it, paint)
+        }
+    }
+}
+
+/** Exact circular regions, including inner arcs that extend into an opposite border.
+ * addRoundRect is deliberately absent: its implicit inner normalization changes this shape. */
+internal fun nativeTableCornerPath(shape: NativeTableCornerShape, padding: Boolean = false): Path {
+    val bounds = (if (padding) shape.paddingBox else shape.borderBox) ?: return Path()
+    if (bounds.width <= 0f || bounds.height <= 0f) return Path()
+    val path = Path().apply { addRect(bounds.left, bounds.top, bounds.right, bounds.bottom, Path.Direction.CW) }
+    val radii = (if (padding) shape.innerRadii else shape.outerRadii).clockwise
+    radii.forEachIndexed { index, radius ->
+        if (radius > 0.0) {
+            val center = shape.center(index)
+            val cx = center.first.toFloat()
+            val cy = center.second.toFloat()
+            val usedRadius = radius.toFloat()
+            if (listOf(cx, cy, usedRadius, cx - usedRadius, cx + usedRadius,
+                    cy - usedRadius, cy + usedRadius).any { !it.isFinite() })
+                throw UnsupportedFloatLayout("Table corner path exceeds native geometry")
+            val region = Path().apply {
+                addCircle(cx, cy, usedRadius, Path.Direction.CW)
+                fun rectangle(left: Float, top: Float, right: Float, bottom: Float) {
+                    if (right > left && bottom > top) addRect(left, top, right, bottom, Path.Direction.CW)
+                }
+                if (index == 0 || index == 3)
+                    rectangle(maxOf(cx, bounds.left), bounds.top, bounds.right, bounds.bottom)
+                else rectangle(bounds.left, bounds.top, minOf(cx, bounds.right), bounds.bottom)
+                if (index < 2)
+                    rectangle(bounds.left, maxOf(cy, bounds.top), bounds.right, bounds.bottom)
+                else rectangle(bounds.left, bounds.top, bounds.right, minOf(cy, bounds.bottom))
+            }
+            if (!path.op(region, Path.Op.INTERSECT))
+                throw UnsupportedFloatLayout("Table corner path is unavailable")
+        }
+    }
+    return path
+}
+
+/** Conservative native-path envelope after the true intersection, without integer Region/raster approximation. */
+internal fun nativeTableCornerIntersection(shape: NativeTableCornerShape, rectangle: RectF,
+    padding: Boolean = false): RectF? {
+    if (rectangle.isEmpty) return null
+    val clipped = nativeTableCornerPath(shape, padding)
+    val rect = Path().apply { addRect(rectangle, Path.Direction.CW) }
+    if (!clipped.op(rect, Path.Op.INTERSECT))
+        throw UnsupportedFloatLayout("Table corner intersection is unavailable")
+    if (clipped.isEmpty) return null
+    val owner = (if (padding) shape.paddingBox else shape.borderBox) ?: return null
+    val bounds = RectF().also { clipped.computeBounds(it, true) }
+    // Path control points may extend beyond its true intersection. The original
+    // rectangular constraints remain exact even when the native envelope is conservative.
+    return bounds.takeIf { it.intersect(rectangle) &&
+        it.intersect(owner.left, owner.top, owner.right, owner.bottom) && !it.isEmpty }
 }
 
 /** A stamped circle path keeps dotted borders circular even at fractional density,

@@ -14,6 +14,17 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 
+/** Only a prepared known glyph owner can retain its complete range through Ruby lowering.
+ * The caller resolves script/numeric ownership and supplies the final physical local target. */
+internal interface NativeRubyGlyphReplacement {
+    /** Original captured physical script shift, even when this object is a relative copy. */
+    val nativeRubyScriptShift: Float
+    fun withRubyLocalShift(localShift: Float): ReplacementSpan
+}
+
+/** The original multi-UTF16 glyph range has already received its resolved Ruby placement. */
+internal interface NativeRubyResolvedGlyphReplacement : NativeAtomicInlineMetrics, NativeReplacementPaintBounds
+
 /** Shape once per immutable logical run; resizing changes only the span's drawing scale. */
 internal class NativeEgyptianSpanPreparation internal constructor(
     val available: Boolean,
@@ -104,12 +115,29 @@ private class GlyphSpan(
     private val background: Int?,
     availableWidth: Float,
     private val missingLinkPaint: NativeMissingLinkPaint?,
-) : ReplacementSpan(), NativeReplacementPaintBounds {
+) : ReplacementSpan(), NativeReplacementPaintBounds, NativeRubyGlyphReplacement {
     // Zero is a real containing width, not a request to erase the shaped glyphs.
     private val scale = if (availableWidth == 0f) 1f else min(1f, availableWidth / ink.naturalWidth)
     private val width = ceil(ink.naturalWidth * scale).toInt().coerceAtLeast(1)
     private val ascent = min(ink.metrics.ascent, floor((ink.bounds.top + ink.shift) * scale).toInt())
     private val descent = max(ink.metrics.descent, ceil((ink.bounds.bottom + ink.shift) * scale).toInt())
+
+    override val nativeRubyScriptShift: Float get() = ink.shift * scale
+
+    override fun withRubyLocalShift(localShift: Float): ReplacementSpan {
+        if (!localShift.isFinite() || kotlin.math.abs(localShift) > TablePixelLimit)
+            throw UnsupportedFloatLayout("Egyptian Ruby glyph exceeds native coordinates")
+        val capturedShift = nativeRubyScriptShift
+        return RubyGlyphSpan(this, localShift - capturedShift)
+    }
+
+    fun rubyMetrics(offset: Float): NativeUsedLineMetrics {
+        val values = listOf(offset, ascent + offset, descent + offset,
+            min(ink.metrics.top, ascent) + offset, max(ink.metrics.bottom, descent) + offset)
+        if (values.any { !it.isFinite() || kotlin.math.abs(it) > TablePixelLimit })
+            throw UnsupportedFloatLayout("Egyptian Ruby glyph exceeds native coordinates")
+        return NativeUsedLineMetrics(ascent + offset, descent + offset)
+    }
 
     override fun nativePaintBounds(lineTop: Float, lineBottom: Float): NativeFloatBounds {
         val source = RectF(ink.bounds)
@@ -138,6 +166,12 @@ private class GlyphSpan(
     }
 
     override fun draw(canvas: Canvas, text: CharSequence, start: Int, end: Int, x: Float, top: Int, y: Int, bottom: Int, paint: Paint) {
+        if (canvas is NativeRubyAtomicCanvas) {
+            canvas.paintRubyAtom(x, y.toFloat()) { target ->
+                draw(target, text, start, end, 0f, top - y, 0, bottom - y, paint)
+            }
+            return
+        }
         val appearance = missingLinkPaint?.appearance()
         val drawingPaint = TextPaint(inkPaint).apply { appearance?.let { color = it.color } }
         if (background != null) {
@@ -163,13 +197,58 @@ private class GlyphSpan(
     }
 }
 
+/** Move the complete captured envelope once, including its original background and decorations.
+ * Only this Ruby copy contributes atomic metrics; ordinary Egyptian line policy stays unchanged. */
+private class RubyGlyphSpan(private val original: GlyphSpan, private val offset: Float) :
+    ReplacementSpan(), NativeRubyResolvedGlyphReplacement, NativeRubyGlyphReplacement {
+    override val nativeUsedMetrics = original.rubyMetrics(offset)
+    override val nativeRubyScriptShift: Float get() = original.nativeRubyScriptShift
+
+    override fun withRubyLocalShift(localShift: Float): ReplacementSpan =
+        original.withRubyLocalShift(localShift)
+
+    override fun nativePaintBounds(lineTop: Float, lineBottom: Float): NativeFloatBounds =
+        original.nativePaintBounds(lineTop, lineBottom).translated(0f, offset)
+
+    override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
+        val width = original.getSize(paint, text, start, end, fm)
+        fm?.let {
+            it.ascent = floor(it.ascent + offset).toInt()
+            it.descent = ceil(it.descent + offset).toInt()
+            it.top = floor(it.top + offset).toInt()
+            it.bottom = ceil(it.bottom + offset).toInt()
+        }
+        return width
+    }
+
+    override fun draw(canvas: Canvas, text: CharSequence, start: Int, end: Int,
+        x: Float, top: Int, y: Int, bottom: Int, paint: Paint) {
+        if (canvas is NativeRubyAtomicCanvas) {
+            canvas.paintRubyAtom(x, y.toFloat()) { target ->
+                draw(target, text, start, end, 0f, top - y, 0, bottom - y, paint)
+            }
+            return
+        }
+        val saved = canvas.save()
+        try {
+            canvas.translate(0f, offset)
+            original.draw(canvas, text, start, end, x, top, y, bottom, paint)
+        } finally { canvas.restoreToCount(saved) }
+    }
+}
+
 /** Explicit failure marker, while the original Egyptian scalars remain selectable and spoken. */
 private class UnavailableEgyptianSpan(
     private val markerPaint: TextPaint,
     private val background: Int?,
     availableWidth: Float,
     private val missingLinkPaint: NativeMissingLinkPaint?,
-) : ReplacementSpan(), NativeReplacementPaintBounds {
+) : ReplacementSpan(), NativeReplacementPaintBounds, NativeRubyGlyphReplacement {
+    override val nativeRubyScriptShift: Float
+        get() = throw UnsupportedFloatLayout("Egyptian glyph layout unavailable")
+    override fun withRubyLocalShift(localShift: Float): ReplacementSpan =
+        throw UnsupportedFloatLayout("Egyptian glyph layout unavailable")
+
     private val size = max(1f, markerPaint.textSize)
     private val width = ceil(if (availableWidth == 0f) size else min(availableWidth, size)).toInt().coerceAtLeast(1)
     private val markerText by lazy(LazyThreadSafetyMode.NONE) {

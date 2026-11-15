@@ -45,10 +45,20 @@ internal data class EgyptianTextRun(val start: Int, val end: Int, val text: Stri
 
 /** Contiguous sign/control runs only: ordinary text, whitespace and trails remain text. */
 internal fun egyptianTextRuns(spans: List<Span>): List<EgyptianTextRun> {
+    if (!spans.hasRuby()) return ordinaryEgyptianTextRuns(spans)
+    return rubyGraphicalProjection(spans).ranges.flatMap { range ->
+        val span = range.span.takeUnless { range.role == RubyTextRole.Owner }
+        if (span == null) emptyList() else ordinaryEgyptianTextRuns(listOf(span), directionControls = false).map {
+            it.copy(start = range.start + it.start, end = range.start + it.end)
+        }
+    }
+}
+
+private fun ordinaryEgyptianTextRuns(spans: List<Span>, directionControls: Boolean = true): List<EgyptianTextRun> {
     val runs = mutableListOf<EgyptianTextRun>()
     var offset = 0
     for (span in spans) {
-        val isolated = span.usesInlineDirectionIsolate()
+        val isolated = directionControls && span.usesInlineDirectionIsolate()
         if (isolated) offset++
         if (span.image != null) offset += InlineImageReplacement.length
         val text = if (span.kind == "line_break") "\n" else span.text

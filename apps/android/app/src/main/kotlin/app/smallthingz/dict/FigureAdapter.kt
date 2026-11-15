@@ -560,10 +560,24 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
             }) { bounds ->
                 val allocated = exact.tableCaption
                 val anchor = allocated?.anchor?.let { RectF(it.left, it.top, it.right, it.bottom) } ?: bounds
-                val original = imageActionText.native?.nodes(ImageActionBounds(anchor)).orEmpty().map { node ->
-                    if (allocated == null) node else {
+                val imagePolicy = (figure.content as? FigureContent.Image)?.span?.linkPaint
+                val imageAnchor = if (imagePolicy == null) anchor else RectF(bounds).apply {
+                    inset(-exact.imageBorder, -exact.imageBorder)
+                }
+                val original = imageActionText.native?.nodes(ImageActionBounds(imageAnchor)).orEmpty().map { node ->
+                    if (allocated == null) {
+                        if (imagePolicy == null) node else node.copy(bounds = listOf(RectF(anchor)))
+                    } else {
                         val after = allocated.after?.let { RectF(it.left, it.top, it.right, it.bottom) }
-                        val outline = allocated.prepared.layout.media.focusOutline?.let { value ->
+                        val outline = if (imagePolicy != null && allocated.prepared.layout.media.focusOutline == null) {
+                            val authored = node.focusPaint
+                                ?: throw UnsupportedFloatLayout("Figure image source focus policy is unavailable")
+                            if (after == null || authored == NativeNodeFocusPaint.None) authored else {
+                                val imageOutline = authored.outlines().singleOrNull()
+                                    ?: throw UnsupportedFloatLayout("Figure image focus requires one actual image box")
+                                NativeNodeFocusPaint.Fragments(listOf(imageOutline, imageOutline.copy(bounds = after)))
+                            }
+                        } else allocated.prepared.layout.media.focusOutline?.let { value ->
                             val offset = value.offset.value.toDouble() * if (value.offset.unit == StyleLengthUnit.Px) density.density else bodyPixels
                             if (!offset.isFinite() || kotlin.math.abs(offset) > Float.MAX_VALUE)
                                 throw UnsupportedFloatLayout("Focus outline offset exceeds the native geometry range")
@@ -573,7 +587,7 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
                         node.copy(bounds = listOfNotNull(RectF(anchor), after), focusPaint = outline)
                     }
                 }
-                if (allocated != null && label == null && original.size != 1)
+                if ((allocated != null || imagePolicy != null) && label == null && original.size != 1)
                     throw UnsupportedFloatLayout("Figure anchor requires one existing image action owner")
                 if (label != null) emptyList() else if (map == null) original else buildList {
                     addAll(original.map { it.copy(onClick = null, onLongClick = { mapMenu = true }) })
@@ -925,6 +939,7 @@ private fun CaptionFailureSurface(input: NativeLayoutInput<CaptionFallbackPass?>
                     catch (_: IllegalArgumentException) { return@mapNotNull null }
                 val owner = subcompose("owner-$index") {
                     AndroidView(factory = { NativeFloatTextView(it, scrollClip) }, update = { view ->
+                        view.updateScrollClip(scrollClip)
                         view.bind({ width -> check(width == physical.width); physical },
                             color.copy(alpha = .25f).toArgb(), color.toArgb())
                     })

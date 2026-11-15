@@ -2,6 +2,13 @@ package app.smallthingz.dict
 
 import java.util.IdentityHashMap
 
+internal fun nativeClearForPart(part: NativeFloatContextPart): FigureClear? = when (part) {
+    is NativeFloatContextPart.Child -> part.clear
+    is NativeFloatContextPart.Container -> part.clear
+    is NativeFloatContextPart.Rule -> part.metrics.clear
+    else -> null
+}
+
 internal fun nativeClearBottom(clear: FigureClear?, exclusions: List<NativeFloatExclusion>): Float? =
     exclusions.filter { when (clear) {
         FigureClear.Left -> it.side == TableFloatSide.Left
@@ -132,11 +139,7 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
             if (part is NativeFloatContextPart.Container && part.absolute != null) continue
             val margins = profile(part)
             if (margins == null) {
-                val normalY = tableClearanceY(cursor.floatTop, when (part) {
-                    is NativeFloatContextPart.Child -> part.clear
-                    is NativeFloatContextPart.Container -> part.clear
-                    else -> null
-                }, exclusions)
+                val normalY = tableClearanceY(cursor.floatTop, nativeClearForPart(part), exclusions)
                 val placement = when (part) {
                     is NativeFloatContextPart.Child -> placeNativeFloatingTable(width.toFloat(), normalY,
                         exclusions, checkNotNull(part.floatSide), part.margins, part.widthRule,
@@ -172,11 +175,7 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
             // A prior pass already proved this child's clearance. Its own margin stays
             // inside the group and terminates the parent's leading adjoining chain.
             if (hasClearance(part)) return exclusions.drop(incoming.size)
-            val clear = when (part) {
-                is NativeFloatContextPart.Child -> part.clear
-                is NativeFloatContextPart.Container -> part.clear
-                else -> null
-            }
+            val clear = nativeClearForPart(part)
             val hypothetical = cursor.preview(margins).borderTop
             val bottom = nativeClearBottom(clear, exclusions)
             if (bottom != null && bottom > hypothetical) {

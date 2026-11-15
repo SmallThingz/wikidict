@@ -173,10 +173,16 @@ class BodyAdjoiningModelCodecTest {
         rejects("O cannot borrow the P tail", old + byteArrayOf(1))
     }
 
-    @Test fun futureQRemainsUnknownWhileKnownPHasNamedMalformedTailContrasts() {
-        val future = runCatching { read(header(emptyP, 'Q')) }.exceptionOrNull()
+    @Test fun futureTRemainsUnknownWhileKnownPQRHaveNamedMalformedTailContrasts() {
+        val future = runCatching { read(header(emptyP, 'T')) }.exceptionOrNull()
         assertTrue(future is IllegalArgumentException)
         assertEquals("Unsupported presentation format", future!!.message)
+        val missingCorners = runCatching { read(header(emptyP, 'Q')) }.exceptionOrNull()
+        assertTrue(missingCorners is IllegalArgumentException)
+        assertEquals("Q version does not match corner or image alignment payload", missingCorners!!.message)
+        val missingRFeatures = runCatching { read(header(emptyP, 'R')) }.exceptionOrNull()
+        assertTrue(missingRFeatures is IllegalArgumentException)
+        assertEquals("R version does not match intrinsic table viewport, rule clear, or image link paint payload", missingRFeatures!!.message)
         val malformed = runCatching { read(emptyP.copyOf().also { it[it.lastIndex] = 0 }) }.exceptionOrNull()
         assertTrue(malformed is IllegalArgumentException)
         assertEquals("Unsupported body adjoining policy", malformed!!.message)

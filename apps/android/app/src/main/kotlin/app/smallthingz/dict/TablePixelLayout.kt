@@ -105,10 +105,12 @@ internal fun anonymousTableRenderMetrics(table: Table, gridStyle: TableStyle, cs
     normalBodyPixels: Float, rtl: Boolean): TableRenderMetrics? = tableRenderMetrics(table, 1, 0, 0,
     cssPixelScale, containerFontPixels = normalBodyPixels, rtl = rtl, anonymousGridStyle = gridStyle)
 
-private fun supportedAnonymousTableStyle(style: TableStyle): Boolean = style.collapse == TableCollapse.Collapse &&
+private fun supportedAnonymousTableStyle(style: TableStyle, separateCornerGrid: Boolean = false): Boolean =
+    style.collapse == (if (separateCornerGrid) TableCollapse.Separate else TableCollapse.Collapse) &&
     style.background == null && style.border == null && style.margins == null && style.floatSide == null &&
     style.width == null && style.padding == null && style.clear == null && style.display == null &&
-    style.verticalAlign == null && style.marginValues == null && style.containingDirection == null
+    style.verticalAlign == null && style.marginValues == null && style.containingDirection == null && style.cornerRadii == null &&
+    (!separateCornerGrid || style.lineHeight == null)
 
 internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, defaultPadding: Int,
                                 defaultMinRowHeight: Int, cssPixelScale: Float, depth: Int = 1,
@@ -117,10 +119,24 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
                                 rtl: Boolean = false, anonymousGridStyle: TableStyle? = null, marginsConsumed: Boolean = false): TableRenderMetrics? {
     val anonymous = anonymousGridStyle != null
     val pairedViewport = table.blockViewport != null && table.floatViewport != null
-    if (anonymous && (table.geometry != null || !supportedAnonymousTableStyle(checkNotNull(anonymousGridStyle)) ||
-            decorationScale != 1.0)) return null
+    val separateCornerTable = table.blockViewport?.isSeparateCornerGrid == true
+    val intrinsicTable = table.blockViewport?.intrinsicContainingDirection != null
+    val intrinsicGrid = anonymous && intrinsicTable && table.blockViewport?.gridStyle == anonymousGridStyle
+    val separateCornerGrid = anonymous && separateCornerTable && table.blockViewport?.gridStyle == anonymousGridStyle
+    if (separateCornerTable) {
+        val sourceGeometry = table.geometry ?: return null
+        if (table.floatViewport != null || sourceGeometry.cellSpacing == null || sourceGeometry.cellPadding == null ||
+            sourceGeometry.border != null || sourceGeometry.width != null) return null
+    }
+    if (intrinsicTable) {
+        val sourceGeometry = table.geometry ?: return null
+        if (table.floatViewport != null || sourceGeometry.border == null || sourceGeometry.cellSpacing == null ||
+            sourceGeometry.cellPadding == null || sourceGeometry.width != null) return null
+    }
+    if (anonymous && ((!separateCornerGrid && !intrinsicGrid && table.geometry != null) ||
+            !supportedAnonymousTableStyle(checkNotNull(anonymousGridStyle), separateCornerGrid) || decorationScale != 1.0)) return null
     if (depth !in 1..MaxTableDepth || preferredColumnWidth <= 0 || defaultPadding < 0 ||
-        defaultMinRowHeight < 0 || !anonymous && !pairedViewport && defaultMinRowHeight == 0 ||
+        defaultMinRowHeight < 0 || !anonymous && !pairedViewport && !separateCornerTable && !intrinsicTable && defaultMinRowHeight == 0 ||
         !cssPixelScale.isFinite() || cssPixelScale <= 0f) return null
     if (!decorationScale.isFinite() || decorationScale !in 0.0..1.0) return null
     fun pixels(value: Long): Int? {
@@ -129,19 +145,19 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
     }
     val geometry = table.geometry
     val selectedStyle = anonymousGridStyle ?: table.style
-    val minRowHeight = if (anonymous) 0 else defaultMinRowHeight
+    val minRowHeight = if (anonymous || separateCornerTable || intrinsicTable) 0 else defaultMinRowHeight
     if (listOfNotNull(geometry?.border, geometry?.cellSpacing, geometry?.cellPadding).any { it !in 0..65535 }) return null
     val legacyBorder = geometry?.border?.let { pixels(it.toLong()) ?: return null } ?: 0
     val legacySpacing = geometry?.cellSpacing?.let { pixels(it.toLong()) ?: return null } ?: 0
-    val padding = if (anonymous) 0 else geometry?.cellPadding?.let { pixels(it.toLong()) ?: return null } ?: defaultPadding
+    val padding = if (anonymous && !separateCornerGrid && !intrinsicGrid) 0 else geometry?.cellPadding?.let { pixels(it.toLong()) ?: return null } ?: defaultPadding
     val grid = runCatching { tableGrid(table) }.getOrNull() ?: return null
     val style = if (anonymous || tableHasOwnStyle(table)) {
         val font = containerFontPixels ?: return null
         if (!font.isFinite() || font < 0f) return null
-        val original = runCatching { resolveTableStyle(table, grid, cssPixelScale, font, padding, legacyBorder, decorationScale, rtl, selectedStyle) }
+        val original = runCatching { resolveTableStyle(table, grid, cssPixelScale, font, padding, legacyBorder, decorationScale, rtl, selectedStyle, suppressOuterHint = intrinsicGrid) }
             .getOrNull()?.let { if (marginsConsumed) it.copy(margins = TablePixelInsets(0, 0, 0, 0)) else it } ?: return null
         val projectedSpacing = if (original.collapse) 0 else kotlin.math.round(legacySpacing * decorationScale).toInt()
-        val factor = if (anonymous || tableHasComputedCellStyle(table)) 1.0 else tableDecorationProjection(grid, original, preferredColumnWidth, defaultMinRowHeight, projectedSpacing,
+        val factor = if (anonymous || intrinsicTable || selectedStyle?.cornerRadii != null || tableHasComputedCellStyle(table)) 1.0 else tableDecorationProjection(grid, original, preferredColumnWidth, defaultMinRowHeight, projectedSpacing,
             decorationViewportWidth, decorationViewportHeight)
         if (factor == 1.0) original else resolveTableStyle(table, grid, cssPixelScale, font, padding, legacyBorder, decorationScale * factor, rtl, selectedStyle)
             .let { if (marginsConsumed) it.copy(margins = TablePixelInsets(0, 0, 0, 0)) else it }
@@ -176,7 +192,7 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
             column = maxOf(column, bodyColumn + (horizontalInset + placed.colspan - 1) / placed.colspan)
         }
         // The new grid receives nested-child minima from its real composed cells below.
-        if (anonymous || pairedViewport) continue
+        if (anonymous || pairedViewport || intrinsicTable) continue
         val children = if (cell.blocks != null) cell.blocks.mapNotNull { block -> block.table?.let { it to blockIndentDp(block) } }
             else listOfNotNull(cell.nestedTable?.let { it to 0 })
         for ((child, indent) in children) {

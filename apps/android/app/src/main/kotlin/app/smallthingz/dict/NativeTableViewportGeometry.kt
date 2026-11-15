@@ -1,6 +1,7 @@
 package app.smallthingz.dict
 
 import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.RectF
 
 /** One immutable scroll placement of the existing caption/grid body. Logical offsets and
@@ -18,8 +19,13 @@ internal class NativeTableViewportGeometry(
     private val x = placement.contentX + placement.physicalScrollX
     private val y = placement.contentY
     private val clip = RectF(placement.contentClip)
+    private val precise = placement.cornerClip?.let { nativeTableContentClip(it, clip) }
+    override val hasPreciseClips: Boolean get() = precise != null || content.hasPreciseClips
+    private fun containsClip(x: Float, y: Float): Boolean = clip.contains(x, y) && (precise?.contains(x, y) ?: true)
+    private fun paintClip(canvas: Canvas) { canvas.clipRect(clip); precise?.clip(canvas) }
     private fun translated(rect: RectF) = RectF(rect).apply { offset(x, y) }
     private fun clipped(rect: RectF): RectF? = translated(rect).takeIf { it.intersect(clip) && !it.isEmpty }
+        ?.let { if (precise == null) it else precise.bounds(it) }
     private fun intersected(rect: RectF): RectF = RectF(rect).apply { if (!intersect(clip)) setEmpty() }
     private fun clippedBounds(value: NativeFloatBounds?): NativeFloatBounds? = value?.let {
         clipped(RectF(it.left, it.top, it.right, it.bottom))?.let { rect ->
@@ -32,7 +38,9 @@ internal class NativeTableViewportGeometry(
     }
     override val nodes: List<FloatInteractionNode> = content.nodes.map { node ->
         val shifted = node.translated(x, y)
-        shifted.copy(bounds = node.bounds.mapNotNull(::clipped),
+        val ownClip = shifted.preciseClip?.intersected(clip)?.let { if (precise == null) it else it.intersected(precise) } ?: precise
+        shifted.copy(bounds = if (ownClip == null) node.bounds.mapNotNull(::clipped)
+            else shifted.bounds.mapNotNull(ownClip::bounds), preciseClip = ownClip,
             clipBounds = shifted.clipBounds?.let(::intersected) ?: RectF(clip),
             onReveal = { complete ->
                 content.revealNode(node.id) {
@@ -47,9 +55,12 @@ internal class NativeTableViewportGeometry(
     }
     override val textBaselines: NativeTextBaselines? get() = content.textBaselines?.translated(y)
     override val positionedGroups: List<NativePositionedGroup> = content.positionedGroups.map { group ->
-        group.copy(bounds = group.bounds.mapNotNull(::clipped), paint = { canvas ->
+        val ownClip = group.preciseClip?.translated(x, y)?.intersected(clip)
+            ?.let { if (precise == null) it else it.intersected(precise) } ?: precise
+        group.copy(bounds = if (ownClip == null) group.bounds.mapNotNull(::clipped)
+            else group.bounds.mapNotNull { ownClip.bounds(translated(it)) }, preciseClip = ownClip, paint = { canvas ->
             val saved = canvas.save()
-            try { canvas.clipRect(clip); canvas.translate(x, y); group.paint(canvas) }
+            try { paintClip(canvas); canvas.translate(x, y); group.paint(canvas) }
             finally { canvas.restoreToCount(saved) }
         })
     }
@@ -58,18 +69,18 @@ internal class NativeTableViewportGeometry(
         enclosingBounds(placement.borderBox.let { NativeFloatBounds(it.left, it.top, it.right, it.bottom) },
             clippedBounds(content.extents.ink)), clippedBounds(content.extents.interaction))
     override val focusBounds: RectF get() = RectF(placement.borderBox)
-    override fun containsInteraction(x: Float, y: Float): Boolean = clip.contains(x, y) &&
+    override fun containsInteraction(x: Float, y: Float): Boolean = containsClip(x, y) &&
         content.containsInteraction(x - this.x, y - this.y)
-    override fun containsInput(x: Float, y: Float): Boolean = clip.contains(x, y)
+    override fun containsInput(x: Float, y: Float): Boolean = containsClip(x, y)
     override fun interactionNodeAt(x: Float, y: Float): FloatInteractionNode? {
-        if (!clip.contains(x, y)) return null
+        if (!containsClip(x, y)) return null
         val child = content.interactionNodeAt(x - this.x, y - this.y) ?: return null
         return nodes.firstOrNull { it.id == child.id && it.contains(x, y) }
     }
     override fun cursorAt(x: Float, y: Float): InlineCursor? =
-        if (clip.contains(x, y)) content.cursorAt(x - this.x, y - this.y) else null
+        if (containsClip(x, y)) content.cursorAt(x - this.x, y - this.y) else null
     override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? {
-        if (!clip.contains(x, y)) return null
+        if (!containsClip(x, y)) return null
         return content.horizontalScrollTargetAt(x - this.x, y - this.y) ?: placement.scrollTarget
     }
     override fun paint(canvas: Canvas) {
@@ -78,13 +89,30 @@ internal class NativeTableViewportGeometry(
     }
     override fun paintOrdinary(canvas: Canvas) {
         val saved = canvas.save()
-        try { canvas.clipRect(clip); canvas.translate(x, y); content.paintOrdinary(canvas) }
+        try { paintClip(canvas); canvas.translate(x, y); content.paintOrdinary(canvas) }
         finally { canvas.restoreToCount(saved) }
     }
+    override fun paintSelection(canvas: Canvas, start: Int, end: Int, paint: Paint) {
+        val saved = canvas.save()
+        try { paintClip(canvas); canvas.translate(x, y); content.paintSelection(canvas, start, end, paint) }
+        finally { canvas.restoreToCount(saved) }
+    }
+    override fun preciseClipForOffset(offset: Int): NativeTextClip? {
+        val child = content.preciseClipForOffset(offset)?.translated(x, y)?.intersected(clip)
+        return if (child == null) precise else if (precise == null) child else child.intersected(precise)
+    }
     override fun offsetForPosition(x: Float, y: Float): Int = content.offsetForPosition(x - this.x, y - this.y)
-    override fun rectsForRange(start: Int, end: Int): List<RectF> = content.rectsForRange(start, end).mapNotNull(::clipped)
-    override fun characterRects(start: Int, length: Int): List<RectF?> = content.characterRects(start, length).map {
-        it?.let(::clipped)
+    override fun rectsForRange(start: Int, end: Int): List<RectF> {
+        require(start in 0..text.length && end in start..text.length)
+        // A nested rounded owner has its own clip per source range. Keep that shape until
+        // intersection, rather than clipping a previous bounding box into visible corners.
+        return if (content.hasPreciseClips) characterRects(start, end - start).filterNotNull()
+            else content.rectsForRange(start, end).mapNotNull(::clipped)
+    }
+    override fun characterRects(start: Int, length: Int): List<RectF?> = content.characterRects(start, length).mapIndexed { index, rect ->
+        val bounds = rect?.let(::clipped) ?: return@mapIndexed null
+        val exact = preciseClipForOffset(start + index)
+        if (exact == null) bounds else exact.bounds(bounds)
     }
     // Carets retain logical position for arrow navigation; the View clips their paint separately.
     override fun caretRect(offset: Int): RectF = translated(content.caretRect(offset))
@@ -98,6 +126,8 @@ internal class NativeTableViewportGeometry(
         }
     }
     override fun lineRange(offset: Int): Pair<Int, Int> = content.lineRange(offset)
+    override fun visualLineRanges(offset: Int): List<Pair<Int, Int>> = content.visualLineRanges(offset)
+    override fun isHardLineBreak(offset: Int): Boolean = content.isHardLineBreak(offset)
     override fun visualOffset(offset: Int, direction: Int): Int = content.visualOffset(offset, direction)
 }
 

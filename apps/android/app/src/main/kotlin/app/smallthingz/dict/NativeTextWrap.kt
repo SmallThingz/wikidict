@@ -109,7 +109,7 @@ internal class NativeNoWrapPlan private constructor(val paragraphs: List<NativeN
 }
 
 internal data class NativeWrapWord(val start: Int, val visibleEnd: Int, val end: Int,
-    val normal: Boolean, val authored: Boolean, val fullyAuthored: Boolean)
+    val normal: Boolean, val authored: Boolean, val fullyAuthored: Boolean, val rubyDefault: Boolean = false)
 
 /** Keep the normal break opportunities used by the existing intrinsic-width owner. The
  * native paragraph still shapes and breaks the complete source; this plan only detects
@@ -123,10 +123,28 @@ internal class NativeTextWrapPlan private constructor(
 ) {
     private val requiredWords = mutableMapOf<Int, NativeWrapWord>()
 
+    /** Policy only: the caller must first observe this original-source offset as an
+     * endpoint from the same complete native source/paint/direction fitter. This does
+     * not turn an ICU cursor boundary into native shaping or line-fitting proof.
+     * Ordinary MIN never uses this accessor; the flag is only for the existing
+     * legacy emergency-MIN request. A missing plan supplies no default permission. */
+    fun permitsEmergencyBreak(offset: Int, forLegacyIntrinsicMinimum: Boolean = false): Boolean {
+        require(offset in 0..source.length)
+        if (noWrap != null || offset == 0 || offset == source.length || offset !in graphemeBoundaries)
+            return false
+        if (source.getSpans(offset, offset, ReplacementSpan::class.java).any {
+                source.getSpanStart(it) < offset && source.getSpanEnd(it) > offset
+            }) return false
+        val word = words.firstOrNull { offset > it.start && offset < it.visibleEnd } ?: return false
+        if (word.normal) return false
+        return !forLegacyIntrinsicMinimum || !ordinaryMinimum(word.start, word.visibleEnd, legacyEmergency = true)
+    }
+
     fun ordinaryMinimum(sourceStart: Int, sourceEnd: Int, legacyEmergency: Boolean): Boolean {
         if (!legacyEmergency) return true
+        val rubyDefault = words.any { it.rubyDefault && it.start < sourceEnd && it.visibleEnd > sourceStart }
         val owned = words.filter { it.start < sourceEnd && it.visibleEnd > sourceStart && it.authored }
-        if (owned.isEmpty()) return false
+        if (owned.isEmpty()) return rubyDefault
         // A run boundary inside an unbreakable word has no independent CSS soft opportunity.
         // Do not silently make a neighbouring legacy-anywhere run part of this source policy.
         if (owned.any { it.start < sourceStart || it.visibleEnd > sourceEnd || !it.fullyAuthored })
@@ -239,12 +257,13 @@ internal class NativeTextWrapPlan private constructor(
     companion object {
         fun create(source: Spanned, paint: TextPaint): NativeTextWrapPlan? {
             val ranges = nativeInlineRanges(source, NativeAuthoredTextWrap::class.java)
-            if (ranges.isEmpty()) return null
+            val ruby = source.getSpans(0, source.length, NativeRubyBreaks::class.java).singleOrNull()
+            if (ranges.isEmpty() && ruby == null) return null
             NativeNoWrapPlan.create(source, ranges)?.let { plan ->
                 val replacements = source.getSpans(0, source.length, ReplacementSpan::class.java)
-                if (replacements.any { it !is NativeNoWrapInlineImage })
+                if (replacements.any { it !is NativeNoWrapInlineImage && it !is NativeRubyColumn && it !is NativeRubyResolvedGlyphReplacement })
                     throw UnsupportedFloatLayout("No-wrap replacement-backed text is unavailable")
-                validateNativeNoWrapImageRanges(source, replacements.map { source.getSpanStart(it) to source.getSpanEnd(it) })
+                validateNativeNoWrapImageRanges(source, replacements.filter { it is NativeNoWrapInlineImage }.map { source.getSpanStart(it) to source.getSpanEnd(it) })
                 return NativeTextWrapPlan(emptyList(), source, ranges, emptySet(), plan)
             }
             val graphemes = android.icu.text.BreakIterator.getCharacterInstance(paint.textLocale).apply {
@@ -261,7 +280,7 @@ internal class NativeTextWrapPlan private constructor(
                     !graphemes.isBoundary(range.start) || !graphemes.isBoundary(range.end))
                     throw UnsupportedFloatLayout("Authored wrap must own complete nonempty grapheme ranges")
                 if (source.getSpans(range.start, range.end, ReplacementSpan::class.java).any {
-                    source.getSpanStart(it) < range.end && source.getSpanEnd(it) > range.start
+                    it !is NativeRubyColumn && it !is NativeRubyResolvedGlyphReplacement && source.getSpanStart(it) < range.end && source.getSpanEnd(it) > range.start
                 }) throw UnsupportedFloatLayout("Authored wrap on replacement-backed text is unavailable")
             }
             for (owner in listOf(false, true)) {
@@ -273,8 +292,11 @@ internal class NativeTextWrapPlan private constructor(
                 .minByOrNull { if (it.value.inheritedOwner) 1 else 0 }?.value?.wrap
             val breaks = BreakIterator.getLineInstance(paint.textLocale).apply { setText(source.toString()) }
             val words = mutableListOf<NativeWrapWord>()
+            val sourceBreaks = ruby?.boundaries?.drop(1)?.iterator()
+            fun nextBreak(): Int = if (sourceBreaks == null) breaks.next()
+                else if (sourceBreaks.hasNext()) sourceBreaks.next() else BreakIterator.DONE
             var start = 0
-            var end = breaks.next()
+            var end = nextBreak()
             while (end != BreakIterator.DONE) {
                 var visibleEnd = end
                 while (visibleEnd > start && source[visibleEnd - 1].isWhitespace()) visibleEnd--
@@ -284,7 +306,11 @@ internal class NativeTextWrapPlan private constructor(
                     val policies = cuts.zipWithNext().map { (a, _) -> policyAt(a) }.distinct()
                     if (TextWrap.Normal in policies && policies.size != 1)
                         throw UnsupportedFloatLayout("Mixed normal wrap inside one unbreakable word is unavailable")
-                    val normal = policies.singleOrNull() == TextWrap.Normal
+                    val containsRuby = source.getSpans(start, visibleEnd, NativeRubyColumn::class.java).any {
+                        source.getSpanStart(it) < visibleEnd && source.getSpanEnd(it) > start
+                    }
+                    val rubyDefault = containsRuby && policies.all { it == null }
+                    val normal = policies.singleOrNull() == TextWrap.Normal || rubyDefault
                     if (normal) {
                         if ((start until visibleEnd).any { source[it] == '\t' })
                             throw UnsupportedFloatLayout("Authored normal tab fitting is unavailable")
@@ -298,10 +324,11 @@ internal class NativeTextWrapPlan private constructor(
                             position = next
                         }
                     }
-                    words += NativeWrapWord(start, visibleEnd, end, normal, policies.any { it != null }, policies.none { it == null })
+                    words += NativeWrapWord(start, visibleEnd, end, normal,
+                        policies.any { it != null }, policies.none { it == null }, rubyDefault = rubyDefault)
                 }
                 start = end
-                end = breaks.next()
+                end = nextBreak()
             }
             return NativeTextWrapPlan(words, source, ranges, graphemeBoundaries)
         }

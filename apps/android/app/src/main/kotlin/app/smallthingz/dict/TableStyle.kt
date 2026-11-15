@@ -18,7 +18,8 @@ internal data class TableResolvedStyle(val background: String?, val border: Tabl
     val tablePadding: TablePixelInsets = TablePixelInsets(0, 0, 0, 0),
     val cellEdges: List<TableCellBorders> = cellBorders.map { TableCellBorders(it, it, it, it) },
     val rtl: Boolean = false,
-    val outerEdges: TableCellBorders = TableCellBorders(border, border, border, border))
+    val outerEdges: TableCellBorders = TableCellBorders(border, border, border, border),
+    val cornerRadii: NativeCornerRadii? = null)
 private data class TableEdge(val vertical: Boolean, val fixed: Int, val interval: Int)
 private data class TableEdgeCandidate(val border: TableStyleBorder, val priority: Int)
 private fun collapsedBorderWinners(grid: TableGrid, borders: List<TableCellBorders>, outer: TableCellBorders, rtl: Boolean): Map<TableEdge, TableEdgeCandidate> {
@@ -90,8 +91,17 @@ internal fun tableStyleEdgesPixels(value: StyleEdges, density: Float, containerF
 }
 internal fun resolveTableStyle(table: Table, grid: TableGrid, density: Float, containerFontPixels: Float,
     defaultPadding: Int, legacyBorder: Int, decorationScale: Double = 1.0, rtl: Boolean = false,
-    tableStyle: TableStyle? = table.style): TableResolvedStyle {
+    tableStyle: TableStyle? = table.style, suppressOuterHint: Boolean = false): TableResolvedStyle {
     require(decorationScale.isFinite() && decorationScale in 0.0..1.0)
+    require(!suppressOuterHint || table.blockViewport?.intrinsicContainingDirection != null &&
+        tableStyle === table.blockViewport.gridStyle) { "Anonymous outer-border hint has no intrinsic source owner" }
+    val corners = tableStyle?.cornerRadii?.let {
+        require(tableStyle.collapse == TableCollapse.Separate && !tableStyle.isInline && decorationScale == 1.0 &&
+            (tableStyle.border == StyleBorder.None || tableStyle.border is StyleBorder.Solid)) {
+            "Authored table corner geometry is unavailable for this border model"
+        }
+        nativeTableCornerRadii(it, density)
+    }
     fun length(value: StyleLength) = (tableStyleLengthPixels(value, density, containerFontPixels) * decorationScale).toFloat()
     fun edges(value: StyleEdges) = tableStyleEdgesPixels(value, density, containerFontPixels, decorationScale)
     fun edge(value: StyleBorderEdge): TableStyleBorder = when (value) {
@@ -129,7 +139,11 @@ internal fun resolveTableStyle(table: Table, grid: TableGrid, density: Float, co
         TableCellBorders(side(edge?.top, fallback.top), side(edge?.right, fallback.right),
             side(edge?.bottom, fallback.bottom), side(edge?.left, fallback.left))
     }
-    val outer = border(tableStyle?.border)
+    val outer = if (corners != null && tableStyle?.border is StyleBorder.Solid) {
+        val source = tableStyle.border
+        val exact = TableStyleBorder(exactCellStylePixels(source.width, density, containerFontPixels), source.color)
+        TableCellBorders(exact, exact, exact, exact)
+    } else border(if (suppressOuterHint && tableStyle?.border == null) StyleBorder.None else tableStyle?.border)
     val padding = grid.cells.map { placed ->
         val fallback = (defaultPadding * decorationScale).roundToInt()
         placed.cell.style?.padding?.let(::edges) ?: TablePixelInsets(fallback, fallback, fallback, fallback)
@@ -144,7 +158,7 @@ internal fun resolveTableStyle(table: Table, grid: TableGrid, density: Float, co
         else tableStyle?.padding?.let { tableBoxPaddingPixels(it, density, containerFontPixels) }
             ?: TablePixelInsets(0, 0, 0, 0)
     return TableResolvedStyle(tableStyle?.background, outer.top, collapse,
-        tableStyle?.margins?.let(::edges) ?: TablePixelInsets(0, 0, 0, 0), borders.map { it.top }, insets, decorationScale, tablePadding, cellEdges, rtl, outer)
+        tableStyle?.margins?.let(::edges) ?: TablePixelInsets(0, 0, 0, 0), borders.map { it.top }, insets, decorationScale, tablePadding, cellEdges, rtl, outer, corners)
 }
 
 /** Shared collapsed-edge allocation for ordinary cells and the Figure's anonymous media cell. */

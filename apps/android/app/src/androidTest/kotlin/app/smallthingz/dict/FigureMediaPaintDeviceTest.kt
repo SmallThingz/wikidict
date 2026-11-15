@@ -1,6 +1,9 @@
 package app.smallthingz.dict
 
 import android.graphics.Bitmap
+import android.graphics.Paint
+import android.graphics.Typeface
+import android.text.TextPaint
 import android.graphics.RectF
 import android.os.SystemClock
 import android.view.KeyEvent
@@ -10,6 +13,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuItem
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuSession
@@ -17,12 +21,14 @@ import androidx.compose.foundation.text.contextmenu.provider.LocalTextContextMen
 import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuDataProvider
 import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuProvider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.Layout
@@ -33,6 +39,7 @@ import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -40,6 +47,9 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFontFamilyResolver
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
@@ -50,6 +60,15 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontSynthesis
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.intl.Locale
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.*
@@ -64,6 +83,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.ceil
 
 @RunWith(AndroidJUnit4::class)
 class FigureMediaPaintDeviceTest {
@@ -552,6 +572,465 @@ class FigureMediaPaintDeviceTest {
             compose.activityRule.scenario.onActivity { it.setContent {} }
             compose.waitForIdle()
             compose.runOnIdle { assertNull(shownMenu) }
+        }
+    }
+
+    @Test fun imagePolicyOwnsOnlyRenderedImageAndAfterFocusAcrossBaseAndResponsiveFigureMedia() {
+        data class Case(val imagePolicy: Boolean, val outline: Boolean, val after: Boolean, val mediaOutline: Boolean = false)
+        data class Scene(val case: Case, val responsive: Boolean, val width: Int = 300,
+            val tableCaption: Boolean = true)
+        val cases = listOf(Case(true, false, true), Case(true, true, false), Case(true, true, true),
+            Case(false, false, true), Case(false, false, true, true))
+        val scene = mutableStateOf(Scene(cases.first(), false))
+        val rasterFocus = androidx.compose.ui.focus.FocusRequester()
+        val bitmap = Bitmap.createBitmap(10, 4, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
+        val settings = AppSettings(allowImages = false, allowAudio = false)
+        val edition = "mgwiktionary-20261001"
+        val actionEdition = mutableStateOf(edition)
+        val sourceUris = mutableListOf<String>()
+        val sourceHandler = object : UriHandler { override fun openUri(uri: String) { sourceUris += uri } }
+        val dictionaryAction: (EntryLink) -> Unit = { error("A Figure File action must keep its source URL: $it") }
+        val sourceOutline = FigureFocusOutline(px(2f), FigureColor.Rgb("#ff0000"), px(0f),
+            SignedContainerMargin(StyleLengthUnit.Px, 0f))
+        fun imagePaint(outline: Boolean) = LinkPaint(
+            normal = FigureLinkState("#102030", true), hover = FigureLinkState("#203040", false),
+            active = FigureLinkState("#304050", true), hoverActive = FigureLinkState("#405060", false),
+            visited = FigureLinkState("#506070", false), visitedHover = FigureLinkState("#607080", true),
+            visitedActive = FigureLinkState("#708090", false), visitedHoverActive = FigureLinkState("#8090a0", true),
+            underlineOnFocus = true, focusOutline = sourceOutline.takeIf { outline })
+        fun source(current: Scene): Figure {
+            val paint = imagePaint(current.case.outline).takeIf { current.case.imagePolicy }
+            val span = Span("link", "", "File:Figure-control.png", image = image,
+                linkPaint = paint, foreground = paint?.normal?.foreground, underline = paint?.normal?.underline ?: false)
+            fun mediaStyle(scale: Float) = policy(graphic = false).copy(
+                strut = strut.copy(fontScale = scale),
+                after = policy(graphic = false).after.takeIf { current.case.after },
+                focusOutline = sourceOutline.takeIf { current.case.mediaOutline })
+            val value = figure(emptyList(), graphic = false)
+            return value.copy(content = FigureContent.Image(span, FigureSizingPolicy.RequestedFit),
+                imageBorder = FigureBorder.Solid(px(3f), FigureColor.Rgb("#000000")),
+                tableCaptionLayout = value.tableCaptionLayout!!.copy(media = mediaStyle(64f),
+                    viewportStates = if (current.responsive) listOf(
+                        FigureViewportState(0xffff_ffffL, ContainerStyle(), mediaStyle(32f))) else emptyList()))
+                .let { if (current.tableCaption) it else it.copy(tableCaptionLayout = null) }
+        }
+        data class ExpectedFrame(val scene: Scene, val source: Figure, val bodyStyle: TextStyle,
+            val typeface: Typeface?, val fontPixels: Float?, val mediaFont: FigureMediaFont?,
+            val metrics: FigureBoxMetrics)
+        var geometry: NativeAnonymousFlowGeometry? = null
+        var renderedSource: Figure? = null
+        var expectedFrame: ExpectedFrame? = null
+        var phase = "setup"
+        val focusHistory = mutableListOf<String>()
+        fun retainEvidence(value: String) {
+            focusHistory += value.take(512)
+            if (focusHistory.size > 12) focusHistory.removeAt(0)
+        }
+        fun recordFocus(point: String, view: NativeFloatTextView) {
+            val provider = view.accessibilityNodeProvider
+            fun snapshot(kind: Int): String {
+                val info = provider.findFocus(kind)
+                return try { if (info == null) "none" else
+                    "focused=${info.isFocused},ax=${info.isAccessibilityFocused},visible=${info.isVisibleToUser}"
+                } finally { info?.recycle() }
+            }
+            retainEvidence("phase=$phase point=$point case=${scene.value} host=${view.hasFocus()} self=${view.isFocused} " +
+                "window=${view.hasWindowFocus()} density=${view.resources.displayMetrics.density} " +
+                "size=${view.measuredWidth}x${view.measuredHeight} " +
+                "imageIds=${view.currentMeasuredGeometry?.nodes.orEmpty().filter { it.kind == FloatInteractionKind.IMAGE }.take(4).map { it.id }} " +
+                "input=${snapshot(AccessibilityNodeInfo.FOCUS_INPUT)} ax=${snapshot(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)}")
+        }
+        var primary: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                MaterialTheme { CompositionLocalProvider(LocalDensity provides Density(1f, 1f),
+                    LocalUriHandler provides sourceHandler) {
+                    val activeOwner = rememberInlineImageViewOwner(listOf(image), media, settings, edition)
+                    androidx.compose.runtime.remember(activeOwner) {
+                        activeOwner.states[inlineImageAssetKey(image)] = InlineImageAssetState.Ready(
+                            DecodedMediaBitmap(bitmap, 10, 4), 100, 40, "image/png", "controlled Figure focus", "")
+                        true
+                    }
+                    val current = scene.value
+                    val authored = source(current)
+                    val fixtureDensity = LocalDensity.current
+                    val bodyStyle = inheritedCellTextStyle(MaterialTheme.typography.bodyLarge)
+                    val bodyPixels = with(fixtureDensity) { bodyStyle.fontSize.toPx() }
+                    val viewportCss = LocalWindowInfo.current.containerSize.width.toDouble() / fixtureDensity.density
+                    val selectedSource = figureTableViewport(authored, viewportCss)
+                    val layout = selectedSource.tableCaptionLayout
+                    val selectedMedia = layout?.let { it.stateAtViewport(viewportCss)?.media ?: it.media }
+                    val resolver = LocalFontFamilyResolver.current
+                    var resolvedTypeface: Typeface? = null
+                    var fontPixels: Float? = null
+                    val mediaFont = selectedMedia?.strut?.let { owner ->
+                        val mediaStyle = inheritedCellTextStyle(bodyStyle.copy(
+                            fontSize = (bodyStyle.fontSize.value * owner.fontScale).sp,
+                            fontFamily = if (owner.code) FontFamily.Monospace else bodyStyle.fontFamily,
+                            fontWeight = if (owner.bold) FontWeight.Bold else FontWeight.Normal,
+                            fontStyle = if (owner.italic) FontStyle.Italic else FontStyle.Normal,
+                            fontFeatureSettings = owner.fontFeatures?.nativeSettings ?: bodyStyle.fontFeatureSettings,
+                        )).copy(localeList = if (owner.language.isEmpty()) LocaleList.current else LocaleList(Locale(owner.language)))
+                        val effective = LocalTextStyle.current.merge(mediaStyle).toSpanStyle()
+                        val face = resolver.resolve(effective.fontFamily ?: FontFamily.Default,
+                            effective.fontWeight ?: FontWeight.Normal, effective.fontStyle ?: FontStyle.Normal,
+                            effective.fontSynthesis ?: FontSynthesis.All).value as Typeface
+                        val pixels = with(fixtureDensity) { effective.fontSize.toPx() }
+                        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                            typeface = face
+                            textSize = pixels
+                            baselineShift = ceil(ascent() * (effective.baselineShift?.multiplier ?: 0f)).toInt()
+                            letterSpacing = when {
+                                effective.letterSpacing.isEm -> effective.letterSpacing.value
+                                effective.letterSpacing.isSp && pixels > 0f -> with(fixtureDensity) { effective.letterSpacing.toPx() } / pixels
+                                else -> 0f
+                            }
+                            fontFeatureSettings = effective.fontFeatureSettings
+                            effective.textGeometricTransform?.let { textScaleX = it.scaleX; textSkewX = it.skewX }
+                            effective.localeList?.let { locales -> textLocales = android.os.LocaleList.forLanguageTags(
+                                locales.joinToString(",") { it.toLanguageTag() }) }
+                        }
+                        resolvedTypeface = face
+                        fontPixels = pixels
+                        val x = android.graphics.Rect().also { paint.getTextBounds("x", 0, 1, it) }
+                        FigureMediaFont(NativePrimaryFontMetrics.from(paint), x.height().toFloat())
+                    }
+                    val natural = figureBoxMetrics(selectedSource,
+                        figureImagePixels(selectedSource, 100L, 40L, fixtureDensity.density), fixtureDensity.density, bodyPixels)
+                    val expected = if (layout == null) natural else FigureTableCaptionMetrics(
+                        layout.copy(media = checkNotNull(selectedMedia)), natural, fixtureDensity.density, bodyPixels,
+                        LocalLayoutDirection.current == LayoutDirection.Rtl, checkNotNull(mediaFont))
+                        .resolve(current.width - 40, captionMinimum = 0)
+                    val observed = ExpectedFrame(current, selectedSource, bodyStyle, resolvedTypeface, fontPixels, mediaFont, expected)
+                    val block = Block("paragraph", 0, emptyList(), figure = authored)
+                    SideEffect { renderedSource = checkNotNull(block.figure); expectedFrame = observed }
+                    CompositionLocalProvider(LocalInlineImageOwner provides activeOwner) {
+                        Layout(modifier = Modifier.testTag("figure-image-policy").background(Color.White)
+                            .focusRequester(rasterFocus).focusable(), content = {
+                            val flow = NativeFloatContextSpec.Flow(41, 0f, null, null, false) { carried, sink ->
+                                AnonymousBlockView(block, Modifier, dictionaryAction, media, settings, actionEdition.value,
+                                    interactionOwner = false, carriedExclusions = carried,
+                                    onFlowGeometry = { geometry = it; sink(it) })
+                            }
+                            NativeFloatContextLayout(listOf(flow), Modifier, Color.Magenta,
+                                documentSurface = true) { _, _ -> error("No delegated child") }
+                        }) { children, _ ->
+                            val child = children.single().measure(Constraints.fixedWidth(current.width - 40))
+                            layout(current.width, child.height + 40) { child.place(20, 20) }
+                        }
+                    }
+                } }
+            } }
+            compose.waitForIdle()
+            val originalView = nativeView()
+            fun pixels(): Pair<Int, Int> {
+                val capture = compose.onNodeWithTag("figure-image-policy").captureToImage()
+                val colors = capture.toPixelMap()
+                var red = 0; var blue = 0
+                for (y in 0 until capture.height) for (x in 0 until capture.width) {
+                    val color = colors[x, y]
+                    if (color.red > .95f && color.green < .05f && color.blue < .05f) red++
+                    if (color.blue > .95f && color.red < .05f && color.green < .05f) blue++
+                }
+                retainEvidence("phase=$phase capture red=$red blue=$blue")
+                return red to blue
+            }
+            fun isFocused(id: Int): Boolean {
+                val info = checkNotNull(originalView.accessibilityNodeProvider.createAccessibilityNodeInfo(id))
+                return try { info.isFocused } finally { info.recycle() }
+            }
+            fun assertRect(expected: RectF, actual: RectF) {
+                assertEquals(expected.left, actual.left, .02f); assertEquals(expected.top, actual.top, .02f)
+                assertEquals(expected.right, actual.right, .02f); assertEquals(expected.bottom, actual.bottom, .02f)
+            }
+            fun assertSourceOutlineDisjoint(content: RectF, anchors: List<RectF>) {
+                assertEquals(StyleLengthUnit.Px, sourceOutline.width.unit)
+                assertEquals(0f, sourceOutline.radius.value, 0f)
+                assertEquals(0f, sourceOutline.offset.value, 0f)
+                val width = sourceOutline.width.value // Fixture density and fontScale are both 1.
+                for (anchor in anchors) {
+                    // Conservative exterior bands include the rounded corners; no tested focus bounds are used.
+                    val bands = listOf(
+                        RectF(anchor.left - width, anchor.top - width, anchor.right + width, anchor.top),
+                        RectF(anchor.left - width, anchor.bottom, anchor.right + width, anchor.bottom + width),
+                        RectF(anchor.left - width, anchor.top, anchor.left, anchor.bottom),
+                        RectF(anchor.right, anchor.top, anchor.right + width, anchor.bottom))
+                    assertTrue("Authored focus ink must remain outside the unchanged bitmap: content=$content, anchor=$anchor",
+                        bands.none { RectF.intersects(content, it) })
+                }
+            }
+            fun unfocusedBaseline(view: NativeFloatTextView) {
+                var transferred = false
+                compose.runOnIdle {
+                    recordFocus("baseline-before", view)
+                    val node = checkNotNull(view.currentMeasuredGeometry).nodes.single { it.kind == FloatInteractionKind.IMAGE }
+                    val provider = view.accessibilityNodeProvider
+                    val info = provider.createAccessibilityNodeInfo(node.id)
+                    val held = try { info?.isFocused == true } finally { info?.recycle() }
+                    if (held) assertTrue(provider.performAction(node.id, AccessibilityNodeInfo.ACTION_CLEAR_FOCUS, null))
+                    view.clearFocus()
+                    // Native clearFocus may refocus the host outside touch mode; use only our nonpainting destination.
+                    if (view.hasFocus()) {
+                        val accepted = rasterFocus.requestFocus(androidx.compose.ui.focus.FocusDirection.Enter)
+                        recordFocus("owned-transfer accepted=$accepted", view)
+                        assertTrue("The owned Figure raster host accepts focus", accepted)
+                        transferred = true
+                    }
+                    recordFocus("baseline-after", view)
+                    assertFalse("The raster baseline excludes native host focus", view.hasFocus())
+                    val input = provider.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                    try { assertNull("The raster baseline excludes virtual input focus", input) }
+                    finally { input?.recycle() }
+                }
+                if (transferred) compose.onNodeWithTag("figure-image-policy").assertIsFocused()
+            }
+            var calls = 0
+            for (responsive in listOf(false, true)) for (case in cases) {
+                val current = Scene(case, responsive)
+                phase = "loop responsive=$responsive case=$case geometry"
+                compose.runOnIdle { scene.value = current }
+                compose.waitForIdle()
+                assertSame(originalView, nativeView())
+                compose.runOnIdle {
+                    recordFocus("case-ready", originalView)
+                    val flow = checkNotNull(geometry)
+                    assertEquals("", flow.text.toString())
+                    assertEquals(1, flow.nodes.count { it.kind == FloatInteractionKind.IMAGE })
+                    assertTrue(flow.nodes.none { it.kind == FloatInteractionKind.LINK })
+                    val placed = flow.figures.single()
+                    val expected = checkNotNull(expectedFrame)
+                    assertEquals(current, expected.scene)
+                    assertEquals(expected.source, placed.anchor.event.figure)
+                    val frame = expected.metrics
+                    assertEquals(frame.width, placed.measured.geometry.width)
+                    assertEquals(frame.height(0), placed.measured.geometry.height)
+                    assertEquals(frame.width.toFloat(), placed.bounds.width(), .02f)
+                    assertEquals(frame.height(0).toFloat(), placed.bounds.height(), .02f)
+                    val allocated = checkNotNull(frame.tableCaption)
+                    assertEquals(if (responsive) 32f else 64f, allocated.prepared.layout.media.strut.fontScale, 0f)
+                    fun moved(rect: RectF) = RectF(rect).apply { offset(placed.bounds.left, placed.bounds.top) }
+                    val imageBox = moved(RectF(frame.imageLeft, frame.imageTop,
+                        frame.imageLeft + frame.image.width, frame.imageTop + frame.image.height).apply {
+                        inset(-frame.imageBorder, -frame.imageBorder)
+                    })
+                    val anchor = moved(allocated.anchor.let { RectF(it.left, it.top, it.right, it.bottom) })
+                    val after = allocated.after?.let { moved(RectF(it.left, it.top, it.right, it.bottom)) }
+                    val contentBox = moved(RectF(frame.imageLeft, frame.imageTop,
+                        frame.imageLeft + frame.image.width, frame.imageTop + frame.image.height))
+                    assertEquals(3f, frame.imageBorder, 0f)
+                    val sourceOutlineAnchors = when {
+                        case.imagePolicy && case.outline -> listOfNotNull(imageBox, after)
+                        case.mediaOutline -> listOf(anchor)
+                        else -> emptyList()
+                    }
+                    assertSourceOutlineDisjoint(contentBox, sourceOutlineAnchors)
+                    if (case.imagePolicy && case.outline && case.after) {
+                        val sourceAfter = checkNotNull(after)
+                        val outlineWidth = sourceOutline.width.value
+                        assertEquals(anchor.bottom, sourceAfter.top, .02f)
+                        assertEquals(anchor.bottom, imageBox.bottom, .02f)
+                        assertEquals(1f, sourceAfter.top - outlineWidth - contentBox.bottom, .02f)
+                        // The old 1px border really allowed this authored overlay; keep that source contrast.
+                        val oldSource = expected.source.copy(
+                            imageBorder = FigureBorder.Solid(px(1f), FigureColor.Rgb("#000000")))
+                        val oldNatural = figureBoxMetrics(oldSource,
+                            figureImagePixels(oldSource, 100L, 40L, 1f), 1f, expected.bodyStyle.fontSize.value)
+                        val oldFrame = FigureTableCaptionMetrics(allocated.prepared.layout, oldNatural, 1f,
+                            expected.bodyStyle.fontSize.value, allocated.prepared.rtl, checkNotNull(expected.mediaFont))
+                            .resolve(current.width - 40, captionMinimum = 0)
+                        val oldAllocated = checkNotNull(oldFrame.tableCaption)
+                        val oldAfter = checkNotNull(oldAllocated.after)
+                        val oldContent = RectF(oldFrame.imageLeft, oldFrame.imageTop,
+                            oldFrame.imageLeft + oldFrame.image.width, oldFrame.imageTop + oldFrame.image.height)
+                        val oldStraightTopBand = RectF(oldAfter.left, oldAfter.top - outlineWidth,
+                            oldAfter.right, oldAfter.top)
+                        val overlap = RectF(oldContent)
+                        assertTrue("The original 1px border permits authored after-outline overlap", overlap.intersect(oldStraightTopBand))
+                        assertEquals(oldAfter.width, overlap.width(), .02f)
+                        assertEquals(1f, overlap.height(), .02f) // Geometric overlap, not a claimed raster pixel count.
+                    }
+                    assertTrue("Fixture strut must be taller than the image: scale=${allocated.prepared.layout.media.strut.fontScale}, " +
+                        "fontPixels=${expected.fontPixels}, primary=${expected.mediaFont?.primary}, xHeight=${expected.mediaFont?.xHeight}, " +
+                        "lineHeight=${anchor.height()}, imageHeight=${imageBox.height()}, bodyStyle=${expected.bodyStyle}, typeface=${expected.typeface}",
+                        anchor.height() > imageBox.height()) // Keep the original tall-strut premise; no invented line-height.
+                    val node = flow.nodes.single { it.kind == FloatInteractionKind.IMAGE }
+                    assertNull(node.missingLinkPaint)
+                    assertEquals(case.imagePolicy, node.sourceFocusVisible)
+                    assertEquals(if (case.after) 2 else 1, node.bounds.size)
+                    assertRect(anchor, node.bounds.first()) // Existing activation/AX anchor is preserved.
+                    if (case.after) assertRect(checkNotNull(after), node.bounds.last())
+                    when {
+                        case.imagePolicy && case.outline -> {
+                            val outlines = (node.focusPaint as NativeNodeFocusPaint.Fragments).outlines
+                            assertEquals(if (case.after) 2 else 1, outlines.size)
+                            assertRect(imageBox, outlines.first().bounds)
+                            if (case.after) assertRect(checkNotNull(after), outlines.last().bounds)
+                            outlines.forEach { assertEquals(2f, it.width, 0f); assertEquals(0xffff0000.toInt(), it.color) }
+                        }
+                        case.mediaOutline -> assertRect(anchor, (node.focusPaint as NativeNodeFocusPaint.Outline).bounds)
+                        else -> assertSame(NativeNodeFocusPaint.None, node.focusPaint)
+                    }
+                    val live = checkNotNull(originalView.currentMeasuredGeometry).nodes.single { it.kind == FloatInteractionKind.IMAGE }
+                    val provider = originalView.accessibilityNodeProvider
+                    if (isFocused(live.id))
+                        assertTrue(provider.performAction(live.id, AccessibilityNodeInfo.ACTION_CLEAR_FOCUS, null))
+                }
+                phase = "loop responsive=$responsive case=$case unfocused"
+                unfocusedBaseline(originalView)
+                val unfocused = pixels()
+                assertTrue(unfocused.second > 0)
+                assertEquals(0, unfocused.first)
+                phase = "loop responsive=$responsive case=$case focused"
+                compose.runOnIdle {
+                    val node = checkNotNull(originalView.currentMeasuredGeometry).nodes.single { it.kind == FloatInteractionKind.IMAGE }
+                    val provider = originalView.accessibilityNodeProvider
+                    assertTrue(provider.performAction(node.id, AccessibilityNodeInfo.ACTION_FOCUS, null))
+                    recordFocus("image-focus", originalView)
+                    assertTrue(isFocused(node.id))
+                    assertTrue(originalView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+                    calls++
+                    assertEquals(calls, sourceUris.size) // IMAGE keeps activation on key down.
+                    originalView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+                    assertEquals(calls, sourceUris.size)
+                }
+                compose.waitForIdle()
+                val focused = pixels()
+                if (case.outline || case.mediaOutline) assertTrue(focused.first > 0) else assertEquals(0, focused.first)
+                assertEquals(unfocused.second, focused.second) // Foreground/underline policy leaves the bitmap unchanged.
+                if (case.imagePolicy && case.outline && !case.after) {
+                    phase = "loop responsive=$responsive case=$case resize"
+                    val held = compose.runOnIdle {
+                        checkNotNull(originalView.currentMeasuredGeometry).nodes.single { it.kind == FloatInteractionKind.IMAGE }
+                    }
+                    compose.runOnIdle { scene.value = current.copy(width = 360) }
+                    compose.waitForIdle()
+                    assertSame(originalView, nativeView())
+                    compose.runOnIdle {
+                        val resized = checkNotNull(originalView.currentMeasuredGeometry).nodes.single { it.kind == FloatInteractionKind.IMAGE }
+                        assertSame(held.onClick, resized.onClick); assertSame(held.onLongClick, resized.onLongClick)
+                        assertTrue(isFocused(resized.id))
+                        assertEquals(1, checkNotNull(geometry).nodes.count { it.kind == FloatInteractionKind.IMAGE })
+                    }
+                }
+            }
+            // A plain Figure keeps its content-image action region; its border belongs to focus ink.
+            phase = "plain geometry"
+            compose.runOnIdle { scene.value = Scene(Case(true, true, false), false, tableCaption = false) }
+            compose.waitForIdle()
+            assertSame(originalView, nativeView())
+            compose.runOnIdle {
+                val flow = checkNotNull(geometry)
+                val placed = flow.figures.single()
+                val expected = checkNotNull(expectedFrame)
+                assertEquals(scene.value, expected.scene)
+                assertEquals(expected.source, placed.anchor.event.figure)
+                val frame = expected.metrics
+                assertEquals(frame.width, placed.measured.geometry.width)
+                assertEquals(frame.height(0), placed.measured.geometry.height)
+                assertEquals(frame.width.toFloat(), placed.bounds.width(), .02f)
+                assertEquals(frame.height(0).toFloat(), placed.bounds.height(), .02f)
+                assertNull(frame.tableCaption)
+                val contentBox = RectF(frame.imageLeft, frame.imageTop,
+                    frame.imageLeft + frame.image.width, frame.imageTop + frame.image.height).apply {
+                    offset(placed.bounds.left, placed.bounds.top)
+                }
+                val outerBox = RectF(contentBox).apply { inset(-frame.imageBorder, -frame.imageBorder) }
+                assertEquals(3f, frame.imageBorder, 0f)
+                assertSourceOutlineDisjoint(contentBox, listOf(outerBox))
+                val node = flow.nodes.single { it.kind == FloatInteractionKind.IMAGE }
+                assertTrue(flow.nodes.none { it.kind == FloatInteractionKind.LINK })
+                assertTrue(node.sourceFocusVisible); assertNull(node.missingLinkPaint)
+                assertRect(contentBox, node.bounds.single())
+                assertRect(outerBox, (node.focusPaint as NativeNodeFocusPaint.Fragments).outlines.single().bounds)
+                assertTrue(outerBox.width() > contentBox.width())
+            }
+            phase = "plain unfocused"
+            unfocusedBaseline(originalView)
+            val plainUnfocused = pixels()
+            assertEquals(0, plainUnfocused.first); assertTrue(plainUnfocused.second > 0)
+            phase = "plain focused"
+            compose.runOnIdle {
+                val node = checkNotNull(originalView.currentMeasuredGeometry).nodes.single { it.kind == FloatInteractionKind.IMAGE }
+                assertTrue(originalView.accessibilityNodeProvider.performAction(node.id, AccessibilityNodeInfo.ACTION_FOCUS, null))
+                recordFocus("image-focus", originalView)
+                assertTrue(isFocused(node.id))
+                assertTrue(originalView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+                calls++
+                assertEquals(calls, sourceUris.size)
+                originalView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+                assertEquals(calls, sourceUris.size)
+            }
+            compose.waitForIdle()
+            val plainFocused = pixels()
+            assertTrue(plainFocused.first > 0); assertEquals(plainUnfocused.second, plainFocused.second)
+            val retainedSource = compose.runOnIdle { checkNotNull(renderedSource) }
+            phase = "unavailable edition"
+            compose.runOnIdle { actionEdition.value = "" }
+            compose.waitForIdle()
+            compose.onAllNodesWithText("Unable to display this layout.")[0].assertIsDisplayed()
+            assertTrue(pixels().second > 0) // The unsupported owner still exposes the retained image.
+            compose.runOnIdle {
+                assertEquals(retainedSource, renderedSource)
+                assertEquals(calls, sourceUris.size)
+                fun noPublishedPolicy(view: View) {
+                    if (view is NativeFloatTextView && view.isShown) {
+                        val provider = view.accessibilityNodeProvider
+                        view.currentMeasuredGeometry?.nodes.orEmpty().filter { it.sourceFocusVisible }.forEach { node ->
+                            val info = provider?.createAccessibilityNodeInfo(node.id)
+                            try { assertFalse(info?.isVisibleToUser == true) } finally { info?.recycle() }
+                        }
+                    }
+                    if (view is android.view.ViewGroup) for (index in 0 until view.childCount)
+                        noPublishedPolicy(view.getChildAt(index))
+                }
+                noPublishedPolicy(compose.activity.window.decorView)
+                actionEdition.value = edition
+            }
+            phase = "valid edition recovery"
+            compose.waitForIdle()
+            compose.onAllNodesWithText("Unable to display this layout.").assertCountEquals(0)
+            val recoveredView = nativeView()
+            compose.runOnIdle {
+                assertEquals(retainedSource, renderedSource)
+                val nodes = checkNotNull(recoveredView.currentMeasuredGeometry).nodes
+                val node = nodes.single { it.kind == FloatInteractionKind.IMAGE }
+                assertTrue(nodes.none { it.kind == FloatInteractionKind.LINK })
+                assertTrue(node.sourceFocusVisible); assertNull(node.missingLinkPaint)
+                assertTrue(node.focusPaint is NativeNodeFocusPaint.Fragments)
+                assertTrue(recoveredView.accessibilityNodeProvider.performAction(node.id, AccessibilityNodeInfo.ACTION_FOCUS, null))
+                recordFocus("recovered-image-focus", recoveredView)
+                assertTrue(recoveredView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
+                calls++
+                assertEquals(calls, sourceUris.size)
+                recoveredView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+                assertEquals(calls, sourceUris.size)
+            }
+            assertEquals(List(calls) { "https://mg.wiktionary.org/wiki/File%3AFigure-control.png" }, sourceUris)
+        } catch (failure: Throwable) {
+            primary = failure
+            try {
+                val report = "OWNED_FIGURE_FOCUS_FAILURE phase=$phase fixtureDensity=1\n" + focusHistory.joinToString("\n")
+                check(report.toByteArray(Charsets.UTF_8).size <= 8192)
+                failure.addSuppressed(AssertionError(report))
+            } catch (observation: Throwable) {
+                if (observation !== failure) failure.addSuppressed(observation)
+            }
+            throw failure
+        } finally {
+            var cleanup: Throwable? = null
+            fun clean(action: () -> Unit) {
+                try { action() } catch (failure: Throwable) {
+                    val previous = cleanup
+                    if (previous == null) cleanup = failure else if (previous !== failure) previous.addSuppressed(failure)
+                }
+            }
+            clean { compose.activityRule.scenario.onActivity { it.setContent {} } }
+            clean { compose.waitForIdle() }
+            clean { bitmap.recycle() }
+            cleanup?.let { failure ->
+                val original = primary
+                if (original == null) throw failure else if (original !== failure) original.addSuppressed(failure)
+            }
         }
     }
 }

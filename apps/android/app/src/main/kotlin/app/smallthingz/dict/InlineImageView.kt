@@ -16,6 +16,9 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -100,17 +103,22 @@ internal fun inlineImagePixels(image: InlineImage, intrinsicWidth: Long, intrins
     val projection = min(1.0, MaxComputedFontPixels / max(w, h))
     return InlineImagePixels((w * projection).toFloat(), (h * projection).toFloat())
 }
-internal fun inlineImageInkTop(metrics: InlineImageFontMetrics, height: Float): Float =
-    metrics.baselineShift - (metrics.xHeight + height) / 2f
-internal fun inlineImageReservedHeight(metrics: InlineImageFontMetrics, height: Float): Float {
+internal fun inlineImageInkTop(metrics: InlineImageFontMetrics, height: Float,
+    alignment: InlineImageVerticalAlign? = null): Float = when (alignment) {
+    null, InlineImageVerticalAlign.Middle -> metrics.baselineShift - (metrics.xHeight + height) / 2f
+    InlineImageVerticalAlign.Baseline -> metrics.baselineShift - height
+}
+internal fun inlineImageReservedHeight(metrics: InlineImageFontMetrics, height: Float,
+    alignment: InlineImageVerticalAlign? = null): Float {
     val center = (metrics.ascent.toDouble() + metrics.descent) / 2.0
-    val top = inlineImageInkTop(metrics, height).toDouble()
+    val top = inlineImageInkTop(metrics, height, alignment).toDouble()
     return (ceil(2.0 * max(center - top, top + height - center)) + 2.0).toFloat().coerceAtLeast(1f)
 }
-internal fun inlineImageDrawTop(metrics: InlineImageFontMetrics, inkHeight: Float, actualBoxHeight: Int): Float {
+internal fun inlineImageDrawTop(metrics: InlineImageFontMetrics, inkHeight: Float, actualBoxHeight: Int,
+    alignment: InlineImageVerticalAlign? = null): Float {
     // Same integer TextCenter inverse used by the existing Egyptian renderer.
     val baseline = -((metrics.ascent.toLong() + metrics.descent - actualBoxHeight) / 2L).toFloat()
-    return baseline + inlineImageInkTop(metrics, inkHeight)
+    return baseline + inlineImageInkTop(metrics, inkHeight, alignment)
 }
 
 internal sealed interface InlineImageAssetState {
@@ -140,11 +148,34 @@ internal fun inlineImageAccessibilityLabel(image: InlineImage, actionLabel: Stri
 
 internal val LocalInlineImageOwner = staticCompositionLocalOf<InlineImageViewOwner?> { null }
 
+/** Original asset metadata is independent of pixel availability and display density. */
+internal data class InlineImageKnownGeometry(val width: Long, val height: Long, val mime: String?) {
+    init { require(width > 0 && height > 0) }
+    fun pixels(image: InlineImage, density: Float): InlineImagePixels? =
+        inlineImagePixels(image, width, height, density, mime)
+}
+
+/** One composition/source generation owns this state; a request never owns its lifetime. */
+internal class InlineImageGeometryState {
+    private val values = mutableStateMapOf<String, InlineImageKnownGeometry>()
+    private val requests = mutableMapOf<String, Any>()
+    operator fun get(key: String): InlineImageKnownGeometry? = values[key]
+    fun start(key: String, request: Any) { requests[key] = request }
+    fun isCurrent(key: String, request: Any): Boolean = requests[key] === request
+    fun accept(key: String, request: Any, value: InlineImageKnownGeometry): Boolean {
+        if (!isCurrent(key, request)) return false
+        values[key] = value
+        return true
+    }
+    fun finish(key: String, request: Any) { if (isCurrent(key, request)) requests.remove(key) }
+}
+
 internal class InlineImageViewOwner(
     private val media: Map<String, Media>, private val settings: AppSettings, private val edition: String,
     private val cache: MediaCache, private val scope: CoroutineScope, private val occurrences: Map<String, List<RasterImageOccurrence>>,
     private val density: Float, private val catalogueFiles: Set<String>,
     val blockMediaLayout: FigureBlockMediaLayout? = null,
+    private val knownGeometry: InlineImageGeometryState = InlineImageGeometryState(),
 ) {
     val states = mutableStateMapOf<String, InlineImageAssetState>()
     private val jobs = mutableMapOf<String, Job>()
@@ -152,6 +183,8 @@ internal class InlineImageViewOwner(
     fun catalogueKey(file: String): String? = file.takeIf(occurrences::containsKey) ?: occurrences.entries
         .singleOrNull { it.value.first().image.file == file && it.value.first().image.staticPoster != null }?.key
     fun owns(file: String): Boolean = catalogueKey(file) != null
+    fun knownPixels(image: InlineImage, density: Float): InlineImagePixels? =
+        knownGeometry[inlineImageAssetKey(image)]?.pixels(image, density)
     fun ensure(image: InlineImage) = ensure(inlineImageAssetKey(image))
     fun retry(image: InlineImage) = retry(inlineImageAssetKey(image))
     fun ensure(file: String) {
@@ -168,8 +201,10 @@ internal class InlineImageViewOwner(
         val group = occurrences.getValue(file)
         val imageFile = group.first().image.file
         val raster = if (blockMediaLayout == null) group.first().image.svgLanguage?.let { SvgRasterRequest(it, density, group) } else null
-        if (!settings.allowImages) { states[file] = InlineImageAssetState.Disabled; return }
         val request = Any(); requests[file] = request
+        knownGeometry.start(file, request)
+        fun currentRequest() = requests[file] === request && knownGeometry.isCurrent(file, request)
+        if (!settings.allowImages) { states[file] = InlineImageAssetState.Disabled; return }
         states[file] = InlineImageAssetState.Loading
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
@@ -179,21 +214,24 @@ internal class InlineImageViewOwner(
                     rasterRequest = raster, posterRequest = poster, blockMediaRequest = blockRequest) { resource ->
                     val width = requireNotNull(resource.originalWidth) { "Image intrinsic width is unavailable" }
                     val height = requireNotNull(resource.originalHeight) { "Image intrinsic height is unavailable" }
+                    if (!currentRequest()) return@withFile
+                    knownGeometry.accept(file, request, InlineImageKnownGeometry(width, height, resource.originalMime))
                     val target = if (blockRequest != null || imageFile in catalogueFiles && raster == null) 1600 else group.mapNotNull { occurrence ->
                         inlineImagePixels(occurrence.image, width, height, density, resource.originalMime)
                     }.maxOfOrNull { max(it.width, it.height) }?.let { ceil(it).coerceIn(1f, 1600f).toInt() } ?: 1600
                     val decoded = decodeMediaBitmap(resource.file, target, resource.requiredRasterWidth, resource.requiredRasterHeight,
                         resource.exactRasterWidth, resource.exactRasterHeight)
-                    if (requests[file] === request) states[file] = InlineImageAssetState.Ready(decoded, width, height, resource.originalMime, resource.source, resource.credit, blockRequest?.identity)
+                    if (currentRequest()) states[file] = InlineImageAssetState.Ready(decoded, width, height, resource.originalMime, resource.source, resource.credit, blockRequest?.identity)
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { if (requests[file] === request) states[file] = InlineImageAssetState.Failed }
+            catch (_: Exception) { if (currentRequest()) states[file] = InlineImageAssetState.Failed }
             finally { if (jobs[file] === coroutineContext[Job]) jobs.remove(file) }
         }
         jobs[file] = job
         job.start()
     }
     fun close() {
+        requests.forEach { (file, request) -> knownGeometry.finish(file, request) }
         requests.clear()
         jobs.values.toList().forEach { it.cancel() }
         jobs.clear(); states.clear()
@@ -208,8 +246,13 @@ internal fun rememberInlineImageViewOwner(images: List<InlineImage>, media: List
     val density = LocalDensity.current.density
     val cache = LocalInlineImageCache.current ?: MediaCache.get(LocalContext.current)
     val scope = rememberCoroutineScope()
-    val owner = remember(rasterImages, media, settings.allowImages, settings.mediaCacheMb, edition, density, cache, scope, catalogueFiles, blockMediaLayout) {
-        InlineImageViewOwner(media.associateBy { it.file }, settings, edition, cache, scope, rasterImages.groupBy { inlineImageAssetKey(it.image) }, density, catalogueFiles, blockMediaLayout)
+    val sourceOwner = LocalMissingLinkOwner.current
+    val assetKeys = rasterImages.map { inlineImageAssetKey(it.image) }.distinct().sorted()
+    val knownGeometry = remember(sourceOwner, assetKeys, media, edition, cache, catalogueFiles, blockMediaLayout) {
+        InlineImageGeometryState()
+    }
+    val owner = remember(rasterImages, media, settings.allowImages, settings.mediaCacheMb, edition, density, cache, scope, catalogueFiles, blockMediaLayout, knownGeometry) {
+        InlineImageViewOwner(media.associateBy { it.file }, settings, edition, cache, scope, rasterImages.groupBy { inlineImageAssetKey(it.image) }, density, catalogueFiles, blockMediaLayout, knownGeometry)
     }
     DisposableEffect(owner) { onDispose { owner.close() } }
     return owner
@@ -256,7 +299,9 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
             val state = if (image.staticPoster != null) InlineImageAssetState.LayoutUnavailable else
                 owner.states[inlineImageAssetKey(image)] ?: if (settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
             val ready = state as? InlineImageAssetState.Ready
-            val geometry = ready?.let { inlineImagePixels(image, it.originalWidth, it.originalHeight, density.density, it.mime) }
+            val geometry = if (ready != null) inlineImagePixels(image, ready.originalWidth, ready.originalHeight, density.density, ready.mime)
+                else if (state == InlineImageAssetState.LayoutUnavailable) null else owner.knownPixels(image, density.density)
+            val boundedFallback = ready == null && geometry != null
             val occurrenceState = if (ready != null && geometry == null) InlineImageAssetState.GeometryUnavailable(ready) else state
             val fallback = inlineImageFallbackText(image, occurrenceState)
             val fallbackStyle = effective.copy(color = spanStyle.color,
@@ -270,10 +315,11 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
                     spanStyle.brush?.let { brush -> merged.copy(brush = brush, alpha = spanStyle.alpha) } ?: merged
                 }
             val fallbackLayout = fallback?.let { textMeasurer.measure(AnnotatedString(it), style = fallbackStyle,
-                overflow = TextOverflow.Ellipsis, constraints = Constraints(maxWidth = fallbackWidth,
-                    maxHeight = MaxComputedFontPixels.toInt())) }
-            val pixels = fallbackLayout?.let { InlineImagePixels(it.size.width.coerceAtLeast(1).toFloat(),
-                it.size.height.coerceAtLeast(1).toFloat()) } ?: geometry ?: run {
+                overflow = TextOverflow.Ellipsis, constraints = Constraints(
+                    maxWidth = geometry?.width?.let { ceil(it).toInt().coerceAtLeast(1) } ?: fallbackWidth,
+                    maxHeight = geometry?.height?.let { ceil(it).toInt().coerceAtLeast(1) } ?: MaxComputedFontPixels.toInt())) }
+            val pixels = geometry ?: fallbackLayout?.let { InlineImagePixels(it.size.width.coerceAtLeast(1).toFloat(),
+                it.size.height.coerceAtLeast(1).toFloat()) } ?: run {
                     // A status marker has no claimed intrinsic image aspect ratio.
                     // The actual asset is not painted until its passive size is known.
                     val axis = image.widthPx ?: image.heightPx
@@ -282,10 +328,11 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
                     InlineImagePixels(side, side)
                 }
             val outer = inlineImageOuterPixels(pixels, image.border, density.density)
-            val reserved = inlineImageReservedHeight(metrics, outer.height)
+            val reserved = inlineImageReservedHeight(metrics, outer.height, image.verticalAlign)
             result["compiled-image-$index"] = InlineTextContent(Placeholder(with(density) { outer.width.toSp() },
                 with(density) { reserved.toSp() }, PlaceholderVerticalAlign.TextCenter)) {
-                InlineImageOccurrence(span, pixels, metrics, occurrenceState, fallback, fallbackStyle, edition, onLink, placeholderColor) {
+                InlineImageOccurrence(span, pixels, metrics, occurrenceState, fallback, fallbackStyle, edition, onLink, placeholderColor,
+                    boundedFallback = boundedFallback) {
                     owner.retry(image)
                 }
             }
@@ -300,12 +347,31 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
 @Composable
 private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics: InlineImageFontMetrics,
     state: InlineImageAssetState, fallback: String?, fallbackStyle: TextStyle,
-    edition: String, onLink: (EntryLink) -> Unit, placeholderColor: Color, retry: () -> Unit) {
+    edition: String, onLink: (EntryLink) -> Unit, placeholderColor: Color,
+    alignedBox: Boolean = false, boundedFallback: Boolean = false, retry: () -> Unit) {
     val image = checkNotNull(span.image)
     val bitmapColorFilter = rememberInlineImageColorFilter(image)
     val density = LocalDensity.current.density
     val borderWidth = if (image.border) density else 0f
     val outer = inlineImageOuterPixels(pixels, image.border, density)
+    if (image.verticalAlign != null && !alignedBox) {
+        // The TextCenter placeholder still reserves the full line envelope. Its
+        // one source image owns only the aligned outer box, including its border.
+        Layout(content = {
+            InlineImageOccurrence(span, pixels, metrics, state, fallback, fallbackStyle,
+                edition, onLink, placeholderColor, alignedBox = true, boundedFallback = boundedFallback, retry = retry)
+        }) { measurables, constraints ->
+            require(constraints.hasBoundedWidth && constraints.hasBoundedHeight)
+            val child = measurables.single().measure(Constraints.fixed(
+                constraints.maxWidth, ceil(outer.height).toInt()))
+            layout(constraints.maxWidth, constraints.maxHeight) {
+                val top = inlineImageDrawTop(metrics, outer.height, constraints.maxHeight, image.verticalAlign)
+                val integralTop = floor(top).toInt()
+                child.placeWithLayer(0, integralTop) { translationY = top - integralTop }
+            }
+        }
+        return
+    }
     val ready = when (state) { is InlineImageAssetState.Ready -> state; is InlineImageAssetState.GeometryUnavailable -> state.resource; else -> null }
     val uri = LocalUriHandler.current
     var menu by remember { mutableStateOf(false) }
@@ -343,8 +409,8 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
         if (fallback == null || image.border) Canvas(Modifier.fillMaxSize()) {
             drawIntoCanvas { target ->
                 val canvas = target.nativeCanvas
-                val top = if (fallback != null) (size.height - outer.height) / 2f
-                    else inlineImageDrawTop(metrics, outer.height, size.height.toInt())
+                val top = if (alignedBox) 0f else if (fallback != null && !boundedFallback) (size.height - outer.height) / 2f
+                    else inlineImageDrawTop(metrics, outer.height, size.height.toInt(), image.verticalAlign)
                 val bounds = RectF(borderWidth, top + borderWidth, borderWidth + pixels.width,
                     top + borderWidth + pixels.height)
                 val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -365,7 +431,23 @@ private fun InlineImageOccurrence(span: Span, pixels: InlineImagePixels, metrics
                 }
             }
         }
-        if (fallback != null) Text(fallback, style = fallbackStyle, overflow = TextOverflow.Ellipsis,
+        if (fallback != null && boundedFallback) Layout(modifier = Modifier.fillMaxSize(), content = {
+            Text(fallback, style = fallbackStyle, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.drawWithContent {
+                    clipRect(right = pixels.width, bottom = pixels.height) { this@drawWithContent.drawContent() }
+                })
+        }) { measurables, constraints ->
+            val child = measurables.single().measure(Constraints.fixed(ceil(pixels.width).toInt(), ceil(pixels.height).toInt()))
+            layout(constraints.maxWidth, constraints.maxHeight) {
+                val left = borderWidth
+                val top = (if (alignedBox) 0f else inlineImageDrawTop(metrics, outer.height,
+                    constraints.maxHeight, image.verticalAlign)) + borderWidth
+                child.placeWithLayer(floor(left).toInt(), floor(top).toInt()) {
+                    translationX = left - floor(left); translationY = top - floor(top)
+                }
+            }
+        }
+        else if (fallback != null) Text(fallback, style = fallbackStyle, overflow = TextOverflow.Ellipsis,
             modifier = if (image.border) with(LocalDensity.current) {
                 Modifier.requiredSize(pixels.width.toDp(), pixels.height.toDp())
             } else Modifier)

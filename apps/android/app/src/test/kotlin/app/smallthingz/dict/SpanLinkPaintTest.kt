@@ -64,7 +64,9 @@ class SpanLinkPaintTest {
         val image = InlineImage("Source.svg", widthPx = 40, heightPx = 20)
         val oldImage = source.copy(linkPaint = null, text = "", trail = "", image = image)
         assertEquals(image, oldImage.image)
-        assertThrows(IllegalArgumentException::class.java) { oldImage.copy(linkPaint = paint()) }
+        assertThrows(IllegalArgumentException::class.java) {
+            oldImage.copy(image = image.copy(alt = "Authored alternative"), linkPaint = paint())
+        }
         assertThrows(IllegalArgumentException::class.java) { source.copy(foreground = "#654321") }
         assertThrows(IllegalArgumentException::class.java) { source.copy(underline = true) }
         assertThrows(IllegalArgumentException::class.java) { FigureLinkState("#ABCDEF", false) }

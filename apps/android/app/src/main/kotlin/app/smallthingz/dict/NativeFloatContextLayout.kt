@@ -136,7 +136,8 @@ internal sealed interface NativeFloatContextSpec {
         val blockBox: ((Int) -> NativeTableBlockBox)? = null,
         val fixedMarginTable: NativeFixedMarginTableInput? = null,
         val pairedMarginTable: NativeFixedMarginTableInput? = null,
-        val pairedBlockBox: ((Int, Float, ContainerWidths) -> NativeTableBlockBox)? = null) : NativeFloatContextSpec
+        val pairedBlockBox: ((Int, Float, ContainerWidths) -> NativeTableBlockBox)? = null,
+        val intrinsicMarginTable: NativeFixedMarginTableInput? = null) : NativeFloatContextSpec
 }
 
 /** Keep an unavailable fallback within both the parent's bounds and Compose's packed range. */
@@ -268,7 +269,7 @@ internal fun NativeFloatContextLayout(
                 when (part) {
                     is NativeFloatContextSpec.Child -> {
                         widths[index] = remember { NativeLayoutInput(0) }
-                        (part.autoMarginTable ?: part.fixedMarginTable?.table ?: part.pairedMarginTable?.table)?.let { table ->
+                        (part.autoMarginTable ?: part.fixedMarginTable?.table ?: part.pairedMarginTable?.table ?: part.intrinsicMarginTable?.table)?.let { table ->
                             tableMarginInputs[index] = remember(NativeDelegatedTableIdentity(table)) { NativeTableMarginMeasureInput(table) }
                         }
                     }
@@ -406,8 +407,10 @@ internal fun NativeFloatContextLayout(
                             else -> null
                         }
                         val edges = box?.let { kotlin.math.ceil(it.contentLeft + it.contentRight).toLong() } ?: 0L
-                        val fixedMargins = (part as? NativeFloatContextSpec.Child)?.takeIf { it.fixedMarginTable != null }
-                            ?.margins?.invoke(0)
+                        val fixedMargins = (part as? NativeFloatContextSpec.Child)?.takeIf {
+                            it.fixedMarginTable != null || it.blockViewport == null &&
+                                (it.autoMarginTable?.blockViewport?.isSeparateCornerGrid == true || it.intrinsicMarginTable != null)
+                        }?.margins?.invoke(0)
                         val fixedEdges = fixedMargins?.let { ceil(it.left + it.right).toLong() } ?: 0L
                         val own = content.toLong() + edges + fixedEdges
                         val floating = when (part) {
@@ -604,68 +607,85 @@ internal fun NativeFloatContextLayout(
                             }
                             is NativeFloatContextSpec.Child -> {
                                 val paired = part.pairedMarginTable
-                                if (paired != null) {
-                                    val source = paired.table
+                                val intrinsicOwner = part.intrinsicMarginTable
+                                if (paired != null || intrinsicOwner != null) {
+                                    val owner = paired ?: checkNotNull(intrinsicOwner)
+                                    val family = if (intrinsicOwner != null) "Intrinsic" else "Paired"
+                                    val source = owner.table
                                     val policy = source.blockViewport
-                                        ?: throw UnsupportedFloatLayout("Paired table block policy is unavailable")
+                                        ?: throw UnsupportedFloatLayout("$family table block policy is unavailable")
                                     val floating = source.floatViewport
-                                        ?: throw UnsupportedFloatLayout("Paired table float policy is unavailable")
+                                    val intrinsicDirection = policy.intrinsicContainingDirection
+                                    val narrow = paired != null || part.blockViewport != null
                                     val resolveBox = part.pairedBlockBox
-                                        ?: throw UnsupportedFloatLayout("Paired table box allocation is unavailable")
-                                    if (part.blockViewport !== policy || part.blockBox != null || part.autoMarginTable != null ||
-                                            part.autoMargins != null || part.fixedMarginTable != null || part.floatSide != null ||
-                                            part.atomicInline || !part.widthFromContent || part.scrollport != null || part.overflowViewport ||
-                                            paired.containingDirection != floating.containingDirection || policy.focusPaint == null)
-                                        throw UnsupportedFloatLayout("Paired table measurement owner is inconsistent")
+                                    if (paired != null && intrinsicOwner != null ||
+                                        (intrinsicOwner != null && (floating != null || intrinsicDirection == null || owner.containingDirection != intrinsicDirection)) ||
+                                        (paired != null && (floating == null || intrinsicDirection != null || owner.containingDirection != floating.containingDirection)) ||
+                                        (if (narrow) part.blockViewport !== policy || resolveBox == null else part.blockViewport != null || resolveBox != null) ||
+                                        part.blockBox != null || part.autoMarginTable != null || part.autoMargins != null ||
+                                        part.fixedMarginTable != null || part.floatSide != null || part.atomicInline ||
+                                        !part.widthFromContent || part.scrollport != null || part.overflowViewport || policy.focusPaint == null)
+                                        throw UnsupportedFloatLayout("$family table measurement owner is inconsistent")
+                                    if (intrinsicOwner != null && (source.caption.isNotEmpty() || source.captionBlocks?.isNotEmpty() == true))
+                                        throw UnsupportedFloatLayout("Intrinsic table focus with a caption is unavailable.")
                                     widths.getValue(index).update(containingWidth)
                                     val input = tableMarginInputs[index]
-                                        ?: throw UnsupportedFloatLayout("Paired table measure owner is unavailable")
+                                        ?: throw UnsupportedFloatLayout("$family table measure owner is unavailable")
                                     val measurable = childMeasurables.getValue(index)
                                     val query = input.beginBlockIntrinsicQuery()
                                     measurable.minIntrinsicWidth(Constraints.Infinity)
                                     val intrinsic = input.blockIntrinsicsReady(query)
                                     val margins = part.margins(containingWidth)
                                     var candidate: NativeTableBlockBox? = null
+                                    var candidateWidth = 0
                                     var predicted: NativeBlockMeasure? = null
                                     pairedCommits[index] = { placed ->
-                                        val box = candidate ?: throw UnsupportedFloatLayout("Paired table used width is unavailable")
-                                        val expected = predicted ?: throw UnsupportedFloatLayout("Paired table used height is unavailable")
+                                        val expected = predicted ?: throw UnsupportedFloatLayout("$family table used height is unavailable")
                                         if (kotlin.math.abs(placed.bounds.width() - expected.usedWidth) > .01f ||
                                                 kotlin.math.abs(placed.bounds.height() - expected.height) > .01f)
-                                            throw UnsupportedFloatLayout("Paired table final allocation changed after intrinsic fitting")
-                                        input.beginBlock(containingWidth, box)
-                                        val allocated = ceil(box.borderWidth).toInt()
-                                        val placeable = measurePart(index, Constraints(minWidth = allocated, maxWidth = allocated))
+                                            throw UnsupportedFloatLayout("$family table final allocation changed after intrinsic fitting")
+                                        val box = candidate
+                                        if (narrow) input.beginBlock(containingWidth,
+                                            box ?: throw UnsupportedFloatLayout("$family table used width is unavailable"))
+                                        else input.begin(containingWidth, candidateWidth, intrinsic.minimum.toInt())
+                                        val placeable = measurePart(index, Constraints(minWidth = candidateWidth, maxWidth = candidateWidth))
                                         val actual = input.ready(placeable.width, placeable.height)
-                                        if (actual.blockBox !== box || kotlin.math.abs(actual.placementWidth - expected.usedWidth) > .01f ||
-                                                kotlin.math.abs(actual.placementHeight - expected.height) > .01f)
-                                            throw UnsupportedFloatLayout("Paired table measured geometry differs from intrinsic fitting")
+                                        if (actual.blockBox !== box || actual.scrolling != narrow ||
+                                            kotlin.math.abs(actual.placementWidth - expected.usedWidth) > .01f ||
+                                            kotlin.math.abs(actual.placementHeight - expected.height) > .01f)
+                                            throw UnsupportedFloatLayout("$family table measured geometry differs from intrinsic fitting")
                                     }
                                     NativeFloatContextPart.Child(part.id, NativeBlockWidth.Auto, { request ->
                                         if (request.containingWidth != containingWidth.toFloat() || request.requestedWidth != null)
-                                            throw UnsupportedFloatLayout("Paired table containing interval changed")
-                                        val box = resolveBox(containingWidth, request.assignedWidth, intrinsic)
-                                        val minimum = resolveBox(containingWidth, request.assignedWidth,
-                                            ContainerWidths(intrinsic.minimum, intrinsic.minimum)).borderWidth
-                                        if (box.policy !== policy || box.floatPolicy !== floating || box.fixedMargins != margins)
-                                            throw UnsupportedFloatLayout("Paired table source box changed during fitting")
-                                        input.beginBlock(containingWidth, box)
-                                        val height = measurable.maxIntrinsicHeight(ceil(box.borderWidth).toInt())
+                                            throw UnsupportedFloatLayout("$family table containing interval changed")
+                                        val box = if (narrow) checkNotNull(resolveBox)(containingWidth, request.assignedWidth, intrinsic) else null
+                                        val minimum = if (box != null) checkNotNull(resolveBox)(containingWidth, request.assignedWidth,
+                                            ContainerWidths(intrinsic.minimum, intrinsic.minimum)).borderWidth else intrinsic.minimum
+                                        if (box != null && (box.policy !== policy || box.floatPolicy !== floating || box.fixedMargins != margins))
+                                            throw UnsupportedFloatLayout("$family table source box changed during fitting")
+                                        val allocated = if (box != null) ceil(box.borderWidth).toInt()
+                                            else intrinsicTableGridWidth(request.availableWidth, intrinsic)
+                                        if (box != null) input.beginBlock(containingWidth, box)
+                                        else input.begin(containingWidth, allocated, intrinsic.minimum.toInt())
+                                        val height = measurable.maxIntrinsicHeight(allocated)
                                         if (height !in 0..TablePixelLimit)
-                                            throw UnsupportedFloatLayout("Paired table height cannot be fitted at its assigned width")
-                                        val edges = box.insets.top + box.insets.bottom
+                                            throw UnsupportedFloatLayout("$family table height cannot be fitted at its assigned width")
+                                        val edges = (box?.insets?.top ?: 0f) + (box?.insets?.bottom ?: 0f)
                                         val actualHeight = height - ceil(edges).toInt() + edges
-                                        NativeBlockMeasure(box.borderWidth, minimum, actualHeight).also {
-                                            candidate = box; predicted = it
+                                        NativeBlockMeasure(box?.borderWidth ?: allocated.toFloat(), minimum, actualHeight).also {
+                                            candidate = box; candidateWidth = allocated; predicted = it
                                         }
                                     }, part.gapAfter, margins = margins, gapBefore = part.gapBefore,
                                         clear = part.clear, logicalObject = part.logicalObject,
-                                        pairedViewportDirection = paired.containingDirection)
+                                        pairedViewportDirection = owner.containingDirection)
                                 } else {
                                 if (part.pairedBlockBox != null)
                                     throw UnsupportedFloatLayout("Paired table box has no source owner")
                                 val autoTable = part.autoMarginTable
-                                val autoMargins = part.autoMargins
+                                val separateCornerGrid = autoTable?.blockViewport?.isSeparateCornerGrid == true
+                                val numericBlockBox = if (separateCornerGrid) part.blockBox?.invoke(containingWidth) else null
+                                val autoMargins = if (separateCornerGrid) numericBlockBox?.margins
+                                    ?: NativeTableAutoMargins(part.margins(containingWidth), false, false) else part.autoMargins
                                 val fixedTable = part.fixedMarginTable
                                 if (fixedTable != null) {
                                     val source = fixedTable.table
@@ -682,8 +702,13 @@ internal fun NativeFloatContextLayout(
                                 val fixedMargins = fixedTable?.let { part.margins(containingWidth) }
                                 val tableStyle = part.blockViewport?.boxStyle ?: autoTable?.style
                                 val containingDirection = if (autoTable != null || autoMargins != null) {
-                                    if (autoTable == null || autoMargins == null || tableStyle?.marginValues == null ||
-                                        tableStyle.isInline || tableStyle.floatSide != null ||
+                                    if (autoTable == null || autoMargins == null ||
+                                        (!separateCornerGrid && tableStyle?.marginValues == null) ||
+                                        (separateCornerGrid && (part.autoMargins != null || autoMargins.leftAuto || autoMargins.rightAuto ||
+                                            part.overflowViewport || autoTable.blockViewport?.focusPaint == null ||
+                                            (if (part.blockViewport == null) numericBlockBox != null else
+                                                numericBlockBox == null || numericBlockBox.policy !== part.blockViewport || numericBlockBox.floatPolicy != null))) ||
+                                        tableStyle == null || tableStyle.isInline || tableStyle.floatSide != null ||
                                         part.atomicInline || part.floatSide != null || !part.widthFromContent || part.scrollport != null)
                                         throw UnsupportedFloatLayout("Table automatic margin owner is inconsistent")
                                     tableStyle.containingDirection
@@ -692,7 +717,7 @@ internal fun NativeFloatContextLayout(
                                 if ((part.blockViewport != null) != (part.blockBox != null) ||
                                     part.blockViewport != null && (autoTable == null || autoTable.blockViewport !== part.blockViewport))
                                     throw UnsupportedFloatLayout("Table block viewport owner is inconsistent")
-                                val blockBox = part.blockBox?.invoke(containingWidth)
+                                val blockBox = numericBlockBox ?: part.blockBox?.invoke(containingWidth)
                                 widths.getValue(index).update(containingWidth)
                                 val atomic = if (part.atomicInline) measurePart(index, Constraints(maxWidth = containingWidth)) else null
                                 var intrinsicMinimum: Int? = null
@@ -944,7 +969,7 @@ internal fun NativeFloatContextLayout(
                             geometry.children.forEach { placed ->
                                 val index = leaves.indexOfFirst { it is NativeFloatContextSpec.Child && it.id == placed.id }
                                 val childOwner = leaves[index] as NativeFloatContextSpec.Child
-                                if (childOwner.autoMarginTable != null || childOwner.fixedMarginTable != null || childOwner.pairedMarginTable != null) {
+                                if (childOwner.autoMarginTable != null || childOwner.fixedMarginTable != null || childOwner.pairedMarginTable != null || childOwner.intrinsicMarginTable != null) {
                                     val x = floor(placed.bounds.left).toInt()
                                     val y = floor(placed.bounds.top).toInt()
                                     measured.getValue(index).placeWithLayer(x, y + documentOrigin,
@@ -1190,6 +1215,7 @@ private fun NativeFloatAuxiliary(input: NativeLayoutInput<NativeContextPass?>, p
                     val coordinates = rememberNativeTableCoordinateBinding()
                     AndroidView(modifier = coordinates?.modifier ?: Modifier,
                         factory = { NativeFloatTextView(it, scrollClip) }, update = { view ->
+                        view.updateScrollClip(scrollClip)
                         coordinates?.bind(view)
                         view.bind({ measuredWidth -> check(measuredWidth == physical.width); physical },
                             linkColor.copy(alpha = .25f).toArgb(), linkColor.toArgb())
@@ -1258,6 +1284,7 @@ private fun NativeFloatAuxiliary(input: NativeLayoutInput<NativeContextPass?>, p
                         stateTable?.positionedRootState(view, coordinates)
                     }
                 }, factory = { NativeFloatTextView(it, scrollClip).also { view -> nativeView = view } }, update = { view ->
+                    view.updateScrollClip(scrollClip)
                     coordinates?.bind(view)
                     delegatedCell?.measured(view, physical, geometry.width, allocatedHeight, minimumTouchWidth, minimumTouchHeight)
                     view.delegatedStateOwner = stateTable

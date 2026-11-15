@@ -176,6 +176,34 @@ internal class NativeAnonymousFlowGeometry private constructor(
         }
         return native.clipForOffset(selection.nativeOffset(offset))
     }
+    override val hasPreciseClips: Boolean get() = native.hasPreciseClips || figures.any { it.measured.geometry.hasPreciseClips }
+    override fun preciseClipForOffset(offset: Int): NativeTextClip? {
+        require(offset in 0..text.length)
+        val segment = selection.at(offset)
+        if (segment is AnonymousSelectionSegment.Figure) {
+            val placed = figureById.getValue(segment.anchor.event.id)
+            return placed.measured.geometry.preciseClipForOffset(offset - segment.start)?.translated(placed.bounds.left, placed.bounds.top)
+        }
+        return native.preciseClipForOffset(selection.nativeOffset(offset))
+    }
+    override fun paintSelection(canvas: Canvas, start: Int, end: Int, paint: Paint) {
+        require(start in 0..text.length && end in start..text.length)
+        selection.segments.forEach { segment ->
+            val first = maxOf(start, segment.start); val last = minOf(end, segment.end)
+            if (first < last) when (segment) {
+                is AnonymousSelectionSegment.Inline -> native.paintSelection(canvas,
+                    if (segment.authored.replacement) segment.nativeStart else segment.nativeStart + first - segment.start,
+                    if (segment.authored.replacement) segment.nativeEnd else segment.nativeStart + last - segment.start, paint)
+                is AnonymousSelectionSegment.Figure -> {
+                    val placed = figureById.getValue(segment.anchor.event.id)
+                    val saved = canvas.save()
+                    try { canvas.translate(placed.bounds.left, placed.bounds.top)
+                        placed.measured.geometry.paintSelection(canvas, first - segment.start, last - segment.start, paint) }
+                    finally { canvas.restoreToCount(saved) }
+                }
+            }
+        }
+    }
     override fun cursorAt(x: Float, y: Float): InlineCursor? {
         val figure = figures.asReversed().firstOrNull { placed ->
             placed.measured.geometry.positionedGroups.any { it.contains(x - placed.bounds.left, y - placed.bounds.top) }
@@ -223,6 +251,33 @@ internal class NativeAnonymousFlowGeometry private constructor(
         }
         val range = native.lineRange(selection.nativeOffset(offset))
         return selection.semanticOffset(range.first) to selection.semanticOffset(range.second)
+    }
+
+    override fun visualLineRanges(offset: Int): List<Pair<Int, Int>> {
+        val segment = selection.at(offset)
+        if (segment is AnonymousSelectionSegment.Figure) {
+            val child = figureById.getValue(segment.anchor.event.id).measured.geometry
+            return child.visualLineRanges(offset - segment.start).map { range ->
+                (segment.start + range.first) to (segment.start + range.second)
+            }
+        }
+        // NativeFloatGeometry exports its original input offsets, even when it privately
+        // shapes Ruby column tokens. Map each fragment separately through this owner.
+        return native.visualLineRanges(selection.nativeOffset(offset)).map { range ->
+            selection.semanticOffset(range.first) to selection.semanticOffset(range.second)
+        }
+    }
+
+    override fun isHardLineBreak(offset: Int): Boolean {
+        require(offset in 0 until text.length)
+        val segment = selection.at(offset)
+        if (segment is AnonymousSelectionSegment.Figure)
+            return figureById.getValue(segment.anchor.event.id).measured.geometry.isHardLineBreak(offset - segment.start)
+        val original = selection.nativeOffset(offset)
+        // Keep the existing semantic image-alt behavior. Ruby's exact public source
+        // retains its gap LF, so only its native owner can classify that character.
+        return if (original < native.text.length && native.text[original] == '\n')
+            native.isHardLineBreak(original) else text[offset] == '\n'
     }
 
     override fun visualOffset(offset: Int, direction: Int): Int {
@@ -318,7 +373,7 @@ internal class NativeAnonymousFlowGeometry private constructor(
                 row.second.toString()
             }
             val source = SpannableString(offsets.nativeText)
-            prepared.forEachIndexed { index, (_, styled) -> if (styled.isNotEmpty() || hasNativeAuthoredInlineMetrics(styled)) {
+            prepared.forEachIndexed { index, (_, styled) -> if (styled.isNotEmpty() || hasNativeInlineLayoutOwner(styled)) {
                 val range = offsets.inlineSources[index]
                 check(styled.toString() == offsets.nativeText.substring(range.start, range.end))
                 styled.getSpans(0, styled.length, Any::class.java).forEach { span ->

@@ -67,6 +67,7 @@ data class FigureMediaLayout(val strut: FigureMediaStrut, val verticalAlign: Inl
         is FigureContent.Missing -> verticalAlign == InlineBoxVerticalAlign.Baseline && maxWidth == null &&
             positioning == null && after == null && focusOutline == null
         is FigureContent.Image -> verticalAlign == InlineBoxVerticalAlign.Middle &&
+            (focusOutline == null || content.span.linkPaint == null) &&
             (after == null && focusOutline == null || content.span.kind in listOf("link", "external_link") &&
                 content.span.target.isNotEmpty())
     }

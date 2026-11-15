@@ -36,3 +36,32 @@ The Android tests decode the compiled payload directly and never parse the sourc
 The fixture covers ordered labels, independent nested HTML lists, nested tables
 and terms, one true dictionary sense, grouped references, and protected literal
 text. It supersedes the earlier experimental grammar fixture.
+
+# Genuine Japanese typed Ruby
+
+`zh-tabiji-typed-ruby.wikblb` is the exact 1,852-byte `WIKBLB08` language blob
+produced by the ordinary Writer for the genuine Chinese Wiktionary page
+[たびぢ, revision 6019530](https://zh.wiktionary.org/w/index.php?title=たびぢ&oldid=6019530)
+(page ID 1502032, selected ordinal 1950). It contains one Japanese-language
+record (`日語`, `ja`) with a `DPRS` presentation payload. No JSON or Kotlin model
+was encoded to create this fixture.
+
+- Blob SHA-256: `5a674511ec65701532d90c002e9285d76dcbe806c050a488c463b79a24bfcce4`.
+- Ordinary Writer executable SHA-256: `4951a8e6930b2e20ff49e055c2cd582852416f81f0bdeee0dd06c02768bfb2f7`.
+- Producer result SHA-256: `479c12ef184f327413b35a7655e45efd77098dff3a5cf1c26f17c0fc43f5c28b`.
+- Independently reviewed complete Reader JSON SHA-256: `5913dbd3dee9ed33caa2f8cdb72c15073d039b0b4b65594cebc933cc4a0f59e0`.
+- Source/body review SHA-256: `de92670c71f584fcfd457669a112d169a08213bf4118d64d04bfd3bafba79cee`.
+
+`BlobDecoderTest.genuineJapaneseTabijiBlobPreservesTypedRubyAndCompleteBody`
+feeds these binary bytes through the production envelope reader and decoder.
+Its independent expected graph retains the entire two-table body, introductory
+and historical notes, all five links, Ruby owner/child font scales and bases,
+annotation line height, and absent optional fields. It also checks the graphical
+base/reading UTF-16 action ranges and text fallback. This is host decoding and
+semantic coverage, not Android rendering, accessibility or navigation acceptance.
+The blob has no destination record for its `旅路#日語` links. The producer's
+`unresolved_table_style` finding remains: absent outer table style is intentional
+in the expected graph and is not a claim of full CSS fidelity.
+
+Content is by [Wiktionary contributors](https://zh.wiktionary.org/w/index.php?title=たびぢ&action=history),
+under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).

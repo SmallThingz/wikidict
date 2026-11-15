@@ -150,6 +150,7 @@ internal fun sectionHeadingCompanion(section: Section): Block? {
     val block = section.blocks.firstOrNull() ?: return null
     // Blank labels have no header affordance; leave their blocks in the visible body.
     if (section.title.isBlank() || block.kind != "heading" || block.level != section.level) return null
+    if (block.spans.hasRuby()) return block.takeIf { rubyFallbackText(it.spans) == section.title }
     if (block.spans.any { it.kind == "line_break" && it.trail.isNotEmpty() }) return null
     val nestedHeading = block.depth > 0 && block.listPath.isNotBlank()
     if (!nestedHeading && block.spans.none { it.image != null || (it.tooltip != null || it.explanation.isNotEmpty() ||
@@ -182,7 +183,7 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymo
             val key = "block-$sectionIndex-$blockIndex"
             if (bodyAdjoining == BodyAdjoiningPolicy.Ordinary ||
                 (authoredBody && sectionIndex == 0 && section.isAuthoredBodyPrefix()) ||
-                original.spans.hasAuthoredFontFamily()) {
+                (original.spans.hasAuthoredFontFamily() || original.spans.hasRuby())) {
                 // This owner consumes source block boundaries, including empty or unsupported ones.
                 add(ReadingRow(key, block = original, sectionKey = sectionKey, meaningSection = meaningSection))
                 return@forEachIndexed
@@ -251,13 +252,16 @@ fun initiallyFolded(row: ReadingRow, settings: AppSettings): Boolean {
 
 /** Empty metric owners retain their source position without adding any logical character. */
 internal fun Span.hasAuthoredInlineMetrics(): Boolean = inlineStyle?.lineHeight != null
-internal fun Span.isEmptyInlineMetricOwner(): Boolean = hasAuthoredInlineMetrics() && image == null &&
+internal fun Span.isEmptyInlineMetricOwner(): Boolean = hasAuthoredInlineMetrics() && image == null && ruby == null &&
     text.isEmpty() && trail.isEmpty()
 internal fun Span.usesInlineDirectionIsolate(): Boolean = direction in listOf("rtl", "ltr", "auto") &&
     !isEmptyInlineMetricOwner()
-internal fun Span.isUnsupportedAuthoredWhitespaceOwner(): Boolean = inlineStyle != null &&
+internal fun Span.isUnsupportedAuthoredWhitespaceOwner(): Boolean = ruby == null && inlineStyle != null &&
     (kind in listOf("link", "external_link") || inlineStyle?.cursor != null || inlineStyle?.lineHeight == null) &&
     text.all { it == ' ' || it == '\t' || it == '\r' || it == '\n' }
+
+/** Typed owners retain their original children and surrounding compiled spacing. */
+internal fun List<Span>.hasRuby(): Boolean = any { it.ruby != null }
 
 /** New family fields preserve the whole compiled inline owner, including its unstyled neighbours. */
 internal fun List<Span>.hasAuthoredFontFamily(): Boolean = any { span ->
@@ -267,7 +271,7 @@ internal fun List<Span>.hasAuthoredFontFamily(): Boolean = any { span ->
 
 internal fun List<Span>.hasCompiledInlineContent(): Boolean = any {
     it.kind == "line_break" || it.text.isNotEmpty() || it.trail.isNotEmpty() ||
-        it.image != null || it.hasAuthoredInlineMetrics()
+        it.image != null || it.hasAuthoredInlineMetrics() || it.ruby != null
 }
 
 internal enum class LegacySpanFontFamily { Code, Egyptian }
@@ -290,12 +294,12 @@ internal fun inlineFontSnapshotSpan(snapshot: InlineFontSnapshot): Span = Span("
     inlineStyle = if (snapshot.fontNormalized) InlineTextStyle(fontNormalized = true) else null)
 
 internal fun inlineMetricOwnerSpan(span: Span): Span = span.copy(kind = "text", text = " ", target = "", trail = "",
-    direction = "", image = null, targetFragment = null, linkPaint = null, underline = false, strike = false,
+    direction = "", image = null, ruby = null, targetFragment = null, linkPaint = null, underline = false, strike = false,
     inlineStyle = if (span.inlineStyle?.fontNormalized == true) InlineTextStyle(fontNormalized = true) else null)
 
 internal fun tableHasAuthoredInlineStyles(table: Table): Boolean {
     var found = false
-    table.visitSpanRuns { spans, _ -> if (spans.hasAuthoredFontFamily() || spans.any { it.inlineStyle != null }) found = true }
+    table.visitSpanRuns { spans, _ -> if (spans.hasAuthoredFontFamily() || spans.hasRuby() || spans.any { it.inlineStyle != null }) found = true }
     return found
 }
 
@@ -307,7 +311,7 @@ private fun Span.hasRetainedInlineContent(): Boolean = hasPaintedInlineContent()
 
 /** Compact ordinary spacing; compiled poem and literal preformatted spacing is semantic. */
 fun compactSpans(spans: List<Span>): List<Span> {
-    if (spans.hasAuthoredFontFamily()) return spans
+    if (spans.hasAuthoredFontFamily() || spans.hasRuby()) return spans
     val trimmed = spans.dropWhile { !it.hasClassToken("wikidict-poem") && !it.hasRetainedInlineContent() && it.text.isBlank() && it.trail.isBlank() }
         .dropLastWhile { !it.hasClassToken("wikidict-poem") && !it.hasRetainedInlineContent() && it.text.isBlank() && it.trail.isBlank() }
     val result = ArrayList<Span>(trimmed.size)
@@ -331,7 +335,7 @@ private fun compactBlock(block: Block): Block {
 
 /** A styled source box is not split or given a text line just to carry its edges. */
 internal fun paragraphDisplaySpans(block: Block): List<Span> {
-    if (block.spans.hasAuthoredFontFamily()) return block.spans
+    if (block.spans.hasAuthoredFontFamily() || block.spans.hasRuby()) return block.spans
     val spans = ordinaryInlineDisplaySpans(block)
     if (block.style == null) return compactSpans(spans)
     fun collapsible(span: Span) = span.kind != "line_break" && !span.hasRetainedInlineContent() &&
@@ -342,7 +346,7 @@ internal fun paragraphDisplaySpans(block: Block): List<Span> {
 
 internal fun paragraphHasContent(block: Block, preserveCompiledText: Boolean = false): Boolean {
     fun inline(spans: List<Span>, owner: Block): Boolean =
-        if (preserveCompiledText || spans.hasAuthoredFontFamily()) spans.hasCompiledInlineContent()
+        if (preserveCompiledText || spans.hasAuthoredFontFamily() || spans.hasRuby()) spans.hasCompiledInlineContent()
         else spans.any { it.kind == "line_break" } || paragraphDisplaySpans(owner).isNotEmpty()
     fun parts(values: List<FlowPart>): Boolean = values.any { part -> when (part) {
         is FlowPart.Inline -> inline(part.spans, Block("paragraph", 0, part.spans))

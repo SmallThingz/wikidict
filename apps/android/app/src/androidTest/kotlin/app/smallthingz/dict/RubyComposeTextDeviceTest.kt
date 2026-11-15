@@ -1,0 +1,913 @@
+package app.smallthingz.dict
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.style.TextDirection
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
+import androidx.activity.compose.setContent
+import android.text.TextPaint
+import android.text.style.MetricAffectingSpan
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.referentialEqualityPolicy
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.BaselineShift
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.sp
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/** These controls exercise the actual Compose lowering, not native Ruby visual qualification. */
+@RunWith(AndroidJUnit4::class)
+class RubyComposeTextDeviceTest {
+    @get:Rule val compose = createPhysicalComposeRule()
+
+    private fun owner(scale: Float = 1f, bold: Boolean = false, italic: Boolean = false,
+        code: Boolean = false, family: ContainerFontFamily? = null) = RubyOwner(InlineFontSnapshot(
+        fontScale = scale, bold = bold, italic = italic, code = code, fontFamily = family), direction = "ltr")
+    private fun ruby(base: List<Span>, reading: List<Span>, baseOwner: RubyOwner = owner(),
+        readingOwner: RubyOwner = owner(.5f)): Span = Span("text", "", ruby = Ruby(listOf(RubySegment(emptyList(),
+        listOf(RubyBase(baseOwner, emptyList(), base)), listOf(RubyAnnotation(0, 1, 0, readingOwner,
+            emptyList(), reading, emptyList(), emptyList(), false))))))
+
+    private inline fun control(body: () -> Unit) {
+        var primary: Throwable? = null
+        try { body() } catch (failure: Throwable) { primary = failure; throw failure }
+        finally {
+            try { compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle() }
+            catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
+    private fun styleAt(text: AnnotatedString, offset: Int): SpanStyle = text.spanStyles
+        .filter { it.start <= offset && it.end > offset }
+        .fold(SpanStyle()) { value, range -> value.merge(range.item) }
+
+    @Test fun completeChildTraitsAndNestedContextScalesUseOriginalBasisOnce() = control {
+        val plain = Span("link", "same", "normal-child", fontScale = .5f)
+        val inherited = Span("link", "same", "bold-child", fontScale = .5f, bold = true, italic = true)
+        val nestedLeaf = Span("text", "nested", fontScale = .5f)
+        val nested = ruby(listOf(nestedLeaf), emptyList(), baseOwner = owner(.5f))
+        val source = listOf(ruby(listOf(plain, inherited, nested), listOf(Span("text", "reading", fontScale = .5f)),
+            baseOwner = owner(.5f, bold = true, italic = true), readingOwner = owner(.5f))
+            .copy(superscript = true, underline = true, background = "#ff0000"))
+        var contexts: RubyStyledTextContexts? = null
+        var annotated = AnnotatedString("")
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme(typography = Typography(bodyLarge = TextStyle(fontSize = 30.sp))) {
+                CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                    val style = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic,
+                        fontFeatureSettings = "\"liga\" 0")
+                    val resolved = rubyStyledTextContexts(source, null, style)
+                    val text = styledTextAnnotation(source, null, style) { }
+                    SideEffect { contexts = resolved; annotated = text }
+                }
+            }
+        } }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            val value = checkNotNull(contexts)
+            assertEquals("samesamenestedreading", annotated.text)
+            val base = value.groups.values.first { it.range.role == RubyTextRole.Base }
+            val outer = value.groups.values.first { it.range.role == RubyTextRole.Owner }
+            assertEquals(BaselineShift.Superscript, outer.style.baselineShift)
+            assertEquals(TextDecoration.Underline, outer.style.textDecoration)
+            assertEquals(Color.Red, outer.style.background)
+            assertEquals(10.sp, base.style.fontSize)
+            assertEquals(FontWeight.Bold, base.style.fontWeight)
+            assertEquals(FontStyle.Italic, base.style.fontStyle)
+            assertEquals("\"liga\" 0", base.style.fontFeatureSettings)
+            val inner = value.groups.values.single { it.range.base?.spans?.singleOrNull() === nestedLeaf }
+            assertEquals(10.sp, inner.style.fontSize)
+            assertEquals(20.sp, inner.fontBasisStyle.fontSize)
+            assertEquals("\"liga\" 0", inner.style.fontFeatureSettings)
+            val first = value.leaves.single { it.range.span === plain }
+            val second = value.leaves.single { it.range.span === inherited }
+            val reset = styleAt(annotated, first.range.start)
+            val retained = styleAt(annotated, second.range.start)
+            assertEquals(FontWeight.Normal, reset.fontWeight)
+            assertEquals(FontStyle.Normal, reset.fontStyle)
+            assertEquals("\"liga\" 0", reset.fontFeatureSettings)
+            assertEquals(FontWeight.Bold, retained.fontWeight)
+            assertEquals(FontStyle.Italic, retained.fontStyle)
+            assertTrue(reset.fontSize.isEm)
+            assertEquals(.5f, reset.fontSize.value, 0f)
+            assertEquals(20.sp, first.fontBasisStyle.fontSize)
+            assertEquals(BaselineShift.None, first.enclosingStyle.baselineShift)
+            assertEquals(TextDecoration.None, first.enclosingStyle.textDecoration)
+            assertEquals(Color.Unspecified, first.enclosingStyle.background)
+            val links = annotated.getLinkAnnotations(0, annotated.length)
+            assertEquals(listOf("normal-child", "bold-child"), links.map { (it.item as LinkAnnotation.Clickable).tag })
+            assertEquals(listOf(first.range.start, second.range.start), links.map { it.start })
+        }
+    }
+
+    @Test fun sourceFamilyAndIndependentTextBasesSurviveOwnerCodeAndContextChanges() = control {
+        val inheritedFamily = ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif)
+        val explicitFamily = ContainerFontFamily.Stack(emptyList(), GenericFontFamily.SansSerif)
+        val plain = Span("text", "plain", fontScale = .5f)
+        val explicit = Span("text", "explicit", fontScale = .5f, fontFamily = explicitFamily)
+        val normalBody = Span("text", "body", fontScale = .5f, fontScaleBasis = FontScaleBasis.NormalBody)
+        val css = Span("text", "css", fontScale = 8f, fontScaleBasis = FontScaleBasis.CssPx)
+        val egyptianChild = Span("text", "inherited-family")
+        val egyptianOverride = Span("text", "explicit-family", fontFamily = explicitFamily)
+        val egyptianOwner = RubyOwner(InlineFontSnapshot(fontScale = .5f, classes = "Egyp"))
+        val source = listOf(ruby(listOf(plain, explicit, normalBody, css), emptyList(), baseOwner = owner(.5f, code = true)),
+            ruby(listOf(egyptianChild, egyptianOverride), emptyList(), baseOwner = egyptianOwner))
+        val zoom = mutableStateOf(1f)
+        var contexts: RubyStyledTextContexts? = null
+        var annotated = AnnotatedString("")
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme(typography = Typography(bodyLarge = TextStyle(fontSize = 32.sp))) {
+                CompositionLocalProvider(LocalDensity provides Density(1f), LocalCssPixelTextZoom provides zoom.value,
+                    LocalNativeContainerTextContext provides ContainerTextContext(fontFamily = inheritedFamily)) {
+                    val style = TextStyle(fontSize = 20.sp, fontFamily = FontFamily.Serif)
+                    val value = rubyStyledTextContexts(source, null, style)
+                    val text = styledTextAnnotation(source, null, style) { }
+                    SideEffect { contexts = value; annotated = text }
+                }
+            }
+        } }
+        for (factor in listOf(1f, 1.5f)) {
+            compose.runOnIdle { zoom.value = factor }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val value = checkNotNull(contexts)
+                val base = value.groups.values.single { it.range.base?.owner?.font?.code == true }
+                assertEquals(LegacySpanFontFamily.Code, base.legacyFamily)
+                assertNull(base.sourceFamily)
+                val leaf = value.leaves.single { it.range.span === plain }
+                assertSame(inheritedFamily, leaf.sourceFamily)
+                assertNull(leaf.legacyFamily)
+                assertEquals(FontFamily.Serif, styleAt(annotated, leaf.range.start).fontFamily)
+                val own = value.leaves.single { it.range.span === explicit }
+                assertSame(explicitFamily, own.range.span!!.fontFamily)
+                assertEquals(FontFamily.SansSerif, styleAt(annotated, own.range.start).fontFamily)
+                val body = value.leaves.single { it.range.span === normalBody }
+                assertEquals(16.sp, styleAt(annotated, body.range.start).fontSize)
+                val px = value.leaves.single { it.range.span === css }
+                assertEquals((8f * factor).sp, styleAt(annotated, px.range.start).fontSize)
+                assertEquals(.5f, styleAt(annotated, leaf.range.start).fontSize.value, 0f)
+                assertSame(source.first().ruby!!.segments.single().bases.single(), base.range.base)
+                val egyptian = value.groups.values.single { it.range.base?.owner === egyptianOwner }
+                val inheritedEgyptian = value.leaves.single { it.range.span === egyptianChild }
+                assertEquals(LegacySpanFontFamily.Egyptian, inheritedEgyptian.legacyFamily)
+                assertNull(inheritedEgyptian.sourceFamily)
+                assertEquals(egyptian.style.fontFamily, styleAt(annotated, inheritedEgyptian.range.start).fontFamily)
+                val overriddenLeaf = value.leaves.single { it.range.span === egyptianOverride }
+                assertEquals(FontFamily.SansSerif, styleAt(annotated, overriddenLeaf.range.start).fontFamily)
+            }
+        }
+    }
+
+    @Test fun exactGraphicalOffsetsAndExplicitFallbackKeepOrdinaryNullPathSeparate() = control {
+        val child = Span("link", "X\ud83d\ude80", "base", trail = "\u0301", direction = "rtl")
+        val reading = Span("link", "Y", "reading", direction = "ltr")
+        val source = listOf(ruby(listOf(child), listOf(reading)))
+        val currentSource = mutableStateOf(source, referentialEqualityPolicy())
+        val ordinary = listOf(Span("text", "old", direction = "rtl"))
+        val fallback = mutableStateOf(false)
+        var contexts: RubyStyledTextContexts? = null
+        var typed = AnnotatedString("")
+        var legacy = AnnotatedString("")
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme {
+                val style = TextStyle(fontSize = 20.sp)
+                val value = rubyStyledTextContexts(currentSource.value, null, style)
+                val current = styledTextAnnotation(currentSource.value, null, style) { }
+                val old = styledTextAnnotation(ordinary, null, style) { }
+                SideEffect { contexts = value; typed = current; legacy = old }
+                if (fallback.value) CompositionLocalProvider(LocalRubyNative provides false,
+                    LocalNativeContainerTextContext provides ContainerTextContext(fontFamily = ContainerFontFamily.SansSerif)) {
+                    StyledText(currentSource.value, style = style, preserveWhitespace = true)
+                }
+            }
+        } }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            val value = checkNotNull(contexts)
+            assertEquals("X\ud83d\ude80\u0301Y", typed.text)
+            assertEquals(value.projection.text, typed.text)
+            assertEquals("\u2067old\u2069", legacy.text)
+            assertSame(child, value.leaves.first().range.span)
+            assertSame(reading, value.leaves.last().range.span)
+            assertEquals(listOf(0, 4), typed.getLinkAnnotations(0, typed.length).map { it.start })
+            assertEquals(listOf(4, 5), typed.getLinkAnnotations(0, typed.length).map { it.end })
+        }
+        val replacement = child.copy()
+        compose.runOnIdle { currentSource.value = listOf(ruby(listOf(replacement), listOf(reading))) }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertSame(replacement, checkNotNull(contexts).leaves.first().range.span)
+            assertNotSame(child, checkNotNull(contexts).leaves.first().range.span)
+            fallback.value = true
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("\u2067X\ud83d\ude80\u0301\u2069\uff08\u2066Y\u2069\uff09").assertIsDisplayed()
+    }
+
+    @Test fun preparedNativeSourceKeepsDeclaringPaintEmptyReadingAndFailureRecovery() = control {
+        val baseLink = Span("link", "base", "base-action", fontScale = .5f)
+        val readingLink = Span("link", "read", "reading-action", fontScale = .5f)
+        fun source(language: String): List<Span> {
+            val font = InlineFontSnapshot(fontScale = .75f, bold = true, italic = true, language = language)
+            val baseOwner = RubyOwner(font, direction = "rtl", inlineStyle = InlineTextStyle(
+                lineHeight = InlineLineHeight.FontRelative(1.2f, font),
+                baselineShift = InlineComputedLength(.25f, FontScaleBasis.CssPx)))
+            return listOf(Span("text", "", ruby = Ruby(listOf(RubySegment(emptyList(),
+                listOf(RubyBase(baseOwner, emptyList(), listOf(baseLink))), listOf(
+                    RubyAnnotation(0, 1, 0, owner(.5f), emptyList(), emptyList(), emptyList(), emptyList(), false),
+                    RubyAnnotation(0, 1, 1, owner(.5f), emptyList(), listOf(readingLink), emptyList(), emptyList(), false)))))))
+        }
+        val current = mutableStateOf(source("ja"))
+        var prepared: PreparedNativeFloatText? = null
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme(typography = Typography(bodyLarge = TextStyle(fontSize = 32.sp))) {
+                CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                    val spans = current.value
+                    val style = TextStyle(fontSize = 20.sp, lineHeight = 24.sp)
+                    val annotated = styledTextAnnotation(spans, null, style) { }
+                    val value = prepareNativeFloatText(spans, annotated, egyptianTextRuns(spans), style,
+                        MaterialTheme.colorScheme.primary, emptyList(), AppSettings(), "", {},
+                        nativeLineHeight = NativeLineHeightPolicy.Pixels(24f))
+                    SideEffect { prepared = value }
+                }
+            }
+        } }
+        for (language in listOf("ja", "en--US", "ja")) {
+            compose.runOnIdle { current.value = source(language) }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val value = checkNotNull(prepared)
+                assertEquals("baseread", value.text.toString())
+                if (language == "en--US") {
+                    assertNull(value.native)
+                    assertTrue(value.stateDescription.orEmpty().contains("language"))
+                } else {
+                    assertNull(value.stateDescription)
+                    val native = checkNotNull(value.native)
+                    val spanned = native.source(400)
+                    assertEquals("baseread", spanned.toString())
+                    val source = spanned.getSpans(0, spanned.length, NativeRubyPreparedSource::class.java).single()
+                    assertEquals("baseread", source.source.toString())
+                    val root = source.projection.ranges.single { it.role == RubyTextRole.Owner }
+                    val base = source.projection.ranges.single { it.role == RubyTextRole.Base }
+                    val empty = source.projection.ranges.single { it.annotation?.spans?.isEmpty() == true }
+                    assertEquals(20f, source.groups.getValue(root.path).paint.textSize, .001f)
+                    val format = source.groups.getValue(base.path)
+                    assertEquals(15f, format.paint.textSize, .001f)
+                    assertTrue(format.paint.typeface.isBold)
+                    assertTrue(format.paint.typeface.isItalic)
+                    assertEquals(0, format.paint.baselineShift)
+                    assertEquals(0f, format.baselineShift, 0f)
+                    assertEquals(-.25f, checkNotNull(format.localBaselineShift), .001f)
+                    assertNull(source.groups.getValue(root.path).localBaselineShift)
+                    assertNull(source.groups.getValue(empty.path).localBaselineShift)
+                    assertEquals(NativeLineHeightPolicy.Pixels(18f), format.lineHeight)
+                    assertEquals("rtl", format.sourceDirection)
+                    assertEquals(empty.start, empty.end)
+                    assertEquals(10f, source.groups.getValue(empty.path).paint.textSize, .001f)
+                    val leaf = source.projection.ranges.single { it.span === baseLink }
+                    val childPaint = TextPaint(native.paint)
+                    spanned.getSpans(leaf.start, leaf.end, MetricAffectingSpan::class.java)
+                        .filter { spanned.getSpanStart(it) <= leaf.start && spanned.getSpanEnd(it) >= leaf.end }
+                        .forEach { it.updateMeasureState(childPaint) }
+                    assertEquals(10f, childPaint.textSize, .001f)
+                    assertFalse(childPaint.typeface.isBold)
+                    assertFalse(childPaint.typeface.isItalic)
+                    assertEquals(0, childPaint.baselineShift)
+                    val actions = source.projection.ranges.filter { it.span?.kind == "link" }
+                    assertEquals(listOf("base-action", "reading-action"), actions.map { it.span!!.target })
+                    assertEquals(listOf(0 to 4, 4 to 8), actions.map { it.start to it.end })
+                    assertSame(baseLink, actions.first().span)
+                    assertSame(readingLink, actions.last().span)
+                }
+            }
+        }
+    }
+
+    @Test fun noWrapSourceStartsKeepRubyGapControlsOutOfHardParagraphs() = control {
+        val gap = Span("text", "\r\n\t")
+        val typed = listOf(Span("text", "p"), Span("line_break", ""), Span("text", "", ruby = Ruby(listOf(
+            RubySegment(emptyList(), listOf(
+                RubyBase(owner(), emptyList(), listOf(Span("text", "A"))),
+                RubyBase(owner(), listOf(gap), listOf(Span("text", "B"))),
+            ), emptyList()),
+        ))))
+        val ordinary = listOf(Span("text", "p"), Span("line_break", ""), Span("text", "B"))
+        val source = mutableStateOf(typed)
+        var prepared: PreparedNativeFloatText? = null
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                    val spans = source.value
+                    val style = TextStyle(fontSize = 20.sp, lineHeight = 24.sp)
+                    val annotation = styledTextAnnotation(spans, null, style) { }
+                    val value = prepareNativeFloatText(spans, annotation, egyptianTextRuns(spans), style,
+                        MaterialTheme.colorScheme.primary, emptyList(), AppSettings(), "", {},
+                        nativeLineHeight = NativeLineHeightPolicy.Pixels(24f), ownerWrap = TextWrap.NoWrap)
+                    SideEffect { prepared = value }
+                }
+            }
+        } }
+        for (hasRuby in listOf(true, false, true)) {
+            compose.runOnIdle { source.value = if (hasRuby) typed else ordinary }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val value = checkNotNull(prepared)
+                val expected = if (hasRuby) "p\nA\r\n\tB" else "p\nB"
+                assertNull(value.stateDescription)
+                assertEquals(expected, value.text.toString())
+                val native = checkNotNull(value.native).source(400)
+                assertEquals(expected, native.toString())
+                val wrap = native.getSpans(0, native.length, NativeAuthoredTextWrap::class.java).single()
+                assertEquals(TextWrap.NoWrap, wrap.wrap)
+                assertTrue(wrap.inheritedOwner)
+                assertEquals(listOf(0, 2), wrap.sourceLineStarts)
+                val markers = native.getSpans(0, native.length, NativeRubyPreparedSource::class.java)
+                if (hasRuby) {
+                    val marker = markers.single()
+                    assertEquals(expected, marker.projection.text)
+                    assertEquals(expected, marker.source.toString())
+                    val originalGap = marker.projection.ranges.single { it.span === gap }
+                    assertEquals(RubyTextRole.BaseGap, originalGap.role)
+                    assertEquals(3 to 6, originalGap.start to originalGap.end)
+                    assertEquals("\r\n\t", expected.substring(originalGap.start, originalGap.end))
+                    assertFalse(checkNotNull(wrap.sourceLineStarts).contains(5))
+                } else assertTrue(markers.isEmpty())
+            }
+        }
+    }
+
+
+    @Test fun composedRubyKeepsOriginalActionsSelectionAndNativeInkAcrossRemeasure() = control {
+        // Synthetic typed source, not a producer fixture. Raster evidence below is the actual
+        // owned View drawn onto our Canvas; it is not a compositor/window capture.
+        val before = Span("link", "\u524d\ud83d\ude80", "ordinary-before", targetFragment = "start", foreground = "#008000")
+        val day = Span("link", "\u65e5", "base-day", targetFragment = "one", foreground = "#0000ff")
+        val origin = Span("link", "\u672c", "base-origin", foreground = "#0000ff")
+        val dayReading = Span("link", "\u306b", "reading-day", fontScale = .5f, foreground = "#ff0000")
+        val originReading = Span("link", "\u307b\u3093", "reading-origin", targetFragment = "two", fontScale = .5f, foreground = "#ff0000")
+        val after = Span("link", "\u5f8c", "ordinary-after", foreground = "#008000")
+        val typed = Span("text", "", direction = "ltr", ruby = Ruby(listOf(RubySegment(emptyList(),
+            listOf(RubyBase(owner(), emptyList(), listOf(day)), RubyBase(owner(), emptyList(), listOf(origin))),
+            listOf(RubyAnnotation(0, 1, 0, owner(.5f), emptyList(), listOf(dayReading), emptyList(), emptyList(), false),
+                RubyAnnotation(1, 1, 0, owner(.5f), emptyList(), listOf(originReading), emptyList(), emptyList(), false))))))
+        val spans = listOf(before, Span("text", " "), typed, Span("text", " "), after)
+        val expected = "\u524d\ud83d\ude80 \u65e5\u672c\u306b\u307b\u3093 \u5f8c"
+        data class Action(val span: Span, val start: Int, val end: Int, val target: EntryLink, val color: Int)
+        // These offsets are literal UTF-16 source positions: the supplementary rocket occupies 1..3.
+        val actions = listOf(
+            Action(before, 0, 3, EntryLink("ordinary-before", "start"), 2),
+            Action(day, 4, 5, EntryLink("base-day", "one"), 0),
+            Action(origin, 5, 6, EntryLink("base-origin"), 0),
+            Action(dayReading, 6, 7, EntryLink("reading-day"), 1),
+            Action(originReading, 7, 9, EntryLink("reading-origin", "two"), 1),
+            Action(after, 10, 11, EntryLink("ordinary-after"), 2),
+        )
+        data class Phase(val width: Int, val rtl: Boolean)
+        val phases = listOf(Phase(240, false), Phase(72, false), Phase(72, true), Phase(240, true), Phase(240, false))
+        val phase = mutableStateOf(phases.first())
+        val rasterFocus = androidx.compose.ui.focus.FocusRequester()
+        val callbacks = mutableListOf<EntryLink>()
+        val onLink: (EntryLink) -> Unit = { callbacks += it }
+        var prepared: PreparedNativeFloatText? = null
+        var committed: Phase? = null
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme {
+                val current = phase.value
+                CompositionLocalProvider(LocalDensity provides Density(1f), LocalLayoutDirection provides
+                    if (current.rtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
+                    val style = TextStyle(fontSize = 20.sp, lineHeight = 24.sp,
+                        textDirection = if (current.rtl) TextDirection.Rtl else TextDirection.Ltr)
+                    val annotated = styledTextAnnotation(spans, null, style, onLink)
+                    val value = prepareNativeFloatText(spans, annotated, egyptianTextRuns(spans), style,
+                        MaterialTheme.colorScheme.primary, emptyList(), AppSettings(), "", onLink,
+                        nativeLineHeight = NativeLineHeightPolicy.Pixels(24f))
+                    SideEffect { prepared = value; committed = current }
+                    Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding().padding(16.dp)
+                        .testTag("ruby-native-raster").focusRequester(rasterFocus).focusable()) {
+                        NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(value, 0f)),
+                            Modifier.width(current.width.dp), MaterialTheme.colorScheme.primary) { _, _ ->
+                            error("The Ruby text fixture has no delegated child")
+                        }
+                    }
+                }
+            }
+        } }
+        fun collect(view: android.view.View): List<NativeFloatTextView> = buildList {
+            if (view is NativeFloatTextView) add(view)
+            if (view is android.view.ViewGroup) for (index in 0 until view.childCount) addAll(collect(view.getChildAt(index)))
+        }
+        data class Raster(val width: Int, val height: Int, val pixels: IntArray)
+        fun draw(view: NativeFloatTextView): Raster {
+            val bitmap = android.graphics.Bitmap.createBitmap(view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888)
+            var primary: Throwable? = null
+            try {
+                bitmap.eraseColor(android.graphics.Color.WHITE)
+                view.draw(android.graphics.Canvas(bitmap))
+                return Raster(bitmap.width, bitmap.height, IntArray(bitmap.width * bitmap.height).also {
+                    bitmap.getPixels(it, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                })
+            } catch (failure: Throwable) { primary = failure; throw failure }
+            finally {
+                try { bitmap.recycle() } catch (cleanup: Throwable) {
+                    val failure = primary
+                    if (failure == null) throw cleanup
+                    if (failure !== cleanup) failure.addSuppressed(cleanup)
+                }
+            }
+        }
+        var retainedView: NativeFloatTextView? = null
+        var originalIds: List<Int>? = null
+        var initialRaster: Raster? = null
+        var initialRects: List<List<android.graphics.RectF>>? = null
+        var wideHeight = 0
+        for ((phaseIndex, current) in phases.withIndex()) try {
+            compose.runOnIdle { phase.value = current }
+            // The post-write barrier must complete the actual Compose/AndroidView remeasure.
+            compose.waitForIdle()
+            var rasterFocusRequested = false
+            compose.runOnIdle {
+                val view = collect(compose.activityRule.activity().window.decorView).single()
+                // End only this fixture's native host ring via its owned nonpainting destination.
+                // No clearFocus/global touch-mode change or virtual-node focus action is used.
+                if (view.hasFocus()) {
+                    assertTrue(rasterFocus.requestFocus(androidx.compose.ui.focus.FocusDirection.Enter))
+                    rasterFocusRequested = true
+                }
+                assertFalse(view.hasFocus())
+            }
+            if (rasterFocusRequested) compose.onNodeWithTag("ruby-native-raster").assertIsFocused()
+            compose.runOnIdle {
+                assertEquals(current, committed)
+                val value = checkNotNull(prepared)
+                assertNull(value.stateDescription)
+                assertEquals(expected, value.text.toString())
+                val original = checkNotNull(value.native).source(current.width)
+                val marker = original.getSpans(0, original.length, NativeRubyPreparedSource::class.java).single()
+                assertEquals(expected, marker.projection.text)
+                assertSame(typed, marker.projection.ranges.single { it.role == RubyTextRole.Owner }.span)
+                for (action in actions) {
+                    val source = marker.projection.ranges.single { it.span === action.span }
+                    assertEquals(action.start to action.end, source.start to source.end)
+                }
+                val view = collect(compose.activityRule.activity().window.decorView).single()
+                if (retainedView == null) retainedView = view else assertSame(retainedView, view)
+                assertTrue(view.isAttachedToWindow && view.isShown)
+                assertTrue(view.width > 0 && view.height > 0)
+                assertFalse(view.defaultFocusHighlightEnabled)
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                assertEquals(expected, view.logicalText.toString())
+                assertEquals(expected, geometry.text.toString())
+                assertEquals(actions.map { it.start to it.end }, geometry.nodes.map { it.start to it.end })
+                assertTrue(geometry.nodes.all { it.kind == FloatInteractionKind.LINK })
+                val ids = geometry.nodes.map { it.id }
+                if (originalIds == null) originalIds = ids else assertEquals(originalIds, ids)
+                if (phaseIndex > 0) {
+                    assertEquals(0, view.selectionStart)
+                    assertEquals(expected.length, view.selectionEnd)
+                    assertEquals(expected, view.selectedTextForCopy())
+                }
+                val provider = view.accessibilityNodeProvider
+                val hostId = android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID
+                val setSelection = android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION
+                assertTrue(provider.performAction(hostId, setSelection, null))
+                assertNull(view.selectedTextForCopy())
+                val host = checkNotNull(provider.createAccessibilityNodeInfo(hostId))
+                try { assertEquals(expected, host.text.toString()); assertEquals(actions.size, host.childCount) }
+                finally { host.recycle() }
+                val screenOrigin = IntArray(2).also(view::getLocationOnScreen)
+                // This fixture supplies no scrollport, transforms, or View padding. Still include
+                // the observed padding and screen origin in the independent AX projection.
+                var ancestor: android.view.View? = view
+                while (ancestor != null) {
+                    assertTrue(ancestor.matrix.isIdentity)
+                    assertEquals(0, ancestor.scrollX); assertEquals(0, ancestor.scrollY)
+                    ancestor = ancestor.parent as? android.view.View
+                }
+                val callbackStart = callbacks.size
+                for ((index, action) in actions.withIndex()) {
+                    val node = geometry.nodes[index]
+                    assertEquals(expected.substring(action.start, action.end), node.label.toString())
+                    assertTrue(node.bounds.isNotEmpty() && node.bounds.all { !it.isEmpty })
+                    assertEquals(geometry.rectsForRange(action.start, action.end), node.bounds)
+                    assertNull(node.clipBounds); assertNull(node.preciseClip)
+                    val bounds = android.graphics.RectF().also { union -> node.bounds.forEach(union::union) }
+                    val parentBounds = android.graphics.Rect().also(bounds::roundOut).apply {
+                        offset(view.paddingLeft, view.paddingTop)
+                    }
+                    val screenBounds = android.graphics.RectF(bounds).apply {
+                        offset((screenOrigin[0] + view.paddingLeft).toFloat(), (screenOrigin[1] + view.paddingTop).toFloat())
+                    }.let { rect -> android.graphics.Rect().also(rect::roundOut) }
+                    val info = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+                    try {
+                        assertEquals(expected.substring(action.start, action.end), info.text.toString())
+                        assertTrue(info.isClickable && info.isVisibleToUser)
+                        assertFalse(info.isFocused); assertFalse(info.isAccessibilityFocused)
+                        assertEquals(parentBounds, android.graphics.Rect().also(info::getBoundsInParent))
+                        assertEquals(screenBounds, android.graphics.Rect().also(info::getBoundsInScreen))
+                    } finally { info.recycle() }
+                    assertTrue(provider.performAction(node.id, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                    assertEquals(action.target, callbacks.last())
+                    assertEquals(callbackStart + index + 1, callbacks.size)
+                    val characters = geometry.characterRects(action.start, action.end - action.start)
+                    assertEquals(action.end - action.start, characters.size)
+                    assertTrue(characters.any { it != null && !it.isEmpty })
+                }
+                assertEquals(actions.map { it.target }, callbacks.drop(callbackStart))
+                for ((baseOffset, readingOffset) in listOf(4 to 6, 5 to 7)) {
+                    val baseLine = geometry.visualLineRanges(baseOffset)
+                    val readingLine = geometry.visualLineRanges(readingOffset)
+                    assertTrue(baseLine.any { baseOffset >= it.first && baseOffset < it.second })
+                    assertTrue(readingLine.any { readingOffset >= it.first && readingOffset < it.second })
+                    // One indivisible base grapheme and its reading share real visual fragments.
+                    assertEquals(baseLine, readingLine)
+                }
+                for (offset in listOf(0, 1, 3, 4, 5, 6, 7, 9, 10, 11)) {
+                    val caret = geometry.caretRect(offset)
+                    assertTrue(listOf(caret.left, caret.top, caret.right, caret.bottom).all { it.isFinite() })
+                    assertTrue(caret.height() > 0f)
+                }
+                assertFalse("Native host focus must not paint a ring in the source-ink witness", view.hasFocus())
+                val raster = draw(view)
+                fun ink(index: Int): List<Pair<Int, Int>> {
+                    val node = geometry.nodes[index]
+                    val color = actions[index].color
+                    val points = mutableListOf<Pair<Int, Int>>()
+                    for (y in 0 until raster.height) for (x in 0 until raster.width) {
+                        if (node.bounds.none { it.contains(x + .5f - view.paddingLeft, y + .5f - view.paddingTop) }) continue
+                        val pixel = raster.pixels[y * raster.width + x]
+                        val r = android.graphics.Color.red(pixel); val g = android.graphics.Color.green(pixel)
+                        val b = android.graphics.Color.blue(pixel)
+                        // Exact channel relation for any positive source-color contribution on white.
+                        val matches = android.graphics.Color.alpha(pixel) == 255 && when (color) {
+                            0 -> b > r && r == g
+                            1 -> r > g && g == b
+                            else -> g > r && r == b
+                        }
+                        if (matches) points += x to y
+                    }
+                    assertTrue("Missing actual source-colored glyph ink for ${actions[index].target}", points.isNotEmpty())
+                    val point = points[points.size / 2]
+                    assertEquals(node.id, checkNotNull(geometry.interactionNodeAt(
+                        point.first + .5f - view.paddingLeft, point.second + .5f - view.paddingTop)).id)
+                    return points
+                }
+                val painted = actions.indices.map(::ink)
+                // Source reading paint must be above its associated base, independent of font pixels/counts.
+                assertTrue(painted[3].map { it.second }.average() < painted[1].map { it.second }.average())
+                assertTrue(painted[4].map { it.second }.average() < painted[2].map { it.second }.average())
+                if (phaseIndex == 0) {
+                    initialRaster = raster
+                    initialRects = geometry.nodes.map { node -> node.bounds.map { android.graphics.RectF(it) } }
+                    val sourceBounds = android.graphics.RectF().also { union ->
+                        geometry.nodes.flatMap { it.bounds }.forEach(union::union)
+                    }
+                    assertTrue("The actual wide source must exceed the chosen narrow width", sourceBounds.width() > 72f)
+                    wideHeight = view.height
+                } else if (current.width == 72) {
+                    assertTrue(view.width < checkNotNull(initialRaster).width)
+                    assertTrue(view.height > wideHeight)
+                } else if (phaseIndex == phases.lastIndex) {
+                    val first = checkNotNull(initialRaster)
+                    assertEquals(first.width, raster.width); assertEquals(first.height, raster.height)
+                    assertArrayEquals(first.pixels, raster.pixels)
+                    assertEquals(initialRects, geometry.nodes.map { it.bounds })
+                }
+                fun select(start: Int, end: Int, text: String) {
+                    val arguments = android.os.Bundle().apply {
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, start)
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, end)
+                    }
+                    assertTrue(provider.performAction(hostId, setSelection, arguments))
+                    assertEquals(start, view.selectionStart); assertEquals(end, view.selectionEnd)
+                    assertEquals(text, view.selectedTextForCopy())
+                }
+                select(1, 3, "\ud83d\ude80")
+                select(4, 9, "\u65e5\u672c\u306b\u307b\u3093")
+                select(0, 11, expected)
+            }
+        } catch (failure: Throwable) {
+            val phaseContext = AssertionError("Ruby Compose/native phase=$phaseIndex width=${current.width} rtl=${current.rtl}")
+            if (failure !== phaseContext) failure.addSuppressed(phaseContext)
+            throw failure
+        }
+    }
+
+    @Test fun typedWrapOnlyGapRetainsRawSourceAndRejectsOtherWhitespaceOwners() = control {
+        // Synthetic producer-shaped gap: raw CSS whitespace under one unchanged wrap policy.
+        // The geometry factory is the actual native consumer, not a mock of its admission rule.
+        val first = Span("text", "A")
+        val last = Span("text", "B")
+        val normalGaps = listOf(Span("text", "\r\n", inlineStyle = InlineTextStyle(wrap = TextWrap.Normal)),
+            Span("text", "\t", inlineStyle = InlineTextStyle(wrap = TextWrap.Normal)))
+        val breakWordGaps = normalGaps.map { it.copy(inlineStyle = InlineTextStyle(wrap = TextWrap.BreakWord)) }
+        val distinctGaps = listOf(normalGaps.first(), normalGaps.last().copy(inlineStyle = InlineTextStyle(
+            wrap = TextWrap.Normal, lineHeight = InlineLineHeight.Computed(InlineComputedLength(30f, FontScaleBasis.CssPx)))))
+        val sharedSpace = Span("text", " ", inlineStyle = InlineTextStyle(wrap = TextWrap.Normal))
+        fun typed(gaps: List<Span>, tail: List<Span> = listOf(last)): List<Span> = listOf(
+            Span("text", "", ruby = Ruby(listOf(RubySegment(emptyList(), listOf(
+                RubyBase(owner(), emptyList(), listOf(first)), RubyBase(owner(), gaps, tail),
+            ), emptyList())))))
+        val original = typed(normalGaps)
+        data class Phase(val name: String, val spans: List<Span>, val expected: String,
+            val gaps: List<Span>? = null, val refusedByBridge: Boolean = false, val refusedByNative: Boolean = false)
+        val phases = listOf(
+            Phase("uniform-normal", original, "A\r\n\tB", normalGaps),
+            Phase("uniform-break-word", typed(breakWordGaps), "A\r\n\tB", breakWordGaps),
+            Phase("legacy", listOf(first) + normalGaps + last, "A\r\n\tB", refusedByBridge = true),
+            Phase("same-object-gap-and-body", typed(listOf(sharedSpace), listOf(sharedSpace, last)), "A  B",
+                refusedByBridge = true),
+            Phase("later-gap-metric", typed(distinctGaps), "A\r\n\tB", distinctGaps, refusedByNative = true),
+            Phase("uniform-recovery", original, "A\r\n\tB", normalGaps),
+        )
+        val current = mutableStateOf(original, referentialEqualityPolicy())
+        var prepared: PreparedNativeFloatText? = null
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                    val spans = current.value
+                    val style = TextStyle(fontSize = 20.sp, lineHeight = 24.sp)
+                    val annotation = styledTextAnnotation(spans, null, style) { }
+                    val value = prepareNativeFloatText(spans, annotation, egyptianTextRuns(spans), style,
+                        MaterialTheme.colorScheme.primary, emptyList(), AppSettings(), "", {},
+                        nativeLineHeight = NativeLineHeightPolicy.Pixels(24f))
+                    SideEffect { prepared = value }
+                }
+            }
+        } }
+        for (phase in phases) {
+            compose.runOnIdle { current.value = phase.spans }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val value = checkNotNull(prepared)
+                assertEquals(phase.name, phase.expected, value.text.toString())
+                if (phase.refusedByBridge) {
+                    assertNull(phase.name, value.native)
+                    assertEquals(phase.name, "Authored inline whitespace effects require a retained collapsed source owner",
+                        value.stateDescription)
+                    if (phase.name == "same-object-gap-and-body") {
+                        val occurrences = rubyGraphicalProjection(phase.spans).ranges.filter { it.span === sharedSpace }
+                        assertEquals(listOf(RubyTextRole.BaseGap, RubyTextRole.BaseText), occurrences.map { it.role })
+                        assertEquals(listOf(1 to 2, 2 to 3), occurrences.map { it.start to it.end })
+                    }
+                } else {
+                    assertNull(phase.name, value.stateDescription)
+                    val source = checkNotNull(value.native).source(400)
+                    assertEquals(phase.name, phase.expected, source.toString())
+                    val marker = source.getSpans(0, source.length, NativeRubyPreparedSource::class.java).single()
+                    assertEquals(phase.expected, marker.source.toString())
+                    assertEquals(phase.expected, marker.projection.text)
+                    val ranges = marker.projection.ranges.filter { it.role == RubyTextRole.BaseGap }
+                    assertEquals(listOf(1 to 3, 3 to 4), ranges.map { it.start to it.end })
+                    val gaps = checkNotNull(phase.gaps)
+                    ranges.forEachIndexed { index, range ->
+                        assertSame(gaps[index], range.span)
+                        assertEquals(gaps[index].text, source.subSequence(range.start, range.end).toString())
+                        val wrap = source.getSpans(range.start, range.end, NativeAuthoredTextWrap::class.java).single()
+                        assertEquals(gaps[index].inlineStyle!!.wrap, wrap.wrap)
+                        assertEquals(range.start, source.getSpanStart(wrap))
+                        assertEquals(range.end, source.getSpanEnd(wrap))
+                    }
+                    val factory = checkNotNull(value.geometry)
+                    if (phase.refusedByNative) {
+                        val failure = assertThrows(UnsupportedFloatLayout::class.java) { factory(400, emptyList(), false) }
+                        assertEquals("Collapsed ruby gap has distinct source inline owners", failure.message)
+                        assertEquals(phase.expected, source.toString())
+                        assertSame(distinctGaps.last(), ranges.last().span)
+                    } else {
+                        val geometry = factory(400, emptyList(), false)
+                        assertEquals(phase.expected, geometry.text.toString())
+                        // The retained LF is part of the collapsed gap, not a source hard line.
+                        assertEquals('\n', geometry.text[2])
+                        assertFalse(geometry.isHardLineBreak(2))
+                        val line = geometry.visualLineRanges(0)
+                        assertEquals(phase.name, line, geometry.visualLineRanges(4))
+                        assertTrue(line.any { 0 >= it.first && 0 < it.second })
+                        assertTrue(line.any { 4 >= it.first && 4 < it.second })
+                        assertTrue(geometry.rectsForRange(1, 4).any { it.width() > 0f && it.height() > 0f })
+                    }
+                }
+            }
+        }
+    }
+
+    @Test fun scriptAndSmallSizingUseOriginalBasisOnceForDeclaringOwnerAndChild() = control {
+        // Synthetic source policy: numeric scale stays .5; unnormalized legacy traits
+        // supply one .8 factor, even when small and superscript are both true.
+        data class Reading(val annotation: RubyAnnotation, val leaf: Span, val usesBody: Boolean,
+            val normalized: Boolean)
+        fun reading(text: String, basis: FontScaleBasis = FontScaleBasis.Context, small: Boolean = false,
+            superscript: Boolean = false, subscript: Boolean = false, normalized: Boolean = false): Reading {
+            val font = InlineFontSnapshot(fontScale = .5f, fontScaleBasis = basis, fontNormalized = normalized,
+                small = small, superscript = superscript, subscript = subscript)
+            val leaf = Span("text", text, fontScale = .5f, fontScaleBasis = basis,
+                small = small, superscript = superscript, subscript = subscript,
+                inlineStyle = if (normalized) InlineTextStyle(fontNormalized = true) else null)
+            val annotation = RubyAnnotation(0, 1, 0, RubyOwner(font, direction = "ltr"), emptyList(),
+                listOf(leaf), emptyList(), emptyList(), false)
+            return Reading(annotation, leaf, basis == FontScaleBasis.NormalBody, normalized)
+        }
+        val readings = listOf(
+            reading("sup", superscript = true),
+            reading("sub", subscript = true),
+            reading("small-sup", small = true, superscript = true),
+            reading("body", basis = FontScaleBasis.NormalBody, superscript = true),
+            reading("normalized", basis = FontScaleBasis.NormalBody, superscript = true, normalized = true),
+        )
+        val source = readings.map { item ->
+            val base = RubyBase(owner(), emptyList(), listOf(Span("text", "B")))
+            val segment = RubySegment(emptyList(), listOf(base), listOf(item.annotation))
+            Span("text", "", ruby = Ruby(listOf(segment)))
+        }
+        val normalBody = mutableStateOf(20)
+        var contexts: RubyStyledTextContexts? = null
+        var prepared: PreparedNativeFloatText? = null
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme(typography = Typography(bodyLarge = TextStyle(fontSize = normalBody.value.sp))) {
+                CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                    val style = TextStyle(fontSize = 20.sp, lineHeight = 24.sp)
+                    val resolved = rubyStyledTextContexts(source, null, style)
+                    val annotation = styledTextAnnotation(source, null, style) { }
+                    val value = prepareNativeFloatText(source, annotation, egyptianTextRuns(source), style,
+                        MaterialTheme.colorScheme.primary, emptyList(), AppSettings(), "", {},
+                        nativeLineHeight = NativeLineHeightPolicy.Pixels(24f))
+                    SideEffect { contexts = resolved; prepared = value }
+                }
+            }
+        } }
+        for (bodyPixels in listOf(20, 40, 20)) {
+            compose.runOnIdle { normalBody.value = bodyPixels }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val value = checkNotNull(prepared)
+                assertNull(value.stateDescription)
+                assertEquals("BsupBsubBsmall-supBbodyBnormalized", value.text.toString())
+                val native = checkNotNull(value.native)
+                val spanned = native.source(400)
+                assertEquals(value.text.toString(), spanned.toString())
+                val marker = spanned.getSpans(0, spanned.length, NativeRubyPreparedSource::class.java).single()
+                val resolved = checkNotNull(contexts)
+                readings.forEach { item ->
+                    val ownerRange = marker.projection.ranges.single { it.annotation === item.annotation }
+                    val leafRange = marker.projection.ranges.single { it.span === item.leaf }
+                    assertSame(item.annotation, ownerRange.annotation)
+                    assertSame(item.annotation.owner, checkNotNull(ownerRange.annotation).owner)
+                    assertSame(item.leaf, leafRange.span)
+                    assertEquals(item.leaf.text, spanned.subSequence(leafRange.start, leafRange.end).toString())
+                    val group = resolved.groups.getValue(ownerRange.path)
+                    val leaf = resolved.leaves.single { it.range.span === item.leaf }
+                    assertEquals(20.sp, group.fontBasisStyle.fontSize)
+                    assertEquals(20.sp, leaf.fontBasisStyle.fontSize)
+                    assertEquals(.5f, checkNotNull(item.annotation.owner.font.fontScale), 0f)
+                    assertEquals(.5f, checkNotNull(item.leaf.fontScale), 0f)
+                    val expected = when {
+                        item.normalized -> if (bodyPixels == 20) 10f else 20f
+                        item.usesBody -> if (bodyPixels == 20) 8f else 16f
+                        else -> 8f
+                    }
+                    val label = "${item.leaf.text}: body=$bodyPixels"
+                    assertEquals(label, expected, group.style.fontSize.value, .001f)
+                    assertTrue(label, group.style.fontSize.isSp)
+                    assertEquals(label, expected, marker.groups.getValue(ownerRange.path).paint.textSize, .001f)
+                    val childPaint = TextPaint(native.paint)
+                    val covering = spanned.getSpans(leafRange.start, leafRange.end, MetricAffectingSpan::class.java)
+                        .filter { spanned.getSpanStart(it) <= leafRange.start && spanned.getSpanEnd(it) >= leafRange.end }
+                    assertTrue(label, covering.isNotEmpty())
+                    covering.forEach { it.updateMeasureState(childPaint) }
+                    assertEquals(label, expected, childPaint.textSize, .001f)
+                }
+                marker.projection.ranges.filter { it.role == RubyTextRole.Base }.forEach { base ->
+                    assertEquals(20f, marker.groups.getValue(base.path).paint.textSize, .001f)
+                }
+            }
+        }
+    }
+
+    @Test fun emptyRubyKeepsTheActualCellPointStrutAboveItsIndependentBaseHeight() = control {
+        // Synthetic cell policy through the real Compose lowerer. There are no source
+        // characters, annotations, padding or glyphs that could manufacture this height.
+        val font = InlineFontSnapshot(fontScale = 20f, fontScaleBasis = FontScaleBasis.CssPx,
+            language = "ja", fontFeatures = FontFeaturePolicy.SevenOn,
+            fontFamily = ContainerFontFamily.SansSerif)
+        val baseOwner = RubyOwner(font, direction = "ltr", inlineStyle = InlineTextStyle(
+            lineHeight = InlineLineHeight.Computed(InlineComputedLength(48f, FontScaleBasis.CssPx))))
+        val base = RubyBase(baseOwner, emptyList(), emptyList())
+        val typed = Span("text", "", inlineStyle = InlineTextStyle(lineHeight =
+            InlineLineHeight.Computed(InlineComputedLength(0f, FontScaleBasis.CssPx))),
+            ruby = Ruby(listOf(RubySegment(emptyList(), listOf(base), emptyList()))))
+        val source = listOf(typed)
+        val cellHeight = mutableStateOf(80f)
+        var prepared: PreparedNativeFloatText? = null
+        var resolvedCell: ContainerTextContext? = null
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            val style = TextStyle(fontSize = 20.sp, fontFamily = FontFamily.SansSerif, letterSpacing = 0.sp)
+            MaterialTheme(typography = Typography(bodyLarge = style)) {
+                CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                    val cell = Cell(source, false, 1, 1, style = CellStyle(lineHeight = CellLineHeight(
+                        CellLineHeightValue.Length(CellFixedLineHeight(cellHeight.value, FontScaleBasis.CssPx)),
+                        CellTextStrut(20f, FontScaleBasis.CssPx, font))))
+                    val context = checkNotNull(nativeCellTextContext(cell, null, style, style.fontSize,
+                        LocalDensity.current, 1f, null))
+                    CompositionLocalProvider(LocalNativeContainerTextContext provides context) {
+                        val annotation = styledTextAnnotation(source, null, style) { }
+                        val value = prepareNativeFloatText(source, annotation, egyptianTextRuns(source), style,
+                            MaterialTheme.colorScheme.primary, emptyList(), AppSettings(), "", {},
+                            nativeLineHeight = checkNotNull(context.cellText).lineHeight)
+                        SideEffect { prepared = value; resolvedCell = context }
+                    }
+                }
+            }
+        } }
+        for (height in listOf(80f, 32f, 80f)) {
+            compose.runOnIdle { cellHeight.value = height }
+            compose.waitForIdle()
+            try {
+                compose.runOnIdle {
+                    val state = checkNotNull(checkNotNull(resolvedCell).cellText)
+                    assertEquals(NativeLineHeightPolicy.Pixels(height), state.lineHeight)
+                    assertSame(font, checkNotNull(state.ownerFont).snapshot)
+                    val value = checkNotNull(prepared)
+                    assertNull(value.stateDescription)
+                    assertFalse(value.emptyInlineOwner)
+                    assertEquals("", value.text.toString())
+                    val native = checkNotNull(value.native)
+                    val spanned = native.source(240)
+                    assertEquals(0, spanned.length)
+                    val strut = spanned.getSpans(0, 0, NativeRunLineMetrics::class.java).single { it.strut }
+                    assertEquals(0, spanned.getSpanStart(strut))
+                    assertEquals(0, spanned.getSpanEnd(strut))
+                    assertEquals(android.text.Spanned.SPAN_MARK_MARK, spanned.getSpanFlags(strut))
+                    assertTrue(strut.includePrimaryInNormal)
+                    assertEquals(NativeLineHeightPolicy.Pixels(height), strut.policy)
+                    val marker = spanned.getSpans(0, 0, NativeRubyPreparedSource::class.java).single()
+                    assertEquals("", marker.source.toString())
+                    assertEquals("", marker.projection.text)
+                    assertSame(typed, marker.projection.ranges.single { it.role == RubyTextRole.Owner }.span)
+                    // The Ruby owner must not inherit cell height: otherwise its own
+                    // column could conceal loss of the independent paragraph point strut.
+                    val outer = marker.projection.ranges.single { it.role == RubyTextRole.Owner }
+                    assertEquals(NativeLineHeightPolicy.Pixels(0f), marker.groups.getValue(outer.path).lineHeight)
+                    val range = marker.projection.ranges.single { it.role == RubyTextRole.Base }
+                    assertSame(base, range.base)
+                    assertSame(baseOwner, checkNotNull(range.base).owner)
+                    assertEquals(0 to 0, range.start to range.end)
+                    val format = marker.groups.getValue(range.path)
+                    assertEquals(NativeLineHeightPolicy.Pixels(48f), format.lineHeight)
+                    assertEquals(20f, format.paint.textSize, 0f)
+                    // Equal real primary metrics make the independent 80/48 envelopes
+                    // concentric; this assertion does not infer the owner from a child.
+                    assertEquals(strut.primary, NativePrimaryFontMetrics.from(format.paint))
+                    val geometry = checkNotNull(value.geometry)(240, emptyList(), false)
+                    val expected = if (height == 80f) 80f else 48f
+                    assertEquals("", geometry.text.toString())
+                    assertEquals(expected, geometry.textBottom, .001f)
+                    assertEquals(expected, geometry.extents.usedHeight, .001f)
+                    assertNotNull(geometry.textBaselines?.first)
+                    assertTrue(geometry.rectsForRange(0, 0).isEmpty())
+                    assertTrue(geometry.nodes.isEmpty())
+                    assertEquals("", source.single().text)
+                    assertEquals(0, source.nativeLogicalLength())
+                }
+            } catch (failure: Throwable) {
+                val phase = AssertionError("Empty Ruby cell point-strut: root=$height base=48 width=240")
+                if (failure !== phase) failure.addSuppressed(phase)
+                throw failure
+            }
+        }
+    }
+}

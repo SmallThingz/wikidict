@@ -93,6 +93,7 @@ internal fun AnonymousFlowLayout(
                     val coordinates = rememberNativeTableCoordinateBinding()
                     AndroidView(modifier = coordinates?.modifier ?: Modifier,
                         factory = { NativeFloatTextView(it, scrollClip) }, update = { view ->
+                        view.updateScrollClip(scrollClip)
                         coordinates?.bind(view)
                         view.bind({ actualWidth -> check(actualWidth == physical.width); physical },
                             linkColor.copy(alpha = .25f).toArgb(), linkColor.toArgb())

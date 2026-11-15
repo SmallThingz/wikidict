@@ -55,6 +55,14 @@ internal fun Modifier.preformattedWidthIntrinsics(): Modifier = then(object : La
 internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Float = 0f,
     breakWordMinimum: Boolean = false, textDirection: TextDirectionHeuristic? = null): NativeWidthRange {
     require(inset.isFinite() && inset >= 0f)
+    val rubyDirection = textDirection ?: android.text.TextDirectionHeuristics.FIRSTSTRONG_LTR
+    nativeRubyLayout(source, paint, rubyDirection)?.let { unbroken ->
+        val maximum = nativeTextWidthRange(unbroken.native, paint, inset, breakWordMinimum, textDirection).maximum
+        val fragmented = checkNotNull(nativeRubyLayout(source, paint, rubyDirection, NativeRubyBands(0f, allowEmergency = false)))
+        val minimum = nativeTextWidthRange(fragmented.native, paint, inset, breakWordMinimum, textDirection).minimum
+        if (minimum > maximum) throw UnsupportedFloatLayout("Ruby minimum exceeds its unbroken native width")
+        return NativeWidthRange(minimum, maximum)
+    }
     val replacements = source.getSpans(0, source.length, ReplacementSpan::class.java)
     val wrapPlan = NativeTextWrapPlan.create(source, paint)
     wrapPlan?.noWrap?.let { plan ->
@@ -70,10 +78,13 @@ internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Floa
     }
     var authoredMinimum = 0f
     val breaks = BreakIterator.getLineInstance(paint.textLocale).apply { setText(source.toString()) }
+    val rubyBreaks = source.getSpans(0, source.length, NativeRubyBreaks::class.java).singleOrNull()?.boundaries?.drop(1)?.iterator()
+    fun nextBreak(): Int = if (rubyBreaks == null) breaks.next()
+        else if (rubyBreaks.hasNext()) rubyBreaks.next() else BreakIterator.DONE
     var minimum = 0f
     var maximum = 0f
     var start = 0
-    var end = breaks.next()
+    var end = nextBreak()
     while (end != BreakIterator.DONE) {
         if (replacements.none { source.getSpanStart(it) < end && source.getSpanEnd(it) > end }) {
             var visibleEnd = end
@@ -84,7 +95,7 @@ internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Floa
                 authoredMinimum = maxOf(authoredMinimum, wordWidth)
             start = end
         }
-        end = breaks.next()
+        end = nextBreak()
     }
     if (start < source.length) minimum = maxOf(minimum, Layout.getDesiredWidth(source, start, source.length, paint))
     start = 0

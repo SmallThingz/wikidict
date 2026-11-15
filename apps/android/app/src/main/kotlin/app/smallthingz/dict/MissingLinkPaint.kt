@@ -33,13 +33,24 @@ internal val LocalFigureCaptionLinkScope = staticCompositionLocalOf<FigureCaptio
 /** A declared unavailable projection keeps body/actions without recursively retrying native paint. */
 internal val LocalOrdinaryLinkPaintNative = staticCompositionLocalOf { true }
 internal const val NativeOrdinaryLinkPaintUnavailable = "Source link interaction paint is unavailable for this action."
-internal fun ordinaryLinkPaintUnavailable(spans: List<Span>): String? {
+internal fun ordinaryLinkPaintUnavailable(spans: List<Span>, edition: String? = null): String? {
     if (spans.none { it.linkPaint != null }) return null
     val supported = nativeCaptionLinkRanges(spans).map { it.index }.toSet()
     return NativeOrdinaryLinkPaintUnavailable.takeIf {
         spans.withIndex().any { (index, span) -> span.linkPaint != null &&
-            (span.text.isEmpty() && span.trail.isEmpty() || index !in supported) }
+            if (span.image != null) !nativeImageLinkPaintSupported(span, edition)
+            else span.text.isEmpty() && span.trail.isEmpty() || index !in supported }
     }
+}
+/** Replaced images keep their own action node; they never enter text-link paint ranges.
+ * Preparation supplies the edition to require a usable source action, not a reader Details action. */
+internal fun nativeImageLinkPaintSupported(span: Span, edition: String? = null): Boolean {
+    val image = span.image ?: return false
+    return span.text.isEmpty() && span.trail.isEmpty() && image.alt.isNullOrEmpty() &&
+        image.map == null && image.staticPoster == null &&
+        (span.hasInternalAction() || externalLinkUrl(span) != null) &&
+        (edition == null || span.kind != "link" || !span.target.startsWith("File:") ||
+            inlineImageLinkUrl(span, edition) != null)
 }
 internal fun tableHasOrdinaryLinkPaint(table: Table): Boolean {
     var found = false

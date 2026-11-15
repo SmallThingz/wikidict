@@ -3,13 +3,15 @@ package app.smallthingz.dict
 import kotlin.math.ceil
 
 /** One empty ordinary box: its exact height has no text strut or separator minimum. */
-internal data class NativeRuleMetrics(val height: Float, val fill: Int?, val margins: FloatMargins) {
+internal data class NativeRuleMetrics(val height: Float, val fill: Int?, val margins: FloatMargins,
+    val clear: FigureClear? = null) {
     init {
         listOf(height, margins.top, margins.right, margins.bottom, margins.left).forEach(::ruleCoordinate)
         ruleCoordinate(margins.left.toDouble() + margins.right)
     }
 
     val positive: Boolean get() = height > 0f
+    val requiresClearanceOwner: Boolean get() = clear != null && clear != FigureClear.None
     val horizontalMargins: Float get() = margins.left + margins.right
     val allocatedHeight: Int get() = ceil(height.toDouble()).toInt()
     val adjoining: NativeAdjoiningMargins get() = NativeAdjoiningMargins(margins.top, margins.bottom, !positive)
@@ -53,5 +55,5 @@ internal fun resolveAuthoredRuleMetrics(style: RuleStyle, density: Float,
         is ContainerColor.LightDark -> checkNotNull(canonicalColorArgb(if (dark) fill.dark else fill.light)).toInt()
     }
     return NativeRuleMetrics(length(style.height), color, FloatMargins(length(style.margins.top),
-        length(style.margins.right), length(style.margins.bottom), length(style.margins.left)))
+        length(style.margins.right), length(style.margins.bottom), length(style.margins.left)), style.clear)
 }
