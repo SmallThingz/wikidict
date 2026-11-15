@@ -12808,6 +12808,8 @@ class InitialSealedWriterBookTests(InitialSealedGenerationTests):
                     f.seal['identity']['providers']['figure-page-observations.json']=[original['bytes'],original['sha256']]
                     f.seal['identity']['assets'].append(['figure-page-observations.json',original['bytes'],original['sha256']])
                     self.reseal_graph(f);f.roles.initial_sealed_generation=f.selection
+                    f.roles.bind_input(f.expander/'figure-page-observations.json')
+                    (f.expander/'figure-page-observations.json').write_bytes(b'changed sealed Book')
                 else:f.proof.rename(f.book_root/'saved');f.proof.symlink_to(f.book_root/'saved')
                 with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2],patch.object(b,'validated_auxiliary_capture',return_value=f.capture):
                     with self.assertRaises((ValueError,OSError)):self.adopt(f,auxiliary_snapshots=snapshots)
@@ -12841,6 +12843,49 @@ class InitialSealedWriterBookTests(InitialSealedGenerationTests):
 
 
 
+
+
+    def sealed_book_fixture(self, root):
+        f=self.book_fixture(root)
+        f.old_book=f.expander/'figure-page-observations.json'
+        f.old_book_ref=_initial_sealed_write(f.old_book,dict(original_sealed_book=True))
+        old=f.old_book_ref
+        f.seal['identity']['providers']['figure-page-observations.json']=[old['bytes'],old['sha256']]
+        f.seal['identity']['assets'].append(['figure-page-observations.json',old['bytes'],old['sha256']])
+        self.reseal_graph(f);f.roles.initial_sealed_generation=f.selection
+        f.roles.bind_input(f.old_book)
+        return f
+
+    def test_initial_writer_book_replacement_preserves_original_sealed_book_and_worker_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f=self.sealed_book_fixture(Path(tmp))
+            before=(f.old_book.read_bytes(),f.old_book.stat())
+            seal_before=(f.expander/'.completed-expander.json').read_bytes()
+            records=copy.deepcopy(f.roles.records)
+            self.assertNotEqual(f.old_book_ref['sha256'],f.aux['figure-page-observations'])
+            with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2],patch.object(b,'validated_auxiliary_capture',return_value=f.capture):
+                self.assertEqual(self.adopt(f,auxiliary_snapshots={'figure-page-observations':f.book}),123)
+            self.assertEqual((f.old_book.read_bytes(),f.old_book.stat()),before)
+            self.assertEqual((f.expander/'.completed-expander.json').read_bytes(),seal_before)
+            self.assertEqual(f.roles.records,records)
+            expected_worker=dict(f.worker_hashes,**{'figure-page-observations':f.old_book_ref['sha256']})
+            self.assertEqual(b.initial_sealed_worker_hashes(f.aux,f.seal['identity']['providers']),expected_worker)
+            self.assertEqual(b.read_build_envelope(f.destination/'state.json')['auxiliary_snapshot_sha256'],f.aux)
+            self.assertIn(f.old_book,f.roles.inputs)
+            for filename in f.inventory:self.assertIn(f.book.parent/filename,f.roles.inputs)
+
+    def test_initial_writer_book_replacement_refuses_bad_capture_old_asset_and_other_provider_drift(self):
+        for mode in ('unselected','capture','sealed-book','other-provider'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                f=self.sealed_book_fixture(Path(tmp));snapshots={'figure-page-observations':f.book}
+                if mode=='unselected':snapshots={}
+                elif mode=='capture':f.proof.write_text('changed current Book capture source')
+                elif mode=='sealed-book':f.old_book.write_bytes(b'changed original sealed Book')
+                else:f.aux['interface-messages']='0'*64
+                with self.contexts(f)[0],self.contexts(f)[1],self.contexts(f)[2],patch.object(b,'validated_auxiliary_capture',return_value=f.capture):
+                    with self.assertRaises((ValueError,OSError)):
+                        self.adopt(f,auxiliary_snapshots=snapshots)
+                self.assertFalse((f.destination/'state.json').exists())
 
 
 class RetainedCompilationEnvelopeTests(unittest.TestCase):

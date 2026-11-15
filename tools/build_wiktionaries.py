@@ -4071,17 +4071,19 @@ def initial_page_language_providers(plan, expected, build_identity, snapshots, p
 
 
 def initial_sealed_worker_hashes(hashes, providers):
-    """Keep every sealed worker Provider; only an external Book is Writer-only."""
+    """Keep sealed worker Providers distinct from the selected Writer Book."""
     result = dict(hashes or {})
-    if providers.get('figure-page-observations.json') is None:
+    sealed_book = providers.get('figure-page-observations.json')
+    if sealed_book is None:
         result.pop('figure-page-observations', None)
+    elif 'figure-page-observations' in result:
+        result['figure-page-observations'] = sealed_book[1]
     return result
 
 
 def initial_sealed_writer_book(expected, build_identity, snapshots, providers, native_roles):
     hashes = build_identity.get('auxiliary_snapshot_sha256', {})
-    if ('figure-page-observations' not in hashes
-            or providers.get('figure-page-observations.json') is not None):
+    if 'figure-page-observations' not in hashes:
         return dict(hashes)
     path = Path((snapshots or {}).get('figure-page-observations', ''))
     if not path.is_absolute():
