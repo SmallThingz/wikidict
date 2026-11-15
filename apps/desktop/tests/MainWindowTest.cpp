@@ -28103,6 +28103,103 @@ private slots:
             QVERIFY2(matches[i], qPrintable(QString::fromUtf8(QJsonDocument(observations[i].toObject()).toJson(QJsonDocument::Compact))));
     }
 
+    void readerAccessibleLinksExposeExactRangesActionsAndLifetime() {
+        MainWindow window(fixture_, QStringLiteral("cat")); window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        auto *browser = window.reading_;
+        auto *reader = QAccessible::queryAccessibleInterface(browser); QVERIFY(reader);
+        // Real compiled content retains its separate section controls and link roles.
+        bool compiledLink = false, disclosure = false;
+        for (int i = 0; i < reader->childCount(); ++i) {
+            auto *child = reader->child(i); if (!child || !child->isValid()) continue;
+            compiledLink |= child->role() == QAccessible::Link;
+            disclosure |= child->role() == QAccessible::Button;
+        }
+        QVERIFY(compiledLink); QVERIFY(disclosure);
+        const QString html = QString::fromUtf8(
+            "<p><a name='named-only'>Named only</a> <a href='dict:dog'>First</a> "
+            "<a href='dict:cat'>Split<b>\xf0\x9f\x98\x80</b>Tail</a> "
+            "<a href='https://example.test/actual-target'>External</a> "
+            "<a href='section:0'>Section action</a></p>"
+            "<table border='1'><tr><td><a href='dict:dog'>Second</a></td>"
+            "<td><a href='dict:cat'>Cell link</a></td></tr></table>"
+            "<p><a href='dict:cat'><img src='accessible-local-image' width='24' height='24' alt='Linked picture'></a></p>");
+        QVERIFY(replaceStockReading(window, html));
+        QImage image(24, 24, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::green);
+        browser->document()->addResource(QTextDocument::ImageResource, QUrl("accessible-local-image"), image);
+        QApplication::processEvents();
+        const QString raw = browser->document()->toRawText();
+        const int revision = browser->document()->revision(), count = browser->document()->characterCount();
+        const QTextCursor before = browser->textCursor();
+        const auto links = [&] {
+            QMap<QString, QAccessibleInterface *> result;
+            for (int i = 0; i < reader->childCount(); ++i) {
+                auto *child = reader->child(i);
+                if (child && child->role() == QAccessible::Link) result.insert(child->text(QAccessible::Name), child);
+            }
+            return result;
+        };
+        auto current = links();
+        QCOMPARE(current.size(), 6);
+        QVERIFY(!current.contains("Named only")); QVERIFY(!current.contains("Section action"));
+        for (auto it = current.cbegin(); it != current.cend(); ++it) {
+            auto *child = it.value(); QVERIFY(child->isValid());
+            QCOMPARE(child->parent(), reader);
+            const int index = reader->indexOfChild(child); QVERIFY(index >= 0); QCOMPARE(reader->child(index), child);
+            auto *link = child->hyperlinkInterface(); QVERIFY(link);
+            auto *action = child->actionInterface(); QVERIFY(action);
+            QVERIFY(action->actionNames().contains(QAccessibleActionInterface::pressAction()));
+            QVERIFY(action->actionNames().contains(QAccessibleActionInterface::setFocusAction()));
+            QCOMPARE(link->anchor(), child->text(QAccessible::Name));
+            const auto target = it.key() == "External" ? QStringLiteral("https://example.test/actual-target")
+                : it.key() == "First" || it.key() == "Second" ? QStringLiteral("dict:dog") : QStringLiteral("dict:cat");
+            QCOMPARE(link->anchorTarget(), target);
+            QCOMPARE(child->text(QAccessible::Description), target);
+            if (it.key() == "Linked picture") {
+                QCOMPARE(link->endIndex() - link->startIndex(), 1);
+                QCOMPARE(browser->document()->characterAt(link->startIndex()), QChar::ObjectReplacementCharacter);
+            } else {
+                const auto found = browser->document()->find(it.key()); QVERIFY(!found.isNull());
+                QCOMPARE(link->startIndex(), found.selectionStart()); QCOMPARE(link->endIndex(), found.selectionEnd());
+            }
+        }
+        QCOMPARE(browser->document()->revision(), revision); QCOMPARE(browser->document()->characterCount(), count);
+        QCOMPARE(browser->document()->toRawText(), raw);
+        QCOMPARE(browser->textCursor().position(), before.position()); QCOMPARE(browser->textCursor().anchor(), before.anchor());
+        auto *second = current.value("Second"); QVERIFY(second);
+        const auto secondRange = browser->document()->find("Second");
+        second->actionInterface()->doAction(QAccessibleActionInterface::setFocusAction());
+        QTRY_VERIFY(browser->hasFocus());
+        QCOMPARE(browser->textCursor().selectionStart(), secondRange.selectionStart());
+        QCOMPARE(browser->textCursor().selectionEnd(), secondRange.selectionEnd());
+        QCOMPARE(reader->focusChild(), second); QVERIFY(second->state().focused);
+        QVERIFY(!current.value("First")->state().focused);
+        QVERIFY(!second->rect().isEmpty());
+        const QRect firstCharacter = reader->textInterface()->characterRect(secondRange.selectionStart());
+        QVERIFY(!firstCharacter.isEmpty()); QCOMPARE(reader->childAt(firstCharacter.center().x(), firstCharacter.center().y()), second);
+        QCOMPARE(browser->document()->toRawText(), raw); QCOMPARE(browser->document()->revision(), revision);
+        QSignalSpy activated(browser, &QTextBrowser::anchorClicked);
+        browser->setEnabled(false); second->actionInterface()->doAction(QAccessibleActionInterface::pressAction());
+        QCOMPARE(activated.size(), 0);
+        browser->setEnabled(true); browser->hide(); second->actionInterface()->doAction(QAccessibleActionInterface::pressAction());
+        QCOMPARE(activated.size(), 0); browser->show();
+        const QAccessible::Id oldId = QAccessible::uniqueId(second);
+        const QPointer<QObject> oldObject(second->object());
+        QVERIFY(replaceStockReading(window, "<p>Replacement without links</p>"));
+        QVERIFY(!second->isValid());
+        second->actionInterface()->doAction(QAccessibleActionInterface::pressAction());
+        QCOMPARE(activated.size(), 0); QVERIFY(links().isEmpty());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(oldObject.isNull()); QVERIFY(!QAccessible::accessibleInterface(oldId));
+        QVERIFY(replaceStockReading(window, html));
+        current = links(); second = current.value("Second"); QVERIFY(second);
+        second->actionInterface()->doAction(QAccessibleActionInterface::pressAction());
+        QCOMPARE(activated.size(), 1); QCOMPARE(activated.at(0).at(0).toUrl(), QUrl("dict:dog"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("dog"));
+    }
+
     void readerAccessibilityPreservesTextStylesSelectionAndGraphemeCoordinates() {
         MainWindow window(fixture_, QStringLiteral("cat")); window.resize(780, 480); window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);

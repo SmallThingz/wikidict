@@ -589,11 +589,20 @@ public:
 };
 
 class SectionDisclosure;
+class ReadingLink;
 
 class ReadingBrowser final : public QTextBrowser {
     CompiledHelpCursor inlineHelpCursor_;
 public:
     explicit ReadingBrowser(QWidget *parent);
+    QList<ReadingLink *> accessibleLinks;
+    QPointer<QTextDocument> accessibleLinkDocument;
+    int accessibleLinkRevision = -1;
+    bool accessibleLinkUpdateQueued = false;
+    QPointer<ReadingLink> lastFocusedLink;
+    void syncAccessibleLinks();
+    void requestAccessibleLinks();
+    ReadingLink *focusedLink();
     QHash<int, QPointer<QScrollBar>> localScrollBars;
     QHash<int, QPointer<SourceTableScrollFocus>> sourceTableFocus;
     QPointer<QTextDocument> localScrollDocument;
@@ -1349,6 +1358,177 @@ public:
     }
 };
 
+class ReadingLink final : public QObject {
+public:
+    ReadingLink(ReadingBrowser *reader, int first, int last, QString target, QString label)
+        : QObject(reader), browser(reader), document(reader->document()), revision(document->revision()),
+          start(first), end(last), href(std::move(target)), name(std::move(label)) {}
+    QPointer<ReadingBrowser> browser;
+    QPointer<QTextDocument> document;
+    const int revision;
+    const int start;
+    int end;
+    const QString href;
+    QString name;
+    bool active = true;
+    bool current() const {
+        return active && browser && document && browser->document() == document
+            && document->revision() == revision && start >= 0 && end > start
+            && end < document->characterCount();
+    }
+    bool focused() const {
+        if (!current() || !browser->hasFocus()) return false;
+        const auto cursor = browser->textCursor();
+        return cursor.hasSelection() && cursor.selectionStart() == start && cursor.selectionEnd() == end;
+    }
+};
+
+static QVariant accessibleAnchorOwner(const QTextCharFormat &format) {
+    const QString policy = format.stringProperty(MissingFigurePaint::policyProperty);
+    if (policy != QStringLiteral("wikidict.figure-link-state/1")
+        && policy != QStringLiteral("wikidict.ordinary-link-state/1")) return {};
+    const auto owner = format.property(MissingFigurePaint::ownerProperty);
+    return owner.metaType().id() == QMetaType::LongLong && owner.toLongLong() >= (qint64(1) << 32)
+        ? owner : QVariant();
+}
+
+void ReadingBrowser::syncAccessibleLinks() {
+    auto *doc = document();
+    if (accessibleLinkDocument == doc && accessibleLinkRevision == doc->revision()) return;
+    for (auto *link : std::exchange(accessibleLinks, {})) {
+        link->active = false;
+        link->deleteLater();
+    }
+    lastFocusedLink.clear();
+    accessibleLinkDocument = doc;
+    accessibleLinkRevision = doc->revision();
+    for (auto block = doc->begin(); block.isValid(); block = block.next()) {
+        ReadingLink *previous = nullptr;
+        QVariant previousOwner;
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid()) continue;
+            const auto format = fragment.charFormat();
+            const QString href = format.anchorHref();
+            if (!format.isAnchor() || href.isEmpty() || QUrl(href).scheme() == QStringLiteral("section")) {
+                previous = nullptr;
+                continue;
+            }
+            const auto owner = accessibleAnchorOwner(format);
+            QString label = fragment.text();
+            if (format.isImageFormat()) label = format.stringProperty(QTextFormat::ImageAltText);
+            if (previous && previous->end == fragment.position() && previous->href == href && previousOwner == owner) {
+                previous->end += fragment.length();
+                previous->name += label;
+            } else {
+                previous = new ReadingLink(this, fragment.position(), fragment.position() + fragment.length(), href, label);
+                accessibleLinks.append(previous);
+            }
+            previousOwner = owner;
+        }
+    }
+    for (auto *link : accessibleLinks) if (link->name.isEmpty()) link->name = link->href;
+}
+
+void ReadingBrowser::requestAccessibleLinks() {
+    if (!QAccessible::isActive()) return;
+    if (accessibleLinkUpdateQueued) return;
+    accessibleLinkUpdateQueued = true;
+    const QPointer<ReadingBrowser> guard(this);
+    QTimer::singleShot(0, this, [guard] {
+        if (!guard) return;
+        guard->accessibleLinkUpdateQueued = false;
+        guard->syncAccessibleLinks();
+        if (QAccessible::isActive()) {
+            QAccessibleEvent event(guard, QAccessible::ObjectReorder);
+            QAccessible::updateAccessibility(&event);
+        }
+    });
+}
+
+ReadingLink *ReadingBrowser::focusedLink() {
+    syncAccessibleLinks();
+    for (auto *link : accessibleLinks) if (link->focused()) return link;
+    return nullptr;
+}
+
+class AccessibleReadingLink final : public QAccessibleObject,
+                                    public QAccessibleActionInterface,
+                                    public QAccessibleHyperlinkInterface {
+public:
+    explicit AccessibleReadingLink(ReadingLink *link) : QAccessibleObject(link) {}
+    ReadingLink *item() const { return static_cast<ReadingLink *>(object()); }
+    bool isValid() const override { const auto *link = item(); return link && link->current(); }
+    QAccessibleInterface *parent() const override {
+        const auto *link = item();
+        return link && link->browser ? QAccessible::queryAccessibleInterface(link->browser) : nullptr;
+    }
+    QAccessibleInterface *child(int) const override { return nullptr; }
+    int childCount() const override { return 0; }
+    int indexOfChild(const QAccessibleInterface *) const override { return -1; }
+    QAccessible::Role role() const override { return QAccessible::Link; }
+    QString text(QAccessible::Text type) const override {
+        if (!isValid()) return {};
+        if (type == QAccessible::Name) return item()->name;
+        if (type == QAccessible::Value || type == QAccessible::Description) return item()->href;
+        return {};
+    }
+    QString anchor() const override { return text(QAccessible::Name); }
+    QString anchorTarget() const override { return text(QAccessible::Value); }
+    int startIndex() const override { return isValid() ? item()->start : -1; }
+    int endIndex() const override { return isValid() ? item()->end : -1; }
+    QRect rect() const override {
+        const QPointer<ReadingLink> link(item());
+        if (!link || !link->current()) return {};
+        auto *reader = parent();
+        auto *text = reader ? reader->textInterface() : nullptr;
+        if (!text) return {};
+        QRect bounds;
+        for (int offset = link->start; offset < link->end; ++offset) {
+            bounds = bounds.united(text->characterRect(offset));
+            if (!link || !link->current()) return {};
+        }
+        const auto *browser = link->browser.data();
+        return bounds.intersected(QRect(browser->viewport()->mapToGlobal(QPoint()), browser->viewport()->size()));
+    }
+    QAccessible::State state() const override {
+        QAccessible::State result;
+        if (!isValid()) { result.invalid = true; result.invisible = true; return result; }
+        const auto *link = item();
+        result.linked = true; result.focusable = true; result.focused = link->focused();
+        result.disabled = !link->browser->isEnabled(); result.invisible = !link->browser->isVisible();
+        result.offscreen = rect().isEmpty();
+        return result;
+    }
+    void *interface_cast(QAccessible::InterfaceType type) override {
+        if (type == QAccessible::ActionInterface) return static_cast<QAccessibleActionInterface *>(this);
+        if (type == QAccessible::HyperlinkInterface) return static_cast<QAccessibleHyperlinkInterface *>(this);
+        return QAccessibleObject::interface_cast(type);
+    }
+    QStringList actionNames() const override { return {pressAction(), setFocusAction()}; }
+    QStringList keyBindingsForAction(const QString &action) const override {
+        return action == pressAction() ? QStringList{QStringLiteral("Enter")} : QStringList();
+    }
+    void doAction(const QString &action) override {
+        if (action != pressAction() && action != setFocusAction()) return;
+        const QPointer<ReadingLink> link(item());
+        if (!link || !link->current()) return;
+        const QPointer<ReadingBrowser> browser(link->browser);
+        if (!browser->isVisible() || !browser->isEnabled()) return;
+        browser->setFocus(Qt::ShortcutFocusReason);
+        if (!browser || !link || !link->current()) return;
+        QTextCursor cursor(browser->document());
+        cursor.setPosition(link->start); cursor.setPosition(link->end, QTextCursor::KeepAnchor);
+        browser->setTextCursor(cursor);
+        if (!browser || !link || !link->current() || !link->focused()) return;
+        browser->requestLocalReveal();
+        if (action == pressAction()) {
+            QKeyEvent event(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(browser, &event);
+        }
+    }
+};
+
 void ReadingBrowser::notifyDisclosures(bool reordered, const QList<SectionDisclosure *> &changed) {
     pendingDisclosureReorder |= reordered;
     for (auto *item : changed) pendingDisclosureChanges.insert(item->index, item);
@@ -1471,6 +1651,7 @@ ReadingBrowser::ReadingBrowser(QWidget *parent) : QTextBrowser(parent) {
         requestMissingPaint();
     });
     connect(this, &QTextEdit::selectionChanged, this, &ReadingBrowser::notifyDisclosureFocus);
+    connect(document(), &QTextDocument::contentsChanged, this, &ReadingBrowser::requestAccessibleLinks);
 }
 
 void ReadingBrowser::notifyDisclosureFocus() {
@@ -1485,10 +1666,13 @@ void ReadingBrowser::notifyDisclosureFocus() {
         // Qt's keyboard anchor traversal does not emit selectionChanged. Query
         // the final focused anchor after navigation and composition have settled.
         const QPointer<SectionDisclosure> item(guard->focusedDisclosure());
-        if (guard->lastFocusedDisclosure == item) return;
+        const QPointer<ReadingLink> link(item ? nullptr : guard->focusedLink());
+        if (guard->lastFocusedDisclosure == item && guard->lastFocusedLink == link) return;
         guard->lastFocusedDisclosure = item;
-        if (!item) return;
-        QAccessibleEvent event(item, QAccessible::Focus);
+        guard->lastFocusedLink = link;
+        QObject *focused = item ? static_cast<QObject *>(item.data()) : static_cast<QObject *>(link.data());
+        if (!focused) return;
+        QAccessibleEvent event(focused, QAccessible::Focus);
         QAccessible::updateAccessibility(&event);
     });
 }
@@ -1581,18 +1765,29 @@ public:
     explicit AccessibleReadingBrowser(ReadingBrowser *browser)
         : ReadingAccessibleBase(browser, QAccessible::StaticText), browser_(browser) {}
 
-    int childCount() const override { return ReadingAccessibleBase::childCount() + browser_->disclosures.size(); }
+    int childCount() const override {
+        browser_->syncAccessibleLinks();
+        return ReadingAccessibleBase::childCount() + browser_->disclosures.size() + browser_->accessibleLinks.size();
+    }
     QAccessibleInterface *child(int index) const override {
+        browser_->syncAccessibleLinks();
         const int widgets = ReadingAccessibleBase::childCount();
         if (index < widgets) return ReadingAccessibleBase::child(index);
         index -= widgets;
-        return index >= 0 && index < browser_->disclosures.size()
-            ? QAccessible::queryAccessibleInterface(browser_->disclosures[index]) : nullptr;
+        if (index >= 0 && index < browser_->disclosures.size())
+            return QAccessible::queryAccessibleInterface(browser_->disclosures[index]);
+        index -= browser_->disclosures.size();
+        return index >= 0 && index < browser_->accessibleLinks.size()
+            ? QAccessible::queryAccessibleInterface(browser_->accessibleLinks[index]) : nullptr;
     }
     int indexOfChild(const QAccessibleInterface *child) const override {
+        browser_->syncAccessibleLinks();
         if (child) {
             for (qsizetype i = 0; i < browser_->disclosures.size(); ++i)
                 if (child->object() == browser_->disclosures[i]) return ReadingAccessibleBase::childCount() + i;
+            for (qsizetype i = 0; i < browser_->accessibleLinks.size(); ++i)
+                if (child->object() == browser_->accessibleLinks[i])
+                    return ReadingAccessibleBase::childCount() + browser_->disclosures.size() + i;
         }
         return ReadingAccessibleBase::indexOfChild(child);
     }
@@ -1614,10 +1809,18 @@ public:
             if (!browser || !item) return nullptr;
             if (bounds.contains(x, y)) return child;
         }
-        return browser ? ReadingAccessibleBase::childAt(x, y) : nullptr;
+        if (!browser) return nullptr;
+        browser->syncAccessibleLinks();
+        const int offset = offsetAtPoint(QPoint(x, y));
+        if (!browser || offset < 0) return nullptr;
+        for (auto *link : browser->accessibleLinks)
+            if (link->current() && offset >= link->start && offset < link->end)
+                return QAccessible::queryAccessibleInterface(link);
+        return ReadingAccessibleBase::childAt(x, y);
     }
     QAccessibleInterface *focusChild() const override {
         if (auto *item = browser_->focusedDisclosure()) return QAccessible::queryAccessibleInterface(item);
+        if (auto *link = browser_->focusedLink()) return QAccessible::queryAccessibleInterface(link);
         return ReadingAccessibleBase::focusChild();
     }
     void *interface_cast(QAccessible::InterfaceType type) override {
@@ -2055,6 +2258,7 @@ QTextBrowser *createReadingBrowser(QWidget *parent) {
         QAccessible::installFactory([](const QString &, QObject *object) -> QAccessibleInterface * {
             if (auto *browser = dynamic_cast<ReadingBrowser *>(object)) return new AccessibleReadingBrowser(browser);
             if (auto *item = dynamic_cast<SectionDisclosure *>(object)) return new AccessibleSectionDisclosure(item);
+            if (auto *link = dynamic_cast<ReadingLink *>(object)) return new AccessibleReadingLink(link);
             if (auto *owner = dynamic_cast<SourceTableScrollFocus *>(object)) return new AccessibleSourceTableScrollFocus(owner);
             return nullptr;
         });
