@@ -46,6 +46,7 @@
 #include <QMenu>
 #include <QPalette>
 #include <QPainter>
+#include <QPainterPath>
 #include <QFontMetricsF>
 #include <QPushButton>
 #include <QProgressBar>
@@ -94,7 +95,29 @@
 #include <algorithm>
 #include <cmath>
 #include <array>
+#include <functional>
 namespace {
+// Settle the reader chrome before QBoxLayout snapshots margins for its pass.
+// A viewport Resize filter runs inside that pass, after those values are cached.
+class ReaderContentLayout final : public QVBoxLayout {
+public:
+    explicit ReaderContentLayout(QWidget *parent) : QVBoxLayout(parent) {}
+    std::function<void()> beforeGeometry;
+    void setGeometry(const QRect &rectangle) override {
+        const QPointer<ReaderContentLayout> guard(this);
+        const auto prepare = beforeGeometry;
+        if (!preparing_ && prepare) {
+            preparing_ = true;
+            const auto reset = qScopeGuard([guard] { if (guard) guard->preparing_ = false; });
+            prepare();
+            if (!guard) return;
+        }
+        QVBoxLayout::setGeometry(rectangle);
+    }
+private:
+    bool preparing_ = false;
+};
+
 struct InlinePlaceholder { QImage pixels; QSize fallbackSize; };
 InlinePlaceholder inlinePlaceholder(QTextBrowser *widget, QTextDocument *document, const QJsonObject &image) {
     InlinePlaceholder result;
@@ -388,6 +411,15 @@ public:
             const qint64 owner = widget->property("wikidict.missing.focusOwner").toLongLong();
             if (edit) {
                 const auto focused = edit->textCursor();
+                const auto format = focused.charFormat();
+                if (format.isImageFormat() && format.stringProperty(MissingFigurePaint::policyProperty) == MissingFigurePaint::ordinaryPolicy
+                    && MissingFigurePaint::ownerAt(edit->document(), focused.selectionStart()) == owner) {
+                    if (auto *value = qstyleoption_cast<QStyleHintReturnVariant *>(result)) {
+                        QTextCharFormat focus; focus.setForeground(format.foreground());
+                        focus.setUnderlineStyle(QTextCharFormat::NoUnderline);
+                        value->variant = QVariant::fromValue<QTextFormat>(focus); return 1;
+                    }
+                }
                 for (const auto &selection : edit->extraSelections()) {
                     if (!selection.format.boolProperty(MissingFigurePaint::overlayProperty)
                         || selection.cursor.document() != focused.document()
@@ -760,9 +792,18 @@ public:
                 .toAlignedRect().intersected(viewport()->rect());
             bar->setGeometry(geometry);
             if (!current() || !bar) return;
-            bar->setMask(QRegion(clip.translated(-geometry.topLeft())));
+            QRegion mask(clip.translated(-geometry.topLeft()));
+            const auto clipPath = owner.value(QStringLiteral("bar_clip_path"));
+            if (clipPath.isValid()) {
+                if (clipPath.metaType().id() != qMetaTypeId<QPainterPath>()) mask = {};
+                else {
+                    const auto path = clipPath.value<QPainterPath>().translated(-rootDocumentOffset() - geometry.topLeft());
+                    mask &= QRegion(path.toFillPolygon().toPolygon());
+                }
+            }
+            bar->setMask(mask);
             if (!current() || !bar) return;
-            bar->setVisible(!clip.isEmpty());
+            bar->setVisible(!mask.isEmpty());
             if (!current() || !bar) return;
             bar->raise();
             if (!current()) return;
@@ -792,6 +833,9 @@ public:
         for (const auto &value : values) {
             const auto owner = value.toMap();
             if (!owner.value(QStringLiteral("clip")).toRectF().contains(point)) continue;
+            const auto clipPath = owner.value(QStringLiteral("clip_path"));
+            if (clipPath.isValid() && (clipPath.metaType().id() != qMetaTypeId<QPainterPath>()
+                || !clipPath.value<QPainterPath>().contains(point))) continue;
             const qreal old = owner.value(QStringLiteral("offset")).toDouble();
             const qreal next = qBound(owner.value(QStringLiteral("minimum")).toDouble(), old + delta,
                 owner.value(QStringLiteral("maximum")).toDouble());
@@ -846,7 +890,14 @@ public:
                 Q_RETURN_ARG(QVariantMap, result), Q_ARG(int, position))) return {};
         if (!self || !doc || !layout || self->document() != doc || doc->documentLayout() != layout
             || result.value(QStringLiteral("error")).toBool()) return {};
-        return result.value(QStringLiteral("handled")).toBool() ? rect.intersected(result.value(QStringLiteral("clip")).toRectF()) : rect;
+        if (!result.value(QStringLiteral("handled")).toBool()) return rect;
+        const auto clipPath = result.value(QStringLiteral("clip_path"));
+        if (clipPath.isValid()) {
+            if (clipPath.metaType().id() != qMetaTypeId<QPainterPath>()) return {};
+            QPainterPath character; character.addRect(rect);
+            return character.intersected(clipPath.value<QPainterPath>()).boundingRect();
+        }
+        return rect.intersected(result.value(QStringLiteral("clip")).toRectF());
     }
 
     void clearDisclosures();
@@ -916,7 +967,7 @@ public:
             selections.append(paint);
             guard->setExtraSelections(selections);
             if (!guard || !document || guard->document() != document) return;
-            const bool customFocus = !paint.isEmpty() || guard->focusedFigureMedia() >= 0;
+            const bool customFocus = !paint.isEmpty() || guard->missingState.focused >= 0 || guard->focusedFigureMedia() >= 0;
             if (customFocus && !guard->missingFocusStyle) {
                 auto *style = new MissingFocusStyle(guard);
                 guard->missingFocusStyle = style;
@@ -1066,6 +1117,16 @@ protected:
         painter.drawRoundedRect(box.translated(-x, -verticalScrollBar()->value()).adjusted(-1, -1, 1, 1), 2, 2);
     }
     bool event(QEvent *event) override {
+        // QWidget consumes Tab traversal before keyPressEvent. Restore keyboard
+        // modality here even when a pointer-focused browser already has focus.
+        if (event->type() == QEvent::KeyPress) {
+            const auto *key = static_cast<QKeyEvent *>(event);
+            if ((key->key() == Qt::Key_Tab || key->key() == Qt::Key_Backtab)
+                && !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier))) {
+                missingState.focusVisible = true;
+                requestMissingPaint();
+            }
+        }
         if (event->type() == QEvent::PaletteChange || event->type() == QEvent::StyleChange) {
             requestMissingPaint();
             const QPointer<ReadingBrowser> self(this);
@@ -2753,7 +2814,7 @@ void MainWindow::setupUi() {
 
     auto *content = new QWidget(splitter);
     readerContent_ = content;
-    auto *right = new QVBoxLayout(content);
+    auto *right = new ReaderContentLayout(content);
     right->setContentsMargins(28, 20, 28, 24);
     right->setSpacing(10);
 
@@ -2897,6 +2958,9 @@ void MainWindow::setupUi() {
     connect(readingPaneAction_, &QAction::triggered, this, [this] { showCompactPane(false); reading_->setFocus(); });
     compactToolbar_->hide();
     setCentralWidget(splitter);
+    right->beforeGeometry = [guard = QPointer<MainWindow>(this)] {
+        if (guard) guard->updateReaderLayout();
+    };
     content->installEventFilter(this);
     updateReaderLayout();
 
@@ -3318,17 +3382,32 @@ void MainWindow::updateReaderLayout() {
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
-    if (reading_ && watched == reading_->viewport() && event->type() == QEvent::Resize && !readingFloatLayoutScheduled_) {
-        readingFloatLayoutScheduled_ = true;
-        // Run after QTextBrowser applies the viewport width; coalesce resize
-        // events and use the current document, including any intervening entry.
-        QTimer::singleShot(0, this, [this] {
-            readingFloatLayoutScheduled_ = false;
-            const QPointer<MainWindow> guard(this);
-            reflowFigures();
-            if (!guard) return;
-            SemanticHtml::finishFloatingLayout(reading_->document());
-        });
+    if (reading_ && watched == reading_->viewport() && event->type() == QEvent::Resize) {
+        const QPointer<MainWindow> guard(this);
+        const QPointer<QWidget> viewport(reading_->viewport());
+        const QPointer<QTextDocument> document(reading_->document());
+        const auto *resize = static_cast<QResizeEvent *>(event);
+        if (!readingCompositionActive_ && !readingResponsiveLayoutActive_
+            && document && document->isLayoutEnabled()
+            && reading_->lineWrapMode() == QTextEdit::WidgetWidth
+            && resize->oldSize().width() != resize->size().width()) {
+            // QTextEdit will lay out the new viewport width synchronously. Set
+            // that width and the matching responsive policy in one owned edit,
+            // so a transient active policy cannot clamp an inactive owner's pan.
+            reflowFigures(true);
+        }
+        if (!guard || !viewport) return true;
+        if (!readingFloatLayoutScheduled_) {
+            readingFloatLayoutScheduled_ = true;
+            // Retain the coalesced final pass after stock scrollbar/layout work.
+            QTimer::singleShot(0, this, [this] {
+                readingFloatLayoutScheduled_ = false;
+                const QPointer<MainWindow> guard(this);
+                reflowFigures();
+                if (!guard) return;
+                SemanticHtml::finishFloatingLayout(reading_->document());
+            });
+        }
     }
     if (watched == learningFocusCue_) {
         if (event->type() == QEvent::FocusIn) {
@@ -3471,12 +3550,29 @@ bool MainWindow::editDocumentFormats(QTextBrowser *browser, const std::function<
     if (!current()) return false;
     const auto inventory = LogicalFlow::inventory(document);
     if (!current() || inventory == LogicalFlow::Status::Refused) return false;
+    const QPointer<ReadingBrowser> scrollReader(dynamic_cast<ReadingBrowser *>(widget.data()));
+    bool refreshSourceTableBindings = scrollReader && !scrollReader->sourceTableFocus.isEmpty();
+    if (refreshSourceTableBindings) {
+        const auto targets = scrollReader->sourceTableFocus;
+        for (const auto &target : targets) {
+            if (!target || target->boundDocument != document || target->boundLayout != layout
+                || target->currentOwner().isEmpty()) refreshSourceTableBindings = false;
+            if (!current()) return false;
+        }
+    }
+    const auto finishOwnedFormats = [&](int revision) {
+        if (!current() || document->revision() != revision) return false;
+        // beginEditBlock advances even a no-op format transaction. Only refresh
+        // bindings validated before this successful, source-preserving edit.
+        if (refreshSourceTableBindings && scrollReader) scrollReader->syncLocalScrollports();
+        return current() && document->revision() == revision;
+    };
     if (inventory == LogicalFlow::Status::Handled) {
         if (readingLogicalDocument_ != document || readingLogicalOwners_.isEmpty()) return false;
         const auto revision = LogicalFlow::editFormats(document, readingLogicalOwners_, readingLogicalRevision_, mutation);
         if (!current() || !revision) return false;
         readingLogicalRevision_ = *revision;
-        return true;
+        return finishOwnedFormats(*revision);
     }
     const QString text = document->toRawText();
     const int count = document->characterCount();
@@ -3495,7 +3591,7 @@ bool MainWindow::editDocumentFormats(QTextBrowser *browser, const std::function<
     restored = true; document->setLayoutEnabled(enabled);
     if (!current() || document->revision() != revision || document->characterCount() != count) return false;
     document->markContentsDirty(0, count);
-    return current() && document->revision() == revision && document->characterCount() == count;
+    return finishOwnedFormats(revision) && document->characterCount() == count;
 }
 
 void MainWindow::updateInlineImageNotice() {
@@ -3613,10 +3709,12 @@ void MainWindow::bindInlineImages() {
                                         format.setProperty(SemanticFigure::placeholderPixelsProperty, fallbackImages.value(url));
                                         SemanticFigure::applyAsset(format, figure, asset);
                                     } else {
+                                        const bool knownGeometry = std::isfinite(asset.intrinsic.width()) && asset.intrinsic.width() > 0
+                                            && std::isfinite(asset.intrinsic.height()) && asset.intrinsic.height() > 0;
                                         SemanticHtml::imageDimensions(format, update->image, document,
-                                            (ready || asset.originalVerified) ? asset.intrinsic : QSizeF(), asset.originalMime == QStringLiteral("image/svg+xml"));
+                                            knownGeometry ? asset.intrinsic : QSizeF(), asset.originalMime == QStringLiteral("image/svg+xml"));
                                         const QSize fallbackSize = fallbackSizes.value(url);
-                                        if (!ready && !asset.originalVerified && fallbackSize.isValid()) { format.setWidth(fallbackSize.width()); format.setHeight(fallbackSize.height()); }
+                                        if (!ready && !asset.originalVerified && !knownGeometry && fallbackSize.isValid()) { format.setWidth(fallbackSize.width()); format.setHeight(fallbackSize.height()); }
                                     }
                                     format.setProperty(SemanticHtml::inlineImageStateProperty, int(asset.state));
                                     format.setProperty(SemanticHtml::inlineImageStatusProperty, asset.message);
@@ -3778,8 +3876,11 @@ void MainWindow::commitReadingEntry() {
     readingUncommitted_ = false;
 }
 
-void MainWindow::reflowFigures() {
+void MainWindow::reflowFigures(bool resizeDocument) {
+    if (readingResponsiveLayoutActive_) return;
+    readingResponsiveLayoutActive_ = true;
     const QPointer<MainWindow> guard(this);
+    const auto finish = qScopeGuard([guard] { if (guard) guard->readingResponsiveLayoutActive_ = false; });
     const QPointer<QTextDocument> document(reading_->document());
     try {
         const auto hasFigure = [&](auto &&visit, QTextFrame *parent) -> bool {
@@ -3794,6 +3895,12 @@ void MainWindow::reflowFigures() {
         const bool containers = FlowConstruction::hasResponsiveContainers(document);
         if (!figures && !tables && !floatTables && !containers) return;
         if (!editDocumentFormats(reading_, [&] {
+                if (resizeDocument) {
+                    CompiledContent::require(reading_->lineWrapMode() == QTextEdit::WidgetWidth);
+                    // Match QTextEditPrivate::relayoutDocument for WidgetWidth,
+                    // including its unconstrained page height and zero width.
+                    document->setPageSize(QSize(reading_->viewport()->width(), -1));
+                }
                 if (containers) FlowConstruction::reflowContainers(document, qreal(contentsRect().width()));
                 if (figures) SemanticFigure::reflow(document, contentsRect().width());
                 if (tables) SemanticHtml::reflowTableBlockViewports(document, qreal(contentsRect().width()));
@@ -4030,6 +4137,14 @@ void MainWindow::updateSectionFoldControl() {
 bool MainWindow::refreshReading() {
     if (currentEntry_.isEmpty()) return true;
     const QPointer<MainWindow> self(this);
+    const bool previousCompositionActive = readingCompositionActive_;
+    readingCompositionActive_ = true;
+    // Re-enabling layout can synchronously resize the viewport as scrollbars
+    // appear. Do not insert a responsive format transaction into this source
+    // commit; the existing queued viewport pass runs after composition ends.
+    const auto compositionScope = qScopeGuard([self, previousCompositionActive] {
+        if (self) self->readingCompositionActive_ = previousCompositionActive;
+    });
     const QPointer<QTextBrowser> browser(reading_);
     const QPointer<QTextDocument> document(browser->document());
     const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
@@ -4630,12 +4745,22 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             const bool ordinaryLink = SemanticHtml::present(ownPaint);
             if (ordinaryLink && (!ownPaint.isObject() || !linkPaint.isEmpty()
                 || (kind != QStringLiteral("link") && kind != QStringLiteral("external_link"))
-                || SemanticHtml::present(span.value(QStringLiteral("image")))
                 || !span.value(QStringLiteral("target")).isString() || span.value(QStringLiteral("target")).toString().isEmpty()))
                 throw DictApiError("invalid ordinary link paint owner");
             const QJsonObject selectedPaint = ordinaryLink ? ownPaint.toObject() : linkPaint;
+            const bool imageLinkPaint = ordinaryLink && SemanticHtml::present(span.value(QStringLiteral("image")));
+            if (imageLinkPaint) {
+                const auto image = SemanticHtml::checkedImage(span.value(QStringLiteral("image")));
+                const auto empty = [](const QJsonValue &value) {
+                    return !SemanticHtml::present(value) || (value.isString() && value.toString().isEmpty());
+                };
+                if (!empty(span.value("text")) || !empty(span.value("trail")) || !empty(image.value("alt"))
+                    || SemanticHtml::present(image.value("map")) || SemanticHtml::present(image.value("static_poster"))
+                    || reading_->document()->documentLayout()->property("_wikidictOrdinaryImageLinkStateCapability").toString() != MissingFigurePaint::ordinaryImageCapability)
+                    throw DictApiError("invalid ordinary image link paint owner");
+            }
             const bool fixedLink = (ordinaryLink || !selectedPaint.isEmpty()) && (kind == QStringLiteral("link") || kind == QStringLiteral("external_link"))
-                && !SemanticHtml::present(span.value(QStringLiteral("image")));
+                && (imageLinkPaint || !SemanticHtml::present(span.value(QStringLiteral("image"))));
             qint64 linkOwner = -1; qreal linkEm = 0;
             if (fixedLink) {
                 if (span.value("target").toString().isEmpty() || nextLinkPaintOwner_ == std::numeric_limits<quint32>::max())
@@ -4709,7 +4834,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                     || (digit >= QChar('a') && digit <= QChar('f')));
             // Keep the authored color on the characters inside a possible link,
             // so the default anchor palette cannot replace its semantic color.
-            if (canonicalForeground)
+            if (canonicalForeground && !imageLinkPaint)
                 text = QStringLiteral("<span style=\"color:%1\">%2</span>").arg(foreground, text);
             else if (!inlineImage && inheritedInk.isValid()) {
                 const QString ink = inheritedInk.alpha() == 0 ? QStringLiteral("transparent")
@@ -4727,7 +4852,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (canonicalBackground)
                 text = QStringLiteral("<span style=\"background-color:%1;white-space:pre-wrap\">%2</span>").arg(background, text);
             const QString effectiveBackground = canonicalBackground ? background : cellBackground;
-            if (!canonicalForeground && !inheritedInk.isValid() && !effectiveBackground.isEmpty()) {
+            if (!imageLinkPaint && !canonicalForeground && !inheritedInk.isValid() && !effectiveBackground.isEmpty()) {
                 const QString ink = backgroundInk(effectiveBackground);
                 text = QStringLiteral("<span style=\"color:%1\">%2</span>").arg(ink, text);
                 if (!zeroScale && (kind == QStringLiteral("link") || kind == QStringLiteral("external_link")))
@@ -4769,7 +4894,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (!normalizedInlineFont && span.value(QStringLiteral("small")).toBool()) text = QStringLiteral("<small>%1</small>").arg(text);
             if (span.value(QStringLiteral("bold")).toBool()) text = QStringLiteral("<b>%1</b>").arg(text);
             if (span.value(QStringLiteral("italic")).toBool()) text = QStringLiteral("<i>%1</i>").arg(text);
-            if (!zeroScale && span.value(QStringLiteral("underline")).toBool()) text = QStringLiteral("<u>%1</u>").arg(text);
+            if (!zeroScale && !imageLinkPaint && span.value(QStringLiteral("underline")).toBool()) text = QStringLiteral("<u>%1</u>").arg(text);
             if (!zeroScale && span.value(QStringLiteral("strike")).toBool()) text = QStringLiteral("<s>%1</s>").arg(text);
             if (span.value(QStringLiteral("superscript")).toBool()) text = QStringLiteral("<sup>%1</sup>").arg(text);
             if (span.value(QStringLiteral("subscript")).toBool()) text = QStringLiteral("<sub>%1</sub>").arg(text);
@@ -4971,12 +5096,13 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             .arg((!geometry.value(QStringLiteral("cell_spacing")).isUndefined() && !geometry.value(QStringLiteral("cell_spacing")).isNull()) ? QStringLiteral("separate") : QStringLiteral("collapse"))
             .arg(tableDepth > 1 ? 0 : 8).arg(indent);
     }
-    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "margin_values", "containing_direction", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height"});
+    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "margin_values", "containing_direction", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height", "corner_radii"});
     if (!viewport.isEmpty() || SemanticHtml::present(tableStyle.value(QStringLiteral("margin_values"))))
         out.insert(out.indexOf(QChar('>')), QStringLiteral(" data-wikidict-table-auto-margins='1'"));
     if (!ownerPolicy.isEmpty())
         out.insert(out.indexOf(QChar('>')), QStringLiteral(" dir='%1' data-wikidict-table-language='%2'")
             .arg(ownerPolicy.value(QStringLiteral("grid_direction")).toString(), ownerPolicy.value(QStringLiteral("language")).toString().toHtmlEscaped()));
+    const bool roundedTable = !SemanticHtml::tableCornerRadii(tableStyle).isEmpty();
     const QString tableBackground = SemanticHtml::present(tableStyle.value(QStringLiteral("background")))
         ? SemanticHtml::styleColor(tableStyle.value(QStringLiteral("background"))).name() : inheritedBackground;
     const QJsonArray caption = CompiledContent::array(table.value(QStringLiteral("caption")));
@@ -5011,9 +5137,11 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
                 canonicalBackground = canonicalBackground && ((digit >= QChar('0') && digit <= QChar('9'))
                     || (digit >= QChar('a') && digit <= QChar('f')));
             const QString effectiveBackground = canonicalBackground ? background : tableBackground;
-            if (!effectiveBackground.isEmpty())
-                style += QStringLiteral(";background-color:") + effectiveBackground
-                    + QStringLiteral(";color:") + backgroundInk(effectiveBackground);
+            if (!effectiveBackground.isEmpty()) {
+                if (canonicalBackground || !roundedTable)
+                    style += QStringLiteral(";background-color:") + effectiveBackground;
+                style += QStringLiteral(";color:") + backgroundInk(effectiveBackground);
+            }
             const QJsonObject cellStyle = SemanticHtml::typedStyle(cell.value(QStringLiteral("style")), {"border", "padding", "text_align", "border_edges", "letter_spacing", "width", "min_width", "vertical_align", "line_height"});
             const auto cellLine = SemanticHtml::cellLineHeight(cellStyle.value(QStringLiteral("line_height")), readingPointSize_, reading_->document());
             auto cellContext = context;
@@ -5291,6 +5419,13 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
             const auto capability = reading_->document()->documentLayout()->property("_wikidictAuthoredRuleCapability");
             if (capability.metaType().id() != QMetaType::QString || capability.toString() != QStringLiteral("wikidict.authored-rule/1"))
                 throw DictApiError("compiled authored Rule layout is not available");
+            const auto style = CompiledContent::ruleStyle(block);
+            if (CompiledContent::present(style.value(QStringLiteral("clear")))) {
+                const auto clearCapability = reading_->document()->documentLayout()->property("_wikidictAuthoredRuleClearCapability");
+                if (clearCapability.metaType().id() != QMetaType::QString
+                    || clearCapability.toString() != QStringLiteral("wikidict.authored-rule-clear/1"))
+                    throw DictApiError("compiled authored Rule clearance is not available");
+            }
             return SemanticHtml::authoredRuleHtml(block, context.normalBodyEm / context.legacyVerticalScale,
                 reading_->document()->property(SemanticHtml::imageDarkThemeProperty).toBool());
         }

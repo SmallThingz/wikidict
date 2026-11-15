@@ -412,6 +412,7 @@ inline QJsonObject captionMedia(const QJsonValue &value, const QJsonObject &figu
         }
     }
     if (CompiledContent::present(media.value(QStringLiteral("focus_outline")))) {
+        require(!CompiledContent::present(span.value(QStringLiteral("link_paint"))));
         require(!missingMedia && action);
         const auto focus = CompiledContent::containerObject(media.value(QStringLiteral("focus_outline")),
             {QStringLiteral("width"), QStringLiteral("color"), QStringLiteral("radius"), QStringLiteral("offset")},
@@ -607,9 +608,14 @@ inline QJsonObject validate(const QJsonValue &value, qreal em, const QPalette &p
         const auto spanValue = object.value("image_span");
         require(spanValue.isObject());
         const auto span = spanValue.toObject();
+        // Primary image link paint uses the existing table-caption media action
+        // geometry. Other Figure geometry remains outside this native owner.
+        if (SemanticHtml::present(span.value(QStringLiteral("link_paint"))))
+            require(SemanticHtml::present(object.value(QStringLiteral("table_caption_layout"))));
         require(span.value("text").toString().isEmpty() && span.value("trail").toString().isEmpty()
             && span.value("kind").toString() != "line_break");
-        SemanticHtml::checkedImage(span.value("image"));
+        const auto image = SemanticHtml::checkedImage(span.value("image"));
+        require(!CompiledContent::present(image.value(QStringLiteral("vertical_align"))));
         FigureSizing::request(object);
     }
     frameMinWidth(object.value(QStringLiteral("frame_min_width")));

@@ -432,6 +432,27 @@ static QJsonObject pairedTableViewportFixture(const QString &containing, bool ov
     return table;
 }
 
+static QJsonObject intrinsicTableViewportFixture(const QString &containing, bool overflow, bool outline) {
+    const auto px=[](double value){return QJsonObject{{"unit","px"},{"value",value}};};
+    const auto edges=[](QJsonValue value){return QJsonObject{{"top",value},{"right",value},{"bottom",value},{"left",value}};};
+    const QJsonObject border{{"solid",QJsonObject{{"width",px(1)},{"color","#123456"}}}};
+    const QJsonObject wide{{"collapse","collapse"},{"margins",edges(px(0))},{"border",border},{"padding",edges(px(2))}};
+    auto box=wide;box.remove("collapse");
+    const QJsonObject paint=outline ? QJsonObject{{"mode","ua_auto"},{"color",QJsonObject{{"kind","rgb"},{"value","#1256a0"}}}}
+        : QJsonObject{{"mode","authored_none"}};
+    const QJsonObject policy{{"max_viewport_width_px",639},{"box_style",box},{"box_sizing","content_box"},
+        {"max_width",QJsonObject{{"unit","percent"},{"value",100}}},{"grid_style",QJsonObject{{"collapse","collapse"}}},
+        {"grid_direction",containing=="ltr" ? "rtl" : "ltr"},{"intrinsic_containing_direction",containing},{"language","ku"},{"focus_paint",paint}};
+    const auto cell=[](QString text,QString target){return QJsonObject{{"rowspan",1},{"colspan",1},{"header",false},
+        {"spans",QJsonArray{QJsonObject{{"kind","link"},{"text",text},{"target",target}}}}};};
+    auto first=cell(overflow ? QString(100,QChar('M')) : QStringLiteral("A"),"IntrinsicFirst");
+    auto second=cell("B","IntrinsicSecond");second.insert("style",QJsonObject{{"border",QJsonObject{{"none",QJsonObject{}}}},{"padding",edges(px(0))}});
+    auto third=cell("C","IntrinsicThird");third.insert("style",QJsonObject{{"border",QJsonObject{{"solid",QJsonObject{{"width",px(2)},{"color","#226622"}}}}},{"padding",edges(px(7))}});
+    const QJsonObject empty{{"rowspan",1},{"colspan",1},{"header",false},{"spans",QJsonArray{}}};
+    return QJsonObject{{"style",wide},{"geometry",QJsonObject{{"border",1},{"cell_padding",4},{"cell_spacing",0}}},
+        {"block_viewport",policy},{"rows",QJsonArray{QJsonObject{{"cells",QJsonArray{first,second,third,empty}}}}}};
+}
+
 class MainWindowTest final : public QObject {
     Q_OBJECT
 
@@ -1004,6 +1025,1056 @@ private slots:
         QCOMPARE(window.currentEntry_, entry);
         QCOMPARE(QJsonDocument(entry).toJson(QJsonDocument::Compact), source);
         QCOMPARE(browser->document()->toRawText(), initialText);
+    }
+
+    void intrinsicTableViewportKeepsAutomaticWideAndCellHints() {
+        MainWindow window{QString()};window.resize(900,700);window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+        for(const QString direction:{QStringLiteral("ltr"),QStringLiteral("rtl")}) for(bool overflow:{false,true}) {
+            const auto table=intrinsicTableViewportFixture(direction,overflow,false);
+            QVERIFY(composeReadingBlocks(window,QJsonArray{QJsonObject{{"kind","table"},{"table",table}}}));
+            auto *doc=window.reading_->document();auto *native=qobject_cast<QTextDocumentLayout *>(doc->documentLayout());QVERIFY(native);
+            QPointer<QTextFrame> owner;QPointer<QTextTable> grid;
+            const auto find=[&](auto &&self,QTextFrame *frame)->void {
+                if(frame->frameFormat().property(SemanticHtml::tableViewportProperty).toMap().value("intrinsic").toBool()){QVERIFY(!owner);owner=frame;}
+                if(auto *real=qobject_cast<QTextTable *>(frame)){QVERIFY(!grid);grid=real;}
+                for(auto *child:frame->childFrames())self(self,child);
+            };find(find,doc->rootFrame());QVERIFY(owner && grid);QCOMPARE(grid->parentFrame(),owner.data());
+            const auto raw=doc->toRawText();const auto entry=window.currentEntry_;const int count=doc->characterCount(),ownerId=owner->objectIndex(),gridId=grid->objectIndex();
+            const auto first=grid->cellAt(0,0),second=grid->cellAt(0,1),third=grid->cellAt(0,2),empty=grid->cellAt(0,3);
+            const auto firstFormat=first.format().toTableCellFormat(),secondFormat=second.format().toTableCellFormat(),thirdFormat=third.format().toTableCellFormat();
+            QCOMPARE(firstFormat.topBorder(),1.0);QCOMPARE(firstFormat.topBorderStyle(),QTextFrameFormat::BorderStyle_Solid);
+            QCOMPARE(secondFormat.topBorder(),0.0);QCOMPARE(secondFormat.topBorderStyle(),QTextFrameFormat::BorderStyle_None);QCOMPARE(secondFormat.topPadding(),0.0);
+            QCOMPARE(thirdFormat.topBorder(),2.0);QCOMPARE(thirdFormat.topBorderBrush().color(),QColor("#226622"));QCOMPARE(thirdFormat.topPadding(),7.0);
+            const auto source=owner->frameFormat().property(SemanticHtml::tableViewportProperty).toMap().value("source");
+            const auto portForOwner=[&]{QVariantMap result;for(const auto &value:native->wikidictScrollports())
+                if(value.toMap().value("owner").toInt()==ownerId)result=value.toMap();return result;};
+            qreal endpoint=0;bool saved=false;QRectF wideBounds;
+            for(const qreal width:{900.0,639.0,639.5,600.0,900.0,600.0}) {
+                doc->setTextWidth(width);
+                // The old active policy sees the new assigned width before the
+                // responsive switch, and clamps only to its actual new range.
+                if(saved) {
+                    const auto beforeSwitch=portForOwner();QVERIFY(!beforeSwitch.isEmpty());
+                    if(beforeSwitch.value("focus_active").toBool())
+                        endpoint=qBound(beforeSwitch.value("minimum").toDouble(),endpoint,beforeSwitch.value("maximum").toDouble());
+                    QCOMPARE(beforeSwitch.value("offset").toDouble(),endpoint);
+                }
+                SemanticHtml::reflowTableBlockViewports(doc,width);native->documentSize();
+                QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);const bool active=width<=639;
+                const auto policy=owner->frameFormat().property(SemanticHtml::tableViewportProperty).toMap();
+                QCOMPARE(policy.value("active").toBool(),active);QCOMPARE(policy.value("source"),source);
+                QCOMPARE(policy.value("direction").toInt(),int(direction=="rtl"?Qt::RightToLeft:Qt::LeftToRight));
+                QCOMPARE(policy.value("grid_direction").toInt(),int(direction=="rtl"?Qt::LeftToRight:Qt::RightToLeft));
+                QCOMPARE(owner->frameFormat().position(),QTextFrameFormat::InFlow);QCOMPARE(grid->format().position(),QTextFrameFormat::InFlow);
+                QCOMPARE(owner->objectIndex(),ownerId);QCOMPARE(grid->objectIndex(),gridId);QCOMPARE(grid->rows(),1);QCOMPARE(grid->columns(),4);
+                QCOMPARE(grid->format().cellPadding(),4.0);QCOMPARE(grid->format().cellSpacing(),0.0);QVERIFY(grid->format().borderCollapse());
+                if (first.format().toTableCellFormat()!=firstFormat)
+                    qInfo() << "intrinsic-cell-format" << direction << overflow << width
+                            << "expected" << firstFormat.properties() << "actual" << first.format().properties();
+                QCOMPARE(first.format().toTableCellFormat(),firstFormat);QCOMPARE(second.format().toTableCellFormat(),secondFormat);QCOMPARE(third.format().toTableCellFormat(),thirdFormat);
+                QCOMPARE(empty.firstPosition(),empty.lastPosition());QCOMPARE(doc->findBlock(empty.firstPosition()).layout()->lineCount(),0);
+                const auto bounds=native->frameBoundingRect(owner);QVERIFY(bounds.width()>0 && bounds.height()>0);
+                auto port=portForOwner();QVERIFY(!port.isEmpty());QCOMPARE(port.value("focus_active").toBool(),active);
+                if(active) {
+                    QCOMPARE(grid->format().border(),0.0);QCOMPARE(grid->format().background().style(),Qt::NoBrush);
+                    const auto viewport=port.value("viewport").toRectF(),content=port.value("content_viewport").toRectF();
+                    QVERIFY(viewport.contains(content));QVERIFY(viewport.left()<content.left());QVERIFY(viewport.right()>content.right());
+                    if(saved)QCOMPARE(port.value("offset").toDouble(),endpoint);
+                    endpoint=qAbs(port.value("minimum").toDouble())>qAbs(port.value("maximum").toDouble())?port.value("minimum").toDouble():port.value("maximum").toDouble();
+                    QCOMPARE(qAbs(endpoint)>0,overflow);QVERIFY(native->wikidictScrollportOffset(ownerId,owner->firstPosition(),doc->revision(),endpoint));
+                    QCOMPARE(portForOwner().value("offset").toDouble(),endpoint);saved=true;
+                } else {
+                    if(saved)QCOMPARE(port.value("offset").toDouble(),endpoint);
+                    QVERIFY(!native->wikidictScrollportOffset(ownerId,owner->firstPosition(),doc->revision(),endpoint+1));
+                    // Automatic width does not become a percentage fill.
+                    if(!overflow)QVERIFY(bounds.width()<width/2);
+                    if(width==900) {if(wideBounds.isValid())QCOMPARE(bounds,wideBounds);else wideBounds=bounds;}
+                }
+                QCOMPARE(doc->toRawText(),raw);QCOMPARE(doc->characterCount(),count);QCOMPARE(window.currentEntry_,entry);
+            }
+        }
+    }
+
+    void intrinsicTableViewportRejectsMalformedSourceAndRevokedCapability() {
+        const auto good=intrinsicTableViewportFixture("rtl",false,false);
+        QVERIFY(!SemanticHtml::tableBlockViewport(good).isEmpty());
+        for(int mode=0;mode<19;++mode) {
+            auto bad=good;auto p=bad.value("block_viewport").toObject();auto box=p.value("box_style").toObject();auto wide=bad.value("style").toObject();auto geometry=bad.value("geometry").toObject();
+            if(mode==0)p.insert("intrinsic_containing_direction","auto");
+            if(mode==1)p.remove("focus_paint");
+            if(mode==2)p.insert("max_viewport_width_px",0);
+            if(mode==3)p.insert("max_width",QJsonObject{{"unit","percent"},{"value",99}});
+            if(mode==4)box.insert("width",QJsonObject{{"unit","percent"},{"value",100}});
+            if(mode==5)box.insert("containing_direction","rtl");
+            if(mode==6)box.insert("margin_values",QJsonObject{});
+            if(mode==7)wide.insert("width",QJsonObject{{"unit","px"},{"value",20}});
+            if(mode==8)wide.insert("float_side","right");
+            if(mode==9)wide.insert("containing_direction","ltr");
+            if(mode==10)wide.insert("display","table");
+            if(mode==11)wide.insert("vertical_align","baseline");
+            if(mode==12)wide.insert("line_height",QJsonObject{{"computed",QJsonObject{{"value",12},{"font_scale_basis","css_px"}}}});
+            if(mode==13)geometry.remove("border");
+            if(mode==14)geometry.remove("cell_padding");
+            if(mode==15)geometry.remove("cell_spacing");
+            if(mode==16)geometry.insert("width",100);
+            if(mode==17)p.insert("grid_style",QJsonObject{{"collapse","separate"}});
+            if(mode==18)bad.insert("float_viewport",QJsonObject{{"max_viewport_width_px",639},{"grid_direction","ltr"},{"language","ku"},{"containing_direction","rtl"}});
+            p.insert("box_style",box);bad.insert("block_viewport",p);bad.insert("style",wide);bad.insert("geometry",geometry);
+            QVERIFY_EXCEPTION_THROWN(SemanticHtml::tableBlockViewport(bad),std::runtime_error);
+        }
+        MainWindow window{QString()};QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+        auto *native=window.reading_->document()->documentLayout();const auto capability=native->property("_wikidictTableIntrinsicScrollCapability");
+        native->setProperty("_wikidictTableIntrinsicScrollCapability",QVariant());
+        QVERIFY(!composeReadingBlocks(window,QJsonArray{QJsonObject{{"kind","table"},{"table",good}}}));
+        native->setProperty("_wikidictTableIntrinsicScrollCapability",capability);
+        QVERIFY(composeReadingBlocks(window,QJsonArray{QJsonObject{{"kind","table"},{"table",good}}}));
+        // Null stays an absent discriminator on the unchanged old paired family.
+        auto legacy=pairedTableViewportFixture("ltr",false,false);auto p=legacy.value("block_viewport").toObject();
+        const auto original=SemanticHtml::tableBlockViewport(legacy);p.insert("intrinsic_containing_direction",QJsonValue(QJsonValue::Null));legacy.insert("block_viewport",p);
+        QCOMPARE(SemanticHtml::tableBlockViewport(legacy),original);
+        QVERIFY(composeReadingBlocks(window,QJsonArray{QJsonObject{{"kind","table"},{"table",legacy}}}));
+    }
+
+    void intrinsicTableViewportUsesActualFloatBandWithoutFloating() {
+        MainWindow window{QString()};window.resize(900,700);window.show();QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+        const auto px=[](double value){return QJsonObject{{"unit","px"},{"value",value}};};
+        for(const QString direction:{QStringLiteral("ltr"),QStringLiteral("rtl")}) for(const QString side:{QStringLiteral("left"),QStringLiteral("right")}) for(bool unbreakable:{false,true}) {
+            auto table=intrinsicTableViewportFixture(direction,false,false);
+            if(unbreakable) {
+                auto policy=table.value("block_viewport").toObject();policy.insert("box_sizing","border_box");table.insert("block_viewport",policy);
+            }
+            const QString text=unbreakable?QString(256,QChar('M')):QString("band ").repeated(100);
+            auto rows=table.value("rows").toArray();auto row=rows[0].toObject();auto cells=row.value("cells").toArray();auto cell=cells[0].toObject();
+            cell.insert("spans",QJsonArray{QJsonObject{{"kind","link"},{"text",text},{"target","IntrinsicBand"}}});
+            cells[0]=cell;row.insert("cells",cells);rows[0]=row;table.insert("rows",rows);
+            QJsonArray floatBlocks;for(int i=0;i<30;++i)floatBlocks.append(QJsonObject{{"kind","paragraph"},{"spans",QJsonArray{QJsonObject{{"kind","text"},{"text","F"}}}}});
+            const QJsonObject floatCell{{"spans",QJsonArray{}},{"blocks",floatBlocks}};
+            const QJsonObject floating{{"kind","table"},{"table",QJsonObject{
+                {"geometry",QJsonObject{{"width",px(120)},{"border",0},{"cell_padding",0},{"cell_spacing",0}}},
+                {"style",QJsonObject{{"float_side",side},{"margins",QJsonObject{{"top",px(0)},{"right",px(0)},{"bottom",px(0)},{"left",px(0)}}}}},
+                {"rows",QJsonArray{QJsonObject{{"cells",QJsonArray{floatCell}}}}}}}};
+            QJsonArray compositionStates;int compositionSequence=0;
+            const QPointer<QTextDocument> observedDocument(window.reading_->document());
+            const auto observation=QObject::connect(observedDocument,&QTextDocument::contentsChanged,&window,[&] {
+                if(!observedDocument)return;
+                auto *observedLayout=observedDocument->documentLayout();
+                QJsonArray frames,boundaries;int frameCount=0,boundaryCount=0;
+                const auto visit=[&](auto &&self,QTextFrame *frame)->void {
+                    if(++frameCount>32)return;
+                    const auto format=frame->frameFormat();
+                    frames.append(QJsonObject{{"id",frame->objectIndex()},{"first",frame->firstPosition()},{"last",frame->lastPosition()},
+                        {"parent",frame->parentFrame()?frame->parentFrame()->objectIndex():-1},
+                        {"table",bool(qobject_cast<QTextTable *>(frame))},
+                        {"viewport",format.hasProperty(SemanticHtml::tableViewportProperty)},
+                        {"float",format.position()!=QTextFrameFormat::InFlow}});
+                    for(auto *child:frame->childFrames())self(self,child);
+                };
+                visit(visit,observedDocument->rootFrame());
+                for(auto block=observedDocument->begin();block.isValid();block=block.next()) {
+                    const auto marker=block.blockFormat().property(QTextFormat::UserProperty+0x5806);
+                    if(!marker.isValid())continue;
+                    if(++boundaryCount>8)break;
+                    const auto *parent=QTextCursor(block).currentFrame();
+                    boundaries.append(QJsonObject{{"position",block.position()},{"length",block.length()},
+                        {"visible",block.isVisible()},{"list",bool(block.textList())},
+                        {"parent",parent?parent->objectIndex():-1},{"markerType",marker.metaType().id()},
+                        {"heading",block.blockFormat().headingLevel()},
+                        {"rule",block.blockFormat().hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth)}});
+                }
+                compositionStates.append(QJsonObject{{"sequence",++compositionSequence},{"revision",observedDocument->revision()},
+                    {"count",observedDocument->characterCount()},{"layoutEnabled",observedDocument->isLayoutEnabled()},
+                    {"nativeError",observedLayout?QJsonValue::fromVariant(observedLayout->property("_wikidictParagraphBoxLayoutError")):QJsonValue()},
+                    {"frames",frames},{"frameTruncated",frameCount>32},{"boundaries",boundaries},{"boundaryTruncated",boundaryCount>8}});
+                if(compositionStates.size()>16)compositionStates.removeFirst();
+            });
+            const bool composed=composeReadingBlocks(window,QJsonArray{floating,QJsonObject{{"kind","table"},{"table",table}}});
+            QObject::disconnect(observation);
+            if(!composed)qInfo().noquote()<<"intrinsic-band-compose "<<QJsonDocument(QJsonObject{
+                {"direction",direction},{"side",side},{"unbreakable",unbreakable},{"sequence",compositionSequence},
+                {"truncated",compositionSequence>16},{"states",compositionStates}}).toJson(QJsonDocument::Compact);
+            QVERIFY(composed);
+            auto *doc=window.reading_->document();auto *native=qobject_cast<QTextDocumentLayout *>(doc->documentLayout());QVERIFY(native);
+            QPointer<QTextFrame> owner,precedingFloat;
+            const auto find=[&](auto &&self,QTextFrame *frame)->void {
+                if(frame->frameFormat().hasProperty(SemanticHtml::tableViewportProperty)){QVERIFY(!owner);owner=frame;}
+                if(qobject_cast<QTextTable *>(frame) && frame->frameFormat().position()!=QTextFrameFormat::InFlow){QVERIFY(!precedingFloat);precedingFloat=frame;}
+                for(auto *child:frame->childFrames())self(self,child);
+            };find(find,doc->rootFrame());QVERIFY(owner && precedingFloat);QCOMPARE(owner->parentFrame(),doc->rootFrame());
+            QCOMPARE(precedingFloat->parentFrame(),doc->rootFrame());
+            QCOMPARE(precedingFloat->frameFormat().position(),side=="left"?QTextFrameFormat::FloatLeft:QTextFrameFormat::FloatRight);
+            auto *floatGrid=qobject_cast<QTextTable *>(precedingFloat.data());QVERIFY(floatGrid);
+            QCOMPARE(floatGrid->rows(),1);QCOMPARE(floatGrid->columns(),1);
+            QCOMPARE(doc->find("F").currentFrame(),precedingFloat.data());
+            const auto raw=doc->toRawText();const auto entry=window.currentEntry_;
+            QCOMPARE(owner->childFrames().size(),1);auto *grid=qobject_cast<QTextTable *>(owner->childFrames().first());QVERIFY(grid);
+            const int ownerId=owner->objectIndex(),gridId=grid->objectIndex();
+            const auto source=owner->frameFormat().property(SemanticHtml::tableViewportProperty).toMap().value("source");
+            const QString sourceWitness=unbreakable?text:QStringLiteral("band");
+            const auto selected=doc->find(sourceWitness,0,QTextDocument::FindCaseSensitively);QVERIFY(!selected.isNull());
+            QCOMPARE(selected.selectedText(),sourceWitness);QCOMPARE(selected.charFormat().anchorHref(),QString("dict:IntrinsicBand"));
+            const qreal scale=native->paintDevice()?native->paintDevice()->logicalDpiY()/96.0:QFontMetricsF(doc->defaultFont()).fontDpi()/96.0;
+            for(qreal cssWidth:{900.0,600.0,900.0}) {
+                doc->setTextWidth(cssWidth*scale);
+                QVERIFY(window.editDocumentFormats(window.reading_,[&] { SemanticHtml::reflowTableBlockViewports(doc,cssWidth); }));
+                native->documentSize();
+                QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);QCOMPARE(owner->frameFormat().position(),QTextFrameFormat::InFlow);
+                const auto parentFormat=doc->rootFrame()->frameFormat();const auto root=native->frameBoundingRect(doc->rootFrame());
+                const qreal left=root.left()+parentFormat.leftMargin()*scale,right=root.left()+doc->pageSize().width()-parentFormat.rightMargin()*scale;
+                const auto excluded=native->tableBoundingRect(floatGrid),actual=native->frameBoundingRect(owner);
+                const qreal bandLeft=side=="left"?excluded.right():left,bandRight=side=="right"?excluded.left():right;
+                const qreal containing=right-left,band=bandRight-bandLeft;
+                QVERIFY(band<containing-100*scale);
+                const auto gridRect=native->tableBoundingRect(grid);
+                const QString diagnostic=QString("unbreakable=%1 css=%2 C=%3 F=%4 owner=(%5,%6,%7,%8) gridWidth=%9 floatBottom=%10")
+                    .arg(unbreakable).arg(cssWidth).arg(containing).arg(band).arg(actual.left()).arg(actual.top()).arg(actual.width()).arg(actual.height()).arg(gridRect.width()).arg(excluded.bottom());
+                if(!unbreakable) {
+                    // Existing wrapping positive: MIN is below F, so stay beside the float.
+                    QVERIFY(actual.top()<excluded.bottom());
+                    QVERIFY2(qAbs(actual.width()-band)<.1,qPrintable(diagnostic));
+                    QVERIFY(qAbs(actual.left()-bandLeft)<.1);QVERIFY(qAbs(actual.right()-bandRight)<.1);
+                } else {
+                    // The actual unbreakable grid exceeds C and F. In narrow
+                    // mode max-width:100% caps the owner at C, not at F. Such
+                    // an owner cannot fit beside the float and must move below.
+                    // A wrong cap=F would both shrink it and leave it beside.
+                    QVERIFY2(gridRect.width()>containing+100*scale,qPrintable(diagnostic));
+                    QVERIFY2(actual.top()>=excluded.bottom()-.1,qPrintable(diagnostic));
+                    if(cssWidth<=639) {
+                        QVERIFY2(qAbs(actual.width()-containing)<.1,qPrintable(diagnostic));
+                        QVERIFY2(qAbs(actual.left()-left)<.1,qPrintable(diagnostic));QVERIFY(qAbs(actual.right()-right)<.1);
+                        QVERIFY(gridRect.width()>actual.width()+100*scale);
+                        QVariantMap port;for(const auto &value:native->wikidictScrollports())
+                            if(value.toMap().value("owner").toInt()==ownerId)port=value.toMap();
+                        QVERIFY(port.value("focus_active").toBool());QVERIFY(port.value("maximum").toDouble()>port.value("minimum").toDouble());
+                    } else {
+                        // Wide automatic layout keeps the real intrinsic minimum.
+                        QVERIFY2(actual.width()>containing+100*scale,qPrintable(diagnostic));
+                    }
+                }
+                QCOMPARE(owner->objectIndex(),ownerId);QCOMPARE(grid->objectIndex(),gridId);QCOMPARE(grid->parentFrame(),owner.data());
+                QCOMPARE(owner->frameFormat().property(SemanticHtml::tableViewportProperty).toMap().value("source"),source);
+                QCOMPARE(selected.selectedText(),sourceWitness);QCOMPARE(selected.charFormat().anchorHref(),QString("dict:IntrinsicBand"));
+                QCOMPARE(doc->toRawText(),raw);QCOMPARE(window.currentEntry_,entry);
+            }
+        }
+    }
+
+    void intrinsicTableViewportUsesTheCellContainingInterval() {
+        MainWindow window{QString()};window.resize(900,700);window.show();QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+        const auto px=[](double value){return QJsonObject{{"unit","px"},{"value",value}};};
+        const auto edges=[](QJsonValue value){return QJsonObject{{"top",value},{"right",value},{"bottom",value},{"left",value}};};
+        const QJsonObject none{{"none",QJsonObject{}}};
+        for(const QString direction:{QStringLiteral("ltr"),QStringLiteral("rtl")}) {
+            auto inner=intrinsicTableViewportFixture(direction,false,false);auto policy=inner.value("block_viewport").toObject();
+            policy.insert("box_sizing","border_box");inner.insert("block_viewport",policy);
+            auto rows=inner.value("rows").toArray();auto row=rows[0].toObject();auto cells=row.value("cells").toArray();auto first=cells[0].toObject();
+            first.insert("spans",QJsonArray{QJsonObject{{"kind","link"},{"text",QString("cell ").repeated(100)},{"target","CellContaining"}}});
+            cells[0]=first;row.insert("cells",cells);rows[0]=row;inner.insert("rows",rows);
+            const QJsonObject outerCellStyle{{"padding",edges(px(0))},{"border",none},{"width",QJsonObject{{"unit","percent"},{"value",50}}}};
+            const QJsonObject firstCell{{"rowspan",1},{"colspan",1},{"header",false},{"spans",QJsonArray{}},{"style",outerCellStyle},
+                {"blocks",QJsonArray{QJsonObject{{"kind","table"},{"table",inner}}}}};
+            const QJsonObject secondCell{{"rowspan",1},{"colspan",1},{"header",false},{"style",outerCellStyle},
+                {"spans",QJsonArray{QJsonObject{{"kind","text"},{"text","Adjacent source"}}}}};
+            const QJsonObject outer{{"style",QJsonObject{{"width",QJsonObject{{"unit","percent"},{"value",100}}},{"border",none},{"padding",edges(px(0))},{"collapse","collapse"}}},
+                {"geometry",QJsonObject{{"border",0},{"cell_padding",0},{"cell_spacing",0}}},
+                {"rows",QJsonArray{QJsonObject{{"cells",QJsonArray{firstCell,secondCell}}}}}};
+            QVERIFY(composeReadingBlocks(window,QJsonArray{QJsonObject{{"kind","table"},{"table",outer}}}));
+            auto *doc=window.reading_->document();auto *native=qobject_cast<QTextDocumentLayout *>(doc->documentLayout());QVERIFY(native);
+            QPointer<QTextFrame> owner;const auto find=[&](auto &&self,QTextFrame *frame)->void {
+                if(frame->frameFormat().property(SemanticHtml::tableViewportProperty).toMap().value("intrinsic").toBool()){QVERIFY(!owner);owner=frame;}
+                for(auto *child:frame->childFrames())self(self,child);
+            };find(find,doc->rootFrame());QVERIFY(owner);auto *parent=qobject_cast<QTextTable *>(owner->parentFrame());QVERIFY(parent);
+            const auto containingCell=parent->cellAt(owner->firstPosition());QVERIFY(containingCell.isValid());
+            const auto raw=doc->toRawText();const auto entry=window.currentEntry_;
+            for(qreal width:{600.0,900.0,600.0}) {
+                doc->setTextWidth(width);SemanticHtml::reflowTableBlockViewports(doc,width);native->documentSize();QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);
+                const auto cellRect=native->tableCellBoundingRect(parent,containingCell),parentRect=native->tableBoundingRect(parent),actual=native->frameBoundingRect(owner);
+                QVERIFY(parentRect.width()>cellRect.width()*1.5);QVERIFY(cellRect.width()>0);
+                QVERIFY2(qAbs(actual.width()-cellRect.width())<.1,qPrintable(QString("cell C=%1 parent=%2 owner=%3").arg(cellRect.width()).arg(parentRect.width()).arg(actual.width())));
+                QVERIFY(qAbs(actual.left()-cellRect.left())<.1);QCOMPARE(owner->frameFormat().position(),QTextFrameFormat::InFlow);
+                QCOMPARE(doc->toRawText(),raw);QCOMPARE(window.currentEntry_,entry);
+            }
+        }
+    }
+
+    void intrinsicTableViewportKeepsSourceFocusAcrossAutomaticWide() {
+        for(const QString direction:{QStringLiteral("ltr"),QStringLiteral("rtl")})
+        for(bool overflow:{false,true}) for(bool outline:{false,true}) {
+            MainWindow window{QString()};window.resize(600,700);window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+            const auto table=intrinsicTableViewportFixture(direction,overflow,outline);
+            const auto paint=table.value("block_viewport").toObject().value("focus_paint").toObject();
+            const QString firstText=overflow?QString(100,QChar('M')):QStringLiteral("A");
+            const QJsonObject source{{"kind","table"},{"table",table}};
+            QVERIFY(composeReadingBlocks(window,QJsonArray{source}));window.readingPaneAction_->trigger();
+            QTRY_VERIFY(window.reading_->isVisible());
+            auto *doc=window.reading_->document();auto *native=qobject_cast<QTextDocumentLayout *>(doc->documentLayout());QVERIFY(native);
+            QPointer<QTextFrame> owner;QPointer<QTextTable> grid;
+            const auto collect=[&](auto &&self,QTextFrame *frame)->void {
+                if(frame->frameFormat().hasProperty(SemanticHtml::tableViewportProperty)){QVERIFY(!owner);owner=frame;}
+                if(auto *real=qobject_cast<QTextTable *>(frame)){QVERIFY(!grid);grid=real;}
+                for(auto *child:frame->childFrames())self(self,child);
+            };
+            collect(collect,doc->rootFrame());QVERIFY(owner && grid);QCOMPARE(grid->parentFrame(),owner.data());
+            const int ownerId=owner->objectIndex(),gridId=grid->objectIndex();const auto raw=doc->toRawText();const auto entry=window.currentEntry_;
+            const auto portForOwner=[&]{QVariantMap result;for(const auto &value:native->wikidictScrollports())
+                if(value.toMap().value("owner").toInt()==ownerId)result=value.toMap();return result;};
+            QTRY_VERIFY(portForOwner().value("focus_active").toBool());
+            auto port=portForOwner();QCOMPARE(port.value("focus_paint").value<QJsonObject>(),paint);
+            QVERIFY(!owner->frameFormat().property(SemanticHtml::tableViewportProperty).toMap().contains("paired"));
+            const auto identity=port.value("source");
+            const auto findTarget=[&]()->QWidget * {
+                for(auto *candidate:window.reading_->findChildren<QWidget *>("readingSourceTableScrollFocus"))
+                    if(candidate->property("wikidict.sourceTable.owner").toMap().value("owner").toInt()==ownerId && candidate->isVisible())return candidate;
+                return nullptr;
+            };
+            QPointer<QWidget> target;QTRY_VERIFY((target=findTarget()));QCOMPARE(target->focusPolicy(),Qt::TabFocus);
+            window.reading_->setFocus();window.reading_->setTextCursor(QTextCursor(doc));
+            for(int step=0;step<64 && !target->hasFocus();++step){
+                auto *focused=QApplication::focusWidget();QVERIFY(focused && window.isAncestorOf(focused));QTest::keyClick(focused,Qt::Key_Tab);
+            }
+            QTRY_VERIFY(target->hasFocus());
+            auto *ax=QAccessible::queryAccessibleInterface(target);QVERIFY(ax && ax->actionInterface());
+            const auto observedState=ax->state();
+            if(!observedState.focusable || !observedState.focused) {
+                const auto bound=target->property("wikidict.sourceTable.owner").toMap();
+                const auto live=portForOwner();
+                qInfo() << "source-table-focus-state" << direction << overflow << outline
+                        << "focused" << target->hasFocus() << "policy" << target->focusPolicy()
+                        << "sameObject" << (ax->object()==target) << "invalid" << observedState.invalid
+                        << "axFocusable" << observedState.focusable << "axFocused" << observedState.focused
+                        << "revision" << doc->revision() << "boundRevision" << bound.value("revision")
+                        << "liveRevision" << live.value("revision") << "active" << live.value("focus_active")
+                        << "firstEqual" << (bound.value("first")==live.value("first"))
+                        << "lastEqual" << (bound.value("last")==live.value("last"))
+                        << "sourceEqual" << (bound.value("source")==live.value("source"))
+                        << "paintEqual" << (bound.value("focus_paint")==live.value("focus_paint"))
+                        << "capability" << native->property("_wikidictTablePairedScrollCapability");
+            }
+            QVERIFY(ax->state().focusable && ax->state().focused);QCOMPARE(ax->childCount(),0);
+            // An owned no-op edit still advances QTextDocument's revision;
+            // the same source target must remain a live accessibility owner.
+            const int beforeOwnedRevision=doc->revision();
+            const auto beforeOwnedBinding=target->property("wikidict.sourceTable.owner").toMap();
+            QVERIFY(window.editDocumentFormats(window.reading_,[]{}));
+            QCOMPARE(doc->revision(),beforeOwnedRevision+1);QVERIFY(target && target->hasFocus());
+            auto afterOwnedBinding=target->property("wikidict.sourceTable.owner").toMap();
+            QCOMPARE(afterOwnedBinding.value("revision").toInt(),doc->revision());
+            afterOwnedBinding.insert("revision",beforeOwnedBinding.value("revision"));QCOMPARE(afterOwnedBinding,beforeOwnedBinding);
+            QCOMPARE(QAccessible::queryAccessibleInterface(target),ax);
+            QVERIFY(!ax->state().invalid && ax->state().focusable && ax->state().focused);
+            QCOMPARE(doc->toRawText(),raw);QCOMPARE(window.currentEntry_,entry);
+            const bool range=port.value("minimum").toDouble()<port.value("maximum").toDouble();QCOMPARE(range,overflow);
+            QCOMPARE(ax->actionInterface()->actionNames().contains(QAccessibleActionInterface::scrollRightAction()),range);
+            QVERIFY(ax->actionInterface()->actionNames().contains(QAccessibleActionInterface::setFocusAction()));
+            auto *style=new PairedFocusProbeStyle;style->setParent(target);target->setStyle(style);
+            const auto ownerBounds=native->frameBoundingRect(owner);const auto gridSize=native->tableBoundingRect(grid).size();
+            const double minimum=port.value("minimum").toDouble(),maximum=port.value("maximum").toDouble();
+            const bool toMinimum=qAbs(minimum)>qAbs(maximum);const double endpoint=toMinimum?minimum:maximum;
+            QTest::keyClick(target,toMinimum?Qt::Key_Home:Qt::Key_End);QCoreApplication::processEvents();
+            port=portForOwner();QCOMPARE(port.value("offset").toDouble(),endpoint);
+            if(range)QVERIFY(qAbs(endpoint)>0);else QCOMPARE(endpoint,0.0);
+            QVERIFY(!target->grab().isNull());QCOMPARE(style->focusPaints>0,outline);if(outline)QCOMPARE(style->requested,QColor("#1256a0"));
+            QCOMPARE(native->frameBoundingRect(owner),ownerBounds);QCOMPARE(native->tableBoundingRect(grid).size(),gridSize);
+            QJsonArray responsiveStates;int responsiveSequence=0;
+            const QPointer<QTextDocument> responsiveDocument(doc);
+            const auto responsiveSnapshot=[&](const QString &phase) {
+                if(!responsiveDocument || !owner || window.reading_->document()!=responsiveDocument)return;
+                const auto margins=window.readerContent_->layout()->contentsMargins();
+                responsiveStates.append(QJsonObject{{"phase",phase},{"sequence",++responsiveSequence},
+                    {"revision",responsiveDocument->revision()},{"layoutEnabled",responsiveDocument->isLayoutEnabled()},
+                    {"pageWidth",responsiveDocument->pageSize().width()},
+                    {"viewportWidth",window.reading_->viewport()->width()},{"readerWidth",window.readerContent_->width()},
+                    {"windowWidth",window.contentsRect().width()},
+                    {"margins",QJsonArray{margins.left(),margins.top(),margins.right(),margins.bottom()}},
+                    {"compactNavigation",window.compactNavigation_},{"compactReader",window.compactReader_},
+                    {"responsiveActive",window.readingResponsiveLayoutActive_},{"scheduled",window.readingFloatLayoutScheduled_},
+                    {"policyActive",QJsonValue::fromVariant(owner->frameFormat().property(SemanticHtml::tableViewportProperty).toMap().value("active"))}});
+                if(responsiveStates.size()>24)responsiveStates.removeFirst();
+            };
+            const auto responsiveObservation=QObject::connect(responsiveDocument,&QTextDocument::contentsChanged,&window,
+                [&]{responsiveSnapshot(QStringLiteral("contentsChanged"));});
+            const auto disconnectResponsive=qScopeGuard([&]{QObject::disconnect(responsiveObservation);});
+            responsiveSnapshot(QStringLiteral("beforeWide"));
+            QJsonArray responsiveRanges{QJsonObject{{"phase","beforeWide"},{"minimum",port.value("minimum").toDouble()},{"maximum",port.value("maximum").toDouble()},{"offset",port.value("offset").toDouble()}}};
+            window.resize(900,700);QTRY_COMPARE(window.contentsRect().width(),900);
+            QTRY_VERIFY(!portForOwner().value("focus_active").toBool());
+            QTRY_VERIFY(target && target->hasFocus() && target->focusPolicy()==Qt::NoFocus);
+            port=portForOwner();responsiveRanges.append(QJsonObject{{"phase","afterWide"},{"minimum",port.value("minimum").toDouble()},{"maximum",port.value("maximum").toDouble()},{"offset",port.value("offset").toDouble()}});
+            QCOMPARE(port.value("source"),identity);QCOMPARE(port.value("offset").toDouble(),endpoint);
+            QVERIFY(!native->wikidictScrollportOffset(ownerId,owner->firstPosition(),doc->revision(),endpoint+1));
+            ax=QAccessible::queryAccessibleInterface(target);QVERIFY(ax && ax->actionInterface());QVERIFY(ax->actionInterface()->actionNames().isEmpty());
+            const int paintsBeforeWide=style->focusPaints;
+            QVERIFY(!target->grab().isNull());QCOMPARE(style->focusPaints,paintsBeforeWide);
+            window.resize(600,700);QTRY_COMPARE(window.contentsRect().width(),600);
+            QTRY_VERIFY(portForOwner().value("focus_active").toBool());QTRY_COMPARE(target->focusPolicy(),Qt::TabFocus);QVERIFY(target->hasFocus());
+            responsiveSnapshot(QStringLiteral("afterNarrow"));
+            port=portForOwner();responsiveRanges.append(QJsonObject{{"phase","afterNarrow"},{"minimum",port.value("minimum").toDouble()},{"maximum",port.value("maximum").toDouble()},{"offset",port.value("offset").toDouble()}});
+            if(port.value("offset").toDouble()!=endpoint)qInfo().noquote()<<"responsive-pan-return "<<QJsonDocument(QJsonObject{
+                {"method","intrinsic"},{"expected",endpoint},{"port",QJsonObject::fromVariantMap(port)},
+                {"sequence",responsiveSequence},{"truncated",responsiveSequence>24},{"states",responsiveStates},{"ranges",responsiveRanges}}).toJson(QJsonDocument::Compact);
+            QCOMPARE(port.value("offset").toDouble(),endpoint);QCOMPARE(port.value("source"),identity);
+            QCOMPARE(owner->objectIndex(),ownerId);QCOMPARE(grid->objectIndex(),gridId);QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);
+            // A resize that stays active must still clamp to its real range;
+            // only a responsive deactivation retains the previous physical pan.
+            window.resize(620,700);QTRY_COMPARE(window.contentsRect().width(),620);
+            QTRY_VERIFY(portForOwner().value("focus_active").toBool());
+            port=portForOwner();
+            const double activeEndpoint=qBound(port.value("minimum").toDouble(),endpoint,port.value("maximum").toDouble());
+            QCOMPARE(port.value("offset").toDouble(),activeEndpoint);
+            if(range)QVERIFY(activeEndpoint!=endpoint);else QCOMPARE(activeEndpoint,0.0);
+            QVERIFY(target && target->hasFocus() && target->focusPolicy()==Qt::TabFocus);
+            QCOMPARE(port.value("source"),identity);
+            window.resize(600,700);QTRY_COMPARE(window.contentsRect().width(),600);
+            QTRY_VERIFY(portForOwner().value("focus_active").toBool());
+            port=portForOwner();QCOMPARE(port.value("offset").toDouble(),activeEndpoint);
+            QTest::keyClick(target,toMinimum?Qt::Key_Home:Qt::Key_End);QCoreApplication::processEvents();
+            port=portForOwner();QCOMPARE(port.value("offset").toDouble(),endpoint);
+            QCOMPARE(port.value("source"),identity);QCOMPARE(doc->toRawText(),raw);QCOMPARE(window.currentEntry_,entry);
+            // Source links retain independent ordinary Reader keyboard traversal.
+            const auto first=doc->find(firstText,0,QTextDocument::FindCaseSensitively);QVERIFY(!first.isNull());
+            window.reading_->setFocus();window.reading_->setTextCursor(first);QCOMPARE(window.reading_->textCursor().charFormat().anchorHref(),QString("dict:IntrinsicFirst"));
+            QTest::keyClick(window.reading_,Qt::Key_Tab);QCOMPARE(window.reading_->textCursor().selectedText(),QString("B"));
+            QCOMPARE(window.reading_->textCursor().charFormat().anchorHref(),QString("dict:IntrinsicSecond"));
+            QCOMPARE(doc->toRawText(),raw);QCOMPARE(window.currentEntry_,entry);
+            // An edit outside the owned transaction must not acquire a fresh
+            // binding merely because its source text is unchanged.
+            QVERIFY(window.editDocumentFormats(window.reading_,[]{}));
+            ax=QAccessible::queryAccessibleInterface(target);QVERIFY(ax && !ax->state().invalid);
+            const auto beforeForeignBinding=target->property("wikidict.sourceTable.owner").toMap();
+            const int beforeForeignRevision=doc->revision();
+            QTextCursor foreign(doc);foreign.beginEditBlock();foreign.endEditBlock();
+            QCOMPARE(doc->revision(),beforeForeignRevision+1);
+            QCOMPARE(target->property("wikidict.sourceTable.owner").toMap(),beforeForeignBinding);
+            QVERIFY(ax->state().invalid && !ax->state().focusable);
+            QVERIFY(ax->actionInterface()->actionNames().isEmpty());
+            QVERIFY(!native->wikidictScrollportOffset(ownerId,owner->firstPosition(),beforeForeignRevision,endpoint));
+            // Formatting remains allowed; it must not reauthorize an owner
+            // whose binding was stale before the owned transaction began.
+            QVERIFY(window.editDocumentFormats(window.reading_,[]{}));
+            QCOMPARE(doc->revision(),beforeForeignRevision+2);
+            QCOMPARE(target->property("wikidict.sourceTable.owner").toMap(),beforeForeignBinding);
+            QVERIFY(ax->state().invalid && !ax->state().focusable);
+            QVERIFY(ax->actionInterface()->actionNames().isEmpty());
+            QVERIFY(!native->wikidictScrollportOffset(ownerId,owner->firstPosition(),beforeForeignRevision,endpoint));
+            QCOMPARE(doc->toRawText(),raw);QCOMPARE(window.currentEntry_,entry);
+        }
+    }
+
+    void tableCornersKeepSourceDecorationOnTheActualResponsiveOwner() {
+        MainWindow window{QString()}; window.resize(900,700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+        const auto px=[](double value){ return QJsonObject{{"unit","px"},{"value",value}}; };
+        const auto edges=[&](QJsonObject value){ return QJsonObject{{"top",value},{"right",value},{"bottom",value},{"left",value}}; };
+        const QJsonObject radii{{"top_left",px(8)},{"top_right",px(8)},{"bottom_right",px(8)},{"bottom_left",px(0)}};
+        const QJsonObject border{{"solid",QJsonObject{{"width",px(1)},{"color","#bca674"}}}};
+        const QJsonObject padding=edges(QJsonObject{{"unit","em"},{"value",.1}});
+        auto margins=edges(px(0)); margins.insert("bottom",QJsonObject{{"unit","em"},{"value",.5}});
+        const QJsonObject style{{"background","#f5f4aa"},{"border",border},{"collapse","separate"},
+            {"corner_radii",radii},{"width",QJsonObject{{"unit","percent"},{"value",100}}},{"padding",padding},{"margins",margins}};
+        for (const QString containing : {QStringLiteral("ltr"),QStringLiteral("rtl")}) {
+        auto wideStyle=style; wideStyle.insert("containing_direction",containing);
+        auto box=wideStyle; box.remove("collapse");
+        const QJsonObject viewport{{"max_viewport_width_px",639},{"language","mg"},{"box_style",box},
+            {"box_sizing","content_box"},{"max_width",QJsonObject{{"unit","percent"},{"value",100}}},
+            {"grid_style",QJsonObject{{"collapse","separate"}}},{"grid_direction",containing=="ltr" ? "rtl" : "ltr"},
+            {"focus_paint",QJsonObject{{"mode","authored_none"}}}};
+        for (const auto metrics : {QPair<int,int>{2,1},QPair<int,int>{0,0}}) {
+        const QJsonObject geometry{{"cell_spacing",metrics.first},{"cell_padding",metrics.second}};
+        for (int shape=0;shape<3;++shape) {
+            const QJsonObject link{{"kind","link"},{"text",QString(80,QChar('M'))},{"target","CornerSource"}};
+            QJsonObject first{{"spans",shape==1 ? QJsonArray{} : QJsonArray{link}},{"rowspan",1},{"colspan",1},{"header",false}};
+            auto authored=first; authored.insert("background","#f5f4aa");
+            QJsonObject table{{"style",wideStyle},{"block_viewport",viewport},{"geometry",geometry},
+                {"rows",shape==2 ? QJsonArray{} : QJsonArray{QJsonObject{{"cells",QJsonArray{first,authored}}}}},
+                {"caption",QJsonArray{}}};
+            const QJsonObject source{{"kind","table"},{"table",table}};
+            QVERIFY(composeReadingBlocks(window,QJsonArray{source})); window.readingPaneAction_->trigger();
+            QTRY_VERIFY(window.reading_->isVisible());
+            auto *doc=window.reading_->document(); auto *native=qobject_cast<QTextDocumentLayout *>(doc->documentLayout()); QVERIFY(native);
+            QPointer<QTextFrame> owner;
+            const auto find=[&](auto &&self,QTextFrame *frame)->void {
+                if (frame->frameFormat().hasProperty(SemanticHtml::tableViewportProperty)) { QVERIFY(!owner); owner=frame; }
+                for(auto *child:frame->childFrames()) self(self,child);
+            };
+            find(find,doc->rootFrame()); QVERIFY(owner); QCOMPARE(owner->childFrames().size(),1);
+            QCOMPARE(owner->parentFrame(),doc->rootFrame());
+            QPointer<QTextFrame> grid=owner->childFrames().first();
+            const auto raw=doc->toRawText(); const int ownerId=owner->objectIndex(),gridId=grid->objectIndex(),count=doc->characterCount();
+            const auto entry=window.currentEntry_;
+            for(int width:{900,639,640,600,900}) {
+                window.resize(width,700); QTRY_COMPARE(window.contentsRect().width(),width);
+                const bool narrow=width<=639;
+                QTRY_COMPARE(owner->frameFormat().property(SemanticHtml::tableViewportProperty).toMap().value("active").toBool(),narrow);
+                QTRY_VERIFY(!window.readingFloatLayoutScheduled_); native->documentSize();
+                QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);
+                QCOMPARE(owner->objectIndex(),ownerId); QCOMPARE(grid->objectIndex(),gridId); QCOMPARE(grid->parentFrame(),owner.data());
+                QCOMPARE(doc->toRawText(),raw); QCOMPARE(doc->characterCount(),count); QCOMPARE(window.currentEntry_,entry);
+                const auto allocation=owner->frameFormat().property(SemanticHtml::tableViewportProperty).toMap();
+                QCOMPARE(allocation.value("direction").toInt(),int(containing=="rtl" ? Qt::RightToLeft : Qt::LeftToRight));
+                QCOMPARE(allocation.value("grid_direction").toInt(),int(containing=="rtl" ? Qt::LeftToRight : Qt::RightToLeft));
+                QCOMPARE(allocation.value("autos").toList(),(QVariantList{false,false,false,false}));
+                const auto marginValues=allocation.value("margins").toList(); QCOMPARE(marginValues.size(),4);
+                QCOMPARE(marginValues[0].toDouble(),0.0); QCOMPARE(marginValues[1].toDouble(),0.0); QCOMPARE(marginValues[3].toDouble(),0.0);
+                QVERIFY(qAbs(marginValues[2].toDouble()-.5*allocation.value("em").toDouble())<.001);
+                const auto identity=QJsonDocument::fromJson(allocation.value("source").toByteArray()).object();
+                QCOMPARE(identity.value("geometry").toObject(),geometry);
+                QCOMPARE(identity.value("block_viewport").toObject(),viewport);
+                const auto saved=owner->frameFormat().property(SemanticHtml::tableViewportFormatsProperty).toMap();
+                const auto narrowFormat=saved.value("grid").value<QTextFormat>();
+                QVERIFY(!narrowFormat.boolProperty(QTextFormat::TableBorderCollapse));
+                QCOMPARE(narrowFormat.doubleProperty(QTextFormat::TableCellSpacing),double(metrics.first));
+                QCOMPARE(narrowFormat.doubleProperty(QTextFormat::TableCellPadding),double(metrics.second));
+                QVERIFY(!narrowFormat.hasProperty(SemanticHtml::tableCornerRadiiProperty));
+                QVERIFY(!narrowFormat.hasProperty(SemanticHtml::tableBoxPaddingProperty));
+                const auto corners=QVariantList{8.0,8.0,8.0,0.0};
+                QCOMPARE(owner->frameFormat().hasProperty(SemanticHtml::tableCornerRadiiProperty),narrow);
+                if(narrow) QCOMPARE(owner->frameFormat().property(SemanticHtml::tableCornerRadiiProperty).toList(),corners);
+                QTextFrame *paintedGrid=grid;
+                if(shape==2) { QCOMPARE(grid->childFrames().size(),1); paintedGrid=grid->childFrames().first(); }
+                const auto paintedFormat=paintedGrid->frameFormat();
+                QVERIFY(!paintedFormat.boolProperty(QTextFormat::TableBorderCollapse));
+                QCOMPARE(paintedFormat.doubleProperty(QTextFormat::TableCellSpacing),double(metrics.first));
+                QCOMPARE(paintedFormat.doubleProperty(QTextFormat::TableCellPadding),double(metrics.second));
+                QCOMPARE(paintedGrid->frameFormat().hasProperty(SemanticHtml::tableCornerRadiiProperty),!narrow);
+                if(!narrow) QCOMPARE(paintedGrid->frameFormat().property(SemanticHtml::tableCornerRadiiProperty).toList(),corners);
+                if(auto *real=qobject_cast<QTextTable *>(grid.data())) {
+                    QCOMPARE(real->rows(),1); QCOMPARE(real->columns(),2);
+                    QCOMPARE(real->cellAt(0,0).format().background().style(),Qt::NoBrush);
+                    QCOMPARE(real->cellAt(0,1).format().background().color(),QColor("#f5f4aa"));
+                    if(shape==0) {
+                        QTextCursor action=real->cellAt(0,0).firstCursorPosition(); action.setPosition(action.position()+80,QTextCursor::KeepAnchor);
+                        QCOMPARE(action.selectedText(),QString(80,QChar('M'))); QCOMPARE(action.charFormat().anchorHref(),QString("dict:CornerSource"));
+                    }
+                }
+                QVariantMap port; for(const auto &value:native->wikidictScrollports())
+                    if(value.toMap().value("owner").toInt()==ownerId) port=value.toMap();
+                if(narrow) {
+                    QVERIFY(!port.isEmpty()); QCOMPARE(port.value("clip_path").metaType().id(),qMetaTypeId<QPainterPath>());
+                    const auto clip=port.value("clip").toRectF(); const auto curved=port.value("clip_path").value<QPainterPath>();
+                    const auto outer=port.value("border_box").toRectF();
+                    const auto content=port.value("content_viewport").toRectF();
+                    const auto root=native->frameBoundingRect(doc->rootFrame());
+                    const auto rootFormat=doc->rootFrame()->frameFormat();
+                    const qreal left=root.left()+rootFormat.leftMargin()+rootFormat.border()+rootFormat.padding();
+                    const qreal pageWidth=doc->pageSize().width();
+                    QVERIFY(std::isfinite(pageWidth) && pageWidth>0);
+                    // Root's painted/scroll extent may grow with overflow;
+                    // the source percentage basis is its definite page width.
+                    const qreal right=root.left()+pageWidth-rootFormat.rightMargin()-rootFormat.border()-rootFormat.padding();
+                    // Percent100 remains content-box. Extra physical edges
+                    // overconstrain the interval, and source containing direction
+                    // chooses the edge; the independently opposite grid direction
+                    // must not decide this origin.
+                    QVERIFY(qAbs(content.width()-(right-left))<.1);
+                    QVERIFY(outer.width()>content.width()+1);
+                    if(containing=="rtl") QVERIFY(qAbs(outer.right()-right)<.1);
+                    else QVERIFY(qAbs(outer.left()-left)<.1);
+                    if(!clip.isEmpty()) {
+                        QVERIFY(!curved.contains(clip.topLeft()+QPointF(.05,.05)));
+                        QVERIFY(native->anchorAt(clip.topLeft()+QPointF(.05,.05)).isEmpty());
+                    }
+                } else QVERIFY(!port.contains("clip_path"));
+            }
+        }
+        }
+        }
+    }
+
+    void tableCornersKeepPaddingStripInkActionsAndOwnedScrollbarCoordinates()
+    {
+        MainWindow window{QString()}; window.resize(900,700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+        const auto px=[](qreal value){return QJsonObject{{"unit","px"},{"value",value}};};
+        const auto edges=[&](qreal t,qreal r,qreal b,qreal l){return QJsonObject{
+            {"top",px(t)},{"right",px(r)},{"bottom",px(b)},{"left",px(l)}};};
+        const QJsonObject percent{{"unit","percent"},{"value",100}};
+        const QJsonObject radii{{"top_left",px(80.25)},{"top_right",px(75.75)},
+            {"bottom_right",px(11.5)},{"bottom_left",px(0)}};
+        const QJsonObject border{{"solid",QJsonObject{{"width",px(1.25)},{"color","#334455"}}}};
+        const QJsonObject image{{"file","Padding control.png"},{"width_px",30},{"height_px",30},
+            {"vertical_align","baseline"},{"alt","Padding image source"}};
+        const QJsonObject picture{{"kind","link"},{"text",""},{"target","PaddingImage"},{"image",image}};
+        const QString label(160,QChar('M'));
+        const QJsonObject link{{"kind","link"},{"text",label},{"target","PaddingText"},{"foreground","#00cc44"}};
+        const auto cell=[](const QJsonObject &span){return QJsonObject{{"spans",QJsonArray{span}},
+            {"rowspan",1},{"colspan",1},{"header",false}};};
+        const QJsonObject before{{"kind","paragraph"},{"spans",QJsonArray{QJsonObject{{"kind","text"},{"text","NeighborBefore"}}}}};
+        const QJsonObject after{{"kind","paragraph"},{"spans",QJsonArray{QJsonObject{{"kind","text"},{"text","NeighborAfter"}}}}};
+        for(const QString &containing:{QString("ltr"),QString("rtl")}) {
+            const bool rtl=containing=="rtl";
+            const QJsonObject wide{{"collapse","separate"},{"background","#f5f4aa"},{"border",border},
+                {"corner_radii",radii},{"padding",edges(1.25,41.5,7.25,32.5)},{"margins",edges(0,0,0,0)},
+                {"width",percent},{"containing_direction",containing}};
+            auto box=wide; box.remove("collapse");
+            const QJsonObject viewport{{"max_viewport_width_px",639},{"language","mg"},{"box_style",box},
+                {"box_sizing","content_box"},{"max_width",percent},
+                {"grid_style",QJsonObject{{"collapse","separate"}}},{"grid_direction","ltr"},
+                {"focus_paint",QJsonObject{{"mode","authored_none"}}}};
+            const QJsonObject table{{"style",wide},{"block_viewport",viewport},
+                {"geometry",QJsonObject{{"cell_spacing",2},{"cell_padding",1}}},{"caption",QJsonArray{}},
+                {"rows",QJsonArray{QJsonObject{{"cells",QJsonArray{cell(picture),cell(link),cell(picture)}}}}}};
+            QVERIFY(composeReadingBlocks(window,QJsonArray{before,QJsonObject{{"kind","table"},{"table",table}},after}));
+            window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+            auto *reading=window.reading_; auto *doc=reading->document();
+            auto *native=qobject_cast<QTextDocumentLayout *>(doc->documentLayout()); QVERIFY(native);
+            QPointer<QTextFrame> owner;
+            const auto find=[&](auto &&self,QTextFrame *frame)->void {
+                if(frame->frameFormat().hasProperty(SemanticHtml::tableViewportProperty)) {QVERIFY(!owner);owner=frame;}
+                for(auto *child:frame->childFrames()) self(self,child);
+            }; find(find,doc->rootFrame()); QVERIFY(owner); QCOMPARE(owner->childFrames().size(),1);
+            auto *grid=qobject_cast<QTextTable *>(owner->childFrames().first()); QVERIFY(grid);
+            QCOMPARE(grid->rows(),1); QCOMPARE(grid->columns(),3);
+            const int ownerId=owner->objectIndex(),gridId=grid->objectIndex();
+            const QString raw=doc->toRawText(); const int count=doc->characterCount(); const auto entry=window.currentEntry_;
+            const auto neighbor=doc->find("NeighborBefore"); QVERIFY(!neighbor.isNull());
+            const auto textCursor=doc->find(label); QVERIFY(!textCursor.isNull()); QCOMPARE(textCursor.selectedText(),label);
+            const int textFirst=textCursor.selectionStart();
+            QList<int> imagePositions;
+            for(auto block=doc->begin();block.isValid();block=block.next())for(auto it=block.begin();!it.atEnd();++it) {
+                const auto fragment=it.fragment();if(fragment.isValid()&&fragment.charFormat().isImageFormat())imagePositions.append(fragment.position());
+            }
+            QCOMPARE(imagePositions.size(),2);
+            const int imagePosition=imagePositions[rtl?1:0];
+            QTextCursor imageCursor(doc); imageCursor.setPosition(imagePosition); imageCursor.movePosition(QTextCursor::NextCharacter,QTextCursor::KeepAnchor);
+            QCOMPARE(imageCursor.selectedText(),QString(QChar::ObjectReplacementCharacter));
+            const auto imageFormat=imageCursor.charFormat().toImageFormat(); QVERIFY(imageFormat.isAnchor());
+            const QString imageHref=imageFormat.anchorHref(); QVERIFY(!imageHref.isEmpty());
+            const auto character=[&](int position) {
+                const auto result=LogicalFlow::position(doc,position);
+                if(result.status==LogicalFlow::Status::Refused)return QRectF();
+                if(result.status==LogicalFlow::Status::Handled||result.values.contains("inlineCharacterRect"))
+                    return result.values.value(result.status==LogicalFlow::Status::Handled?"characterRect":"inlineCharacterRect").toRectF();
+                const auto block=doc->findBlock(position); if(!block.isValid()||!block.layout())return QRectF();
+                const int offset=position-block.position(); const auto line=block.layout()->lineForTextPosition(offset);
+                if(!line.isValid())return QRectF();
+                const qreal leading=line.cursorToX(offset,QTextLine::Leading),trailing=line.cursorToX(offset,QTextLine::Trailing);
+                return QRectF(native->blockBoundingRect(block).topLeft()+QPointF(qMin(leading,trailing),line.y()),
+                    QSizeF(qMax(qreal(1),qAbs(trailing-leading)),line.height()));
+            };
+            const auto portForOwner=[&]() {
+                for(const auto &row:native->wikidictScrollports())if(row.toMap().value("owner").toInt()==ownerId)return row.toMap();
+                return QVariantMap();
+            };
+            for(int width:{600,520,900,600}) {
+                window.resize(width,700); window.readingPaneAction_->trigger();
+                QTRY_VERIFY(reading->isVisible());
+                const bool narrow=width<=639;
+                QTRY_COMPARE(owner->frameFormat().property(SemanticHtml::tableViewportProperty).toMap().value("active").toBool(),narrow);
+                QTRY_VERIFY(!window.readingFloatLayoutScheduled_); native->documentSize();
+                QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);
+                QCOMPARE(doc->toRawText(),raw); QCOMPARE(doc->characterCount(),count); QCOMPARE(window.currentEntry_,entry);
+                QCOMPARE(owner->objectIndex(),ownerId); QCOMPARE(grid->objectIndex(),gridId); QCOMPARE(grid->parentFrame(),owner.data());
+                auto port=portForOwner(); QVERIFY(!port.isEmpty());
+                qInfo() << "TABLE_PADDING_GEOMETRY" << containing << width << narrow
+                    << QFontMetricsF(doc->defaultFont(),native->paintDevice()).fontDpi()
+                    << port.value("clip").toRectF() << port.value("content_viewport").toRectF()
+                    << port.value("border_box").toRectF() << port.value("bar").toRectF()
+                    << owner->frameFormat().property(SemanticHtml::tablePhysicalEdgesProperty)
+                    << owner->frameFormat().property(QTextFormat::UserProperty+0x57e8);
+                const QString frameDir=qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if(!frameDir.isEmpty()) {
+                    QVERIFY(QDir().mkpath(frameDir));
+                    const QString framePath=frameDir+QString("/table-padding-%1-%2.png").arg(containing).arg(width);
+                    QVERIFY(reading->viewport()->grab().save(framePath));qInfo()<<"TABLE_PADDING_FRAME"<<framePath;
+                }
+                if(!narrow) {
+                    QVERIFY(!port.contains("clip_path")); QVERIFY(!port.value("focus_active").toBool());
+                    // Radius alone does not install an overflow clip in the wide state.
+                    QCOMPARE(native->anchorAt(character(imagePosition).center()),imageHref);
+                    continue;
+                }
+                const QRectF clip=port.value("clip").toRectF(),content=port.value("content_viewport").toRectF();
+                const QRectF outer=port.value("border_box").toRectF(),bar=port.value("bar").toRectF();
+                const QPainterPath path=port.value("clip_path").value<QPainterPath>();
+                const QPainterPath barPath=port.value("bar_clip_path").value<QPainterPath>();
+                QVERIFY(!path.isEmpty()); QVERIFY(bar.height()>0);
+                QVERIFY(qAbs(clip.left()-outer.left()-1.25)<.06); QVERIFY(qAbs(clip.right()-outer.right()+1.25)<.06);
+                QVERIFY(qAbs(clip.top()-outer.top()-1.25)<.06);
+                QVERIFY(qAbs(clip.bottom()+bar.height()+1.25-outer.bottom())<.06);
+                QVERIFY(qAbs(content.left()-clip.left()-32.5)<.06); QVERIFY(qAbs(clip.right()-content.right()-41.5)<.06);
+                QVERIFY(qAbs(content.top()-clip.top()-1.25)<.06); QVERIFY(qAbs(clip.bottom()-content.bottom()-7.25)<.06);
+                QCOMPARE(bar.left(),clip.left()); QCOMPARE(bar.right(),clip.right()); QCOMPARE(bar.top(),clip.bottom());
+                QVERIFY(!barPath.isEmpty()); QVERIFY(!path.intersects(bar.adjusted(.1,.1,-.1,-.1)));
+                QCOMPARE(native->hitTest(bar.center(),Qt::ExactHit),-1); QVERIFY(native->anchorAt(bar.center()).isEmpty());
+                const auto allocation=owner->frameFormat().property(SemanticHtml::tableViewportProperty).toMap();
+                QCOMPARE(allocation.value("direction").toInt(),int(rtl?Qt::RightToLeft:Qt::LeftToRight));
+                QCOMPARE(allocation.value("grid_direction").toInt(),int(Qt::LeftToRight));
+                const qreal minimum=port.value("minimum").toDouble(),maximum=port.value("maximum").toDouble();
+                QVERIFY(maximum-minimum>100);
+                const QRectF strip=rtl?QRectF(content.right(),clip.top(),clip.right()-content.right(),clip.height())
+                    :QRectF(clip.left(),clip.top(),content.left()-clip.left(),clip.height());
+                QVERIFY(strip.width()>30);
+                const auto neighborBox=native->blockBoundingRect(neighbor.block());
+                int changes=0;
+                for(bool pictureCase:{false,true}) {
+                    const int position=pictureCase?imagePosition:textFirst+80;
+                    const auto beforeBox=character(position); QVERIFY(!beforeBox.isEmpty());
+                    const auto gridBefore=native->tableBoundingRect(grid);
+                    const qreal oldOffset=portForOwner().value("offset").toDouble();
+                    const qreal desired=qBound(minimum,oldOffset+beforeBox.center().x()-strip.center().x(),maximum);
+                    QVERIFY(native->wikidictScrollportOffset(ownerId,owner->firstPosition(),doc->revision(),desired));
+                    const qreal actual=portForOwner().value("offset").toDouble(); QVERIFY(qAbs(actual-desired)<.02);
+                    changes+=qAbs(actual-oldOffset)>.1;
+                    const auto boxNow=character(position),gridNow=native->tableBoundingRect(grid);
+                    QVERIFY(qAbs(boxNow.left()-beforeBox.left()+actual-oldOffset)<.06);
+                    QVERIFY(qAbs(gridNow.left()-gridBefore.left()+actual-oldOffset)<.06);
+                    QCOMPARE(gridNow.size(),gridBefore.size()); QCOMPARE(native->blockBoundingRect(neighbor.block()),neighborBox);
+                    QCOMPARE(portForOwner().value("content_viewport").toRectF(),content);
+                    QCOMPARE(portForOwner().value("clip_path").value<QPainterPath>(),path);
+                    QImage sourcePixels(30,30,QImage::Format_ARGB32_Premultiplied); sourcePixels.fill(QColor("#00cc44"));
+                    // Controlled image pixels exercise the ordinary resource/object painter, without media I/O.
+                    for(int sourcePosition:imagePositions) {
+                        QTextCursor cursor(doc); cursor.setPosition(sourcePosition);
+                        cursor.movePosition(QTextCursor::NextCharacter,QTextCursor::KeepAnchor);
+                        doc->addResource(QTextDocument::ImageResource,QUrl(cursor.charFormat().toImageFormat().name()),sourcePixels);
+                    }
+                    const QRect canvas=outer.united(bar).adjusted(-4,-4,4,4).toAlignedRect();
+                    const auto paint=[&](bool select) {
+                        QImage pixels(canvas.size(),QImage::Format_ARGB32_Premultiplied); pixels.fill(Qt::white);
+                        QAbstractTextDocumentLayout::PaintContext context;
+                        if(select) {
+                            QAbstractTextDocumentLayout::Selection selection; selection.cursor=QTextCursor(doc);
+                            selection.cursor.setPosition(pictureCase?imagePosition:textFirst);
+                            selection.cursor.setPosition(pictureCase?imagePosition+1:textFirst+label.size(),QTextCursor::KeepAnchor);
+                            selection.format.setBackground(QColor("#cc00cc")); context.selections.append(selection);
+                        }
+                        QPainter painter(&pixels); painter.translate(-canvas.topLeft()); native->draw(&painter,context); return pixels;
+                    };
+                    const auto pixels=paint(false),selected=paint(true);
+                    QPointF visible,hidden; bool haveVisible=false,haveHidden=false; int excluded=0,selectionPixels=0;
+                    const auto bounds=pictureCase?boxNow:QRectF(strip.left(),boxNow.top(),strip.width(),boxNow.height());
+                    for(int y=0;y<pixels.height();++y)for(int x=0;x<pixels.width();++x) {
+                        const QPointF point=canvas.topLeft()+QPointF(x+.5,y+.5);
+                        if(!strip.contains(point)||!bounds.contains(point))continue;
+                        const QRectF sample(point-QPointF(1,1),QSizeF(2,2));
+                        if(path.contains(sample)) {
+                            if(pixels.pixelColor(x,y)==QColor("#00cc44")&&!haveVisible) {visible=point;haveVisible=true;}
+                            if(selected.pixelColor(x,y)==QColor("#cc00cc"))++selectionPixels;
+                        } else if(!path.intersects(sample)) {
+                            QVERIFY(pixels.pixelColor(x,y)!=QColor("#00cc44"));
+                            QVERIFY(selected.pixelColor(x,y)!=QColor("#cc00cc"));
+                            QCOMPARE(native->hitTest(point,Qt::ExactHit),-1); QVERIFY(native->anchorAt(point).isEmpty()); ++excluded;
+                            if(!haveHidden) {hidden=point;haveHidden=true;}
+                        }
+                    }
+                    QVERIFY2(haveVisible,qPrintable(QString("padding ink direction=%1 width=%2 image=%3").arg(containing).arg(width).arg(pictureCase)));
+                    // Opaque image pixels can cover their selection background;
+                    // the text case separately proves retained selection paint.
+                    if(!pictureCase) QVERIFY(selectionPixels>0);
+                    QVERIFY(excluded>0); QVERIFY(!content.contains(visible));
+                    const QString href=pictureCase?imageHref:QString("dict:PaddingText");
+                    QCOMPARE(native->anchorAt(visible),href);
+                    const int hit=native->hitTest(visible,Qt::ExactHit);
+                    QVERIFY(pictureCase?hit==imagePosition:(hit>=textFirst&&hit<textFirst+label.size()));
+                    auto *accessible=QAccessible::queryAccessibleInterface(reading); QVERIFY(accessible&&accessible->textInterface());
+                    auto *ax=accessible->textInterface();
+                    const int horizontal=reading->isRightToLeft()?reading->horizontalScrollBar()->minimum()+reading->horizontalScrollBar()->maximum()-reading->horizontalScrollBar()->value():reading->horizontalScrollBar()->value();
+                    const QPointF globalOrigin=reading->viewport()->mapToGlobal(QPoint())-QPoint(horizontal,reading->verticalScrollBar()->value());
+                    const QPoint global=(visible+globalOrigin).toPoint();
+                    QVERIFY(QRect(reading->viewport()->mapToGlobal(QPoint()),reading->viewport()->size()).contains(global));
+                    const QPointF axPoint=QPointF(global)-globalOrigin;
+                    QCOMPARE(native->anchorAt(axPoint),href);
+                    const int axHit=native->hitTest(axPoint,Qt::ExactHit);
+                    QVERIFY(pictureCase?axHit==imagePosition:(axHit>=textFirst&&axHit<textFirst+label.size()));
+                    QCOMPARE(ax->offsetAtPoint(global),axHit); QVERIFY(ax->characterRect(axHit).contains(global));
+                    QPainterPath characterPath; characterPath.addRect(character(axHit));
+                    const QRect expectedAx=characterPath.intersected(path).boundingRect().translated(globalOrigin).toAlignedRect();
+                    QCOMPARE(ax->characterRect(axHit),expectedAx);
+                    QVERIFY(haveHidden); const QPoint hiddenGlobal=(hidden+globalOrigin).toPoint();
+                    QCOMPARE(ax->offsetAtPoint(hiddenGlobal),-1);
+                    QCOMPARE(ax->text(axHit,axHit+1),pictureCase?QString(QChar::ObjectReplacementCharacter):QString("M"));
+                    ax->addSelection(axHit,axHit+1); int selectedFirst=-1,selectedLast=-1;
+                    ax->selection(0,&selectedFirst,&selectedLast); QCOMPARE(selectedFirst,axHit); QCOMPARE(selectedLast,axHit+1);
+                    QCOMPARE(reading->textCursor().selectedText(),pictureCase?QString(QChar::ObjectReplacementCharacter):QString("M"));
+                    ax->removeSelection(0);
+                    QCOMPARE(doc->toRawText(),raw); QCOMPARE(doc->characterCount(),count); QCOMPARE(window.currentEntry_,entry);
+                }
+                QVERIFY(changes>=1);
+            }
+        }
+    }
+
+    void tableCornersRejectUnprovedSeparateGridAndPreserveLegacyViewport() {
+        MainWindow window{QString()}; window.resize(600,700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+        const auto px=[](double value){return QJsonObject{{"unit","px"},{"value",value}};};
+        const auto edges=[&](QJsonValue value){return QJsonObject{{"top",value},{"right",value},{"bottom",value},{"left",value}};};
+        const QJsonObject corners{{"top_left",px(8)},{"top_right",px(8)},{"bottom_right",px(8)},{"bottom_left",px(0)}};
+        const QJsonObject border{{"solid",QJsonObject{{"width",px(1)},{"color","#bca674"}}}};
+        const QJsonObject pct{{"unit","percent"},{"value",100}};
+        const QJsonObject style{{"corner_radii",corners},{"collapse","separate"},{"border",border},{"width",pct},{"margins",edges(px(0))},{"containing_direction","rtl"}};
+        const QJsonObject box{{"corner_radii",corners},{"border",border},{"width",pct},{"margins",edges(px(0))},{"containing_direction","ltr"}};
+        const QJsonObject policy{{"max_viewport_width_px",639},{"language","mg"},{"box_style",box},{"box_sizing","content_box"},
+            {"max_width",pct},{"grid_style",QJsonObject{{"collapse","separate"}}},{"grid_direction","rtl"},
+            {"focus_paint",QJsonObject{{"mode","authored_none"}}}};
+        const QJsonObject cell{{"rowspan",1},{"colspan",1},{"header",false},{"spans",QJsonArray{QJsonObject{{"kind","link"},{"text","MG"},{"target","MG"}}}}};
+        const QJsonObject good{{"style",style},{"geometry",QJsonObject{{"cell_spacing",2},{"cell_padding",1}}},
+            {"block_viewport",policy},{"rows",QJsonArray{QJsonObject{{"cells",QJsonArray{cell}}}}}};
+        const auto block=[](QJsonObject table){return QJsonObject{{"kind","table"},{"table",table}};};
+        QVERIFY(composeReadingBlocks(window,QJsonArray{block(good)}));
+        for(int mode=0;mode<25;++mode) {
+            auto bad=good; auto p=policy; auto b=box; auto g=good.value("geometry").toObject();
+            if(mode==0) g.remove("cell_spacing");
+            if(mode==1) g.remove("cell_padding");
+            if(mode==2) g.insert("cell_padding",-1);
+            if(mode==3) g.insert("cell_spacing",65536);
+            if(mode==4) g.insert("border",1);
+            if(mode==5) g.insert("width",100);
+            if(mode==6) g.insert("cell_spacing",1.5);
+            if(mode==7) b.remove("containing_direction");
+            if(mode==8) b.insert("containing_direction","auto");
+            if(mode==9) b.insert("width",QJsonObject{{"unit","percent"},{"value",99}});
+            if(mode==10) p.insert("max_width",px(100));
+            if(mode==11) p.insert("grid_style",QJsonObject{{"collapse","separate"},{"padding",edges(px(1))}});
+            if(mode==12) p.insert("grid_style",QJsonObject{{"collapse","separate"},{"line_height",QJsonObject{{"value",12},{"basis","css_px"}}}});
+            if(mode==13) b.insert("margin_values",edges(QJsonObject{{"length",px(0)}}));
+            if(mode==14) p.remove("focus_paint");
+            if(mode==15) p.insert("focus_paint",QJsonValue(QJsonValue::Null));
+            if(mode==16) p.insert("focus_paint",QJsonObject{{"mode","unknown"}});
+            if(mode==17) p.insert("focus_paint",QJsonObject{{"mode","authored_none"},{"color",QJsonObject{{"kind","native_theme"}}}});
+            if(mode==18) p.insert("focus_paint",QJsonObject{{"mode","ua_auto"},{"color",QJsonObject{{"kind","rgb"},{"value","#xyzxyz"}}}});
+            auto wideStyle=style;
+            if(mode==19) wideStyle.remove("containing_direction");
+            if(mode==20) wideStyle.insert("containing_direction","auto");
+            if(mode==21) wideStyle.remove("margins");
+            if(mode==22) wideStyle.insert("margin_values",edges(QJsonObject{{"length",px(0)}}));
+            if(mode==23) wideStyle.remove("width");
+            if(mode==24) wideStyle.insert("width",QJsonObject{{"unit","percent"},{"value",99}});
+            bad.insert("style",wideStyle);
+            p.insert("box_style",b); bad.insert("block_viewport",p); bad.insert("geometry",g);
+            QVERIFY_EXCEPTION_THROWN(SemanticHtml::tableBlockViewport(bad),std::runtime_error);
+        }
+        // The old P-shaped automatic-margin/collapsed-grid route still uses
+        // its old constructor and refuses numeric geometry without Q corners.
+        auto legacy=good; legacy.remove("geometry"); auto wide=style; wide.remove("corner_radii"); wide.remove("margins"); wide.remove("containing_direction"); wide.remove("width"); legacy.insert("style",wide);
+        auto p=policy; auto b=box; b.remove("corner_radii"); b.remove("margins");
+        auto automatic=edges(QJsonObject{{"length",px(0)}});
+        automatic.insert("left",QJsonObject{{"auto",QJsonObject{}}}); automatic.insert("right",QJsonObject{{"auto",QJsonObject{}}});
+        b.insert("margin_values",automatic); p.insert("box_style",b); p.insert("grid_style",QJsonObject{{"collapse","collapse"}}); p.remove("focus_paint");
+        legacy.insert("block_viewport",p); QVERIFY(composeReadingBlocks(window,QJsonArray{block(legacy)}));
+        auto unsupported=legacy; unsupported.insert("geometry",good.value("geometry"));
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::tableBlockViewport(unsupported),std::runtime_error);
+        QVERIFY(composeReadingBlocks(window,QJsonArray{block(good)}));
+    }
+
+    void tableCornersKeepNativeSourceFocusAcrossResponsiveStates() {
+        const auto px=[](double value){return QJsonObject{{"unit","px"},{"value",value}};};
+        const auto edges=[&](QJsonValue value){return QJsonObject{{"top",value},{"right",value},{"bottom",value},{"left",value}};};
+        const QJsonObject radii{{"top_left",px(8)},{"top_right",px(8)},{"bottom_right",px(8)},{"bottom_left",px(0)}};
+        const QJsonObject border{{"solid",QJsonObject{{"width",px(1)},{"color","#bca674"}}}};
+        const QJsonObject pct{{"unit","percent"},{"value",100}};
+        for(const QString direction:{QStringLiteral("ltr"),QStringLiteral("rtl")})
+        for(bool overflow:{false,true}) for(bool outline:{false,true}) {
+            MainWindow window{QString()}; window.resize(600,700); window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+            const QJsonObject paint=outline ? QJsonObject{{"mode","ua_auto"},{"color",QJsonObject{{"kind","rgb"},{"value","#1256a0"}}}}
+                : QJsonObject{{"mode","authored_none"}};
+            const QJsonObject wide{{"corner_radii",radii},{"border",border},{"collapse","separate"},{"width",pct},
+                {"margins",edges(px(0))},{"containing_direction",direction},{"padding",edges(px(1))}};
+            auto box=wide;box.remove("collapse");
+            const QJsonObject policy{{"max_viewport_width_px",639},{"box_style",box},{"box_sizing","content_box"},
+                {"max_width",pct},{"grid_style",QJsonObject{{"collapse","separate"}}},{"grid_direction",direction},
+                {"language","mg"},{"focus_paint",paint}};
+            const QString firstText=overflow ? QString(100,QChar('M')) : QStringLiteral("A");
+            const auto cell=[](const QString &text,const QString &target){return QJsonObject{{"rowspan",1},{"colspan",1},{"header",false},
+                {"spans",QJsonArray{QJsonObject{{"kind","link"},{"text",text},{"target",target}}}}};};
+            const QJsonObject table{{"style",wide},{"block_viewport",policy},{"geometry",QJsonObject{{"cell_spacing",2},{"cell_padding",1}}},
+                {"rows",QJsonArray{QJsonObject{{"cells",QJsonArray{cell(firstText,"CornerFirst"),cell("B","CornerSecond")}}}}}};
+            const QJsonObject source{{"kind","table"},{"table",table}};
+            QVERIFY(composeReadingBlocks(window,QJsonArray{source}));window.readingPaneAction_->trigger();
+            QTRY_VERIFY(window.reading_->isVisible());
+            auto *doc=window.reading_->document();auto *native=qobject_cast<QTextDocumentLayout *>(doc->documentLayout());QVERIFY(native);
+            QPointer<QTextFrame> owner;QPointer<QTextTable> grid;
+            const auto collect=[&](auto &&self,QTextFrame *frame)->void {
+                if(frame->frameFormat().hasProperty(SemanticHtml::tableViewportProperty)){QVERIFY(!owner);owner=frame;}
+                if(auto *real=qobject_cast<QTextTable *>(frame)){QVERIFY(!grid);grid=real;}
+                for(auto *child:frame->childFrames())self(self,child);
+            };
+            collect(collect,doc->rootFrame());QVERIFY(owner && grid);QCOMPARE(grid->parentFrame(),owner.data());
+            const int ownerId=owner->objectIndex(),gridId=grid->objectIndex();const auto raw=doc->toRawText();const auto entry=window.currentEntry_;
+            const auto portForOwner=[&]{QVariantMap result;for(const auto &value:native->wikidictScrollports())
+                if(value.toMap().value("owner").toInt()==ownerId)result=value.toMap();return result;};
+            QTRY_VERIFY(portForOwner().value("focus_active").toBool());
+            auto port=portForOwner();QCOMPARE(port.value("focus_paint").value<QJsonObject>(),paint);
+            QVERIFY(!owner->frameFormat().property(SemanticHtml::tableViewportProperty).toMap().contains("paired"));
+            const auto identity=port.value("source");
+            const auto findTarget=[&]()->QWidget * {
+                for(auto *candidate:window.reading_->findChildren<QWidget *>("readingSourceTableScrollFocus"))
+                    if(candidate->property("wikidict.sourceTable.owner").toMap().value("owner").toInt()==ownerId && candidate->isVisible())return candidate;
+                return nullptr;
+            };
+            QPointer<QWidget> target;QTRY_VERIFY((target=findTarget()));QCOMPARE(target->focusPolicy(),Qt::TabFocus);
+            window.reading_->setFocus();window.reading_->setTextCursor(QTextCursor(doc));
+            for(int step=0;step<64 && !target->hasFocus();++step){
+                auto *focused=QApplication::focusWidget();QVERIFY(focused && window.isAncestorOf(focused));QTest::keyClick(focused,Qt::Key_Tab);
+            }
+            QTRY_VERIFY(target->hasFocus());
+            auto *ax=QAccessible::queryAccessibleInterface(target);QVERIFY(ax && ax->actionInterface());
+            const auto observedState=ax->state();
+            if(!observedState.focusable || !observedState.focused) {
+                const auto bound=target->property("wikidict.sourceTable.owner").toMap();
+                const auto live=portForOwner();
+                qInfo() << "source-table-focus-state" << direction << overflow << outline
+                        << "focused" << target->hasFocus() << "policy" << target->focusPolicy()
+                        << "sameObject" << (ax->object()==target) << "invalid" << observedState.invalid
+                        << "axFocusable" << observedState.focusable << "axFocused" << observedState.focused
+                        << "revision" << doc->revision() << "boundRevision" << bound.value("revision")
+                        << "liveRevision" << live.value("revision") << "active" << live.value("focus_active")
+                        << "firstEqual" << (bound.value("first")==live.value("first"))
+                        << "lastEqual" << (bound.value("last")==live.value("last"))
+                        << "sourceEqual" << (bound.value("source")==live.value("source"))
+                        << "paintEqual" << (bound.value("focus_paint")==live.value("focus_paint"))
+                        << "capability" << native->property("_wikidictTablePairedScrollCapability");
+            }
+            QVERIFY(ax->state().focusable && ax->state().focused);QCOMPARE(ax->childCount(),0);
+            // An owned no-op edit still advances QTextDocument's revision;
+            // the same source target must remain a live accessibility owner.
+            const int beforeOwnedRevision=doc->revision();
+            const auto beforeOwnedBinding=target->property("wikidict.sourceTable.owner").toMap();
+            QVERIFY(window.editDocumentFormats(window.reading_,[]{}));
+            QCOMPARE(doc->revision(),beforeOwnedRevision+1);QVERIFY(target && target->hasFocus());
+            auto afterOwnedBinding=target->property("wikidict.sourceTable.owner").toMap();
+            QCOMPARE(afterOwnedBinding.value("revision").toInt(),doc->revision());
+            afterOwnedBinding.insert("revision",beforeOwnedBinding.value("revision"));QCOMPARE(afterOwnedBinding,beforeOwnedBinding);
+            QCOMPARE(QAccessible::queryAccessibleInterface(target),ax);
+            QVERIFY(!ax->state().invalid && ax->state().focusable && ax->state().focused);
+            QCOMPARE(doc->toRawText(),raw);QCOMPARE(window.currentEntry_,entry);
+            const bool range=port.value("minimum").toDouble()<port.value("maximum").toDouble();QCOMPARE(range,overflow);
+            QCOMPARE(ax->actionInterface()->actionNames().contains(QAccessibleActionInterface::scrollRightAction()),range);
+            QVERIFY(ax->actionInterface()->actionNames().contains(QAccessibleActionInterface::setFocusAction()));
+            auto *style=new PairedFocusProbeStyle;style->setParent(target);target->setStyle(style);
+            const auto ownerBounds=native->frameBoundingRect(owner);const auto gridSize=native->tableBoundingRect(grid).size();
+            const double minimum=port.value("minimum").toDouble(),maximum=port.value("maximum").toDouble();
+            const bool toMinimum=qAbs(minimum)>qAbs(maximum);const double endpoint=toMinimum?minimum:maximum;
+            QTest::keyClick(target,toMinimum?Qt::Key_Home:Qt::Key_End);QCoreApplication::processEvents();
+            port=portForOwner();QCOMPARE(port.value("offset").toDouble(),endpoint);
+            if(range)QVERIFY(qAbs(endpoint)>0);else QCOMPARE(endpoint,0.0);
+            QVERIFY(!target->grab().isNull());QCOMPARE(style->focusPaints>0,outline);if(outline)QCOMPARE(style->requested,QColor("#1256a0"));
+            QCOMPARE(native->frameBoundingRect(owner),ownerBounds);QCOMPARE(native->tableBoundingRect(grid).size(),gridSize);
+            QJsonArray responsiveStates;int responsiveSequence=0;
+            const QPointer<QTextDocument> responsiveDocument(doc);
+            const auto responsiveSnapshot=[&](const QString &phase) {
+                if(!responsiveDocument || !owner || window.reading_->document()!=responsiveDocument)return;
+                const auto margins=window.readerContent_->layout()->contentsMargins();
+                responsiveStates.append(QJsonObject{{"phase",phase},{"sequence",++responsiveSequence},
+                    {"revision",responsiveDocument->revision()},{"layoutEnabled",responsiveDocument->isLayoutEnabled()},
+                    {"pageWidth",responsiveDocument->pageSize().width()},
+                    {"viewportWidth",window.reading_->viewport()->width()},{"readerWidth",window.readerContent_->width()},
+                    {"windowWidth",window.contentsRect().width()},
+                    {"margins",QJsonArray{margins.left(),margins.top(),margins.right(),margins.bottom()}},
+                    {"compactNavigation",window.compactNavigation_},{"compactReader",window.compactReader_},
+                    {"responsiveActive",window.readingResponsiveLayoutActive_},{"scheduled",window.readingFloatLayoutScheduled_},
+                    {"policyActive",QJsonValue::fromVariant(owner->frameFormat().property(SemanticHtml::tableViewportProperty).toMap().value("active"))}});
+                if(responsiveStates.size()>24)responsiveStates.removeFirst();
+            };
+            const auto responsiveObservation=QObject::connect(responsiveDocument,&QTextDocument::contentsChanged,&window,
+                [&]{responsiveSnapshot(QStringLiteral("contentsChanged"));});
+            const auto disconnectResponsive=qScopeGuard([&]{QObject::disconnect(responsiveObservation);});
+            responsiveSnapshot(QStringLiteral("beforeWide"));
+            QJsonArray responsiveRanges{QJsonObject{{"phase","beforeWide"},{"minimum",port.value("minimum").toDouble()},{"maximum",port.value("maximum").toDouble()},{"offset",port.value("offset").toDouble()}}};
+            window.resize(900,700);QTRY_COMPARE(window.contentsRect().width(),900);
+            QTRY_VERIFY(!portForOwner().value("focus_active").toBool());
+            QTRY_VERIFY(target && target->hasFocus() && target->focusPolicy()==Qt::NoFocus);
+            port=portForOwner();responsiveRanges.append(QJsonObject{{"phase","afterWide"},{"minimum",port.value("minimum").toDouble()},{"maximum",port.value("maximum").toDouble()},{"offset",port.value("offset").toDouble()}});
+            QCOMPARE(port.value("source"),identity);QCOMPARE(port.value("offset").toDouble(),endpoint);
+            QVERIFY(!native->wikidictScrollportOffset(ownerId,owner->firstPosition(),doc->revision(),endpoint+1));
+            ax=QAccessible::queryAccessibleInterface(target);QVERIFY(ax && ax->actionInterface());QVERIFY(ax->actionInterface()->actionNames().isEmpty());
+            const int paintsBeforeWide=style->focusPaints;
+            QVERIFY(!target->grab().isNull());QCOMPARE(style->focusPaints,paintsBeforeWide);
+            window.resize(600,700);QTRY_COMPARE(window.contentsRect().width(),600);
+            QTRY_VERIFY(portForOwner().value("focus_active").toBool());QTRY_COMPARE(target->focusPolicy(),Qt::TabFocus);QVERIFY(target->hasFocus());
+            responsiveSnapshot(QStringLiteral("afterNarrow"));
+            port=portForOwner();responsiveRanges.append(QJsonObject{{"phase","afterNarrow"},{"minimum",port.value("minimum").toDouble()},{"maximum",port.value("maximum").toDouble()},{"offset",port.value("offset").toDouble()}});
+            if(port.value("offset").toDouble()!=endpoint)qInfo().noquote()<<"responsive-pan-return "<<QJsonDocument(QJsonObject{
+                {"method","corners"},{"expected",endpoint},{"port",QJsonObject::fromVariantMap(port)},
+                {"sequence",responsiveSequence},{"truncated",responsiveSequence>24},{"states",responsiveStates},{"ranges",responsiveRanges}}).toJson(QJsonDocument::Compact);
+            QCOMPARE(port.value("offset").toDouble(),endpoint);QCOMPARE(port.value("source"),identity);
+            QCOMPARE(owner->objectIndex(),ownerId);QCOMPARE(grid->objectIndex(),gridId);QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);
+            // Source links retain independent ordinary Reader keyboard traversal.
+            const auto first=doc->find(firstText,0,QTextDocument::FindCaseSensitively);QVERIFY(!first.isNull());
+            window.reading_->setFocus();window.reading_->setTextCursor(first);QCOMPARE(window.reading_->textCursor().charFormat().anchorHref(),QString("dict:CornerFirst"));
+            QTest::keyClick(window.reading_,Qt::Key_Tab);QCOMPARE(window.reading_->textCursor().selectedText(),QString("B"));
+            QCOMPARE(window.reading_->textCursor().charFormat().anchorHref(),QString("dict:CornerSecond"));
+            QCOMPARE(doc->toRawText(),raw);QCOMPARE(window.currentEntry_,entry);
+            // An edit outside the owned transaction must not acquire a fresh
+            // binding merely because its source text is unchanged.
+            QVERIFY(window.editDocumentFormats(window.reading_,[]{}));
+            ax=QAccessible::queryAccessibleInterface(target);QVERIFY(ax && !ax->state().invalid);
+            const auto beforeForeignBinding=target->property("wikidict.sourceTable.owner").toMap();
+            const int beforeForeignRevision=doc->revision();
+            QTextCursor foreign(doc);foreign.beginEditBlock();foreign.endEditBlock();
+            QCOMPARE(doc->revision(),beforeForeignRevision+1);
+            QCOMPARE(target->property("wikidict.sourceTable.owner").toMap(),beforeForeignBinding);
+            QVERIFY(ax->state().invalid && !ax->state().focusable);
+            QVERIFY(ax->actionInterface()->actionNames().isEmpty());
+            QVERIFY(!native->wikidictScrollportOffset(ownerId,owner->firstPosition(),beforeForeignRevision,endpoint));
+            // Formatting remains allowed; it must not reauthorize an owner
+            // whose binding was stale before the owned transaction began.
+            QVERIFY(window.editDocumentFormats(window.reading_,[]{}));
+            QCOMPARE(doc->revision(),beforeForeignRevision+2);
+            QCOMPARE(target->property("wikidict.sourceTable.owner").toMap(),beforeForeignBinding);
+            QVERIFY(ax->state().invalid && !ax->state().focusable);
+            QVERIFY(ax->actionInterface()->actionNames().isEmpty());
+            QVERIFY(!native->wikidictScrollportOffset(ownerId,owner->firstPosition(),beforeForeignRevision,endpoint));
+            QCOMPARE(doc->toRawText(),raw);QCOMPARE(window.currentEntry_,entry);
+        }
+    }
+
+    void tableCornersRejectUnsupportedShapesAndKeepLegacyNull() {
+        MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+        const auto px=[](double value){return QJsonObject{{"unit","px"},{"value",value}};};
+        const QJsonObject corners{{"top_left",px(8)},{"top_right",px(8)},{"bottom_right",px(8)},{"bottom_left",px(0)}};
+        const QJsonObject valid{{"corner_radii",corners},{"collapse","separate"},{"background","#f5f4aa"},
+            {"border",QJsonObject{{"solid",QJsonObject{{"width",px(1)},{"color","#bca674"}}}}}};
+        const auto block=[&](QJsonObject style){
+            const QJsonObject span{{"kind","link"},{"text","Corner"},{"target","Corner"}};
+            const QJsonObject cell{{"rowspan",1},{"colspan",1},{"header",false},{"spans",QJsonArray{span}}};
+            const QJsonObject row{{"cells",QJsonArray{cell}}};
+            const QJsonObject table{{"style",style},{"rows",QJsonArray{row}}};
+            return QJsonObject{{"kind","table"},{"table",table}};
+        };
+        QVERIFY(composeReadingBlocks(window,QJsonArray{block(valid)}));
+        auto *doc=window.reading_->document(); auto *native=qobject_cast<QTextDocumentLayout *>(doc->documentLayout()); QVERIFY(native);
+        const auto capability=native->property("_wikidictTableCornersCapability");
+        native->setProperty("_wikidictTableCornersCapability",QVariant());
+        QVERIFY(!composeReadingBlocks(window,QJsonArray{block(valid)}));
+        native->setProperty("_wikidictTableCornersCapability",capability);
+        QVERIFY(composeReadingBlocks(window,QJsonArray{block(valid)}));
+        for(int mode=0;mode<10;++mode) {
+            auto bad=valid; auto values=corners;
+            if(mode==0) values.remove("top_left");
+            if(mode==1) values.insert("top_left",px(-1));
+            if(mode==2) values.insert("bottom_right",px(16777217));
+            if(mode==3) values.insert("top_right",QJsonObject{{"unit","percent"},{"value",8}});
+            if(mode==4) values.insert("unknown",px(0));
+            bad.insert("corner_radii",values);
+            if(mode==5) bad.insert("collapse","collapse");
+            if(mode==6) bad.remove("border");
+            if(mode==7) bad.insert("display","inline_table");
+            if(mode==8) bad.insert("display","inline_block");
+            if(mode==9) {
+                const QJsonObject thin{{"solid",QJsonObject{{"width",px(1)},{"color","#bca674"}}}};
+                const QJsonObject thick{{"solid",QJsonObject{{"width",px(2)},{"color","#bca674"}}}};
+                bad.insert("border",QJsonObject{{"edges",QJsonObject{{"top",thin},{"right",thick},{"bottom",thin},{"left",thin}}}});
+            }
+            QVERIFY(!composeReadingBlocks(window,QJsonArray{block(bad)}));
+            QVERIFY(composeReadingBlocks(window,QJsonArray{block(valid)}));
+        }
+        auto noBorder=valid; noBorder.insert("border",QJsonObject{{"none",QJsonObject{}}});
+        QVERIFY(composeReadingBlocks(window,QJsonArray{block(noBorder)}));
+        auto legacy=valid; legacy.remove("corner_radii");
+        QVERIFY(composeReadingBlocks(window,QJsonArray{block(legacy)}));
+        const auto raw=doc->toRawText(); const auto size=doc->size();
+        legacy.insert("corner_radii",QJsonValue(QJsonValue::Null));
+        QVERIFY(composeReadingBlocks(window,QJsonArray{block(legacy)}));
+        QCOMPARE(doc->toRawText(),raw); QCOMPARE(doc->size(),size);
+        const auto check=[&](auto &&self,QTextFrame *frame)->void {
+            QVERIFY(!frame->frameFormat().hasProperty(SemanticHtml::tableCornerRadiiProperty));
+            for(auto *child:frame->childFrames()) self(self,child);
+        };
+        check(check,doc->rootFrame());
     }
 
     void pairedTableViewportKeepsOneGridAndSourceKeyboardFocus() {
@@ -4418,8 +5489,513 @@ private slots:
         }
     }
 
+    void ordinaryImageLinkPaintKeepsAlignedFocusAndBitmapStates()
+    {
+        const auto oldPermission = QSettings().value("media/allowImages");
+        const auto restore = qScopeGuard([&] {
+            if (oldPermission.isValid()) QSettings().setValue("media/allowImages", oldPermission);
+            else QSettings().remove("media/allowImages");
+        });
+        QSettings().setValue("media/allowImages", false);
+        class NoNetwork final : public QNetworkAccessManager {
+        public:
+            int requests = 0;
+        protected:
+            QNetworkReply *createRequest(Operation, const QNetworkRequest &request, QIODevice *) override {
+                ++requests;
+                class Reply final : public QNetworkReply {
+                public:
+                    Reply(const QNetworkRequest &request, QObject *parent) : QNetworkReply(parent) {
+                        setRequest(request); setUrl(request.url()); open(QIODevice::ReadOnly);
+                    }
+                    void abort() override { if (!isFinished()) { setFinished(true); emit finished(); } }
+                protected:
+                    qint64 readData(char *, qint64) override { return -1; }
+                };
+                return new Reply(request, this);
+            }
+        } network;
+        MainWindow window{QString()}; window.resize(900, 700); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        delete window.media_; window.media_ = new MediaPanel(window.entryTabs_, &network);
+        window.entryTabs_->insertTab(1, window.media_, QStringLiteral("Media && speech"));
+        auto *permission = window.media_->findChild<QCheckBox *>("mediaAllowImages"); QVERIFY(permission);
+        const QString file = QStringLiteral("Owned image focus.png");
+        const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/media-v1/";
+        QVERIFY(QDir().mkpath(cache));
+        const QString key = QString::fromLatin1(QCryptographicHash::hash((":image:" + file).toUtf8(), QCryptographicHash::Sha256).toHex());
+        const QString payloadPath = cache + key + ".bin", metadataPath = cache + key + ".json";
+        QVERIFY(!QFileInfo::exists(payloadPath)); QVERIFY(!QFileInfo::exists(metadataPath));
+        const auto clean = qScopeGuard([&] { QFile::remove(payloadPath); QFile::remove(metadataPath); });
+        const QColor bitmapInk("#20c060"), outlineInk("#d020e0");
+        QImage pixels(30, 30, QImage::Format_ARGB32); pixels.fill(bitmapInk);
+        QByteArray encoded; QBuffer buffer(&encoded); QVERIFY(buffer.open(QIODevice::WriteOnly)); QVERIFY(pixels.save(&buffer, "PNG"));
+        QFile payload(payloadPath); QVERIFY(payload.open(QIODevice::WriteOnly)); QCOMPARE(payload.write(encoded), encoded.size()); payload.close();
+        QJsonObject metadata;
+        metadata.insert("url", "https://upload.wikimedia.org/wikipedia/commons/a/aa/Owned_image_focus.png");
+        metadata.insert("source", "https://commons.wikimedia.org/wiki/File:Owned_image_focus.png");
+        metadata.insert("credit", "Owned focus square"); metadata.insert("intrinsic_width", 30); metadata.insert("intrinsic_height", 30); metadata.insert("original_mime", "image/png");
+        QFile info(metadataPath); QVERIFY(info.open(QIODevice::WriteOnly)); const auto bytes = QJsonDocument(metadata).toJson(); QCOMPARE(info.write(bytes), bytes.size()); info.close();
+        const auto px = [](qreal value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        auto paint = figureLinkPaintFixture(false);
+        paint.insert("hover_active", QJsonObject{{"foreground", "#789abc"}, {"underline", true}});
+        paint.insert("visited_hover_active", QJsonObject{{"foreground", "#89abcd"}, {"underline", true}});
+        QJsonObject outline{{"width", px(2)}, {"radius", px(2)}, {"offset", px(1)}};
+        outline.insert("color", QJsonObject{{"kind", "rgb"}, {"value", outlineInk.name()}});
+        paint.insert("focus_outline", outline);
+        auto *reading = window.reading_;
+        QObject::disconnect(reading, nullptr, &window, nullptr);
+        QSignalSpy actions(reading, &QTextBrowser::anchorClicked);
+        for (const QString &alignment : {QString("baseline"), QString("middle")}) for (bool rtl : {false, true}) {
+            QHash<int, QImage> defaultFocus;
+            for (const QString &mode : {QString("default"), QString("absent"), QString("none"), QString("outline")}) {
+                const bool authored = mode == "none" || mode == "outline";
+                permission->setChecked(false);
+                QJsonObject image{{"file", file}, {"width_px", 30}, {"height_px", 30}, {"alt", ""}, {"vertical_align", alignment}};
+                QJsonObject span{{"kind", "link"}, {"text", ""}, {"target", "FocusDestination"}, {"target_fragment", "image"}, {"image", image}};
+                auto policy = paint;
+                if (mode == "none") policy.insert("focus_outline", QJsonValue(QJsonValue::Null));
+                if (mode == "default") span.insert("link_paint", QJsonValue(QJsonValue::Null));
+                else if (authored) {
+                    span.insert("link_paint", policy);
+                    span.insert("foreground", policy.value("normal").toObject().value("foreground"));
+                    span.insert("underline", policy.value("normal").toObject().value("underline"));
+                }
+                const QJsonObject before{{"kind", "text"}, {"text", rtl ? QString::fromUtf8("\xd7\x90\xd7\x91 ") : QString("Before ")}, {"font_scale", 3}};
+                const QJsonObject after{{"kind", "link"}, {"text", "After"}, {"target", "IndependentAfter"}};
+                const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{before, span, after}}};
+                const QJsonObject section{{"title", "English"}, {"level", 2}, {"blocks", QJsonArray{paragraph}}};
+                QJsonObject entry{{"title", "Controlled image focus"}, {"kind", "language"}, {"language", "English"}, {"language_code", "en"}, {"sections", QJsonArray{section}}};
+                entry.insert("media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", file}, {"caption", "Owned focus square"}}});
+                QVERIFY(composeReadingEntry(window, entry));
+                auto *document = reading->document();
+                int position = -1;
+                for (auto block = document->begin(); block.isValid(); block = block.next())
+                    for (auto it = block.begin(); !it.atEnd(); ++it) if (it.fragment().charFormat().isImageFormat()) {
+                        QVERIFY(position < 0); position = it.fragment().position();
+                    }
+                QVERIFY(position >= 0);
+                const auto format = [&] {
+                    QTextCursor cursor(document); cursor.setPosition(position); cursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor); return cursor.charFormat();
+                };
+                permission->setChecked(true);
+                QTRY_COMPARE(format().intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Ready));
+                QCOMPARE(network.requests, 0);
+                const QString raw = document->toRawText(); const int count = document->characterCount();
+                const auto owner = MissingFigurePaint::ownerAt(document, position);
+                QCOMPARE(owner >= (qint64(1) << 32), authored);
+                if (authored) {
+                    QCOMPARE(QJsonObject::fromVariantMap(format().property(MissingFigurePaint::fixedPolicyProperty).toMap()), policy);
+                    QCOMPARE(format().underlineStyle(), QTextCharFormat::NoUnderline);
+                    MissingFigurePaint::State states; states.fixedContext = "owned-image-focus";
+                    for (bool visited : {false, true}) for (bool hover : {false, true}) for (bool active : {false, true}) {
+                        states.visitedTargets.clear(); if (visited) states.visitedTargets.insert(MissingFigurePaint::fixedTargetKey(states, format().anchorHref()));
+                        states.hovered = hover ? owner : -1; states.pressed = active ? owner : -1; states.focused = owner;
+                        for (const auto &selection : MissingFigurePaint::selections(document, reading->palette(), states))
+                            QVERIFY(MissingFigurePaint::ownerAt(document, selection.cursor.selectionStart()) != owner);
+                    }
+                }
+                for (int width : {900, 640}) {
+                    window.resize(width, 700); window.readingPaneAction_->trigger(); QTRY_VERIFY(reading->isVisible());
+                    QTRY_VERIFY(!window.readingFloatLayoutScheduled_); document->documentLayout()->documentSize();
+                    reading->setFocus(Qt::TabFocusReason); QTRY_VERIFY(reading->hasFocus());
+                    QTextCursor reset(document); reset.setPosition(0); reading->setTextCursor(reset);
+                    QTest::keyClick(reading, Qt::Key_Tab); QTRY_COMPARE(reading->textCursor().selectionStart(), position);
+                    QCOMPARE(reading->textCursor().selectionEnd(), position + 1);
+                    if (authored) {
+                        // Tab selects synchronously; the queued interaction update
+                        // installs the authored focus style and owner paint.
+                        reading->viewport()->update();
+                        const auto authoredFocusReady = [&] {
+                            QStyleHintReturnVariant hint;
+                            QStyleOption option; option.initFrom(reading);
+                            if (!reading->style()->styleHint(QStyle::SH_TextControl_FocusIndicatorTextCharFormat,
+                                    &option, reading, &hint)) return false;
+                            const auto focus = hint.variant.value<QTextFormat>().toCharFormat();
+                            return reading->property("wikidict.missing.focusOwner").isValid()
+                                && reading->property("wikidict.missing.focusOwner").toLongLong() == owner
+                                && !focus.hasProperty(QTextFormat::OutlinePen)
+                                && !focus.hasProperty(QTextFormat::TextOutline)
+                                && !focus.hasProperty(QTextFormat::BackgroundBrush);
+                        };
+                        QTRY_VERIFY(authoredFocusReady());
+                        QTRY_VERIFY(document->property("wikidict.figure.linkFocusOwner").isValid());
+                        QTRY_COMPARE(document->property("wikidict.figure.linkFocusOwner").toLongLong(), owner);
+                    }
+                    const auto geometry = LogicalFlow::position(document, position); QVERIFY(geometry.status != LogicalFlow::Status::Refused);
+                    const QRectF outer = geometry.values.value(geometry.status == LogicalFlow::Status::Handled ? "characterRect" : "inlineCharacterRect").toRectF();
+                    QVERIFY(outer.isValid()); QVERIFY(qAbs(outer.width() - 30) < .06); QVERIFY(qAbs(outer.height() - 30) < .06);
+                    const auto *bar = reading->horizontalScrollBar();
+                    const qreal pan = reading->isRightToLeft() ? bar->minimum() + bar->maximum() - bar->value() : bar->value();
+                    const QRectF viewBox = outer.translated(-pan, -reading->verticalScrollBar()->value());
+                    QVERIFY(reading->viewport()->rect().contains(viewBox.adjusted(-4, -4, 4, 4).toAlignedRect()));
+                    const auto capture = [&] { reading->viewport()->update(); return reading->viewport()->grab().toImage(); };
+                    const auto coloredBounds = [&](const QImage &frame) {
+                        QRect found;
+                        for (int y = 0; y < frame.height(); ++y) for (int x = 0; x < frame.width(); ++x)
+                            if (frame.pixelColor(x, y) == outlineInk) found |= QRect(x, y, 1, 1);
+                        return QRectF(found.x() / frame.devicePixelRatio(), found.y() / frame.devicePixelRatio(), found.width() / frame.devicePixelRatio(), found.height() / frame.devicePixelRatio());
+                    };
+                    const QImage frame = capture(); const QRectF observed = coloredBounds(frame);
+                    const QRect focusPixels = QRectF(viewBox.adjusted(-4, -4, 4, 4).topLeft() * frame.devicePixelRatio(),
+                        viewBox.adjusted(-4, -4, 4, 4).size() * frame.devicePixelRatio()).toAlignedRect();
+                    if (mode == "default") defaultFocus.insert(width, frame.copy(focusPixels));
+                    if (mode == "absent") QCOMPARE(frame.copy(focusPixels), defaultFocus.value(width));
+                    qInfo() << "IMAGE_LINK_FOCUS" << mode << alignment << rtl << width << outer << viewBox << observed << owner
+                        << "native focus owner" << document->property("wikidict.figure.linkFocusOwner");
+                    if (mode == "outline") {
+                        QVERIFY(observed.isValid()); QVERIFY(observed.left() < viewBox.left()); QVERIFY(observed.right() > viewBox.right());
+                        QVERIFY(observed.top() < viewBox.top()); QVERIFY(observed.bottom() > viewBox.bottom());
+                        QVERIFY(viewBox.adjusted(-4, -4, 4, 4).contains(observed));
+                        // Exercise the same native outline under a real painter/context clip.
+                        // Only the right half of the aligned object and its outline can paint.
+                        const QRect clip = QRectF(outer.center().x(), outer.top() - 5,
+                            outer.width() / 2 + 5, outer.height() + 10).toAlignedRect();
+                        QImage full(QSize(qCeil(document->size().width()) + 16, qCeil(document->size().height()) + 16), QImage::Format_ARGB32_Premultiplied);
+                        full.fill(Qt::white); QAbstractTextDocumentLayout::PaintContext context;
+                        { QPainter painter(&full); document->documentLayout()->draw(&painter, context); }
+                        QImage clipped(full.size(), full.format()); clipped.fill(Qt::white);
+                        { QPainter painter(&clipped); painter.setClipRect(clip); context.clip = clip; document->documentLayout()->draw(&painter, context); }
+                        QCOMPARE(clipped.copy(clip), full.copy(clip));
+                        const auto clippedInk = coloredBounds(clipped); QVERIFY(clippedInk.isValid());
+                        QVERIFY(QRectF(clip).contains(clippedInk));
+                        for (int y = 0; y < clipped.height(); ++y) for (int x = 0; x < clipped.width(); ++x)
+                            if (!clip.contains(x, y)) QCOMPARE(clipped.pixelColor(x, y), QColor(Qt::white));
+                    } else QVERIFY(!observed.isValid());
+                    if (authored) {
+                        const auto center = viewBox.center() * frame.devicePixelRatio(); QCOMPARE(frame.pixelColor(center.toPoint()), bitmapInk);
+                        const QRect bitmapPixels = QRectF(viewBox.adjusted(2, 2, -2, -2).topLeft() * frame.devicePixelRatio(),
+                            viewBox.adjusted(2, 2, -2, -2).size() * frame.devicePixelRatio()).toAlignedRect();
+                        for (int y = bitmapPixels.top(); y <= bitmapPixels.bottom(); ++y)
+                            for (int x = bitmapPixels.left(); x <= bitmapPixels.right(); ++x) QCOMPARE(frame.pixelColor(x, y), bitmapInk);
+                        QStyleHintReturnVariant hint;
+                        QStyleOption option; option.initFrom(reading);
+                        QVERIFY(reading->style()->styleHint(QStyle::SH_TextControl_FocusIndicatorTextCharFormat, &option, reading, &hint));
+                        const auto focus = hint.variant.value<QTextFormat>().toCharFormat();
+                        qInfo() << "IMAGE_FOCUS_STYLE" << mode << alignment << rtl << width << reading->style()->metaObject()->className() << focus.properties();
+                        QVERIFY(!focus.hasProperty(QTextFormat::OutlinePen));
+                        QVERIFY(!focus.hasProperty(QTextFormat::TextOutline)); QVERIFY(!focus.hasProperty(QTextFormat::BackgroundBrush));
+                    }
+                    const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                    if (!directory.isEmpty()) {
+                        QVERIFY(QDir().mkpath(directory));
+                        QVERIFY(frame.save(directory + QString("/image-focus-%1-%2-%3-%4.png").arg(mode, alignment, rtl ? "rtl" : "ltr").arg(width)));
+                    }
+                    const int previousActions = actions.size(); QTest::keyClick(reading, Qt::Key_Return); QTRY_COMPARE(actions.size(), previousActions + 1);
+                    QCOMPARE(actions.last().first().toUrl(), QUrl("dict:FocusDestination#image"));
+                    const QPoint point = viewBox.center().toPoint(); QCOMPARE(reading->anchorAt(point), QString("dict:FocusDestination#image"));
+                    QTest::mouseClick(reading->viewport(), Qt::LeftButton, Qt::NoModifier, point); QTRY_COMPARE(actions.size(), previousActions + 2);
+                    if (authored) {
+                        const QImage pointer = capture(); QVERIFY(!coloredBounds(pointer).isValid());
+                        QCOMPARE(pointer.pixelColor((viewBox.center() * pointer.devicePixelRatio()).toPoint()), bitmapInk);
+                    }
+                    QCOMPARE(document->toRawText(), raw); QCOMPARE(document->characterCount(), count); QCOMPARE(window.currentEntry_, entry);
+                }
+            }
+        }
+    }
+
+    void primaryFigureImageLinkPaintUsesMediaActionBox()
+    {
+        const auto oldPermission = QSettings().value("media/allowImages");
+        const auto restore = qScopeGuard([&] {
+            if (oldPermission.isValid()) QSettings().setValue("media/allowImages", oldPermission);
+            else QSettings().remove("media/allowImages");
+        });
+        QSettings().setValue("media/allowImages", false);
+        class NoNetwork final : public QNetworkAccessManager {
+        public:
+            int requests = 0;
+        protected:
+            QNetworkReply *createRequest(Operation, const QNetworkRequest &request, QIODevice *) override {
+                ++requests;
+                class Reply final : public QNetworkReply {
+                public:
+                    Reply(const QNetworkRequest &request, QObject *parent) : QNetworkReply(parent) {
+                        setRequest(request); setUrl(request.url()); open(QIODevice::ReadOnly);
+                    }
+                    void abort() override { if (!isFinished()) { setFinished(true); emit finished(); } }
+                protected:
+                    qint64 readData(char *, qint64) override { return -1; }
+                };
+                return new Reply(request, this);
+            }
+        } network;
+        MainWindow window{QString()}; window.resize(900, 700); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        delete window.media_; window.media_ = new MediaPanel(window.entryTabs_, &network);
+        window.entryTabs_->insertTab(1, window.media_, QStringLiteral("Media && speech"));
+        auto *permission = window.media_->findChild<QCheckBox *>("mediaAllowImages"); QVERIFY(permission);
+        const QString file = QStringLiteral("Owned figure image focus.png");
+        const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/media-v1/";
+        QVERIFY(QDir().mkpath(cache));
+        const QString key = QString::fromLatin1(QCryptographicHash::hash((":image:" + file).toUtf8(), QCryptographicHash::Sha256).toHex());
+        const QString payloadPath = cache + key + ".bin", metadataPath = cache + key + ".json";
+        QVERIFY(!QFileInfo::exists(payloadPath)); QVERIFY(!QFileInfo::exists(metadataPath));
+        const auto clean = qScopeGuard([&] { QFile::remove(payloadPath); QFile::remove(metadataPath); });
+        const QColor bitmapInk("#20c060"), outlineInk("#d020e0");
+        QImage pixels(30, 30, QImage::Format_ARGB32); pixels.fill(bitmapInk);
+        QByteArray encoded; QBuffer buffer(&encoded); QVERIFY(buffer.open(QIODevice::WriteOnly)); QVERIFY(pixels.save(&buffer, "PNG"));
+        QFile payload(payloadPath); QVERIFY(payload.open(QIODevice::WriteOnly)); QCOMPARE(payload.write(encoded), encoded.size()); payload.close();
+        QJsonObject metadata;
+        metadata.insert("url", "https://upload.wikimedia.org/wikipedia/commons/a/aa/Owned_figure_image_focus.png");
+        metadata.insert("source", "https://commons.wikimedia.org/wiki/File:Owned_figure_image_focus.png");
+        metadata.insert("credit", "Owned focus square"); metadata.insert("intrinsic_width", 30); metadata.insert("intrinsic_height", 30); metadata.insert("original_mime", "image/png");
+        QFile info(metadataPath); QVERIFY(info.open(QIODevice::WriteOnly)); const auto bytes = QJsonDocument(metadata).toJson(); QCOMPARE(info.write(bytes), bytes.size()); info.close();
+        const auto px = [](qreal value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        auto paint = figureLinkPaintFixture(false);
+        paint.insert("hover_active", QJsonObject{{"foreground", "#789abc"}, {"underline", true}});
+        paint.insert("visited_hover_active", QJsonObject{{"foreground", "#89abcd"}, {"underline", true}});
+        QJsonObject outline{{"width", px(2)}, {"radius", px(2)}, {"offset", px(1)}};
+        outline.insert("color", QJsonObject{{"kind", "rgb"}, {"value", outlineInk.name()}});
+        paint.insert("focus_outline", outline);
+        auto *reading = window.reading_;
+        // The native default focus pen must survive an omitted layout clip.
+        // Figure drawing already supplies the outer clip on the painter.
+        QStyleHintReturnVariant stockHint;
+        QStyleOption stockOption; stockOption.initFrom(reading);
+        QVERIFY(reading->style()->styleHint(QStyle::SH_TextControl_FocusIndicatorTextCharFormat,
+            &stockOption, reading, &stockHint));
+        const auto stockFocus = stockHint.variant.value<QTextFormat>().toCharFormat();
+        QVERIFY(stockFocus.hasProperty(QTextFormat::OutlinePen));
+        QVERIFY(stockFocus.penProperty(QTextFormat::OutlinePen).style() != Qt::NoPen);
+        QTextLayout focusProbe(QStringLiteral("Focus"), reading->font());
+        // Isolate the outline from the separate ordinary glyph clip path.
+        QTextLayout::FormatRange probeInk;
+        probeInk.start = 0; probeInk.length = 5; probeInk.format.setForeground(Qt::white);
+        focusProbe.setFormats({probeInk});
+        focusProbe.beginLayout();
+        auto probeLine = focusProbe.createLine(); QVERIFY(probeLine.isValid());
+        probeLine.setLineWidth(140); focusProbe.endLayout();
+        QTextLayout::FormatRange probeSelection;
+        probeSelection.start = 0; probeSelection.length = 5; probeSelection.format = stockFocus;
+        const QRect whole(0, 0, 160, 60), outerClip(4, 4, 148, 52), partialClip(24, 0, 136, 60);
+        const auto drawProbe = [&](bool selected, const QRectF &layoutClip) {
+            QImage frame(whole.size(), QImage::Format_ARGB32_Premultiplied); frame.fill(Qt::white);
+            QPainter painter(&frame); painter.setClipRect(outerClip);
+            const QList<QTextLayout::FormatRange> ranges = selected
+                ? QList<QTextLayout::FormatRange>{probeSelection} : QList<QTextLayout::FormatRange>{};
+            if (layoutClip.isNull()) focusProbe.draw(&painter, QPointF(8, 8), ranges);
+            else focusProbe.draw(&painter, QPointF(8, 8), ranges, layoutClip);
+            painter.end(); return frame;
+        };
+        const QImage defaultClipFocus = drawProbe(true, QRectF());
+        QCOMPARE(defaultClipFocus, drawProbe(true, whole));
+        QVERIFY(defaultClipFocus != drawProbe(false, QRectF()));
+        const QImage clippedFocus = drawProbe(true, partialClip);
+        QCOMPARE(clippedFocus.copy(partialClip), defaultClipFocus.copy(partialClip));
+        QVERIFY(clippedFocus != defaultClipFocus);
+        for (int y = 0; y < whole.height(); ++y) for (int x = 0; x < whole.width(); ++x) {
+            if (!outerClip.contains(x, y)) QCOMPARE(defaultClipFocus.pixelColor(x, y), QColor(Qt::white));
+            if (!outerClip.intersected(partialClip).contains(x, y))
+                QCOMPARE(clippedFocus.pixelColor(x, y), QColor(Qt::white));
+        }
+        QObject::disconnect(reading, nullptr, &window, nullptr);
+        QSignalSpy actions(reading, &QTextBrowser::anchorClicked);
+        for (bool rtl : {false, true}) {
+            const QString alignment = QStringLiteral("figure");
+            QHash<int, QImage> defaultFocus;
+            for (const QString &mode : {QString("default"), QString("absent"), QString("none"), QString("outline")}) {
+                const bool authored = mode == "none" || mode == "outline";
+                permission->setChecked(false);
+                QJsonObject image{{"file", file}, {"width_px", 30}, {"height_px", 30}, {"alt", ""}};
+                QJsonObject span{{"kind", "link"}, {"text", ""}, {"target", "FocusDestination"}, {"target_fragment", "image"}, {"image", image}};
+                auto policy = paint;
+                if (mode == "none") policy.insert("focus_outline", QJsonValue(QJsonValue::Null));
+                if (mode == "default") span.insert("link_paint", QJsonValue(QJsonValue::Null));
+                else if (authored) {
+                    span.insert("link_paint", policy);
+                    span.insert("foreground", policy.value("normal").toObject().value("foreground"));
+                    span.insert("underline", policy.value("normal").toObject().value("underline"));
+                }
+                auto figure = tableCaptionFigureFixture(); figure.insert("image_span", span);
+                const qreal imageInset = rtl ? 4.25 : 4.0;
+                figure.insert("image_insets", QJsonObject{{"top", px(imageInset)}, {"right", px(imageInset)},
+                    {"bottom", px(imageInset)}, {"left", px(imageInset)}});
+                auto table = figure.value("table_caption_layout").toObject();
+                const auto mediaWithoutFocus = [&](QJsonObject media) {
+                    media.remove("focus_outline"); auto strut = media.value("strut").toObject();
+                    strut.insert("direction", rtl ? "rtl" : "ltr"); media.insert("strut", strut); return media;
+                };
+                table.insert("media", mediaWithoutFocus(table.value("media").toObject()));
+                auto states = table.value("viewport_states").toArray();
+                for (int i = 0; i < states.size(); ++i) {
+                    auto state = states[i].toObject();
+                    auto narrowMedia = mediaWithoutFocus(state.value("media").toObject());
+                    state.insert("media", narrowMedia); states[i] = state;
+                }
+                table.insert("viewport_states", states); figure.insert("table_caption_layout", table);
+                const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{}}, {"figure", figure}};
+                const QJsonObject section{{"title", "English"}, {"level", 2}, {"blocks", QJsonArray{paragraph}}};
+                QJsonObject entry{{"title", "Controlled image focus"}, {"kind", "language"}, {"language", "English"}, {"language_code", "en"}, {"sections", QJsonArray{section}}};
+                entry.insert("media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", file}, {"caption", "Owned focus square"}}});
+                QVERIFY(composeReadingEntry(window, entry));
+                auto *document = reading->document();
+                int position = -1;
+                for (auto block = document->begin(); block.isValid(); block = block.next())
+                    for (auto it = block.begin(); !it.atEnd(); ++it) if (it.fragment().charFormat().isImageFormat()) {
+                        QVERIFY(position < 0); position = it.fragment().position();
+                    }
+                QVERIFY(position >= 0);
+                const auto format = [&] {
+                    QTextCursor cursor(document); cursor.setPosition(position); cursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor); return cursor.charFormat();
+                };
+                permission->setChecked(true);
+                QTRY_COMPARE(format().intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Ready));
+                QCOMPARE(network.requests, 0);
+                const QString raw = document->toRawText(); const int count = document->characterCount();
+                const auto owner = MissingFigurePaint::ownerAt(document, position);
+                QCOMPARE(owner >= (qint64(1) << 32), authored);
+                if (authored) {
+                    QCOMPARE(QJsonObject::fromVariantMap(format().property(MissingFigurePaint::fixedPolicyProperty).toMap()), policy);
+                    QCOMPARE(format().underlineStyle(), QTextCharFormat::NoUnderline);
+                    MissingFigurePaint::State states; states.fixedContext = "owned-image-focus";
+                    for (bool visited : {false, true}) for (bool hover : {false, true}) for (bool active : {false, true}) {
+                        states.visitedTargets.clear(); if (visited) states.visitedTargets.insert(MissingFigurePaint::fixedTargetKey(states, format().anchorHref()));
+                        states.hovered = hover ? owner : -1; states.pressed = active ? owner : -1; states.focused = owner;
+                        for (const auto &selection : MissingFigurePaint::selections(document, reading->palette(), states))
+                            QVERIFY(MissingFigurePaint::ownerAt(document, selection.cursor.selectionStart()) != owner);
+                    }
+                }
+                for (int width : {900, 640}) {
+                    window.resize(width, 700); window.readingPaneAction_->trigger(); QTRY_VERIFY(reading->isVisible());
+                    QTRY_VERIFY(!window.readingFloatLayoutScheduled_); document->documentLayout()->documentSize();
+                    reading->setFocus(Qt::TabFocusReason); QTRY_VERIFY(reading->hasFocus());
+                    QTextCursor reset(document); reset.setPosition(0); reading->setTextCursor(reset);
+                    QTest::keyClick(reading, Qt::Key_Tab); QTRY_COMPARE(reading->textCursor().selectionStart(), position);
+                    QCOMPARE(reading->textCursor().selectionEnd(), position + 1);
+                    if (authored) {
+                        // Tab selects synchronously; the queued interaction update
+                        // installs the authored focus style and owner paint.
+                        reading->viewport()->update();
+                        const auto authoredFocusReady = [&] {
+                            QStyleHintReturnVariant hint;
+                            QStyleOption option; option.initFrom(reading);
+                            if (!reading->style()->styleHint(QStyle::SH_TextControl_FocusIndicatorTextCharFormat,
+                                    &option, reading, &hint)) return false;
+                            const auto focus = hint.variant.value<QTextFormat>().toCharFormat();
+                            return reading->property("wikidict.missing.focusOwner").isValid()
+                                && reading->property("wikidict.missing.focusOwner").toLongLong() == owner
+                                && !focus.hasProperty(QTextFormat::OutlinePen)
+                                && !focus.hasProperty(QTextFormat::TextOutline)
+                                && !focus.hasProperty(QTextFormat::BackgroundBrush);
+                        };
+                        QTRY_VERIFY(authoredFocusReady());
+                        QTRY_VERIFY(document->property("wikidict.figure.linkFocusOwner").isValid());
+                        QTRY_COMPARE(document->property("wikidict.figure.linkFocusOwner").toLongLong(), owner);
+                    }
+                    auto *native = dynamic_cast<QTextDocumentLayout *>(document->documentLayout()); QVERIFY(native);
+                    const auto geometry = native->wikidictFigureMediaGeometry(position); QVERIFY(geometry.value("handled").toBool());
+                    const QRectF outer = geometry.value("anchor").toRectF(), bitmap = geometry.value("image").toRectF();
+                    const auto mediaBlock = document->findBlock(position);
+                    const auto mediaLine = mediaBlock.layout()->lineForTextPosition(position - mediaBlock.position());
+                    QVERIFY(mediaLine.isValid());
+                    const auto *mediaEngine = mediaBlock.layout()->engine();
+                    const auto &mediaScriptLine = mediaEngine->lines[mediaLine.lineNumber()];
+                    // The RTL object has a fractional line height: public
+                    // QTextLine::height() rounds it and cannot place this image.
+                    QCOMPARE(mediaScriptLine.height().toReal(), 30 + 2 * imageInset);
+                    if (rtl) QVERIFY(mediaScriptLine.height().value() % 64 != 0);
+                    QCOMPARE(bitmap.top(), outer.top() + imageInset);
+                    const auto mediaFrame = document->frameAt(position)->frameFormat();
+                    qInfo() << "PRIMARY_IMAGE_GEOMETRY" << mode << rtl << width
+                        << "position/revision" << position << document->revision() << geometry.value("revision")
+                        << "anchor/image/frame" << outer << bitmap << native->frameBoundingRect(document->frameAt(position))
+                        << "page/viewport" << document->pageSize() << reading->viewport()->size()
+                        << "block/layout/line" << mediaBlock.position() << mediaBlock.layout()->position()
+                        << (mediaLine.isValid() ? mediaLine.rect() : QRectF())
+                        << "frame margins" << mediaFrame.topMargin() << mediaFrame.rightMargin()
+                        << mediaFrame.bottomMargin() << mediaFrame.leftMargin()
+                        << "media box" << InlineVectorImages::figureMediaPolicy(document, position).value("box")
+                        << "state" << format().intProperty(SemanticHtml::inlineImageStateProperty);
+                    QVERIFY(outer.isValid()); QVERIFY(bitmap.isValid()); QVERIFY(outer.contains(bitmap));
+                    QCOMPARE(outer, native->frameBoundingRect(document->frameAt(position)));
+                    QVERIFY(qAbs(bitmap.width() - 30) < .06); QVERIFY(qAbs(bitmap.height() - 30) < .06);
+                    QVERIFY(outer.width() > bitmap.width()); QVERIFY(outer.height() > bitmap.height());
+                    QCOMPARE(geometry.value("revision").toInt(), document->revision());
+                    QVERIFY(InlineVectorImages::figureMediaPolicy(document, position).value("focus").toMap().isEmpty());
+                    const auto *bar = reading->horizontalScrollBar();
+                    const qreal pan = reading->isRightToLeft() ? bar->minimum() + bar->maximum() - bar->value() : bar->value();
+                    const QRectF viewBox = outer.translated(-pan, -reading->verticalScrollBar()->value());
+                    const QRectF bitmapView = bitmap.translated(-pan, -reading->verticalScrollBar()->value());
+                    QVERIFY(reading->viewport()->rect().contains(viewBox.adjusted(-4, -4, 4, 4).toAlignedRect()));
+                    const auto capture = [&] { reading->viewport()->update(); return reading->viewport()->grab().toImage(); };
+                    const auto coloredBounds = [&](const QImage &frame) {
+                        QRect found;
+                        for (int y = 0; y < frame.height(); ++y) for (int x = 0; x < frame.width(); ++x)
+                            if (frame.pixelColor(x, y) == outlineInk) found |= QRect(x, y, 1, 1);
+                        return QRectF(found.x() / frame.devicePixelRatio(), found.y() / frame.devicePixelRatio(), found.width() / frame.devicePixelRatio(), found.height() / frame.devicePixelRatio());
+                    };
+                    const QImage frame = capture(); const QRectF observed = coloredBounds(frame);
+                    const QRect focusPixels = QRectF(viewBox.adjusted(-4, -4, 4, 4).topLeft() * frame.devicePixelRatio(),
+                        viewBox.adjusted(-4, -4, 4, 4).size() * frame.devicePixelRatio()).toAlignedRect();
+                    if (mode == "default") defaultFocus.insert(width, frame.copy(focusPixels));
+                    if (mode == "absent") QCOMPARE(frame.copy(focusPixels), defaultFocus.value(width));
+                    if (mode == "none") QVERIFY(frame.copy(focusPixels) != defaultFocus.value(width));
+                    qInfo() << "PRIMARY_FIGURE_IMAGE_LINK_FOCUS" << mode << alignment << rtl << width << outer << viewBox << observed << owner;
+                    if (mode == "outline") {
+                        QVERIFY(observed.isValid()); QVERIFY(observed.left() < viewBox.left()); QVERIFY(observed.right() > viewBox.right());
+                        QVERIFY(observed.top() < viewBox.top()); QVERIFY(observed.bottom() > viewBox.bottom());
+                        QVERIFY(viewBox.adjusted(-4, -4, 4, 4).contains(observed));
+                        // Exercise the same native outline under a real painter/context clip.
+                        // Only the right half of the aligned object and its outline can paint.
+                        const QRect clip = QRectF(outer.center().x(), outer.top() - 5,
+                            outer.width() / 2 + 5, outer.height() + 10).toAlignedRect();
+                        QImage full(QSize(qCeil(document->size().width()) + 16, qCeil(document->size().height()) + 16), QImage::Format_ARGB32_Premultiplied);
+                        full.fill(Qt::white); QAbstractTextDocumentLayout::PaintContext context;
+                        { QPainter painter(&full); document->documentLayout()->draw(&painter, context); }
+                        QImage clipped(full.size(), full.format()); clipped.fill(Qt::white);
+                        { QPainter painter(&clipped); painter.setClipRect(clip); context.clip = clip; document->documentLayout()->draw(&painter, context); }
+                        QCOMPARE(clipped.copy(clip), full.copy(clip));
+                        const auto clippedInk = coloredBounds(clipped); QVERIFY(clippedInk.isValid());
+                        QVERIFY(QRectF(clip).contains(clippedInk));
+                        for (int y = 0; y < clipped.height(); ++y) for (int x = 0; x < clipped.width(); ++x)
+                            if (!clip.contains(x, y)) QCOMPARE(clipped.pixelColor(x, y), QColor(Qt::white));
+                    } else QVERIFY(!observed.isValid());
+                    if (authored) {
+                        const auto center = bitmapView.center() * frame.devicePixelRatio(); QCOMPARE(frame.pixelColor(center.toPoint()), bitmapInk);
+                        const QRect bitmapPixels = QRectF(bitmapView.adjusted(2, 2, -2, -2).topLeft() * frame.devicePixelRatio(),
+                            bitmapView.adjusted(2, 2, -2, -2).size() * frame.devicePixelRatio()).toAlignedRect();
+                        for (int y = bitmapPixels.top(); y <= bitmapPixels.bottom(); ++y)
+                            for (int x = bitmapPixels.left(); x <= bitmapPixels.right(); ++x) QCOMPARE(frame.pixelColor(x, y), bitmapInk);
+                        QStyleHintReturnVariant hint;
+                        QStyleOption option; option.initFrom(reading);
+                        QVERIFY(reading->style()->styleHint(QStyle::SH_TextControl_FocusIndicatorTextCharFormat, &option, reading, &hint));
+                        const auto focus = hint.variant.value<QTextFormat>().toCharFormat();
+                        qInfo() << "IMAGE_FOCUS_STYLE" << mode << alignment << rtl << width << reading->style()->metaObject()->className() << focus.properties();
+                        QVERIFY(!focus.hasProperty(QTextFormat::OutlinePen));
+                        QVERIFY(!focus.hasProperty(QTextFormat::TextOutline)); QVERIFY(!focus.hasProperty(QTextFormat::BackgroundBrush));
+                    }
+                    const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                    if (!directory.isEmpty()) {
+                        QVERIFY(QDir().mkpath(directory));
+                        QVERIFY(frame.save(directory + QString("/figure-image-focus-%1-%2-%3-%4.png").arg(mode, alignment, rtl ? "rtl" : "ltr").arg(width)));
+                    }
+                    const int previousActions = actions.size(); QTest::keyClick(reading, Qt::Key_Return); QTRY_COMPARE(actions.size(), previousActions + 1);
+                    QCOMPARE(actions.last().first().toUrl(), QUrl("dict:FocusDestination#image"));
+                    const QPoint point = bitmapView.center().toPoint(); QCOMPARE(reading->anchorAt(point), QString("dict:FocusDestination#image"));
+                    // The inset belongs to this exact primary action as well.
+                    const QPoint insetPoint = QPointF(viewBox.left() + 1, viewBox.center().y()).toPoint();
+                    QCOMPARE(reading->anchorAt(insetPoint), QString("dict:FocusDestination#image"));
+                    QTest::mouseClick(reading->viewport(), Qt::LeftButton, Qt::NoModifier, point); QTRY_COMPARE(actions.size(), previousActions + 2);
+                    if (authored) {
+                        const QImage pointer = capture(); QVERIFY(!coloredBounds(pointer).isValid());
+                        QCOMPARE(pointer.pixelColor((bitmapView.center() * pointer.devicePixelRatio()).toPoint()), bitmapInk);
+                    }
+                    QCOMPARE(document->toRawText(), raw); QCOMPARE(document->characterCount(), count); QCOMPARE(window.currentEntry_, entry);
+                }
+            }
+        }
+    }
+
     void ordinaryLinkPaintRejectsWrongOwnersAndPreservesCaptionBoundary()
     {
+        const auto oldImages = QSettings().value("media/allowImages");
+        const auto restoreImages = qScopeGuard([&] {
+            if (oldImages.isValid()) QSettings().setValue("media/allowImages", oldImages);
+            else QSettings().remove("media/allowImages");
+        });
+        QSettings().setValue("media/allowImages", false);
         MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
         auto paint = figureLinkPaintFixture(false);
         paint.insert("hover_active", QJsonObject{{"foreground", "#789abc"}, {"underline", true}});
@@ -4435,7 +6011,66 @@ private slots:
         for (const auto &key : {"hover_active", "visited_hover_active"}) { auto bad=span;auto p=paint;p.remove(QLatin1String(key));bad.insert("link_paint",p);refuse(bad); }
         { auto bad=span;bad.insert("kind","text");refuse(bad); }
         { auto bad=span;bad.insert("target","");refuse(bad); }
-        { auto bad=span;bad.insert("text","");bad.insert("image",QJsonObject{{"file","Controlled.png"},{"width_px",1},{"height_px",1}});refuse(bad); }
+        const QJsonObject simpleImage{{"file", "Controlled.png"}, {"width_px", 1}, {"height_px", 1}, {"alt", ""}};
+        auto imageSpan = span; imageSpan.insert("text", ""); imageSpan.insert("image", simpleImage);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{block(imageSpan)}));
+        const auto imageOwners = [&] {
+            int count = 0;
+            for (auto b = window.reading_->document()->begin(); b.isValid(); b = b.next())
+                for (auto it = b.begin(); !it.atEnd(); ++it) {
+                    const auto f = it.fragment().charFormat();
+                    if (f.isImageFormat() && f.stringProperty(MissingFigurePaint::policyProperty) == MissingFigurePaint::ordinaryPolicy) ++count;
+                }
+            return count;
+        };
+        QCOMPARE(imageOwners(), 1);
+        for (const QString &field : {QString("alt"), QString("map"), QString("static_poster")}) {
+            auto bad = imageSpan; auto image = simpleImage;
+            image.insert(field, field == "alt" ? QJsonValue("Authored fallback") : QJsonValue(QJsonObject{}));
+            bad.insert("image", image); refuse(bad);
+        }
+        { auto bad = imageSpan; bad.insert("text", "not empty"); refuse(bad); }
+        { auto bad = imageSpan; bad.insert("trail", "tail"); refuse(bad); }
+        { auto bad = imageSpan; bad.insert("kind", "text"); refuse(bad); }
+        { auto bad = imageSpan; auto malformed = paint; malformed.insert("focus_outline", QJsonObject{{"width", -1}}); bad.insert("link_paint", malformed); refuse(bad); }
+        auto *imageLayout = window.reading_->document()->documentLayout();
+        const auto imageCapability = imageLayout->property("_wikidictOrdinaryImageLinkStateCapability");
+        imageLayout->setProperty("_wikidictOrdinaryImageLinkStateCapability", QVariant());
+        QVERIFY(!composeReadingBlocks(window, QJsonArray{block(imageSpan)}));
+        imageLayout->setProperty("_wikidictOrdinaryImageLinkStateCapability", imageCapability);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{block(imageSpan)})); QCOMPARE(imageOwners(), 1);
+        auto imageFigure = tableCaptionFigureFixture(); imageFigure.insert("caption", QJsonArray{imageSpan});
+        auto imageFigureBlock = QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{}}, {"figure", imageFigure}};
+        QVERIFY(composeReadingBlocks(window, QJsonArray{imageFigureBlock})); QCOMPARE(imageOwners(), 1);
+        imageFigure.insert("caption", QJsonArray{});
+        imageFigure.insert("caption_blocks", QJsonArray{block(imageSpan)});
+        imageFigureBlock.insert("figure", imageFigure);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{imageFigureBlock})); QCOMPARE(imageOwners(), 1);
+        const auto supportedFigure = imageFigure;
+        // Primary media has one authority: image paint cannot coexist with an
+        // independent media outline, including a responsive-only outline.
+        imageFigure.insert("image_span", imageSpan);
+        imageFigureBlock.insert("figure", imageFigure);
+        QVERIFY(!composeReadingBlocks(window, QJsonArray{imageFigureBlock}));
+        auto layoutInput = imageFigure.value("table_caption_layout").toObject();
+        auto mediaInput = layoutInput.value("media").toObject(); mediaInput.remove("focus_outline");
+        layoutInput.insert("media", mediaInput);
+        auto states = layoutInput.value("viewport_states").toArray();
+        for (int index = 0; index < states.size(); ++index) {
+            auto state = states[index].toObject(); auto media = state.value("media").toObject();
+            media.remove("focus_outline"); state.insert("media", media); states[index] = state;
+        }
+        layoutInput.insert("viewport_states", states); imageFigure.insert("table_caption_layout", layoutInput);
+        imageFigureBlock.insert("figure", imageFigure);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{imageFigureBlock})); QCOMPARE(imageOwners(), 2);
+        auto conflictingState = states.first().toObject(); auto conflictingMedia = conflictingState.value("media").toObject();
+        conflictingMedia.insert("focus_outline", supportedFigure.value("table_caption_layout").toObject().value("media").toObject().value("focus_outline"));
+        conflictingState.insert("media", conflictingMedia); auto conflictingStates = states; conflictingStates[0] = conflictingState;
+        auto conflictingLayout = layoutInput; conflictingLayout.insert("viewport_states", conflictingStates);
+        auto conflictingFigure = imageFigure; conflictingFigure.insert("table_caption_layout", conflictingLayout);
+        imageFigureBlock.insert("figure", conflictingFigure); QVERIFY(!composeReadingBlocks(window, QJsonArray{imageFigureBlock}));
+        imageFigureBlock.insert("figure", supportedFigure);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{imageFigureBlock})); QCOMPARE(imageOwners(), 1);
         { auto bad=span;bad.insert("underline",true);refuse(bad); }
         { auto bad=span;bad.insert("foreground","#ffffff");refuse(bad); }
         { auto bad=span;auto p=paint;p.insert("unknown",true);bad.insert("link_paint",p);refuse(bad); }
@@ -6593,6 +8228,380 @@ private slots:
         QVERIFY_EXCEPTION_THROWN(window.blockHtml(box(QJsonObject{{"positioning", "relative_auto"}}, QJsonArray{staticHead})), std::exception);
         QVERIFY_EXCEPTION_THROWN(window.blockHtml(box(QJsonObject{{"positioning", "relative_auto"}, {"columns", QJsonObject{{"count", 2}, {"gap", height}}}}, QJsonArray{headParagraph})), std::exception);
         QVERIFY(composeReadingBlocks(window, QJsonArray{staticHead, table})); QCOMPARE(window.reading_->document()->toRawText(), raw);
+    }
+
+    void authoredRuleClearanceUsesPhysicalFloatsAndPreservesMargins() {
+        MainWindow window{QString()}; window.resize(900,700); window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+        const auto px=[](qreal value){return QJsonObject{{"unit","px"},{"value",value}};};
+        const auto edges=[&](qreal t,qreal r,qreal b,qreal l){return QJsonObject{{"top",px(t)},{"right",px(r)},{"bottom",px(b)},{"left",px(l)}};};
+        const auto paragraph=[&](const QString &text){return QJsonObject{{"kind","paragraph"},{"style",QJsonObject{{"margins",edges(0,0,0,0)}}},
+            {"spans",QJsonArray{QJsonObject{{"kind","link"},{"text",text},{"target",text}}}}};};
+        const auto box=[](const QJsonObject &style,const QJsonArray &blocks){return QJsonObject{{"kind","container"},{"spans",QJsonArray{}},
+            {"container",QJsonObject{{"style",style},{"blocks",blocks}}}};};
+        const auto floating=[&](const QString &side,int height,const QString &text){
+            const QJsonObject cell{{"spans",QJsonArray{}},{"blocks",QJsonArray{paragraph(text)}},
+                {"style",QJsonObject{{"padding",edges(0,0,height,0)}}}};
+            const QJsonObject table{{"geometry",QJsonObject{{"width",px(70)},{"border",0},{"cell_padding",0},{"cell_spacing",0}}},
+                {"style",QJsonObject{{"float_side",side},{"margins",edges(0,0,0,0)}}},
+                {"rows",QJsonArray{QJsonObject{{"cells",QJsonArray{cell}}}}}};
+            return QJsonObject{{"kind","table"},{"table",table}};
+        };
+        // Only an orphan importer flag is normalized. A real href or named
+        // target remains exact; clickable hrefs still fail native Rule admission.
+        const QJsonObject normalizationRule{{"kind","rule"},{"spans",QJsonArray{}},
+            {"rule_style",QJsonObject{{"height",px(3)},{"fill",QJsonObject{{"rgb","#123456"}}},{"margins",edges(0,0,0,0)}}}};
+        for(int anchorMode:{0,1,2,3}) {
+            QTextDocument normalization;normalization.setLayoutEnabled(false);
+            QHash<int,QVariantMap> rules;
+            normalization.setHtml(SemanticHtml::prepareAuthoredRules(SemanticHtml::authoredRuleHtml(normalizationRule,16,false),rules));
+            auto block=normalization.begin();QCOMPARE(block.length(),1);QVERIFY(block.text().isEmpty());
+            auto strut=block.charFormat();strut.setAnchor(true);
+            if(anchorMode==1)strut.setAnchorNames({QStringLiteral("RetainedRuleAnchor")});
+            if(anchorMode==2)strut.setAnchorHref(QStringLiteral("https://example.test/retained-rule"));
+            if(anchorMode==3)strut.setAnchor(false); // Explicit false retains ordinary Rule behavior.
+            QTextCursor cursor(block);cursor.setBlockCharFormat(strut);
+            const auto raw=normalization.toRawText();const int count=normalization.characterCount();
+            QVERIFY(SemanticHtml::normalizeAuthoredRules(&normalization,rules));
+            if(anchorMode==0)strut.clearProperty(QTextFormat::IsAnchor);
+            QCOMPARE(block.charFormat(),strut);QCOMPARE(normalization.toRawText(),raw);QCOMPARE(normalization.characterCount(),count);
+            normalization.setTextWidth(320);normalization.setLayoutEnabled(true);
+            normalization.documentLayout()->documentSize();
+            QCOMPARE(normalization.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(),anchorMode==2?1:0);
+            QCOMPARE(block.charFormat(),strut);QCOMPARE(normalization.toRawText(),raw);
+        }
+        // A named Rule is a real navigation destination, never a link action.
+        QTextBrowser target;target.resize(320,120);target.show();
+        const QString targetHtml=QString("<p style='margin:0'>%1</p><a name='RetainedRuleAnchor'></a>%2<p style='margin:0'>%3</p>")
+            .arg(QString("before<br>").repeated(24),SemanticHtml::authoredRuleHtml(normalizationRule,16,false),QString("after<br>").repeated(24));
+        SemanticHtml::setHtml(&target,targetHtml);
+        auto *targetDoc=target.document();auto *targetLayout=targetDoc->documentLayout();
+        QTextBlock targetBlock;int targetRules=0;
+        for(auto block=targetDoc->begin();block.isValid();block=block.next())if(block.blockFormat().hasProperty(SemanticHtml::authoredRuleProperty)){targetBlock=block;++targetRules;}
+        QCOMPARE(targetRules,1);QVERIFY(targetBlock.isValid());
+        const auto namedStrut=targetBlock.charFormat();const auto targetRaw=targetDoc->toRawText();const int targetPosition=targetBlock.position();
+        QVERIFY(namedStrut.isAnchor());QCOMPARE(namedStrut.anchorNames(),QStringList{QStringLiteral("RetainedRuleAnchor")});
+        QVERIFY(!namedStrut.hasProperty(QTextFormat::AnchorHref));
+        for(int width:{320,240,320}) {
+            target.resize(width,120);QCoreApplication::processEvents();targetLayout->documentSize();
+            QCOMPARE(targetLayout->property("_wikidictParagraphBoxLayoutError").toInt(),0);
+            QVariantMap geometry;QVERIFY(QMetaObject::invokeMethod(targetLayout,"wikidictAuthoredRuleGeometry",Qt::DirectConnection,
+                Q_RETURN_ARG(QVariantMap,geometry),Q_ARG(int,targetPosition)));QVERIFY(geometry.value("handled").toBool());
+            const auto rectangle=geometry.value("characterRect").toRectF();const auto cursorRect=geometry.value("cursorRect").toRectF();
+            QVERIFY(rectangle.isValid());QVERIFY(cursorRect.top()>0);QVERIFY(target.verticalScrollBar()->maximum()>0);
+            QCOMPARE(targetLayout->anchorAt(rectangle.center()),QString());
+            target.verticalScrollBar()->setValue(target.verticalScrollBar()->maximum());target.scrollToAnchor(QStringLiteral("RetainedRuleAnchor"));
+            QCOMPARE(target.verticalScrollBar()->value(),qBound(target.verticalScrollBar()->minimum(),qRound(cursorRect.top()),target.verticalScrollBar()->maximum()));
+            QCOMPARE(targetBlock.charFormat(),namedStrut);QCOMPARE(targetBlock.position(),targetPosition);QCOMPARE(targetDoc->toRawText(),targetRaw);
+        }
+        for(int invalid:{0,1,2,3,4,5}) {
+            auto rejected=namedStrut;
+            if(invalid==0)rejected.setAnchorHref(QStringLiteral("https://example.test/forbidden-rule"));
+            if(invalid==1)rejected.clearProperty(QTextFormat::AnchorName);
+            if(invalid==2)rejected.setProperty(QTextFormat::AnchorName,QStringLiteral("RetainedRuleAnchor"));
+            if(invalid==3)rejected.setProperty(QTextFormat::IsAnchor,1);
+            if(invalid==4)rejected.setAnchorNames({QStringLiteral("RetainedRuleAnchor"),QString()});
+            if(invalid==5)rejected.setProperty(QTextFormat::AnchorHref,QString());
+            targetDoc->setLayoutEnabled(false);QTextCursor(targetBlock).setBlockCharFormat(rejected);
+            const auto stored=targetBlock.charFormat();
+            QCOMPARE(stored.property(QTextFormat::IsAnchor).metaType().id(),rejected.property(QTextFormat::IsAnchor).metaType().id());
+            QCOMPARE(stored.property(QTextFormat::AnchorName).metaType().id(),rejected.property(QTextFormat::AnchorName).metaType().id());
+            QCOMPARE(stored.hasProperty(QTextFormat::AnchorHref),rejected.hasProperty(QTextFormat::AnchorHref));
+            targetDoc->markContentsDirty(0,targetDoc->characterCount());targetDoc->setLayoutEnabled(true);targetLayout->documentSize();
+            qInfo()<<"RULE_TARGET_REJECTION"<<invalid<<stored.property(QTextFormat::IsAnchor).metaType().id()
+                <<stored.isAnchor()<<stored.property(QTextFormat::AnchorName).metaType().id()<<stored.anchorNames()
+                <<stored.hasProperty(QTextFormat::AnchorHref)<<targetLayout->property("_wikidictParagraphBoxLayoutError")
+                <<targetLayout->property("_wikidictParagraphBoxLayoutErrorPosition")<<targetPosition;
+            QCOMPARE(targetLayout->property("_wikidictParagraphBoxLayoutError").toInt(),1);QCOMPARE(targetDoc->toRawText(),targetRaw);
+            targetDoc->setLayoutEnabled(false);QTextCursor(targetBlock).setBlockCharFormat(namedStrut);
+            targetDoc->markContentsDirty(0,targetDoc->characterCount());targetDoc->setLayoutEnabled(true);targetLayout->documentSize();
+            QCOMPARE(targetLayout->property("_wikidictParagraphBoxLayoutError").toInt(),0);QCOMPARE(targetBlock.charFormat(),namedStrut);QCOMPARE(targetDoc->toRawText(),targetRaw);
+        }
+        for(auto direction:{Qt::LeftToRight,Qt::RightToLeft}) for(int context:{0,1,2}) for(int clearMode=0;clearMode<6;++clearMode) {
+            QJsonObject style{{"height",px(3)},{"fill",QJsonObject{{"rgb","#123456"}}},{"margins",edges(7,110,11,110)}};
+            if(clearMode==1)style.insert("clear",QJsonValue::Null);
+            if(clearMode>=2)style.insert("clear",QStringList{"none","left","right","both"}[clearMode-2]);
+            const QJsonObject rule{{"kind","rule"},{"spans",QJsonArray{}},{"rule_style",style}};
+            auto tailStyle=style;tailStyle.remove("clear");tailStyle.insert("height",px(2));tailStyle.insert("margins",edges(5,110,0,110));
+            const QJsonObject tailRule{{"kind","rule"},{"spans",QJsonArray{}},{"rule_style",tailStyle}};
+            QJsonArray blocks{paragraph("BeforeRule"),floating("left",50,"LeftFloat"),floating("right",90,"RightFloat"),rule,tailRule,paragraph("AfterRule")};
+            if(context==1)blocks=QJsonArray{box(QJsonObject{{"padding",edges(4,4,4,4)}},blocks)};
+            if(context==2) {
+                const QJsonObject cell{{"spans",QJsonArray{}},{"blocks",blocks}};
+                const QJsonObject table{{"style",QJsonObject{{"width",QJsonObject{{"unit","percent"},{"value",100}}}}},
+                    {"rows",QJsonArray{QJsonObject{{"cells",QJsonArray{cell}}}}}};
+                blocks=QJsonArray{QJsonObject{{"kind","table"},{"table",table}}};
+            }
+            QJsonArray compositionStates;int compositionSequence=0;
+            const QPointer<QTextDocument> observedDocument(window.reading_->document());
+            const auto observation=QObject::connect(observedDocument,&QTextDocument::contentsChanged,&window,[&] {
+                if(!observedDocument)return;
+                auto *observedLayout=observedDocument->documentLayout();
+                QJsonArray frames,boundaries;int frameCount=0,boundaryCount=0;
+                const auto visit=[&](auto &&self,QTextFrame *frame)->void {
+                    if(++frameCount>32)return;
+                    const auto format=frame->frameFormat();
+                    frames.append(QJsonObject{{"id",frame->objectIndex()},{"first",frame->firstPosition()},{"last",frame->lastPosition()},
+                        {"parent",frame->parentFrame()?frame->parentFrame()->objectIndex():-1},
+                        {"table",bool(qobject_cast<QTextTable *>(frame))},
+                        {"viewport",format.hasProperty(SemanticHtml::tableViewportProperty)},
+                        {"float",format.position()!=QTextFrameFormat::InFlow}});
+                    for(auto *child:frame->childFrames())self(self,child);
+                };
+                visit(visit,observedDocument->rootFrame());
+                const auto field=[](const QTextFormat &format,int property) {
+                    const auto value=format.property(property);
+                    return QJsonObject{{"present",format.hasProperty(property)},
+                        {"type",value.metaType().id()},{"value",QJsonValue::fromVariant(value)}};
+                };
+                const auto neighbor=[](const QTextBlock &block) {
+                    QJsonObject result{{"valid",block.isValid()}};
+                    if(!block.isValid())return result;
+                    const auto format=block.blockFormat();const auto *parent=QTextCursor(block).currentFrame();
+                    result.insert("position",block.position());result.insert("length",block.length());
+                    result.insert("parent",parent?parent->objectIndex():-1);result.insert("visible",block.isVisible());
+                    result.insert("topMargin",format.topMargin());result.insert("bottomMargin",format.bottomMargin());
+                    result.insert("topMarginType",format.property(QTextFormat::BlockTopMargin).metaType().id());
+                    result.insert("bottomMarginType",format.property(QTextFormat::BlockBottomMargin).metaType().id());
+                    result.insert("authoredRule",format.hasProperty(SemanticHtml::authoredRuleProperty));
+                    result.insert("boundary",format.hasProperty(QTextFormat::UserProperty+0x5806));
+                    return result;
+                };
+                for(auto block=observedDocument->begin();block.isValid();block=block.next()) {
+                    const auto marker=block.blockFormat().property(QTextFormat::UserProperty+0x5806);
+                    const auto authored=block.blockFormat().property(SemanticHtml::authoredRuleProperty);
+                    if(!marker.isValid() && !authored.isValid())continue;
+                    if(++boundaryCount>8)break;
+                    const auto *parent=QTextCursor(block).currentFrame();
+                    const auto format=block.blockFormat();const auto strut=block.charFormat();
+                    QJsonObject formatFields;
+                    for(const auto property:{QTextFormat::BlockTopMargin,QTextFormat::BlockRightMargin,
+                        QTextFormat::BlockBottomMargin,QTextFormat::BlockLeftMargin,QTextFormat::BlockIndent,
+                        QTextFormat::TextIndent,QTextFormat::HeadingLevel,QTextFormat::BackgroundBrush,
+                        QTextFormat::PageBreakPolicy,QTextFormat::BlockTrailingHorizontalRulerWidth})
+                        formatFields.insert(QString::number(int(property)),field(format,int(property)));
+                    formatFields.insert("paragraphBoxOwner",field(format,QTextFormat::UserProperty+0x5760));
+                    formatFields.insert("tableCaptionBlock",field(format,QTextFormat::UserProperty+0x57f3));
+                    const QString href=strut.anchorHref();
+                    const QStringList anchorNames=strut.anchorNames();QJsonArray boundedAnchorNames;
+                    for(const auto &name:anchorNames.mid(0,8))boundedAnchorNames.append(name.left(128));
+                    boundaries.append(QJsonObject{{"position",block.position()},{"length",block.length()},
+                        {"visible",block.isVisible()},{"list",bool(block.textList())},
+                        {"parent",parent?parent->objectIndex():-1},{"markerType",marker.metaType().id()},
+                        {"heading",block.blockFormat().headingLevel()},
+                        {"rule",block.blockFormat().hasProperty(QTextFormat::BlockTrailingHorizontalRulerWidth)},
+                        {"authoredRule",QJsonValue::fromVariant(authored)},{"authoredRuleType",authored.metaType().id()},
+                        {"sameDocument",block.document()==observedDocument.data()},
+                        {"blockFormat",formatFields},{"backgroundStyle",int(format.background().style())},
+                        {"strut",QJsonObject{{"objectType",strut.objectType()},
+                            {"objectTypeField",field(strut,QTextFormat::ObjectType)},
+                            {"objectIndex",strut.objectIndex()},
+                            {"isAnchor",strut.isAnchor()},{"isAnchorField",field(strut,QTextFormat::IsAnchor)},
+                            {"hrefPresent",strut.hasProperty(QTextFormat::AnchorHref)},
+                            {"hrefType",strut.property(QTextFormat::AnchorHref).metaType().id()},
+                            {"href",href.left(128)},{"hrefTruncated",href.size()>128},
+                            {"anchorNamesPresent",strut.hasProperty(QTextFormat::AnchorName)},
+                            {"anchorNamesType",strut.property(QTextFormat::AnchorName).metaType().id()},
+                            {"anchorNames",boundedAnchorNames},{"anchorNameCount",anchorNames.size()},
+                            {"anchorNamesTruncated",anchorNames.size()>8||std::any_of(anchorNames.cbegin(),anchorNames.cend(),[](const QString &name){return name.size()>128;})}}},
+                        {"previous",neighbor(block.previous())},{"next",neighbor(block.next())},
+                        {"text",block.text().left(128)}});
+                }
+                compositionStates.append(QJsonObject{{"sequence",++compositionSequence},{"revision",observedDocument->revision()},
+                    {"count",observedDocument->characterCount()},{"layoutEnabled",observedDocument->isLayoutEnabled()},
+                    {"nativeError",observedLayout?QJsonValue::fromVariant(observedLayout->property("_wikidictParagraphBoxLayoutError")):QJsonValue()},
+                    {"nativeErrorPosition",observedLayout?QJsonValue::fromVariant(observedLayout->property("_wikidictParagraphBoxLayoutErrorPosition")):QJsonValue()},
+                    {"pageWidth",observedDocument->pageSize().width()},{"pageHeight",observedDocument->pageSize().height()},
+                    {"frames",frames},{"frameTruncated",frameCount>32},{"boundaries",boundaries},{"boundaryTruncated",boundaryCount>8}});
+                if(compositionStates.size()>16)compositionStates.removeFirst();
+            });
+            const bool composed=composeReadingBlocks(window,blocks,direction);
+            QObject::disconnect(observation);
+            if(!composed)qInfo().noquote()<<"rule-clear-compose "<<QJsonDocument(QJsonObject{
+                {"direction",int(direction)},{"context",context},{"clearMode",clearMode},{"sequence",compositionSequence},
+                {"truncated",compositionSequence>16},{"states",compositionStates}}).toJson(QJsonDocument::Compact);
+            QVERIFY(composed);auto *doc=window.reading_->document();auto *layout=doc->documentLayout();
+            auto *native=qobject_cast<QTextDocumentLayout *>(layout);QVERIFY(native);
+            QList<QTextBlock> rules;for(auto block=doc->begin();block.isValid();block=block.next())if(block.blockFormat().hasProperty(SemanticHtml::authoredRuleProperty))rules.append(block);
+            QCOMPARE(rules.size(),2);
+            QList<QTextCharFormat> ruleStruts;
+            for(const auto &block:rules) {
+                const auto strut=block.charFormat();ruleStruts.append(strut);
+                QVERIFY(!strut.hasProperty(QTextFormat::AnchorHref));
+                if(strut.isAnchor()) {
+                    QCOMPARE(strut.property(QTextFormat::IsAnchor).metaType().id(),int(QMetaType::Bool));
+                    QCOMPARE(strut.property(QTextFormat::AnchorName).metaType().id(),int(QMetaType::QStringList));
+                    QVERIFY(!strut.anchorNames().isEmpty());for(const auto &name:strut.anchorNames())QVERIFY(!name.isEmpty());
+                }
+            }
+            if(direction==Qt::LeftToRight && context==0 && clearMode==0)
+                QCOMPARE(rules[0].charFormat().anchorNames(),QStringList{QStringLiteral("section-0")});
+            QPointer<QTextFrame> left=doc->find("LeftFloat").currentFrame(),right=doc->find("RightFloat").currentFrame();QVERIFY(left&&right);
+            QVERIFY(qobject_cast<QTextTable *>(left.data()) && qobject_cast<QTextTable *>(right.data()));
+            QCOMPARE(left->frameFormat().position(),QTextFrameFormat::FloatLeft);QCOMPARE(right->frameFormat().position(),QTextFrameFormat::FloatRight);
+            QCOMPARE(doc->find("LeftFloat").charFormat().anchorHref(),QString("dict:LeftFloat"));
+            QCOMPARE(doc->find("RightFloat").charFormat().anchorHref(),QString("dict:RightFloat"));
+            const auto raw=doc->toRawText();const auto entry=window.currentEntry_;const int count=doc->characterCount();
+            const auto source=rules[0].blockFormat().property(SemanticHtml::authoredRuleProperty).toMap();
+            QCOMPARE(QJsonDocument::fromJson(source.value("source").toByteArray()).object(),rule);QCOMPARE(source.contains("clear"),clearMode>=2);
+            const int leftId=left->objectIndex(),rightId=right->objectIndex();QRectF firstWide;
+            for(int width:{900,600,900}) {
+                doc->setTextWidth(width);layout->documentSize();QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(),0);
+                const qreal scale=layout->paintDevice()?layout->paintDevice()->logicalDpiY()/96.0:QFontMetricsF(doc->defaultFont()).fontDpi()/96.0;
+                const auto l=native->tableBoundingRect(qobject_cast<QTextTable *>(left.data())),r=native->tableBoundingRect(qobject_cast<QTextTable *>(right.data())),actual=layout->blockBoundingRect(rules[0]);
+                QVERIFY(qAbs(l.top()-r.top())<.06);QVERIFY(r.bottom()>l.bottom()+30*scale);
+                const qreal expected=clearMode==3?l.bottom():clearMode>=4?r.bottom():l.top()+7*scale;
+                const QString diagnostic=QString("dir=%1 context=%2 clear=%3 width=%4 actual=%5 expected=%6 left=%7 right=%8")
+                    .arg(int(direction)).arg(context).arg(clearMode).arg(width).arg(actual.top()).arg(expected).arg(l.bottom()).arg(r.bottom());
+                QVERIFY2(qAbs(actual.top()-expected)<.06,qPrintable(diagnostic));QVERIFY(qAbs(actual.height()-3*scale)<.06);
+                const auto following=layout->blockBoundingRect(rules[1]);QVERIFY(qAbs(following.top()-actual.bottom()-11*scale)<.06);
+                QCOMPARE(rules[0].layout()->lineCount(),0);QCOMPARE(layout->hitTest(actual.center(),Qt::ExactHit),rules[0].position());
+                QVariantMap geometry;QVERIFY(QMetaObject::invokeMethod(layout,"wikidictAuthoredRuleGeometry",Qt::DirectConnection,
+                    Q_RETURN_ARG(QVariantMap,geometry),Q_ARG(int,rules[0].position())));QVERIFY(geometry.value("handled").toBool());QCOMPARE(geometry.value("characterRect").toRectF(),actual);
+                QImage image(1100,qMax(800,qCeil(layout->documentSize().height())+10),QImage::Format_ARGB32_Premultiplied);image.fill(Qt::white);
+                {QPainter painter(&image);layout->draw(&painter,{});}const QPoint pixel(qFloor(actual.center().x()),qFloor(actual.center().y()));
+                QVERIFY(image.rect().contains(pixel));QCOMPARE(image.pixelColor(pixel),QColor("#123456"));
+                auto *ax=QAccessible::queryAccessibleInterface(window.reading_);QVERIFY(ax&&ax->textInterface());
+                QRect expectedAx=actual.toAlignedRect();expectedAx.translate(-window.reading_->horizontalScrollBar()->value(),-window.reading_->verticalScrollBar()->value());
+                expectedAx.moveTopLeft(window.reading_->viewport()->mapToGlobal(expectedAx.topLeft()));QCOMPARE(ax->textInterface()->characterRect(rules[0].position()),expectedAx);
+                for(const QString text:{QString("BeforeRule"),QString("AfterRule")}) {const auto selected=doc->find(text);QVERIFY(!selected.isNull());QCOMPARE(selected.selectedText(),text);QCOMPARE(selected.charFormat().anchorHref(),"dict:"+text);}
+                QCOMPARE(left->objectIndex(),leftId);QCOMPARE(right->objectIndex(),rightId);QCOMPARE(doc->toRawText(),raw);QCOMPARE(doc->characterCount(),count);QCOMPARE(window.currentEntry_,entry);
+                QCOMPARE(rules[0].blockFormat().property(SemanticHtml::authoredRuleProperty).toMap(),source);
+                QCOMPARE(rules[0].charFormat(),ruleStruts[0]);QCOMPARE(rules[1].charFormat(),ruleStruts[1]);
+                QCOMPARE(layout->anchorAt(actual.center()),QString());
+                if(width==900) {if(firstWide.isNull())firstWide=actual;else QCOMPARE(actual,firstWide);}
+            }
+        }
+    }
+
+    void authoredRuleClearanceLeadingChainAndContextIsolation() {
+        MainWindow window{QString()};window.resize(900,700);window.show();QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+        const auto px=[](qreal n){return QJsonObject{{"unit","px"},{"value",n}};};
+        const auto edges=[&](qreal t,qreal r,qreal b,qreal l){return QJsonObject{{"top",px(t)},{"right",px(r)},{"bottom",px(b)},{"left",px(l)}};};
+        const auto paragraph=[&](const QString &text){return QJsonObject{{"kind","paragraph"},{"style",QJsonObject{{"margins",edges(0,0,0,0)}}},
+            {"spans",QJsonArray{QJsonObject{{"kind","link"},{"text",text},{"target",text}}}}};};
+        const auto box=[](const QJsonObject &style,const QJsonArray &blocks){return QJsonObject{{"kind","container"},{"spans",QJsonArray{}},{"container",QJsonObject{{"style",style},{"blocks",blocks}}}};};
+        const auto floating=[&](const QString &side,int height,const QString &text){
+            const QJsonObject cell{{"spans",QJsonArray{}},{"blocks",QJsonArray{paragraph(text)}},
+                {"style",QJsonObject{{"padding",edges(0,0,height,0)}}}};
+            const QJsonObject table{{"geometry",QJsonObject{{"width",px(70)},{"border",0},{"cell_padding",0},{"cell_spacing",0}}},
+                {"style",QJsonObject{{"float_side",side},{"margins",edges(0,0,0,0)}}},
+                {"rows",QJsonArray{QJsonObject{{"cells",QJsonArray{cell}}}}}};
+            return QJsonObject{{"kind","table"},{"table",table}};
+        };
+        for(auto direction:{Qt::LeftToRight,Qt::RightToLeft}) for(bool isolated:{false,true}) for(int height:{0,3}) {
+            const QJsonObject rule{{"kind","rule"},{"spans",QJsonArray{}},{"rule_style",QJsonObject{{"height",px(height)},
+                {"fill",QJsonObject{{"rgb","#123456"}}},{"margins",edges(7,100,11,100)},{"clear","both"}}}};
+            auto sentinel=rule;auto style=rule.value("rule_style").toObject();style.remove("clear");style.insert("height",px(2));style.insert("margins",edges(5,100,0,100));sentinel.insert("rule_style",style);
+            QJsonObject ownerStyle{{"width",QJsonObject{{"length",px(320)}}},{"margins",edges(17,0,19,0)}};if(isolated) {
+                ownerStyle.remove("width");ownerStyle.insert("max_width",QJsonObject{{"length",px(320)}});
+                ownerStyle.insert("overflow","auto");
+            }
+            const auto owner=box(ownerStyle,QJsonArray{floating("right",70,"InnerFloat"),rule,sentinel,paragraph("InnerTail")});
+            QVERIFY(composeReadingBlocks(window,QJsonArray{paragraph("OuterBefore"),floating("left",190,"OuterFloat"),owner,paragraph("OuterAfter")},direction));
+            auto *doc=window.reading_->document();auto *layout=doc->documentLayout();QPointer<QTextFrame> inner=doc->find("InnerFloat").currentFrame(),outer=doc->find("OuterFloat").currentFrame();QVERIFY(inner&&outer);
+            auto *native=qobject_cast<QTextDocumentLayout *>(layout);QVERIFY(native);
+            QVERIFY(qobject_cast<QTextTable *>(inner.data()) && qobject_cast<QTextTable *>(outer.data()));
+            QCOMPARE(inner->frameFormat().position(),QTextFrameFormat::FloatRight);QCOMPARE(outer->frameFormat().position(),QTextFrameFormat::FloatLeft);
+            QCOMPARE(doc->find("InnerFloat").charFormat().anchorHref(),QString("dict:InnerFloat"));
+            QCOMPARE(doc->find("OuterFloat").charFormat().anchorHref(),QString("dict:OuterFloat"));
+            QList<QTextBlock> rules;for(auto block=doc->begin();block.isValid();block=block.next())if(block.blockFormat().hasProperty(SemanticHtml::authoredRuleProperty))rules.append(block);QCOMPARE(rules.size(),2);
+            auto *ruleOwner=QTextCursor(rules[0]).currentFrame();QCOMPARE(inner->parentFrame(),ruleOwner);QVERIFY(outer->parentFrame()!=ruleOwner);
+            const auto raw=doc->toRawText();const auto entry=window.currentEntry_;const int ownerId=ruleOwner->objectIndex();
+            for(int width:{900,600,900}) {
+                doc->setTextWidth(width);layout->documentSize();QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(),0);
+                const qreal scale=layout->paintDevice()?layout->paintDevice()->logicalDpiY()/96.0:QFontMetricsF(doc->defaultFont()).fontDpi()/96.0;
+                const auto in=native->tableBoundingRect(qobject_cast<QTextTable *>(inner.data())),out=native->tableBoundingRect(qobject_cast<QTextTable *>(outer.data())),actual=layout->blockBoundingRect(rules[0]);
+                const qreal expected=isolated?in.bottom():qMax(in.bottom(),out.bottom());
+                QVERIFY(qAbs(actual.top()-expected)<.06);if(isolated)QVERIFY(actual.bottom()<out.bottom()-50*scale);
+                const auto next=layout->blockBoundingRect(rules[1]);const qreal gap=height?11:4;
+                QVERIFY(qAbs(next.top()-actual.bottom()-gap*scale)<.06);QCOMPARE(rules[0].layout()->lineCount(),0);
+                QCOMPARE(QTextCursor(rules[0]).currentFrame()->objectIndex(),ownerId);QCOMPARE(doc->toRawText(),raw);QCOMPARE(window.currentEntry_,entry);
+                for(const QString text:{QString("OuterBefore"),QString("InnerTail"),QString("OuterAfter")})QCOMPARE(doc->find(text).charFormat().anchorHref(),"dict:"+text);
+            }
+        }
+    }
+
+    void authoredRuleTrailingZeroClearanceDoesNotExportItsMarginsTwice() {
+        MainWindow window{QString()};window.resize(900,700);window.show();QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+        const auto px=[](qreal n){return QJsonObject{{"unit","px"},{"value",n}};};
+        const auto edges=[&](qreal t,qreal r,qreal b,qreal l){return QJsonObject{{"top",px(t)},{"right",px(r)},{"bottom",px(b)},{"left",px(l)}};};
+        const auto paragraph=[&](const QString &text){return QJsonObject{{"kind","paragraph"},{"style",QJsonObject{{"margins",edges(0,0,0,0)}}},
+            {"spans",QJsonArray{QJsonObject{{"kind","link"},{"text",text},{"target",text}}}}};};
+        const auto box=[](const QJsonObject &style,const QJsonArray &blocks){return QJsonObject{{"kind","container"},{"spans",QJsonArray{}},
+            {"container",QJsonObject{{"style",style},{"blocks",blocks}}}};};
+        const auto floating=[&](const QString &side,int height,const QString &text){
+            const QJsonObject cell{{"spans",QJsonArray{}},{"blocks",QJsonArray{paragraph(text)}},
+                {"style",QJsonObject{{"padding",edges(0,0,height,0)}}}};
+            const QJsonObject table{{"geometry",QJsonObject{{"width",px(70)},{"border",0},{"cell_padding",0},{"cell_spacing",0}}},
+                {"style",QJsonObject{{"float_side",side},{"margins",edges(0,0,0,0)}}},
+                {"rows",QJsonArray{QJsonObject{{"cells",QJsonArray{cell}}}}}};
+            return QJsonObject{{"kind","table"},{"table",table}};
+        };
+        const QJsonObject zero{{"kind","rule"},{"spans",QJsonArray{}},{"rule_style",QJsonObject{{"height",px(0)},
+            {"fill",QJsonObject{{"rgb","#123456"}}},{"margins",edges(7,100,11,100)},{"clear","both"}}}};
+        auto next=zero;auto nextStyle=zero.value("rule_style").toObject();nextStyle.remove("clear");nextStyle.insert("height",px(2));
+        nextStyle.insert("margins",edges(3,100,0,100));next.insert("rule_style",nextStyle);
+        const auto owner=box(QJsonObject{{"width",QJsonObject{{"length",px(400)}}},{"padding",edges(6,0,0,0)},
+            {"margins",edges(17,0,2,0)}},QJsonArray{floating("right",70,"InnerTrailingFloat"),zero});
+        for(auto direction:{Qt::LeftToRight,Qt::RightToLeft}) {
+            QVERIFY(composeReadingBlocks(window,QJsonArray{paragraph("TrailingBefore"),floating("left",190,"OuterTrailingFloat"),owner,next,paragraph("TrailingAfter")},direction));
+            auto *doc=window.reading_->document();auto *layout=doc->documentLayout();QList<QTextBlock> rules;
+            for(auto block=doc->begin();block.isValid();block=block.next())if(block.blockFormat().hasProperty(SemanticHtml::authoredRuleProperty))rules.append(block);
+            QCOMPARE(rules.size(),2);QPointer<QTextFrame> frame=QTextCursor(rules[0]).currentFrame(),outside=doc->find("OuterTrailingFloat").currentFrame();QVERIFY(frame&&outside);
+            auto *native=qobject_cast<QTextDocumentLayout *>(layout);QVERIFY(native);
+            auto *inside=doc->find("InnerTrailingFloat").currentFrame();QVERIFY(inside && qobject_cast<QTextTable *>(inside));
+            QVERIFY(qobject_cast<QTextTable *>(outside.data()));QCOMPARE(inside->parentFrame(),frame.data());
+            QCOMPARE(inside->frameFormat().position(),QTextFrameFormat::FloatRight);QCOMPARE(outside->frameFormat().position(),QTextFrameFormat::FloatLeft);
+            QCOMPARE(doc->find("InnerTrailingFloat").charFormat().anchorHref(),QString("dict:InnerTrailingFloat"));
+            QCOMPARE(doc->find("OuterTrailingFloat").charFormat().anchorHref(),QString("dict:OuterTrailingFloat"));
+            QVERIFY(QTextCursor(rules[1]).currentFrame()!=frame);QCOMPARE(QTextCursor(rules[0]).position(),frame->lastCursorPosition().position());
+            const auto raw=doc->toRawText();const auto entry=window.currentEntry_;const int id=frame->objectIndex();QRectF wide;
+            for(int width:{900,600,900}) {
+                doc->setTextWidth(width);layout->documentSize();QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(),0);
+                const qreal scale=layout->paintDevice()?layout->paintDevice()->logicalDpiY()/96.0:QFontMetricsF(doc->defaultFont()).fontDpi()/96.0;
+                const auto rule=layout->blockBoundingRect(rules[0]),parent=layout->frameBoundingRect(frame),following=layout->blockBoundingRect(rules[1]);
+                QVERIFY(qAbs(rule.top()-native->tableBoundingRect(qobject_cast<QTextTable *>(outside.data())).bottom())<.06);QCOMPARE(rule.height(),0.0);
+                // Clearance stops the trailing zero Rule's bottom margin from
+                // collapsing out. Its internal collapsed tail is max(7,11)-7.
+                QVERIFY(qAbs(parent.bottom()-rule.top()-4*scale)<.06);
+                // Only the parent's own 2px margin adjoins the next Rule's 3px.
+                // Exporting the child's old 11px after-profile would fail here.
+                QVERIFY(qAbs(following.top()-parent.bottom()-3*scale)<.06);
+                QCOMPARE(rules[0].layout()->lineCount(),0);QCOMPARE(frame->objectIndex(),id);QCOMPARE(doc->toRawText(),raw);QCOMPARE(window.currentEntry_,entry);
+                QCOMPARE(doc->find("TrailingBefore").charFormat().anchorHref(),QString("dict:TrailingBefore"));QCOMPARE(doc->find("TrailingAfter").charFormat().anchorHref(),QString("dict:TrailingAfter"));
+                if(width==900){if(wide.isNull())wide=parent;else QCOMPARE(parent,wide);}
+            }
+        }
+    }
+
+    void authoredRuleClearanceStrictJsonCapabilityAndNativeOwnership() {
+        MainWindow window{QString()};const auto px=[](qreal n){return QJsonObject{{"unit","px"},{"value",n}};};
+        const QJsonObject edges{{"top",px(2)},{"right",px(0)},{"bottom",px(3)},{"left",px(0)}};
+        const QJsonObject legacy{{"kind","rule"},{"spans",QJsonArray{}},{"rule_style",QJsonObject{{"height",px(1)},{"fill",QJsonObject{{"rgb","#123456"}}},{"margins",edges}}}};
+        const auto old=SemanticHtml::authoredRuleMetadata(legacy,16,false);QCOMPARE(old.size(),7);QCOMPARE(old.value("capability").toString(),QString("wikidict.authored-rule/1"));
+        auto with=[&](const QJsonValue &value){auto rule=legacy;auto style=legacy.value("rule_style").toObject();style.insert("clear",value);rule.insert("rule_style",style);return rule;};
+        const auto nullRule=with(QJsonValue::Null);const auto nullMeta=SemanticHtml::authoredRuleMetadata(nullRule,16,false);QCOMPARE(nullMeta.size(),7);QVERIFY(!nullMeta.contains("clear"));
+        for(const QJsonValue value:{QJsonValue(1),QJsonValue(true),QJsonValue(QJsonObject{}),QJsonValue(QJsonArray{}),QJsonValue(""),QJsonValue("inline_end")})
+            QVERIFY_EXCEPTION_THROWN(CompiledContent::ruleStyle(with(value)),std::exception);
+        auto *layout=window.reading_->document()->documentLayout();const auto capability=layout->property("_wikidictAuthoredRuleClearCapability");
+        layout->setProperty("_wikidictAuthoredRuleClearCapability",QVariant());
+        for(const QString clear:{QString("none"),QString("left"),QString("right"),QString("both")})QVERIFY_EXCEPTION_THROWN(window.blockHtml(with(clear)),DictApiError);
+        QVERIFY(!window.blockHtml(legacy).isEmpty());QVERIFY(!window.blockHtml(nullRule).isEmpty());layout->setProperty("_wikidictAuthoredRuleClearCapability",capability);
+        QRectF legacyGeometry;
+        for(int mode=0;mode<6;++mode) {
+            const auto rule=mode==0?legacy:mode==1?nullRule:with(QStringList{"none","left","right","both"}[mode-2]);
+            QTextDocument doc;SemanticHtml::setHtml(&doc,window.blockHtml(rule));doc.setTextWidth(240);doc.documentLayout()->documentSize();
+            QCOMPARE(doc.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(),0);QTextBlock block;
+            for(auto it=doc.begin();it.isValid();it=it.next())if(it.blockFormat().hasProperty(SemanticHtml::authoredRuleProperty))block=it;QVERIFY(block.isValid());
+            const auto rect=doc.documentLayout()->blockBoundingRect(block);if(mode==0)legacyGeometry=rect;else QCOMPARE(rect,legacyGeometry);
+            const auto metadata=block.blockFormat().property(SemanticHtml::authoredRuleProperty).toMap();QCOMPARE(metadata.contains("clear"),mode>=2);
+            if(mode>=2) {
+                QCOMPARE(metadata.value("clear").toInt(),mode-2);auto forged=metadata;forged.insert("clear",(mode-1)%4);
+                QTextCursor cursor(block);auto format=block.blockFormat();format.setProperty(SemanticHtml::authoredRuleProperty,forged);cursor.setBlockFormat(format);doc.documentLayout()->documentSize();
+                QVERIFY(doc.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt()!=0);
+            }
+        }
+        QVERIFY(!window.blockHtml(legacy).isEmpty());QCOMPARE(SemanticHtml::authoredRuleMetadata(legacy,16,false),old);
     }
 
     void authoredRuleKeepsTypedSeparatorSourceGeometrySelectionAndAccessibility() {
@@ -9373,6 +11382,216 @@ private slots:
         // overlapping allocation if one exists. No adjacent-pixel tolerance.
         QVERIFY(allSettled);
         QVERIFY(allSettledBoundsPass);
+    }
+
+    void explicitInlineImageAlignmentRejectsMalformedContextsAndKeepsNull()
+    {
+        const QJsonObject original{{"file","Arrowyellow.png"},{"width_px",30},{"height_px",30},
+            {"alt","Source arrow alternative"},{"tooltip","Source arrow advice"},{"border",true}};
+        QCOMPARE(SemanticHtml::checkedImage(original),original);
+        for(const QJsonValue &value:{QJsonValue(QJsonValue::Null),QJsonValue("middle"),QJsonValue("baseline")}) {
+            auto image=original;image.insert("vertical_align",value);
+            QCOMPARE(SemanticHtml::inlineImageData(SemanticHtml::inlineImageUrl(image)),image);
+        }
+        for(const QJsonValue &value:{QJsonValue(0),QJsonValue(1),QJsonValue(false),QJsonValue("Middle"),QJsonValue("top"),QJsonValue(""),QJsonValue(QJsonObject{})}) {
+            auto image=original;image.insert("vertical_align",value);QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineImageHtml(image),std::runtime_error);
+        }
+        QJsonObject poster{{"file","Controlled.stl"},{"width_px",30},{"height_px",23},
+            {"static_poster",QJsonObject{{"policy","three_d_stl_v1"},{"label","Source poster"},
+                {"file_sha1",QString(40,QChar('0'))},{"file_timestamp","2026-01-01T00:00:00Z"}}}};
+        QCOMPARE(SemanticHtml::checkedImage(poster),poster);poster.insert("vertical_align","baseline");
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::checkedImage(poster),std::runtime_error);
+        auto figure=tableCaptionFigureFixture();auto span=figure.value("image_span").toObject();auto image=span.value("image").toObject();
+        image.insert("vertical_align","middle");span.insert("image",image);figure.insert("image_span",span);
+        QVERIFY_EXCEPTION_THROWN(SemanticFigure::validate(figure,16,QPalette()),std::runtime_error);
+        QTextDocument legacy,nullable;
+        const auto html=[&](QJsonObject image){return QString("<p>before %1 after</p>").arg(SemanticHtml::inlineImageHtml(image));};
+        SemanticHtml::setHtml(&legacy,html(original));auto nullImage=original;nullImage.insert("vertical_align",QJsonValue(QJsonValue::Null));
+        SemanticHtml::setHtml(&nullable,html(nullImage));legacy.setTextWidth(300);nullable.setTextWidth(300);
+        QCOMPARE(legacy.toRawText(),nullable.toRawText());QCOMPARE(legacy.documentLayout()->documentSize(),nullable.documentLayout()->documentSize());
+        for(QTextDocument *document:{&legacy,&nullable})for(QTextBlock b=document->begin();b.isValid();b=b.next())for(auto it=b.begin();!it.atEnd();++it)
+            if(it.fragment().charFormat().isImageFormat())QVERIFY(!it.fragment().charFormat().hasProperty(SemanticHtml::inlineImageAlignmentProperty));
+        QTextDocument refused;refused.documentLayout()->setProperty("_wikidictInlineImageAlignmentCapability",QVariant());
+        image=original;image.insert("vertical_align","middle");
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&refused,html(image)),std::runtime_error);
+    }
+
+    void explicitInlineImageAlignmentKeepsSourceActionAndAccessibleOuterBox()
+    {
+        class HeldReply final : public QNetworkReply {
+        public:
+            HeldReply(const QNetworkRequest &request, QObject *parent) : QNetworkReply(parent) {
+                setRequest(request); setUrl(request.url()); setOperation(QNetworkAccessManager::GetOperation);
+                open(QIODevice::ReadOnly);
+            }
+            void complete(const QByteArray &bytes, NetworkError error = NoError) {
+                if (isFinished()) return;
+                bytes_ = bytes;
+                if (error != NoError) setError(error, QStringLiteral("Controlled unavailable image"));
+                setHeader(QNetworkRequest::ContentLengthHeader, bytes_.size());
+                emit metaDataChanged();
+                if (!bytes_.isEmpty()) emit readyRead();
+                setFinished(true); emit finished();
+            }
+            void abort() override { complete({}, OperationCanceledError); }
+            qint64 bytesAvailable() const override { return bytes_.size() - offset_ + QNetworkReply::bytesAvailable(); }
+        protected:
+            qint64 readData(char *data, qint64 maximum) override {
+                const qint64 count = qMin(maximum, bytes_.size() - offset_);
+                if (count <= 0) return -1;
+                std::copy_n(bytes_.constData() + offset_, count, data); offset_ += count; return count;
+            }
+        private:
+            QByteArray bytes_;
+            qint64 offset_ = 0;
+        };
+        class HeldNetwork final : public QNetworkAccessManager {
+        public:
+            QList<QUrl> urls;
+            QList<QPointer<HeldReply>> replies;
+        protected:
+            QNetworkReply *createRequest(Operation, const QNetworkRequest &request, QIODevice *) override {
+                urls.append(request.url());
+                auto *reply = new HeldReply(request, this); replies.append(reply); return reply;
+            }
+        } network;
+        const QVariant oldPermission=QSettings().value("media/allowImages");
+        const auto restorePermission=qScopeGuard([&]{QSettings().setValue("media/allowImages",oldPermission);});
+        QSettings().setValue("media/allowImages",false);
+        MainWindow window{QString()};window.resize(900,700);window.show();QTRY_VERIFY_WITH_TIMEOUT(!window.loading_,30000);
+        delete window.media_;window.media_=new MediaPanel(window.entryTabs_,&network);
+        window.entryTabs_->insertTab(1,window.media_,QStringLiteral("Media && speech"));
+        const QString cache=QStandardPaths::writableLocation(QStandardPaths::CacheLocation)+"/media-v1/";
+        QVERIFY(QDir().mkpath(cache));
+        const QString key=QString::fromLatin1(QCryptographicHash::hash(QByteArray(":image:Arrowyellow.png"),QCryptographicHash::Sha256).toHex());
+        const QString payloadPath=cache+key+".bin",metadataPath=cache+key+".json";
+        QVERIFY(!QFileInfo::exists(payloadPath));QVERIFY(!QFileInfo::exists(metadataPath));
+        const auto clean=qScopeGuard([&]{QFile::remove(payloadPath);QFile::remove(metadataPath);});
+        QImage square(30,30,QImage::Format_ARGB32);square.fill(QColor("#20c060"));
+        QByteArray pixels;QBuffer buffer(&pixels);QVERIFY(buffer.open(QIODevice::WriteOnly));QVERIFY(square.save(&buffer,"PNG"));
+        const QByteArray metadata=QJsonDocument(QJsonObject{
+            {"url","https://upload.wikimedia.org/wikipedia/commons/a/aa/Arrowyellow.png"},
+            {"source","https://commons.wikimedia.org/wiki/File:Arrowyellow.png"},{"credit","Owned alignment square"},
+            {"intrinsic_width",30},{"intrinsic_height",30},{"original_mime","image/png"}}).toJson(QJsonDocument::Compact);
+        const auto seed=[&]()->bool {
+            QFile payload(payloadPath),info(metadataPath);
+            if(!payload.open(QIODevice::WriteOnly)||payload.write(pixels)!=pixels.size())return false;payload.close();
+            if(!info.open(QIODevice::WriteOnly)||info.write(metadata)!=metadata.size())return false;info.close();return true;
+        };
+        QVERIFY(seed());
+        auto *permission=window.media_->findChild<QCheckBox *>("mediaAllowImages");QVERIFY(permission);
+
+        for(const QString &alignment:{QString("baseline"),QString("middle")})for(bool rtl:{false,true}) {
+            const QJsonObject image{{"file","Arrowyellow.png"},{"width_px",30},{"height_px",30},{"vertical_align",alignment},
+                {"alt","Source arrow alternative"},{"tooltip","Source arrow advice"},{"border",true}};
+            const QJsonObject span{{"kind","link"},{"text",""},{"target","File:Arrowyellow.png"},{"image",image}};
+            const QJsonObject paragraph{{"kind","paragraph"},{"spans",QJsonArray{
+                QJsonObject{{"kind","text"},{"text",rtl?QString::fromUtf8("\xd7\x90\xd7\x91 "):QString("Before ")},{"font_scale",2}},span,
+                QJsonObject{{"kind","link"},{"text","After"},{"target","IndependentAfter"}}}}};
+            permission->setChecked(false);
+            const QJsonObject entry{{"title","Controlled alignment"},{"kind","language"},{"language","English"},{"language_code","en"},
+                {"sections",QJsonArray{QJsonObject{{"title","English"},{"level",2},{"blocks",QJsonArray{paragraph}}}}},
+                {"references",QJsonArray{}},{"media",QJsonArray{QJsonObject{{"kind","image"},{"file","Arrowyellow.png"},{"caption","Owned alignment square"}}}}};
+            QVERIFY(composeReadingEntry(window,entry));
+            const auto liveFormat=[&] {
+                for(auto block=window.reading_->document()->begin();block.isValid();block=block.next())
+                    for(auto it=block.begin();!it.atEnd();++it)if(it.fragment().charFormat().isImageFormat())return it.fragment().charFormat().toImageFormat();
+                return QTextImageFormat();
+            };
+            const auto inState=[&](MediaPanel::InlineImageState state) {
+                const auto f=liveFormat();return f.hasProperty(SemanticHtml::inlineImageStateProperty)
+                    && f.intProperty(SemanticHtml::inlineImageStateProperty)==int(state);
+            };
+            permission->setChecked(true);QTRY_VERIFY(inState(MediaPanel::InlineImageState::Ready));
+            QCOMPARE(network.urls.size(),alignment=="baseline"&&!rtl?0:1);
+
+            auto *reading=window.reading_;auto *document=reading->document();QVERIFY(document);
+            QAction *showReading=window.readingPaneAction_;
+            QVERIFY(showReading);showReading->trigger();QTRY_VERIFY(reading->isVisible());
+            int position=-1;QTextImageFormat format;
+            for(QTextBlock block=document->begin();block.isValid();block=block.next())for(auto it=block.begin();!it.atEnd();++it) {
+                const auto fragment=it.fragment();if(fragment.isValid()&&fragment.charFormat().isImageFormat()) {QVERIFY(position<0);position=fragment.position();format=fragment.charFormat().toImageFormat();}
+            }
+            QVERIFY(position>=0);QCOMPARE(format.stringProperty(SemanticHtml::inlineImageAlignmentProperty),alignment);
+            QCOMPARE(SemanticHtml::inlineImageData(QUrl(format.name())),image);QCOMPARE(format.stringProperty(QTextFormat::ImageAltText),QString("Source arrow alternative"));
+            QCOMPARE(format.toolTip(),QString("Source arrow advice"));QCOMPARE(format.width(),qreal(30));QCOMPARE(format.height(),qreal(30));
+            QVERIFY(format.isAnchor());const QString href=format.anchorHref();QVERIFY(!href.isEmpty());
+            const QString body=document->toRawText();const int count=document->characterCount();
+            for(int width:{900,640,900}) {
+                window.resize(width,700);showReading->trigger();QTRY_VERIFY(reading->isVisible());
+                QTRY_VERIFY(!window.readingFloatLayoutScheduled_);document->documentLayout()->documentSize();
+                const auto geometry=LogicalFlow::position(document,position);QVERIFY(geometry.status!=LogicalFlow::Status::Refused);
+                const QRectF outer=geometry.values.value(geometry.status==LogicalFlow::Status::Handled?"characterRect":"inlineCharacterRect").toRectF();
+                QTextCursor observed(document);observed.setPosition(position);
+                observed.movePosition(QTextCursor::NextCharacter,QTextCursor::KeepAnchor);
+                const auto observedFormat=observed.charFormat().toImageFormat();
+                qInfo()<<"INLINE_IMAGE_OUTER"<<alignment<<rtl<<width<<position<<int(geometry.status)
+                    <<geometry.values.contains("characterRect")<<geometry.values.contains("inlineCharacterRect")<<outer
+                    <<observedFormat.width()<<observedFormat.height()
+                    <<observedFormat.property(SemanticHtml::inlineImageStateProperty)
+                    <<observedFormat.property(SemanticHtml::inlineImageBorderProperty)
+                    <<QFontMetricsF(document->defaultFont(),document->documentLayout()->paintDevice()).fontDpi();
+                const QString frameDir=qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if(!frameDir.isEmpty()) {
+                    QVERIFY(QDir().mkpath(frameDir));
+                    const QString framePath=frameDir+QString("/inline-image-%1-%2-%3.png").arg(alignment).arg(rtl?"rtl":"ltr").arg(width);
+                    QVERIFY(reading->viewport()->grab().save(framePath));qInfo()<<"INLINE_IMAGE_FRAME"<<framePath;
+                }
+                QVERIFY(outer.width()>30&&outer.height()>30);QVERIFY(outer.width()<33&&outer.height()<33);
+                QCOMPARE(document->documentLayout()->anchorAt(outer.center()),href);
+                QCOMPARE(document->documentLayout()->hitTest(outer.center(),Qt::ExactHit),position);
+                auto *accessible=QAccessible::queryAccessibleInterface(reading);QVERIFY(accessible);auto *text=accessible->textInterface();QVERIFY(text);
+                const int horizontal=reading->isRightToLeft()?reading->horizontalScrollBar()->minimum()+reading->horizontalScrollBar()->maximum()-reading->horizontalScrollBar()->value():reading->horizontalScrollBar()->value();
+                QRectF expected=outer.translated(reading->viewport()->mapToGlobal(QPoint())-QPoint(horizontal,reading->verticalScrollBar()->value()));
+                expected=expected.intersected(QRectF(reading->viewport()->mapToGlobal(QPoint()),reading->viewport()->size()));
+                QVERIFY(!expected.isEmpty());QCOMPARE(text->characterRect(position),expected.toAlignedRect());
+                QCOMPARE(text->offsetAtPoint(expected.center().toPoint()),position);
+                text->addSelection(position,position+1);int first=-1,last=-1;text->selection(0,&first,&last);QCOMPARE(first,position);QCOMPARE(last,position+1);
+                QCOMPARE(reading->textCursor().selectedText(),QString(QChar::ObjectReplacementCharacter));
+                QCOMPARE(document->toRawText(),body);QCOMPARE(document->characterCount(),count);
+            }
+            const auto verifyKnown=[&](const QString &phase) {
+                const auto f=liveFormat();QCOMPARE(f.width(),qreal(30));QCOMPARE(f.height(),qreal(30));
+                document->documentLayout()->documentSize();const auto geometry=LogicalFlow::position(document,position);
+                QVERIFY(geometry.status!=LogicalFlow::Status::Refused);
+                const QRectF outer=geometry.values.value(geometry.status==LogicalFlow::Status::Handled?"characterRect":"inlineCharacterRect").toRectF();
+                qInfo()<<"INLINE_KNOWN_RECOVERY"<<alignment<<rtl<<phase<<f.property(SemanticHtml::inlineImageStateProperty)<<outer;
+                const QString frameDir=qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if(!frameDir.isEmpty()) {
+                    QVERIFY(QDir().mkpath(frameDir));const QString path=frameDir+QString("/inline-known-%1-%2-%3.png").arg(alignment).arg(rtl?"rtl":"ltr").arg(phase);
+                    QVERIFY(reading->viewport()->grab().save(path));qInfo()<<"INLINE_KNOWN_FRAME"<<path;
+                }
+                QVERIFY(outer.width()>30&&outer.height()>30);QVERIFY(outer.width()<33&&outer.height()<33);
+                QCOMPARE(document->documentLayout()->anchorAt(outer.center()),href);
+                QCOMPARE(document->documentLayout()->hitTest(outer.center(),Qt::ExactHit),position);
+                QCOMPARE(f.anchorHref(),href);QCOMPARE(f.stringProperty(QTextFormat::ImageAltText),QString("Source arrow alternative"));
+                QCOMPARE(document->toRawText(),body);QCOMPARE(document->characterCount(),count);QCOMPARE(window.currentEntry_,entry);
+            };
+            if(alignment=="baseline"&&!rtl) {
+                window.resize(640,700);showReading->trigger();QTRY_VERIFY(reading->isVisible());
+                permission->setChecked(false);QTRY_VERIFY(inState(MediaPanel::InlineImageState::Disabled));verifyKnown("disabled");
+                permission->setChecked(true);QTRY_VERIFY(inState(MediaPanel::InlineImageState::Ready));verifyKnown("ready-again");
+                QVERIFY(QFile::remove(payloadPath));QVERIFY(QFile::remove(metadataPath));
+                QPushButton *load=nullptr;for(auto *button:window.media_->findChildren<QPushButton *>("mediaLoad"))
+                    if(button->accessibleName().contains("Owned alignment square"))load=button;
+                QVERIFY(load&&load->isEnabled());load->click();QTRY_VERIFY(inState(MediaPanel::InlineImageState::Loading));
+                QCOMPARE(network.urls.size(),1);verifyKnown("loading");QVERIFY(network.replies.last());
+                network.replies.last()->complete({},QNetworkReply::ContentNotFoundError);
+                QTRY_VERIFY(inState(MediaPanel::InlineImageState::Error));verifyKnown("error");
+                QVERIFY(seed());QVERIFY(load->isEnabled());load->click();QTRY_VERIFY(inState(MediaPanel::InlineImageState::Ready));verifyKnown("recovered");
+                QCOMPARE(network.urls.size(),1);
+            }
+        }
+        permission->setChecked(false);
+        const QJsonObject unknown{{"file","Unknown alignment asset.png"},{"width_px",30},{"height_px",30},{"alt","Unknown source alternative"}};
+        const QJsonObject unknownEntry{{"title","Changed asset"},{"kind","language"},{"language","English"},
+            {"sections",QJsonArray{QJsonObject{{"title","English"},{"level",2},{"blocks",QJsonArray{QJsonObject{{"kind","paragraph"},
+                {"spans",QJsonArray{QJsonObject{{"kind","text"},{"text",""},{"image",unknown}}}}}}}}}},
+            {"media",QJsonArray{QJsonObject{{"kind","image"},{"file","Unknown alignment asset.png"},{"caption","Unknown source alternative"}}}}};
+        QVERIFY(composeReadingEntry(window,unknownEntry));
+        const auto asset=window.media_->requestInlineImage(unknown,QString(),1,&window,"changed-asset",[](const MediaPanel::InlineImageAsset &){});
+        QCOMPARE(asset.state,MediaPanel::InlineImageState::Disabled);QVERIFY(!asset.intrinsic.isValid());QVERIFY(!asset.originalVerified);
+        QCOMPARE(network.urls.size(),1);
     }
 
     void typedInlineImageThemeRejectsUnknownFilters() {

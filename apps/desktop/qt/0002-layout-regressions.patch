@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,13115 @@
+@@ -3,24 +3,13540 @@
  
  
  #include <QTest>
@@ -3197,6 +3197,431 @@
 +            QCOMPARE(port.value("offset").toDouble(), qBound(newMinimum, endpoint, newMaximum));
 +            QCOMPARE(doc.find(QString(10, QChar('M'))).charFormat().anchorHref(), QStringLiteral("dict:ProbeScroll"));
 +            QCOMPARE(grid->parentFrame(), owner); QCOMPARE(owner->parentFrame(), ancestors.last());
++        }
++    }
++
++    void explicitInlineImagesShareOccurrenceMetricsPaintHitAndSelection()
++    {
++        const int alignmentProperty = QTextFormat::UserProperty + 0x5811;
++        int outsideSelectionWitnesses = 0;
++        for (bool projected : {false, true}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft})
++        for (int dpi : {96, 144}) for (int points : {9, 18}) for (int height : {6, 30})
++        for (const QString &alignment : {QString(), QString("baseline"), QString("middle")})
++        for (int shiftPercent : {0, 25}) {
++            if (alignment.isEmpty() && shiftPercent) continue; // Null retains its historical metrics.
++            QImage device(900, 500, QImage::Format_ARGB32_Premultiplied);
++            device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0);
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            native->setPaintDevice(&device);
++            PlainContainerPaintCounter handler; native->registerHandler(QTextFormat::ImageObject, &handler);
++            doc.setDefaultFont(QFont("DejaVu Sans", 12));
++            auto option=doc.defaultTextOption();option.setTextDirection(direction);
++            option.setAlignment(Qt::AlignAbsolute | (direction==Qt::RightToLeft?Qt::AlignRight:Qt::AlignLeft));
++            doc.setDefaultTextOption(option);
++            QTextCursor c(&doc);QTextBlockFormat block;block.setLayoutDirection(direction);block.setAlignment(option.alignment());c.setBlockFormat(block);
++            QTextCharFormat tall;tall.setFontPointSize(36);c.insertText("X ",tall);
++            const int position=c.position();QTextImageFormat image;image.setName("controlled-image");image.setWidth(30);image.setHeight(height);
++            QFont occurrence("DejaVu Serif",points);image.setFont(occurrence);image.setBaselineOffset(shiftPercent);
++            image.setAnchor(true);image.setAnchorHref("dict:Image");
++            if(!alignment.isEmpty())image.setProperty(alignmentProperty,alignment);
++            c.insertImage(image);c.insertText(" tail words to wrap",QTextCharFormat());
++            const QString source=doc.toRawText();const int revision=doc.revision(),count=doc.characterCount();
++            if(projected) {
++                const QVariantMap flow{{"first",0},{"last",int(source.size())},{"direction",int(direction)},
++                    {"joins",QVariantList{}},{"parts",QVariantList{QVariantMap{{"kind","text"},{"first",0},{"last",int(source.size())}}}}};
++                QVERIFY(native->wikidictSetLogicalFlows({flow}));
++            }
++            doc.setLayoutEnabled(true);QRectF original;
++            for(int width:{400,97,400}) {
++                doc.setTextWidth(width);native->documentSize();QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);
++                device.fill(Qt::transparent);handler.rectangles.clear();
++                {QPainter painter(&device);native->draw(&painter,{});}QVERIFY(handler.rectangles.contains(position));
++                const QRectF painted=handler.rectangles.value(position);QCOMPARE(painted.size(),QSizeF(30,height));
++                const auto geometry=native->wikidictLogicalPosition(position);QCOMPARE(geometry.value("error").toInt(),0);
++                qreal baseline=0,lineTop=0,lineHeight=0;
++                if(projected) {
++                    QVERIFY(geometry.value("handled").toBool());lineTop=geometry.value("layoutY").toReal()+geometry.value("lineY").toReal();
++                    lineHeight=geometry.value("lineHeight").toReal();baseline=lineTop+geometry.value("lineAscent").toReal();
++                } else {
++                    const auto b=doc.findBlock(position);const auto line=b.layout()->lineForTextPosition(position-b.position());QVERIFY(line.isValid());
++                    lineTop=native->blockBoundingRect(b).top()+line.y();lineHeight=line.height();baseline=lineTop+line.ascent();
++                }
++                const QFontMetricsF metrics(QFont(occurrence,&device),&device);
++                const qreal shift=alignment.isEmpty()?0:-(metrics.ascent()+metrics.descent())*shiftPercent/100.0;
++                const qreal expectedTop=baseline+shift-(alignment=="middle"?(height+metrics.xHeight())/2.0:height);
++                QVERIFY2(qAbs(painted.top()-expectedTop)<.04,qPrintable(QString("projected=%1 dir=%2 dpi=%3 pt=%4 H=%5 mode=%6 shift=%7 width=%8 actual=%9 expected=%10")
++                    .arg(projected).arg(int(direction)).arg(dpi).arg(points).arg(height).arg(alignment).arg(shiftPercent).arg(width).arg(painted.top()).arg(expectedTop)));
++                if(!alignment.isEmpty()) {
++                    const QString geometryKey=projected?QStringLiteral("characterRect"):QStringLiteral("inlineCharacterRect");
++                    const QString context=QStringLiteral("projected=%1 dir=%2 dpi=%3 pt=%4 H=%5 mode=%6 shift=%7 width=%8 key=%9 painted=(%10,%11,%12,%13)")
++                        .arg(projected).arg(int(direction)).arg(dpi).arg(points).arg(height).arg(alignment).arg(shiftPercent).arg(width).arg(geometryKey)
++                        .arg(painted.x()).arg(painted.y()).arg(painted.width()).arg(painted.height());
++                    QVERIFY2(geometry.contains(geometryKey),qPrintable(context));
++                    const QRectF character=geometry.value(geometryKey).toRectF();
++                    const QString detail=context+QStringLiteral(" character=(%1,%2,%3,%4)")
++                        .arg(character.x()).arg(character.y()).arg(character.width()).arg(character.height());
++                    QVERIFY2(character.isValid(),qPrintable(detail));
++                    QVERIFY2(qAbs(character.left()-painted.left())<.04,qPrintable(detail));QVERIFY2(qAbs(character.top()-painted.top())<.04,qPrintable(detail));
++                    QCOMPARE(character.size(),painted.size());
++                    QCOMPARE(native->hitTest(painted.center(),Qt::ExactHit),position);QCOMPARE(native->anchorAt(painted.center()),QString("dict:Image"));
++                    const QPointF outside(painted.center().x(),lineTop+1);
++                    if(!painted.adjusted(-1,-1,1,1).contains(outside)&&QRectF(painted.left(),lineTop,painted.width(),lineHeight).contains(outside)) {
++                        ++outsideSelectionWitnesses;QCOMPARE(native->hitTest(outside,Qt::ExactHit),-1);QVERIFY(native->anchorAt(outside).isEmpty());
++                        QImage selected=device;selected.fill(Qt::transparent);
++                        QAbstractTextDocumentLayout::PaintContext context;QAbstractTextDocumentLayout::Selection selection;
++                        selection.cursor=QTextCursor(&doc);selection.cursor.setPosition(position);selection.cursor.setPosition(position+1,QTextCursor::KeepAnchor);
++                        selection.format.setBackground(QColor("#f02080"));context.selections.append(selection);
++                        {QPainter painter(&selected);native->draw(&painter,context);}
++                        const QPoint p(qFloor(outside.x()),qFloor(outside.y()));QVERIFY(device.rect().contains(p));QCOMPARE(selected.pixelColor(p),device.pixelColor(p));
++                        const QPoint inside=painted.center().toPoint();QVERIFY(device.rect().contains(inside));QVERIFY(selected.pixelColor(inside)!=device.pixelColor(inside));
++                    }
++                }
++                if(width==400) {if(original.isNull())original=painted;else QCOMPARE(painted,original);}
++                QCOMPARE(doc.toRawText(),source);QCOMPARE(doc.revision(),revision);QCOMPARE(doc.characterCount(),count);
++                QTextCursor selected(&doc);selected.setPosition(position);selected.setPosition(position+1,QTextCursor::KeepAnchor);
++                QCOMPARE(selected.selectedText(),QString(QChar::ObjectReplacementCharacter));QCOMPARE(selected.charFormat().anchorHref(),QString("dict:Image"));
++            }
++        }
++        QVERIFY(outsideSelectionWitnesses>0);
++    }
++
++    void explicitInlineImagesRefuseMalformedNativePolicyAndRecover()
++    {
++        const int alignmentProperty=QTextFormat::UserProperty+0x5811;
++        for(const QVariant &invalid:{QVariant(0),QVariant(true),QVariant(QString("Middle")),QVariant(QString("top")),QVariant(QString()),QVariant(QVariantMap{})}) {
++            QTextDocument doc;doc.setLayoutEnabled(false);QTextCursor c(&doc);QTextImageFormat image;
++            image.setName("invalid-image");image.setWidth(30);image.setHeight(30);image.setProperty(alignmentProperty,invalid);c.insertImage(image);
++            auto *native=qobject_cast<QTextDocumentLayout *>(doc.documentLayout());QVERIFY(native);doc.setLayoutEnabled(true);doc.setTextWidth(300);native->documentSize();
++            QVERIFY(native->wikidictParagraphBoxLayoutError()!=0);
++            doc.clear();QTextCursor recovered(&doc);image.clearProperty(alignmentProperty);recovered.insertImage(image);native->documentSize();QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);
++        }
++        for(int invalidKind:{0,1,2,3,4,5,6,7}) {
++            QImage device(600,400,QImage::Format_ARGB32_Premultiplied);
++            device.setDotsPerMeterX(qRound(192/.0254));device.setDotsPerMeterY(qRound(192/.0254));
++            QTextDocument doc;doc.setLayoutEnabled(false);QTextCursor c(&doc);QTextImageFormat image;image.setName("invalid-owner");image.setWidth(30);image.setHeight(30);image.setProperty(alignmentProperty,QString("middle"));
++            if(invalidKind==0) {QTextCharFormat text;text.setProperty(alignmentProperty,QString("middle"));c.insertText("not an image",text);}
++            if(invalidKind==1) {image.setVerticalAlignment(QTextCharFormat::AlignMiddle);c.insertImage(image);}
++            if(invalidKind==2) {image.setProperty(QTextFormat::UserProperty+0x57b0,QByteArray("{}"));c.insertImage(image);}
++            if(invalidKind==3) {image.setBaselineOffset(qQNaN());c.insertImage(image);}
++            if(invalidKind==4) {image.setWidth(100000000);c.insertImage(image);}
++            if(invalidKind==5) {image.setFontPointSize(4096);image.setBaselineOffset(1000000);c.insertImage(image);}
++            if(invalidKind==6) {image.setFontPointSize(4096);image.setVerticalAlignment(QTextCharFormat::AlignSuperScript);image.setSuperScriptBaseline(1000000);c.insertImage(image);}
++            if(invalidKind==7) {image.setProperty(QTextFormat::UserProperty+0x5804,QVariantMap{{"policy","wikidict.inline-text/1"},{"normalized",true},{"shift",5000000.0}});c.insertImage(image);}
++            auto *native=qobject_cast<QTextDocumentLayout *>(doc.documentLayout());QVERIFY(native);native->setPaintDevice(&device);doc.setLayoutEnabled(true);doc.setTextWidth(300);native->documentSize();QVERIFY(native->wikidictParagraphBoxLayoutError()!=0);
++        }
++    }
++
++    void tableCornersPaintPhysicalArcsAndLiteralInnerBorderWithoutChangingLayout()
++    {
++        constexpr int property = QTextFormat::UserProperty + 0x5810;
++        struct Case { qreal width, border; QVariantList radii; };
++        const QList<Case> cases{{120, 1, {8.0, 8.0, 8.0, 0.0}}, {90, 3, {32.0, 18.0, 3.0, 0.0}},
++            {80, 1, {1000.0, 2000.0, 500.0, 0.0}}, {120, 0, {8.0, 8.0, 8.0, 0.0}},
++            {60, 1, {0.0, 0.0, 0.0, 0.0}}, {7, 3, {7.0, 0.0, 0.0, 0.0}},
++            {55, 1, {2.25, 8.5, 0.0, 12.75}}};
++        for (int dpi : {96, 144}) for (const auto &item : cases) {
++            QImage image(500, 240, QImage::Format_ARGB32_Premultiplied);
++            image.setDotsPerMeterX(qRound(dpi / .0254)); image.setDotsPerMeterY(qRound(dpi / .0254));
++            const qreal scale = image.logicalDpiY() / QFontMetricsF(QFont()).fontDpi();
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(12);
++            doc.documentLayout()->setPaintDevice(&image); doc.setTextWidth(300 * scale);
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            QCOMPARE(native->property("_wikidictTableCornersCapability").toString(), QString("wikidict.table-corners/1"));
++            QTextTableFormat format; format.setMargin(0); format.setCellPadding(0); format.setCellSpacing(0);
++            format.setBorderCollapse(false); format.setBorder(item.border);
++            format.setBorderStyle(item.border ? QTextFrameFormat::BorderStyle_Solid : QTextFrameFormat::BorderStyle_None);
++            format.setBorderBrush(QColor("#bca674")); format.setBackground(QColor("#f5f4aa"));
++            format.setWidth(QTextLength(QTextLength::FixedLength, item.width));
++            format.setProperty(QTextFormat::UserProperty + 0x57d0, "wikidict.table-box/1");
++            format.setProperty(QTextFormat::UserProperty + 0x57d2, 0);
++            auto *table = QTextCursor(&doc).insertTable(1, 1, format);
++            auto cell = table->cellAt(0, 0); auto cellFormat = cell.format().toTableCellFormat();
++            cellFormat.setBorder(0); cell.setFormat(cellFormat);
++            auto cursor = cell.firstCursorPosition(); auto blockFormat = cursor.blockFormat();
++            blockFormat.setLineHeight(40, QTextBlockFormat::FixedHeight); cursor.setBlockFormat(blockFormat);
++            doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            const auto rectangular = native->tableBoundingRect(table); const auto raw = doc.toRawText();
++            const auto count = doc.characterCount(), object = table->objectIndex();
++            image.fill(Qt::white); { QPainter painter(&image); native->draw(&painter, {}); }
++            const auto legacyPaint = image.copy();
++            format = table->format(); format.setProperty(property, item.radii); table->setFormat(format);
++            native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            QCOMPARE(native->tableBoundingRect(table), rectangular); QCOMPARE(doc.toRawText(), raw);
++            QCOMPARE(doc.characterCount(), count); QCOMPARE(table->objectIndex(), object);
++            image.fill(Qt::white); { QPainter painter(&image); native->draw(&painter, {}); }
++            QList<qreal> used; for (const auto &value : item.radii) used.append(value.toDouble() * scale);
++            qreal factor = 1;
++            for (const auto pair : {QPair<int,int>{0,1}, {3,2}, {0,3}, {1,2}}) {
++                const qreal sum = used[pair.first] + used[pair.second];
++                if (sum > 0) factor = qMin(factor, (pair.first == 0 && pair.second == 1) || pair.first == 3
++                    ? rectangular.width() / sum : rectangular.height() / sum);
++            }
++            for (auto &radius : used) radius *= factor;
++            const qreal border = qRound(item.border * scale);
++            const QRectF inner = rectangular.adjusted(border, border, -border, -border);
++            auto inset = used; for (auto &radius : inset) radius = qMax(qreal(0), radius - border);
++            const auto contains = [](const QRectF &box, const QList<qreal> &radii, QPointF point, bool *edge) {
++                if (box.isEmpty()) return false;
++                *edge |= qMin(qMin(qAbs(point.x()-box.left()), qAbs(point.x()-box.right())),
++                              qMin(qAbs(point.y()-box.top()), qAbs(point.y()-box.bottom()))) < .8;
++                if (!box.contains(point)) return false;
++                for (int i = 0; i < 4; ++i) {
++                    const qreal r = radii[i]; if (r == 0) continue;
++                    const bool right = i == 1 || i == 2, bottom = i >= 2;
++                    const qreal dx = right ? box.right()-point.x() : point.x()-box.left();
++                    const qreal dy = bottom ? box.bottom()-point.y() : point.y()-box.top();
++                    if (dx < r && dy < r) {
++                        const qreal distance = qSqrt((dx-r)*(dx-r)+(dy-r)*(dy-r));
++                        *edge |= qAbs(distance-r) < .8;
++                        if (distance > r) return false;
++                    }
++                }
++                return true;
++            };
++            int compared = 0;
++            const QRect pixels = rectangular.adjusted(-2,-2,2,2).toAlignedRect().intersected(image.rect());
++            for (int y = pixels.top(); y <= pixels.bottom(); ++y) for (int x = pixels.left(); x <= pixels.right(); ++x) {
++                bool edge = false; const QPointF point(x+.5,y+.5);
++                const bool outer = contains(rectangular, used, point, &edge);
++                const bool hole = contains(inner, inset, point, &edge);
++                if (edge) continue;
++                const QColor expected = !outer ? QColor(Qt::white) : border > 0 && !hole ? QColor("#bca674") : QColor("#f5f4aa");
++                QVERIFY2(image.pixelColor(x,y) == expected, qPrintable(QString("dpi=%1 width=%2 border=%3 pixel=%4,%5 actual=%6 expected=%7")
++                    .arg(dpi).arg(item.width).arg(border).arg(x).arg(y).arg(image.pixelColor(x,y).name()).arg(expected.name())));
++                ++compared;
++            }
++            QVERIFY(compared > 20);
++            if (item.radii == QVariantList{0.0,0.0,0.0,0.0}) QCOMPARE(image, legacyPaint);
++            format.clearProperty(property); table->setFormat(format); native->documentSize();
++            image.fill(Qt::white); { QPainter painter(&image); native->draw(&painter, {}); }
++            QCOMPARE(image, legacyPaint);
++        }
++    }
++
++    void tableCornersClipOnlyExistingOverflowAndKeepSourceActions()
++    {
++        constexpr int property = QTextFormat::UserProperty + 0x5810;
++        constexpr int ownerProperty = QTextFormat::UserProperty + 0x57f5;
++        QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(240);
++        auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++        QVERIFY(native->wikidictConfigureScrollports(14));
++        auto format = tableViewportOwnerFormat(Qt::LeftToRight, Qt::LeftToRight, 100);
++        auto state = format.property(ownerProperty).toMap();
++        auto source = QJsonDocument::fromJson(state.value("source").toByteArray()).object();
++        auto policy = source.value("block_viewport").toObject(); auto box = policy.value("box_style").toObject();
++        QJsonObject corners; const QStringList names{"top_left","top_right","bottom_right","bottom_left"};
++        const QVariantList radii{45.0,30.0,8.0,0.0};
++        for (int i=0;i<4;++i) corners.insert(names[i], QJsonObject{{"unit","px"},{"value",radii[i].toDouble()}});
++        box.insert("corner_radii", corners); policy.insert("box_style",box); source.insert("block_viewport",policy);
++        state.insert("source",QJsonDocument(source).toJson(QJsonDocument::Compact)); format.setProperty(ownerProperty,state);
++        format.setProperty(property,radii);
++        auto *owner = QTextCursor(&doc).insertFrame(format);
++        auto *table = owner->firstCursorPosition().insertTable(1,1,tableViewportGridFormat(owner));
++        auto cursor = table->cellAt(0,0).firstCursorPosition(); QTextCharFormat action;
++        action.setAnchor(true); action.setAnchorHref("dict:RoundedSource"); action.setBackground(QColor("#00cc44"));
++        cursor.insertText(QString(80,QChar('M')),action); tableViewportSourceRuns(table);
++        for (auto it=owner->begin(); !it.atEnd(); ++it) if (auto block=it.currentBlock(); block.isValid() && block.length()==1) {
++            block.setVisible(false); block.setLineCount(0);
++        }
++        const auto raw=doc.toRawText(); const int count=doc.characterCount(), object=table->objectIndex();
++        doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);
++        for (qreal width : {240.0,320.0,240.0}) {
++            doc.setTextWidth(width); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);
++            const auto ports=native->wikidictScrollports(); QCOMPARE(ports.size(),1); const auto port=ports.first().toMap();
++            QVERIFY(port.value("clip_path").metaType().id()==qMetaTypeId<QPainterPath>());
++            const auto clip=port.value("clip").toRectF(); const auto path=port.value("clip_path").value<QPainterPath>();
++            QVERIFY(path.contains(clip.center())); QVERIFY(!path.contains(clip.topLeft()+QPointF(.1,.1)));
++            QVERIFY(native->anchorAt(clip.topLeft()+QPointF(.1,.1)).isEmpty());
++            QCOMPARE(native->hitTest(clip.topLeft()+QPointF(.1,.1),Qt::ExactHit),-1);
++            const auto block=table->cellAt(0,0).firstCursorPosition().block(); const auto line=block.layout()->lineAt(0);
++            bool visible=false;
++            for (int i=0;i<block.text().size();++i) {
++                const QPointF point=native->blockBoundingRect(block).topLeft()+QPointF((line.cursorToX(i)+line.cursorToX(i+1))/2,line.y()+line.height()/2);
++                if (!path.contains(point)) continue;
++                QCOMPARE(native->anchorAt(point),QString("dict:RoundedSource"));
++                QVERIFY(native->hitTest(point,Qt::ExactHit)>=block.position()); visible=true; break;
++            }
++            QVERIFY(visible);
++            QImage paint(500,200,QImage::Format_ARGB32_Premultiplied); paint.fill(Qt::white);
++            QAbstractTextDocumentLayout::PaintContext context; QAbstractTextDocumentLayout::Selection selection;
++            selection.cursor=table->cellAt(0,0).firstCursorPosition();
++            selection.cursor.setPosition(table->cellAt(0,0).lastPosition(),QTextCursor::KeepAnchor);
++            selection.format.setBackground(QColor("#cc00cc")); context.selections.append(selection);
++            { QPainter painter(&paint); native->draw(&painter,context); }
++            int rejected=0,selected=0;
++            for (int y=0;y<paint.height();++y) for(int x=0;x<paint.width();++x) {
++                const QPointF point(x+.5,y+.5);
++                if (clip.contains(point) && !path.intersects(QRectF(x-1,y-1,3,3))) {
++                    QVERIFY(paint.pixelColor(x,y)!=QColor("#cc00cc")); QVERIFY(paint.pixelColor(x,y)!=QColor("#00cc44")); ++rejected;
++                }
++                if (path.contains(point) && paint.pixelColor(x,y)==QColor("#cc00cc")) ++selected;
++            }
++            QVERIFY(rejected>0); QVERIFY(selected>0); QCOMPARE(doc.toRawText(),raw); QCOMPARE(doc.characterCount(),count);
++            QCOMPARE(table->objectIndex(),object); QCOMPARE(table->parentFrame(),owner);
++            QVERIFY(!table->format().hasProperty(property));
++        }
++        // Authored cell paint remains independent on a non-scroll table.
++        QTextDocument ordinary; ordinary.setDocumentMargin(0); ordinary.setTextWidth(150);
++        auto *plain=qobject_cast<QTextDocumentLayout *>(ordinary.documentLayout()); QVERIFY(plain);
++        QTextTableFormat rounded; rounded.setMargin(0); rounded.setBorder(0); rounded.setBorderStyle(QTextFrameFormat::BorderStyle_None);
++        rounded.setBorderCollapse(false); rounded.setCellPadding(0); rounded.setCellSpacing(0); rounded.setWidth(QTextLength(QTextLength::FixedLength,100));
++        rounded.setBackground(Qt::yellow); rounded.setProperty(property,QVariantList{45.0,45.0,45.0,45.0});
++        rounded.setProperty(QTextFormat::UserProperty+0x57d0,"wikidict.table-box/1");
++        rounded.setProperty(QTextFormat::UserProperty+0x57d2,0);
++        auto *real=QTextCursor(&ordinary).insertTable(1,1,rounded); auto cell=real->cellAt(0,0);
++        auto cellFormat=cell.format().toTableCellFormat(); cellFormat.setBorder(0); cellFormat.setBackground(QColor("#00cc44")); cell.setFormat(cellFormat);
++        cell.firstCursorPosition().insertText("Source"); plain->documentSize(); QCOMPARE(plain->wikidictParagraphBoxLayoutError(),0);
++        QVERIFY(plain->wikidictScrollports().isEmpty());
++        QImage paint(200,100,QImage::Format_ARGB32_Premultiplied); paint.fill(Qt::white);
++        { QPainter painter(&paint); plain->draw(&painter,{}); }
++        const auto bounds=plain->tableBoundingRect(real);
++        QCOMPARE(paint.pixelColor(qCeil(bounds.left()+1),qCeil(bounds.top()+1)),QColor("#00cc44"));
++    }
++
++    void tableCornersRejectMalformedNativeOwnersAndRecover()
++    {
++        constexpr int property=QTextFormat::UserProperty+0x5810;
++        QTextDocument doc; doc.setTextWidth(220);
++        auto *native=qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++        QTextTableFormat good; good.setMargin(0); good.setBorder(1); good.setBorderStyle(QTextFrameFormat::BorderStyle_Solid);
++        good.setBorderBrush(QColor("#bca674")); good.setBackground(QColor("#f5f4aa")); good.setBorderCollapse(false);
++        good.setProperty(QTextFormat::UserProperty+0x57d0,"wikidict.table-box/1"); good.setProperty(QTextFormat::UserProperty+0x57d2,0);
++        good.setProperty(property,QVariantList{8.0,8.0,8.0,0.0});
++        auto *table=QTextCursor(&doc).insertTable(1,1,good); table->cellAt(0,0).firstCursorPosition().insertText("Source");
++        native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);
++        good=table->format(); const auto bounds=native->tableBoundingRect(table); const auto raw=doc.toRawText();
++        const QList<QVariant> malformed{QVariantList{},QVariantList{8.0,8.0,8.0},QVariantList{8.0,8.0,8.0,0},
++            QVariantList{-1.0,8.0,8.0,0.0},QVariantList{16777217.0,8.0,8.0,0.0},
++            QVariantList{std::numeric_limits<double>::infinity(),8.0,8.0,0.0},
++            QVariantList{std::numeric_limits<double>::quiet_NaN(),8.0,8.0,0.0}};
++        for(int mode=0;mode<malformed.size()+5;++mode) {
++            auto bad=good;
++            if(mode<malformed.size()) bad.setProperty(property,malformed[mode]);
++            else switch(mode-malformed.size()) {
++                case 0: bad.setBorderCollapse(true); break;
++                case 1: bad.setBorderStyle(QTextFrameFormat::BorderStyle_Dotted); break;
++                case 2: bad.clearProperty(QTextFormat::UserProperty+0x57d0); break;
++                case 3: bad.setProperty(QTextFormat::UserProperty+0x57d6,1); break;
++                case 4: bad.setBackground(QColor(255,255,0,100)); break;
++            }
++            // Match a completed owner-format batch: refusal is cleared only
++            // by whole-document recomputation, not a partial frame update.
++            table->setFormat(bad); doc.markContentsDirty(0,doc.characterCount()); native->documentSize();
++            const auto requested=bad.property(property),stored=table->format().property(property);
++            const auto requestedRadii=requested.toList(),storedRadii=stored.toList();
++            qInfo("TABLE_CORNER_REJECTION mode=%d error=%d requested_type=%d stored_type=%d requested_last_type=%d stored_last_type=%d",
++                mode,native->wikidictParagraphBoxLayoutError(),requested.metaType().id(),stored.metaType().id(),
++                requestedRadii.isEmpty()?-1:requestedRadii.last().metaType().id(),storedRadii.isEmpty()?-1:storedRadii.last().metaType().id());
++            QCOMPARE(stored.metaType().id(),requested.metaType().id());
++            QCOMPARE(storedRadii.size(),requestedRadii.size());
++            for(qsizetype corner=0;corner<requestedRadii.size();++corner)
++                QCOMPARE(storedRadii[corner].metaType().id(),requestedRadii[corner].metaType().id());
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(),1);
++            table->setFormat(good); doc.markContentsDirty(0,doc.characterCount()); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);
++            QCOMPARE(native->tableBoundingRect(table),bounds); QCOMPARE(doc.toRawText(),raw); QCOMPARE(table->format(),good);
++        }
++    }
++
++    void tableCornersClipRelativeSourceLinksAcrossSignedPan()
++    {
++        constexpr int cornersProperty=QTextFormat::UserProperty+0x5810;
++        constexpr int viewportProperty=QTextFormat::UserProperty+0x57f5;
++        for(auto direction:{Qt::LeftToRight,Qt::RightToLeft}) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(240);
++            QFont font(QStringLiteral("DejaVu Sans")); font.setPixelSize(16); doc.setDefaultFont(font);
++            auto option=doc.defaultTextOption(); option.setTextDirection(direction); option.setWrapMode(QTextOption::NoWrap); doc.setDefaultTextOption(option);
++            auto *native=qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            QVERIFY(native->wikidictConfigureScrollports(14));
++            auto ownerFormat=tableViewportOwnerFormat(direction,direction,100);
++            auto policy=ownerFormat.property(viewportProperty).toMap();
++            auto source=QJsonDocument::fromJson(policy.value("source").toByteArray()).object();
++            auto viewport=source.value("block_viewport").toObject(); auto box=viewport.value("box_style").toObject();
++            QJsonObject radii; const QStringList names{"top_left","top_right","bottom_right","bottom_left"};
++            const QVariantList values{200.0,200.0,0.0,0.0};
++            for(int i=0;i<4;++i) radii.insert(names[i],QJsonObject{{"unit","px"},{"value",values[i].toDouble()}});
++            box.insert("corner_radii",radii); viewport.insert("box_style",box); source.insert("block_viewport",viewport);
++            policy.insert("source",QJsonDocument(source).toJson(QJsonDocument::Compact));
++            ownerFormat.setProperty(viewportProperty,policy); ownerFormat.setProperty(cornersProperty,values);
++            auto *owner=QTextCursor(&doc).insertFrame(ownerFormat);
++            auto *grid=owner->firstCursorPosition().insertTable(1,1,tableViewportGridFormat(owner));
++            const QString label(200,QChar('M'));
++            QTextFrameFormat relative; relative.setMargin(0); relative.setPadding(0); relative.setBorder(0);
++            relative.setLayoutDirection(direction); relative.setWidth(QTextLength(QTextLength::FixedLength,QFontMetricsF(font).horizontalAdvance(label)));
++            relative.setProperty(QTextFormat::UserProperty+0x57e0,"wikidict.plain-container/1");
++            relative.setProperty(QTextFormat::UserProperty+0x57e1,0);
++            relative.setProperty(QTextFormat::UserProperty+0x57e6,"wikidict.relative-auto/1");
++            auto cursor=grid->cellAt(0,0).firstCursorPosition(); auto *child=cursor.insertFrame(relative);
++            auto blockFormat=cursor.blockFormat(); blockFormat.setLayoutDirection(direction); cursor.setBlockFormat(blockFormat);
++            const int begin=cursor.position(); QTextCharFormat action;
++            action.setAnchor(true); action.setAnchorHref("dict:RelativeCornerSource"); action.setForeground(Qt::red);
++            cursor.insertText(label,action); const int end=cursor.position(); const auto textBlock=cursor.block();
++            tableViewportSourceRuns(grid);
++            for(auto storage=doc.begin();storage.isValid();storage=storage.next()) if(storage.length()==1) {
++                storage.setVisible(false); storage.setLineCount(0);
++            }
++            const QString raw=doc.toRawText(); const int count=doc.characterCount();
++            const int ownerId=owner->objectIndex(),gridId=grid->objectIndex(),childId=child->objectIndex();
++            doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(),0);
++            QCOMPARE(textBlock.layout()->lineCount(),1);
++            QTextCursor selection(&doc); selection.setPosition(begin); selection.setPosition(end,QTextCursor::KeepAnchor);
++            QCOMPARE(selection.selectedText(),label); QCOMPARE(selection.charFormat().anchorHref(),QString("dict:RelativeCornerSource"));
++            const auto initial=native->wikidictScrollports(); QCOMPARE(initial.size(),1);
++            const auto initialPort=initial.first().toMap(); const qreal minimum=initialPort.value("minimum").toDouble(),maximum=initialPort.value("maximum").toDouble();
++            QVERIFY(maximum-minimum>100);
++            qreal previous=initialPort.value("offset").toDouble(); int changed=0;
++            for(qreal offset:{minimum,maximum,minimum}) {
++                const auto before=native->frameBoundingRect(child);
++                QVERIFY(native->wikidictScrollportOffset(ownerId,owner->firstPosition(),doc.revision(),offset));
++                const auto rows=native->wikidictScrollports(); QCOMPARE(rows.size(),1); const auto port=rows.first().toMap();
++                QCOMPARE(port.value("offset").toDouble(),offset);
++                const auto childBox=native->frameBoundingRect(child);
++                QVERIFY(qAbs(childBox.left()-before.left()+offset-previous)<.02);
++                changed+=offset!=previous; previous=offset;
++                const auto clip=port.value("clip").toRectF(); const auto path=port.value("clip_path").value<QPainterPath>();
++                QVERIFY(!path.isEmpty()); const auto line=textBlock.layout()->lineAt(0);
++                const auto origin=native->blockBoundingRect(textBlock).topLeft();
++                QPointF hidden,visible; int hiddenPosition=-1,visiblePosition=-1;
++                for(int i=0;i<label.size();++i) {
++                    const qreal a=line.cursorToX(i),b=line.cursorToX(i+1);
++                    const QRectF character(origin+QPointF(qMin(a,b),line.y()),QSizeF(qAbs(a-b),line.height()));
++                    if(character.width()<1 || character.height()<1) continue;
++                    for(qreal x:{character.left()+.5,character.center().x(),character.right()-.5}) {
++                        const QPointF point(x,character.top()+.5);
++                        if(hiddenPosition<0 && clip.contains(point) && !path.contains(point)) { hidden=point; hiddenPosition=begin+i; }
++                    }
++                    if(visiblePosition<0 && path.contains(character.center())) { visible=character.center(); visiblePosition=begin+i; }
++                }
++                const QString context=QString("direction=%1 offset=%2 range=[%3,%4] hidden=%5 visible=%6 clip=%7,%8,%9,%10")
++                    .arg(int(direction)).arg(offset).arg(minimum).arg(maximum).arg(hiddenPosition).arg(visiblePosition)
++                    .arg(clip.x()).arg(clip.y()).arg(clip.width()).arg(clip.height());
++                // Select the two witnesses from source geometry, never from a successful hit result.
++                QVERIFY2(hiddenPosition>=begin && hiddenPosition<end,qPrintable(context));
++                QVERIFY2(visiblePosition>=begin && visiblePosition<end,qPrintable(context));
++                QVERIFY(clip.contains(hidden)); QVERIFY(!path.contains(hidden));
++                QVERIFY2(native->anchorAt(hidden).isEmpty(),qPrintable(context));
++                QCOMPARE(native->hitTest(hidden,Qt::ExactHit),-1);
++                QCOMPARE(native->anchorAt(visible),QString("dict:RelativeCornerSource"));
++                const int hit=native->hitTest(visible,Qt::ExactHit); QVERIFY(hit>=begin && hit<=end);
++                QImage image(500,180,QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
++                QAbstractTextDocumentLayout::PaintContext paint; QAbstractTextDocumentLayout::Selection range;
++                range.cursor=selection; range.format.setBackground(QColor("#cc00cc")); paint.selections.append(range);
++                { QPainter painter(&image); native->draw(&painter,paint); }
++                int selected=0,rejected=0;
++                for(int y=0;y<image.height();++y) for(int x=0;x<image.width();++x) {
++                    const QRectF sample(x-1,y-1,3,3);
++                    if(clip.contains(QPointF(x+.5,y+.5)) && !path.intersects(sample)) {
++                        QVERIFY(image.pixelColor(x,y)!=QColor("#cc00cc")); ++rejected;
++                    }
++                    if(path.contains(QPointF(x+.5,y+.5)) && image.pixelColor(x,y)==QColor("#cc00cc")) ++selected;
++                }
++                QVERIFY(selected>0); QVERIFY(rejected>0);
++                QCOMPARE(doc.toRawText(),raw); QCOMPARE(doc.characterCount(),count); QCOMPARE(selection.selectedText(),label);
++                QCOMPARE(owner->objectIndex(),ownerId); QCOMPARE(grid->objectIndex(),gridId); QCOMPARE(child->objectIndex(),childId);
++                QCOMPARE(child->parentFrame(),static_cast<QTextFrame *>(grid)); QCOMPARE(grid->parentFrame(),owner);
++            }
++            QVERIFY(changed>=2);
 +        }
 +    }
 +

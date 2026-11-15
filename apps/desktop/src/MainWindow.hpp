@@ -52,7 +52,9 @@ private:
     bool readingUncommitted_ = false;
     quint64 inlineImageGeneration_ = 0;
     quint64 readingComposition_ = 0;
+    bool readingCompositionActive_ = false;
     bool readingFloatLayoutScheduled_ = false;
+    bool readingResponsiveLayoutActive_ = false;
     struct Visit {
         QString title;
         QString language;
@@ -89,7 +91,7 @@ private:
     void commitReadingEntry();
     bool refreshReading();
     void updateSectionFoldControl();
-    void reflowFigures();
+    void reflowFigures(bool resizeDocument = false);
     QVector<QPair<QString, QString>> readingExplanations() const;
     QVector<QPair<QString, QString>> readingAdvisories() const;
     void showReaderContextMenu(const QPoint &position);

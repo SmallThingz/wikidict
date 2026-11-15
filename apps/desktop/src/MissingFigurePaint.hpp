@@ -31,6 +31,7 @@ inline constexpr int outlineProperty = policyProperty + 6;
 inline constexpr int atomicProperty = policyProperty + 7;
 inline const QString fixedPolicy = QStringLiteral("wikidict.figure-link-state/1");
 inline const QString ordinaryPolicy = QStringLiteral("wikidict.ordinary-link-state/1");
+inline const QString ordinaryImageCapability = QStringLiteral("wikidict.ordinary-image-link-state/1");
 inline bool present(const QJsonValue &v) { return !v.isUndefined() && !v.isNull(); }
 inline void require(bool condition) { if (!condition) throw std::runtime_error("invalid Figure link paint"); }
 inline bool canonicalRgb(const QJsonValue &value) {
@@ -136,6 +137,9 @@ inline QList<QTextEdit::ExtraSelection> selections(QTextDocument *document, cons
         for (auto it = block.begin(); !it.atEnd(); ++it) {
             const auto fragment = it.fragment(); if (!fragment.isValid()) continue;
             auto format = fragment.charFormat(); if (!owns(format)) continue;
+            // Replaced image owners retain action/state identity and authored
+            // focus outlines; glyph foreground/underline never paint the bitmap.
+            if (format.isImageFormat()) continue;
             const qint64 owner = format.property(ownerProperty).toLongLong();
             const auto interaction = owner == state.pressed ? Interaction::Active
                 : owner == state.hovered ? Interaction::Hover : Interaction::Rest;

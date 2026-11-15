@@ -419,6 +419,47 @@ qualify genuine DE Mai, missing source CSS, enabled media or the whole frontend.
 The imported history and prior native patch series remain intact. Promotion
 reuses qualified source and results; it performs no additional build or test.
 
+## Compiled Q/R table, image and Rule semantics
+
+The existing Table owner handles asymmetric physical corners, numeric separate
+scroll boxes and intrinsic automatic-wide/fit-content-narrow allocation. It keeps
+source cells, actions, focus and the independent containing-block direction.
+Rounded overflow uses fractional padding edges; a wide radius alone does not clip
+children. Responsive cell backgrounds preserve exact property presence. Table focus bindings
+refresh after successful owned format transactions; external revisions remain
+invalid. Fractional positions clamp against the active allocation; inactive
+responsive owners retain their physical pan.
+Explicit image baseline/middle geometry uses the occurrence font and the same
+paint, hit, selection and accessibility box. Known image dimensions remain with
+the same media asset across disabled, loading, failure and recovery states. Authored
+image-link focus policies use the aligned image or Figure media action box;
+bitmap glyph colors and underlines stay inert. Authored none remains distinct
+from the native default. Omitted QTextLayout clip bounds preserve the existing
+painter clip for stock focus outlines; explicit valid clips still intersect it.
+
+Rule.clear uses physical float exclusions and the existing margin cursor. A
+trailing zero-height cleared Rule refreshes its parent's exported after-margin
+profile without changing the already established leading placement. Only orphan
+anchor flags on authenticated empty Rules are normalized; typed nonempty named targets keep their navigation geometry while href and malformed
+anchor metadata remain refused. Synchronous responsive reflow waits until an
+owned Reading composition commits its source revision. Reader chrome settles before
+the content layout snapshots margins; primary table-caption media preserves middle
+metrics through inline reshaping.
+
+The current Qt product was compiled without rerunning native controls. Two
+Cold134 passes and four Cold132 passes remain historical. The current twenty-one
+compiled-JSON app controls and sixty-seven constructed captures qualify the changed
+Qt/app dependency set. App168's twelve passes and App169's two passes remain
+historical, as do App170 outcomes. WidgetWidth resize assigns page width and responsive policy in one
+owned transaction, preserving inactive pan while active ranges still clamp. The
+Cold132/Cold133 and App165/App166/App167/App168/App169/App170 failures remain linked. Retained P68 supports
+these optimized source-local checks, not new Q/R wire interchange or genuine KU/TH/MG
+rendered acceptance. Full suites and device qualification remain separate.
+
+The eight app leaves were already integrated before qualification. Promotion
+verifies their equality with the qualified private source and updates only the
+four maintained Qt patch/manifest/README files. It performs no build or test.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,

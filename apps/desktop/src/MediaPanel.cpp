@@ -608,13 +608,17 @@ struct MediaPanel::Impl {
 
     MediaPanel::InlineImageAsset inlineAsset(const MediaCard *card) const {
         using State = MediaPanel::InlineImageState;
-        if (!allowed(card)) return {State::Disabled, {}, QStringLiteral("Online images are disabled.")};
         const bool verified = card->svgLanguage && !card->verifiedOriginal.isEmpty();
-        const QSizeF axes = verified ? originalImageSize(card->verifiedOriginal, QStringLiteral("width"), QStringLiteral("height")) : QSizeF();
-        if (card->busy) return {State::Loading, {}, card->status->text(), axes, verified ? QStringLiteral("image/svg+xml") : QString(), {}, verified};
-        if (!card->inlineFailure.isEmpty()) return {State::Error, {}, card->inlineFailure, axes, verified ? QStringLiteral("image/svg+xml") : QString(), {}, verified};
+        // Geometry learned for this card survives pixel availability changes.
+        // setEntry creates new cards when the source asset identity changes.
+        const QSizeF axes = verified ? originalImageSize(card->verifiedOriginal, QStringLiteral("width"), QStringLiteral("height")) : card->intrinsicImage;
+        const QString mime = verified ? QStringLiteral("image/svg+xml")
+            : card->metadata.value(QStringLiteral("original_mime")).toString().trimmed().toLower();
+        if (!allowed(card)) return {State::Disabled, {}, QStringLiteral("Online images are disabled."), axes, mime, {}, verified};
+        if (card->busy) return {State::Loading, {}, card->status->text(), axes, mime, {}, verified};
+        if (!card->inlineFailure.isEmpty()) return {State::Error, {}, card->inlineFailure, axes, mime, {}, verified};
         if (adequate(card)) return {State::Ready, card->decodedImage, QString(), card->intrinsicImage, card->metadata.value(QStringLiteral("original_mime")).toString().trimmed().toLower(), card->vectorImage, verified, card->pinnedRendition};
-        return {State::Loading, {}, QStringLiteral("Loading image.")};
+        return {State::Loading, {}, QStringLiteral("Loading image."), axes, mime, {}, verified};
     }
     void notifyInline(MediaCard *card) {
         if (card->kind != QStringLiteral("image")) return;

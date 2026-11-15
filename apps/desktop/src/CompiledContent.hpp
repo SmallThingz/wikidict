@@ -134,7 +134,11 @@ inline QJsonObject ruleStyle(const QJsonObject &block) {
             QStringLiteral("flow"), QStringLiteral("container"), QStringLiteral("style"), QStringLiteral("text_align")})
         require(!present(block.value(key)));
     const QStringList keys{QStringLiteral("height"), QStringLiteral("fill"), QStringLiteral("margins")};
-    const auto style = containerObject(value, keys, keys);
+    auto allowed = keys; allowed.append(QStringLiteral("clear"));
+    const auto style = containerObject(value, allowed, keys);
+    const auto clear = style.value(QStringLiteral("clear"));
+    if (present(clear)) require(clear.isString() && QStringList{QStringLiteral("none"), QStringLiteral("left"),
+        QStringLiteral("right"), QStringLiteral("both")}.contains(clear.toString()));
     containerLength(style.value(QStringLiteral("height")));
     containerColor(style.value(QStringLiteral("fill")));
     containerEdges(style.value(QStringLiteral("margins")));
