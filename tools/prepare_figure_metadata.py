@@ -2530,6 +2530,7 @@ def source_records(path, expected):
 
 
 def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache=None, *, profile_kind=FIGURE_PROFILE_V3, inventory_cache=None, allow_compatible_epochs=False, origin_plan=None):
+    # Return only this frame's authenticated retired-response identities.
     if not isinstance(source, dict):
         raise ValueError('Invalid Figure request source')
     kind = source.get('kind')
@@ -2539,7 +2540,7 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
             directories = {Path(root): complete_capture_directory_stamp(Path(root)),
                            local: complete_capture_directory_stamp(local)}
             local_files = set()
-            replay_source(local, leaf, batch, wiki, date, namespace, local_files, prefix_cache,
+            local_archived = replay_source(local, leaf, batch, wiki, date, namespace, local_files, prefix_cache,
                 profile_kind=profile_kind, inventory_cache=inventory_cache,
                 allow_compatible_epochs=allow_compatible_epochs, origin_plan={})
             scoped = {prefix + name for name in local_files}
@@ -2548,7 +2549,8 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
             if any(complete_capture_directory_stamp(path) != before for path, before in directories.items()):
                 raise ValueError('Contained Figure HTTP directory changed during replay')
             http_files.update(scoped)
-            return
+            return {(name[0], prefix + name[1]) if isinstance(name, tuple) else prefix + name: identity
+                    for name, identity in local_archived.items()}
     if kind == 'complete-stream':
         path = Path(source.get('path', ''))
         if not path.is_absolute() or path.resolve().is_relative_to(root.resolve()):
@@ -2557,13 +2559,13 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
         if (complete['manifest']['wiki'] != wiki or complete['manifest']['date'] != date or
                 complete['namespace'] != namespace or complete_stream_batch(source, prefix_cache) != batch):
             raise ValueError('Retained complete Figure batch identity differs')
-        return
+        return {}
     if kind == 'closed-prefix':
         prefix = read_closed_prefix(Path(source['path']), prefix_cache)
         if (prefix['record']['wiki'] != wiki or prefix['record']['date'] != date or
                 prefix['namespace'] != namespace or closed_prefix_batch(source, prefix_cache) != batch):
             raise ValueError('Retained closed Figure batch identity differs')
-        return
+        return {}
     if kind in ('retained-occurrences', 'retained-request'):
         expected_keys = {'kind', 'path', 'manifest_sha256' if kind == 'retained-occurrences' else 'sha256'}
         if set(source) != expected_keys or not isinstance(source['path'], str):
@@ -2581,7 +2583,7 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
             expected = retained_metadata_batch(path, wiki, date, namespace)
         if expected != batch:
             raise ValueError('Figure batch differs from its retained authority')
-        return
+        return {}
     if kind == 'http-archived-lean':
         expected = {'kind', 'batch', 'artifacts'}
         if 'tiff_metadata_response' in batch:
@@ -2589,13 +2591,13 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
         if set(source) != expected:
             raise ValueError('Invalid lean Figure request evidence')
         base = {'requests': batch['requests'], 'response': batch['response']}
-        replay_http_source(root, source, base, wiki, http_files, light=True)
+        response_name, identity = replay_http_source(root, source, base, wiki, http_files, light=True)
         titles = lean_tiff_titles(base, namespace, wiki, date, profile_kind, allow_compatible_epochs=allow_compatible_epochs)
         if bool(titles) != ('tiff_metadata_response' in batch):
             raise ValueError('Archived lean Figure response lacks its required TIFF evidence')
         if titles:
             followup = {'kind': kind, 'batch': source['tiff_batch'], 'artifacts': source['tiff_artifacts']}
-            replay_http_source(root, followup,
+            tiff_name, tiff_identity = replay_http_source(root, followup,
                 {'requests': titles, 'response': batch['tiff_metadata_response']}, wiki, http_files,
                 light=False, stage='tiff')
         # The exact base has already passed lean_tiff_titles above. A TIFF
@@ -2607,13 +2609,18 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
                          allow_compatible_epochs=allow_compatible_epochs)
         elif set(batch) != {'requests', 'response'}:
             raise ValueError('Invalid Figure source batch')
-        return
+        archived = {response_name: identity}
+        if titles:
+            archived[tiff_name] = tiff_identity
+            archived[('tiff-titles', response_name)] = list(titles)
+        return archived
     if kind not in ('http-archived', 'http-archived-light') or set(source) != {'kind', 'batch', 'artifacts'}:
         raise ValueError('Invalid archived Figure HTTP source')
     light = kind == 'http-archived-light'
-    replay_http_source(root, source, batch, wiki, http_files, light=light)
+    response_name, identity = replay_http_source(root, source, batch, wiki, http_files, light=light)
     if light:
         validate_metadata_light(batch, namespace, wiki, date)
+    return {response_name: identity}
 
 
 def captured_http_stage(root, reference, wiki, *, light, stage=''):
@@ -2691,31 +2698,8 @@ def replay_http_source(root, source, batch, wiki, http_files, *, light, stage=''
     # silently ignored or removed by verification.
     if (root / response_name).exists():
         raise ValueError('Unretired duplicate accepted response')
+    return response_name, {'bytes': len(response), 'sha256': receipt['response_sha256']}
 
-
-
-def record_http_archive(root, source, batch, archived, *, origin_plan=None):
-    if source.get('kind') in ('http-archived', 'http-archived-light', 'http-archived-lean'):
-        local, leaf, prefix = terminal_http_origin(root, source, origin_plan=origin_plan)
-        if prefix:
-            local_archived = {}
-            record_http_archive(local, leaf, batch, local_archived, origin_plan={})
-            for name, identity in local_archived.items():
-                key = (name[0], prefix + name[1]) if isinstance(name, tuple) else prefix + name
-                if key in archived:
-                    raise ValueError('Duplicate contained Figure HTTP archive identity')
-                archived[key] = identity
-            return
-        receipt = decode(small(root/source['batch']['accepted_receipt']))
-        raw = batch['response'].encode('utf-8')
-        archived[receipt['response']] = {'bytes': len(raw), 'sha256': digest(raw)}
-        if 'tiff_metadata_response' in batch:
-            receipt = decode(small(root/source['tiff_batch']['accepted_receipt']))
-            raw = batch['tiff_metadata_response'].encode('utf-8')
-            archived[receipt['response']] = {'bytes': len(raw), 'sha256': digest(raw)}
-            request = decode(small(root/source['tiff_batch']['request']))
-            base_receipt = decode(small(root/source['batch']['accepted_receipt']))
-            archived[('tiff-titles', base_receipt['response'])] = request['titles']
 
 
 def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None, _inventory_sources_out=None):
@@ -2825,9 +2809,12 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             if held_stamp() != raw_before[1] or raw_identity() != raw_before:
                 raise ValueError('Figure raw identity changed during selected replay')
     for batch, source in zip(batches, sources, strict=True):
-        replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache, profile_kind=selected_profile, inventory_cache=inventory_cache,
+        frame_archived = replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache, profile_kind=selected_profile, inventory_cache=inventory_cache,
                       allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT), origin_plan=plan)
-        record_http_archive(root, source, batch, archived, origin_plan=plan)
+        for name, identity in frame_archived.items():
+            if name in archived:
+                raise ValueError('Duplicate contained Figure HTTP archive identity')
+            archived[name] = identity
         if materialized is not None:materialized_frame_echo(materialized,source,batch,archived,root)
         if source['kind'] in ('http-archived', 'http-archived-light', 'http-archived-lean'):
             planned.append(batch['requests'])
@@ -4339,8 +4326,11 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
                     if len(line) > STREAM_RAW_LINE_LIMIT or len(source_line) > STREAM_HEADER_LIMIT:
                         raise ValueError('Figure checkpoint record exceeds its bound')
                     batch, source = raw_record_decode(line, encoding), stream_decode(source_line)
-                    replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache, profile_kind=profile_kind, allow_compatible_epochs=True, origin_plan=plan)
-                    record_http_archive(root, source, batch, archived, origin_plan=plan)
+                    frame_archived = replay_source(root, source, batch, args.wiki, args.date, namespace, http_files, prefix_cache, profile_kind=profile_kind, allow_compatible_epochs=True, origin_plan=plan)
+                    for name, identity in frame_archived.items():
+                        if name in archived:
+                            raise ValueError('Duplicate contained Figure HTTP archive identity')
+                        archived[name] = identity
                     if index < len(retained):
                         if source != retained[index]:
                             raise ValueError('Figure retained prefix order differs')

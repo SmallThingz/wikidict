@@ -5383,8 +5383,7 @@ class TerminalHttpOriginTests(unittest.TestCase):
         self.assertEqual(Path(sources[0]['batch']['request']).name,Path(sources[1]['batch']['request']).name)
         files=set();archived={}
         for source,batch in zip(sources,batches):
-            self.replay(source,batch,files)
-            figure.record_http_archive(self.root,source,batch,archived,origin_plan=self.plan)
+            archived.update(self.replay(source,batch,files))
         self.assertEqual(files,set(before))
         self.assertEqual(set(archived),{identifier+'/file-metadata.response-000001-02.raw.json' for identifier in self.ids})
         for index,identifier in enumerate(self.ids):
@@ -5401,8 +5400,7 @@ class TerminalHttpOriginTests(unittest.TestCase):
         source.update(tiff_batch=followup['batch'],tiff_artifacts=followup['artifacts'])
         batch['tiff_metadata_response']=full['response']
         scoped=self.scoped(0,source);files=set();archived={}
-        self.replay(scoped,batch,files)
-        figure.record_http_archive(self.root,scoped,batch,archived,origin_plan=self.plan)
+        archived.update(self.replay(scoped,batch,files))
         prefix=self.ids[0]+'/'
         self.assertEqual(archived[('tiff-titles',prefix+'file-metadata.response-000001-01.raw.json')],batch['requests'])
         self.assertIn(prefix+'file-metadata.tiff-response-000001-01.raw.json',archived)
@@ -5484,7 +5482,6 @@ class TerminalHttpOriginTests(unittest.TestCase):
             return original(path)
         with patch.object(figure,'inventory_document',side_effect=read):
             self.replay(scoped,batch)
-            figure.record_http_archive(self.root,scoped,batch,{},origin_plan=self.plan)
 
     def test_origin_directory_mutation_during_leaf_validation_refuses(self):
         source,batch=self.terminal(0,'\u0645\u0644\u0641:A.svg');scoped=self.scoped(0,source)
@@ -7592,18 +7589,23 @@ class LeanFrameReplayReuseTests(unittest.TestCase):
             if set(source) != expected:
                 raise ValueError('Invalid lean Figure request evidence')
             base = {'requests': batch['requests'], 'response': batch['response']}
-            figure.replay_http_source(root, source, base, wiki, http_files, light=True)
+            name, identity = figure.replay_http_source(root, source, base, wiki, http_files, light=True)
             titles = figure.lean_tiff_titles(base, namespace, wiki, date, profile_kind,
                 allow_compatible_epochs=allow_compatible_epochs)
             if bool(titles) != ('tiff_metadata_response' in batch):
                 raise ValueError('Archived lean Figure response lacks its required TIFF evidence')
             if titles:
                 followup = {'kind': source['kind'], 'batch': source['tiff_batch'], 'artifacts': source['tiff_artifacts']}
-                figure.replay_http_source(root, followup,
+                tiff_name, tiff_identity = figure.replay_http_source(root, followup,
                     {'requests': titles, 'response': batch['tiff_metadata_response']}, wiki, http_files,
                     light=False, stage='tiff')
             figure.validate_lean_batch(batch, namespace, wiki, date, profile_kind,
                 allow_compatible_epochs=allow_compatible_epochs)
+            archived = {name: identity}
+            if titles:
+                archived[tiff_name] = tiff_identity
+                archived[('tiff-titles', name)] = list(titles)
+            return archived
         return replay
 
     def pair(self, source, batch, *, valid=True, epochs=True):
@@ -7617,10 +7619,9 @@ class LeanFrameReplayReuseTests(unittest.TestCase):
             with patch.object(figure, 'file_records', wraps=figure.file_records) as reduce:
                 wall, cpu = time.perf_counter(), time.process_time()
                 if valid:
-                    call(self.root, source, batch, self.fixture.wiki, self.fixture.date,
+                    archives.update(call(self.root, source, batch, self.fixture.wiki, self.fixture.date,
                          self.namespace, files, profile_kind=figure.FIGURE_PROFILE_V4,
-                         allow_compatible_epochs=epochs, origin_plan={})
-                    figure.record_http_archive(self.root, source, batch, archives, origin_plan={})
+                         allow_compatible_epochs=epochs, origin_plan={}))
                 else:
                     with self.assertRaises(ValueError):
                         call(self.root, source, batch, self.fixture.wiki, self.fixture.date,
@@ -11396,10 +11397,14 @@ def measure_figure_utc_key(baseline, candidate, selection):
             for _ in range(count):
                 files, archives = set(), {}
                 for source, batch in pairs:
-                    helper.replay_source(root, source, batch, selection['wiki'], selection['date'],
+                    frame = helper.replay_source(root, source, batch, selection['wiki'], selection['date'],
                         namespace, files, profile_kind=helper.FIGURE_PROFILE_V4,
                         allow_compatible_epochs=True, origin_plan={})
-                    helper.record_http_archive(root, source, batch, archives, origin_plan={})
+                    if frame is None:
+                        # Historical UTC baseline predates the archive return API.
+                        helper.record_http_archive(root, source, batch, archives, origin_plan={})
+                    else:
+                        archives.update(frame)
                 results.append((files, archives))
             return results
         expected = run(baseline)
@@ -11503,6 +11508,362 @@ def measure_figure_utc_key(baseline, candidate, selection):
         response_bytes_per_operation=sum(len(batch['response'].encode()) for _, batch in pairs),
         parity=True, input_after=True, census=census, error_parity=errors,
         rows=rows, allocation_rows=allocation_rows)
+
+
+class HttpArchiveReplayIdentityTests(unittest.TestCase):
+    def terminal(self):
+        fixture = TerminalHttpOriginTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        return fixture
+
+    def test_frame_returns_exact_archive_with_one_receipt_read_and_response_hash(self):
+        for kind in ('full', 'light', 'lean', 'tiff'):
+            with self.subTest(kind=kind):
+                fixture = self.terminal()
+                title = 'ملف:F.tif' if kind == 'tiff' else 'ملف:Unicode-\u00e9.svg'
+                source, batch = fixture.terminal(0, title, lean=kind != 'full')
+                if kind == 'light':
+                    source['kind'] = 'http-archived-light'
+                if kind == 'tiff':
+                    followup, full = fixture.terminal(0, title, stage='tiff')
+                    source.update(tiff_batch=followup['batch'], tiff_artifacts=followup['artifacts'])
+                    batch['tiff_metadata_response'] = full['response']
+                scoped = fixture.scoped(0, source)
+                root = fixture.root / fixture.ids[0]
+                references = [source['batch']] + ([source['tiff_batch']] if kind == 'tiff' else [])
+                receipts = {root/ref['accepted_receipt']: figure.decode((root/ref['accepted_receipt']).read_bytes())
+                            for ref in references}
+                raws = [batch['response'].encode()] + ([batch['tiff_metadata_response'].encode()] if kind == 'tiff' else [])
+                prefix = fixture.ids[0] + '/'
+                expected = {prefix+receipt['response']: {'bytes': len(raw), 'sha256': figure.digest(raw)}
+                            for receipt, raw in zip(receipts.values(), raws, strict=True)}
+                if kind == 'tiff':
+                    expected[('tiff-titles', prefix+next(iter(receipts.values()))['response'])] = list(batch['requests'])
+                before = copy.deepcopy((scoped, batch))
+                files_before = {p.name:p.read_bytes() for p in root.iterdir()}
+                original_small, original_digest = figure.small, figure.digest
+                reads, hashes = [], []
+                def small(path, *args, **options):
+                    reads.append(Path(path))
+                    return original_small(path, *args, **options)
+                def digest(raw):
+                    if raw in raws:
+                        hashes.append(raw)
+                    return original_digest(raw)
+                original_http = figure.replay_http_source
+                def http(*values, **options):
+                    # Count HTTP authentication only; semantic reducers still
+                    # hash their independent site registration outside this call.
+                    with patch.object(figure, 'digest', side_effect=digest):
+                        return original_http(*values, **options)
+                with patch.object(figure, 'small', side_effect=small), patch.object(figure, 'replay_http_source', side_effect=http):
+                    actual = fixture.replay(scoped, batch)
+                self.assertEqual(actual, expected)
+                self.assertEqual({p:reads.count(p) for p in receipts}, {p:1 for p in receipts})
+                self.assertEqual([hashes.count(raw) for raw in raws], [1]*len(raws))
+                self.assertEqual((scoped, batch), before)
+                self.assertEqual({p.name:p.read_bytes() for p in root.iterdir()}, files_before)
+                self.assertFalse(hasattr(figure, 'record_http_archive'))
+
+    def test_returned_identity_is_fresh_and_cannot_authorize_changed_receipt(self):
+        fixture = self.terminal()
+        source, batch = fixture.terminal(0, 'ملف:F.tif', lean=True)
+        followup, full = fixture.terminal(0, 'ملف:F.tif', stage='tiff')
+        source.update(tiff_batch=followup['batch'], tiff_artifacts=followup['artifacts'])
+        batch['tiff_metadata_response'] = full['response']
+        scoped = fixture.scoped(0, source)
+        expected = fixture.replay(scoped, batch)
+        returned = fixture.replay(scoped, batch)
+        name = next(name for name in returned if isinstance(name, str))
+        returned[name]['sha256'] = '0'*64
+        returned[('tiff-titles', name)].append('ملف:Foreign.tif')
+        self.assertEqual(fixture.replay(scoped, batch), expected)
+        self.assertEqual(batch['requests'], ['ملف:F.tif'])
+        path = fixture.root/fixture.ids[0]/source['batch']['accepted_receipt']
+        saved = path.read_bytes()
+        receipt = figure.decode(saved)
+        for field, value in (('response_sha256', '0'*64), ('response_bytes', receipt['response_bytes']+1),
+                             ('accepted', 1), ('request', 'file-metadata.request-000002.json')):
+            with self.subTest(field=field):
+                changed = dict(receipt, **{field:value})
+                path.write_bytes(figure.encoded(changed))
+                with self.assertRaises(ValueError):
+                    fixture.replay(scoped, batch)
+                path.write_bytes(saved)
+        path.write_bytes(b'{"accepted":true,' + saved[1:])
+        with self.assertRaises(ValueError):
+            fixture.replay(scoped, batch)
+        path.write_bytes(saved)
+        self.assertEqual(fixture.replay(scoped, batch), expected)
+
+    def test_tuple_final_guard_rejects_between_stage_receipt_and_request_mutation(self):
+        for mutation in ('receipt-content', 'receipt-restored', 'receipt-inode', 'request-content', 'request-inode'):
+            with self.subTest(mutation=mutation):
+                fixture = FigureOutputDigestTests()
+                fixture.setUp()
+                self.addCleanup(fixture.doCleanups)
+                root = fixture.args.output
+                original = figure.replay_source
+                reached = []
+                def replay(local, source, *args, **options):
+                    archived = original(local, source, *args, **options)
+                    if Path(local) == root and archived and not reached:
+                        key = 'request' if mutation.startswith('request') else 'accepted_receipt'
+                        path = root/source['batch'][key]
+                        raw = path.read_bytes()
+                        reached.append((path, raw))
+                        if mutation.endswith('inode'):
+                            replacement = root.parent/'replaced-http-evidence'
+                            replacement.write_bytes(raw)
+                            replacement.replace(path)
+                        else:
+                            path.write_bytes(raw+b' ')
+                            if mutation.endswith('restored'):
+                                path.write_bytes(raw)
+                    return archived
+                with patch.object(figure, 'replay_source', side_effect=replay):
+                    with self.assertRaises((ValueError, OSError)):
+                        figure.verify_tuple(fixture.paths, fixture.fixture.wiki, fixture.fixture.date)
+                self.assertEqual(len(reached), 1)
+                path, raw = reached[0]
+                path.write_bytes(raw)
+                self.assertEqual(set(figure.verify_tuple(fixture.paths, fixture.fixture.wiki, fixture.fixture.date)), set(fixture.paths))
+
+    def test_resume_keeps_original_receipt_hash_after_archive_handoff(self):
+        fixture = FigureFileTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        args, _ = fixture.make_wall_stop()
+        original = figure.replay_source
+        changed = []
+        def replay(root, source, *values, **options):
+            archived = original(root, source, *values, **options)
+            if archived and not changed:
+                receipt = Path(root)/source['batch']['accepted_receipt']
+                receipt.write_bytes(receipt.read_bytes()+b' ')
+                changed.append(receipt)
+            return archived
+        with patch.object(figure, 'replay_source', side_effect=replay):
+            with self.assertRaisesRegex(ValueError, 'Figure checkpoint evidence changed'):
+                figure.capture_files(args, transport=lambda *_: self.fail('changed prefix reached transport'), sleep=lambda _:None)
+        self.assertEqual(len(changed), 1)
+        self.assertFalse((args.output/figure.COMPLETE).exists())
+
+    def test_stream_archive_merge_keeps_duplicate_identity_refusal(self):
+        fixture = FigureFileTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        args, _, _ = fixture.complete_stream_fixture()
+        original = figure.replay_source
+        returned = []
+        def replay(*values, **options):
+            archived = original(*values, **options)
+            if archived:
+                returned.append(archived)
+                if len(returned) == 2:
+                    return returned[0]
+            return archived
+        with patch.object(figure, 'replay_source', side_effect=replay):
+            with self.assertRaisesRegex(ValueError, 'Duplicate contained Figure HTTP archive identity'):
+                figure.verify(args.output)
+        self.assertEqual(len(returned), 2)
+        self.assertNotEqual(set(returned[0]), set(returned[1]))
+
+    def test_retained_source_validates_without_http_archive_identity(self):
+        fixture = FigureFileTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        args, observation, _ = fixture.complete_stream_fixture()
+        namespace = fixture.namespace.read_bytes()
+        batch = figure.retained_metadata_batch(observation, fixture.wiki, fixture.date, namespace)
+        source = {'kind':'retained-request', 'path':str(observation.resolve()),
+                  'sha256':figure.digest(observation.read_bytes())}
+        files = set()
+        self.assertEqual(figure.replay_source(args.output, source, batch, fixture.wiki, fixture.date,
+                                             namespace, files, origin_plan={}), {})
+        self.assertEqual(files, set())
+        bad = dict(source, sha256='0'*64)
+        with self.assertRaisesRegex(ValueError, 'Retained Figure request changed'):
+            figure.replay_source(args.output, bad, batch, fixture.wiki, fixture.date, namespace, set(), origin_plan={})
+
+
+def measure_figure_http_archive(baseline, candidate, selection):
+    """Existing 32 real full-metadata frames through the normal HTTP leaf replay."""
+    import gc
+    import tracemalloc
+    if tracemalloc.is_tracing():
+        raise ValueError('HTTP archive measurement requires unprofiled entry')
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid',
+              'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    def physical(path):
+        value = path.lstat()
+        return [getattr(value, name) for name in fields]
+    raw_selection = selection['raw_selection']
+    raw_path = Path(raw_selection['raw_path'])
+    request_selection = selection['requests']
+    request_path = Path(request_selection['path'])
+    origin = raw_path.parent/selection['origin']
+    namespace_path = Path(selection['namespace']['path'])
+    namespace_stamp = physical(namespace_path)
+    namespace = namespace_path.read_bytes()
+    if (len(namespace) != selection['namespace']['bytes'] or
+            hashlib.sha256(namespace).hexdigest() != selection['namespace']['sha256'] or
+            physical(namespace_path) != namespace_stamp):
+        raise ValueError('Selected retained namespace changed')
+    def bounded_rows(path, stamp, rows):
+        if physical(path) != stamp:
+            raise ValueError('Selected retained frame stream identity changed')
+        values = []
+        with path.open('rb') as stream:
+            if [getattr(os.fstat(stream.fileno()), name) for name in fields] != stamp:
+                raise ValueError('Selected retained frame stream fd differs')
+            for row in rows:
+                stream.seek(row['offset'])
+                raw = stream.read(row['bytes'])
+                if len(raw) != row['bytes'] or hashlib.sha256(raw).hexdigest() != row['sha256']:
+                    raise ValueError('Selected retained frame bytes changed')
+                values.append(raw)
+            if [getattr(os.fstat(stream.fileno()), name) for name in fields] != stamp:
+                raise ValueError('Selected retained frame stream fd changed')
+        if physical(path) != stamp:
+            raise ValueError('Selected retained frame stream changed')
+        return values
+    if physical(origin) != selection['origin_stamp'] or origin.is_symlink():
+        raise ValueError('Selected retained HTTP origin changed')
+    header_size = raw_selection['frames'][0]['offset']
+    raw_rows = [{'offset':0, 'bytes':header_size, 'sha256':raw_selection['header_sha256']},
+                *raw_selection['frames']]
+    raw_records = bounded_rows(raw_path, raw_selection['raw_stamp'], raw_rows)
+    source_records = bounded_rows(request_path, request_selection['stamp'], request_selection['rows'])
+    encoding = baseline.raw_record_encoding(baseline.stream_decode(raw_records[0]))
+    header = baseline.stream_decode(source_records[0])
+    if header != request_selection['rows'][0]['value'] or header['schema'] != baseline.REQUEST_STREAM_SCHEMA:
+        raise ValueError('Selected retained request header changed')
+    source_rows = [baseline.stream_decode(raw) for raw in source_records[1:]]
+    if source_rows != [row['value'] for row in request_selection['rows'][1:]]:
+        raise ValueError('Selected retained request source selection differs')
+    batches = [baseline.raw_record_decode(raw, encoding) for raw in raw_records[1:]]
+    if len(batches) != 32 or len(source_rows) != 32 or any(len(batch['requests']) != 50 for batch in batches):
+        raise ValueError('Selected retained 32-frame task shape changed')
+    originals = {}
+    for row in selection['http_files']:
+        path = Path(row['path'])
+        if physical(path) != row['stamp'] or path.parent != origin or path.is_symlink():
+            raise ValueError('Selected retained HTTP evidence identity changed')
+        raw = path.read_bytes()
+        if (len(raw) != row['bytes'] or hashlib.sha256(raw).hexdigest() != row['sha256'] or
+                physical(path) != row['stamp']):
+            raise ValueError('Selected retained HTTP evidence changed')
+        originals[path] = raw
+    prefix = selection['origin']+'/'
+    pairs = []
+    for source, batch in zip(source_rows, batches, strict=True):
+        if (source['kind'] != 'http-archived' or set(source) != {'kind','batch','artifacts'} or
+                any(not name.startswith(prefix) or '/' in name[len(prefix):] for name in source['artifacts']) or
+                set(source['batch'].values()) != set(source['artifacts'])):
+            raise ValueError('Selected retained full HTTP origin shape differs')
+        leaf = dict(source, artifacts=[name[len(prefix):] for name in source['artifacts']],
+                    batch={key:name[len(prefix):] for key,name in source['batch'].items()})
+        pairs.append((leaf, batch))
+    if {origin/name for source,_ in pairs for name in source['artifacts']} != set(originals):
+        raise ValueError('Selected retained HTTP members differ')
+    snapshots = copy.deepcopy(pairs)
+    operations = 32
+    def run(helper, count=operations, values=pairs):
+        results = []
+        for _ in range(count):
+            files, archived = set(), {}
+            for source, batch in values:
+                frame = helper.replay_source(origin, source, batch, raw_selection['wiki'], raw_selection['date'],
+                    namespace, files, profile_kind=helper.FIGURE_PROFILE_V4,
+                    allow_compatible_epochs=True, origin_plan={})
+                if helper is baseline:
+                    if frame is not None:
+                        raise AssertionError('Historical baseline archive API changed')
+                    helper.record_http_archive(origin, source, batch, archived, origin_plan={})
+                else:
+                    for name, identity in frame.items():
+                        if name in archived:
+                            raise ValueError('Duplicate contained Figure HTTP archive identity')
+                        archived[name] = identity
+            results.append((files, baseline.encoded(archived)))
+        return results
+    expected = run(baseline)
+    if run(candidate) != expected or pairs != snapshots:
+        raise AssertionError('Retained HTTP archive/output/input parity differs')
+    # Complete metadata and provider comparison is outside the archive clocks.
+    semantic = []
+    for helper in (baseline, candidate):
+        documents = [helper.file_records(iter((batch,)), namespace, raw_selection['wiki'], raw_selection['date'],
+            batch['response'].encode(), has_batches=True, record_limit=50,
+            profile_kind=helper.FIGURE_PROFILE_V4, allow_compatible_epochs=True,
+            allow_tiff_companion=True, allow_decimal_tiff_axes=True, allow_default_tiff_page=False)
+            for _,batch in pairs]
+        semantic.append((documents, [b''.join(helper.provider_chunks(document)) for document in documents]))
+    if semantic[0] != semantic[1]:
+        raise AssertionError('Retained full metadata/provider parity differs')
+    del semantic
+    targets = {batch['response'].encode() for _,batch in pairs}
+    receipt_paths = {origin/source['batch']['accepted_receipt'] for source,_ in pairs}
+    census = []
+    for name, helper in (('baseline', baseline), ('candidate', candidate)):
+        original_small, original_digest = helper.small, helper.digest
+        counts = dict(receipt_reads=0, response_hashes=0, response_hash_bytes=0)
+        def small(path, *values, **options):
+            if Path(path) in receipt_paths:
+                counts['receipt_reads'] += 1
+            return original_small(path, *values, **options)
+        def digest(raw):
+            if raw in targets:
+                counts['response_hashes'] += 1
+                counts['response_hash_bytes'] += len(raw)
+            return original_digest(raw)
+        with patch.object(helper, 'small', side_effect=small), patch.object(helper, 'digest', side_effect=digest):
+            if run(helper, 1) != expected[:1]:
+                raise AssertionError('Instrumented HTTP archive parity differs')
+        census.append(dict(arm=name, **counts))
+    response_bytes = sum(len(batch['response'].encode()) for _,batch in pairs)
+    if census != [dict(arm=name, receipt_reads=n*32, response_hashes=n*32, response_hash_bytes=n*response_bytes)
+                   for name,n in (('baseline',2),('candidate',1))]:
+        raise AssertionError('Retained HTTP duplicate-operation census differs')
+    errors = []
+    for mutation in ('response-bytes', 'request-titles', 'source-receipt'):
+        source, batch = copy.deepcopy(pairs[0])
+        if mutation == 'response-bytes': batch['response'] += ' '
+        elif mutation == 'request-titles': batch['requests'][0] += 'changed'
+        else: source['batch']['accepted_receipt'] = 'file-metadata.response-999999-01.receipt.json'
+        observed = []
+        for helper in (baseline,candidate):
+            try: run(helper,1,[(source,batch)])
+            except Exception as error: observed.append((type(error).__name__,str(error)))
+            else: raise AssertionError('Mismatched retained HTTP frame accepted')
+        if observed[0] != observed[1]:
+            raise AssertionError('Retained HTTP error parity differs')
+        errors.append(dict(mutation=mutation,error=observed[0]))
+    rows = []
+    for name,helper in (('baseline',baseline),('candidate',candidate),('candidate',candidate),('baseline',baseline)):
+        gc.collect()
+        wall,cpu = time.perf_counter_ns(),time.process_time_ns()
+        result = run(helper)
+        cpu,wall = time.process_time_ns()-cpu,time.perf_counter_ns()-wall
+        rows.append(dict(arm=name,cpu_ns=cpu,wall_ns=wall))
+        if result != expected:
+            raise AssertionError('Timed retained HTTP archive parity differs')
+        del result
+    if pairs != snapshots or physical(origin) != selection['origin_stamp']:
+        raise AssertionError('Retained HTTP task inputs changed')
+    if (physical(namespace_path) != namespace_stamp or namespace_path.read_bytes() != namespace or
+            bounded_rows(raw_path,raw_selection['raw_stamp'],raw_rows) != raw_records or
+            bounded_rows(request_path,request_selection['stamp'],request_selection['rows']) != source_records):
+        raise AssertionError('Retained HTTP frame/namespace input changed')
+    for row in selection['http_files']:
+        path = Path(row['path'])
+        if physical(path) != row['stamp'] or path.read_bytes() != originals[path] or physical(path) != row['stamp']:
+            raise AssertionError('Retained original HTTP evidence changed')
+    return dict(scope='32 authentic full-metadata FR frames with original request/receipt evidence through ordinary flat HTTP replay_source and archive handoff; 32 independent walks per CPU arm. Contained-origin dispatch and full tuple are outside clocks; no whole-edition claim.',
+        operations=operations,frames_per_operation=32,request_titles=1600,response_bytes_per_operation=response_bytes,
+        parity=True,input_after=True,semantic_provider_parity=True,census=census,error_parity=errors,rows=rows)
 
 
 if __name__ == '__main__':
