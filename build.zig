@@ -241,6 +241,13 @@ pub fn build(b: *std.Build) void {
     addPublicRunStep(b, "compile-lua", "Compile extracted Lua AST directly to LLVM bitcode", addRunArtifactCommand(b, llvm_exe, &.{}), &.{});
     const pipeline_paths = b.addOptions();
     const worker_object = bundleWorkerObject(b);
+    const prepare_expander_tools = b.step("prepare-expander-tools", "Install the module extractor, LLVM compiler and shared expansion runtime");
+    for ([_]*std.Build.Step.Compile{ module_extract_exe, llvm_exe }) |artifact| {
+        const install = b.addInstallArtifact(artifact, .{});
+        prepare_expander_tools.dependOn(&install.step);
+    }
+    const install_worker_object = b.addInstallFileWithDir(worker_object.getEmittedBin(), .lib, worker_object.out_filename);
+    prepare_expander_tools.dependOn(&install_worker_object.step);
     pipeline_paths.addOptionPath("worker_object", worker_object.getEmittedBin());
     const value_leaf_object = bundleValueLeafObject(b);
     // Preserve the former build-obj producer's object+bitcode outputs. Only
