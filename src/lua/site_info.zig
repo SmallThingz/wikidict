@@ -65,6 +65,7 @@ pub const Snapshot = struct {
     script: ?[]const u8,
     article_path: ?[]const u8,
     statistics: ?Statistics = null,
+    language_conversion_enabled: ?bool = null,
 
     fn urlPath(general: std.json.Value, name: []const u8, article: bool) !?[]const u8 {
         const value = general.object.get(name) orelse return null;
@@ -102,6 +103,10 @@ pub const Snapshot = struct {
         }
         if (!std.mem.eql(u8, try string(general, "wikiid"), wiki) or !std.mem.eql(u8, try string(general, "lang"), language))
             return error.SiteInfoIdentityMismatch;
+        const language_conversion_enabled: ?bool = if (general.object.get("langconversion")) |value| enabled: {
+            if (value != .bool) return error.InvalidSiteInfoSnapshot;
+            break :enabled value.bool;
+        } else null;
         const server = try string(general, "server");
         if (!validServer(server)) return error.InvalidSiteInfoSnapshot;
         const script = try urlPath(general, "script", false);
@@ -110,7 +115,7 @@ pub const Snapshot = struct {
         errdefer a.free(owned_server);
         const owned_script = if (script) |value| try a.dupe(u8, value) else null;
         errdefer if (owned_script) |value| a.free(value);
-        return .{ .allocator = a, .server = owned_server, .script = owned_script, .article_path = if (article_path) |value| try a.dupe(u8, value) else null, .statistics = statistics };
+        return .{ .allocator = a, .server = owned_server, .script = owned_script, .article_path = if (article_path) |value| try a.dupe(u8, value) else null, .statistics = statistics, .language_conversion_enabled = language_conversion_enabled };
     }
 
     pub fn deinit(self: *Snapshot) void {
@@ -538,5 +543,24 @@ test "category formatted statistics require exact pinned domain and own locale o
         const bad = try std.json.Stringify.valueAlloc(a, proof, .{});
         defer a.free(bad);
         try std.testing.expectError(error.InvalidCategoryStatisticsFormatSnapshot, CategoryFormattedStatistics.init(a, bad, site, categories, namespace, "arwiktionary", "20261001", "ar"));
+    }
+}
+
+test "site info retains explicit global language conversion independently of language variants" {
+    const a = std.testing.allocator;
+    for ([_][]const u8{ "true", "false" }) |enabled| {
+        const raw = try std.fmt.allocPrint(a, "{{\"query\":{{\"general\":{{\"wikiid\":\"enwiktionary\",\"lang\":\"en\",\"server\":\"//en.wiktionary.org\",\"langconversion\":{s}}}}}}}", .{enabled});
+        defer a.free(raw);
+        var snapshot = try Snapshot.init(a, raw, "enwiktionary", "20261001", "en");
+        defer snapshot.deinit();
+        try std.testing.expectEqual(std.mem.eql(u8, enabled, "true"), snapshot.language_conversion_enabled.?);
+    }
+    var absent = try Snapshot.init(a, test_raw, "arwiktionary", "20261001", "ar");
+    defer absent.deinit();
+    try std.testing.expect(absent.language_conversion_enabled == null);
+    for ([_][]const u8{ "null", "1", "\"true\"", "{}", "[]" }) |value| {
+        const raw = try std.fmt.allocPrint(a, "{{\"query\":{{\"general\":{{\"wikiid\":\"enwiktionary\",\"lang\":\"en\",\"server\":\"//en.wiktionary.org\",\"langconversion\":{s}}}}}}}", .{value});
+        defer a.free(raw);
+        try std.testing.expectError(error.InvalidSiteInfoSnapshot, Snapshot.init(a, raw, "enwiktionary", "20261001", "en"));
     }
 }

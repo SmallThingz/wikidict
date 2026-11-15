@@ -395,6 +395,7 @@ pub const Provider = struct {
             .site_statistics_formatted = if (self.site_statistics_format) |snapshot| snapshot.values else null,
             .site_script = if (self.site_info) |snapshot| snapshot.script else null,
             .site_article_path = if (self.site_info) |snapshot| snapshot.article_path else null,
+            .language_conversion_enabled = if (self.site_info) |snapshot| snapshot.language_conversion_enabled else null,
             .category_stats = if (self.category_stats_available) categoryStats else null,
             .category_statistics_formatted = if (self.category_statistics_format != null) categoryStatisticsFormatted else null,
             .interface_message = if (self.interface_messages_available) interfaceMessage else null,
@@ -3100,5 +3101,23 @@ test "data only provider accepts owned direct source capsules without compiler i
         try std.testing.expect(capsule.response.len > 0 and std.mem.startsWith(u8, capsule.response, capsule.prefix));
         try std.testing.expect(!@hasField(@TypeOf(capsule.styles), "reading_target"));
         try std.testing.expectEqual(@as(?bool, true), capsule.body_skin_responsive);
+    }
+}
+
+test "normal bundle provider forwards captured global language conversion without guessing edition" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    const catalog = try lua_program.namespace_registry.englishTestRegistry();
+    for ([_][]const u8{ "true", "false" }) |enabled| {
+        const raw = try std.fmt.allocPrint(a, "{{\"query\":{{\"general\":{{\"wikiid\":\"enwiktionary\",\"lang\":\"en\",\"server\":\"https://captured.example\",\"langconversion\":{s}}}}}}}", .{enabled});
+        defer a.free(raw);
+        try tmp.dir.writeFile(io, .{ .sub_path = "namespace-siteinfo.raw.json", .data = raw });
+        var provider = try Provider.init(io, a, root, catalog, "unused-dump.xml");
+        defer provider.deinit();
+        try std.testing.expectEqual(std.mem.eql(u8, enabled, "true"), provider.api().language_conversion_enabled.?);
     }
 }

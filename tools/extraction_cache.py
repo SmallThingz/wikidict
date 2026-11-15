@@ -278,7 +278,7 @@ def completed_producer_identity(graph):
     return producer, stamps
 
 
-def completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshots):
+def completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshots, *, restored_dump=None):
     """Compare the current ordinary graph, not a guessed source exclusion list."""
     if (not isinstance(graph, dict) or not isinstance(snapshots, dict) or
             set(graph) != {"project_root", "extractor", "llvm", "runtime", "leaf",
@@ -295,7 +295,7 @@ def completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshot
             ".bundle-expander", ".incomplete", "compile-plan.tsv", "module-compile-plan.tsv"}:
         raise ValueError("Unexpected owned expander outputs")
     producer, graph_stamps = completed_producer_identity(graph)
-    source = completed_source_binding(root, dump)
+    source = _frontend_completed_source(root, dump, restored_dump)
     validate_extraction_completion(root)
     providers = {}
     # Operation-local hashes only: no previous seal or caller-provided digest.
@@ -327,7 +327,7 @@ def completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshot
     if (completed_asset_names(root, sealing=True) != names or
             any(_full_stamp(Path(graph[name]).stat()) != stamp for name, stamp in graph_stamps.items()) or
             any(_full_stamp((root / name).stat()) != stamp for name, stamp in stamps.items()) or
-            completed_source_binding(root, dump) != source):
+            _frontend_completed_source(root, dump, restored_dump) != source):
         raise ValueError("Expander source changed during validation")
     return dict(version=COMPLETED_EXPANDER_VERSION, source=source,
                 verified_input=[dump_sha, index_sha], producer=producer,
@@ -1388,11 +1388,20 @@ def seal_completed_expander(root, dump, dump_sha, index_sha, graph, snapshots, *
     stamps = {name: _full_stamp((root / name).stat()) for name in names}
     snapshot_links = {name: os.readlink(root / name) if (root / name).is_symlink() else None for name in names}
     plan_stamps = {name: _full_stamp((root.parent / name).stat()) for name in ('compile-plan.tsv', 'module-compile-plan.tsv')}
-    identity = completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshots)
+    restored_binding = None
+    if frontend_reference is not None:
+        authority = _frontend_reference(frontend_reference)
+        selected = authority.get('sealed_frontend') if isinstance(authority, dict) else None
+        if isinstance(selected, dict) and 'restored_dump' in selected:
+            frontend = _frontend_selection(frontend_reference, graph, validate_roles=False)
+            restored_binding = frontend[0]['_restored_dump_binding']
+    identity = completed_expander_identity(root, dump, dump_sha, index_sha, graph, snapshots,
+                                           restored_dump=restored_binding)
     link = completed_link_provenance(root, graph)
     if frontend_reference is not None:
         _, _, _, original, _, _, _ = _frontend_selection(frontend_reference, graph, validate_roles=False,
-                                                         producer_observation=identity['producer'])
+                                                         producer_observation=identity['producer'],
+                                                         restored_dump=restored_binding)
         _frontend_identity_matches(original['identity'], identity)
         if (link['object_inputs']['identity'] != original['link']['object_inputs']['identity'] or
                 link['ordered_objects'] != original['link']['ordered_objects'] or
@@ -2480,12 +2489,214 @@ def _frontend_sources(record):
     return sorted(values, key=lambda value: (value['path'], value['sha256']))
 
 
-def _frontend_selection(reference, graph, *, validate_roles, producer_observation=None):
+
+# A source contract for the existing qualification scheduler, not a build-file
+# exemption. Every other token, including producer flags and graph edges, stays.
+_SCHEDULER_HELPERS = {'validateQualificationStepMemory': '2bcf6f1b8bf0a79e36d7ee3801553ced2529b4723de42fe877faa2e872ad185f', 'claimQualificationMemory': '90a3e02663dd3ed87aa78a18369ebbdb3a266b45ea90136fc26394a15f14eca4', 'claimQualificationStep': '791b64c71b4294f26290dd225bd3373960a276c5aa54e2dd61aa8ec9b9de58af', 'addTestOrder': '6d6d7d9e79a49c77c8ab2b063618dfe242d72b9e8bd2f7f47d8ded90827c606d'}
+_QUALIFICATION_EDGES = (('test_step', '&encoder_tests[i].step', '&run_encoder_tests[i - 1].step', 'test_step_memory != 0'), ('test_step', '&blob_encoder_tests.step', '&run_encoder_tests[encoder_partitions.len - 1].step', 'test_step_memory != 0'), ('test_step', '&blob_decoder_tests.step', '&run_blob_encoder_tests.step', 'test_step_memory != 0'), ('test_step', '&blob_query_tests.step', '&run_blob_decoder_tests.step', 'test_step_memory != 0'), ('test_step', '&wikimedia_dump_tests.step', '&run_blob_query_tests.step', 'test_step_memory != 0'), ('test_step', '&lua_tests.step', '&run_wikimedia_dump_tests.step', 'test_step_memory != 0'), ('test_step', '&lua_core_tests.step', '&run_lua_tests.step', 'test_step_memory != 0'), ('test_step', '&global_index_tests.step', '&run_lua_core_tests.step', 'test_step_memory != 0'), ('test_step', '&program_shapes_tests.step', '&run_global_index_tests.step', 'test_step_memory != 0'), ('test_step', '&lua_abi_tests.step', '&run_program_shapes_tests.step', 'test_step_memory != 0'), ('test_step', '&lua_stdlib_tests.step', '&run_lua_abi_tests.step', 'test_step_memory != 0'), ('test_step', '&lua_ustring_tests.step', '&run_lua_stdlib_tests.step', 'test_step_memory != 0'), ('test_step', '&lua_scribunto_tests.step', '&run_lua_ustring_tests.step', 'test_step_memory != 0'), ('test_step', '&lua_wikitext_tests.step', '&run_lua_scribunto_tests.step', 'test_step_memory != 0'), ('test_step', '&run_bundle_protocol_tests.step', '&run_lua_wikitext_tests.step', 'test_step_memory != 0'), ('test_step', '&lua_tests.step', '&run_namespace_registry_tests.step', 'test_step_memory != 0'), ('test_step', '&blob_wasm_smoke.step', '&run_bundle_protocol_tests.step', 'test_step_memory != 0'), ('test_step', '&run_bundle_pipeline_tests.step', '&blob_wasm_smoke.step', 'test_step_memory != 0'), ('test_step', '&run_blob_build_tests.step', '&run_bundle_pipeline_tests.step', 'test_step_memory != 0'), ('test_step', '&run_blob_file_tools_tests.step', '&run_blob_build_tests.step', 'test_step_memory != 0'), ('storage_test_step', '&storage_unit_run.step', '&reader_test_run.step', 'test_step_memory != 0'), ('storage_test_step', '&storage_run.step', '&storage_unit_run.step', 'test_step_memory != 0'))
+_SCHEDULER_PREAMBLE = '269b22ae7292d74cb64d94bab5b9ccd168a64a3291bb962027952190f70f2a39'
+_INSTALL_ONLY_SOURCE = '''    const prepare_expander_tools = b.step("prepare-expander-tools", "Install the module extractor, LLVM compiler and shared expansion runtime");
+    for ([_]*std.Build.Step.Compile{ module_extract_exe, llvm_exe }) |artifact| {
+        const install = b.addInstallArtifact(artifact, .{});
+        prepare_expander_tools.dependOn(&install.step);
+    }
+    const install_worker_object = b.addInstallFileWithDir(worker_object.getEmittedBin(), .lib, worker_object.out_filename);
+    prepare_expander_tools.dependOn(&install_worker_object.step);
+'''
+
+def _build_policy_tokens(source):
+    if not isinstance(source, str) or len(source.encode()) > 512 * 1024 or '\0' in source:
+        raise ValueError('Invalid native build policy source')
+    pattern = r'//[^\n]*|\s+|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|\\\\[^\n]*|[A-Za-z_][A-Za-z_0-9]*|[0-9][A-Za-z_0-9.]*|\.\.\.|<<\||<<|>>|==|!=|<=|>=|\+\+|\+%|-\%|\*%|\+\||-\||\*\||\.\.|[^\s]'
+    return [token for token in re.findall(pattern, source) if not token.isspace() and not token.startswith('//')]
+
+def _policy_token_hash(tokens):
+    return hashlib.sha256(json.dumps(tokens, separators=(',', ':')).encode()).hexdigest()
+
+def _policy_close(tokens, start, left='{', right='}'):
+    depth = 0
+    for i in range(start, len(tokens)):
+        if tokens[i] == left: depth += 1
+        elif tokens[i] == right:
+            depth -= 1
+            if depth == 0: return i + 1
+    raise ValueError('Unclosed native build policy declaration')
+
+def _policy_replace(tokens, before, after):
+    out = []; count = 0; at = 0
+    while at < len(tokens):
+        if tokens[at:at + len(before)] == before:
+            out.extend(after); at += len(before); count += 1
+        else: out.append(tokens[at]); at += 1
+    return out, count
+
+def _native_build_policy_projection(source):
+    tokens = _build_policy_tokens(source); out = []; at = 0; depth = 0; helpers = set()
+    while at < len(tokens):
+        if depth == 0 and tokens[at] == 'test':
+            opening = at + 1 if tokens[at + 1] == '{' else at + 2
+            if tokens[opening] != '{': raise ValueError('Invalid build policy test declaration')
+            at = _policy_close(tokens, opening); continue
+        if depth == 0 and tokens[at:at + 1] == ['fn'] and at + 1 < len(tokens) and tokens[at + 1] in _SCHEDULER_HELPERS:
+            name = tokens[at + 1]; opening = tokens.index('{', at); end = _policy_close(tokens, opening)
+            if name in helpers or _policy_token_hash(tokens[at:end]) != _SCHEDULER_HELPERS[name]:
+                raise ValueError('Qualification scheduler implementation changed')
+            helpers.add(name); at = end; continue
+        if tokens[at] == '{': depth += 1
+        elif tokens[at] == '}': depth -= 1
+        if depth < 0: raise ValueError('Invalid native build policy scope')
+        out.append(tokens[at]); at += 1
+    if depth != 0: raise ValueError('Invalid native build policy scope')
+    tokens = out
+    start = _build_policy_tokens('pub fn build(b: *std.Build) void {')
+    positions = [i for i in range(len(tokens)) if tokens[i:i + len(start)] == start]
+    if len(positions) != 1: raise ValueError('Ambiguous native build policy entry')
+    begin = positions[0] + len(start)
+    target = _build_policy_tokens('const target = b.standardTargetOptions(.{});')
+    end = next((i for i in range(begin, len(tokens)) if tokens[i:i + len(target)] == target), None)
+    if end is None: raise ValueError('Missing native build target selection')
+    preamble = tokens[begin:end]
+    if preamble:
+        if helpers != set(_SCHEDULER_HELPERS) or _policy_token_hash(preamble) != _SCHEDULER_PREAMBLE:
+            raise ValueError('Native build policy preamble changed')
+        tokens = tokens[:begin] + tokens[end:]
+    elif helpers: raise ValueError('Unexpected qualification scheduler declarations')
+    if _INSTALL_ONLY_SOURCE:
+        prefix = _build_policy_tokens('const worker_object = bundleWorkerObject(b);')
+        suffix = _build_policy_tokens('pipeline_paths.addOptionPath("worker_object", worker_object.getEmittedBin());')
+        before = prefix + _build_policy_tokens(_INSTALL_ONLY_SOURCE) + suffix
+        tokens, count = _policy_replace(tokens, before, prefix + suffix)
+        if count > 1: raise ValueError('Duplicate native install-only graph')
+    test_step = _build_policy_tokens('const test_step = b.step("test", "Run bundle encoder, data reader, Lua, and tooling tests");')
+    locations = [i for i in range(len(tokens)) if tokens[i:i + len(test_step)] == test_step]
+    if len(locations) != 1: raise ValueError('Ambiguous test aggregate')
+    location = locations[0]
+    following = tokens[location + len(test_step):]
+    allowed_following = (_build_policy_tokens('var run_encoder_tests: [encoder_partitions.len]*std.Build.Step.Run = undefined;'),
+                         _build_policy_tokens('const missing_dependency_tests = b.addTest('))
+    if not any(following[:len(row)] == row for row in allowed_following):
+        raise ValueError('Qualification aggregate moved outside its reviewed test context')
+    tokens = tokens[:location] + following
+    out = []; at = 0; edges = set()
+    allowed_edges = {tuple(tuple(_build_policy_tokens(argument)) for argument in row) for row in _QUALIFICATION_EDGES}
+    while at < len(tokens):
+        if tokens[at:at + 2] != ['addTestOrder', '(']: out.append(tokens[at]); at += 1; continue
+        end = _policy_close(tokens, at + 1, '(', ')'); args = []; part = []; level = 0
+        for token in tokens[at + 2:end - 1]:
+            if token == ',' and level == 0: args.append(part); part = []
+            else:
+                part.append(token)
+                if token in ('(', '[', '{'): level += 1
+                elif token in (')', ']', '}'): level -= 1
+        args.append(part)
+        if (len(args) != 4 or args[0] not in (['test_step'], ['storage_test_step']) or not args[1] or not args[2] or
+                args[1][0] != '&' or args[2][0] != '&' or args[3] != ['test_step_memory', '!=', '0'] or tokens[end] != ';'):
+            raise ValueError('Unsupported qualification dependency transition')
+        edge = tuple(tuple(part) for part in args)
+        if edge not in allowed_edges or edge in edges:
+            raise ValueError('Native or duplicate edge is not a qualification transition')
+        edges.add(edge)
+        out.extend(args[1][1:] + ['.', 'dependOn', '('] + args[2] + [')', ';']); at = end + 1
+    if preamble and edges != allowed_edges: raise ValueError('Qualification transition edge inventory changed')
+    tokens = out
+    storage = 'b.step("test-storage", "Exercise after-compression indexes and selective real XZ block decoding")'
+    tokens, count = _policy_replace(tokens, _build_policy_tokens('const storage_test_step = ' + storage + ';'), [])
+    if count > 1: raise ValueError('Duplicate storage aggregate')
+    tokens, _ = _policy_replace(tokens, _build_policy_tokens('storage_test_step.dependOn(&storage_run.step);'), _build_policy_tokens(storage + '.dependOn(&storage_run.step);'))
+    tokens, _ = _policy_replace(tokens, _build_policy_tokens('test_step.dependOn(if (test_step_memory != 0) storage_test_step else &storage_run.step);'), _build_policy_tokens('test_step.dependOn(&storage_run.step);'))
+    return tokens
+
+
+def _frontend_build_policy(selection, original, current):
+    before = original['dependencies'].get('runtime_source:build.zig')
+    after = current['dependencies'].get('runtime_source:build.zig')
+    if before == after:
+        return None
+    records = []
+    for descriptor in selection['layout_sources']:
+        value = _frontend_reference(descriptor)
+        if isinstance(value, dict) and 'build_policy_correspondence' in value:
+            records.append(value['build_policy_correspondence'])
+    if not records:
+        return None
+    if (len(records) != 1 or not isinstance(before, dict) or not isinstance(after, dict) or
+            set(before) != set(after) or {k:v for k,v in before.items() if k not in ('bytes','sha256')} !=
+            {k:v for k,v in after.items() if k not in ('bytes','sha256')}):
+        raise ValueError('Ambiguous sealed frontend build policy source')
+    proof = records[0]
+    if (not isinstance(proof, dict) or set(proof) != {'version','projection','original_source','original_build','current_build'} or
+            type(proof['version']) is not int or proof['version'] != 1 or
+            proof['projection'] != 'qualification-scheduler-v1' or not isinstance(proof['original_source'], str) or
+            proof['original_build'] != [before[k] for k in ('bytes','sha256')] or
+            proof['current_build'] != [after[k] for k in ('bytes','sha256')]):
+        raise ValueError('Sealed frontend build policy correspondence differs')
+    if (len(proof['original_source']) > 512 * 1024 or any(type(row.get('bytes')) is not int or not 0 < row['bytes'] <= 512 * 1024 for row in (before, after))):
+        raise ValueError('Oversized sealed frontend build policy source')
+    old = proof['original_source'].encode()
+    path = Path(after['path'])
+    if path != Path(current['source_root']) / 'build.zig':
+        raise ValueError('Sealed frontend build policy path differs')
+    regular(path)
+    stamp = _full_stamp(path.stat())
+    if path.stat().st_size != after['bytes']:
+        raise ValueError('Sealed frontend build policy size changed')
+    new = path.read_bytes()
+    if ([len(old), hashlib.sha256(old).hexdigest()] != proof['original_build'] or
+            [len(new), hashlib.sha256(new).hexdigest()] != proof['current_build'] or
+            _full_stamp(path.stat()) != stamp):
+        raise ValueError('Sealed frontend build policy bytes changed')
+    try:
+        equivalent = _native_build_policy_projection(old.decode()) == _native_build_policy_projection(new.decode())
+    except (UnicodeError, IndexError, ValueError) as error:
+        raise ValueError('Unsupported sealed frontend build policy transition') from error
+    if not equivalent:
+        raise ValueError('Sealed frontend native producer graph changed')
+    return dict(original=proof['original_build'], current=proof['current_build'])
+
+def _frontend_restored_source(selection, result, plan, seal, *, previous=None):
+    if 'restored_dump' not in selection:
+        if previous is not None:
+            raise ValueError('Unselected restored frontend source')
+        return None
+    chosen = selection['restored_dump']
+    if (type(chosen) is not dict or set(chosen) != {'dump', 'custody'} or
+            type(chosen['dump']) is not dict or chosen['dump'].get('path') != plan['dump']['path']):
+        raise ValueError('Invalid restored frontend source selection')
+    old_root = Path(result['expander'])
+    binding = restored_dump_binding(old_root, chosen['dump'], result['completed_expander_seal']['sha256'], previous=previous)
+    if (json.loads(binding[3]) != seal['identity']['source'] or
+            json.dumps(binding[4:6], sort_keys=True, separators=(',', ':')) !=
+            json.dumps(chosen['custody'], sort_keys=True, separators=(',', ':'))):
+        raise ValueError('Restored frontend source identity or physical custody differs')
+    return binding
+
+
+def _frontend_completed_source(root, dump, binding):
+    if binding is None:
+        return completed_source_binding(root, dump)
+    if type(binding) is not _RestoredDumpBinding or len(binding) != 7:
+        raise ValueError('Invalid restored frontend source binding')
+    # Reauthenticate the original root/seal independently; feeding binding[0]
+    # back only to the tuple comparator would let a foreign root self-validate.
+    descriptor = json.loads(binding[6])
+    restored_dump_binding(Path(binding[0]), descriptor, binding[2], previous=binding)
+    source = json.loads(binding[3])
+    _require_restored_dump(binding, Path(binding[0]), dump, binding[2], source)
+    current = _completed_source_binding(root, dump, restored_source=source)
+    _require_restored_dump(binding, Path(binding[0]), dump, binding[2], source)
+    restored_dump_binding(Path(binding[0]), descriptor, binding[2], previous=binding)
+    if current != source:
+        raise ValueError('Restored frontend extraction receipt or indexes differ')
+    return current
+
+
+def _frontend_selection(reference, graph, *, validate_roles, producer_observation=None, restored_dump=None):
     authority = _frontend_reference(reference)
     # Reuse the existing keyed-preparation DATA, not a new manifest layer.
     selected = authority.get('sealed_frontend') if isinstance(authority, dict) else None
-    if (not isinstance(selected, dict) or set(selected) != {'version', 'preparation_result',
-            'preparation_closure', 'original_policy_git', 'layout_sources'} or type(selected['version']) is not int or selected['version'] != 1 or
+    if (not isinstance(selected, dict) or set(selected) not in ({'version', 'preparation_result',
+            'preparation_closure', 'original_policy_git', 'layout_sources'},
+            {'version', 'preparation_result', 'preparation_closure', 'original_policy_git', 'layout_sources', 'restored_dump'}) or type(selected['version']) is not int or selected['version'] != 1 or
             not {'roles', 'inputs', 'expander_args', 'workspace', 'cache', 'dump', 'builder'} <= set(authority)):
         raise ValueError('Invalid sealed frontend selection in preparation DATA')
     selection = dict(selected, current_roles=authority['roles'], workspace=authority['workspace'], cache=authority['cache'])
@@ -2529,6 +2740,9 @@ def _frontend_selection(reference, graph, *, validate_roles, producer_observatio
     old_dependencies, dependencies = original['dependencies'], current['dependencies']
     excluded = {'blobs', 'pipeline_paths', 'worker_object', 'extraction_helper',
                 'runtime_source:tools/bundle_build.zig', 'runtime_source:tools/extraction_cache.py'}
+    build_policy = _frontend_build_policy(selection, original, current)
+    if build_policy is not None:
+        excluded.add('runtime_source:build.zig')
     if (set(old_dependencies) != set(dependencies) or
             {k:v for k,v in old_dependencies.items() if k not in excluded} !=
             {k:v for k,v in dependencies.items() if k not in excluded}):
@@ -2548,6 +2762,9 @@ def _frontend_selection(reference, graph, *, validate_roles, producer_observatio
         args = plan['expander_args']
         if args.count(flag) != 1 or args.index(flag) + 1 >= len(args) or args[args.index(flag) + 1] != digest:
             raise ValueError('Sealed frontend original verified input arguments differ')
+    restored_binding = _frontend_restored_source(selection, result, plan, seal, previous=restored_dump)
+    if restored_binding is not None:
+        selection['_restored_dump_binding'] = restored_binding
     for name in ('lua-program.meta',):
         regular(root / name)
         if _full_stamp((root / name).stat()) != tuple(seal['runtime_stamps']['assets'][name]):
@@ -2603,7 +2820,8 @@ def _frontend_selection(reference, graph, *, validate_roles, producer_observatio
             raise ValueError('Sealed frontend is a fresh preparation, not sealed-worker adoption')
         if getattr(builder._PREPARED_SOURCE, 'value', None) is not None:
             raise ValueError('An authorized generation cannot relink')
-        for name in ('tools/bundle_build.zig', 'tools/extraction_cache.py'):
+        original_policy_names = ('tools/bundle_build.zig', 'tools/extraction_cache.py') + (('build.zig',) if build_policy is not None else ())
+        for name in original_policy_names:
             identity = roles.compilation_identity({'source_payload_git': selection['original_policy_git']}, name)
             if [identity[k] for k in ('bytes', 'sha256')] != dict(seal['identity']['producer']['policy'])[name]:
                 raise ValueError('Sealed frontend original policy custody differs')
@@ -2617,16 +2835,21 @@ def _frontend_selection(reference, graph, *, validate_roles, producer_observatio
             raise ValueError('Sealed frontend live policy differs from qualified roles')
     if producer['runtime'] != [dependencies['worker_object'][k] for k in ('bytes', 'sha256')]:
         raise ValueError('Sealed frontend live runtime differs from qualified roles')
-    _frontend_producer_transition(seal['identity']['producer'], producer)
+    _frontend_producer_transition(seal['identity']['producer'], producer, build_policy=build_policy)
     return selection, result, plan, seal, observation, producer, stamps
 
 
-def _frontend_producer_transition(original, current):
+def _frontend_producer_transition(original, current, *, build_policy=None):
     before, after = json.loads(json.dumps(original)), json.loads(json.dumps(current))
     if not {'runtime', 'policy'} <= set(before) or set(before) != set(after):
         raise ValueError('Sealed frontend producer contract changed')
     before.pop('runtime'); after.pop('runtime')
     old_policy, policy = dict(before.pop('policy')), dict(after.pop('policy'))
+    if build_policy is not None:
+        if (old_policy.get('build.zig') != build_policy['original'] or
+                policy.get('build.zig') != build_policy['current']):
+            raise ValueError('Sealed frontend producer build policy differs from source proof')
+        del old_policy['build.zig']; del policy['build.zig']
     for name in ('tools/bundle_build.zig', 'tools/extraction_cache.py'):
         if name not in old_policy or name not in policy:
             raise ValueError('Sealed frontend lacks explicit pipeline/helper policy')
@@ -2774,7 +2997,7 @@ def probe_sealed_frontend(cache_root, executable, dump_sha, index_sha, output, d
         if ({name: [size, digest] for name,size,digest in record['assets']} !=
                 {name: old_assets[name] for name in expected_names}):
             raise ValueError('Sealed frontend extraction bytes changed')
-        if completed_source_binding(output, dump) != seal['identity']['source']:
+        if _frontend_completed_source(output, dump, selection.get('_restored_dump_binding')) != seal['identity']['source']:
             raise ValueError('Sealed frontend physical extraction receipt changed')
         source_stamps = {name: _full_stamp((output / name).stat()) for name in walk_assets(output)}
         llvm = output / 'llvm'
@@ -2795,6 +3018,7 @@ def probe_sealed_frontend(cache_root, executable, dump_sha, index_sha, output, d
                     for name,stamp in provider_stamps.items()) or
                 any(_full_stamp(Path(observation[name]).stat()) != stamp for name,stamp in graph_stamps.items())):
             raise ValueError('Sealed frontend input changed during restoration')
+        _frontend_completed_source(output, dump, selection.get('_restored_dump_binding'))
         _frontend_reference(reference)
     if probe(cache_root, expected, output, _after_verified=restore) != 0:
         raise ValueError('Explicit sealed frontend reuse requires an ordinary extraction hit')

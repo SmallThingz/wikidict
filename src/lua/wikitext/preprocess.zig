@@ -771,6 +771,7 @@ pub const Construct = struct {
 const BracePiece = struct {
     count: usize,
     root: bool,
+    saved_minus: bool = false,
 };
 
 fn repeatedByteRun(s: []const u8, start: usize, byte: u8) usize {
@@ -788,10 +789,10 @@ fn matchingBraceWidth(open_count: usize, close_count: usize) u8 {
 
 fn findBraceConstruct(s: []const u8, start: usize) ?Construct {
     var cache: OpaqueParserScan = .{};
-    return findBraceConstructCached(s, start, &cache);
+    return findBraceConstructCached(s, start, &cache, false);
 }
 
-fn findBraceConstructCached(s: []const u8, start: usize, forward_cache: *OpaqueParserScan) ?Construct {
+fn findBraceConstructCached(s: []const u8, start: usize, forward_cache: *OpaqueParserScan, conversion_enabled: bool) ?Construct {
     if (start >= s.len or s[start] != '{') return null;
     const root_count = repeatedByteRun(s, start, '{');
     if (root_count < 2) return null;
@@ -799,6 +800,10 @@ fn findBraceConstructCached(s: []const u8, start: usize, forward_cache: *OpaqueP
     var stack: [128]BracePiece = undefined;
     var depth: usize = 1;
     stack[0] = .{ .count = root_count, .root = true };
+    var square: usize = 0;
+    var square_braces: [128]usize = undefined;
+    var conversions: [128]struct { depth: usize, square: usize } = undefined;
+    var conversion_depth: usize = 0;
     var i = start + root_count;
     // Only a complete root commits positive lookahead as the caller advances.
     // Failed lookahead retains only absence facts guarded by their source offset.
@@ -809,17 +814,45 @@ fn findBraceConstructCached(s: []const u8, start: usize, forward_cache: *OpaqueP
             i = region_end;
             continue;
         }
+        if (conversion_enabled and std.mem.startsWith(u8, s[i..], "-{") and
+            (i + 2 == s.len or s[i + 2] != '{')) {
+            if (conversion_depth == conversions.len) return null;
+            conversions[conversion_depth] = .{ .depth = depth, .square = square };
+            conversion_depth += 1;
+            i += 2;
+            continue;
+        }
+        const conversion_here = conversion_depth != 0 and
+            conversions[conversion_depth - 1].depth == depth and
+            conversions[conversion_depth - 1].square == square;
+        if (conversion_here and std.mem.startsWith(u8, s[i..], "}-")) {
+            conversion_depth -= 1;
+            i += 2;
+            continue;
+        }
+        if (conversion_enabled and std.mem.startsWith(u8, s[i..], "[[")) {
+            if (square == square_braces.len) return null;
+            square_braces[square] = depth;
+            square += 1;
+            i += 2;
+            continue;
+        }
+        if (conversion_enabled and square != 0 and depth == square_braces[square - 1] and !conversion_here and std.mem.startsWith(u8, s[i..], "]]")) {
+            square -= 1;
+            i += 2;
+            continue;
+        }
         if (s[i] == '{') {
             const count = repeatedByteRun(s, i, '{');
             if (count >= 2) {
                 if (depth == stack.len) return null;
-                stack[depth] = .{ .count = count, .root = false };
+                stack[depth] = .{ .count = count, .root = false, .saved_minus = conversion_enabled and i != 0 and s[i - 1] == '-' };
                 depth += 1;
                 i += count;
                 continue;
             }
         }
-        if (s[i] == '}' and depth != 0) {
+        if (s[i] == '}' and depth != 0 and !conversion_here and (square == 0 or depth > square_braces[square - 1])) {
             const close_count = repeatedByteRun(s, i, '}');
             const piece = stack[depth - 1];
             const width = matchingBraceWidth(piece.count, close_count);
@@ -827,8 +860,12 @@ fn findBraceConstructCached(s: []const u8, start: usize, forward_cache: *OpaqueP
                 depth -= 1;
                 const remainder = piece.count - width;
                 if (remainder >= 2) {
-                    stack[depth] = .{ .count = remainder, .root = piece.root };
+                    stack[depth] = .{ .count = remainder, .root = piece.root, .saved_minus = piece.saved_minus };
                     depth += 1;
+                } else if (remainder == 1 and piece.saved_minus) {
+                    if (conversion_depth == conversions.len) return null;
+                    conversions[conversion_depth] = .{ .depth = depth, .square = square };
+                    conversion_depth += 1;
                 } else if (piece.root) {
                     forward_cache.* = opaque_scan;
                     return .{
@@ -997,6 +1034,7 @@ pub fn markRootSingletonLiteralCurly(a: std.mem.Allocator, out: *dependency.Buil
 // Retain this state across successive nodes of one unchanged input only.
 // Speculative brace parsing owns independent caches and never publishes misses.
 pub const ExpansionScan = struct {
+    conversion_enabled: bool = false,
     opaque_scan: OpaqueParserScan = .{},
     no_more_poem_close: bool = false,
     no_more_poem_gt: bool = false,
@@ -1021,7 +1059,7 @@ pub const ExpansionScan = struct {
                 }
             }
             if (s[i] == '{' and s[i + 1] == '{') {
-                if (findBraceConstructCached(s, i, &self.opaque_scan)) |construct| return .{ .construct = construct };
+                if (findBraceConstructCached(s, i, &self.opaque_scan, self.conversion_enabled)) |construct| return .{ .construct = construct };
             }
             i += 1;
         }
@@ -1126,29 +1164,59 @@ pub fn opaqueParserRegionEnd(s: []const u8, start: usize) ?usize {
 }
 
 pub fn findTopDelimiter(s: []const u8, needle: u8) ?usize {
-    return findTopDelimiterImpl(s, needle, false);
+    return findTopDelimiterWithConversion(s, needle, false);
+}
+
+pub fn findTopDelimiterWithConversion(s: []const u8, needle: u8, conversion_enabled: bool) ?usize {
+    return findTopDelimiterImpl(s, needle, false, conversion_enabled);
 }
 
 pub const ParserColon = struct { index: usize, len: usize };
 
 pub fn findTopParserColon(s: []const u8) ?ParserColon {
-    const index = findTopDelimiterImpl(s, ':', true) orelse return null;
+    return findTopParserColonWithConversion(s, false);
+}
+
+pub fn findTopParserColonWithConversion(s: []const u8, conversion_enabled: bool) ?ParserColon {
+    const index = findTopDelimiterImpl(s, ':', true, conversion_enabled) orelse return null;
     return .{ .index = index, .len = if (s[index] == ':') 1 else "：".len };
 }
 
-fn findTopDelimiterImpl(s: []const u8, needle: u8, fullwidth_colon: bool) ?usize {
+fn findTopDelimiterImpl(s: []const u8, needle: u8, fullwidth_colon: bool, conversion_enabled: bool) ?usize {
     var scan: OpaqueParserScan = .{};
-    return findTopDelimiterFrom(s, needle, fullwidth_colon, 0, &scan);
+    return findTopDelimiterFrom(s, needle, fullwidth_colon, 0, &scan, conversion_enabled);
 }
 
-fn findTopDelimiterFrom(s: []const u8, needle: u8, fullwidth_colon: bool, start: usize, opaque_scan: *OpaqueParserScan) ?usize {
+fn findTopDelimiterFrom(s: []const u8, needle: u8, fullwidth_colon: bool, start: usize, opaque_scan: *OpaqueParserScan, conversion_enabled: bool) ?usize {
     var braces: [128]usize = undefined;
     var brace_depth: usize = 0;
+    var saved_minus: [128]bool = undefined;
     var square: usize = 0;
+    var square_braces: [128]usize = undefined;
+    // Pinned MediaWiki Preprocessor_Hash: -{ owns its internal pipes only
+    // when global language conversion is enabled; -{{ remains a brace opener.
+    var conversions: [128]struct { braces: usize, square: usize } = undefined;
+    var conversion_depth: usize = 0;
     var i = start;
     while (i < s.len) {
         if (opaque_scan.end(s, i)) |region_end| {
             i = region_end;
+            continue;
+        }
+        if (conversion_enabled and std.mem.startsWith(u8, s[i..], "-{") and
+            (i + 2 == s.len or s[i + 2] != '{')) {
+            if (conversion_depth == conversions.len) return null;
+            conversions[conversion_depth] = .{ .braces = brace_depth, .square = square };
+            conversion_depth += 1;
+            i += 2;
+            continue;
+        }
+        const conversion_here = conversion_depth != 0 and
+            conversions[conversion_depth - 1].braces == brace_depth and
+            conversions[conversion_depth - 1].square == square;
+        if (conversion_here and std.mem.startsWith(u8, s[i..], "}-")) {
+            conversion_depth -= 1;
+            i += 2;
             continue;
         }
         if (s[i] == '{') {
@@ -1156,37 +1224,48 @@ fn findTopDelimiterFrom(s: []const u8, needle: u8, fullwidth_colon: bool, start:
             if (count >= 2) {
                 if (brace_depth == braces.len) return null;
                 braces[brace_depth] = count;
+                saved_minus[brace_depth] = conversion_enabled and i != 0 and s[i - 1] == '-';
                 brace_depth += 1;
                 i += count;
                 continue;
             }
         }
-        if (s[i] == '}' and brace_depth != 0) {
+        if (s[i] == '}' and brace_depth != 0 and !conversion_here and (!conversion_enabled or square == 0 or brace_depth > square_braces[square - 1])) {
             const close_count = repeatedByteRun(s, i, '}');
             const open_count = braces[brace_depth - 1];
             const width = matchingBraceWidth(open_count, close_count);
             if (width != 0) {
+                const minus = saved_minus[brace_depth - 1];
                 brace_depth -= 1;
                 const remainder = open_count - width;
                 if (remainder >= 2) {
                     braces[brace_depth] = remainder;
+                    saved_minus[brace_depth] = minus;
                     brace_depth += 1;
+                } else if (remainder == 1 and minus) {
+                    if (conversion_depth == conversions.len) return null;
+                    conversions[conversion_depth] = .{ .braces = brace_depth, .square = square };
+                    conversion_depth += 1;
                 }
                 i += width;
                 continue;
             }
         }
         if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "[[")) {
+            if (conversion_enabled) {
+                if (square == square_braces.len) return null;
+                square_braces[square] = brace_depth;
+            }
             square += 1;
             i += 2;
             continue;
         }
-        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "]]") and square != 0) {
+        if (i + 1 < s.len and std.mem.eql(u8, s[i .. i + 2], "]]") and square != 0 and !conversion_here and (!conversion_enabled or brace_depth == square_braces[square - 1])) {
             square -= 1;
             i += 2;
             continue;
         }
-        if (brace_depth == 0 and square == 0 and
+        if (brace_depth == 0 and square == 0 and conversion_depth == 0 and
             (s[i] == needle or (fullwidth_colon and std.mem.startsWith(u8, s[i..], "：")))) return i;
         i += 1;
     }
@@ -1194,10 +1273,14 @@ fn findTopDelimiterFrom(s: []const u8, needle: u8, fullwidth_colon: bool, start:
 }
 
 pub fn splitWikitextTop(a: std.mem.Allocator, s: []const u8, delimiter: u8, out: *std.ArrayList([]const u8)) !void {
+    return splitWikitextTopWithConversion(a, s, delimiter, out, false);
+}
+
+pub fn splitWikitextTopWithConversion(a: std.mem.Allocator, s: []const u8, delimiter: u8, out: *std.ArrayList([]const u8), conversion_enabled: bool) !void {
     var start: usize = 0;
     var opaque_scan: OpaqueParserScan = .{};
     while (start < s.len) {
-        const cut = findTopDelimiterFrom(s, delimiter, false, start, &opaque_scan) orelse break;
+        const cut = findTopDelimiterFrom(s, delimiter, false, start, &opaque_scan, conversion_enabled) orelse break;
         try out.append(a, s[start..cut]);
         start = cut + 1;
     }
@@ -1214,7 +1297,11 @@ test "parser colon recognizes ASCII and fullwidth outside nested constructs" {
 
 pub const ParameterSplit = struct { key: []const u8, default: ?[]const u8 };
 pub fn splitParameter(s: []const u8) ParameterSplit {
-    if (findTopDelimiter(s, '|')) |bar| return .{ .key = s[0..bar], .default = s[bar + 1 ..] };
+    return splitParameterWithConversion(s, false);
+}
+
+pub fn splitParameterWithConversion(s: []const u8, conversion_enabled: bool) ParameterSplit {
+    if (findTopDelimiterWithConversion(s, '|', conversion_enabled)) |bar| return .{ .key = s[0..bar], .default = s[bar + 1 ..] };
     return .{ .key = s, .default = null };
 }
 
@@ -2041,4 +2128,58 @@ test "expanded comment escape mapping leaves prior spans unchanged across repeat
     try std.testing.expectEqual(@as(usize, 1), output.ranges.len);
     try std.testing.expectEqual(@as(u32, @intCast(mapped_start)), output.ranges[0].start);
     try std.testing.expectEqual(@as(u32, @intCast(expected.items.len)), output.ranges[0].end);
+}
+
+test "conversion frames shield argument pipes only under captured global enablement" {
+    const a = std.testing.allocator;
+    const cases = [_]struct { input: []const u8, expected: []const []const u8 }{
+        .{ .input = "yes|-{T|ku-latn:{{PAGENAME}};ku-arab:{{{1|}}}}-|no", .expected = &.{ "yes", "-{T|ku-latn:{{PAGENAME}};ku-arab:{{{1|}}}}-", "no" } },
+        .{ .input = "a|-{x|-{y|z}-|q}-|b", .expected = &.{ "a", "-{x|-{y|z}-|q}-", "b" } },
+        .{ .input = "-{{{x}}|hidden}-|outer", .expected = &.{ "-{{{x}}|hidden}-", "outer" } },
+        .{ .input = "[[a|-{x]]y}-]]|z", .expected = &.{ "[[a|-{x]]y}-]]", "z" } },
+        .{ .input = "a|-{[[x}}]]}-|b", .expected = &.{ "a", "-{[[x}}]]}-", "b" } },
+        .{ .input = "a|-{[[{{x]]|y}}z]]}-|b", .expected = &.{ "a", "-{[[{{x]]|y}}z]]}-", "b" } },
+        .{ .input = "a|-{{x|y}}|b", .expected = &.{ "a", "-{{x|y}}", "b" } },
+        .{ .input = "a|<nowiki>-{x|y}-</nowiki>|b", .expected = &.{ "a", "<nowiki>-{x|y}-</nowiki>", "b" } },
+        .{ .input = "a|-{x|[[p|q]]{{t|v}}}-|b", .expected = &.{ "a", "-{x|[[p|q]]{{t|v}}}-", "b" } },
+        .{ .input = "a|-{x|'quoted|text'}-|b", .expected = &.{ "a", "-{x|'quoted|text'}-", "b" } },
+    };
+    for (cases) |case| {
+        var parts: std.ArrayList([]const u8) = .empty;
+        defer parts.deinit(a);
+        try splitWikitextTopWithConversion(a, case.input, '|', &parts, true);
+        try std.testing.expectEqual(case.expected.len, parts.items.len);
+        for (case.expected, parts.items) |expected, actual| try std.testing.expectEqualStrings(expected, actual);
+    }
+    for ([_]bool{ false, true }) |enabled| {
+        var parts: std.ArrayList([]const u8) = .empty;
+        defer parts.deinit(a);
+        try splitWikitextTopWithConversion(a, "a|-{T|x}-|b", '|', &parts, enabled);
+        try std.testing.expectEqual(@as(usize, if (enabled) 3 else 4), parts.items.len);
+    }
+    try std.testing.expectEqual(@as(?usize, null), findTopDelimiterWithConversion("-{x=y}-", '=', true));
+    try std.testing.expectEqual(@as(?usize, 3), findTopDelimiterWithConversion("-{x=y}-", '=', false));
+    try std.testing.expect(findTopParserColonWithConversion("-{x:y}-", true) == null);
+    try std.testing.expectEqualStrings("-{x|y}-", splitParameterWithConversion("-{x|y}-|default", true).key);
+    try std.testing.expectEqualStrings("default", splitParameterWithConversion("-{x|y}-|default", true).default.?);
+}
+
+test "conversion aware construct boundaries retain internal closing brace text" {
+    const source = "{{T|-{a}}b}-|c}}";
+    var scan: ExpansionScan = .{ .conversion_enabled = true };
+    const construct = scan.next(source, 0, false).?.construct;
+    try std.testing.expectEqual(@as(usize, 0), construct.open);
+    try std.testing.expectEqual(source.len - 2, construct.close);
+    var incomplete: ExpansionScan = .{ .conversion_enabled = true };
+    try std.testing.expect(incomplete.next("{{T|-{a|b}}", 0, false) == null);
+    var incomplete_parts: std.ArrayList([]const u8) = .empty;
+    defer incomplete_parts.deinit(std.testing.allocator);
+    try splitWikitextTopWithConversion(std.testing.allocator, "a|-{x|y", '|', &incomplete_parts, true);
+    try std.testing.expectEqual(@as(usize, 2), incomplete_parts.items.len);
+    try std.testing.expectEqualStrings("-{x|y", incomplete_parts.items[1]);
+    const nested_source = "{{T|-{[[x}}]]}-|y}}";
+    var nested: ExpansionScan = .{ .conversion_enabled = true };
+    try std.testing.expectEqual(nested_source.len - 2, nested.next(nested_source, 0, false).?.construct.close);
+    var disabled: ExpansionScan = .{};
+    try std.testing.expectEqual(@as(usize, 7), disabled.next(source, 0, false).?.construct.close);
 }

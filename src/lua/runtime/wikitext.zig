@@ -150,6 +150,7 @@ pub const Provider = struct {
     site_statistics_formatted: ?[7][]const u8 = null,
     site_script: ?[]const u8 = null,
     site_article_path: ?[]const u8 = null,
+    language_conversion_enabled: ?bool = null,
     interwiki_map: ?*const fn (?*anyopaque) anyerror![]const InterwikiRow = null,
     stable_interwiki_map: bool = false,
     wikibase_sitelink: ?*const fn (?*anyopaque, []const u8, []const u8) anyerror!?[]const u8 = null,
@@ -1316,7 +1317,7 @@ pub const Expander = struct {
         var out: dependency.Builder = .{};
         errdefer out.deinit(self.runtime.allocator);
         var pos: usize = 0;
-        var expansion_scan: preprocess.ExpansionScan = .{};
+        var expansion_scan: preprocess.ExpansionScan = .{ .conversion_enabled = self.provider.language_conversion_enabled orelse false };
         const protect_literal_curly = preprocess.hasParsingBoundary(text);
         var literal_state: preprocess.ParsingLiteralState = .{};
         while (expansion_scan.next(text, pos, allow_poem)) |node| {
@@ -1437,7 +1438,7 @@ pub const Expander = struct {
         var out: dependency.Builder = .{};
         errdefer out.deinit(self.runtime.allocator);
         var pos: usize = 0;
-        var expansion_scan: preprocess.ExpansionScan = .{};
+        var expansion_scan: preprocess.ExpansionScan = .{ .conversion_enabled = self.provider.language_conversion_enabled orelse false };
         const protect_literal_curly = preprocess.hasParsingBoundary(text);
         var literal_state: preprocess.ParsingLiteralState = .{};
         while (expansion_scan.next(text, pos, true)) |node| {
@@ -1625,7 +1626,7 @@ pub const Expander = struct {
     }
 
     fn expandParameterTracked(self: *Expander, inside: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!dependency.Text {
-        const split = preprocess.splitParameter(inside);
+        const split = preprocess.splitParameterWithConversion(inside, self.provider.language_conversion_enabled orelse false);
         const expanded_key = try self.expandWikitext(split.key, params, host_title, depth + 1);
         const key_text = std.mem.trim(u8, expanded_key, " \t\r\n");
         const key: Value = if (std.fmt.parseInt(i64, key_text, 10)) |number|
@@ -1679,7 +1680,7 @@ pub const Expander = struct {
             }
         }
         if (try self.magicWord(head)) |value| return dependency.Text.transformed(value);
-        if (preprocess.findTopParserColon(head)) |colon| {
+        if (preprocess.findTopParserColonWithConversion(head, self.provider.language_conversion_enabled orelse false)) |colon| {
             const raw_name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
             if (try self.resolveParserFunction(try self.parserFunctionLookupName(raw_name))) |name| {
                 const first = head[colon.index + colon.len ..];
@@ -1723,7 +1724,7 @@ pub const Expander = struct {
         defer self.lazy_template_args.items.len = lazy_base;
         var parts: std.ArrayList([]const u8) = .empty;
         defer parts.deinit(self.runtime.allocator);
-        try preprocess.splitWikitextTop(self.runtime.allocator, content, '|', &parts);
+        try preprocess.splitWikitextTopWithConversion(self.runtime.allocator, content, '|', &parts, self.provider.language_conversion_enabled orelse false);
         if (parts.items.len == 0) return error.MalformedWikitext;
         var raw_head = stripSubstPrefix(parts.items[0]);
         if (raw_head.len == 0)
@@ -1763,7 +1764,7 @@ pub const Expander = struct {
             return dependency.Text.transformed(try self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth, true));
         }
         if (invalidTransclusionTitle(title)) {
-            if (invalidTransclusionNeedsProtection(title) or literalComputedColonTitle(content, title, parts.items.len))
+            if (invalidTransclusionNeedsProtection(title) or literalComputedColonTitleWithConversion(content, title, parts.items.len, self.provider.language_conversion_enabled orelse false))
                 return dependency.Text.untracked(try std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content}));
             return dependency.Text.untracked(try std.fmt.allocPrint(self.runtime.allocator, "{{{{{s}}}}}", .{content}));
         }
@@ -1795,7 +1796,7 @@ pub const Expander = struct {
     }
 
     fn expandParameter(self: *Expander, inside: []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror![]const u8 {
-        const split = preprocess.splitParameter(inside);
+        const split = preprocess.splitParameterWithConversion(inside, self.provider.language_conversion_enabled orelse false);
         const expanded_key = try self.expandWikitext(split.key, params, host_title, depth + 1);
         const key_text = std.mem.trim(u8, expanded_key, " \t\r\n");
         const key: Value = if (std.fmt.parseInt(i64, key_text, 10)) |number|
@@ -1817,7 +1818,7 @@ pub const Expander = struct {
         defer named_numeric_keys.deinit(page_a);
         var positional: i64 = 1;
         for (raw_args) |raw| {
-            if (preprocess.findTopDelimiter(raw, '=')) |eq| {
+            if (preprocess.findTopDelimiterWithConversion(raw, '=', self.provider.language_conversion_enabled orelse false)) |eq| {
                 const key_expanded = try self.expandWikitext(raw[0..eq], caller_params, host_title, depth + 1);
                 const key_text = std.mem.trim(u8, key_expanded, " \t\r\n");
                 if (key_text.len == 0) continue;
@@ -1856,7 +1857,7 @@ pub const Expander = struct {
         const out = try self.runtime.newTable();
         var positional: i64 = 1;
         for (raw_args) |raw| {
-            if (preprocess.findTopDelimiter(raw, '=')) |eq| {
+            if (preprocess.findTopDelimiterWithConversion(raw, '=', self.provider.language_conversion_enabled orelse false)) |eq| {
                 const key_origin = try self.expandWikitextTracked(raw[0..eq], caller_params, host_title, depth + 1);
                 const key_expanded = key_origin.bytes;
                 try self.rememberStringOrigin(try originResult(self.trimDependency(key_origin, " \t\r\n")));
@@ -1916,7 +1917,7 @@ pub const Expander = struct {
             if (try resolve(self.provider.ctx, raw)) |canonical| return canonical;
             // Retain the supported frame.callParserFunction("#tag:ref", args)
             // spelling while applying the same captured alias to its head.
-            if (preprocess.findTopParserColon(raw)) |colon| {
+            if (preprocess.findTopParserColonWithConversion(raw, self.provider.language_conversion_enabled orelse false)) |colon| {
                 if (try resolve(self.provider.ctx, raw[0..colon.index])) |canonical| {
                     if (std.mem.eql(u8, canonical, "#tag"))
                         return try std.fmt.allocPrint(self.runtime.allocator, "#tag:{s}", .{raw[colon.index + colon.len ..]});
@@ -2437,7 +2438,7 @@ pub const Expander = struct {
         var forms: std.ArrayList([]const u8) = .empty;
         defer forms.deinit(self.runtime.allocator);
         for (args) |raw_form| {
-            if (preprocess.findTopDelimiter(raw_form, '=')) |eq| {
+            if (preprocess.findTopDelimiterWithConversion(raw_form, '=', self.provider.language_conversion_enabled orelse false)) |eq| {
                 const label_expanded = std.mem.trim(
                     u8,
                     try self.expandWikitext(raw_form[0..eq], params, host_title, depth + 1),
@@ -2486,7 +2487,7 @@ pub const Expander = struct {
         var fallback: ?[]const u8 = null;
         var trailing: ?[]const u8 = null;
         for (args, 0..) |raw_case, index| {
-            if (preprocess.findTopDelimiter(raw_case, '=')) |eq| {
+            if (preprocess.findTopDelimiterWithConversion(raw_case, '=', self.provider.language_conversion_enabled orelse false)) |eq| {
                 const value_raw = raw_case[eq + 1 ..];
                 // A matched bare case selects this result without evaluating its label.
                 if (pending_match) return self.expandTrimmedParserArgument(value_raw, params, host_title, depth + 1);
@@ -2740,12 +2741,13 @@ pub const Expander = struct {
     // These serializers may prove absence of missing dependencies only from
     // their actual consumed inputs. Escaping/reordering is not a range map.
     const NativeSerializationProvenance = struct {
+        conversion_enabled: bool = false,
         known: bool = true,
         lost_missing_range: bool = false,
 
         fn include(self: *@This(), value: dependency.Text) void {
             self.lost_missing_range = self.lost_missing_range or value.lost_missing_range or value.ranges.len != 0;
-            var scan: preprocess.ExpansionScan = .{};
+            var scan: preprocess.ExpansionScan = .{ .conversion_enabled = self.conversion_enabled };
             self.known = self.known and !value.unknown and !value.lost_missing_range and
                 value.ranges.len == 0 and value.literal_curly_ranges.len == 0 and
                 value.generated_links.len == 0 and value.generated_source == null and
@@ -2766,7 +2768,7 @@ pub const Expander = struct {
     }
 
     fn expandUrlParserTracked(self: *Expander, raw: []const u8, args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize, kind: uri_lib.WikiUrlKind, escaped: bool) anyerror!dependency.Text {
-        var provenance: NativeSerializationProvenance = .{ .known = kind == .local and !escaped };
+        var provenance: NativeSerializationProvenance = .{ .known = kind == .local and !escaped, .conversion_enabled = self.provider.language_conversion_enabled orelse false };
         const expanded_title = try self.expandWikitextTracked(raw, params, host_title, depth + 1);
         provenance.include(expanded_title);
         const title = std.mem.trim(u8, expanded_title.bytes, " \t\r\n");
@@ -2779,7 +2781,7 @@ pub const Expander = struct {
         // destination. Inspect only after protecting proven literal curly atoms;
         // authored percent escapes and protected/entity literals remain unchanged.
         const inspected_title = try dependency.escapeLiteralCurly(self.runtime.allocator, expanded_title);
-        var title_scan: preprocess.ExpansionScan = .{};
+        var title_scan: preprocess.ExpansionScan = .{ .conversion_enabled = self.provider.language_conversion_enabled orelse false };
         var title_pos: usize = 0;
         while (title_scan.next(inspected_title.bytes, title_pos, false)) |node| {
             switch (node) {
@@ -3285,6 +3287,7 @@ pub const Expander = struct {
 
     fn expandTagParserTracked(self: *Expander, raw_tag: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!dependency.Text {
         var provenance: NativeSerializationProvenance = .{
+            .conversion_enabled = self.provider.language_conversion_enabled orelse false,
             .known = std.ascii.eqlIgnoreCase(std.mem.trim(u8, raw_tag, " \t\r\n\x00\x0b"), "references"),
         };
         const expanded_tag = try self.expandWikitextTracked(raw_tag, params, host_title, depth + 1);
@@ -3307,7 +3310,7 @@ pub const Expander = struct {
         if (raw_args.len > 1) {
             const table = try self.runtime.newTable();
             for (raw_args[1..]) |raw| {
-                const eq = preprocess.findTopDelimiter(raw, '=') orelse continue;
+                const eq = preprocess.findTopDelimiterWithConversion(raw, '=', self.provider.language_conversion_enabled orelse false) orelse continue;
                 const expanded_key = try self.expandWikitextTracked(raw[0..eq], params, host_title, depth + 1);
                 provenance.include(expanded_key);
                 const key = std.mem.trim(u8, expanded_key.bytes, " \t\r\n");
@@ -3547,7 +3550,7 @@ pub const Expander = struct {
         }
         if (try self.magicWord(head)) |value| return value;
 
-        if (preprocess.findTopParserColon(head)) |colon| {
+        if (preprocess.findTopParserColonWithConversion(head, self.provider.language_conversion_enabled orelse false)) |colon| {
             const raw_name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
             const name = (try self.resolveParserFunction(try self.parserFunctionLookupName(raw_name))) orelse return null;
             const first = head[colon.index + colon.len ..];
@@ -3670,9 +3673,13 @@ pub const Expander = struct {
     // Keep the unchanged invocation literal; renderer-side colon text alone
     // cannot prove that dispatch outcome.
     fn literalComputedColonTitle(content: []const u8, title: []const u8, part_count: usize) bool {
+        return literalComputedColonTitleWithConversion(content, title, part_count, false);
+    }
+
+    fn literalComputedColonTitleWithConversion(content: []const u8, title: []const u8, part_count: usize, conversion_enabled: bool) bool {
         if (part_count != 1 or !std.mem.eql(u8, content, title) or
             !std.unicode.utf8ValidateSlice(title)) return false;
-        const colon = preprocess.findTopParserColon(title) orelse return false;
+        const colon = preprocess.findTopParserColonWithConversion(title, conversion_enabled) orelse return false;
         if (colon.index == 0 or std.mem.indexOfAny(u8, title[0..colon.index], "{}") != null) return false;
         var at: usize = 0;
         var parameters: usize = 0;
@@ -3727,7 +3734,7 @@ pub const Expander = struct {
         defer self.lazy_template_args.items.len = lazy_base;
         var parts: std.ArrayList([]const u8) = .empty;
         defer parts.deinit(self.runtime.allocator);
-        try preprocess.splitWikitextTop(self.runtime.allocator, content, '|', &parts);
+        try preprocess.splitWikitextTopWithConversion(self.runtime.allocator, content, '|', &parts, self.provider.language_conversion_enabled orelse false);
         if (parts.items.len == 0) return error.MalformedWikitext;
         var raw_head = stripSubstPrefix(parts.items[0]);
         if (raw_head.len == 0)
@@ -3767,7 +3774,7 @@ pub const Expander = struct {
             return self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth, true);
         }
         if (invalidTransclusionTitle(title)) {
-            if (invalidTransclusionNeedsProtection(title) or literalComputedColonTitle(content, title, parts.items.len))
+            if (invalidTransclusionNeedsProtection(title) or literalComputedColonTitleWithConversion(content, title, parts.items.len, self.provider.language_conversion_enabled orelse false))
                 return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
             return std.fmt.allocPrint(self.runtime.allocator, "{{{{{s}}}}}", .{content});
         }
@@ -3813,7 +3820,7 @@ pub const Expander = struct {
         // Validate the original ordered argument roster, including overwritten
         // unsupported keys. Values are the already materialized last winners.
         for (raw_args) |raw| {
-            const eq = preprocess.findTopDelimiter(raw, '=');
+            const eq = preprocess.findTopDelimiterWithConversion(raw, '=', self.provider.language_conversion_enabled orelse false);
             const key_text = if (eq) |at| std.mem.trim(u8, raw[0..at], " \t\r\n") else "";
             var key: Value = undefined;
             if (eq != null) {
@@ -4761,7 +4768,7 @@ pub const Expander = struct {
         );
         var positional: usize = 2;
         for (raw_args) |raw| {
-            if (preprocess.findTopDelimiter(raw, '=')) |eq| {
+            if (preprocess.findTopDelimiterWithConversion(raw, '=', self.provider.language_conversion_enabled orelse false)) |eq| {
                 const key = std.mem.trim(
                     u8,
                     try self.expandWikitext(raw[0..eq], params, host_title, depth + 1),
@@ -10707,4 +10714,57 @@ test "direct frame provenance allocation failures survive Lua pcall without chan
         try std.testing.expectError(error.OutOfMemory, expander.expandFragment("Page", "{{#invoke:Test|main}}", null));
         try std.testing.expect(P.caught);
     }
+}
+
+test "native conversion enabled argument splitting preserves selected KU title marker tracked and plain" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = TestProvider.get, .exists = TestProvider.exists, .language_conversion_enabled = true } };
+    const content = "#if:yes|-{T|ku-latn:{{PAGENAME}};ku-arab:مال}-|no";
+    const expected = "-{T|ku-latn:mal;ku-arab:مال}-";
+    const params = try runtime.newTable();
+    expander.beginPage("mal", content, 1_670_803_200);
+    try std.testing.expectEqualStrings(expected, try expander.expandConstruct(content, params, "mal", 1));
+    const tracked = try expander.expandConstructTracked(content, params, "mal", 1);
+    try std.testing.expectEqualStrings(expected, tracked.bytes);
+    try std.testing.expectEqualStrings(expected, try expander.expandFragment("mal", "{{#if:yes|-{T|ku-latn:{{PAGENAME}};ku-arab:مال}-|no}}", 1_670_803_200));
+    // Global false and absent retain the ordinary non-conversion preprocessor.
+    for ([_]?bool{ false, null }) |enabled| {
+        expander.provider.language_conversion_enabled = enabled;
+        try std.testing.expectEqualStrings("-{T", try expander.expandFragment("mal", "{{#if:yes|-{T|ku-latn:{{PAGENAME}};ku-arab:مال}-|no}}", 1_670_803_200));
+    }
+    expander.provider.language_conversion_enabled = true;
+    try std.testing.expectEqualStrings("-{a}}b}-", try expander.expandFragment("mal", "{{#if:yes|-{a}}b}-|no}}", 1_670_803_200));
+    try std.testing.expectEqualStrings("-{x|ok}-", try expander.expandFragment("mal", "{{#if:|{{Missing template}}|-{x|ok}-}}", 1_670_803_200));
+}
+
+test "native selected retained ku ar template keeps complete title conversion through if branch" {
+    const Source = struct {
+        // Exact decoded views from p61954/r6115015 and p1324977/r6058922.
+        const ku_ar = "{{#if:{{{1|}}}{{{2|}}}<!--\n-->|{{ku-ar-bibîne<!-- \nku-latn:\n-->|{{g|ku|kurdî-erebî}}: {{g|ku|{{{1|}}}|{{{2|}}}|tr=-}}<!-- \nku-arab:\n-->|[[کوردی-لاتینی]]: {{PAGENAME}}<!-- \n-->}}<!-- \n-->-{T|ku-latn:{{PAGENAME}};ku-arab:{{{1|}}}}-<!--Sernavê sayfeyê bi ku-arab dibe parametreya 1\n-->|{{g|ku|kurdî-erebî}}<!--\n-->}}<noinclude>\n{{belgekirin}}\n</noinclude>";
+        const choice = "-{ku-latn:{{{1}}};ku-arab:{{{2}}}}-<noinclude>{{belgekirin|naverok=tiştê di {{param|1}} de bi variant ku-latn tê xane, tiştê di {{param|2}} de bi variant ku-arab xuya dibe.}}</noinclude>";
+        fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+            if (std.ascii.eqlIgnoreCase(title, "Template:ku-ar")) return ku_ar;
+            if (std.ascii.eqlIgnoreCase(title, "Template:ku-ar-bibîne")) return choice;
+            // Isolated unrelated rendering wrapper; retained conversion bodies above are exact.
+            if (std.ascii.eqlIgnoreCase(title, "Template:g")) return "{{{2|}}}";
+            return null;
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var runtime = try rt.Context.initProgram(arena.allocator(), 24, 1);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var expander = Expander{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = Source.get, .exists = TestProvider.exists, .language_conversion_enabled = true } };
+    const output = try expander.expandFragment("mal", "{{ku-ar|مال}}", 1_670_803_200);
+    try std.testing.expect(std.mem.indexOf(u8, output, "-{ku-latn:kurdî-erebî: مال;ku-arab:[[کوردی-لاتینی]]: mal}-") != null);
+    try std.testing.expect(std.mem.endsWith(u8, output, "-{T|ku-latn:mal;ku-arab:مال}-"));
 }
