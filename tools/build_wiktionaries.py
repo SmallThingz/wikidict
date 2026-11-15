@@ -4021,7 +4021,7 @@ def initial_sealed_role_successor(original, native_roles):
             raise ValueError('Initial sealed successor authority changed')
 
 
-def initial_sealed_context_options(selected, native_roles):
+def initial_sealed_context_options(selected, native_roles, *, root=None, seal_reference=None, original_dump=None):
     """Retain the exact existing custody authorities selected for this worker."""
     options = {}
     references = []
@@ -4044,6 +4044,28 @@ def initial_sealed_context_options(selected, native_roles):
         observed = native_roles.bind_input(Path(reference['path']))
         if any(observed[key] != reference[key] for key in ('path', 'bytes', 'sha256')):
             raise ValueError('Initial metadata custody authority changed')
+    if 'restored_dump' in selected:
+        import extraction_cache as cache
+        if root is None or seal_reference is None or original_dump is None:
+            raise ValueError('Restored dump requires its original prepared context')
+        binding = cache.restored_dump_binding(root, selected['restored_dump'], seal_reference['sha256'],
+            previous=getattr(native_roles, '_restored_dump_binding', None))
+        source = json.loads(binding[3]); restored = json.loads(binding[6])
+        if (original_dump['path'] != source['path']
+                or original_dump['bytes'] != restored['bytes']
+                or original_dump['sha256'] != restored['sha256']):
+            raise ValueError('Restored dump differs from its original preparation')
+        # Carry the freshly authenticated physical input through the existing
+        # parent/child dispatch readset; do not hash the same dump a second time.
+        path = Path(binding[1]); stamp = binding[4]
+        identity = dict(path=str(path), bytes=stamp[3], sha256=restored['sha256'], mode=stat.S_IMODE(stamp[2]))
+        if path in native_roles.inputs and (native_roles.inputs[path] != stamp
+                or native_roles.input_identities[path] != identity):
+            raise ValueError('Restored dump differs from an existing input binding')
+        native_roles.inputs[path] = stamp
+        native_roles.input_identities[path] = identity
+        native_roles._restored_dump_binding = binding
+        options['restored_dump'] = binding
     return options
 
 
@@ -4081,7 +4103,7 @@ def initial_sealed_generation(reference, native_roles):
     """Read a selected closed direct preparation, without inventing old shard state."""
     selected = prepared_metadata(reference)
     if (not {'preparation_result','preparation_closure'} <= set(selected)
-            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh','metadata_custody_refresh','file_metadata_provider_update','sitelinks_provider_update'}):
+            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh','metadata_custody_refresh','file_metadata_provider_update','sitelinks_provider_update','restored_dump'}):
         raise ValueError('Invalid initial sealed generation selection')
     if 'file_metadata_provider_update' in selected and 'sitelinks_provider_update' in selected:
         raise ValueError('Mixed initial Provider update families')
@@ -4216,7 +4238,7 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     import extraction_cache as cache
     selected, result, plan, selected_workspace = initial_sealed_generation(reference, native_roles)
     if (workspace.is_relative_to(selected_workspace) or selected_workspace.is_relative_to(workspace)
-            or dump is None or str(dump) != plan['dump']['path']
+            or dump is None or str(dump) != selected.get('restored_dump', plan['dump'])['path']
             or build_identity is None or expected.get('source') != build_identity.get('source')
             or native_roles.provenance() != build_identity.get('native_tool_roles')
             or plan['zig_sha256'] != build_identity.get('zig_sha256')
@@ -4233,7 +4255,8 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
             raise ValueError('Initial Provider update differs from its authenticated constructor')
         expected_context=getattr(native_roles,'closed_native_origin',None)
         if expected_context is None:raise ValueError('Initial Provider update lacks a closed native origin')
-    context_options = initial_sealed_context_options(selected, native_roles)
+    context_options = initial_sealed_context_options(selected, native_roles,
+        root=root, seal_reference=seal_reference, original_dump=plan['dump'])
     if context_options:
         if context_options != getattr(native_roles, '_closed_native_context_options', {}):
             raise ValueError('Initial metadata custody differs from its authenticated constructor')
@@ -5392,8 +5415,10 @@ class RetainedNativeToolRoles:
             update_references.extend([update[k]for k in ('result','closure','input_authority','original_seal_archive','current_seal','helper','wire_correspondence')])
         ready_seal_reference=reference
         producer=seal['identity']['producer']
-        options = initial_sealed_context_options(selected, self)
-        context = cache.frozen_runtime_context(root,Path(plan['dump']['path']),reference['sha256'],**options)
+        options = initial_sealed_context_options(selected, self,
+            root=root, seal_reference=reference, original_dump=plan['dump'])
+        dump = Path(selected.get('restored_dump', plan['dump'])['path'])
+        context = cache.frozen_runtime_context(root,dump,reference['sha256'],**options)
         comparable = context
         if context is not None and options:
             comparable = dict(context)
@@ -5451,7 +5476,7 @@ class RetainedNativeToolRoles:
             if self.bind_input(resolved)['sha256']!=digest:
                 raise ValueError('Closed execution library bytes differ')
             self._closed_library_routes[name]=str(resolved)
-        self._closed_native_context=(root,Path(plan['dump']['path']),ready_seal_reference['sha256'])
+        self._closed_native_context=(root,dump,ready_seal_reference['sha256'])
         return context
 
     def closed_execution_resolution(self, root):
@@ -5657,6 +5682,8 @@ class RetainedNativeToolRoles:
             derived.require_unchanged()
         self.closed_native_origin=derived.closed_native_origin
         self._closed_native_context_options=copy.deepcopy(getattr(derived,'_closed_native_context_options',{}))
+        if 'restored_dump' in self._closed_native_context_options:
+            self._restored_dump_binding = self._closed_native_context_options['restored_dump']
         self._closed_native_context=derived._closed_native_context
         self._closed_library_routes=derived._closed_library_routes
         self._closed_native_worker_stamp=derived._closed_native_worker_stamp
@@ -5676,7 +5703,7 @@ class RetainedNativeToolRoles:
             selected, result, plan, workspace = initial_sealed_generation(self.initial_sealed_generation,self)
             current_reference=(selected.get('sitelinks_provider_update',selected.get('file_metadata_provider_update'))['current_seal'] if (selected.get('file_metadata_provider_update') is not None or selected.get('sitelinks_provider_update') is not None) else result['completed_expander_seal'])
             if self.initial_sealed_context!=(workspace/'expander'/'.bundle-expander',
-                    Path(plan['dump']['path']),current_reference['sha256']):
+                    Path(selected.get('restored_dump', plan['dump'])['path']),current_reference['sha256']):
                 raise ValueError('Prepared retained readonly origin differs')
         return self
 

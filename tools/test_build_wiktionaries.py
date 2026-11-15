@@ -14014,4 +14014,148 @@ class InitialSealedToolLayoutTests(unittest.TestCase):
                     self.assertFalse((f.destination/'state.json').exists())
 
 
+class InitialSealedRestoredDumpTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def fixture(self):
+        # Keep the existing qualified native observations; source receipt,
+        # compressed bytes, constructor and live-helper selection are real.
+        with ReadonlyPreparedRetainedTests().fixture() as f:
+            cache = f.native_cache
+            for name in ('page-index.tsv', 'page-title-index.bin', 'dump-streams.tsv', 'namespace-registry.tsv'):
+                (f.expander / name).write_bytes(name.encode())
+            receipt = dict(version=2, source=cache._receipt_identity(f.dump),
+                indexes=[cache._receipt_identity(f.expander / name, index=True) for name in
+                         ('page-index.tsv', 'page-title-index.bin', 'dump-streams.tsv')],
+                namespace_sha256=list(bytes.fromhex(cache.sha256(f.expander / 'namespace-registry.tsv'))),
+                redirects_sha256=None)
+            _initial_sealed_write(f.expander / 'extraction-source.json', receipt)
+            source_ref = _initial_sealed_reference(f.expander / 'extraction-source.json')
+            f.f.result['source_receipt'] = source_ref; f.f.closed['source_receipt'] = source_ref
+            f.seal['identity']['assets'] = [[name, source_ref['bytes'], source_ref['sha256']]
+                if name == 'extraction-source.json' else [name, size, digest]
+                for name, size, digest in f.seal['identity']['assets']]
+            f.seal['identity']['source'] = cache.completed_source_binding(f.expander, f.dump)
+            # The constructor's optional-context comparison expects the same
+            # stamp mapping supplied by every real frozen seal. Native inventory
+            # remains the existing mocked fixture; these asset stamps are real.
+            names = [name for name, _, _ in f.seal['identity']['assets']]
+            f.seal['runtime_stamps'] = dict(
+                assets={name:list(cache._full_stamp((f.expander / name).stat())) for name in names},
+                plans={}, snapshot_links={name:None for name in names})
+            InitialSealedGenerationTests().reseal_graph(f.f)
+            original_selected = b.prepared_metadata(f.f.selection)
+            held = {name:(f.expander / name).read_bytes() for name in
+                    ('.completed-expander.json', 'extraction-source.json', 'dict-bundle-expander', 'lua-program.meta',
+                     'page-index.tsv', 'page-title-index.bin', 'dump-streams.tsv')}
+            restored = f.root / 'restored-pages.xml.zst'; restored.write_bytes(f.dump.read_bytes()); restored.chmod(0o644)
+            descriptor = dict(_initial_sealed_reference(restored), mode=0o644)
+            selection_ref = _initial_sealed_write(f.root / 'restored-selection.json',
+                dict(original_selected, restored_dump=descriptor))
+            selection, live_helper = InitialSealedLiveHelperTests().current(f)
+            selection['dict-bundle-build']['initial_sealed_generation'] = selection_ref
+            original_dump = f.dump
+            original_dump.unlink()
+            validations = []
+            def frozen(root, dump, seal_sha, **options):
+                self.assertEqual((Path(root), seal_sha), (f.expander, f.f.seal_ref['sha256']))
+                proof = options.get('restored_dump')
+                if proof is None:
+                    cache.completed_source_binding(root, dump)
+                else:
+                    cache._require_restored_dump(proof, root, dump, seal_sha, f.seal['identity']['source'])
+                    self.assertEqual(cache._completed_source_binding(root, dump, restored_source=f.seal['identity']['source']), f.seal['identity']['source'])
+                    cache._require_restored_dump(proof, root, dump, seal_sha, f.seal['identity']['source'])
+                validations.append((Path(dump), proof))
+                return f.seal
+            with patch.object(cache, '__file__', str(live_helper)), \
+                    patch.object(cache, 'frozen_runtime_context', side_effect=frozen), \
+                    patch.object(b, 'run_checked', side_effect=AssertionError('must not compile')), \
+                    patch.object(b, 'timed_run', side_effect=AssertionError('must not launch native')), \
+                    patch.object(b.PreparedBlobTool, 'run', side_effect=AssertionError('must not execute native')):
+                yield SimpleNamespace(**dict(locals(), fixture=f))
+
+    def test_restored_initial_constructor_live_helper_adoption_and_prepare_keep_old_origin(self):
+        with self.fixture() as x:
+            f = x.fixture
+            old_policy = copy.deepcopy(f.records['dict-bundle-build']['dependencies']['runtime_source:tools/extraction_cache.py'])
+            roles = b.RetainedNativeToolRoles(x.selection, zig_sha256=f.identity['zig_sha256'])
+            self.assertIsNone(roles.initial_sealed_context)
+            self.assertEqual(roles._closed_native_context, (f.expander, x.restored, f.f.seal_ref['sha256']))
+            self.assertEqual(roles.closed_native_origin['identity']['source']['path'], str(x.original_dump))
+            self.assertEqual(roles.records['dict-bundle-build']['dependencies']['runtime_source:tools/extraction_cache.py'], old_policy)
+            self.assertIn(x.live_helper, roles.inputs)
+            self.assertNotIn(x.original_dump, roles.inputs)
+            self.assertEqual(roles.inputs[x.restored], roles._restored_dump_binding[4])
+            self.assertEqual(roles.input_identities[x.restored], x.descriptor)
+            fresh = copy.copy(f.f)
+            fresh.selection = x.selection_ref; fresh.dump = x.restored
+            fresh.identity = copy.deepcopy(f.identity); fresh.identity['native_tool_roles'] = roles.provenance()
+            fresh.destination = f.root / 'restored-output/viwiktionary/20261001.shards'
+            self.assertEqual(InitialSealedGenerationTests().adopt(fresh, native_roles=roles), 123)
+            self.assertEqual(roles.initial_sealed_context, roles._closed_native_context)
+            self.assertEqual(set(roles.prepare(None, 'viwiktionary', '20261001')), set(b.BLOB_TOOL_NAMES))
+            roles.require_unchanged()
+            dispatch = roles.prepared_dispatch()
+            resumed = b.RetainedNativeToolRoles.from_prepared_dispatch(dispatch, _authenticated_origin=roles)
+            self.assertEqual(resumed.initial_sealed_context, roles.initial_sealed_context)
+            self.assertEqual(resumed.inputs[x.restored], roles.inputs[x.restored])
+            self.assertEqual(resumed.closed_native_origin, roles.closed_native_origin)
+            resumed.require_unchanged()
+            self.assertGreater(len(x.validations), 2)
+            self.assertTrue(all(path == x.restored and proof == roles._restored_dump_binding for path, proof in x.validations))
+            state = b.read_build_envelope(fresh.destination / 'state.json')
+            self.assertEqual(state['native_generation']['dump'], str(x.restored))
+            self.assertEqual(state['native_generation']['seal_sha256'], f.f.seal_ref['sha256'])
+            self.assertEqual(x.held, {name:(f.expander / name).read_bytes() for name in x.held})
+            self.assertEqual(b.prepared_metadata(f.f.result['input_authority'])['dump']['path'], str(x.original_dump))
+            replacement = x.restored.with_suffix('.new'); replacement.write_bytes(x.restored.read_bytes()); replacement.chmod(0o644)
+            replacement.replace(x.restored)
+            with self.assertRaises(ValueError): roles.require_unchanged()
+            with self.assertRaises(ValueError): resumed.require_unchanged()
+            # A fresh constructor can prove the bytes again, but cannot replace
+            # the authenticated parent's physical input recorded in dispatch.
+            with self.assertRaisesRegex(ValueError, 'omitted a selected execution dependency'):
+                b.RetainedNativeToolRoles.from_prepared_dispatch(dispatch)
+
+    def test_restored_initial_missing_selection_foreign_plan_and_late_mutation_refuse(self):
+        for kind in ('unselected', 'foreign-plan', 'changed-selection', 'late-replacement'):
+            with self.subTest(kind=kind), self.fixture() as x:
+                f = x.fixture
+                if kind == 'unselected':
+                    selected = copy.deepcopy(x.selection)
+                    selected['dict-bundle-build']['initial_sealed_generation'] = f.f.selection
+                    with self.assertRaises((ValueError, OSError)):
+                        b.RetainedNativeToolRoles(selected, zig_sha256=f.identity['zig_sha256'])
+                    continue
+                roles = b.RetainedNativeToolRoles(x.selection, zig_sha256=f.identity['zig_sha256'])
+                if kind == 'foreign-plan':
+                    selected = b.prepared_metadata(x.selection_ref)
+                    foreign = dict(f.f.plan['dump'], path=str(f.root / 'foreign-original'))
+                    with self.assertRaises(ValueError):
+                        b.initial_sealed_context_options(selected, roles, root=f.expander,
+                            seal_reference=f.f.seal_ref, original_dump=foreign)
+                    continue
+                fresh = copy.copy(f.f); fresh.selection = x.selection_ref; fresh.dump = x.restored
+                fresh.identity = copy.deepcopy(f.identity); fresh.identity['native_tool_roles'] = roles.provenance()
+                fresh.destination = f.root / 'refused-output/viwiktionary/20261001.shards'
+                if kind == 'changed-selection':
+                    selected = b.prepared_metadata(x.selection_ref)
+                    other = f.root / 'other-restored'; other.write_bytes(x.restored.read_bytes()); other.chmod(0o644)
+                    selected['restored_dump'] = dict(_initial_sealed_reference(other), mode=0o644)
+                    fresh.selection = _initial_sealed_write(f.root / 'changed-selection.json', selected)
+                    fresh.dump = other
+                    with self.assertRaises(ValueError): InitialSealedGenerationTests().adopt(fresh, native_roles=roles)
+                else:
+                    original = roles.require_unchanged; count = [0]
+                    def changed():
+                        original(); count[0] += 1
+                        if count[0] == 2:
+                            replacement = x.restored.with_suffix('.new'); replacement.write_bytes(x.restored.read_bytes()); replacement.chmod(0o644); replacement.replace(x.restored)
+                    roles.require_unchanged = changed
+                    with self.assertRaises(ValueError): InitialSealedGenerationTests().adopt(fresh, native_roles=roles)
+                    self.assertGreaterEqual(count[0], 2)
+                self.assertFalse((fresh.destination / 'state.json').exists())
+                self.assertEqual(x.held, {name:(f.expander / name).read_bytes() for name in x.held})
+
+
 if __name__=='__main__':unittest.main()

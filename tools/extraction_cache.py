@@ -119,6 +119,10 @@ def _receipt_identity(path, *, index=False):
 
 def completed_source_binding(root, dump):
     """Keep the existing physical SourceReceipt v2; never rewrite its origin."""
+    return _completed_source_binding(root, dump)
+
+
+def _completed_source_binding(root, dump, *, restored_source=None):
     receipt_path = root / "extraction-source.json"
     regular(receipt_path)
     with receipt_path.open("rb") as stream:
@@ -130,15 +134,108 @@ def completed_source_binding(root, dump):
     redirects_path = root / "transclusion-redirects.tsv"
     redirects = (stable_file_digest(redirects_path, snapshot=True)[1]
                  if os.path.lexists(redirects_path) else None)
-    expected = dict(version=2, source=_receipt_identity(dump),
+    expected = dict(version=2, source=(_receipt_identity(dump) if restored_source is None else restored_source["receipt"]["source"]),
                     indexes=[_receipt_identity(root / name, index=True) for name in
                              ("page-index.tsv", "page-title-index.bin", "dump-streams.tsv")],
                     namespace_sha256=list(bytes.fromhex(namespace)),
                     redirects_sha256=list(bytes.fromhex(redirects)) if redirects else None)
     if receipt != expected:
         raise ValueError("Completed expander source receipt changed")
-    return dict(path=str(dump.absolute()), receipt=expected,
+    return dict(path=(str(dump.absolute()) if restored_source is None else restored_source["path"]), receipt=expected,
                 receipt_bytes=[len(raw), hashlib.sha256(raw).hexdigest()])
+
+
+class _RestoredDumpBinding(tuple):
+    """Process-local immutable custody, separate from the historical SourceReceipt."""
+    __slots__ = ()
+
+
+def _restored_dump_custody(dump):
+    import stat
+    dump = Path(dump)
+    if not dump.is_absolute() or str(dump) != os.path.normpath(str(dump)):
+        raise ValueError('Invalid restored dump path')
+    parents = []
+    for parent in dump.parents:
+        info = parent.lstat()
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError('Linked or non-directory restored dump parent')
+        parents.append((str(parent), info.st_dev, info.st_ino, info.st_mode))
+    info = dump.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError('Linked or nonregular restored dump')
+    return _full_stamp(info), tuple(parents)
+
+
+def _require_restored_dump(binding, root, dump, expected_sha, source):
+    if (type(binding) is not _RestoredDumpBinding or len(binding) != 7
+            or binding[:3] != (str(root), str(dump), expected_sha)
+            or binding[3] != json.dumps(source, sort_keys=True, separators=(',', ':')).encode()
+            or _restored_dump_custody(dump) != binding[4:6]):
+        raise ValueError('Restored dump custody changed')
+
+
+def restored_dump_binding(root, descriptor, expected_sha, *, previous=None):
+    """Authenticate exact original compressed bytes once, then retain their custody."""
+    import stat
+    root = Path(root)
+    if type(descriptor) is not dict:
+        raise ValueError('Invalid restored dump selection')
+    selected_descriptor = descriptor
+    descriptor = dict(descriptor)
+    if (not root.is_absolute() or str(root) != os.path.normpath(str(root))
+            or any(p.is_symlink() for p in (root, *root.parents)) or not root.is_dir()
+            or not isinstance(descriptor, dict)
+            or not {'path', 'bytes', 'sha256'} <= set(descriptor)
+            or not set(descriptor) <= {'path', 'bytes', 'sha256', 'mode'}
+            or type(descriptor['path']) is not str or type(descriptor['bytes']) is not int
+            or descriptor['bytes'] < 0 or type(descriptor['sha256']) is not str
+            or not re.fullmatch('[0-9a-f]{64}', descriptor['sha256'])
+            or ('mode' in descriptor and type(descriptor['mode']) is not int)
+            or not isinstance(expected_sha, str) or not re.fullmatch('[0-9a-f]{64}', expected_sha)):
+        raise ValueError('Invalid restored dump selection')
+    dump = Path(descriptor['path'])
+    if str(dump) != descriptor['path']:
+        raise ValueError('Noncanonical restored dump path')
+    selection = json.dumps(descriptor, sort_keys=True, separators=(',', ':')).encode()
+    marker = root / COMPLETED_EXPANDER
+    regular(marker)
+    before = _full_stamp(marker.stat())
+    with marker.open('rb') as stream:
+        if _full_stamp(os.fstat(stream.fileno())) != before:
+            raise ValueError('Restored dump seal changed before reading')
+        raw = stream.read(MAX_MARKER_BYTES + 1)
+        if _full_stamp(os.fstat(stream.fileno())) != before:
+            raise ValueError('Restored dump seal changed during reading')
+    if (len(raw) > MAX_MARKER_BYTES or hashlib.sha256(raw).hexdigest() != expected_sha
+            or _full_stamp(marker.stat()) != before):
+        raise ValueError('Restored dump original seal changed')
+    seal = json.loads(raw)
+    source = seal['identity']['source']
+    if (descriptor['sha256'] != seal['identity']['verified_input'][0]
+            or descriptor['bytes'] != source['receipt']['source']['size']):
+        raise ValueError('Restored dump differs from original compressed input')
+    custody = _restored_dump_custody(dump)
+    if custody[0][3] != descriptor['bytes'] or ('mode' in descriptor and stat.S_IMODE(custody[0][2]) != descriptor['mode']):
+        raise ValueError('Restored dump size or mode differs')
+    if previous is None:
+        if stable_file_digest(dump) != [descriptor['bytes'], descriptor['sha256']]:
+            raise ValueError('Restored compressed dump bytes differ')
+        binding = _RestoredDumpBinding((str(root), str(dump), expected_sha,
+            json.dumps(source, sort_keys=True, separators=(',', ':')).encode(),
+            *custody, selection))
+    else:
+        binding = previous
+        if type(binding) is not _RestoredDumpBinding or len(binding) != 7 or binding[6] != selection:
+            raise ValueError('Restored dump selection changed')
+    _require_restored_dump(binding, root, dump, expected_sha, source)
+    if (_completed_source_binding(root, dump, restored_source=source) != source
+            or _full_stamp(marker.stat()) != before):
+        raise ValueError('Restored dump original source binding changed')
+    _require_restored_dump(binding, root, dump, expected_sha, source)
+    if json.dumps(selected_descriptor, sort_keys=True, separators=(',', ':')).encode() != selection:
+        raise ValueError('Restored dump selection changed during authentication')
+    return binding
 
 
 def completed_asset_names(root, *, sealing=False):
@@ -554,7 +651,7 @@ def _closed_metadata_custody(root, recorded, expected_sha, receipt):
     return successor
 
 
-def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, snapshot_metadata_refresh=None, metadata_custody_refresh=None):
+def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, snapshot_metadata_refresh=None, metadata_custody_refresh=None, restored_dump=None):
     """Validate an original completed seal, never the current compilation graph.
 
     None means the old/absent seal cannot authorize source-custody release.
@@ -602,6 +699,8 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, s
         return value
     recorded = refreshed_context(original_recorded)
     identity = recorded['identity']; stamps = recorded['runtime_stamps']
+    if restored_dump is not None:
+        _require_restored_dump(restored_dump, root, dump, expected_sha, identity['source'])
     if (set(stamps) != {'assets', 'plans', 'snapshot_links'} or
             type(identity.get('version')) is not int or identity.get('version') != COMPLETED_EXPANDER_VERSION):
         raise ValueError('Invalid frozen runtime stamp contract')
@@ -643,7 +742,9 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, s
             raise ValueError('Frozen native snapshot path changed')
     for name in stamps['plans']:
         regular(root.parent / name); same(root.parent / name, stamps['plans'][name])
-    if completed_source_binding(root, dump) != identity['source']:
+    source = (completed_source_binding(root, dump) if restored_dump is None else
+              _completed_source_binding(root, dump, restored_source=identity['source']))
+    if source != identity['source']:
         raise ValueError('Frozen extraction SourceReceipt changed')
     # Bracket SourceReceipt reads too; a same-name change must not escape.
     for name in names:
@@ -658,6 +759,8 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, s
     # authorize the source/attempt and bind private tools, Python and live libs.
     if refreshed_context(original_recorded) != recorded:
         raise ValueError('Metadata custody changed during source validation')
+    if restored_dump is not None:
+        _require_restored_dump(restored_dump, root, dump, expected_sha, identity['source'])
     return recorded
 
 

@@ -3584,5 +3584,125 @@ class KnownMaterializationCustodyTests(unittest.TestCase):
 
 
 
+class RestoredDumpCustodyTests(unittest.TestCase):
+    setUp = CompletedExpanderTests.setUp
+    fixture = CompletedExpanderTests.fixture
+    call = CompletedExpanderTests.call
+    _trace_seal_digest_reads = CompletedExpanderTests._trace_seal_digest_reads
+
+    def restored_fixture(self):
+        root, dump, snapshots = self.fixture(ready=False)
+        self.assertEqual(0, self.call('seal-expander', root, dump, snapshots, dump_sha=cache.sha256(dump)))
+        cache.shutil.rmtree(root / 'llvm')
+        (root / '.incomplete').unlink()
+        (root.parent / '.incomplete').write_bytes(b'expander ready')
+        marker = root / cache.COMPLETED_EXPANDER
+        seal_sha = cache.sha256(marker)
+        original = cache.frozen_runtime_context(root, dump, seal_sha)
+        self.assertIsNotNone(original)
+        held = {name: (root / name).read_bytes() for name in
+                (cache.COMPLETED_EXPANDER, 'extraction-source.json', 'page-index.tsv',
+                 'page-title-index.bin', 'dump-streams.tsv', 'dict-bundle-expander')}
+        restored = self.base / ('restored-' + dump.name)
+        restored.write_bytes(dump.read_bytes()); restored.chmod(0o644)
+        descriptor = dict(path=str(restored), bytes=restored.stat().st_size,
+                          sha256=cache.sha256(restored), mode=0o644)
+        dump.unlink()
+        return root, dump, restored, descriptor, seal_sha, original, held
+
+    def test_exact_restored_compressed_bytes_keep_historical_origin_and_hash_once(self):
+        root, old, restored, descriptor, seal_sha, original, held = self.restored_fixture()
+        with self.assertRaises((ValueError, OSError)): cache.frozen_runtime_context(root, old, seal_sha)
+        with self.assertRaises(ValueError): cache.completed_source_binding(root, restored)
+        with self._trace_seal_digest_reads((restored,)) as reads:
+            binding = cache.restored_dump_binding(root, descriptor, seal_sha)
+            for _ in range(3):
+                self.assertIs(cache.restored_dump_binding(root, descriptor, seal_sha, previous=binding), binding)
+                self.assertEqual(cache.frozen_runtime_context(root, restored, seal_sha, restored_dump=binding), original)
+        self.assertEqual(reads['bytes'], descriptor['bytes'])
+        self.assertEqual(reads['opens'], 1)
+        self.assertEqual(original['identity']['source']['path'], str(old))
+        self.assertNotEqual(original['identity']['source']['receipt']['source']['inode'], restored.stat().st_ino)
+        # A sibling may change parent timestamps; parent identity must stay bound.
+        (restored.parent / 'unrelated-sibling').write_bytes(b'other work')
+        self.assertEqual(cache.frozen_runtime_context(root, restored, seal_sha, restored_dump=binding), original)
+        self.assertEqual(held, {name: (root / name).read_bytes() for name in held})
+
+    def test_restoration_requires_original_compressed_hash_size_and_regular_path(self):
+        for kind in ('changed-bytes', 'size', 'claimed-digest', 'claimed-size', 'mode', 'path-spelling', 'symlink', 'parent-symlink'):
+            with self.subTest(kind=kind):
+                root, old, restored, descriptor, seal_sha, original, held = self.restored_fixture()
+                if kind == 'changed-bytes': restored.write_bytes(b'X' * descriptor['bytes'])
+                elif kind == 'size': restored.write_bytes(b'truncated')
+                elif kind == 'claimed-digest': descriptor['sha256'] = '0' * 64
+                elif kind == 'claimed-size': descriptor['bytes'] += 1
+                elif kind == 'mode': descriptor['mode'] = 0o600
+                elif kind == 'path-spelling': descriptor['path'] = str(restored.parent) + '//' + restored.name
+                elif kind == 'symlink':
+                    actual = restored.with_suffix('.actual'); restored.rename(actual); restored.symlink_to(actual)
+                else:
+                    parent = self.base / ('link-' + restored.name); parent.symlink_to(restored.parent, target_is_directory=True)
+                    descriptor['path'] = str(parent / restored.name)
+                with self.assertRaises((ValueError, OSError)):
+                    cache.restored_dump_binding(root, descriptor, seal_sha)
+                self.assertEqual(held, {name: (root / name).read_bytes() for name in held})
+
+    def test_restored_binding_rejects_replacement_foreign_context_and_mutable_proof(self):
+        root, old, restored, descriptor, seal_sha, original, held = self.restored_fixture()
+        binding = cache.restored_dump_binding(root, descriptor, seal_sha)
+        for proof in (dict(path=str(restored)), list(binding), tuple(binding)):
+            with self.subTest(proof=type(proof).__name__), self.assertRaises(ValueError):
+                cache.frozen_runtime_context(root, restored, seal_sha, restored_dump=proof)
+        other = restored.with_suffix('.other'); other.write_bytes(restored.read_bytes())
+        with self.assertRaises(ValueError):
+            cache.frozen_runtime_context(root, other, seal_sha, restored_dump=binding)
+        replacement = restored.with_suffix('.new'); replacement.write_bytes(restored.read_bytes()); replacement.chmod(0o644)
+        replacement.replace(restored)
+        with self.assertRaises(ValueError):
+            cache.frozen_runtime_context(root, restored, seal_sha, restored_dump=binding)
+        with self.assertRaises(ValueError):
+            cache.restored_dump_binding(root, descriptor, seal_sha, previous=binding)
+        fresh = cache.restored_dump_binding(root, descriptor, seal_sha)
+        self.assertNotEqual(fresh, binding)
+        self.assertEqual(cache.frozen_runtime_context(root, restored, seal_sha, restored_dump=fresh), original)
+        other_root, _, _, _, other_sha, _, _ = self.restored_fixture()
+        with self.assertRaises(ValueError):
+            cache.frozen_runtime_context(other_root, restored, other_sha, restored_dump=fresh)
+        self.assertEqual(held, {name: (root / name).read_bytes() for name in held})
+
+    def test_restoration_hash_race_and_final_source_guard_preserve_failures(self):
+        for kind in ('hash-replace', 'hash-write', 'hash-error', 'hash-selection', 'late-replace', 'index', 'receipt', 'seal', 'worker'):
+            with self.subTest(kind=kind):
+                root, old, restored, descriptor, seal_sha, original, held = self.restored_fixture()
+                digest = cache.stable_file_digest
+                def replaced():
+                    new = restored.with_suffix('.new'); new.write_bytes(restored.read_bytes()); new.chmod(0o644); new.replace(restored)
+                if kind.startswith('hash-'):
+                    def changed(path, **options):
+                        result = digest(path, **options)
+                        if Path(path) == restored:
+                            if kind == 'hash-error': raise MemoryError('restoration allocation')
+                            if kind == 'hash-replace': replaced()
+                            elif kind == 'hash-selection': descriptor['sha256'] = '0' * 64
+                            else: restored.write_bytes(b'X' * descriptor['bytes'])
+                        return result
+                    with mock.patch.object(cache, 'stable_file_digest', side_effect=changed), self.assertRaises(MemoryError if kind == 'hash-error' else ValueError):
+                        cache.restored_dump_binding(root, descriptor, seal_sha)
+                    continue
+                binding = cache.restored_dump_binding(root, descriptor, seal_sha)
+                if kind == 'late-replace':
+                    source = cache._completed_source_binding
+                    def changed(*args, **kwargs):
+                        result = source(*args, **kwargs); replaced(); return result
+                    with mock.patch.object(cache, '_completed_source_binding', side_effect=changed), self.assertRaises(ValueError):
+                        cache.frozen_runtime_context(root, restored, seal_sha, restored_dump=binding)
+                else:
+                    name = {'index':'page-index.tsv', 'receipt':'extraction-source.json', 'seal':cache.COMPLETED_EXPANDER, 'worker':'dict-bundle-expander'}[kind]
+                    path = root / name; path.write_bytes(path.read_bytes() + b'changed')
+                    with self.assertRaises((ValueError, OSError)):
+                        cache.frozen_runtime_context(root, restored, seal_sha, restored_dump=binding)
+                self.assertFalse(old.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
