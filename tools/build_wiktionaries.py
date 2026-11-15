@@ -1871,9 +1871,34 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
         return (str(resolved),info.st_dev,info.st_ino,info.st_mode,info.st_size,
                 info.st_mtime_ns,info.st_ctime_ns)
     figure_identities={name:figure_output_identity(path) for name,path in figure_paths.items()}
-    with build_phase(edition,date,'auxiliary_provider_verification',provider='figure-tuple'):
-        figures=validated_figure_tuple(snapshots,edition,date)
-    for name, source in sorted((snapshots or {}).items()):
+    figures={};observation_guard=None;observation_paths={}
+    def observation_identity():
+        root=Path(snapshots['figure-page-observations']).parent
+        directory=_figure_replay_identity(root,directory=True)
+        return (directory[0],directory[1][:3],
+                {name:_figure_replay_identity(path) for name,path in observation_paths.items()})
+    def validation_order():
+        nonlocal figures,observation_guard,observation_paths
+        # Finish observation validation first: an incompatible capture must not
+        # incur Figure replay. The ordinary role body below still runs once.
+        if 'figure-page-observations' in (snapshots or {}):
+            path=Path(snapshots['figure-page-observations'])
+            helper=auxiliary_capture_helper('figure-page-observations',path)
+            observation_paths={name:path.with_name(name) for name in
+                (helper.SNAPSHOT,helper.NAMESPACE,helper.DEFAULTS,helper.MANIFEST,helper.COMPLETE)}
+            # Preserve the validator's original error if an input is unavailable
+            # or unsafe. Only a successful complete capture can use these stamps.
+            try:observation_guard=observation_identity()
+            except (OSError,ValueError):observation_guard=None
+            yield 'figure-page-observations',path
+            if (observation_guard is None or
+                    set(captures['figure-page-observations'][1])!=set(observation_paths)):
+                raise ValueError('Observation capture changed during auxiliary validation')
+        with build_phase(edition,date,'auxiliary_provider_verification',provider='figure-tuple'):
+            figures=validated_figure_tuple(snapshots,edition,date)
+        for name,source in sorted((snapshots or {}).items()):
+            if name!='figure-page-observations':yield name,source
+    for name, source in validation_order():
         with build_phase(edition,date,'auxiliary_provider_verification',provider=name):
             if name not in AUXILIARY_SNAPSHOT_NAMES:
                 raise ValueError(f'Unknown auxiliary snapshot: {name}')
@@ -1916,6 +1941,12 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
                     raise ValueError('Namespace registry identifies a different edition or date')
             hashes[name]=sha
     if 'figure-page-observations' in captures:
+        # Moving this role before Figure replay must not extend its proof across
+        # a replaced or changed payload, manifest, marker, or capture directory.
+        try:current_observation_guard=observation_identity()
+        except (OSError,ValueError):current_observation_guard=None
+        if current_observation_guard!=observation_guard:
+            raise ValueError('Observation capture changed during auxiliary validation')
         observations=captures['figure-page-observations'][0]
         if ('namespace-registry' not in hashes or 'figure-siteinfo' not in hashes or
                 observations['namespace_registry_sha256']!=hashes['namespace-registry'] or

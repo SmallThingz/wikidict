@@ -14210,4 +14210,189 @@ class InitialSealedRegistryRoleTests(unittest.TestCase):
                 self.assertFalse((f.destination/'state.json').exists())
 
 
+class AuxiliaryObservationOrderTests(unittest.TestCase):
+    def fixture(self, root):
+        import prepare_figure_page_observations as observed
+        source=Path(__file__).parent/'testdata'/'figure-page-observations'/'it'
+        record=observed.pack(source/observed.SNAPSHOT,source/'namespace-registry.tsv',
+                             source/'figure-siteinfo.raw.json',root/'observations')
+        namespace=root/'namespace-registry.tsv'
+        namespace.write_bytes((source/'namespace-registry.tsv').read_bytes())
+        namespace.with_suffix('.manifest.json').write_text(json.dumps(dict(
+            wiki='itwiktionary',date='20261001',output_sha256=b.sha256_file(namespace))))
+        figure=root/'figure';figure.mkdir()
+        defaults=figure/'figure-siteinfo.raw.json'
+        defaults.write_bytes((source/'figure-siteinfo.raw.json').read_bytes())
+        manifest=figure/'figure-inputs.manifest.json';manifest.write_bytes(b'{}\n')
+        sha=b.sha256_file(defaults)
+        figure_capture=({'wiki':'itwiktionary','date':'20261001',
+            'namespace_registry_sha256':b.sha256_file(namespace),
+            'output_sha256':sha,'outputs':{'figure-siteinfo':sha}},
+            {defaults.name:sha,manifest.name:b.sha256_file(manifest)})
+        paths={'figure-siteinfo':defaults,'namespace-registry':namespace,
+               'figure-page-observations':root/'observations'/observed.SNAPSHOT}
+        return observed,paths,record,{'figure-siteinfo':figure_capture}
+
+    def test_observation_identity_errors_precede_tuple_and_payload_verification(self):
+        with tempfile.TemporaryDirectory(dir=b.PROJECT/'.tmp') as tmp:
+            observed,paths,record,figures=self.fixture(Path(tmp))
+            manifest=paths['figure-page-observations'].with_name(observed.MANIFEST)
+            original=manifest.read_bytes()
+            for key,value in (('schema','unknown'),('generator_sha256','0'*64),
+                              ('wiki','otherwiktionary'),('date','20261002')):
+                with self.subTest(field=key):
+                    changed=dict(record);changed[key]=value
+                    manifest.write_bytes(observed.encoded(changed))
+                    with patch.object(b,'validated_figure_tuple',return_value=figures) as replay, \
+                         patch.object(observed,'capture_artifacts',wraps=observed.capture_artifacts) as payloads:
+                        with self.assertRaisesRegex(ValueError,'^Observation capture identity mismatch$'):
+                            b._validated_auxiliary_state(paths,'itwiktionary','20261001')
+                    replay.assert_not_called();payloads.assert_not_called()
+            manifest.write_bytes(original)
+            changed=dict(record);changed['generator_sha256']='0'*64
+            manifest.write_bytes(observed.encoded(changed))
+            paths['figure-page-observations'].with_name(observed.DEFAULTS).unlink()
+            with patch.object(b,'validated_figure_tuple') as replay:
+                with self.assertRaisesRegex(ValueError,'^Observation capture identity mismatch$'):
+                    b._validated_auxiliary_state(paths,'itwiktionary','20261001')
+            replay.assert_not_called()
+
+    def test_success_keeps_each_validation_hash_and_final_join_once(self):
+        with tempfile.TemporaryDirectory(dir=b.PROJECT/'.tmp') as tmp:
+            observed,paths,record,figures=self.fixture(Path(tmp));events=[]
+            actual=b.validated_auxiliary_capture
+            def capture(name,*args,**kwargs):
+                events.append(name);return actual(name,*args,**kwargs)
+            def tuple_replay(*args,**kwargs):
+                events.append('figure-tuple');return figures
+            selection=({'source_xml':{}},[],None)
+            with patch.object(b,'validated_auxiliary_capture',side_effect=capture) as captures, \
+                 patch.object(b,'validated_figure_tuple',side_effect=tuple_replay) as replay, \
+                 patch.object(b,'_validate_captured_snapshot_context') as joins, \
+                 patch.object(observed,'validate_snapshot',wraps=observed.validate_snapshot) as validation, \
+                 patch.object(observed,'capture_artifacts',wraps=observed.capture_artifacts) as payloads:
+                hashes,proofs=b._validated_auxiliary_state(paths,'itwiktionary','20261001',
+                                                          captured_selection=selection)
+            self.assertEqual(events,['figure-page-observations','figure-tuple','namespace-registry'])
+            self.assertEqual([c.args[0] for c in joins.call_args_list],
+                             ['figure-page-observations','figure-siteinfo','namespace-registry'])
+            self.assertEqual(captures.call_count,2);self.assertEqual(replay.call_count,1)
+            self.assertEqual(validation.call_count,1);self.assertEqual(payloads.call_count,2)
+            self.assertEqual(hashes,{name:b.sha256_file(path) for name,path in paths.items()})
+            self.assertEqual(proofs['figure-page-observations'][0],record)
+            self.assertEqual(proofs['figure-siteinfo'][:2],figures['figure-siteinfo'])
+            self.assertEqual(set(proofs),{'figure-page-observations','figure-siteinfo'})
+            wrong=dict(figures);wrong_record=dict(figures['figure-siteinfo'][0])
+            wrong_record['namespace_registry_sha256']='0'*64
+            wrong['figure-siteinfo']=(wrong_record,figures['figure-siteinfo'][1])
+            with patch.object(b,'validated_figure_tuple',return_value=wrong):
+                with self.assertRaisesRegex(ValueError,'different namespace registry'):
+                    b._validated_auxiliary_state(paths,'itwiktionary','20261001')
+
+    def test_observation_payload_mutation_and_late_output_change_still_refuse(self):
+        for mode in ('captured-payload','selected-output'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory(dir=b.PROJECT/'.tmp') as tmp:
+                observed,paths,record,figures=self.fixture(Path(tmp))
+                target=paths['figure-page-observations']
+                if mode=='captured-payload':target.write_bytes(target.read_bytes()+b' ')
+                def joined(*args):
+                    if args[0]=='figure-page-observations':target.write_bytes(target.read_bytes()+b' ')
+                with patch.object(b,'validated_figure_tuple',return_value=figures) as replay, \
+                     patch.object(b,'_validate_captured_snapshot_context',side_effect=joined):
+                    with self.assertRaises(ValueError):
+                        b._validated_auxiliary_state(paths,'itwiktionary','20261001',
+                                                    captured_selection=({},[],None))
+                replay.assert_not_called()
+
+    def test_tuple_time_changes_to_any_observation_member_or_root_refuse(self):
+        for mode in ('snapshot','namespace','defaults','manifest','complete','same-byte-replacement','root-replacement'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory(dir=b.PROJECT/'.tmp') as tmp:
+                observed,paths,record,figures=self.fixture(Path(tmp));calls=[]
+                root=paths['figure-page-observations'].parent
+                names=dict(snapshot=observed.SNAPSHOT,namespace=observed.NAMESPACE,
+                           defaults=observed.DEFAULTS,manifest=observed.MANIFEST,complete=observed.COMPLETE)
+                def tuple_replay(*args,**kwargs):
+                    calls.append('tuple')
+                    if mode=='root-replacement':
+                        retired=root.with_name('old-observations');root.rename(retired);root.mkdir()
+                        for old in retired.iterdir():os.link(old,root/old.name)
+                    elif mode=='same-byte-replacement':
+                        target=root/observed.SNAPSHOT
+                        replacement=root/'replacement';replacement.write_bytes(target.read_bytes());replacement.replace(target)
+                    else:
+                        target=root/names[mode];target.write_bytes(target.read_bytes()+b' ')
+                    return figures
+                with patch.object(b,'validated_figure_tuple',side_effect=tuple_replay):
+                    with self.assertRaisesRegex(ValueError,'Observation capture changed during auxiliary validation'):
+                        b._validated_auxiliary_state(paths,'itwiktionary','20261001')
+                self.assertEqual(calls,['tuple'])
+
+    def test_no_observation_preserves_tuple_first_and_empty_selection(self):
+        with tempfile.TemporaryDirectory(dir=b.PROJECT/'.tmp') as tmp:
+            path=Path(tmp)/'language-registry.tsv';path.write_bytes(b'legacy\n');events=[]
+            actual=b.validated_auxiliary_capture
+            def capture(name,*args,**kwargs):
+                events.append(name);return actual(name,*args,**kwargs)
+            def tuple_replay(*args,**kwargs):events.append('figure-tuple');return {}
+            with patch.object(b,'validated_auxiliary_capture',side_effect=capture), \
+                 patch.object(b,'validated_figure_tuple',side_effect=tuple_replay) as replay:
+                self.assertEqual(b._validated_auxiliary_state({'language-registry':path}),
+                                 ({'language-registry':b.sha256_file(path)},{}))
+                self.assertEqual(events,['figure-tuple','language-registry'])
+                self.assertEqual(b._validated_auxiliary_state(None),({},{}))
+                self.assertEqual(replay.call_count,2)
+
+
+def measure_auxiliary_observation_rejection(baseline,candidate):
+    """Count bypassed work on the retained rejection; do not replay the corpus tuple."""
+    import prepare_figure_page_observations as observed
+    root=b.PROJECT/'.tmp/figure-normal-inputs01/shared-provider01/retained-bundle-driver01'
+    old=root/'ku-current153-ordinary01/runtime01'
+    result_raw=(old/'result01.json').read_bytes()
+    stdout_raw=(old/'tests.stdout').read_bytes()
+    assert hashlib.sha256(result_raw).hexdigest()=='692b243482ccc0780eea32f1d762d6b8c4b88186c6d8bf0e475f515e61f126c2'
+    assert hashlib.sha256(stdout_raw).hexdigest()=='3fa4e98b4c9051160eead73808fde671ada09cea1257aaa5f4cdc93bbc968c1c'
+    argv=json.loads(result_raw)['argv']
+    def option(name):return argv[argv.index(name)+1]
+    selected=json.loads(option('--python-tooling-json'))['modules']['prepare_figure_page_observations']
+    assert selected['sha256']==observed.producer()['generator_sha256']
+    paths={'figure-page-observations':Path(option('--figure-page-observations-snapshot')),
+           'figure-siteinfo':Path(option('--figure-siteinfo-snapshot'))}
+    manifest=paths['figure-page-observations'].with_name(observed.MANIFEST)
+    raw=manifest.read_bytes()
+    assert hashlib.sha256(raw).hexdigest()=='fd5747a2ab5c020447cc89e88dde409a079f102f724e513c06dad92a936a5d98'
+    before={path:(path.stat().st_dev,path.stat().st_ino,path.stat().st_size,
+                  path.stat().st_mtime_ns,path.stat().st_ctime_ns) for path in (*paths.values(),manifest)}
+    rows=[]
+    for label,module in (('baseline',baseline),('candidate',candidate)):
+        reads=[];original=observed.regular
+        def regular(path,*args,**kwargs):
+            reads.append(Path(path));return original(path,*args,**kwargs)
+        with patch.object(module,'validated_figure_tuple',return_value={}) as tuple_calls, \
+             patch.object(observed,'capture_artifacts',wraps=observed.capture_artifacts) as payloads, \
+             patch.object(observed,'regular',side_effect=regular):
+            start=time.monotonic_ns();cpu=time.process_time_ns()
+            try:module._validated_auxiliary_state(paths,'kuwiktionary','20261001')
+            except ValueError as error:message=str(error)
+            else:raise AssertionError('Retained invalid observation must refuse')
+            cpu=time.process_time_ns()-cpu;wall=time.monotonic_ns()-start
+        assert message=='Observation capture identity mismatch'
+        assert reads==[manifest] and payloads.call_count==0
+        rows.append(dict(variant=label,rejection_wall_ns=wall,rejection_cpu_ns=cpu,
+                         tuple_dispatches=tuple_calls.call_count,observation_payload_replays=0,
+                         manifest_reads=1,error=message))
+    assert [row['tuple_dispatches'] for row in rows]==[1,0]
+    after={path:(path.stat().st_dev,path.stat().st_ino,path.stat().st_size,
+                 path.stat().st_mtime_ns,path.stat().st_ctime_ns) for path in before}
+    assert before==after and manifest.read_bytes()==raw
+    phases=[json.loads(line.split(' ',1)[1]) for line in stdout_raw.decode().splitlines()
+            if line.startswith('BUILD_PHASE ')]
+    prior=[row for row in phases if row.get('phase')=='auxiliary_provider_verification' and
+           row.get('provider')=='figure-tuple' and row.get('event')=='end']
+    assert len(prior)==1 and prior[0]['status']=='success' and prior[0]['seconds']==52.792
+    return dict(scope='retained rejection ordering; tuple dispatch counted but payload replay stubbed',
+                rows=rows,input_after=True,original_measured_tuple=prior[0],
+                whole_build_throughput_measured=False)
+
+
 if __name__=='__main__':unittest.main()
