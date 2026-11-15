@@ -6119,7 +6119,8 @@ class MaterializedFigureConsumerTests(unittest.TestCase):
         def read(path,cache=None,**options):
             result=original(path,cache,**options)
             if Path(path)==args.output/figure.MANIFEST:
-                self.assertIn('document',result)
+                self.assertIs(options.get('include_document'),False)
+                self.assertNotIn('document',result)
                 held.update(cache=cache,stamps=dict(result['stamps']),offsets=list(result['offsets']))
             return result
         with patch.object(figure,'read_complete_capture',side_effect=read):output,_=self.materialize(args)
@@ -6153,15 +6154,10 @@ class FixedSiteProfileTests(unittest.TestCase):
 
     def test_fixed_site_is_checked_once_and_every_response_is_checked(self):
         batches = [self.batch('ملف:Profile%d.svg' % i) for i in range(8)]
-        fixed = figure.encoded(self.site_api)
-        original = figure._figure_site_profile
         registration = figure._figure_site_registration
-        with patch.object(figure, '_figure_site_profile', wraps=original) as checked, \
-                patch.object(figure, '_figure_site_registration', wraps=registration) as registrations:
+        with patch.object(figure, '_figure_site_registration', wraps=registration) as registrations:
             result = self.project(batches)
         self.assertEqual(len(result['records']), 8)
-        self.assertEqual(checked.call_count, 1)
-        self.assertEqual(checked.call_args.args[0], fixed)
         self.assertEqual(registrations.call_count, 9)
         self.assertEqual(registrations.call_args_list[0].args[0], self.site_api)
         self.assertEqual([call.args[0] for call in registrations.call_args_list[1:]],
@@ -6170,11 +6166,14 @@ class FixedSiteProfileTests(unittest.TestCase):
     def test_invalid_fixed_site_is_rejected_before_any_response(self):
         site = copy.deepcopy(self.site_api)
         site['query']['extensions'][0]['vcs-version'] = '0' * 40
-        original = figure._figure_site_profile
-        with patch.object(figure, '_figure_site_profile', wraps=original) as checked:
+        original = figure._figure_site_registration
+        with patch.object(figure, '_figure_site_registration', wraps=original) as checked, \
+                patch.object(figure.metadata, 'classify_response') as classified:
             with self.assertRaises(ValueError):
                 self.project([self.batch()], site=site)
         self.assertEqual(checked.call_count, 1)
+        self.assertEqual(checked.call_args.args[0], site)
+        classified.assert_not_called()
 
     def test_later_response_keeps_server_core_language_and_registration_guards(self):
         title = 'ملف:Later.svg'
@@ -6215,28 +6214,33 @@ class LeanMaterializationVerificationTests(unittest.TestCase):
 
     def test_plan_reuse_still_refuses_source_mutation_during_frame_resolution(self):
         args = self.complete()
-        original = figure.terminal_http_origin
+        original = figure._verified_contained_http_leaf
         original_read = figure.read_complete_capture
         changed, verified = [], []
+        plan_path = args.output/figure.PLAN
+        plan_before = plan_path.read_bytes()
         def read(path, cache=None, **options):
             result = original_read(path, cache, **options)
             if Path(path) == args.output/figure.MANIFEST:
                 verified.append(True)
             return result
-        def origin(root, source, *, origin_plan=None):
-            result = original(root, source, origin_plan=origin_plan)
-            # Alter the source only after its ordinary first verification,
-            # while the materializer resolves the authenticated frames.
-            if Path(root) == args.output and verified and not changed:
-                path = args.output/figure.PLAN
-                path.write_bytes(path.read_bytes()+b' ')
-                changed.append(path)
+        def leaf(node, slot, batch, cache, namespace, source_stamps):
+            result = original(node, slot, batch, cache, namespace, source_stamps)
+            # Mutate after actual complete verification and successful contained
+            # leaf authentication, before the materializer's final source fence.
+            if node['root'] == args.output and verified and not changed:
+                self.assertIs(result, True)
+                plan_path.write_bytes(plan_before+b' ')
+                changed.append(plan_path)
             return result
         with patch.object(figure, 'read_complete_capture', side_effect=read), \
-                patch.object(figure, 'terminal_http_origin', side_effect=origin):
+                patch.object(figure, '_verified_contained_http_leaf', side_effect=leaf):
             with self.assertRaisesRegex(ValueError, 'changed'):
                 self.materialize(args)
-        self.assertEqual(changed, [args.output/figure.PLAN])
+        self.assertTrue(verified)
+        self.assertEqual(changed, [plan_path])
+        self.assertEqual(plan_path.read_bytes(), plan_before+b' ')
+        self.assertFalse((self.root/'self-contained').exists())
         self.assertFalse((self.root/'self-contained'/figure.COMPLETE).exists())
 
     def test_fresh_output_has_one_full_replay_and_keeps_normal_verification(self):
@@ -6308,10 +6312,15 @@ class MaterializedRootReplayTests(unittest.TestCase):
                 finally:
                     self.assertEqual(active.pop(), name)
             return call
+        original_replay = helper.replay_source
+        def source_replay(root, source, *args, **options):
+            if source.get('kind') == 'http-archived-lean':
+                return scoped(original_replay, 'lean-final')(root, source, *args, **options)
+            return original_replay(root, source, *args, **options)
         with patch.object(helper, 'raw_record_decode', wraps=helper.raw_record_decode) as decoded, \
                 patch.object(helper, 'file_records', side_effect=records), \
                 patch.object(helper, 'lean_tiff_titles', side_effect=scoped(helper.lean_tiff_titles, 'lean-titles')), \
-                patch.object(helper, 'validate_lean_batch', side_effect=scoped(helper.validate_lean_batch, 'lean-final')), \
+                patch.object(helper, 'replay_source', side_effect=source_replay), \
                 patch.object(helper.evidence, 'fingerprint', side_effect=fingerprint):
             result = helper.verify(output)
         self.assertEqual(active, [])
@@ -6332,8 +6341,9 @@ class MaterializedRootReplayTests(unittest.TestCase):
         self.assertEqual(counts['semantic_scopes']['capture'], origins)
         sources = list(figure.source_records(output/figure.FILE_REQUESTS, frames))
         lean_frames = sum(source['kind'] == 'http-archived-lean' for source in sources)
-        self.assertEqual(counts['semantic_scopes']['lean-titles'], 2*lean_frames)
-        self.assertEqual(counts['semantic_scopes']['lean-final'], lean_frames)
+        lean_companions = sum(source['kind'] == 'http-archived-lean' and 'tiff_batch' in source for source in sources)
+        self.assertEqual(counts['semantic_scopes']['lean-titles'], lean_frames)
+        self.assertEqual(counts['semantic_scopes']['lean-final'], lean_companions)
         self.assertGreater(counts['raw_fingerprints'], 0)
 
     def test_root_reuse_matches_original_manifest_and_eliminates_one_raw_semantic_pass(self):
@@ -7160,16 +7170,22 @@ class OfflinePolicyReprojectionTests(unittest.TestCase):
     def test_reprojection_preserves_multipage_refusal_and_exact_v4_options(self):
         source, old = self.legacy(multipage=True)
         derive = figure.figure_stream_document
-        calls = []
+        calls, consumed = [], []
+        take = figure._ReprojectionRecords.take
         def observe(*args, **kwargs):
             calls.append((Path(args[0]), dict(kwargs)))
             return derive(*args, **kwargs)
-        with patch.object(figure, 'figure_stream_document', side_effect=observe):
+        def consume(records, raw_path, *args, **kwargs):
+            consumed.append((Path(raw_path), dict(kwargs)))
+            return take(records, raw_path, *args, **kwargs)
+        with patch.object(figure, 'figure_stream_document', side_effect=observe), \
+                patch.object(figure._ReprojectionRecords, 'take', new=consume):
             output, _, _ = self.reproject(source)
         actual = self.fixture.stream_document(output)
         self.assertEqual(actual['records'], old['records'])
         selected = [options for path, options in calls if path.parent==output]
-        self.assertGreaterEqual(len(selected), 2)
+        self.assertEqual(len(selected), 1)
+        self.assertEqual([options for path, options in consumed if path.parent == output], selected)
         self.assertTrue(all(options == dict(profile_kind=figure.FIGURE_PROFILE_V3, allow_tiff_companion=True,
             allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True,
             allow_default_tiff_page=False) for options in selected))
@@ -7872,15 +7888,21 @@ class DefaultPageReplayReprojectionTests(unittest.TestCase):
     def test_v6_reprojection_keeps_malformed_default_page_unsupported_and_exact_options(self):
         root, old, _ = self.parent(figure.REPLAY_CONTRACT_V4, malformed=True)
         derive = figure.figure_stream_document
-        calls = []
+        calls, consumed = [], []
+        take = figure._ReprojectionRecords.take
         def observe(*args, **kwargs):
             calls.append((Path(args[0]), dict(kwargs)))
             return derive(*args, **kwargs)
-        with patch.object(figure, 'figure_stream_document', side_effect=observe):
+        def consume(records, raw_path, *args, **kwargs):
+            consumed.append((Path(raw_path), dict(kwargs)))
+            return take(records, raw_path, *args, **kwargs)
+        with patch.object(figure, 'figure_stream_document', side_effect=observe), \
+                patch.object(figure._ReprojectionRecords, 'take', new=consume):
             output, _, _ = self.upgrade(root)
         self.assertEqual(self.fixture.stream_document(output)['records'], old['records'])
         selected = [options for path, options in calls if path.parent == output]
-        self.assertGreaterEqual(len(selected), 2)
+        self.assertEqual(len(selected), 1)
+        self.assertEqual([options for path, options in consumed if path.parent == output], selected)
         self.assertTrue(all(options == dict(profile_kind=figure.FIGURE_PROFILE_V4,
             allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True,
             allow_decimal_tiff_axes=True, allow_default_tiff_page=True) for options in selected))
@@ -7939,16 +7961,34 @@ class DefaultPageReplayReprojectionTests(unittest.TestCase):
                 root, _, _ = self.parent(figure.REPLAY_CONTRACT_V3)
                 output = self.fixture.root/('written-'+str(self.serial))
                 write = figure.write_projection_stream
+                changed = []
                 def writer(path, document, **options):
+                    self.assertEqual(Path(path), output/figure.ROLES['figure-sizing'])
                     if mode in ('eligible','unsupported'):
-                        document = copy.deepcopy(document)
-                        next(row for row in document['records'] if row['requested_file'].endswith('B.tif'))['state'] = mode
+                        # The real writer receives independent records lazily.
+                        # Materialize only this small test input before copying.
+                        document = copy.deepcopy(dict(document, records=list(document['records'])))
+                        row = next(row for row in document['records'] if row['requested_file'].endswith('B.tif'))
+                        self.assertEqual(row['state'], 'tiff_default_page')
+                        row['state'] = mode
                     result = write(path, document, **options)
                     if mode == 'provider': (output/figure.PROVIDER).write_bytes(b'corrupt\n')
                     elif mode == 'root-mode': output.chmod(0o777)
+                    changed.append(mode)
                     return result
-                with patch.object(figure,'write_projection_stream',side_effect=writer), self.assertRaises(ValueError):
+                with patch.object(figure,'write_projection_stream',side_effect=writer), self.assertRaises(ValueError) as refused:
                     figure.reproject_capture(root, output, target_contract=figure.REPLAY_CONTRACT)
+                self.assertEqual(changed, [mode])
+                if mode in ('eligible','unsupported'):
+                    self.assertRegex(str(refused.exception), 'projection stream record differs from exact raw replay')
+                    written = figure.stream_values(output/figure.ROLES['figure-sizing'], figure.FILES_STREAM_SCHEMA)
+                    next(written)
+                    rows = list(written)
+                    self.assertEqual(next(row for row in rows if row['requested_file'].endswith('B.tif'))['state'], mode)
+                elif mode == 'provider':
+                    self.assertEqual((output/figure.PROVIDER).read_bytes(), b'corrupt\n')
+                else:
+                    self.assertEqual(figure.stat.S_IMODE(output.stat().st_mode), 0o777)
                 self.assertFalse((output/figure.COMPLETE).exists())
 
 
@@ -10281,6 +10321,418 @@ def measure_canonical_title_reuse(baseline,candidate):
             whole_fr_timing_claimed=False)
     finally:
         case.doCleanups()
+
+
+
+
+class FigureOriginLifetimeTests(unittest.TestCase):
+    setUp = OfflineFigureMaterializationTests.setUp
+    epoch_complete = OfflineFigureMaterializationTests.epoch_complete
+    materialize = OfflineFigureMaterializationTests.materialize
+
+    @staticmethod
+    def lifetime_trace(helper, output, *, allocations=False):
+        import ast
+        import inspect
+        import sys
+        import textwrap
+        import tracemalloc
+        outer = helper.validate_materialized_echo
+        codes = {value.co_name:value for value in outer.__code__.co_consts
+                 if isinstance(value, type(outer.__code__))}
+        source, first = inspect.getsourcelines(outer)
+        parsed = ast.parse(textwrap.dedent(''.join(source)))
+        visit = next(node for node in parsed.body[0].body
+                     if isinstance(node, ast.FunctionDef) and node.name == 'visit')
+        check = next(node for node in visit.body if isinstance(node, ast.If) and
+                     any(isinstance(part, ast.Name) and part.id == 'original_count'
+                         for part in ast.walk(node.test)) and isinstance(node.test, ast.BoolOp))
+        check_line = first + check.lineno - 1
+        rows = []
+        def observe(frame, event, arg):
+            if frame.f_code is codes['visit'] and event == 'call':
+                parent = frame.f_back
+                if parent is not None and parent.f_code is codes['ordinary_origin']:
+                    values = parent.f_locals
+                    rows.append(dict(boundary='ancestor-entry',
+                        retained_names_live='retained_names' in values,
+                        remaining_live='remaining' in values,
+                        planned_batches=len(values['planned']),
+                        traced_current_bytes=tracemalloc.get_traced_memory()[0] if allocations else None))
+            elif frame.f_code is codes['visit'] and event == 'line' and frame.f_lineno == check_line:
+                values = frame.f_locals
+                rows.append(dict(boundary='post-count',
+                    original_document_live='original_document' in values,
+                    original_count=values['original_count'],
+                    traced_current_bytes=tracemalloc.get_traced_memory()[0] if allocations else None))
+            return observe if frame.f_code in codes.values() else None
+        previous = sys.gettrace()
+        try:
+            sys.settrace(observe)
+            result = helper.verify(output)
+        finally:
+            sys.settrace(previous)
+        return result, rows
+
+    def test_full_epoch_caller_releases_dead_locals_before_ancestor_and_failure_checks(self):
+        args, _ = self.epoch_complete()
+        output, expected = self.materialize(args)
+        result, rows = self.lifetime_trace(figure, output)
+        self.assertEqual(result, expected)
+        ancestors = [row for row in rows if row['boundary'] == 'ancestor-entry']
+        counts = [row for row in rows if row['boundary'] == 'post-count']
+        self.assertTrue(ancestors)
+        self.assertTrue(counts)
+        self.assertTrue(all(not row['retained_names_live'] and not row['remaining_live'] for row in ancestors))
+        self.assertTrue(all(not row['original_document_live'] for row in counts))
+        self.assertEqual(figure.verify(output), expected)
+
+    def test_ancestral_semantic_memory_error_still_propagates_without_mutating_inputs(self):
+        import sys
+        args, _ = self.epoch_complete()
+        output, expected = self.materialize(args)
+        original = figure.file_records
+        visit = next(value for value in figure.validate_materialized_echo.__code__.co_consts
+                     if isinstance(value, type(original.__code__)) and value.co_name == 'visit')
+        members = figure.capture_member_paths(output, include_markers=True)[0]
+        before = {name:(figure.evidence.stamp(path),figure.digest(path.read_bytes()))
+                  for name,path in members.items()}
+        reached = []
+        def refuse(*values, **options):
+            if sys._getframe(1).f_code is visit:
+                reached.append(options['record_limit'])
+                raise MemoryError('owned ancestral allocation failure')
+            return original(*values, **options)
+        with patch.object(figure, 'file_records', new=refuse):
+            with self.assertRaisesRegex(MemoryError, 'owned ancestral allocation failure'):
+                figure.verify(output)
+        self.assertTrue(reached)
+        self.assertEqual({name:(figure.evidence.stamp(path),figure.digest(path.read_bytes()))
+                          for name,path in members.items()}, before)
+        self.assertEqual(figure.verify(output), expected)
+
+    def bounded_nested_complete(self, records=2048):
+        # The ordinary capture and retained-complete route own every plan,
+        # journal, projection, marker and HTTP receipt in this temporary fixture.
+        names = tuple('Lifetime%05d.svg' % number for number in range(records))
+        args = self.fixture.args(links=names)
+        args.output = self.root/'lifetime-parent'
+        registry = figure.evidence.Registry(self.fixture.namespace.read_bytes(), self.fixture.wiki, self.fixture.date)
+        titles = sorted((registry.file_title(registry.specs[6]['name'] + ':' + name) for name in names), key=lambda title:title.encode())
+        planned_requests = sum(1 for _ in figure.metadata.title_batches(
+            self.fixture.wiki, titles, args.batch_size, figure_axes=True))
+        # This fixture advances a fake clock at each normal paced request.
+        # Its deadline must cover the selected batch count, not the two-row default.
+        args.wall_seconds = max(args.wall_seconds, (planned_requests + 1) * args.delay)
+        clock = [0.0]
+        def transport(url, timeout):
+            titles = parse_qs(urlsplit(url).query)['titles'][0].split('|')
+            response = self.fixture.response(titles[0])
+            response['query']['pages'] = [self.fixture.response(title)['query']['pages'][0] for title in titles]
+            return 200, {}, figure.encoded(response)
+        with patch.object(figure.time, 'monotonic', side_effect=lambda:clock[0]):
+            figure.capture_files(args, transport=transport,
+                sleep=lambda delay:clock.__setitem__(0,clock[0]+delay))
+        self.assertEqual(json.loads((args.output/figure.PLAN).read_text())['base_batches'], planned_requests)
+        parent = args.output
+        args.output = self.root/'lifetime-child'
+        args.reuse = [parent]
+        figure.capture_files(args, transport=lambda *_:self.fail('retained complete parent was fetched'))
+        output, expected = self.materialize(args)
+        plan = json.loads((output/figure.PLAN).read_text())
+        self.assertEqual(len(plan['materialized_http_origins']), 2)
+        self.assertEqual(expected['coverage']['files'], records)
+        self.assertEqual(figure.verify(output), expected)
+        return output, expected, tuple(Path(path) for path in args.sql)
+
+
+def measure_figure_origin_lifetimes(baseline, candidate):
+    """One bounded real verifier; CPU and traced allocation arms stay separate."""
+    import tracemalloc
+    if baseline is candidate or baseline.validate_materialized_echo.__code__ is candidate.validate_materialized_echo.__code__:
+        raise AssertionError('paired measurement requires distinct authenticated sources')
+    case = FigureOriginLifetimeTests('test_full_epoch_caller_releases_dead_locals_before_ancestor_and_failure_checks')
+    rows, memory_rows, census = [], [], {}
+    try:
+        case.setUp()
+        output, expected, sql = case.bounded_nested_complete()
+        members = candidate.capture_member_paths(output, include_markers=True)[0]
+        paths = tuple(members.values()) + sql + (case.fixture.namespace,)
+        before = {str(path):(candidate.evidence.stamp(path),candidate.digest(path.read_bytes())) for path in paths}
+        for arm,helper,released in (('baseline',baseline,False),('candidate',candidate,True)):
+            result,events = case.lifetime_trace(helper,output)
+            case.assertEqual(result,expected)
+            ancestors = [row for row in events if row['boundary']=='ancestor-entry']
+            counts = [row for row in events if row['boundary']=='post-count']
+            case.assertTrue(ancestors);case.assertTrue(counts)
+            case.assertTrue(all(row['retained_names_live'] is not released and row['remaining_live'] is not released for row in ancestors))
+            if released:case.assertTrue(all(not row['original_document_live'] for row in counts))
+            else:case.assertTrue(any(row['original_document_live'] for row in counts))
+            census[arm]=events
+            del result,events,ancestors,counts
+        for arm,helper in (('baseline',baseline),('candidate',candidate),('candidate',candidate),('baseline',baseline)):
+            wall,cpu=time.perf_counter_ns(),time.process_time_ns()
+            result=helper.verify(output)
+            cpu,wall=time.process_time_ns()-cpu,time.perf_counter_ns()-wall
+            case.assertEqual(result,expected)
+            rows.append(dict(arm=arm,cpu_ns=cpu,wall_ns=wall,records=2048,origins=2,
+                             manifest_sha256=candidate.digest(candidate.encoded(result))))
+            del result
+        case.assertFalse(tracemalloc.is_tracing())
+        for arm,helper in (('baseline',baseline),('candidate',candidate),('candidate',candidate),('baseline',baseline)):
+            tracemalloc.start(1)
+            try:
+                result,events=case.lifetime_trace(helper,output,allocations=True)
+                current,peak=tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+            case.assertEqual(result,expected)
+            memory_rows.append(dict(arm=arm,traced_current_bytes=current,traced_peak_bytes=peak,
+                                    boundaries=events,records=2048,origins=2))
+            del result,events
+        case.assertEqual({str(path):(candidate.evidence.stamp(path),candidate.digest(path.read_bytes())) for path in paths},before)
+        return dict(rows=rows,allocation_rows=memory_rows,untimed_lifetime_census=census,
+            output_and_input_parity=True,
+            scope='Unprofiled full verify CPU ABBA and separate tracemalloc full verify ABBA; setup, validation, comparison and result disposal outside CPU clocks.',
+            allocation_scope='Python traced allocations with test-local boundary observation, not RSS/PSS or a production swapping attribution.',
+            fixture_scope='2048 positive ordinary records, 50-title batches, two exact complete origins through maintained capture/reuse/materialize; bounded ancestry topology, not full FR scale.',
+            whole_fr_timing_claimed=False)
+    finally:
+        case.doCleanups()
+
+
+class FigureInventorySourceHandoffTests(unittest.TestCase):
+    setUp = OfflineFigureMaterializationTests.setUp
+    complete = OfflineFigureMaterializationTests.complete
+
+    def snapshot(self, root, sql=()):
+        members = figure.capture_member_paths(root, include_markers=True)[0]
+        paths = tuple(members.values()) + tuple(Path(path) for path in sql) + (self.fixture.namespace,)
+        return {str(path):(figure.evidence.stamp(path),figure.digest(path.read_bytes())) for path in paths}
+
+    def counted_verify(self, helper, root):
+        original = helper.inventory_document
+        reads = []
+        def read(path):
+            if Path(path) == root/helper.INVENTORY:
+                reads.append(Path(path).stat().st_size)
+            return original(path)
+        with patch.object(helper, 'inventory_document', new=read):
+            result = helper.verify(root)
+        return result, reads
+
+    def test_stream_source_handoff_uses_one_inventory_decode_and_keeps_owned_ordered_sources(self):
+        args = self.complete()
+        expected = figure.verify(args.output)
+        before = self.snapshot(args.output, args.sql)
+        replay = figure.replay_stream_capture
+        outputs = []
+        def observe(*values, **options):
+            handoff = options.get('_inventory_sources_out')
+            self.assertEqual(handoff, {})
+            result = replay(*values, **options)
+            self.assertEqual(set(handoff), {'path','stamp','sources'})
+            self.assertIs(type(handoff['sources']), tuple)
+            self.assertTrue(all(type(row) is tuple and len(row)==6 for row in handoff['sources']))
+            self.assertTrue(all(type(value) in (str,int) for row in handoff['sources'] for value in row))
+            outputs.append(handoff)
+            return result
+        with patch.object(figure, 'replay_stream_capture', new=observe):
+            actual, reads = self.counted_verify(figure, args.output)
+        self.assertEqual(actual, expected)
+        self.assertEqual(reads, [(args.output/figure.INVENTORY).stat().st_size])
+        keys = ('wiki','date','name','url','size','sha1')
+        selected = [dict(zip(keys,row,strict=True)) for row in outputs[0]['sources']]
+        for row in selected:row['url']='https://dumps.wikimedia.org'+row['url']
+        self.assertEqual(selected, expected['source_dump_files'])
+        selected[0]['sha1']='0'*40
+        outputs[0].clear()
+        repeated, reads = self.counted_verify(figure, args.output)
+        self.assertEqual(repeated, expected)
+        self.assertEqual(len(reads),1)
+        self.assertEqual(len(figure.replay(args.output,self.fixture.wiki,self.fixture.date)),2)
+        self.assertEqual(self.snapshot(args.output,args.sql),before)
+        with patch.object(figure,'inventory_document',wraps=figure.inventory_document) as read:
+            complete=figure.read_complete_capture(args.output/figure.MANIFEST,{},include_document=False)
+        self.assertNotIn('document',complete)
+        self.assertEqual(complete['manifest'],expected)
+        self.assertEqual(sum(Path(call.args[0])==args.output/figure.INVENTORY for call in read.call_args_list),2)
+
+    def test_stream_source_handoff_preserves_source_selection_order_and_failure_propagation(self):
+        args = self.complete()
+        path,marker=args.output/figure.MANIFEST,args.output/figure.COMPLETE
+        original,complete=path.read_bytes(),marker.read_bytes()
+        expected=json.loads(original)
+        cases=[('order',list(reversed(expected['source_dump_files'])))]
+        for key,value in (('wiki','enwiktionary'),('date','20261002'),('name','foreign.sql.gz'),
+                          ('url','/unbound'),('size',0),('sha1','0'*40)):
+            selected=copy.deepcopy(expected['source_dump_files']);selected[0][key]=value
+            cases.append((key,selected))
+        for name,selected in cases:
+            with self.subTest(field=name):
+                changed=copy.deepcopy(expected);changed['source_dump_files']=selected
+                path.write_bytes(figure.encoded(changed))
+                marker.write_bytes(figure.encoded(dict(schema=figure.SCHEMA,manifest_sha256=figure.digest(path.read_bytes()))))
+                try:
+                    with self.assertRaisesRegex(ValueError,'^Figure file source selection differs from the verified inventory$'):
+                        figure.verify(args.output)
+                finally:
+                    path.write_bytes(original);marker.write_bytes(complete)
+        handoff={}
+        failure=MemoryError('inventory semantic allocation refused')
+        with patch.object(figure,'verify_inventory',side_effect=failure):
+            with self.assertRaises(MemoryError) as refused:
+                figure.replay(args.output,self.fixture.wiki,self.fixture.date,_inventory_sources_out=handoff)
+        self.assertIs(refused.exception,failure)
+        self.assertEqual(handoff,{})
+        for invalid in ([],{'sources':()}):
+            with self.assertRaisesRegex(ValueError,'empty dictionary'):
+                figure.replay(args.output,self.fixture.wiki,self.fixture.date,_inventory_sources_out=invalid)
+        self.assertEqual(figure.verify(args.output),expected)
+
+    def test_stream_source_handoff_refuses_inventory_mutation_before_and_after_publication(self):
+        args=self.complete();path=args.output/figure.INVENTORY
+        original=path.read_bytes();replacement=self.root/'inventory-replacement'
+        verify_inventory=figure.verify_inventory;stream=figure.replay_stream_capture
+        for boundary in ('semantic-validation','replay-return'):
+            for mode in ('same-bytes','replacement','symlink'):
+                reached=[];handoffs=[]
+                def mutate():
+                    reached.append(True)
+                    if mode=='same-bytes':path.write_bytes(original)
+                    elif mode=='replacement':
+                        replacement.write_bytes(original);replacement.replace(path)
+                    else:
+                        path.rename(replacement);path.symlink_to(replacement)
+                def verified(*values,**options):
+                    result=verify_inventory(*values,**options)
+                    if not reached:mutate()
+                    return result
+                def replayed(*values,**options):
+                    handoffs.append(options['_inventory_sources_out'])
+                    result=stream(*values,**options)
+                    if boundary=='replay-return':mutate()
+                    return result
+                with self.subTest(boundary=boundary,mode=mode):
+                    try:
+                        with patch.object(figure,'replay_stream_capture',new=replayed), contextlib.ExitStack() as stack:
+                            if boundary=='semantic-validation':stack.enter_context(patch.object(figure,'verify_inventory',new=verified))
+                            with self.assertRaises(ValueError):figure.verify(args.output)
+                        self.assertEqual(reached,[True])
+                        self.assertEqual(len(handoffs),1)
+                        if boundary=='semantic-validation':self.assertEqual(handoffs,[{}])
+                        else:self.assertIn('sources',handoffs[0])
+                    finally:
+                        if path.is_symlink():path.unlink()
+                        path.write_bytes(original)
+                        if replacement.exists():replacement.unlink()
+        # The existing raw-index output must also stay private when the new
+        # inventory fence refuses an otherwise completed stream replay.
+        handoff,raw_index={},{}
+        def changed_inventory(*values,**options):
+            result=verify_inventory(*values,**options)
+            path.write_bytes(original)
+            return result
+        try:
+            with patch.object(figure,'verify_inventory',new=changed_inventory):
+                with self.assertRaisesRegex(ValueError,'^Figure inventory changed during source replay$'):
+                    figure.replay(args.output,self.fixture.wiki,self.fixture.date,
+                                  _raw_index_out=raw_index,_inventory_sources_out=handoff)
+            self.assertEqual(raw_index,{})
+            self.assertEqual(handoff,{})
+        finally:path.write_bytes(original)
+        self.assertEqual(figure.verify(args.output)['coverage']['files'],2)
+
+    def test_stream_source_handoff_keeps_final_sql_payload_and_canonical_inventory_checks(self):
+        args=self.complete();expected=figure.verify(args.output)
+        stream=figure.replay_stream_capture
+        for kind in ('sql','payload'):
+            path=Path(args.sql[0]) if kind=='sql' else args.output/figure.PROVIDER
+            original=path.read_bytes();reached=[]
+            def late(*values,**options):
+                result=stream(*values,**options)
+                self.assertIn('sources',options['_inventory_sources_out'])
+                reached.append(True);path.write_bytes(original+b'changed')
+                return result
+            with self.subTest(kind=kind):
+                try:
+                    with patch.object(figure,'replay_stream_capture',new=late):
+                        with self.assertRaises(ValueError):figure.verify(args.output)
+                    self.assertEqual(reached,[True])
+                finally:path.write_bytes(original)
+        inventory=args.output/figure.INVENTORY;raw=inventory.read_bytes()
+        changed=json.loads(raw);changed['titles'].append('injected')
+        inventory.write_bytes(figure.encoded(changed))
+        try:
+            with self.assertRaisesRegex(ValueError,'differs from exact dated SQL replay'):
+                figure.verify(args.output)
+        finally:inventory.write_bytes(raw)
+        self.assertEqual(figure.verify(args.output),expected)
+
+    def bounded_complete(self, records=2048):
+        names=tuple('Inventory%05d.svg'%number for number in range(records))
+        args=self.fixture.args(links=names)
+        args.output=self.root/'inventory-sources-complete'
+        registry=figure.evidence.Registry(self.fixture.namespace.read_bytes(),self.fixture.wiki,self.fixture.date)
+        titles=sorted((registry.file_title(registry.specs[6]['name']+':'+name) for name in names),key=lambda title:title.encode())
+        planned=sum(1 for _ in figure.metadata.title_batches(self.fixture.wiki,titles,args.batch_size,figure_axes=True))
+        args.wall_seconds=max(args.wall_seconds,(planned+1)*args.delay)
+        clock=[0.0]
+        def transport(url,timeout):
+            selected=parse_qs(urlsplit(url).query)['titles'][0].split('|')
+            response=self.fixture.response(selected[0])
+            response['query']['pages']=[self.fixture.response(title)['query']['pages'][0] for title in selected]
+            return 200,{},figure.encoded(response)
+        with patch.object(figure.time,'monotonic',side_effect=lambda:clock[0]):
+            expected=figure.capture_files(args,transport=transport,sleep=lambda delay:clock.__setitem__(0,clock[0]+delay))
+        self.assertEqual(json.loads((args.output/figure.PLAN).read_text())['base_batches'],planned)
+        self.assertEqual(expected['coverage']['files'],records)
+        self.assertEqual(figure.verify(args.output),expected)
+        return args,expected
+
+
+def measure_figure_inventory_source_handoff(baseline,candidate):
+    """Full verification, with the removed decode counted outside measurement."""
+    import tracemalloc
+    if baseline is candidate or baseline.verify.__code__ is candidate.verify.__code__:
+        raise AssertionError('paired measurement requires distinct authenticated sources')
+    case=FigureInventorySourceHandoffTests('test_stream_source_handoff_uses_one_inventory_decode_and_keeps_owned_ordered_sources')
+    rows,memory_rows,census=[],[],{}
+    try:
+        case.setUp()
+        args,expected=case.bounded_complete()
+        before=case.snapshot(args.output,args.sql)
+        for arm,helper,count in (('baseline',baseline,2),('candidate',candidate,1)):
+            result,reads=case.counted_verify(helper,args.output)
+            case.assertEqual(result,expected)
+            case.assertEqual(len(reads),count)
+            census[arm]=dict(inventory_decodes=count,inventory_decode_bytes=sum(reads),inventory_file_bytes=reads[0])
+            del result,reads
+        for arm,helper in (('baseline',baseline),('candidate',candidate),('candidate',candidate),('baseline',baseline)):
+            wall,cpu=time.perf_counter_ns(),time.process_time_ns()
+            result=helper.verify(args.output)
+            cpu,wall=time.process_time_ns()-cpu,time.perf_counter_ns()-wall
+            case.assertEqual(result,expected)
+            rows.append(dict(arm=arm,cpu_ns=cpu,wall_ns=wall,records=2048,
+                             manifest_sha256=candidate.digest(candidate.encoded(result))))
+            del result
+        case.assertFalse(tracemalloc.is_tracing())
+        for arm,helper in (('baseline',baseline),('candidate',candidate),('candidate',candidate),('baseline',baseline)):
+            tracemalloc.start(1)
+            try:
+                result=helper.verify(args.output)
+                current,peak=tracemalloc.get_traced_memory()
+            finally:tracemalloc.stop()
+            case.assertEqual(result,expected)
+            memory_rows.append(dict(arm=arm,traced_current_bytes=current,traced_peak_bytes=peak,records=2048))
+            del result
+        case.assertEqual(case.snapshot(args.output,args.sql),before)
+        return dict(rows=rows,allocation_rows=memory_rows,untimed_inventory_census=census,
+            output_and_input_parity=True,
+            scope='Unprofiled full verify CPU ABBA and separate tracemalloc full verify ABBA; setup, validation, comparisons and result disposal outside clocks.',
+            fixture_scope='2048 ordinary positive records through maintained capture and full verify; exact inventory source-selection reload under test, not a full FR timing/peak model.',
+            allocation_scope='Python traced allocations, not RSS/PSS or a paging attribution.',whole_fr_timing_claimed=False)
+    finally:case.doCleanups()
 
 
 if __name__ == '__main__':

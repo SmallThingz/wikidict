@@ -1831,8 +1831,10 @@ def payload(root):
     return result
 
 
-def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None):
+def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None, _inventory_sources_out=None):
     """Replay original source captures, retaining their exact finite scope."""
+    if _inventory_sources_out is not None and (type(_inventory_sources_out) is not dict or _inventory_sources_out):
+        raise ValueError('Verified inventory source output must be an empty dictionary')
     root = Path(root)
     defaults = site_info.verify(root, embedded=True)
     if (defaults['wiki'] != wiki or defaults['date'] != date or
@@ -1851,7 +1853,7 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
         return replay_stream_capture(root, wiki, date, defaults, namespace, general,
             retained_cache=retained_cache, inventory_cache=inventory_cache,
             regenerate_projection=regenerate_projection, _reprojection_records=_reprojection_records,
-            _raw_index_out=_raw_index_out)
+            _raw_index_out=_raw_index_out, _inventory_sources_out=_inventory_sources_out)
     with (root / ROLES['figure-sizing']).open('rb') as source:
         first = source.readline(STREAM_HEADER_LIMIT + 1)
     try:
@@ -1860,7 +1862,8 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
         stream_header = None
     if isinstance(stream_header, dict) and stream_header.get('schema') == FILES_STREAM_SCHEMA:
         return replay_stream_capture(root, wiki, date, defaults, namespace, general,
-            retained_cache=retained_cache, inventory_cache=inventory_cache, _raw_index_out=_raw_index_out)
+            retained_cache=retained_cache, inventory_cache=inventory_cache,
+            _raw_index_out=_raw_index_out, _inventory_sources_out=_inventory_sources_out)
     projection_raw = small(root / ROLES['figure-sizing'])
     projection = decode(projection_raw)
     file_level = isinstance(projection, dict) and projection.get('schema') == FILES_SCHEMA
@@ -1984,11 +1987,19 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
     raw_index = {} if _raw_index_out is not None else None
     if raw_index is not None:
         generation['_raw_index_out'] = raw_index
-    defaults, coverage = replay(root, manifest.get('wiki'), manifest.get('date'), retained_cache=retained_cache, inventory_cache=inventory_cache, **generation)
+    inventory_sources = {}
+    defaults, coverage = replay(root, manifest.get('wiki'), manifest.get('date'), retained_cache=retained_cache, inventory_cache=inventory_cache,
+                               _inventory_sources_out=inventory_sources, **generation)
     if coverage['kind'] == 'file-logical-axes':
-        inventory = inventory_document(root / INVENTORY)
-        expected_sources = [{key: row[key] for key in ('wiki', 'date', 'name', 'url', 'size', 'sha1')}
-                            for row in inventory['sources']]
+        keys = ('wiki', 'date', 'name', 'url', 'size', 'sha1')
+        if inventory_sources:
+            path = root / INVENTORY
+            if (path.resolve(), evidence.stamp(path)) != (inventory_sources['path'], inventory_sources['stamp']):
+                raise ValueError('Figure inventory changed before source selection comparison')
+            expected_sources = [dict(zip(keys, row, strict=True)) for row in inventory_sources['sources']]
+        else:
+            inventory = inventory_document(root / INVENTORY)
+            expected_sources = [{key: row[key] for key in keys} for row in inventory['sources']]
         if manifest.get('capture_format') == FILES_STREAM_SCHEMA:
             for row in expected_sources:
                 row['url'] = 'https://dumps.wikimedia.org'+row['url']
@@ -2683,7 +2694,9 @@ def record_http_archive(root, source, batch, archived, *, origin_plan=None):
             archived[('tiff-titles', base_receipt['response'])] = request['titles']
 
 
-def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None):
+def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None, _inventory_sources_out=None):
+    if _inventory_sources_out is not None and (type(_inventory_sources_out) is not dict or _inventory_sources_out):
+        raise ValueError('Verified inventory source output must be an empty dictionary')
     if _raw_index_out is not None and (type(_raw_index_out) is not dict or _raw_index_out):
         raise ValueError('Verified raw index output must be an empty dictionary')
     site_raw = small(root / ROLES['figure-sizing-site'], MAX_RESPONSE)
@@ -2727,7 +2740,10 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         return verified_count
     if not figure_source_compatible(projection['core_revision'], general.get('git-hash')):
         raise ValueError('Figure defaults and streamed facts use different source versions')
-    inventory = verify_inventory(inventory_document(root / INVENTORY), namespace, wiki, date, inventory_cache=inventory_cache)
+    inventory_path = root / INVENTORY
+    inventory_before = ((inventory_path.resolve(), evidence.stamp(inventory_path))
+                        if _inventory_sources_out is not None else None)
+    inventory = verify_inventory(inventory_document(inventory_path), namespace, wiki, date, inventory_cache=inventory_cache)
     query_inputs = decode(small(root / QUERY_INPUTS))
     query_titles = provider_query_titles(root, query_inputs, namespace, wiki, date)
     coverage = file_coverage(projection, inventory, query_titles)
@@ -2873,6 +2889,12 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     members,_ = capture_member_paths(root)
     if set(members) != expected:
         raise ValueError('Unexpected or incomplete streamed Figure evidence')
+    if _inventory_sources_out is not None:
+        if (inventory_path.resolve(), evidence.stamp(inventory_path)) != inventory_before:
+            raise ValueError('Figure inventory changed during source replay')
+        # Only source scalars cross this call; the full inventory dies with replay.
+        sources = tuple(tuple(row[key] for key in ('wiki', 'date', 'name', 'url', 'size', 'sha1'))
+                        for row in inventory['sources'])
     if _raw_index_out is not None:
         if (len(offsets) != header['base_batches'] + header['observed_batches'] or
                 replay_identity != {'size': projection['raw_bytes'], 'sha256': projection['raw_sha256']} or
@@ -2882,6 +2904,8 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             (REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT))
         _raw_index_out.update(header=header, offsets=offsets, encoding=encoding,
                               identity=replay_identity, stamp=raw_before[1])
+    if _inventory_sources_out is not None:
+        _inventory_sources_out.update(path=inventory_before[0], stamp=inventory_before[1], sources=sources)
     return defaults, coverage
 
 
@@ -5126,7 +5150,9 @@ def validate_materialized_echo(state, plan, wiki, date, namespace, *, root_recor
             if names & retained_names:raise ValueError('Duplicate materialized retained requests')
             retained_names.update(names)
         remaining=sorted(node['desired']-retained_names,key=lambda name:name.encode())
+        del retained_names
         planned=list(metadata.title_batches(wiki,remaining,old['batch_size'],figure_axes=True))
+        del remaining
         light=set()
         for ref in old.get('closed_prefixes',[]):
             other=referenced(dict(ref,batch=0)); proof=nodes[other]['proof']
@@ -5259,6 +5285,7 @@ def validate_materialized_echo(state, plan, wiki, date, namespace, *, root_recor
         if original_count is None:
             original_document=file_records(original_batches(),namespace,wiki,date,original_site,**options)
             original_count=len(original_document['records'])
+            del original_document
         if node['failure'] is None and original_count!=old['records_count']:
             raise ValueError('Materialized original semantic membership differs')
         failure=node['failure']
