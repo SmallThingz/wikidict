@@ -9890,7 +9890,7 @@ class InitialSealedGenerationTests(unittest.TestCase):
         seal=dict(provenance='ordinary-linked-expander',origin_graph=graph,identity=dict(producer={'fixture':'qualified native producer'},providers={b.auxiliary_snapshot_filename(n):[10,v] for n,v in aux.items()},assets=[[Path(d['path']).name,d['bytes'],d['sha256']] for d in outputs.values()],verified_input=[_initial_sealed_reference(dump)['sha256'],'1'*64]))
         seal['identity']['providers'].update({'interwiki-map.tsv':[10,interwiki],'wikibase-page-links.tsv':[10,'2'*64],'page-redirects.tsv':[10,'3'*64]})
         seal_ref=_initial_sealed_write(expander/'.completed-expander.json',seal)
-        plan=dict(workspace=str(workspace),repository=str(root),dump=_initial_sealed_reference(dump),roles=role_ref,zig_sha256=identity['zig_sha256'],registry=dict(sha256=aux['language-registry']),interwiki=dict(sha256=interwiki),page_links=dict(sha256='2'*64),page_redirects=dict(sha256='3'*64))
+        plan=dict(workspace=str(workspace),repository=str(root),dump=_initial_sealed_reference(dump),roles=role_ref,zig_sha256=identity['zig_sha256'],registry=dict(sha256=aux['namespace-registry']),interwiki=dict(sha256=interwiki),page_links=dict(sha256='2'*64),page_redirects=dict(sha256='3'*64))
         plan_ref=_initial_sealed_write(root/'preparation-data.json',plan)
         result=dict(passed=True,source_after=True,inputs_after=True,pages_executed=0,whole_dictionary=False,native_generation_state_created=False,input_authority=plan_ref,role_map=role_ref,expander=str(expander),completed_expander_seal=seal_ref,installed_tools={n:{k:v for k,v in d.items()if k!='mode'} for n,d in artifacts.items() if n in b.BLOB_TOOL_NAMES},**outputs)
         result_ref=_initial_sealed_write(root/'preparation-result.json',result)
@@ -9928,6 +9928,7 @@ class InitialSealedGenerationTests(unittest.TestCase):
         manifests,artifacts=b._project_auxiliary_capture_identities({'page-language':(*capture,b.auxiliary_manifest_filename('page-language',path))})
         f.expected['edition']='testwiktionary'
         f.aux.update({'namespace-registry':b.sha256_file(namespace),'page-language':b.sha256_file(path)})
+        f.plan['registry']['sha256']=f.aux['namespace-registry']
         for identity in (f.expected,f.identity):
             identity['auxiliary_capture_sha256']=manifests
             identity['auxiliary_capture_artifact_sha256']=artifacts
@@ -14156,6 +14157,57 @@ class InitialSealedRestoredDumpTests(unittest.TestCase):
                     self.assertGreaterEqual(count[0], 2)
                 self.assertFalse((fresh.destination / 'state.json').exists())
                 self.assertEqual(x.held, {name:(f.expander / name).read_bytes() for name in x.held})
+
+
+class InitialSealedRegistryRoleTests(unittest.TestCase):
+    def test_distinct_namespace_and_language_roles_adopt_without_relabeling(self):
+        factory=InitialSealedGenerationTests()
+        with tempfile.TemporaryDirectory(dir=b.PROJECT/'.tmp') as tmp:
+            f=factory.fixture(Path(tmp))
+            self.assertNotEqual(f.aux['namespace-registry'],f.aux['language-registry'])
+            self.assertEqual(f.plan['registry']['sha256'],f.aux['namespace-registry'])
+            self.assertEqual(f.expected['registry_sha256'],f.aux['language-registry'])
+            before={path:path.read_bytes() for path in (f.expander/'.completed-expander.json',
+                    f.root/'preparation-data.json',f.root/'preparation-result.json',f.root/'closure.json')}
+            worker=Path(f.outputs['worker']['path']);worker_identity=(worker.stat().st_dev,worker.stat().st_ino)
+            with factory.contexts(f)[0],factory.contexts(f)[1],factory.contexts(f)[2]:
+                self.assertEqual(factory.adopt(f),123)
+                self.assertEqual(factory.adopt(f),123)
+            state=json.loads((f.destination/'state.json').read_bytes())
+            self.assertEqual(state['registry_sha256'],f.aux['language-registry'])
+            self.assertEqual(state['auxiliary_snapshot_sha256'],f.aux)
+            self.assertEqual(state['native_generation']['build_inputs'],f.identity)
+            self.assertEqual({path:path.read_bytes() for path in before},before)
+            self.assertEqual((worker.stat().st_dev,worker.stat().st_ino),worker_identity)
+            self.assertEqual(f.seal['identity']['providers']['namespace-registry.tsv'][1],f.aux['namespace-registry'])
+            self.assertEqual(f.seal['identity']['providers']['language-registry.tsv'][1],f.aux['language-registry'])
+
+    def test_swapped_missing_changed_registry_roles_and_interwiki_refuse(self):
+        factory=InitialSealedGenerationTests()
+        for mode in ('swapped-plan','missing-namespace','selected-namespace','state-language',
+                     'missing-language','selected-language','interwiki','namespace-provider','language-provider'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory(dir=b.PROJECT/'.tmp') as tmp:
+                f=factory.fixture(Path(tmp));message='Initial sealed registry or interwiki source differs'
+                if mode=='swapped-plan':
+                    f.plan['registry']['sha256']=f.aux['language-registry']
+                    f.result['input_authority']=_initial_sealed_write(f.root/'preparation-data.json',f.plan)
+                    factory.reseal_graph(f)
+                elif mode=='missing-namespace':del f.aux['namespace-registry']
+                elif mode=='selected-namespace':f.aux['namespace-registry']='9'*64
+                elif mode=='state-language':f.expected['registry_sha256']='9'*64
+                elif mode=='missing-language':del f.aux['language-registry']
+                elif mode=='selected-language':
+                    f.aux['language-registry']='9'*64;f.expected['registry_sha256']='9'*64
+                    message='Initial sealed snapshot or dump inputs differ'
+                elif mode=='interwiki':
+                    f.expected['interwiki_map_sha256']='9'*64;f.identity['interwiki_map_sha256']='9'*64
+                else:
+                    name='namespace-registry.tsv' if mode=='namespace-provider' else 'language-registry.tsv'
+                    f.seal['identity']['providers'][name][1]='9'*64
+                    factory.reseal_graph(f);message='Initial sealed snapshot or dump inputs differ'
+                with factory.contexts(f)[0],factory.contexts(f)[1],factory.contexts(f)[2]:
+                    with self.assertRaisesRegex(ValueError,'^'+message+'$'):factory.adopt(f)
+                self.assertFalse((f.destination/'state.json').exists())
 
 
 if __name__=='__main__':unittest.main()

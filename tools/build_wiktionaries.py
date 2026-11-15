@@ -4303,7 +4303,9 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
     providers = seal['identity']['providers']
     worker_hashes = initial_sealed_writer_book(expected, build_identity, auxiliary_snapshots, providers, native_roles)
     snapshots = {auxiliary_snapshot_filename(name): digest for name, digest in worker_hashes.items()}
-    if (plan['registry']['sha256'] != expected.get('registry_sha256')
+    # The native preparation registry is namespaces; shard registry_sha256 is languages.
+    if (plan['registry']['sha256'] != expected.get('auxiliary_snapshot_sha256', {}).get('namespace-registry')
+            or expected.get('registry_sha256') != expected.get('auxiliary_snapshot_sha256', {}).get('language-registry')
             or plan['interwiki']['sha256'] != expected.get('interwiki_map_sha256')):
         raise ValueError('Initial sealed registry or interwiki source differs')
     snapshots.update({'interwiki-map.tsv': expected.get('interwiki_map_sha256'),
