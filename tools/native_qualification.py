@@ -725,6 +725,41 @@ def qualification_binding_plan(cfg, group_binding, expect, source_root):
     return report
 
 
+def record_independent_abort(result, commands):
+    """Account an already-stopped worker; never classify, continue, or signal it."""
+    from collections import Counter
+    recorded=result.get('commands',[])
+    names=[command['name'] for command in commands]
+    if (len(names)!=len(set(names)) or len(recorded)>len(commands) or
+            [row['name'] for row in recorded]!=names[:len(recorded)]):
+        raise ValueError('Interrupted worker result is not an exact command prefix')
+    remaining=[];unrun_tests=[]
+    for command in commands[len(recorded):]:
+        remaining.append(dict(name=command['name'],argv=list(command['argv']),cwd=command['cwd'],
+            status='unrun',passed=False,returncode=None,reason='worker execution aborted',
+            aborted_at=result.get('current_phase')))
+        if 'independent_root' in command:
+            unrun_tests.extend(Counter(command['independent_root']['expected_occurrences']).elements())
+        elif 'independent_test' in command:
+            unrun_tests.append(command['independent_test']['name'])
+    result.setdefault('test_failures',[])
+    # The raw exited row is already durable input. Add a failed classification
+    # only when its ordinary classifier never completed; retain its logs/code.
+    if recorded and recorded[-1]['name']==result.get('current_phase'):
+        row=recorded[-1];command=commands[len(recorded)-1]
+        if row.get('status')=='exited' and 'passed' not in row:
+            row.update(passed=False,outcome='aborted',unclassified_termination=True)
+            result['aborted_command']=row['name']
+            if 'independent_test' in command or 'independent_root' in command:
+                failures=result.setdefault('test_failures',[])
+                if row['name'] not in failures:failures.append(row['name'])
+    result.setdefault('unrun_commands',[]).extend(row['name'] for row in remaining)
+    result.setdefault('unrun_tests',[]).extend(unrun_tests)
+    recorded.extend(remaining)
+    result['commands']=recorded
+    result['passed']=False
+
+
 def focused_returned_test_error(command, stderr, occurrences, unknown_name):
     """Recognize only the runner's terminal clean returned test error, never prose."""
     import re
