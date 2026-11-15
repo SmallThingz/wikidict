@@ -3602,7 +3602,7 @@ def retained_compilation_source(row, native_roles):
             names.append(name)
             path = str(Path(row['source_root']) / name)
             if (files[name]['path'] != path or final[name]['path'] != path or after.get('path') != path
-                    or before.get('path') != path
+                    or before.get('path', path) != path
                     or any(before.get(key) != files[name][key] for key in ('bytes', 'sha256'))
                     or before.get('mode') != modes[name] or after.get('mode') != modes[name]):
                 raise ValueError('Retained helper application continuity differs')

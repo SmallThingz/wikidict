@@ -13070,7 +13070,7 @@ class RetainedCompilationEnvelopeTests(unittest.TestCase):
 
     def native_only_fixture(self, root):
         f = self.fixture(root)
-        f.native_application = dict(rows=[dict(path=row['relative'], before=row['before'], actual_post=row['after']) for row in f.application['rows']], head_before='native-head', head_after=f.guard['head'])
+        f.native_application = dict(rows=[dict(path=row['relative'], before={key: value for key, value in row['before'].items() if key != 'path'}, actual_post=row['after']) for row in f.application['rows']], head_before='native-head', head_after=f.guard['head'])
         f.native_targets = ['prepare-blob-tools', 'cli']
         f.native_extra_options = []
         self.publish_native_only(f)
