@@ -839,5 +839,283 @@ class SpacingKernelTests(unittest.TestCase):
             setup_excluded=True, whole_capture_measured=False, rows=rows), sort_keys=True), flush=True)
 
 
+class SmallBoundedReadTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='small-read-control-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.path = self.root/'input.json'
+        self.path.write_bytes(b'x'*10433)
+
+    def observe_reads(self, calls, *, after_read=None, error=None):
+        original = Path.open
+        selected = self.path
+        class Stream:
+            def __init__(self, stream): self.stream = stream
+            def __enter__(self): self.stream.__enter__();return self
+            def __exit__(self, *args): return self.stream.__exit__(*args)
+            def __getattr__(self, name): return getattr(self.stream, name)
+            def read(self, size):
+                calls.append(size)
+                if error is not None: raise error
+                value = self.stream.read(size)
+                if after_read is not None: after_read()
+                return value
+        def open_file(path, *args, **options):
+            stream = original(path, *args, **options)
+            return Stream(stream) if path == selected and args == ('rb',) else stream
+        return mock.patch.object(Path, 'open', new=open_file)
+
+    def test_small_read_uses_file_size_and_keeps_exact_bounds(self):
+        original = self.path.read_bytes()
+        for limit, expected_size in ((metadata.MAX_METADATA, 10434), (10433, 10434), (10434, 10434)):
+            calls = []
+            with self.observe_reads(calls):
+                self.assertEqual(metadata.small(self.path, limit), original)
+            self.assertEqual(calls, [expected_size])
+        calls = []
+        with self.observe_reads(calls), self.assertRaisesRegex(ValueError, 'Oversized or changing input'):
+            metadata.small(self.path, 8)
+        self.assertEqual(calls, [9])
+        self.path.write_bytes(b'')
+        for limit in (0, metadata.MAX_METADATA):
+            calls = []
+            with self.observe_reads(calls): self.assertEqual(metadata.small(self.path, limit), b'')
+            self.assertEqual(calls, [1])
+
+    def test_small_read_filled_sentinel_preserves_inexact_stat_and_full_bound(self):
+        raw = self.path.read_bytes()
+        actual = metadata.stamp(self.path)
+        for hint, limit, expected in ((0, 20000, [1, 20000]), (7, 20000, [8, 19993]),
+                                      (20000, 20000, [20001])):
+            before = (*actual[:2], hint, *actual[3:])
+            calls = []
+            with mock.patch.object(metadata, 'stamp', return_value=before), self.observe_reads(calls):
+                self.assertEqual(metadata.small(self.path, limit), raw)
+            self.assertEqual(calls, expected)
+        before = (*actual[:2], 0, *actual[3:])
+        calls = []
+        with mock.patch.object(metadata, 'stamp', return_value=before), self.observe_reads(calls), \
+                self.assertRaisesRegex(ValueError, 'Oversized or changing input'):
+            metadata.small(self.path, 8)
+        self.assertEqual(calls, [1, 8])
+
+    def test_small_read_preserves_real_growth_shrink_replacement_and_final_fence(self):
+        original_stamp = metadata.stamp
+        for mutation in ('grow', 'shrink', 'replace'):
+            with self.subTest(mutation=mutation):
+                self.path.write_bytes(b'abcd')
+                reached, calls = [], []
+                def stamp(path):
+                    value = original_stamp(path)
+                    if not reached:
+                        reached.append(True)
+                        if mutation == 'grow': self.path.write_bytes(b'abcdefgh')
+                        elif mutation == 'shrink': self.path.write_bytes(b'a')
+                        else:
+                            replacement = self.root/'replacement'
+                            replacement.write_bytes(b'abcd')
+                            replacement.replace(self.path)
+                    return value
+                with mock.patch.object(metadata, 'stamp', side_effect=stamp), self.observe_reads(calls), \
+                        self.assertRaisesRegex(ValueError, 'Oversized or changing input'):
+                    metadata.small(self.path, 20)
+                self.assertEqual(reached, [True])
+                self.assertEqual(calls, [5, 16] if mutation == 'grow' else [5])
+        self.path.write_bytes(b'abcd')
+        reached = []
+        def mutate_after_read():
+            if not reached:
+                reached.append(True)
+                self.path.write_bytes(b'changed after read')
+        with self.observe_reads([], after_read=mutate_after_read), \
+                self.assertRaisesRegex(ValueError, 'Oversized or changing input'):
+            metadata.small(self.path)
+        self.assertEqual(reached, [True])
+
+    def test_small_read_keeps_nonregular_invalid_bound_and_io_errors(self):
+        import sys
+        link = self.root/'link'
+        link.symlink_to(self.path)
+        with mock.patch.object(Path, 'open', side_effect=AssertionError('opened nonregular input')):
+            for path in (link, self.root):
+                with self.assertRaisesRegex(ValueError, 'Expected a regular, non-symlink file'):
+                    metadata.small(path)
+        for limit, exception in ((1.5, TypeError), (None, TypeError), (sys.maxsize, OverflowError)):
+            with self.subTest(limit=limit), self.assertRaises(exception): metadata.small(self.path, limit)
+        for limit, requested in ((-1, 0), (-2, -1)):
+            calls = []
+            with self.observe_reads(calls), self.assertRaisesRegex(ValueError, 'Oversized or changing input'):
+                metadata.small(self.path, limit)
+            self.assertEqual(calls, [requested])
+        for error in (OSError('selected read failure'), MemoryError('selected allocation failure')):
+            with self.observe_reads([], error=error), self.assertRaises(type(error)) as caught:
+                metadata.small(self.path)
+            self.assertIs(caught.exception, error)
+
+
+def measure_figure_small_read(baseline, candidate, selection):
+    """Two authentic lean frames per fresh replay walk; no corpus extrapolation."""
+    import copy
+    import gc
+    import tempfile
+    import time
+    import tracemalloc
+    from unittest.mock import patch
+    if tracemalloc.is_tracing():
+        raise ValueError('Small read measurement requires unprofiled entry')
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid',
+              'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    def physical(path):
+        value = path.lstat()
+        return tuple(getattr(value, name) for name in fields)
+    originals, stamps = {}, {}
+    for row in [selection['namespace'], *selection['files']]:
+        path = Path(row['path'])
+        before = physical(path)
+        raw = path.read_bytes()
+        if (len(raw) != row['bytes'] or hashlib.sha256(raw).hexdigest() != row['sha256'] or
+                physical(path) != before):
+            raise ValueError('Retained lean replay input changed')
+        originals[path], stamps[path] = raw, before
+    namespace = originals[Path(selection['namespace']['path'])]
+    operations = 16
+    with tempfile.TemporaryDirectory(prefix='figure-small-read-') as temporary:
+        root = Path(temporary)
+        for row in selection['files']:
+            path = Path(row['path'])
+            (root/path.name).write_bytes(originals[path])
+        pairs = []
+        for reference in selection['references']:
+            names, raw, artifacts, accepted = baseline.captured_http_stage(root, reference,
+                selection['wiki'], light=True)
+            # Only this task's temporary raw copy is retired. Original evidence stays intact.
+            accepted[0].unlink()
+            source = dict(kind='http-archived-lean', batch=reference, artifacts=artifacts)
+            pairs.append((source, dict(requests=names, response=raw.decode())))
+        if len(pairs) != 2 or any(len(batch['requests']) != 50 for _, batch in pairs):
+            raise AssertionError('Retained two-frame task shape changed')
+        before_pairs = copy.deepcopy(pairs)
+        files_before = {path.name:(path.read_bytes(), physical(path)) for path in root.iterdir()}
+        def run(helper, count=operations):
+            results = []
+            for _ in range(count):
+                files, archives = set(), {}
+                for source, batch in pairs:
+                    helper.replay_source(root, source, batch, selection['wiki'], selection['date'],
+                        namespace, files, profile_kind=helper.FIGURE_PROFILE_V4,
+                        allow_compatible_epochs=True, origin_plan={})
+                    helper.record_http_archive(root, source, batch, archives, origin_plan={})
+                results.append((files, archives))
+            return results
+        expected = run(baseline)
+        actual = run(candidate)
+        if actual != expected or pairs != before_pairs:
+            raise AssertionError('Retained replay authority/output/input parity differs')
+        del actual
+        documents, census = [], []
+        for name, helper in (('baseline', baseline), ('candidate', candidate)):
+            captured = []
+            original_records = helper.file_records
+            def records(*args, **options):
+                result = original_records(*args, **options)
+                captured.append((result, b''.join(helper.provider_chunks(result))))
+                return result
+            with patch.object(helper, 'file_records', side_effect=records):
+                result = run(helper, 1)
+            if result != expected[:1]:
+                raise AssertionError('Retained semantic census changes replay result')
+            documents.append(captured)
+            del result
+            original_open, reads = Path.open, []
+            class Stream:
+                def __init__(self, stream, path): self.stream, self.path = stream, path
+                def __enter__(self): self.stream.__enter__();return self
+                def __exit__(self, *args): return self.stream.__exit__(*args)
+                def read(self, size):
+                    reads.append(dict(name=self.path.name, requested_bytes=size))
+                    return self.stream.read(size)
+            def open_file(path, *args, **options):
+                stream = original_open(path, *args, **options)
+                return Stream(stream, path) if path.parent == root and args == ('rb',) else stream
+            with patch.object(Path, 'open', new=open_file):
+                result = run(helper, 1)
+            if result != expected[:1]:
+                raise AssertionError('Read-size census changes replay result')
+            if len(reads) != 6:
+                raise AssertionError('Read-size census differs from the actual six-read caller')
+            census.append(dict(arm=name, reads=reads))
+            del result
+        if documents[0] != documents[1] or len(documents[0]) != 2:
+            raise AssertionError('Complete semantic records/provider parity differs')
+        if (any(row['requested_bytes'] != baseline.MAX_METADATA+1 for row in census[0]['reads']) or
+                any(row['requested_bytes'] != len(files_before[row['name']][0])+1 for row in census[1]['reads']) or
+                [row['name'] for row in census[0]['reads']] != [row['name'] for row in census[1]['reads']]):
+            raise AssertionError('Actual size-aware read census differs')
+        del documents
+        errors = []
+        source, batch = pairs[-1]
+        receipt_path = root/source['batch']['accepted_receipt']
+        receipt_original = receipt_path.read_bytes()
+        response_original = batch['response']
+        for mutation in ('wrong-wiki', 'missing-timestamp', 'unrequested-metadata', 'duplicate-key'):
+            data = baseline.decode(response_original.encode())
+            if mutation == 'wrong-wiki': data['query']['general']['wikiid'] = 'invalidwiktionary'
+            elif mutation == 'missing-timestamp': del data['query']['pages'][0]['imageinfo'][0]['timestamp']
+            elif mutation == 'unrequested-metadata': data['query']['pages'][0]['imageinfo'][0]['metadata'] = []
+            raw = baseline.encoded(data)
+            if mutation == 'duplicate-key': raw = b'{"query":null,' + raw[1:]
+            batch['response'] = raw.decode()
+            receipt = baseline.decode(receipt_original)
+            receipt.update(response_bytes=len(raw), response_sha256=baseline.digest(raw))
+            receipt_path.write_bytes(baseline.encoded(receipt))
+            observed = []
+            for helper in (baseline, candidate):
+                try:
+                    run(helper, 1)
+                except Exception as error:
+                    observed.append((type(error).__name__, str(error)))
+                else:
+                    raise AssertionError('Invalid retained replay response accepted')
+            if observed[0] != observed[1]:
+                raise AssertionError('Retained replay error parity differs')
+            errors.append(dict(mutation=mutation, error=observed[0]))
+            batch['response'] = response_original
+            receipt_path.write_bytes(receipt_original)
+        # Fixture mutations are fully restored and revalidated before all clocks.
+        if run(baseline) != expected or run(candidate) != expected or pairs != before_pairs:
+            raise AssertionError('Restored retained replay differs')
+        files_before = {path.name:(path.read_bytes(), physical(path)) for path in root.iterdir()}
+        rows, allocation_rows = [], []
+        for traced, output in ((False, rows), (True, allocation_rows)):
+            for name, helper in (('baseline', baseline), ('candidate', candidate),
+                                 ('candidate', candidate), ('baseline', baseline)):
+                gc.collect()
+                if traced: tracemalloc.start()
+                try:
+                    wall, cpu = time.perf_counter_ns(), time.process_time_ns()
+                    result = run(helper)
+                    cpu, wall = time.process_time_ns()-cpu, time.perf_counter_ns()-wall
+                    if traced: current, peak = tracemalloc.get_traced_memory()
+                finally:
+                    if traced: tracemalloc.stop()
+                output.append(dict(arm=name, cpu_ns=cpu, wall_ns=wall,
+                    **(dict(current_bytes=current, peak_bytes=peak) if traced else {})))
+                if result != expected:
+                    raise AssertionError('Timed retained replay output parity differs')
+                del result
+        if (pairs != before_pairs or
+                {path.name:(path.read_bytes(), physical(path)) for path in root.iterdir()} != files_before):
+            raise AssertionError('Retained replay task mutated its inputs')
+    for path, raw in originals.items():
+        if physical(path) != stamps[path] or path.read_bytes() != raw:
+            raise AssertionError('Original retained input changed during qualification')
+    return dict(scope='16 independent ordinary replay_source walks over the same two authentic FR lean HTTP frames, coherent baseline/candidate metadata modules; incremental traced allocations exclude loaded inputs, not full verify/RSS/whole-FR timing',
+        operations=operations, frames_per_operation=len(pairs), unique_request_titles=100,
+        response_bytes_per_operation=sum(len(batch['response'].encode()) for _, batch in pairs),
+        parity=True, input_after=True, census=census, error_parity=errors,
+        rows=rows, allocation_rows=allocation_rows)
+
+
 if __name__ == '__main__':
     unittest.main()

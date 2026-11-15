@@ -81,7 +81,13 @@ def stamp(path):
 def small(path, limit=MAX_METADATA):
     before = stamp(path)
     with path.open('rb') as stream:
-        raw = stream.read(limit + 1)
+        requested = limit + 1
+        size = (min(requested, before[2] + 1) if type(requested) is int and
+                0 <= requested <= sys.maxsize else requested)
+        raw = stream.read(size)
+        # A full sentinel read can mean growth or a regular file with an inexact stat size.
+        if type(size) is int and 0 < size < requested and len(raw) == size:
+            raw += stream.read(requested - size)
     if len(raw) > limit or stamp(path) != before:
         raise ValueError('Oversized or changing input: ' + str(path))
     return raw
