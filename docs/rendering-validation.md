@@ -16,6 +16,9 @@ needed to keep a build usable, records every affected page, and still emits the
 same data-only presentation schema. Recovery never installs a second Lua engine
 or a reader-side wikitext fallback.
 
+Here, publication means finalizing verified local dictionary files. It does not
+approve a release or establish production readiness; those require user approval.
+
 The build report is `fallback-pages.jsonl`, with one JSON object per recovered
 page:
 
@@ -28,12 +31,14 @@ report as `fallback_report`. Publication rejects blank or malformed JSONL record
 invalid identities, empty/duplicate reasons, and duplicate `(namespace,title)`
 records before compression or rename.
 
-Current fixed reasons are `literal_markup`, `unclosed_formatting`,
-`malformed_table`, `unsupported_element`, `render_limit`,
-`template_presentation`, `missing_template`, `display_title_rejected`,
-`missing_language_heading`, and `expansion_error`. Operational expansion failures
-also add a specific reason such as `expansion_error:Timeout` or
-`expansion_error:expand:ErrorName`.
+The current presentation reasons are defined by
+[`presentation_fallback.Report`](../src/encoder/presentation_fallback.zig).
+They include unresolved language/style decisions, unrepresented figures and image
+maps, rejected targets, and visible Lua/extension errors as well as the original
+syntax and expansion failures. The builder also records
+`unsupported_parser_function` and specific operational failures such as
+`expansion_error:Timeout` or `expansion_error:expand:ErrorName`. A well-formed report
+preserves these defects for review; it does not qualify the affected rendering.
 
 ## MediaWiki recovery oracle
 
@@ -107,10 +112,15 @@ A separate real two-edition run built `aawiktionary` and `abwiktionary` with two
 concurrent edition jobs and two workers per edition. Their compile/link/expand
 pipelines overlapped and both published verified compressed output with fallback
 reports. `--threads` controls per-edition Lua parsing, LLVM compilation, page
-expansion, and XZ work; `--jobs` overlaps edition pipelines. Current orchestration
-also gates new jobs against live CPU load and a fixed 8 GiB aggregate memory cap.
-Those are upper bounds on concurrency. The individual native
-link command is still one link operation and is not claimed to be internally
+expansion, and XZ work; `--jobs` overlaps edition pipelines. At that historical
+checkpoint, orchestration gated new jobs against CPU load and an 8 GiB aggregate
+memory cap. Current resource rules are in [AGENTS.md](../AGENTS.md): corpus jobs
+have their own 8 GiB budget, and admission checks the new allocation plus its
+reserve against available memory, including explicitly verified eligible swap.
+Prepared jobs are not allocations. Once a job starts, host RAM and PSI changes
+are telemetry only; its own memory, CPU, task and time limits still apply.
+Correctness checks do not require a quiet benchmark host. The individual native
+link command remains one link operation and is not claimed to be internally
 multithreaded.
 
 ## What this does not prove
@@ -125,3 +135,17 @@ The full `zig build test -Doptimize=ReleaseFast` suite and bundle integration we
 run at that earlier recovery checkpoint. Its bundle integration reported
 `BUNDLE_INTEGRATION_PASS checks=19` and verifies the final tree contains compiled
 data only.
+
+## Focused failure diagnosis
+
+When preparing a necessary focused native test build, use the existing
+`prepare-tests` selection with `-Dprepare-test-error-tracing=true` to retain
+error-return locations in the selected test root. This avoids rebuilding an
+otherwise useful test binary solely to locate an assertion. The option does not
+recursively enable tracing in separately imported modules: a Tools test traces
+its own assertion and file imports, but its named `encoder` dependency keeps
+that module's original setting.
+
+Preparation only compiles the selected executables. Record the tests actually
+executed and their failures separately; neither successful preparation nor a
+focused pass replaces the required full suite or real dictionary/UI checks.
