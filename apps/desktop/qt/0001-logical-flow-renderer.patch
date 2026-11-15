@@ -8302,7 +8302,7 @@
 +        if (!format.hasProperty(QCompiledInline::Property)) continue;
 +        if (!QCompiledInline::valid(format.property(QCompiledInline::Property))) return invalidInline();
 +        const auto p = QCompiledInline::policy(format);
-+        if (p.contains(u"cursor"_s) && format.objectType() != QTextFormat::NoObject) return invalidInline();
++        if ((p.contains(u"cursor"_s) || p.contains(u"wrap"_s)) && format.objectType() != QTextFormat::NoObject) return invalidInline();
 +        for (const auto &key : {u"height"_s, u"shift"_s})
 +            if (p.contains(key) && qAbs(p.value(key).toDouble() * scaling) >= qreal(QFIXED_MAX)) return false;
 +        const auto decoration = p.value(u"decoration"_s).toMap();
@@ -8335,7 +8335,7 @@
 +                && sourceBlock.text().at(offset).isLowSurrogate() && sourceBlock.text().at(offset - 1).isHighSurrogate()) return invalidInline();
 +            previous = offset;
 +            const auto emptyPolicy = QCompiledInline::policy(f.toCharFormat());
-+            if (emptyPolicy.contains(u"cursor"_s)) return invalidInline();
++            if (emptyPolicy.contains(u"cursor"_s) || emptyPolicy.contains(u"wrap"_s)) return invalidInline();
 +            if (emptyPolicy.contains(u"shift"_s) && qAbs(emptyPolicy.value(u"shift"_s).toDouble() * scaling) >= qreal(QFIXED_MAX)) return false;
 +            qreal height;
 +            if (!QCompiledInline::height(f.toCharFormat(), paintDevice, scaling, &height)) return false;
@@ -10695,7 +10695,7 @@
          }
          if (newY == QFIXED_MAX)
              break;
-@@ -3718,8 +12273,86 @@
+@@ -3718,8 +12273,87 @@
      : QAbstractTextDocumentLayout(*new QTextDocumentLayoutPrivate, doc)
  {
      registerHandler(QTextFormat::ImageObject, new QTextImageHandler(this));
@@ -10705,6 +10705,7 @@
 +    setProperty("_wikidictEntryBodyAdjoiningCapability", QStringLiteral("wikidict.entry-body-adjoining/1"));
 +    setProperty("_wikidictInlineTextCapability", QLatin1StringView(QCompiledInline::Capability));
 +    setProperty("_wikidictInlineHelpCursorCapability", QStringLiteral("wikidict.inline-help-cursor/1"));
++    setProperty("_wikidictInlineWrapCapability", QStringLiteral("wikidict.inline-wrap/1"));
 +    setProperty("_wikidictSectionHeadingCapability", QStringLiteral("wikidict.section-heading/1"));
 +    setProperty("_wikidictContainerFlexCapability", QStringLiteral("wikidict.container-flex/1"));
 +    setProperty("_wikidictPlainContainerCapability", QStringLiteral("wikidict.plain-container/1"));
@@ -10784,7 +10785,7 @@
  
  void QTextDocumentLayout::draw(QPainter *painter, const PaintContext &context)
  {
-@@ -3745,7 +12378,35 @@
+@@ -3745,7 +12379,35 @@
  
      // Make sure we conform to the root frames bounds when drawing.
      d->clipRect = QRectF(fd->position.toPointF(), fd->size.toSizeF()).adjusted(fd->leftMargin.toReal(), 0, -fd->rightMargin.toReal(), 0);
@@ -10821,7 +10822,7 @@
      fd->size.width = width;
  }
  
-@@ -3796,6 +12457,40 @@
+@@ -3796,6 +12458,40 @@
      d->insideDocumentChange = true;
  
      const int documentLength = d->docPrivate->length();
@@ -10862,7 +10863,7 @@
      const bool fullLayout = (oldLength == 0 && length == documentLength);
      const bool smallChange = documentLength > 0
                               && (qMax(length, oldLength) * 100 / documentLength) < 5;
-@@ -3847,6 +12542,108 @@
+@@ -3847,6 +12543,108 @@
  
  //     qDebug("documentChange: from=%d, oldLength=%d, length=%d", from, oldLength, length);
  
@@ -10971,7 +10972,7 @@
      // mark all frames between f_start and f_end as dirty
      markFrames(d->docPrivate->rootFrame(), from, oldLength, length);
  
-@@ -3862,6 +12659,9 @@
+@@ -3862,6 +12660,9 @@
      else if (d->showLayoutProgress)
          d->sizeChangedTimer.start(0, this);
  
@@ -10981,7 +10982,7 @@
      return updateRect;
  }
  
-@@ -3875,7 +12675,50 @@
+@@ -3875,7 +12676,50 @@
      QFixedPoint pointf;
      pointf.x = QFixed::fromReal(point.x());
      pointf.y = QFixed::fromReal(point.y());
@@ -11033,7 +11034,7 @@
      if (accuracy == Qt::ExactHit && p < QTextDocumentLayoutPrivate::PointExact)
          return -1;
  
-@@ -3913,6 +12756,47 @@
+@@ -3913,6 +12757,47 @@
      }
  
      QSizeF inlineSize = (pos == QTextFrameFormat::InFlow ? intrinsic : QSizeF(0, 0));
@@ -11081,7 +11082,7 @@
      item.setWidth(inlineSize.width());
  
      switch (f.verticalAlignment()) {
-@@ -3957,7 +12841,10 @@
+@@ -3957,7 +12842,10 @@
  
      QTextBlock b = d->document->findBlock(frame->firstPosition());
      QTextLine line;
@@ -11093,7 +11094,7 @@
          line = b.layout()->lineAt(b.layout()->lineCount()-1);
  //     qDebug() << "layoutObject: line.isValid" << line.isValid() << b.position() << b.length() <<
  //         frame->firstPosition() << frame->lastPosition();
-@@ -3990,7 +12877,14 @@
+@@ -3990,7 +12878,14 @@
  QSizeF QTextDocumentLayout::dynamicDocumentSize() const
  {
      Q_D(const QTextDocumentLayout);
@@ -11109,7 +11110,7 @@
  }
  
  int QTextDocumentLayout::pageCount() const
-@@ -4078,13 +12972,18 @@
+@@ -4078,13 +12973,18 @@
      if (!d->docPrivate->canLayout())
          return QRectF();
      d->ensureLayoutFinished();
@@ -11129,7 +11130,7 @@
  
          if (f != table) {
              if (QTextTable *table = qobject_cast<QTextTable *>(f)) {
-@@ -4116,6 +13015,7 @@
+@@ -4116,6 +13016,7 @@
      while (f) {
          QTextFrameData *fd = data(f);
          pos += fd->position.toPointF();
@@ -11137,7 +11138,7 @@
  
          if (QTextTable *table = qobject_cast<QTextTable *>(f)) {
              QTextTableCell cell = table->cellAt(framePos);
-@@ -4140,7 +13040,7 @@
+@@ -4140,7 +13041,7 @@
  
      while (frame) {
          QTextFrameData *fd = data(frame);
@@ -11146,7 +11147,7 @@
  
          if (QTextTable *table = qobject_cast<QTextTable *>(frame)) {
              QTextTableCell cell = table->cellAt(blockPos);
-@@ -4151,7 +13051,12 @@
+@@ -4151,7 +13052,12 @@
          frame = frame->parentFrame();
      }
  
@@ -11308,18 +11309,105 @@
              }
          }
          // fix log clusters to point to the previous glyph, as the object doesn't have a glyph of it's own.
-@@ -2219,7 +2250,9 @@
+@@ -2009,6 +2040,12 @@
+     #include "../../3rdparty/emoji-segmenter/emoji_presentation_scanner.c"
+ }
+ #endif
++
++static bool qt_sameShapingFormat(const QTextCharFormat &first, const QTextCharFormat &second)
++{
++    const auto a = QCompiledInline::shapingFormat(first), b = QCompiledInline::shapingFormat(second);
++    return a == b || QTextSourceProvenance::sameIgnoringRun(a, b);
++}
+ 
+ void QTextEngine::itemize() const
+ {
+@@ -2206,6 +2243,73 @@
+ 
+     Itemizer itemizer(layoutData->string, scriptAnalysis.data(), layoutData->items);
+ 
++    if (specialData && hasInlineWrap()) {
++        // Keep original ranges for inlineWrapAt. Resolve overlays BEFORE removing
++        // wrap: a later Property map replaces the entire earlier map, including
++        // non-wrap metrics. The resulting full formats are a shaping-only view.
++        QList<int> edges{0, length};
++        const auto addEdge = [&](qint64 edge) {
++            if (edge > 0 && edge < length) edges.append(int(edge));
++        };
++        const int preedit = specialData->preeditPosition;
++        const int preeditLength = specialData->preeditText.size();
++        if (preedit >= 0) {
++            addEdge(preedit);
++            addEdge(qint64(preedit) + preeditLength);
++        }
++        if (QTextDocumentPrivate::get(block)) {
++            for (auto it = block.begin(); !it.atEnd(); ++it) {
++                const QTextFragment fragment = it.fragment();
++                if (!fragment.isValid()) continue;
++                const int start = fragment.position() - block.position();
++                for (qint64 edge : {qint64(start), qint64(start) + fragment.length()}) {
++                    if (preedit >= 0 && edge >= preedit) edge += preeditLength;
++                    addEdge(edge);
++                }
++            }
++        }
++        for (const auto &range : std::as_const(specialData->formats)) {
++            if (range.length <= 0) continue;
++            addEdge(range.start);
++            addEdge(qint64(range.start) + range.length);
++        }
++        std::sort(edges.begin(), edges.end());
++        edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
++        QList<QTextLayout::FormatRange> shaping;
++        for (int index = 0; index + 1 < edges.size(); ++index) {
++            const int start = edges.at(index), count = edges.at(index + 1) - start;
++            const QTextCharFormat format = QCompiledInline::shapingFormat(inlineFormatAt(start));
++            if (!shaping.isEmpty() && qt_sameShapingFormat(shaping.last().format, format))
++                shaping.last().length += count;
++            else
++                shaping.append({start, count, format});
++        }
++        // Both item boundaries and resolved formats consume this same complete,
++        // non-overlapping view. No original wrap event enters the aligned sweep.
++        for (const auto &range : std::as_const(shaping)) {
++            const auto capitalization = range.format.hasProperty(QTextFormat::FontCapitalization)
++                    ? range.format.fontCapitalization()
++                    : (QTextDocumentPrivate::get(block)
++                       ? formatCollection()->defaultFont().capitalization()
++                       : static_cast<QFont::Capitalization>(fnt.d->capital));
++            itemizer.generate(range.start, range.length, capitalization);
++        }
++        Q_ASSERT(specialData->resolvedFormats.isEmpty());
++        QList<QTextCharFormat> resolved(layoutData->items.size());
++        int rangeIndex = 0;
++        for (int index = 0; index < layoutData->items.size(); ++index) {
++            const auto &item = layoutData->items.at(index);
++            while (item.position >= shaping.at(rangeIndex).start + shaping.at(rangeIndex).length)
++                ++rangeIndex;
++            const auto &range = shaping.at(rangeIndex);
++            Q_ASSERT(item.position >= range.start
++                     && item.position + this->length(&item) <= range.start + range.length);
++            resolved[index] = formatCollection()->charFormat(formatCollection()->indexForFormat(range.format));
++        }
++        specialData->resolvedFormats = resolved;
++        return;
++    }
++
+     const QTextDocumentPrivate *p = QTextDocumentPrivate::get(block);
+     if (p) {
+         SpecialData *s = specialData;
+@@ -2219,7 +2323,9 @@
          int position = prevPosition;
          while (1) {
              const QTextFragmentData * const frag = it.value();
 -            if (it == end || format != frag->format) {
 +            if (it == end || (format != frag->format
-+                && !QTextSourceProvenance::sameIgnoringRun(
++                && !qt_sameShapingFormat(
 +                    formatCollection()->charFormat(format), formatCollection()->charFormat(frag->format)))) {
                  if (s && position >= preeditPosition) {
                      position += s->preeditText.size();
                      preeditPosition = INT_MAX;
-@@ -2454,13 +2487,7 @@
+@@ -2454,13 +2560,7 @@
          } else {
              font = font.resolve(fnt);
          }
@@ -11334,7 +11422,7 @@
      }
  
      if (si.analysis.flags == QScriptAnalysis::SmallCaps)
-@@ -2545,11 +2572,8 @@
+@@ -2545,11 +2645,8 @@
                  engine->ref.ref();
  
                  QTextCharFormat::VerticalAlignment valign = f.verticalAlignment();
@@ -11348,6 +11436,54 @@
                      scaledEngine = font.d->engineForScript(script);
                      if (scaledEngine)
                          scaledEngine->ref.ref();
+@@ -3040,6 +3137,47 @@
+     if (const QTextFormatCollection *collection = formatCollection())
+         return collection->charFormat(formatIndex(si));
+     return QTextCharFormat();
++}
++
++bool QTextEngine::hasInlineWrap() const
++{
++    if (const auto *p = QTextDocumentPrivate::get(block)) {
++        auto it = p->find(block.position());
++        const auto end = p->find(block.position() + block.length() - 1);
++        for (;;) {
++            if (!QCompiledInline::wrap(formatCollection()->charFormat(it.value()->format)).isEmpty()) return true;
++            if (it == end) break;
++            ++it;
++        }
++    }
++    if (specialData)
++        for (const auto &range : std::as_const(specialData->formats))
++            if (!QCompiledInline::wrap(range.format).isEmpty()) return true;
++    return false;
++}
++
++QTextCharFormat QTextEngine::inlineFormatAt(int position) const
++{
++    QTextCharFormat value;
++    if (const auto *p = QTextDocumentPrivate::get(block)) {
++        int sourcePosition = position;
++        if (specialData && position >= specialData->preeditPosition) {
++            if (position < specialData->preeditPosition + specialData->preeditText.size())
++                sourcePosition = qMax(qMin(block.length(), specialData->preeditPosition) - 1, 0);
++            else sourcePosition -= specialData->preeditText.size();
++        }
++        value = formatCollection()->charFormat(p->find(block.position() + sourcePosition).value()->format);
++    }
++    if (specialData) {
++        for (const auto &range : std::as_const(specialData->formats))
++            if (range.start <= position && position < range.start + range.length) value.merge(range.format);
++    }
++    return value;
++}
++
++QString QTextEngine::inlineWrapAt(int position) const
++{
++    return QCompiledInline::wrap(inlineFormatAt(position));
+ }
+ 
+ void QTextEngine::addRequiredBoundaries() const
 --- a/src/gui/text/qtextengine_p.h
 +++ b/src/gui/text/qtextengine_p.h
 @@ -28,6 +28,9 @@
@@ -11360,16 +11496,20 @@
  
  #include "private/qfixed_p.h"
  #include "private/qfont_p.h"
-@@ -497,6 +500,8 @@
+@@ -496,7 +499,12 @@
+         return specialData ? specialData->formatCollection.data() : nullptr;
      }
      QTextCharFormat format(const QScriptItem *si) const;
++    QTextCharFormat inlineFormatAt(int position) const;
++    QString inlineWrapAt(int position) const;
++    bool hasInlineWrap() const;
      inline QAbstractTextDocumentLayout *docLayout() const {
 +        if (projectedDocument)
 +            return projectedDocument->documentLayout();
          Q_ASSERT(QTextDocumentPrivate::get(block) != nullptr);
          return QTextDocumentPrivate::get(block)->document()->documentLayout();
      }
-@@ -532,6 +537,23 @@
+@@ -532,6 +540,23 @@
      QRawFont rawFont;
  #endif
      QTextBlock block;
@@ -11393,7 +11533,7 @@
  
      QTextOption option;
  
-@@ -555,7 +577,14 @@
+@@ -555,7 +580,14 @@
      ItemDecorationList overlineList;
  
      inline bool visualCursorMovement() const
@@ -11658,7 +11798,40 @@
      bool toggleAntialiasing = !(p->renderHints() & QPainter::Antialiasing)
                                && (p->transform().type() > QTransform::TxTranslate);
      if (toggleAntialiasing)
-@@ -1913,11 +2043,25 @@
+@@ -1844,7 +1974,13 @@
+ // fill QScriptLine
+ void QTextLine::layout_helper(int maxGlyphs)
+ {
++    layout_helper(maxGlyphs, false);
++}
++
++void QTextLine::layout_helper(int maxGlyphs, bool emergency)
++{
+     QScriptLine &line = eng->lines[index];
++    const QScriptLine beforeFitting = line;
+     line.length = 0;
+     line.trailingSpaces = 0;
+     line.textWidth = 0;
+@@ -1862,8 +1998,6 @@
+     lbh.maxGlyphs = maxGlyphs;
+ 
+     QTextOption::WrapMode wrapMode = eng->option.wrapMode();
+-    bool breakany = (wrapMode == QTextOption::WrapAnywhere);
+-    const bool breakWordOrAny = breakany || (wrapMode == QTextOption::WrapAtWordBoundaryOrAnywhere);
+     lbh.manualWrap = (wrapMode == QTextOption::ManualWrap || wrapMode == QTextOption::NoWrap);
+ 
+     int item = -1;
+@@ -1882,6 +2016,9 @@
+     lbh.logClusters = eng->layoutData->logClustersPtr;
+     lbh.previousGlyph = 0;
+ 
++    const bool hasInlineWrap = eng->hasInlineWrap();
++    QFixed minimumRunWidth;
++    bool haveEmergencyWrap = false;
+     bool manuallyWrapped = false;
+     bool hasInlineObject = false;
+     bool reachedEndOfLine = false;
+@@ -1913,11 +2050,25 @@
          }
          const QScriptItem &current = eng->layoutData->items.at(item);
  
@@ -11689,7 +11862,7 @@
              // Objects with a QTextDocument may need special vertical alignment
              // or floating treatment handled later, so skip the ascent/descent
              // update for them here.  Standalone objects (no document) are
-@@ -1971,10 +2115,10 @@
+@@ -1971,10 +2122,10 @@
              lbh.whiteSpaceOrObject = true;
              lbh.tmpData.length++;
  
@@ -11702,20 +11875,85 @@
                  QTextCharFormat::VerticalAlignment valign = f.toCharFormat().verticalAlignment();
                  if (valign != QTextCharFormat::AlignTop && valign != QTextCharFormat::AlignBottom) {
                      lbh.tmpData.ascent = qMax(lbh.tmpData.ascent, current.ascent);
-@@ -2049,7 +2193,11 @@
+@@ -2011,6 +2162,7 @@
+ 
+             lbh.whiteSpaceOrObject = false;
+             bool sb_or_ws = false;
++            bool emergencyBoundary = false;
+             // We save the previous glyph so we can use it for calculating the right bearing
+             // later. If we are trimming trailing spaces, the previous glyph is whitespace
+             // and we have already recorded a non-whitespace glyph, we keep that one instead.
+@@ -2020,10 +2172,32 @@
+                 || !attributes[lbh.currentPosition - 1].whiteSpace) {
+                 lbh.saveCurrentGlyph();
+             }
+-            QFixed accumulatedTextWidth;
+             do {
++                const int clusterStart = lbh.currentPosition;
++                QFixed clusterWidth;
+                 addNextCluster(lbh.currentPosition, end, lbh.tmpData, lbh.glyphCount,
+-                               current, lbh.logClusters, lbh.glyphs, &accumulatedTextWidth);
++                               current, lbh.logClusters, lbh.glyphs, &clusterWidth);
++                minimumRunWidth += clusterWidth;
++                bool clusterEmergency = !lbh.manualWrap && wrapMode == QTextOption::WrapAtWordBoundaryOrAnywhere;
++                bool clusterAnywhere = !lbh.manualWrap && wrapMode == QTextOption::WrapAnywhere;
++                bool minimumAnywhere = wrapMode == QTextOption::WrapAnywhere
++                    || wrapMode == QTextOption::WrapAtWordBoundaryOrAnywhere;
++                if (hasInlineWrap) {
++                    clusterEmergency = clusterAnywhere = !lbh.manualWrap;
++                    minimumAnywhere = true;
++                    for (int at = clusterStart; at < lbh.currentPosition; ++at) {
++                        const QString wrap = eng->inlineWrapAt(at);
++                        const bool inherited = wrap.isEmpty();
++                        const bool fallback = wrap == QLatin1String("break_word")
++                            || (inherited && wrapMode == QTextOption::WrapAtWordBoundaryOrAnywhere);
++                        clusterEmergency &= fallback;
++                        clusterAnywhere &= inherited && wrapMode == QTextOption::WrapAnywhere;
++                        minimumAnywhere &= inherited && (wrapMode == QTextOption::WrapAnywhere
++                            || wrapMode == QTextOption::WrapAtWordBoundaryOrAnywhere);
++                    }
++                }
++                haveEmergencyWrap |= clusterEmergency;
++                const bool breakany = clusterAnywhere || (emergency && clusterEmergency);
+ 
+                 // This is a hack to fix a regression caused by the introduction of the
+                 // whitespace flag to non-breakable spaces and will cause the non-breakable
+@@ -2041,15 +2215,20 @@
+                     sb_or_ws = true;
+                     break;
+                 } else if (attributes[lbh.currentPosition].graphemeBoundary) {
+-                    if (breakWordOrAny) {
+-                        lbh.minw = qMax(accumulatedTextWidth, lbh.minw);
+-                        accumulatedTextWidth = 0;
++                    if (minimumAnywhere) {
++                        lbh.minw = qMax(minimumRunWidth, lbh.minw);
++                        minimumRunWidth = 0;
+                     }
+-                    if (breakany)
++                    if (breakany) {
++                        emergencyBoundary = true;
                          break;
++                    }
                  }
              } while (lbh.currentPosition < end);
 -            lbh.minw = qMax(accumulatedTextWidth, lbh.minw);
-+            // Formatting/script items are not word boundaries. tmpData keeps
-+            // the uncommitted word across those items until a real line break;
-+            // emergency wrapping still measures individual grapheme clusters.
-+            lbh.minw = qMax(breakWordOrAny ? accumulatedTextWidth : lbh.tmpData.textWidth,
-+                           lbh.minw);
++            // Neither a shaping item nor an authored emergency boundary is an
++            // intrinsic word boundary. Only normal opportunities reset this sum.
++            lbh.minw = qMax(minimumRunWidth, lbh.minw);
++            if (sb_or_ws) minimumRunWidth = 0;
  
              if (lbh.currentPosition > 0 && lbh.currentPosition <= end
                  && (lbh.currentPosition == end || attributes[lbh.currentPosition].lineBreak)
-@@ -2137,13 +2285,23 @@
+@@ -2073,7 +2252,7 @@
+                 lbh.currentSoftHyphenWidth = lbh.glyphs.advances[lbh.logClusters[lbh.currentPosition - 1]];
+             }
+ 
+-            if (sb_or_ws|breakany) {
++            if (sb_or_ws || emergencyBoundary) {
+                 // To compute the final width of the text we need to take negative right bearing
+                 // into account (negative right bearing means the glyph has pixel data past the
+                 // advance length). Note that the negative right bearing is an absolute number,
+@@ -2137,13 +2316,23 @@
          line += lbh.tmpData;
      }
  
@@ -11744,7 +11982,7 @@
          }
          int startItem = eng->findItem(line.from);
          int endItem = eng->findItem(line.from + line.length);
-@@ -2165,14 +2323,14 @@
+@@ -2165,14 +2354,14 @@
                      current.descent = height - line.ascent;
                      break;
                  case QTextCharFormat::AlignBottom:
@@ -11762,10 +12000,36 @@
              }
          }
      }
-@@ -2194,11 +2352,27 @@
-         }
-     }
+@@ -2183,22 +2372,42 @@
+     LB_DEBUG("        : '%s'", eng->layoutData->string.mid(line.from, line.length).toUtf8().data());
  
+     const QFixed trailingSpace = (includeTrailingSpaces ? lbh.spaceData.textWidth : QFixed(0));
+-    if (eng->option.wrapMode() == QTextOption::WrapAtWordBoundaryOrAnywhere) {
+-        if ((lbh.maxGlyphs != INT_MAX && lbh.glyphCount > lbh.maxGlyphs)
+-            || (lbh.maxGlyphs == INT_MAX && line.textWidth > (line.width -  trailingSpace))) {
+-
+-            eng->option.setWrapMode(QTextOption::WrapAnywhere);
+-            layout_helper(lbh.maxGlyphs);
+-            eng->option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+-            return;
+-        }
+-    }
+-
++    if (!emergency && !lbh.manualWrap && haveEmergencyWrap
++        && ((lbh.maxGlyphs != INT_MAX && lbh.glyphCount > lbh.maxGlyphs)
++            || (lbh.maxGlyphs == INT_MAX && line.textWidth > (line.width - trailingSpace)))) {
++        // Retry this overflowing line, not the paragraph's wrap option. The
++        // first pass has measured the complete ordinary unbreakable word;
++        // emergency opportunities cannot reduce that authored minimum.
++        const QFixed ordinaryMinimum = lbh.minw;
++        // The rejected full word may contain a larger later font. Its metrics
++        // cannot leak onto the shorter authored line selected by the retry.
++        if (hasInlineWrap) line = beforeFitting;
++        layout_helper(lbh.maxGlyphs, true);
++        eng->minWidth = qMax(eng->minWidth, ordinaryMinimum);
++        return;
++    }
++
 +    QFixed projectedMinimum = lbh.minw;
 +    bool isolatedBlockObject = false;
 +    auto projectedObject = eng->projectedFrameMinimumWidths.lowerBound(line.from);
@@ -11792,7 +12056,7 @@
  
          const QFixed actualTextWidth = manuallyWrapped || reachedEndOfLine
                                             ? line.textWidth
-@@ -2744,6 +2918,8 @@
+@@ -2744,6 +2953,8 @@
      }
  
      QPen pen = p->pen();
@@ -11801,7 +12065,7 @@
      {
          QTextLineItemIterator iterator(eng, index, pos, selection);
          while (!iterator.atEnd()) {
-@@ -2766,28 +2942,16 @@
+@@ -2766,28 +2977,16 @@
                  prepareFormat(format, &si);
                  setPen(p, pen, format);
  
@@ -11834,7 +12098,7 @@
                          QFixed itemY = y - si.ascent;
                          switch (format.verticalAlignment()) {
                          case QTextCharFormat::AlignTop:
-@@ -2807,7 +2971,7 @@
+@@ -2807,7 +3006,7 @@
  
                          eng->docLayout()->drawInlineObject(p, itemRect,
                                                             QTextInlineObject(iterator.item, eng),
@@ -11843,7 +12107,7 @@
                                                             format);
                          if (selection) {
                              QBrush bg = format.brushProperty(ObjectSelectionBrush);
-@@ -2901,6 +3065,26 @@
+@@ -2901,6 +3100,26 @@
                  QPainterPrivate::get(p)->drawTextItem(pos, gf, eng);
              }
  
@@ -11870,7 +12134,7 @@
              if ((si.analysis.flags == QScriptAnalysis::Space
                   || si.analysis.flags == QScriptAnalysis::Nbsp)
                  && (eng->option.flags() & QTextOption::ShowTabsAndSpaces)) {
-@@ -2917,12 +3101,47 @@
+@@ -2917,12 +3136,47 @@
          }
      }
      eng->drawDecorations(p);
@@ -11918,7 +12182,7 @@
  }
  
  /*!
-@@ -2946,7 +3165,8 @@
+@@ -2946,7 +3200,8 @@
      const QScriptLine &line = eng->lines[index];
      bool lastLine = index >= eng->lines.size() - 1;
  
@@ -11928,7 +12192,7 @@
  
      if (!eng->layoutData)
          eng->itemize();
-@@ -2998,6 +3218,22 @@
+@@ -2998,6 +3253,22 @@
  
      const int l = eng->length(itm);
      pos = qBound(0, pos - scriptItem->position, l);
@@ -11951,7 +12215,7 @@
  
      QGlyphLayout glyphs = eng->shapedGlyphs(scriptItem);
      unsigned short *logClusters = eng->logClusters(scriptItem);
-@@ -3087,12 +3323,31 @@
+@@ -3087,12 +3358,31 @@
  
      if (eng->option.wrapMode() != QTextOption::NoWrap && x > line.x + line.width)
          x = line.x + line.width;
@@ -11985,7 +12249,7 @@
  
  /*!
      \fn int QTextLine::xToCursor(qreal x, CursorPosition cpos) const
-@@ -3103,8 +3358,26 @@
+@@ -3103,8 +3393,26 @@
  
      \sa cursorToX()
  */
@@ -12014,7 +12278,7 @@
      QFixed x = QFixed::fromReal(_x);
      const QScriptLine &line = eng->lines[index];
      bool lastLine = index >= eng->lines.size() - 1;
-@@ -3113,7 +3386,11 @@
+@@ -3113,7 +3421,11 @@
      if (!eng->layoutData)
          eng->itemize();
  
@@ -12027,7 +12291,7 @@
  
      if (!line_length)
          return line.from;
-@@ -3143,7 +3420,11 @@
+@@ -3143,7 +3455,11 @@
          return line.from;
      }   else if (x < line.textWidth || (line.justified && x < line.width)) {
          // has to be in one of the runs
@@ -13379,7 +13643,7 @@
                  break;
 --- /dev/null
 +++ b/src/gui/text/qtextinlinestyle_p.h
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,186 @@
 +// Private compiled-inline protocol. Semantic source is decoded by the application.
 +#ifndef QTEXTINLINESTYLE_P_H
 +#define QTEXTINLINESTYLE_P_H
@@ -13418,13 +13682,15 @@
 +    if (value.metaType().id() != QMetaType::QVariantMap) return false;
 +    const auto p = value.toMap();
 +    const QStringList keys{u"policy"_s, u"normalized"_s, u"height"_s, u"height_font"_s,
-+        u"height_factor"_s, u"shift"_s, u"decoration"_s, u"cursor"_s};
++        u"height_factor"_s, u"shift"_s, u"decoration"_s, u"cursor"_s, u"wrap"_s};
 +    for (auto it = p.cbegin(); it != p.cend(); ++it) if (!keys.contains(it.key())) return false;
 +    if (p.value(u"policy"_s).metaType().id() != QMetaType::QString
 +        || p.value(u"policy"_s).toString() != QLatin1StringView(Capability)
 +        || p.value(u"normalized"_s).metaType().id() != QMetaType::Bool) return false;
 +    if (p.contains(u"cursor"_s) && (p.value(u"cursor"_s).metaType().id() != QMetaType::QString
 +        || p.value(u"cursor"_s).toString() != u"help"_s)) return false;
++    if (p.contains(u"wrap"_s) && (p.value(u"wrap"_s).metaType().id() != QMetaType::QString
++        || (p.value(u"wrap"_s) != u"normal"_s && p.value(u"wrap"_s) != u"break_word"_s))) return false;
 +    if (p.contains(u"height"_s) && !number(p.value(u"height"_s))) return false;
 +    if (p.contains(u"shift"_s) && !number(p.value(u"shift"_s), true)) return false;
 +    if (p.contains(u"height_font"_s) != p.contains(u"height_factor"_s)) return false;
@@ -13461,6 +13727,20 @@
 +{
 +    return format.hasProperty(Property) && valid(format.property(Property))
 +        ? format.property(Property).toMap() : QVariantMap{};
++}
++inline QTextCharFormat shapingFormat(QTextCharFormat format)
++{
++    auto p = policy(format);
++    if (p.contains(u"wrap"_s)) {
++        p.remove(u"wrap"_s);
++        if (p.size() == 2 && !p.value(u"normalized"_s).toBool()) format.clearProperty(Property);
++        else format.setProperty(Property, p);
++    }
++    return format;
++}
++inline QString wrap(const QTextCharFormat &format)
++{
++    return format.objectType() == QTextFormat::NoObject ? policy(format).value(u"wrap"_s).toString() : QString();
 +}
 +inline bool normalized(const QTextCharFormat &format)
 +{
@@ -13550,3 +13830,13 @@
 +}
 +QT_END_NAMESPACE
 +#endif
+--- a/src/gui/text/qtextlayout.h
++++ b/src/gui/text/qtextlayout.h
+@@ -251,6 +251,7 @@
+ private:
+     QTextLine(int line, QTextEngine *e) : index(line), eng(e) {}
+     void layout_helper(int numGlyphs);
++    void layout_helper(int numGlyphs, bool emergency);
+     void draw_internal(QPainter *p, const QPointF &pos,
+                        const QTextLayout::FormatRange *selection) const;
+ 

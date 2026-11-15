@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "01713066a3ae0ca48c6ccf868ca0dc5f5e2d1d6e0591d4bd6f10cd0c82fd1aa9",
-      "bytes": 818418,
+      "sha256": "7f8709bc235b62482e60ce1d7d76bad0a0fb5964ff7384441831a2b1c808b4fd",
+      "bytes": 832439,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "c7e88b76ee8dd5e5495fb156786954607b5aaa692869746ea26b71cc1e443ff0",
-          "bytes": 755995
+          "qualified_sha256": "bf9cc6a4fc4e007c386dd3ec650230345178813cda67ee8d89faca0965f13022",
+          "bytes": 756149
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -68,15 +68,15 @@
           "path": "src/gui/text/qtextengine.cpp",
           "new_file": false,
           "upstream_sha256": "e072b6ce45339b39d1f352f12d49294877bd10cc597d87d1163e0b49dc363e56",
-          "qualified_sha256": "1b87a3c1fe47aa209c65adc4561e86ca2f705056db2d2193e9d8e2f5745bec4d",
-          "bytes": 157044
+          "qualified_sha256": "4f9f68a91d487cad858157a9d07bcaeca8a80445c38983afb95e884720941c34",
+          "bytes": 162473
         },
         {
           "path": "src/gui/text/qtextengine_p.h",
           "new_file": false,
           "upstream_sha256": "a0e5cada6914da634a8ac97c1e357a94b97e39802556266f9b4bc3d50c13d8a3",
-          "qualified_sha256": "dc0ec0c18fcb1408364697f65070e6207cca303fd835797ecda97df226d147c3",
-          "bytes": 23952
+          "qualified_sha256": "88b8c488c26e311014161ad68ae87be810566a1fb1858cc35ec271a66cdd0da5",
+          "bytes": 24086
         },
         {
           "path": "src/gui/text/qtexthtmlparser.cpp",
@@ -89,8 +89,8 @@
           "path": "src/gui/text/qtextlayout.cpp",
           "new_file": false,
           "upstream_sha256": "a6b8d41c3b4f0d81777edbc84ca53037940ddf3066fa95223fb95cd56ee9c2a8",
-          "qualified_sha256": "ecae83ccd78615a3626dafec1e252a62c4809b6d1a033fe876cab797900dd16a",
-          "bytes": 136230
+          "qualified_sha256": "4beb3da618ed1a276239067783069b4710eeb91827e0efadca1882af792002db",
+          "bytes": 138246
         },
         {
           "path": "src/gui/text/qtextlogicalflow_p.h",
@@ -159,8 +159,15 @@
           "path": "src/gui/text/qtextinlinestyle_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "qualified_sha256": "f59ecdd665302a110a61f579e63eccb2affb80776e80625bb754dc8088242802",
-          "bytes": 9507
+          "qualified_sha256": "c49b462b5329ecf185399521b0f7c71468d1fef0fc55e584475b11327e35635a",
+          "bytes": 10206
+        },
+        {
+          "path": "src/gui/text/qtextlayout.h",
+          "new_file": false,
+          "upstream_sha256": "f918c25d2d8d11d34dc72bde98f10669ab7e41da7894df7e4516c0cc307b0363",
+          "qualified_sha256": "c0bad81288108553f7b4e25e09892261ba072e4550baa92d9621735d48650a85",
+          "bytes": 7784
         }
       ]
     },
@@ -187,15 +194,15 @@
     },
     {
       "file": "0003-bounded-gcc-link-policy.patch",
-      "sha256": "b4af82ae6ee45595a776f35daef0b5abfe1fc18d1cdedca17da00865f76fbf7e",
-      "bytes": 1432,
+      "sha256": "92cba07343426fffde64ce349ee2dc01e2f7332a1f0f06d5533fe30b4d9896fc",
+      "bytes": 2060,
       "files": [
         {
           "path": "src/gui/CMakeLists.txt",
           "new_file": false,
           "upstream_sha256": "c996a751de6dc8db20770bb537f7273a8a1a02740de2a9bfa4834c1c0f29428f",
-          "qualified_sha256": "b19ac827577b83bba8bb7a9be129e8f0d3c8e8d8857e7dac9eb5112776480961",
-          "bytes": 48153
+          "qualified_sha256": "6bcccce0ae1f19802f56b6ae830e271fb934fc244ba5e8f1bb98284de738cbbf",
+          "bytes": 48226
         },
         {
           "path": "src/widgets/CMakeLists.txt",
@@ -209,353 +216,84 @@
   ],
   "qualification": {
     "date": "2026-11-15",
-    "scope": "Compiled semantic Q corners/image alignment and R intrinsic Table/physical Rule clearance in the existing Qt owner/layout paths.",
+    "scope": "Typed per-range inline emergency wrapping, shaping continuity and reproducible private Qt header export.",
     "source_components": [
       {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/preparation165.json",
-        "bytes": 98588,
-        "sha256": "1c78b01909f20ab5d76df26940aef955195ed4f7e0ea4207b868b4a491634102"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-float-viewport01/generic-link-paint01/entry-body-boundary01/adjoining01/section-heading01/full-th01/text-flow07/preparation180.json",
+        "bytes": 315301,
+        "sha256": "14cad6505a9e742c97394b5d8e65badc46ea64cf8cfb6b32f4821d715825cddc"
       },
       {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app165-moc01/preparation166.json",
-        "bytes": 83129,
-        "sha256": "59d9c5bbe3f66899f08299fa9de38340a5993970d6a720b333a622cd9d854c95"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-float-viewport01/generic-link-paint01/entry-body-boundary01/adjoining01/section-heading01/full-th01/text-flow07/preparation182.json",
+        "bytes": 326915,
+        "sha256": "7f43dcc29221b4afac5bcbdc59fc9581a68de682d833c43a249c255143a6e089"
       },
       {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app166-repair01/preparation167.json",
-        "bytes": 110716,
-        "sha256": "e1c6dd060934fc2a72a29c0cad2d66d61bd4e16795a1e776918e16f7cc631084"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-float-viewport01/generic-link-paint01/entry-body-boundary01/adjoining01/section-heading01/full-th01/text-flow07/preparation183.json",
+        "bytes": 333002,
+        "sha256": "1cf4a49f4f8331ee30f0479c27325f30010db6ed538141a38c8f74b103bd7cbc"
       },
       {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app167-repair01/preparation168.json",
-        "bytes": 118652,
-        "sha256": "1d04a9ddf93371a6239c562b49cd67489f8d13be01f9975d0a43e37fa6ef1a23"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-float-viewport01/generic-link-paint01/entry-body-boundary01/adjoining01/section-heading01/full-th01/text-flow07/preparation160.json",
+        "bytes": 429176,
+        "sha256": "e2818c88be431bc77b129339f39c5fe7ed9040bcc398f23b04b1950ab86db04a"
       },
       {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app168-repair01/preparation169.json",
-        "bytes": 126761,
-        "sha256": "f5fbc4693e39858280ea314a7c7ddd5981613227670455837db7d2f02751524f"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app169-repair01/preparation170.json",
-        "bytes": 147868,
-        "sha256": "1f692f7a494b7a07629578087f0b29eb75ef089ae776ef7b3bac5025a5129092"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app170-repair01/preparation171.json",
-        "bytes": 200368,
-        "sha256": "408ae0d15f2d0fc5b005cddbb14c5b776c807e813c613b1e082ea656aa1e568b"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app171-repair01/preparation172.json",
-        "bytes": 185251,
-        "sha256": "82d18f2ad0b21d72f73385ff284fe6bc053ff8e525b5b4793339e9da7dfdff07"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app172-repair01/preparation173.json",
-        "bytes": 202359,
-        "sha256": "95297dfb13d499b3696faad2d8ee56cb71e1c0d5758f866db076f5ecb3d99e35"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app173-repair01/preparation174.json",
-        "bytes": 211754,
-        "sha256": "1205978c5d88e874181a1547682b01f110e418bc2741208337080effd52e5f55"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app174-repair01/preparation175.json",
-        "bytes": 220384,
-        "sha256": "54cdc428ac5e061b9bbbc5a402358f6329b5dc695cf8421c5b3f7a5ccd6473c5"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app176-repair01/preparation178.json",
-        "bytes": 259932,
-        "sha256": "a2d03fc069f526096e6b903923c5b5c78796cdad6cd901bcff0d456cc8b8ea96"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/preparation151.json",
-        "bytes": 99557,
-        "sha256": "92f968ba04ab889de1009c1e585d9d233de6e9c17bd22feff1a9271a95f033d2"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/cold132-repair01/preparation152.json",
-        "bytes": 88641,
-        "sha256": "79a8c2509322d0ed3b7d9696e3e102f8dea794a719f72ea1859eda437b8f53be"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/cold133-repair01/preparation153.json",
-        "bytes": 97009,
-        "sha256": "851cd98da6f33710810175c7718eb5bfb0d8318a9b11e4360d514b8f9efee01c"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app166-repair01/preparation154.json",
-        "bytes": 130888,
-        "sha256": "871075f46c2d38d2308630c094e4def5dea85bfe2ace6066fab67e323b28a90f"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app170-repair01/preparation155.json",
-        "bytes": 200541,
-        "sha256": "28e35a88739da2746cfe8aa0dc4fd39c182c7fbc98792d79c43328bbd28efc33"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app172-repair01/preparation156.json",
-        "bytes": 246762,
-        "sha256": "d29f569a3eb1def7edc26439ec8d7f134b5dcc3fe2fc4be00b2030f0a075cf1f"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app173-repair01/preparation157.json",
-        "bytes": 300437,
-        "sha256": "b6ab4c48ac2b9b9af9f26d3da852b3d05e66df840092c964b16663c9aca03453"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app175-repair01/preparation158.json",
-        "bytes": 336816,
-        "sha256": "9752c8eac2140844b58b0743ef6991f3720c373b90142d0a7d59732b5aee156a"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app176-repair01/preparation159.json",
-        "bytes": 363035,
-        "sha256": "2f18acf1b63d73c0e5b80cd32910f8e1d87aa4df9cdfbe17dfbe61aa17e8f947"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/sr-next268-source01/cubeb-container01/native-qt-consumer01/future-m01/figure-table-caption01/ru-table-cell-combined01/table-float-viewport01/generic-link-paint01/entry-body-boundary01/adjoining01/section-heading01/full-th01/text-flow07/preparation161.json",
+        "bytes": 412960,
+        "sha256": "0203922e41cc85269fa73c1cfabd748f6177c12e77e4baf8a1766d0f3df2d3d0"
       }
     ],
-    "app_source_applications": [
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application165.json",
-        "bytes": 250191,
-        "sha256": "a85e4988f413b41e8f4caf5348b9b5c06cf7ac4902c88a16a895e4364d85a7ed"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application166.json",
-        "bytes": 276509,
-        "sha256": "c9b95515801d274eedc299023ebe35b78380056d13da115fc28d061353ce2332"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application167.json",
-        "bytes": 322185,
-        "sha256": "667f5dcb10c8470e12322d341f397bcec6ee25c16a0efbf2f2ef25fc06f91f93"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application168.json",
-        "bytes": 363584,
-        "sha256": "c829ad12add7571c8cdbbd262c2ccfa6b33bae6e0b750ee6b75c10a73aa3bf51"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application169.json",
-        "bytes": 407445,
-        "sha256": "3a24dbc707e099dda0a933903a15d45369279963a45e6e9478a4278a09b7451d"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application170.json",
-        "bytes": 449329,
-        "sha256": "46082014b155ba053579d121da99fc8ca97d4811583797e76794add609aa660a"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application171.json",
-        "bytes": 518618,
-        "sha256": "8880c0acf03abe03725c1b180bf43f7bb3e3ee563d3d7237e90b51b856572494"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application172.json",
-        "bytes": 575378,
-        "sha256": "2d6cbd36a28c6447f061aee5b3473b91a2f26f3a44d6fd7fedbec6b51eaf146d"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application173.json",
-        "bytes": 641967,
-        "sha256": "fd90fe153d70eefa1647de7fb9b21fb76ed0a53f42e4366cf269f70d3400143a"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application174.json",
-        "bytes": 705256,
-        "sha256": "2eea0a3822e62e82601949d43e123e6f75b14298aab431096de39d42621b6297"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application175.json",
-        "bytes": 767820,
-        "sha256": "85d835de0d865adcab5992e61dc231d54ea380bcc2098643242fa8dcb67fe06c"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application178.json",
-        "bytes": 866337,
-        "sha256": "2898b3a61556a3668db42bd1d39e19a56798d419ff3a6d1213dec76864b6aa07"
-      }
-    ],
-    "native_source_applications": [
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application151.json",
-        "bytes": 296793,
-        "sha256": "ca5e7104f1e6c14531b8ac8fcb5eb20a749b51c760409797cfd054a4f0a3af35"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application152.json",
-        "bytes": 300583,
-        "sha256": "9054aae8416ab9e5d894cae286c1f9d0cbbfd687440ef444146081ca7b8d4a61"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application153.json",
-        "bytes": 307884,
-        "sha256": "6c6d1ecbe6b73cd95d6f067ca9ba7647dab92d2e9460477914266be9f94149e2"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application154.json",
-        "bytes": 312672,
-        "sha256": "1850899a6a592185d794d8186884de706475f73a3e39150652d9a136a535fb8d"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application155.json",
-        "bytes": 318804,
-        "sha256": "e83203ac89c52358e0dcd14bfae64d6051cf290f2ea7e22242d8275f69aab39a"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application156.json",
-        "bytes": 331259,
-        "sha256": "7f3a816ce99989b1c9c93ef262a0f689e600efd234b30fb86a31f4ff2a74157c"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application157.json",
-        "bytes": 337116,
-        "sha256": "f19b5bec61464f0330d9585a3f98240c8b13f62be20416b61ce2ade809d30234"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application158.json",
-        "bytes": 342950,
-        "sha256": "3fb30a5b831fc7311442e4d0a7ea8721fc076a94d2fd831e6b125cd8129a4327"
-      },
-      {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application159.json",
-        "bytes": 348771,
-        "sha256": "0fb1242c9c081d187e32c134ba58439bc7b604630b25a44a5ad90fb31ed3d350"
-      }
-    ],
+    "source_application": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application183.json",
+      "bytes": 1108786,
+      "sha256": "d75b207e749b0b5a57b6ea99d2da3befe302f290d4f2fb1245f20ea5551a0a8c"
+    },
+    "native_application": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application161.json",
+      "bytes": 366561,
+      "sha256": "2533d82e3ffe3cf80cc13d187244017a900376eb2d43898b0132c48eeb618a0e"
+    },
     "native_product": {
       "closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold140/independent-closure01.json",
-        "bytes": 281690,
-        "sha256": "a1d8a7e4ed0a9b12b20ff4331ac1d8ed18316c5883ca1b99a9da4a85f2ae550b"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold141/independent-closure01.json",
+        "bytes": 303574,
+        "sha256": "3b0507f0b751b98007eeca71dcc5aa70d94622703ccbf9f3877052ab8863f478"
       },
       "release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold140/release01.json",
-        "bytes": 549,
-        "sha256": "cd6703876400efb6da4c7d273ede79cec078b34dccd57d4ac2b22f9cc4a0afbb"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold141/release01.json",
+        "bytes": 548,
+        "sha256": "a5765685b0bcd591cba6e735d260899d8209cadbb9702feef36fa7fdc35f723f"
       },
-      "product_lto_audited": true
+      "compiled": true,
+      "tests_executed": false
     },
-    "native_qualification": {
+    "native_header_generation": {
       "closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold140/independent-closure01.json",
-        "bytes": 281690,
-        "sha256": "a1d8a7e4ed0a9b12b20ff4331ac1d8ed18316c5883ca1b99a9da4a85f2ae550b"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold142/independent-closure01.json",
+        "bytes": 423713,
+        "sha256": "f1d784fbe2461e7b2c932c7ebbbe2717c7648c981549234f084150c0b29d8f4c"
       },
       "release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold140/release01.json",
-        "bytes": 549,
-        "sha256": "cd6703876400efb6da4c7d273ede79cec078b34dccd57d4ac2b22f9cc4a0afbb"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold142/release01.json",
+        "bytes": 666,
+        "sha256": "0b4277424af812e59ac25a3901e8de3801b6962eb0f680484f7bb7285d86a8b7"
       },
-      "current_methods": [],
-      "qualification_mode": "compile_only",
-      "tests_executed": false,
-      "retained134": {
-        "closure": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold134/independent-closure01.json",
-          "bytes": 271192,
-          "sha256": "b7ed7a040c82698e4ff5d692546e2551e5ed215c201d553d06db9d0a0fd6b248"
-        },
-        "release": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold134/release01.json",
-          "bytes": 548,
-          "sha256": "dd73eca94deec8e6539d71aabc1d26932fdef946bd87f4b7548a9cf5d41751fd"
-        },
-        "passed_methods": [
-          "explicitInlineImagesShareOccurrenceMetricsPaintHitAndSelection",
-          "tableCornersRejectMalformedNativeOwnersAndRecover"
-        ],
-        "method_source_equality": [
-          {
-            "method": "explicitInlineImagesShareOccurrenceMetricsPaintHitAndSelection",
-            "bytes": 7954,
-            "sha256": "662db1243d5c3d1ce41e3467638f4134868c92b7ae3b33926558b902fb61040a"
-          },
-          {
-            "method": "tableCornersRejectMalformedNativeOwnersAndRecover",
-            "bytes": 3554,
-            "sha256": "9bd01529a33315f75ae6977d75a5309830a0c6011d666df412141ae37f1c995f"
-          }
-        ],
-        "not_repeated_on_current_product": true
-      },
-      "retained132": {
-        "closure": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold132/independent-closure01.json",
-          "bytes": 267638,
-          "sha256": "4a203d439319de3d4f587ffa509ff19b90f84ba88e7dd96971955d01889b242c"
-        },
-        "release": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold132/release01.json",
-          "bytes": 549,
-          "sha256": "48fb512361700b6c73aa557b2891769066fdce384c9bc3a87d9a2d9be8eae94b"
-        },
-        "passed_methods": [
-          "explicitInlineImagesRefuseMalformedNativePolicyAndRecover",
-          "tableCornersPaintPhysicalArcsAndLiteralInnerBorderWithoutChangingLayout",
-          "tableCornersClipOnlyExistingOverflowAndKeepSourceActions",
-          "tableCornersClipRelativeSourceLinksAcrossSignedPan"
-        ],
-        "method_source_equality": [
-          {
-            "method": "explicitInlineImagesRefuseMalformedNativePolicyAndRecover",
-            "bytes": 2774,
-            "sha256": "b4dd6e571b7cd23a06f05cd3d43ebd975886f4a4076438b19bf62970741844b1"
-          },
-          {
-            "method": "tableCornersPaintPhysicalArcsAndLiteralInnerBorderWithoutChangingLayout",
-            "bytes": 6508,
-            "sha256": "0eb75d926cf3a2f45e65339280b4c080fe6e6c0238ab1793a1de13413c0e4e1b"
-          },
-          {
-            "method": "tableCornersClipOnlyExistingOverflowAndKeepSourceActions",
-            "bytes": 6630,
-            "sha256": "0507def7e483def167f7d892ccba744d3f3ee4bcc45faa3b7cf85dcfb8abfeb7"
-          },
-          {
-            "method": "tableCornersClipRelativeSourceLinksAcrossSignedPan",
-            "bytes": 8589,
-            "sha256": "cca8aab488d045f648ba8f0d102b70eba189b63bcbd87ca501f3d034529df56b"
-          }
-        ],
-        "original_overall_passed": false,
-        "not_repeated_on_current_product": true
-      },
-      "historical131_scope": "Source151 combined history: actual131 paired method plus actual130 nested method; no two-method131 pass claim.",
-      "failed133": {
-        "closure": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold133/dispatch02/independent-closure01.json",
-          "bytes": 269938,
-          "sha256": "a3b4af4420d2e82870e85a27fef2d59b184f739248a67b791b8c52255506fce8"
-        },
-        "release": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold133/dispatch02/release01.json",
-          "bytes": 561,
-          "sha256": "f5def053201c5681ca020aa7fc8558e3ed23a0f6b046e4295bf76ae9284eac63"
-        },
-        "selected_passes": 0,
-        "selected_failures": 2
-      },
-      "preadmission133": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold133/independent-closure01.json",
-        "bytes": 8126,
-        "sha256": "f0c603d727b057582d46de760df7b13e3223eebeda0765d7bab041bdabdc18de"
-      },
-      "full_native_suite_passed": false
+      "full_run_passed": false,
+      "worker_final_source_guard": false,
+      "independent_source_guard": true,
+      "header_generation_usable": true
     },
     "app_qualification": {
       "closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/independent-closure01.json",
-        "bytes": 925903,
-        "sha256": "73c7a3350e394e14525ec9b49b1c446902c6d853726a2c3fb2f58a44b18438b8"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/independent-closure01.json",
+        "bytes": 1185966,
+        "sha256": "0d61d3066430d65872b7386e4bc28d7e1836c7e964de159ed10477fd982af762"
       },
       "release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/release01.json",
-        "bytes": 484,
-        "sha256": "de8e7ebe0d070a18bdf59a1d8c2628066f794b092b4a94d859b33cb93b273c2d"
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/release01.json",
+        "bytes": 496,
+        "sha256": "c86c6dffff004c2a9f2fa49fc8c8c0ff805701f4cdd048c077d2b4a7c406c981"
       },
       "current_methods": [
         "intrinsicTableViewportKeepsAutomaticWideAndCellHints",
@@ -578,62 +316,27 @@
         "authoredRuleStrictParsingCopyAndOldNullSeparatorRemainDistinct",
         "ordinaryImageLinkPaintKeepsAlignedFocusAndBitmapStates",
         "primaryFigureImageLinkPaintUsesMediaActionBox",
-        "ordinaryLinkPaintRejectsWrongOwnersAndPreservesCaptionBoundary"
+        "ordinaryLinkPaintRejectsWrongOwnersAndPreservesCaptionBoundary",
+        "authoredInlineWrapKeepsWordMinimumAndMixedGraphemes",
+        "authoredInlineWrapMapsOnlyTextAndKeepsActions"
       ],
-      "test_xml": [
-        {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/reader-ru-table-cell.xml",
-          "bytes": 58232,
-          "sha256": "a0ceebf7bff1ee41efc5bce62fb478fbbc514d7c3b8100ca235d05c0adcb55ca"
-        }
-      ],
+      "test_xml": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/reader-ru-table-cell.xml",
+        "bytes": 60660,
+        "sha256": "4d869a74845872842f767f0ac512b61b930143e3e6be3276f88d8d58093874ef"
+      },
       "all_selected_passed": true,
-      "full_app_ctest": false,
-      "preadmission_closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile165/independent-closure01.json",
-        "bytes": 5287,
-        "sha256": "0d03b238b57478d0457ad9d068b3128b216239289223c48adbcdd649e245325a"
-      },
-      "preadmission_release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile165/release01.json",
-        "bytes": 527,
-        "sha256": "cf1866b38f95c538fbc93492b729d485e8553ff04f7b26cd5cf389d26bbb0119"
-      },
-      "failed_app165": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile165/dispatch02/independent-closure01.json",
-        "bytes": 257724,
-        "sha256": "7a1ecf47923e496f1376460274196e0d70d0525af7c8fbfb2c755712f71901a4"
-      },
-      "failed_app165_release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile165/dispatch02/release01.json",
-        "bytes": 496,
-        "sha256": "d4fcb7c5862352c3c8e0cdb36c09fa9a52734c613d80ce5fec0b06d2dfe61511"
-      },
-      "completed_pending_app165_product_build": true,
-      "test_only_two_brace_correction": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app165-moc01/preparation166.json",
-        "bytes": 83129,
-        "sha256": "59d9c5bbe3f66899f08299fa9de38340a5993970d6a720b333a622cd9d854c95"
-      },
-      "failed_app166": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile166/independent-closure01.json",
-        "bytes": 301606,
-        "sha256": "3405db2dfaf49b282854c49546b8fe0f3b4482d91eb9610d636d113aae9d7a6e"
-      },
-      "failed_app166_release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile166/release01.json",
-        "bytes": 485,
-        "sha256": "41e8da30e80f4de05dfc9c83750bc9c9f9ed70ec6a00aa233660b95a307f850e"
-      },
-      "current_app_repair": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app176-repair01/preparation178.json",
-        "bytes": 259932,
-        "sha256": "a2d03fc069f526096e6b903923c5b5c78796cdad6cd901bcff0d456cc8b8ea96"
+      "qualification_compile_profile": {
+        "build_type": "Release",
+        "before": "-O0 -DNDEBUG",
+        "after": "-O3 -DNDEBUG",
+        "development_only": false,
+        "final_release_qualified": false
       },
       "constructed_frames": [
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/table-padding-ltr-600.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/table-padding-ltr-600.png",
             "bytes": 11146,
             "sha256": "a7a33d264828df1d2bfe9fb18981275f2fe5bd8175779be8d64a80303bb49a69"
           },
@@ -642,7 +345,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/table-padding-ltr-520.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/table-padding-ltr-520.png",
             "bytes": 10714,
             "sha256": "3f47aa0933de357705ec92b8076dd9720ff254ff498c67d2d7935e9d64b21210"
           },
@@ -651,7 +354,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/table-padding-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/table-padding-ltr-900.png",
             "bytes": 10801,
             "sha256": "ad6341f8fd46e4db0cd99b27fdc0eab438d5bd42ce4e4c385e30e9b25c8d23c5"
           },
@@ -660,7 +363,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/table-padding-rtl-600.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/table-padding-rtl-600.png",
             "bytes": 11151,
             "sha256": "718b240dd491873fb7d7e3d7886c7f66f6f7608049f5611b22501806d7935589"
           },
@@ -669,7 +372,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/table-padding-rtl-520.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/table-padding-rtl-520.png",
             "bytes": 10827,
             "sha256": "fb1262bf32afb30d2218f4bac0cd2140eba91341fc7d63d8327f474a97949fd8"
           },
@@ -678,7 +381,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/table-padding-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/table-padding-rtl-900.png",
             "bytes": 12991,
             "sha256": "7e2baa935eee27a26e84a41be08a700ec85699d810577b62097e29f82a8cb0b5"
           },
@@ -687,7 +390,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-image-baseline-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-image-baseline-ltr-900.png",
             "bytes": 16104,
             "sha256": "f232616a79da8ee49a8a101ffa515c7221af88a985b63378ae1d9ad0435cf669"
           },
@@ -696,7 +399,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-image-baseline-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-image-baseline-ltr-640.png",
             "bytes": 15997,
             "sha256": "fb9ed4b97a4c7642efd542077a83ac86d2b02d01581a51558e22eb4e9dffb556"
           },
@@ -705,7 +408,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-image-baseline-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-image-baseline-rtl-900.png",
             "bytes": 14752,
             "sha256": "eace92818ff5e95cb52cea920af4667f7f6d535b0863dcf1658ca735e1e5b159"
           },
@@ -714,7 +417,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-image-baseline-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-image-baseline-rtl-640.png",
             "bytes": 14670,
             "sha256": "667cf5cbf43bd46232ab8294ac01258ba3db2e5413fb1468a23c40fab1041fc9"
           },
@@ -723,7 +426,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-image-middle-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-image-middle-ltr-900.png",
             "bytes": 16125,
             "sha256": "aff72111e94aeafcc69bc6588134663c7ec040cc6f6adc203484667dbcc912a8"
           },
@@ -732,7 +435,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-image-middle-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-image-middle-ltr-640.png",
             "bytes": 16018,
             "sha256": "2379ccd65a65f411f87f954ee6ad3b5af442bc69dccf2d3f679d9fcfc7ae2117"
           },
@@ -741,7 +444,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-image-middle-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-image-middle-rtl-900.png",
             "bytes": 14781,
             "sha256": "df9493cb1485be1458ee25a7f631a54fed4be977b7bd9049b5e39d3706f77c43"
           },
@@ -750,7 +453,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-image-middle-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-image-middle-rtl-640.png",
             "bytes": 14707,
             "sha256": "f9c983a1dc304a28c9ad0a2d0af63c75fcb046efc7cfd90cae6a91cf00131444"
           },
@@ -759,7 +462,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-disabled.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-disabled.png",
             "bytes": 16357,
             "sha256": "7d6880fa58825ac1eb1bc37d4b92ee693281f962879b92007ce79474f4b82532"
           },
@@ -768,7 +471,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-ready-again.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-ready-again.png",
             "bytes": 15800,
             "sha256": "c7ea4451933aa138ffe8b693901d208218a224f37c5187261f05d091e61b78ff"
           },
@@ -777,7 +480,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-loading.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-loading.png",
             "bytes": 16571,
             "sha256": "b3c2f2329d65c3e9d498dee507defd84202cca4f50b1de98d19269f01d8a9030"
           },
@@ -786,7 +489,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-error.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-error.png",
             "bytes": 16357,
             "sha256": "7d6880fa58825ac1eb1bc37d4b92ee693281f962879b92007ce79474f4b82532"
           },
@@ -795,7 +498,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-recovered.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-recovered.png",
             "bytes": 15800,
             "sha256": "c7ea4451933aa138ffe8b693901d208218a224f37c5187261f05d091e61b78ff"
           },
@@ -804,7 +507,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-default-baseline-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-default-baseline-ltr-900.png",
             "bytes": 17817,
             "sha256": "6713007f93d1ce0ee1453e6635e9aa80b8001e443a2ae8eaec563d560f7e266b"
           },
@@ -813,7 +516,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-default-baseline-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-default-baseline-ltr-640.png",
             "bytes": 17806,
             "sha256": "524f609e8fb8b9c0e6ff9f36fc38f36e2bbb9651264d44303074b33a3cc39069"
           },
@@ -822,7 +525,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-absent-baseline-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-absent-baseline-ltr-900.png",
             "bytes": 17817,
             "sha256": "6713007f93d1ce0ee1453e6635e9aa80b8001e443a2ae8eaec563d560f7e266b"
           },
@@ -831,7 +534,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-absent-baseline-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-absent-baseline-ltr-640.png",
             "bytes": 17806,
             "sha256": "524f609e8fb8b9c0e6ff9f36fc38f36e2bbb9651264d44303074b33a3cc39069"
           },
@@ -840,7 +543,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-none-baseline-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-none-baseline-ltr-900.png",
             "bytes": 17726,
             "sha256": "ff0eb628598b287298d0bd76b674715e78de6df34f9018d97544ed956e160a34"
           },
@@ -849,7 +552,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-none-baseline-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-none-baseline-ltr-640.png",
             "bytes": 17693,
             "sha256": "f495fb12e36f9e1b6f7445176fa7491ae23e58c2664af0eb4f367aefdc51c972"
           },
@@ -858,7 +561,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-outline-baseline-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-outline-baseline-ltr-900.png",
             "bytes": 18006,
             "sha256": "84538d5c85e3c58a7bdceeed0058eed7e4f3ae09d479340ebc51728032417ebd"
           },
@@ -867,7 +570,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-outline-baseline-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-outline-baseline-ltr-640.png",
             "bytes": 17995,
             "sha256": "50e2b488634a547d9f2861f548fbebffe7eecf9bbae5ab9f813f1715bb17b01d"
           },
@@ -876,7 +579,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-default-baseline-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-default-baseline-rtl-900.png",
             "bytes": 16012,
             "sha256": "7166b4bd7183ba74ab56899530b00c70fd99865e3efee5cde5b3b6381753507f"
           },
@@ -885,7 +588,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-default-baseline-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-default-baseline-rtl-640.png",
             "bytes": 15990,
             "sha256": "0dc90cabd130280eb464dbad95e0f322c3d51867513e1bd044b67cc8862cf8ad"
           },
@@ -894,7 +597,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-absent-baseline-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-absent-baseline-rtl-900.png",
             "bytes": 16012,
             "sha256": "7166b4bd7183ba74ab56899530b00c70fd99865e3efee5cde5b3b6381753507f"
           },
@@ -903,7 +606,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-absent-baseline-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-absent-baseline-rtl-640.png",
             "bytes": 15990,
             "sha256": "0dc90cabd130280eb464dbad95e0f322c3d51867513e1bd044b67cc8862cf8ad"
           },
@@ -912,7 +615,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-none-baseline-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-none-baseline-rtl-900.png",
             "bytes": 15878,
             "sha256": "ae18b768f81b9a770a5d1516b09eb67c8bf82c8e7ac4535c132c18e63e8c97a3"
           },
@@ -921,7 +624,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-none-baseline-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-none-baseline-rtl-640.png",
             "bytes": 15860,
             "sha256": "00e5bc40a5e104e734eee2dd218908b790227bed2e1d1e9ab816c4ec440a6fa8"
           },
@@ -930,7 +633,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-outline-baseline-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-outline-baseline-rtl-900.png",
             "bytes": 16255,
             "sha256": "ed7fca61a311bb85b310bdb7e57792b66386f0eba3729f63eaae03258ef4f1c0"
           },
@@ -939,7 +642,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-outline-baseline-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-outline-baseline-rtl-640.png",
             "bytes": 16223,
             "sha256": "beb04cde710c827edd905653b08e51372d06bd749aa2925adbeed86a34308679"
           },
@@ -948,7 +651,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-default-middle-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-default-middle-ltr-900.png",
             "bytes": 17819,
             "sha256": "28e5a9b20007bfad86c1abfea111b32b5b395c0b3129f905ac0b89747f75d397"
           },
@@ -957,7 +660,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-default-middle-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-default-middle-ltr-640.png",
             "bytes": 17800,
             "sha256": "7065da190d723da85868134104b3bba30a0c6ac4579828b94637b27a9b50020b"
           },
@@ -966,7 +669,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-absent-middle-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-absent-middle-ltr-900.png",
             "bytes": 17819,
             "sha256": "28e5a9b20007bfad86c1abfea111b32b5b395c0b3129f905ac0b89747f75d397"
           },
@@ -975,7 +678,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-absent-middle-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-absent-middle-ltr-640.png",
             "bytes": 17800,
             "sha256": "7065da190d723da85868134104b3bba30a0c6ac4579828b94637b27a9b50020b"
           },
@@ -984,7 +687,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-none-middle-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-none-middle-ltr-900.png",
             "bytes": 17733,
             "sha256": "e2da5d9a63e5b1678578afb85802399f387c7632e3996bcb2d157bc4bb849722"
           },
@@ -993,7 +696,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-none-middle-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-none-middle-ltr-640.png",
             "bytes": 17701,
             "sha256": "6585967055ac0c355060f83d95ed2dad1f1ef92e4211e77483b29631cccaf412"
           },
@@ -1002,7 +705,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-outline-middle-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-outline-middle-ltr-900.png",
             "bytes": 18022,
             "sha256": "fb49879c88d97869527ef55a92fc0834a8780d6593ff9d940eb58479d82ba2d7"
           },
@@ -1011,7 +714,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-outline-middle-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-outline-middle-ltr-640.png",
             "bytes": 18013,
             "sha256": "3283e321aafc29c54aef741dce808da00445f50a4c54c1518f2f3d71f03b0cf6"
           },
@@ -1020,7 +723,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-default-middle-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-default-middle-rtl-900.png",
             "bytes": 16024,
             "sha256": "1abb24877fab81e6db7a5734d8fa6c69023cebf8906e75a2a06af1ef89624d41"
           },
@@ -1029,7 +732,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-default-middle-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-default-middle-rtl-640.png",
             "bytes": 16004,
             "sha256": "eb845ce1b80d274dc527b356e7c3e447ae2d5627922f900fd245fadaebc83fd1"
           },
@@ -1038,7 +741,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-absent-middle-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-absent-middle-rtl-900.png",
             "bytes": 16024,
             "sha256": "1abb24877fab81e6db7a5734d8fa6c69023cebf8906e75a2a06af1ef89624d41"
           },
@@ -1047,7 +750,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-absent-middle-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-absent-middle-rtl-640.png",
             "bytes": 16004,
             "sha256": "eb845ce1b80d274dc527b356e7c3e447ae2d5627922f900fd245fadaebc83fd1"
           },
@@ -1056,7 +759,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-none-middle-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-none-middle-rtl-900.png",
             "bytes": 15905,
             "sha256": "65670f6ad4225afa86b7d2adbb28b2679574858f17d14af3ae42958dbf5919bc"
           },
@@ -1065,7 +768,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-none-middle-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-none-middle-rtl-640.png",
             "bytes": 15895,
             "sha256": "6fdba08129e87608a18e7667798ef94f794c82eaacb0b0b838144694bd92de30"
           },
@@ -1074,7 +777,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-outline-middle-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-outline-middle-rtl-900.png",
             "bytes": 16357,
             "sha256": "a14344b3fc847678190b4a6cec08a92f424b178c825bec70082d4c97e3dea784"
           },
@@ -1083,7 +786,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/image-focus-outline-middle-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/image-focus-outline-middle-rtl-640.png",
             "bytes": 16327,
             "sha256": "6591ddcbf231e25cb5b30140cd20920aa4bf38f70e68ea890fb119a0cfa69127"
           },
@@ -1092,7 +795,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-default-figure-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-default-figure-ltr-900.png",
             "bytes": 16471,
             "sha256": "0578573b164dfed7e9a0fb0010110c32e3200ffeab0e7b49910f567415d24946"
           },
@@ -1101,7 +804,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-default-figure-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-default-figure-ltr-640.png",
             "bytes": 16401,
             "sha256": "42859b7bd9cec59acc027bdbe74d3f55d154df3da00e97adc51e85f8c546e069"
           },
@@ -1110,7 +813,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-absent-figure-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-absent-figure-ltr-900.png",
             "bytes": 16471,
             "sha256": "0578573b164dfed7e9a0fb0010110c32e3200ffeab0e7b49910f567415d24946"
           },
@@ -1119,7 +822,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-absent-figure-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-absent-figure-ltr-640.png",
             "bytes": 16401,
             "sha256": "42859b7bd9cec59acc027bdbe74d3f55d154df3da00e97adc51e85f8c546e069"
           },
@@ -1128,7 +831,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-none-figure-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-none-figure-ltr-900.png",
             "bytes": 16369,
             "sha256": "f6444e0cbcf2e682528ea0f7714084d49b933aa9ba118b2eeb2885e6cf7a1f45"
           },
@@ -1137,7 +840,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-none-figure-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-none-figure-ltr-640.png",
             "bytes": 16295,
             "sha256": "986192d20ed1f92ec6b4e3b06f55c2aa435c5ec39d8e72116e6f88540ee3413c"
           },
@@ -1146,7 +849,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-outline-figure-ltr-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-outline-figure-ltr-900.png",
             "bytes": 16721,
             "sha256": "ddd5deb280185260813bcf644374083261206b226cc55c7d6923d7ebfd477870"
           },
@@ -1155,7 +858,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-outline-figure-ltr-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-outline-figure-ltr-640.png",
             "bytes": 16648,
             "sha256": "f0d8c002a1da6014e072a4ff26ad7a5b3f3cf36b5d96a5ea678f295cdc6e87fe"
           },
@@ -1164,7 +867,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-default-figure-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-default-figure-rtl-900.png",
             "bytes": 16503,
             "sha256": "5e7650939ab2dc4fe42f319e9457afc33b88b28b04a946552aa893d073e8ad91"
           },
@@ -1173,7 +876,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-default-figure-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-default-figure-rtl-640.png",
             "bytes": 16419,
             "sha256": "8b906a1c07811f8934afd802bd9477fa6cab633f7e637081fa43db4d0fd4e92b"
           },
@@ -1182,7 +885,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-absent-figure-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-absent-figure-rtl-900.png",
             "bytes": 16503,
             "sha256": "5e7650939ab2dc4fe42f319e9457afc33b88b28b04a946552aa893d073e8ad91"
           },
@@ -1191,7 +894,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-absent-figure-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-absent-figure-rtl-640.png",
             "bytes": 16419,
             "sha256": "8b906a1c07811f8934afd802bd9477fa6cab633f7e637081fa43db4d0fd4e92b"
           },
@@ -1200,7 +903,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-none-figure-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-none-figure-rtl-900.png",
             "bytes": 16395,
             "sha256": "15721eccbeccc9ffcee547e274b73dc0c3d0623fff764df0a2acbbdf2899b4f6"
           },
@@ -1209,7 +912,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-none-figure-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-none-figure-rtl-640.png",
             "bytes": 16307,
             "sha256": "94befcc316c578e98480b610d2555f22b1b4d4e26ff5f89d1b19568e1e0ace1a"
           },
@@ -1218,7 +921,7 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-outline-figure-rtl-900.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-outline-figure-rtl-900.png",
             "bytes": 16704,
             "sha256": "217e0f88cc07945779ad549f0b51d1f60e8556564f216267d67bc06e1f2e1379"
           },
@@ -1227,1064 +930,92 @@
         },
         {
           "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile179/commands/.tmp/ui-screenshots/figure-image-focus-outline-figure-rtl-640.png",
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/figure-image-focus-outline-figure-rtl-640.png",
             "bytes": 16617,
             "sha256": "cc6dd162076ccd9663abd5abf93584f87a781724b72ed2af9d2400dd8c1061e8"
           },
           "width": 580,
           "height": 450
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-wrap-paragraph-ltr-900.png",
+            "bytes": 58980,
+            "sha256": "16d342880d0480d403cbff1c27505e6273f1933f1f675f7b84454347e0b347ac"
+          },
+          "width": 900,
+          "height": 650
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-wrap-paragraph-ltr-480.png",
+            "bytes": 39195,
+            "sha256": "9b567eb976849c2be223a6f244e8491232b735589874126f5e20425f73febc4c"
+          },
+          "width": 480,
+          "height": 650
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-wrap-paragraph-rtl-900.png",
+            "bytes": 57734,
+            "sha256": "b9081a11bbe8dffce3993af1f6f14a542588dd0baaf20dcffdfb6fe806ec67c0"
+          },
+          "width": 900,
+          "height": 650
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-wrap-paragraph-rtl-480.png",
+            "bytes": 41855,
+            "sha256": "9a9f6b636278aceec959713e76f1cb169b0c8d070e2de6595b27e2de78a8498c"
+          },
+          "width": 480,
+          "height": 650
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-wrap-table-ltr-900.png",
+            "bytes": 48468,
+            "sha256": "1b162c013ccf41200e24d1afbf1f3b73a7c16e3afaf5364553154d600b396f51"
+          },
+          "width": 900,
+          "height": 650
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-wrap-table-ltr-480.png",
+            "bytes": 31727,
+            "sha256": "910d9341b25a9c16d41fe68b804d8c1edf1c7a6405055f37d75e6b676fd20b3e"
+          },
+          "width": 480,
+          "height": 650
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-wrap-table-rtl-900.png",
+            "bytes": 50471,
+            "sha256": "b55de5c874063b7b8a2325bd3a93f6b3f42db26b2e9ac11d151291a59a9c50cd"
+          },
+          "width": 900,
+          "height": 650
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/dispatch02/commands/.tmp/ui-screenshots/inline-wrap-table-rtl-480.png",
+            "bytes": 33177,
+            "sha256": "e8fd22d68996cc4e0db152cf7443dccd178ec2c0e1fb8e67a64c5928a39bdb7c"
+          },
+          "width": 480,
+          "height": 650
         }
       ],
-      "failed_app167": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/independent-closure01.json",
-        "bytes": 353207,
-        "sha256": "276cd334880912c8e8b1eb019d16147913153295a939a543e54241bf8fbf9e57"
-      },
-      "failed_app167_release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/release01.json",
-        "bytes": 485,
-        "sha256": "63cb9bf668f0685886e853e8275ab0f74e0bb50152d7b71cb48956f1007fb44d"
-      },
-      "retained167_passed_methods": [
-        "intrinsicTableViewportRejectsMalformedSourceAndRevokedCapability",
-        "intrinsicTableViewportUsesTheCellContainingInterval",
-        "tableCornersKeepSourceDecorationOnTheActualResponsiveOwner",
-        "tableCornersKeepPaddingStripInkActionsAndOwnedScrollbarCoordinates",
-        "tableCornersRejectUnprovedSeparateGridAndPreserveLegacyViewport",
-        "tableCornersRejectUnsupportedShapesAndKeepLegacyNull",
-        "authoredRuleClearanceStrictJsonCapabilityAndNativeOwnership",
-        "explicitInlineImageAlignmentRejectsMalformedContextsAndKeepsNull",
-        "explicitInlineImageAlignmentKeepsSourceActionAndAccessibleOuterBox",
-        "authoredRuleKeepsTypedSeparatorSourceGeometrySelectionAndAccessibility",
-        "authoredRuleStrictParsingCopyAndOldNullSeparatorRemainDistinct"
-      ],
-      "retained167_method_source_equality": [
-        {
-          "name": "intrinsicTableViewportRejectsMalformedSourceAndRevokedCapability",
-          "bytes": 3296,
-          "sha256": "a9816e49abe156af8b75536cacc8ac141d910dfdd67be45073f32497d64a49d4"
-        },
-        {
-          "name": "intrinsicTableViewportUsesTheCellContainingInterval",
-          "bytes": 3929,
-          "sha256": "705a036b5a1a509e1ceb208dd48942eb29686a9916782f75da77ba3fc0bd3c58"
-        },
-        {
-          "name": "tableCornersKeepSourceDecorationOnTheActualResponsiveOwner",
-          "bytes": 10138,
-          "sha256": "2d9154b88773a6cc8ee12857c084a105c42c01e0b19bb3bede0708d63535767b"
-        },
-        {
-          "name": "tableCornersKeepPaddingStripInkActionsAndOwnedScrollbarCoordinates",
-          "bytes": 18359,
-          "sha256": "ff88b194b3c217b35586004950949a39470352a777e10f3923901184e0a6f4a2"
-        },
-        {
-          "name": "tableCornersRejectUnprovedSeparateGridAndPreserveLegacyViewport",
-          "bytes": 5366,
-          "sha256": "c0342d438b08113ec1f4aabb7eaf9ba6a738c9c624825b27b93e3d49fb6f8346"
-        },
-        {
-          "name": "tableCornersRejectUnsupportedShapesAndKeepLegacyNull",
-          "bytes": 3720,
-          "sha256": "b5d0af82726922722cd1d40d5325f9a6a20c10a72c8081d76a8de2cab521efa9"
-        },
-        {
-          "name": "authoredRuleClearanceStrictJsonCapabilityAndNativeOwnership",
-          "bytes": 3348,
-          "sha256": "ef55a8a597c0077fa66071971a25a096feef3ce11b34b13f610fcf530a1ac988"
-        },
-        {
-          "name": "explicitInlineImageAlignmentRejectsMalformedContextsAndKeepsNull",
-          "bytes": 2958,
-          "sha256": "4436aac8e0965eee6a8e8d39390c5603aeb4b143384cd500f8cf44804319889a"
-        },
-        {
-          "name": "explicitInlineImageAlignmentKeepsSourceActionAndAccessibleOuterBox",
-          "bytes": 15019,
-          "sha256": "474bb03f5142c3a06f81deee86ccb70946e62af8d3c8ca3a8e0f0b4269b1c1fd"
-        },
-        {
-          "name": "authoredRuleKeepsTypedSeparatorSourceGeometrySelectionAndAccessibility",
-          "bytes": 8775,
-          "sha256": "d2b8ffd40a4f7f73e57b34b8ce7e970581b08274d3c27c15cf75dc9873218e61"
-        },
-        {
-          "name": "authoredRuleStrictParsingCopyAndOldNullSeparatorRemainDistinct",
-          "bytes": 5738,
-          "sha256": "016feb9f94c162ba54f1cebc413d2a87af1c51881d4096b5d073ed27a443a7e0"
-        }
-      ],
-      "retained167_controlled_frames": [
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/table-padding-ltr-600.png",
-            "bytes": 10784,
-            "sha256": "a02cfa3aab7c1006d0022ed413f3be2e7bb55c345e4ed18dd5f0f01b00d83fbd"
-          },
-          "width": 540,
-          "height": 401
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/table-padding-ltr-520.png",
-            "bytes": 11919,
-            "sha256": "c67f1fe3b12a0d5a7b2501483b60628f3e8a291301f68349869e60606936f657"
-          },
-          "width": 492,
-          "height": 339
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/table-padding-ltr-900.png",
-            "bytes": 10801,
-            "sha256": "ad6341f8fd46e4db0cd99b27fdc0eab438d5bd42ce4e4c385e30e9b25c8d23c5"
-          },
-          "width": 556,
-          "height": 433
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/table-padding-rtl-600.png",
-            "bytes": 12597,
-            "sha256": "ecf2d37a0621b05f87a8ec5f278e3576b0cbf3de9a06b392c835df4fd9d61b93"
-          },
-          "width": 540,
-          "height": 401
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/table-padding-rtl-520.png",
-            "bytes": 10855,
-            "sha256": "0f89ad2d22df4d7ad81283315544eea7a323090ce0a3d73abba9c16d195b94c7"
-          },
-          "width": 492,
-          "height": 339
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/table-padding-rtl-900.png",
-            "bytes": 13431,
-            "sha256": "1ee70e18b47646728b41a407d75800adf7a8579a1cc766c76c76c2f5791b4040"
-          },
-          "width": 556,
-          "height": 433
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-image-baseline-ltr-900.png",
-            "bytes": 16104,
-            "sha256": "f232616a79da8ee49a8a101ffa515c7221af88a985b63378ae1d9ad0435cf669"
-          },
-          "width": 556,
-          "height": 482
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-image-baseline-ltr-640.png",
-            "bytes": 15997,
-            "sha256": "fb9ed4b97a4c7642efd542077a83ac86d2b02d01581a51558e22eb4e9dffb556"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-image-baseline-rtl-900.png",
-            "bytes": 14752,
-            "sha256": "eace92818ff5e95cb52cea920af4667f7f6d535b0863dcf1658ca735e1e5b159"
-          },
-          "width": 556,
-          "height": 482
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-image-baseline-rtl-640.png",
-            "bytes": 14670,
-            "sha256": "667cf5cbf43bd46232ab8294ac01258ba3db2e5413fb1468a23c40fab1041fc9"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-image-middle-ltr-900.png",
-            "bytes": 16125,
-            "sha256": "aff72111e94aeafcc69bc6588134663c7ec040cc6f6adc203484667dbcc912a8"
-          },
-          "width": 556,
-          "height": 482
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-image-middle-ltr-640.png",
-            "bytes": 16018,
-            "sha256": "2379ccd65a65f411f87f954ee6ad3b5af442bc69dccf2d3f679d9fcfc7ae2117"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-image-middle-rtl-900.png",
-            "bytes": 14781,
-            "sha256": "df9493cb1485be1458ee25a7f631a54fed4be977b7bd9049b5e39d3706f77c43"
-          },
-          "width": 556,
-          "height": 482
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-image-middle-rtl-640.png",
-            "bytes": 14707,
-            "sha256": "f9c983a1dc304a28c9ad0a2d0af63c75fcb046efc7cfd90cae6a91cf00131444"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-disabled.png",
-            "bytes": 16357,
-            "sha256": "7d6880fa58825ac1eb1bc37d4b92ee693281f962879b92007ce79474f4b82532"
-          },
-          "width": 580,
-          "height": 415
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-ready-again.png",
-            "bytes": 15800,
-            "sha256": "c7ea4451933aa138ffe8b693901d208218a224f37c5187261f05d091e61b78ff"
-          },
-          "width": 580,
-          "height": 415
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-loading.png",
-            "bytes": 16571,
-            "sha256": "b3c2f2329d65c3e9d498dee507defd84202cca4f50b1de98d19269f01d8a9030"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-error.png",
-            "bytes": 16357,
-            "sha256": "7d6880fa58825ac1eb1bc37d4b92ee693281f962879b92007ce79474f4b82532"
-          },
-          "width": 580,
-          "height": 415
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile167/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-recovered.png",
-            "bytes": 15800,
-            "sha256": "c7ea4451933aa138ffe8b693901d208218a224f37c5187261f05d091e61b78ff"
-          },
-          "width": 580,
-          "height": 415
-        }
-      ],
-      "changed_app_methods": [],
-      "retained167_current_pass_credit": false,
-      "original_failed_app168": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/independent-closure01.json",
-        "bytes": 394605,
-        "sha256": "16e6868fb13e04bdd22811654568f49f50b4611899ceff716eb53c71b3457b50"
-      },
-      "original_failed_app168_release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/release01.json",
-        "bytes": 485,
-        "sha256": "1acbad99084da5d68f626f809717596a4bf36d200c13082bcac7a45db9f96d95"
-      },
-      "retained168_passed_methods": [
-        "intrinsicTableViewportKeepsAutomaticWideAndCellHints",
-        "intrinsicTableViewportRejectsMalformedSourceAndRevokedCapability",
-        "intrinsicTableViewportUsesTheCellContainingInterval",
-        "tableCornersKeepSourceDecorationOnTheActualResponsiveOwner",
-        "tableCornersKeepPaddingStripInkActionsAndOwnedScrollbarCoordinates",
-        "tableCornersRejectUnprovedSeparateGridAndPreserveLegacyViewport",
-        "tableCornersRejectUnsupportedShapesAndKeepLegacyNull",
-        "authoredRuleClearanceStrictJsonCapabilityAndNativeOwnership",
-        "explicitInlineImageAlignmentRejectsMalformedContextsAndKeepsNull",
-        "explicitInlineImageAlignmentKeepsSourceActionAndAccessibleOuterBox",
-        "authoredRuleKeepsTypedSeparatorSourceGeometrySelectionAndAccessibility",
-        "authoredRuleStrictParsingCopyAndOldNullSeparatorRemainDistinct"
-      ],
-      "retained168_method_source_equality": [
-        {
-          "name": "intrinsicTableViewportKeepsAutomaticWideAndCellHints",
-          "bytes": 6704,
-          "sha256": "81fcd47fc28115e6a7859eef6d81193d8370410a786a0a36cd73927b111c2dd7"
-        },
-        {
-          "name": "intrinsicTableViewportRejectsMalformedSourceAndRevokedCapability",
-          "bytes": 3296,
-          "sha256": "a9816e49abe156af8b75536cacc8ac141d910dfdd67be45073f32497d64a49d4"
-        },
-        {
-          "name": "intrinsicTableViewportUsesTheCellContainingInterval",
-          "bytes": 3929,
-          "sha256": "705a036b5a1a509e1ceb208dd48942eb29686a9916782f75da77ba3fc0bd3c58"
-        },
-        {
-          "name": "tableCornersKeepSourceDecorationOnTheActualResponsiveOwner",
-          "bytes": 10138,
-          "sha256": "2d9154b88773a6cc8ee12857c084a105c42c01e0b19bb3bede0708d63535767b"
-        },
-        {
-          "name": "tableCornersKeepPaddingStripInkActionsAndOwnedScrollbarCoordinates",
-          "bytes": 18359,
-          "sha256": "ff88b194b3c217b35586004950949a39470352a777e10f3923901184e0a6f4a2"
-        },
-        {
-          "name": "tableCornersRejectUnprovedSeparateGridAndPreserveLegacyViewport",
-          "bytes": 5366,
-          "sha256": "c0342d438b08113ec1f4aabb7eaf9ba6a738c9c624825b27b93e3d49fb6f8346"
-        },
-        {
-          "name": "tableCornersRejectUnsupportedShapesAndKeepLegacyNull",
-          "bytes": 3720,
-          "sha256": "b5d0af82726922722cd1d40d5325f9a6a20c10a72c8081d76a8de2cab521efa9"
-        },
-        {
-          "name": "authoredRuleClearanceStrictJsonCapabilityAndNativeOwnership",
-          "bytes": 3348,
-          "sha256": "ef55a8a597c0077fa66071971a25a096feef3ce11b34b13f610fcf530a1ac988"
-        },
-        {
-          "name": "explicitInlineImageAlignmentRejectsMalformedContextsAndKeepsNull",
-          "bytes": 2958,
-          "sha256": "4436aac8e0965eee6a8e8d39390c5603aeb4b143384cd500f8cf44804319889a"
-        },
-        {
-          "name": "explicitInlineImageAlignmentKeepsSourceActionAndAccessibleOuterBox",
-          "bytes": 15019,
-          "sha256": "474bb03f5142c3a06f81deee86ccb70946e62af8d3c8ca3a8e0f0b4269b1c1fd"
-        },
-        {
-          "name": "authoredRuleKeepsTypedSeparatorSourceGeometrySelectionAndAccessibility",
-          "bytes": 8775,
-          "sha256": "d2b8ffd40a4f7f73e57b34b8ce7e970581b08274d3c27c15cf75dc9873218e61"
-        },
-        {
-          "name": "authoredRuleStrictParsingCopyAndOldNullSeparatorRemainDistinct",
-          "bytes": 5738,
-          "sha256": "016feb9f94c162ba54f1cebc413d2a87af1c51881d4096b5d073ed27a443a7e0"
-        }
-      ],
-      "retained168_controlled_frames": [
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/table-padding-ltr-600.png",
-            "bytes": 10784,
-            "sha256": "a02cfa3aab7c1006d0022ed413f3be2e7bb55c345e4ed18dd5f0f01b00d83fbd"
-          },
-          "width": 540,
-          "height": 401
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/table-padding-ltr-520.png",
-            "bytes": 11919,
-            "sha256": "c67f1fe3b12a0d5a7b2501483b60628f3e8a291301f68349869e60606936f657"
-          },
-          "width": 492,
-          "height": 339
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/table-padding-ltr-900.png",
-            "bytes": 10801,
-            "sha256": "ad6341f8fd46e4db0cd99b27fdc0eab438d5bd42ce4e4c385e30e9b25c8d23c5"
-          },
-          "width": 556,
-          "height": 433
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/table-padding-rtl-600.png",
-            "bytes": 12597,
-            "sha256": "ecf2d37a0621b05f87a8ec5f278e3576b0cbf3de9a06b392c835df4fd9d61b93"
-          },
-          "width": 540,
-          "height": 401
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/table-padding-rtl-520.png",
-            "bytes": 10827,
-            "sha256": "fb1262bf32afb30d2218f4bac0cd2140eba91341fc7d63d8327f474a97949fd8"
-          },
-          "width": 492,
-          "height": 339
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/table-padding-rtl-900.png",
-            "bytes": 12991,
-            "sha256": "7e2baa935eee27a26e84a41be08a700ec85699d810577b62097e29f82a8cb0b5"
-          },
-          "width": 556,
-          "height": 433
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-image-baseline-ltr-900.png",
-            "bytes": 16104,
-            "sha256": "f232616a79da8ee49a8a101ffa515c7221af88a985b63378ae1d9ad0435cf669"
-          },
-          "width": 556,
-          "height": 482
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-image-baseline-ltr-640.png",
-            "bytes": 15997,
-            "sha256": "fb9ed4b97a4c7642efd542077a83ac86d2b02d01581a51558e22eb4e9dffb556"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-image-baseline-rtl-900.png",
-            "bytes": 14752,
-            "sha256": "eace92818ff5e95cb52cea920af4667f7f6d535b0863dcf1658ca735e1e5b159"
-          },
-          "width": 556,
-          "height": 482
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-image-baseline-rtl-640.png",
-            "bytes": 14670,
-            "sha256": "667cf5cbf43bd46232ab8294ac01258ba3db2e5413fb1468a23c40fab1041fc9"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-image-middle-ltr-900.png",
-            "bytes": 16125,
-            "sha256": "aff72111e94aeafcc69bc6588134663c7ec040cc6f6adc203484667dbcc912a8"
-          },
-          "width": 556,
-          "height": 482
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-image-middle-ltr-640.png",
-            "bytes": 16018,
-            "sha256": "2379ccd65a65f411f87f954ee6ad3b5af442bc69dccf2d3f679d9fcfc7ae2117"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-image-middle-rtl-900.png",
-            "bytes": 14781,
-            "sha256": "df9493cb1485be1458ee25a7f631a54fed4be977b7bd9049b5e39d3706f77c43"
-          },
-          "width": 556,
-          "height": 482
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-image-middle-rtl-640.png",
-            "bytes": 14707,
-            "sha256": "f9c983a1dc304a28c9ad0a2d0af63c75fcb046efc7cfd90cae6a91cf00131444"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-disabled.png",
-            "bytes": 16357,
-            "sha256": "7d6880fa58825ac1eb1bc37d4b92ee693281f962879b92007ce79474f4b82532"
-          },
-          "width": 580,
-          "height": 415
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-ready-again.png",
-            "bytes": 15800,
-            "sha256": "c7ea4451933aa138ffe8b693901d208218a224f37c5187261f05d091e61b78ff"
-          },
-          "width": 580,
-          "height": 415
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-loading.png",
-            "bytes": 16571,
-            "sha256": "b3c2f2329d65c3e9d498dee507defd84202cca4f50b1de98d19269f01d8a9030"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-error.png",
-            "bytes": 16357,
-            "sha256": "7d6880fa58825ac1eb1bc37d4b92ee693281f962879b92007ce79474f4b82532"
-          },
-          "width": 580,
-          "height": 415
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile168/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-recovered.png",
-            "bytes": 15800,
-            "sha256": "c7ea4451933aa138ffe8b693901d208218a224f37c5187261f05d091e61b78ff"
-          },
-          "width": 580,
-          "height": 415
-        }
-      ],
-      "retained168_dependency_artifacts": {
-        "lib/libwikidict-gui.so": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/desktop-monorepo-build01/lib/libwikidict-gui.so",
-          "bytes": 9848888,
-          "sha256": "d86241ecacc7e6bfee235ea10c4d551873bf46df5347e16cd2bd3db8b1d40298"
-        },
-        "src/dict-media-tests": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/desktop-monorepo-build01/src/dict-media-tests",
-          "bytes": 1286104,
-          "sha256": "80dceb3e77c5136fde3b436e765d335134caed50cb33245d4d5033e7b292d697"
-        },
-        "src/dict-library-tests": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/desktop-monorepo-build01/src/dict-library-tests",
-          "bytes": 388168,
-          "sha256": "d5c44f8f22a118b0f2393bf285795128113ec9947da5d9cda945fb479b3d810d"
-        },
-        "src/libwikidict-product.a": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/desktop-monorepo-build01/src/libwikidict-product.a",
-          "bytes": 7674714,
-          "sha256": "c7a1fe4d3a1bd7a90403407f2bc31d265de3128ecbcb04e92cfc42516d7de0bb"
-        }
-      },
-      "retained168_native_manifest": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/private-qt-inputs167.json",
-        "bytes": 3553279,
-        "sha256": "e42794722360dd714ecd58fd6de093b52f8fd36eabec86fe5b9c5fae9a8efa92"
-      },
-      "retained168_core_artifacts": [
-        {
-          "bytes": 8170840,
-          "path": "/mnt/downloads/dev/wikidict/.tmp/figure-normal-inputs01/shared-provider01/retained-bundle-driver01/canonical-production-current68/install/bin/wikidict",
-          "sha256": "351d9bfaa027b10b61fb075d56fd8223dcfc80572db5216461485d73a86238a1"
-        },
-        {
-          "bytes": 5108272,
-          "path": "/mnt/downloads/dev/wikidict/.tmp/figure-normal-inputs01/shared-provider01/retained-bundle-driver01/canonical-production-current68/install/lib/libdictffi.so",
-          "sha256": "f62a05e92f68e6524ba0b3d125ab07289938adc87204ad6a397f39a96762968f"
-        },
-        {
-          "bytes": 2392,
-          "path": "/mnt/downloads/dev/wikidict/.tmp/figure-normal-inputs01/shared-provider01/retained-bundle-driver01/canonical-production-current68/install/include/dict/dict.h",
-          "sha256": "43d2fb9c5726f522f5e0e20b705969cd5430b75137ed935b505c47467746bb99"
-        }
-      ],
-      "retained168_qualification_scope": "Twelve actual App168 passes and nineteen saved frames remain historical because Main changes. Retained dependency descriptors describe predecessor products, not required post-build equality or current pass credit.",
-      "retained_component_methods": 0,
-      "dependency_bound_retained_passes": false,
-      "retained168_current_pass_credit": false,
-      "original_failed_app169": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile169/independent-closure01.json",
-        "bytes": 426054,
-        "sha256": "b2024c2e2daafee9213e54a31dfb0466412471c815e883b9c7041b30927cd3be"
-      },
-      "original_failed_app169_release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile169/release01.json",
-        "bytes": 485,
-        "sha256": "b2926c3ffb7354c653ccf0d712bcc792d8b1a58597ece681b44bd3246126f972"
-      },
-      "retained169_passed_methods": [
-        "authoredRuleClearanceLeadingChainAndContextIsolation",
-        "authoredRuleTrailingZeroClearanceDoesNotExportItsMarginsTwice"
-      ],
-      "retained169_method_source_equality": [
-        {
-          "name": "authoredRuleClearanceLeadingChainAndContextIsolation",
-          "bytes": 5221,
-          "sha256": "9dedcb01836cbc2ee064786c30915b4b38e1f8f8cc664a3a1426174ccee66fe1"
-        },
-        {
-          "name": "authoredRuleTrailingZeroClearanceDoesNotExportItsMarginsTwice",
-          "bytes": 5460,
-          "sha256": "a1b8e1fd211eb890619cc3ecbebb68c70df96b0bd0ae93df53083f6951391c74"
-        }
-      ],
-      "retained169_qualification_scope": "Two actual App169 Rule boundary passes remain historical because Main responsive transaction changes. All eighteen methods execute on the new product; no current credit by source equality.",
-      "changed_app_method_bodies": [
-        "primaryFigureImageLinkPaintUsesMediaActionBox"
-      ],
-      "retained169_current_pass_credit": false,
-      "original_failed_app170": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/independent-closure01.json",
-        "bytes": 480353,
-        "sha256": "c0c715cc1b35af8a7414955db1d4009040cf38e396d39455c3cfa63db4fccb94"
-      },
-      "original_failed_app170_release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/release01.json",
-        "bytes": 485,
-        "sha256": "5beeed3c0917b2b04cb86fd99d01ca1d66e03c83614476830714afd8fd32df40"
-      },
-      "retained170_passed_methods": [
-        "intrinsicTableViewportKeepsAutomaticWideAndCellHints",
-        "intrinsicTableViewportRejectsMalformedSourceAndRevokedCapability",
-        "intrinsicTableViewportUsesTheCellContainingInterval",
-        "tableCornersKeepSourceDecorationOnTheActualResponsiveOwner",
-        "tableCornersKeepPaddingStripInkActionsAndOwnedScrollbarCoordinates",
-        "tableCornersRejectUnprovedSeparateGridAndPreserveLegacyViewport",
-        "tableCornersRejectUnsupportedShapesAndKeepLegacyNull",
-        "authoredRuleClearanceLeadingChainAndContextIsolation",
-        "authoredRuleTrailingZeroClearanceDoesNotExportItsMarginsTwice",
-        "authoredRuleClearanceStrictJsonCapabilityAndNativeOwnership",
-        "explicitInlineImageAlignmentRejectsMalformedContextsAndKeepsNull",
-        "explicitInlineImageAlignmentKeepsSourceActionAndAccessibleOuterBox",
-        "authoredRuleKeepsTypedSeparatorSourceGeometrySelectionAndAccessibility",
-        "authoredRuleStrictParsingCopyAndOldNullSeparatorRemainDistinct"
-      ],
-      "retained170_method_source_equality": [
-        {
-          "name": "intrinsicTableViewportKeepsAutomaticWideAndCellHints",
-          "bytes": 6704,
-          "sha256": "81fcd47fc28115e6a7859eef6d81193d8370410a786a0a36cd73927b111c2dd7"
-        },
-        {
-          "name": "intrinsicTableViewportRejectsMalformedSourceAndRevokedCapability",
-          "bytes": 3296,
-          "sha256": "a9816e49abe156af8b75536cacc8ac141d910dfdd67be45073f32497d64a49d4"
-        },
-        {
-          "name": "intrinsicTableViewportUsesTheCellContainingInterval",
-          "bytes": 3929,
-          "sha256": "705a036b5a1a509e1ceb208dd48942eb29686a9916782f75da77ba3fc0bd3c58"
-        },
-        {
-          "name": "tableCornersKeepSourceDecorationOnTheActualResponsiveOwner",
-          "bytes": 10138,
-          "sha256": "2d9154b88773a6cc8ee12857c084a105c42c01e0b19bb3bede0708d63535767b"
-        },
-        {
-          "name": "tableCornersKeepPaddingStripInkActionsAndOwnedScrollbarCoordinates",
-          "bytes": 18359,
-          "sha256": "ff88b194b3c217b35586004950949a39470352a777e10f3923901184e0a6f4a2"
-        },
-        {
-          "name": "tableCornersRejectUnprovedSeparateGridAndPreserveLegacyViewport",
-          "bytes": 5366,
-          "sha256": "c0342d438b08113ec1f4aabb7eaf9ba6a738c9c624825b27b93e3d49fb6f8346"
-        },
-        {
-          "name": "tableCornersRejectUnsupportedShapesAndKeepLegacyNull",
-          "bytes": 3720,
-          "sha256": "b5d0af82726922722cd1d40d5325f9a6a20c10a72c8081d76a8de2cab521efa9"
-        },
-        {
-          "name": "authoredRuleClearanceLeadingChainAndContextIsolation",
-          "bytes": 5221,
-          "sha256": "9dedcb01836cbc2ee064786c30915b4b38e1f8f8cc664a3a1426174ccee66fe1"
-        },
-        {
-          "name": "authoredRuleTrailingZeroClearanceDoesNotExportItsMarginsTwice",
-          "bytes": 5460,
-          "sha256": "a1b8e1fd211eb890619cc3ecbebb68c70df96b0bd0ae93df53083f6951391c74"
-        },
-        {
-          "name": "authoredRuleClearanceStrictJsonCapabilityAndNativeOwnership",
-          "bytes": 3348,
-          "sha256": "ef55a8a597c0077fa66071971a25a096feef3ce11b34b13f610fcf530a1ac988"
-        },
-        {
-          "name": "explicitInlineImageAlignmentRejectsMalformedContextsAndKeepsNull",
-          "bytes": 2958,
-          "sha256": "4436aac8e0965eee6a8e8d39390c5603aeb4b143384cd500f8cf44804319889a"
-        },
-        {
-          "name": "explicitInlineImageAlignmentKeepsSourceActionAndAccessibleOuterBox",
-          "bytes": 15019,
-          "sha256": "474bb03f5142c3a06f81deee86ccb70946e62af8d3c8ca3a8e0f0b4269b1c1fd"
-        },
-        {
-          "name": "authoredRuleKeepsTypedSeparatorSourceGeometrySelectionAndAccessibility",
-          "bytes": 8775,
-          "sha256": "d2b8ffd40a4f7f73e57b34b8ce7e970581b08274d3c27c15cf75dc9873218e61"
-        },
-        {
-          "name": "authoredRuleStrictParsingCopyAndOldNullSeparatorRemainDistinct",
-          "bytes": 5738,
-          "sha256": "016feb9f94c162ba54f1cebc413d2a87af1c51881d4096b5d073ed27a443a7e0"
-        }
-      ],
-      "retained170_controlled_frames": [
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/table-padding-ltr-600.png",
-            "bytes": 11146,
-            "sha256": "a7a33d264828df1d2bfe9fb18981275f2fe5bd8175779be8d64a80303bb49a69"
-          },
-          "width": 540,
-          "height": 401
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/table-padding-ltr-520.png",
-            "bytes": 10714,
-            "sha256": "3f47aa0933de357705ec92b8076dd9720ff254ff498c67d2d7935e9d64b21210"
-          },
-          "width": 492,
-          "height": 339
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/table-padding-ltr-900.png",
-            "bytes": 10801,
-            "sha256": "ad6341f8fd46e4db0cd99b27fdc0eab438d5bd42ce4e4c385e30e9b25c8d23c5"
-          },
-          "width": 556,
-          "height": 433
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/table-padding-rtl-600.png",
-            "bytes": 11151,
-            "sha256": "718b240dd491873fb7d7e3d7886c7f66f6f7608049f5611b22501806d7935589"
-          },
-          "width": 540,
-          "height": 401
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/table-padding-rtl-520.png",
-            "bytes": 10827,
-            "sha256": "fb1262bf32afb30d2218f4bac0cd2140eba91341fc7d63d8327f474a97949fd8"
-          },
-          "width": 492,
-          "height": 339
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/table-padding-rtl-900.png",
-            "bytes": 12991,
-            "sha256": "7e2baa935eee27a26e84a41be08a700ec85699d810577b62097e29f82a8cb0b5"
-          },
-          "width": 556,
-          "height": 433
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-image-baseline-ltr-900.png",
-            "bytes": 16104,
-            "sha256": "f232616a79da8ee49a8a101ffa515c7221af88a985b63378ae1d9ad0435cf669"
-          },
-          "width": 556,
-          "height": 482
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-image-baseline-ltr-640.png",
-            "bytes": 15997,
-            "sha256": "fb9ed4b97a4c7642efd542077a83ac86d2b02d01581a51558e22eb4e9dffb556"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-image-baseline-rtl-900.png",
-            "bytes": 14752,
-            "sha256": "eace92818ff5e95cb52cea920af4667f7f6d535b0863dcf1658ca735e1e5b159"
-          },
-          "width": 556,
-          "height": 482
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-image-baseline-rtl-640.png",
-            "bytes": 14670,
-            "sha256": "667cf5cbf43bd46232ab8294ac01258ba3db2e5413fb1468a23c40fab1041fc9"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-image-middle-ltr-900.png",
-            "bytes": 16125,
-            "sha256": "aff72111e94aeafcc69bc6588134663c7ec040cc6f6adc203484667dbcc912a8"
-          },
-          "width": 556,
-          "height": 482
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-image-middle-ltr-640.png",
-            "bytes": 16018,
-            "sha256": "2379ccd65a65f411f87f954ee6ad3b5af442bc69dccf2d3f679d9fcfc7ae2117"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-image-middle-rtl-900.png",
-            "bytes": 14781,
-            "sha256": "df9493cb1485be1458ee25a7f631a54fed4be977b7bd9049b5e39d3706f77c43"
-          },
-          "width": 556,
-          "height": 482
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-image-middle-rtl-640.png",
-            "bytes": 14707,
-            "sha256": "f9c983a1dc304a28c9ad0a2d0af63c75fcb046efc7cfd90cae6a91cf00131444"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-disabled.png",
-            "bytes": 16357,
-            "sha256": "7d6880fa58825ac1eb1bc37d4b92ee693281f962879b92007ce79474f4b82532"
-          },
-          "width": 580,
-          "height": 415
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-ready-again.png",
-            "bytes": 15800,
-            "sha256": "c7ea4451933aa138ffe8b693901d208218a224f37c5187261f05d091e61b78ff"
-          },
-          "width": 580,
-          "height": 415
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-loading.png",
-            "bytes": 16571,
-            "sha256": "b3c2f2329d65c3e9d498dee507defd84202cca4f50b1de98d19269f01d8a9030"
-          },
-          "width": 580,
-          "height": 450
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-error.png",
-            "bytes": 16357,
-            "sha256": "7d6880fa58825ac1eb1bc37d4b92ee693281f962879b92007ce79474f4b82532"
-          },
-          "width": 580,
-          "height": 415
-        },
-        {
-          "file": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile170/commands/.tmp/ui-screenshots/inline-known-baseline-ltr-recovered.png",
-            "bytes": 15800,
-            "sha256": "c7ea4451933aa138ffe8b693901d208218a224f37c5187261f05d091e61b78ff"
-          },
-          "width": 580,
-          "height": 415
-        }
-      ],
-      "retained170_qualification_scope": "Fourteen actual App170 passes and nineteen saved frames are historical. Shared native and app paint/composition change; all twenty-one controls execute on the new product, with no pass credit from source equality.",
-      "added_app_methods": [],
-      "new_app_methods": [],
-      "image_focus_draft06": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-missing-ac01/banner-style01/image-link-paint-r01/qt-consumer01/product-draft06.json",
-        "bytes": 29891,
-        "sha256": "8ddf75926c6cba145cb2f2c30f1a7c2412439e481da4bc5b9d615e2e4cde413c"
-      },
-      "coherent_draft": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app176-repair01/draft02.json",
-        "bytes": 4717,
-        "sha256": "0690d5beb22642a5e3699e84d27abc35572c5966eee32a4b700f7fef5ecb009a"
-      },
-      "retained170_current_pass_credit": false,
-      "current_source_application178": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application178.json",
-        "bytes": 866337,
-        "sha256": "2898b3a61556a3668db42bd1d39e19a56798d419ff3a6d1213dec76864b6aa07"
-      },
-      "native_dependency_qualification176": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app175-repair01/preparation176.json",
-        "bytes": 236288,
-        "sha256": "711af38efd4018b9b9a3945476a571806e6583c9fac43583203ebcc9b507fb18"
-      },
-      "normal_release_qualification179": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/normal-release17601/preparation179.json",
-        "bytes": 49391,
-        "sha256": "9d474cfa3fef2950a83e351d3b9ead661a696d8d3a2acb1db21369944f20e6dc"
-      },
-      "private_qt_manifest": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/private-qt-inputs178.json",
-        "bytes": 3553255,
-        "sha256": "fda8a85c3fc6e8816f22a04bab902d75b312cdc96341d32268e897be27608264"
-      },
-      "qualification_compile_profile": {
-        "build_type": "Release",
-        "before": "-O0 -DNDEBUG",
-        "after": "-O3 -DNDEBUG",
-        "development_only": false,
-        "final_release_qualified": false
-      },
-      "final_release_qualified": true,
-      "historical_source171": {
-        "source_application": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application171.json",
-          "bytes": 518618,
-          "sha256": "8880c0acf03abe03725c1b180bf43f7bb3e3ee563d3d7237e90b51b856572494"
-        },
-        "configuration": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile171/configuration.json",
-          "bytes": 1076025,
-          "sha256": "59799e88b6586884e8acc3e3fc64db6b063e2a325cfcbe8cd5c3407695d7c395"
-        },
-        "source_binding": {
-          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/th-jian-caption-action01/rule-clear-r01/qt-consumer01/app170-repair01/preparation171.json",
-          "bytes": 200368,
-          "sha256": "408ae0d15f2d0fc5b005cddbb14c5b776c807e813c613b1e082ea656aa1e568b"
-        },
-        "changed_app_methods": [
-          "intrinsicTableViewportUsesActualFloatBandWithoutFloating",
-          "intrinsicTableViewportKeepsSourceFocusAcrossAutomaticWide",
-          "tableCornersKeepNativeSourceFocusAcrossResponsiveStates",
-          "authoredRuleClearanceUsesPhysicalFloatsAndPreservesMargins"
-        ],
-        "changed_app_method_bodies": [
-          "intrinsicTableViewportKeepsSourceFocusAcrossAutomaticWide",
-          "tableCornersKeepNativeSourceFocusAcrossResponsiveStates",
-          "ordinaryLinkPaintRejectsWrongOwnersAndPreservesCaptionBoundary",
-          "authoredRuleClearanceUsesPhysicalFloatsAndPreservesMargins"
-        ],
-        "added_app_methods": [
-          "ordinaryImageLinkPaintKeepsAlignedFocusAndBitmapStates",
-          "primaryFigureImageLinkPaintUsesMediaActionBox",
-          "ordinaryLinkPaintRejectsWrongOwnersAndPreservesCaptionBoundary"
-        ],
-        "new_app_methods": [
-          "ordinaryImageLinkPaintKeepsAlignedFocusAndBitmapStates",
-          "primaryFigureImageLinkPaintUsesMediaActionBox"
-        ]
-      },
-      "later_history": [
-        {
-          "role": "original_failed_app171",
-          "closure": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile171/independent-closure01.json",
-            "bytes": 540552,
-            "sha256": "f91ba8e922705efd64e872be3f18078880a7f5308493cd8d330a7f33f0f9bf31"
-          },
-          "release": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile171/release01.json",
-            "bytes": 485,
-            "sha256": "252e56180130832ce466c7ab2732e38d4cddca6ed3f68d81f5b138c4eba15769"
-          }
-        },
-        {
-          "role": "original_failed_app172",
-          "closure": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile172/dispatch02/independent-closure01.json",
-            "bytes": 601090,
-            "sha256": "de58d5dfe8f0dda2ff1f1c0a66ca22a06451658f81b34f99551cdcf98866398b"
-          },
-          "release": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile172/dispatch02/release01.json",
-            "bytes": 495,
-            "sha256": "505fe88766e959822e6e98894b3e4c823d7d90563a8fc80163c6f8e9cfddab95"
-          }
-        },
-        {
-          "role": "original_failed_app173",
-          "closure": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile173/independent-closure01.json",
-            "bytes": 666874,
-            "sha256": "0c22c80344ae508d40d8078c5f2d1c240537feff3c260ccf753dcfed549815e2"
-          },
-          "release": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile173/release01.json",
-            "bytes": 484,
-            "sha256": "ed5310776227e96b1f4788ae5a285dfa1aa302e45347931d1870c8fa20a6c943"
-          }
-        },
-        {
-          "role": "original_failed_app174",
-          "closure": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile174/independent-closure01.json",
-            "bytes": 740085,
-            "sha256": "5a6558fab600ee59330c14d7c2158fc84c23d02c7e5b6f4492d56c77b413f7e1"
-          },
-          "release": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile174/release01.json",
-            "bytes": 485,
-            "sha256": "15ddb67f9fc29e1e3f5e1d1ff2c63a2c7118daf55df8aff8aee6e0fd6328db5c"
-          }
-        },
-        {
-          "role": "original_configure172",
-          "closure": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile172/independent-closure01.json",
-            "bytes": 588598,
-            "sha256": "245138c3b48396bcdb22505c1e901e1045c5871d6cb75c04fb268eb4bdc7fc7e"
-          },
-          "release": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile172/release01.json",
-            "bytes": 485,
-            "sha256": "115f9b0f0836f42105ce1b29332571f09ea5cb2411720b17e7b1f0e42a1d9849"
-          }
-        },
-        {
-          "role": "failed_app175",
-          "closure": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile175/independent-closure01.json",
-            "bytes": 789462,
-            "sha256": "d510b5daa5b3d994c6a66f395df90e6e835500dacab17f94296d83818515625f"
-          },
-          "release": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile175/release01.json",
-            "bytes": 485,
-            "sha256": "bfc9cd35c428d185710bd522f652d260175571033a20c88a0fef55dbf1d02017"
-          }
-        },
-        {
-          "role": "passed_dependency176",
-          "closure": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile176/independent-closure01.json",
-            "bytes": 822426,
-            "sha256": "ed3fed46edd5913a07a4baddfa319c12e278fc2e79c8c567cb6e9df96725ed67"
-          },
-          "release": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile176/release01.json",
-            "bytes": 484,
-            "sha256": "0cad2b3a87189e5217a252683aa5a322cfb6831f57592b8c2847aefc06d8f7be"
-          }
-        },
-        {
-          "role": "passed_clip178",
-          "closure": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile178/independent-closure01.json",
-            "bytes": 906200,
-            "sha256": "a2a08c7bcae4216465dd194527835ac073161868c01d665a339814a6174026e5"
-          },
-          "release": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile178/release01.json",
-            "bytes": 484,
-            "sha256": "0c8741935de54b21a66efc12e8184ac8f76c687213fc45292c1b7018f2383acc"
-          }
-        }
-      ]
+      "capture_scope": "Current optimized Release23 Reader controls and75 constructed client frames, including eight paragraph/table wrap captures. Genuine dictionary interoperability and full UI flows remain separate.",
+      "full_app_ctest": false,
+      "final_release_qualified_scope": "optimized Release build profile and 23 selected component controls only",
+      "optimized_release_profile_qualified": true,
+      "release_approved": false,
+      "production_ready": false
     },
     "library": {
       "closure": {
@@ -2292,68 +1023,10 @@
         "bytes": 216018,
         "sha256": "981a35ed05cc398fed393f14102d62c03e82bc3a3a08045a63f3bfb177a36e6d"
       },
-      "release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile160/release01.json",
-        "bytes": 484,
-        "sha256": "5459ffef68c732a963e113894b7bbb8222cd0b79fa37ce84348b9c4aa8ec9c82"
-      },
-      "result": [
-        {
-          "name": "library-storage",
-          "returncode": 0,
-          "stdout": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile160/commands/library-storage.stdout",
-            "bytes": 256,
-            "sha256": "633253a5161a7d2b62d5afc78387d24be66edfd0d6f59cc6a779275e4fe7c754"
-          },
-          "stderr": {
-            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile160/commands/library-storage.stderr",
-            "bytes": 316241,
-            "sha256": "bd387fc8eb134467fe4b5c802346376101896a37c3b6dd13796ac5dc71b3387f"
-          },
-          "actual_qt_initialized": [
-            "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/build/lib/libQt6Core.so.6",
-            "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/build/lib/libQt6DBus.so.6",
-            "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/build/lib/libQt6Gui.so.6",
-            "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/modules/qtsvg/build/lib/libQt6Svg.so.6",
-            "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/build/lib/libQt6Network.so.6",
-            "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/build/lib/libQt6Concurrent.so.6",
-            "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/modules/qtmultimedia/build/lib/libQt6Multimedia.so.6",
-            "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/build/lib/libQt6Widgets.so.6"
-          ],
-          "actual_ffi_initialized": [
-            "/mnt/downloads/dev/wikidict/.tmp/figure-normal-inputs01/shared-provider01/retained-bundle-driver01/canonical-production-current68/install/lib/libdictffi.so"
-          ],
-          "private_loader_paths_passed": true,
-          "ffi_loader_passed": true,
-          "required_modules_loaded": true,
-          "success_summary_count": 1,
-          "no_compressed_skip": true,
-          "compressed_roles": [
-            "language",
-            "supplemental",
-            "alias"
-          ],
-          "xz_paths": [
-            "/usr/bin/xz"
-          ],
-          "passed": true
-        }
-      ],
-      "repeated": false
-    },
-    "historical_media": {
-      "closure": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app151-media-library01/independent-closure01.json",
-        "bytes": 20828,
-        "sha256": "bc92080e969fa9e80ce6131f51fad52aa2e3305d1be8c689a3c9e32c7ecb251e"
-      },
-      "release": {
-        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app151-media-library01/release01.json",
-        "bytes": 491,
-        "sha256": "10a21cbccb2eea90729e74ec79793fcab3b847e4150e05795c15a1967c39c8e0"
-      },
-      "repeated": false
+      "repeated": false,
+      "prior_full_run_passed": false,
+      "library_target_passed": true,
+      "current_run": false
     },
     "core_pairing": {
       "runtime": {
@@ -2434,25 +1107,42 @@
       "R_interoperability_qualified": false
     },
     "previous_delivery": {
-      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-delivery164.json",
-      "bytes": 16991,
-      "sha256": "a01e200f3731e4ff745b6827492109c05f79a76305ec8e65692ccf58590bbf53"
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/normal-delivery179.json",
+      "bytes": 97514,
+      "sha256": "28c0472f54695b10a2eaac62d702617a5077782f96b45b1f6dd50e4d6657bcf0"
     },
     "preserved_failures": [
-      "Cold132 original four passes and two failures remain unchanged; only the two affected methods run in corrected Cold134.",
-      "Cold133 dispatch02 retained two failures after its pre-admission metadata refusal; both original closures remain separate from corrected Cold134.",
-      "App165 initial owner stopped before admission on a projection bootstrap dependency; its failed closure remains separate from corrected App166.",
-      "App165 dispatch02 completed autogen dependencies then correctly stopped on missing MainWindowTest meta-object output; two test initializer braces were corrected before App166, with the generated-symbol guard retained.",
-      "App166 completed all eighteen controls with nine passes and nine failures. App167 reran the current eighteen against the changed Qt and app dependencies; earlier results remain historical.",
-      "App167 completed eighteen controls with eleven passes and seven failures. App168 reran all eighteen because the owned format-transaction lifecycle is shared by image/table controls; original results and nineteen frames remain historical.",
-      "App168 completed eighteen controls with twelve passes and six failures. App169 changes only the test fixture and runs the six affected controls; twelve exact method bodies and all four product dependencies, native inputs and core artifacts remain bound to App168, with its nineteen captures retained separately.",
-      "App169 completed six controls with two passes and four failures. App170 synchronizes the viewport width and responsive policy in one owned transaction; all eighteen controls and nineteen constructed captures run on that changed product, while earlier passes remain historical.",
-      "App170 completed eighteen controls with fourteen passes and four failures. App171 normalizes authenticated orphan Rule anchors, suppresses synchronous composition reentry and adds image focus semantics; all twenty-one controls run against the current Qt/app product, preserving strict responsive endpoints.",
-      "App171 crashed after a partial prefix; App172 retained its configure metadata refusal and later development failures. App173 and App174 retained partial failures, and App175 retained the strict primary bitmap geometry failure. Native158 preserves primary media metrics through reshaping; App176 passed three image controls, but its default/absent/none frame equality did not establish keyboard focus. Native159 preserves the painter clip when QTextLayout has no explicit clip; App178 exercises the stock default/full/partial clip and primary default-versus-none contrasts before the current optimized GUI/full21 qualification. The unconstructed App177 route remains historical and was not executed. No historical result is relabeled current."
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile180/independent-closure01.json",
+        "bytes": 998824,
+        "sha256": "fce4d6b5b7a344fb13da75a2a1fc9239a8bbfeef2545dbbd2e1df40b84576050"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile181/independent-closure01.json",
+        "bytes": 1016136,
+        "sha256": "bf255ce65850780adea46177afe53cba6ad1b86401b941fb1d4108834fa13063"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/independent-closure01.json",
+        "bytes": 6039,
+        "sha256": "56809d08dbfbc91ec6978eb6e78a8b2256af37209c0218d8bc94bf33a819823d"
+      },
+      {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold142/independent-closure01.json",
+        "bytes": 423713,
+        "sha256": "f1d784fbe2461e7b2c932c7ebbbe2717c7648c981549234f084150c0b29d8f4c"
+      }
     ],
+    "pre_admission_release183": {
+      "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile183/release01.json",
+      "bytes": 527,
+      "sha256": "3d7c4e89212c60ddbc4eee5fdcddf88c50c3963d200bae5ba57cc7ac23347a5b"
+    },
     "limitations": [
-      "No genuine Q/R Writer-to-Reader data interchange or KU/TH/MG rendered acceptance follows from these controlled host tests.",
-      "No unchanged GUI flow, Library/Media suite, full native suite, full app CTest, device, matched performance or browser pixel equivalence was repeated."
+      "No current-R Writer/FFI/Reader interoperability, genuine dictionary acceptance, full native suite or full frontend acceptance is inferred.",
+      "Cold142 raw final source guard failure remains failed; exact source, objects, runtime bytes and generated headers were independently verified.",
+      "App180 missing private header export and App181 standalone-height fixture failure remain immutable.",
+      "Release names the optimized CMake build profile only; production readiness and publication approval remain withheld."
     ]
   },
   "packaged_distribution_source_equivalence": false,

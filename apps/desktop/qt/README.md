@@ -446,19 +446,31 @@ owned Reading composition commits its source revision. Reader chrome settles bef
 the content layout snapshots margins; primary table-caption media preserves middle
 metrics through inline reshaping.
 
-The current Qt product was compiled without rerunning native controls. Two
-Cold134 passes and four Cold132 passes remain historical. The current twenty-one
-compiled-JSON app controls and sixty-seven constructed captures qualify the changed
-Qt/app dependency set. App168's twelve passes and App169's two passes remain
-historical, as do App170 outcomes. WidgetWidth resize assigns page width and responsive policy in one
-owned transaction, preserving inactive pan while active ranges still clamp. The
-Cold132/Cold133 and App165/App166/App167/App168/App169/App170 failures remain linked. Retained P68 supports
-these optimized source-local checks, not new Q/R wire interchange or genuine KU/TH/MG
-rendered acceptance. Full suites and device qualification remain separate.
+The current Qt product includes typed per-range `normal` and `break_word`
+wrapping. Emergency breaks use grapheme and shaping-cluster boundaries only
+inside the authored text range; they do not lower the normal word minimum.
+Mixed ranges, pre/no-wrap policy, stored text, actions, selection and accessibility
+offsets stay intact. Effective shaping formats preserve overlay priority without
+letting wrap-only boundaries split ligatures. Private logical-flow and source-map
+headers are registered in Qt's existing CMake header generation/install path.
 
-The eight app leaves were already integrated before qualification. Promotion
-verifies their equality with the qualified private source and updates only the
-four maintained Qt patch/manifest/README files. It performs no build or test.
+The optimized GUI and Reader qualification runs twenty-three current controls
+and saves seventy-five constructed captures, including paragraph/table, LTR/RTL
+and wide/narrow wrap views. These are test-constructed client-window captures,
+not genuine dictionary or physical desktop acceptance. Cold141 compiled the
+Gui dependency without native tests. Cold142 generated the registered headers;
+its raw VCS-directory timestamp guard failure remains failed, while independent
+source, object, runtime-byte and header checks establish reusable artifacts.
+Earlier failures and qualifications remain in the referenced prior delivery.
+Retained P68 supports source-local checks; current-R interchange, full suites
+and full frontend acceptance remain separate.
+Release refers only to the optimized CMake build profile and selected controls.
+The application is not production-ready; publication approval remains withheld.
+
+The eight app leaves are verified against qualified private source. Promotion
+updates the existing renderer and CMake policy patches, manifest and README, and proves all
+twenty-seven registered native patch targets forward and backward against the
+pinned upstream. It performs no build or test.
 
 ## Source and build layout
 

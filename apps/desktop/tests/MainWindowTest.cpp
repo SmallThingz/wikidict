@@ -57,6 +57,7 @@
 #include <QPaintEngine>
 #include <QRawFont>
 #include <QtGui/private/qtextengine_p.h>
+#include <QtGui/private/qtextlogicalflow_p.h>
 #include <QtGui/private/qfontengine_p.h>
 #include <QtGui/private/qrawfont_p.h>
 #include <QImage>
@@ -2690,6 +2691,306 @@ private slots:
         QVERIFY_EXCEPTION_THROWN(SemanticHtml::normalizeTables(&overlapDoc, overlapRecords, overlapCount), std::runtime_error);
         QTextDocument recovered; SemanticHtml::setHtml(&recovered, html);
         QCOMPARE(recovered.find("Span owner").currentTable()->cellAt(1, 0).rowSpan(), 2);
+    }
+
+    void authoredInlineWrapKeepsWordMinimumAndMixedGraphemes()
+    {
+        struct Fitted {
+            QList<int> ends;
+            QList<qreal> heights;
+            QList<QGlyphRun> glyphs;
+            QList<QVariantMap> resolvedPolicies;
+            QSet<int> shapeEnds;
+            qreal minimum = 0, maximum = 0;
+            bool complete = false;
+        };
+        const auto policy = [](const QString &wrap) {
+            QTextCharFormat format;
+            if (!wrap.isEmpty()) format.setProperty(SemanticHtml::inlineStyleProperty,
+                QVariantMap{{"policy", SemanticHtml::inlineStyleCapability}, {"normalized", false}, {"wrap", wrap}});
+            return format;
+        };
+        QFont font(QStringLiteral("DejaVu Sans")); font.setPointSizeF(17.25);
+        const auto fit = [&](const QString &text, const QList<QTextLayout::FormatRange> &ranges,
+                             qreal width, QTextOption::WrapMode mode, Qt::LayoutDirection direction) {
+            QTextLayout layout(text, font); layout.setCacheEnabled(true);
+            QTextOption option; option.setWrapMode(mode); option.setTextDirection(direction);
+            layout.setTextOption(option); layout.setFormats(ranges);
+            Fitted result; qreal y = 0;
+            layout.beginLayout();
+            for (int guard = 0; guard <= text.size(); ++guard) {
+                auto line = layout.createLine();
+                if (!line.isValid()) { result.complete = true; break; }
+                line.setLineWidth(width); line.setPosition(QPointF(0, y)); y += line.height();
+                result.ends.append(line.textStart() + line.textLength()); result.heights.append(line.height());
+            }
+            layout.endLayout();
+            result.minimum = layout.minimumWidth(); result.maximum = layout.maximumWidth();
+            result.glyphs = layout.glyphRuns();
+            const auto *engine = layout.engine();
+            const auto *attributes = engine->attributes();
+            const auto *clusters = engine->layoutData->logClustersPtr;
+            result.shapeEnds.insert(text.size());
+            for (int at = 0; at < text.size(); ++at) {
+                const int item = engine->findItem(at);
+                result.resolvedPolicies.append(engine->format(&engine->layoutData->items.at(item))
+                    .property(SemanticHtml::inlineStyleProperty).toMap());
+            }
+            for (int at = 1; at < text.size(); ++at)
+                if (attributes[at].graphemeBoundary && (engine->findItem(at) != engine->findItem(at - 1)
+                    || clusters[at] != clusters[at - 1])) result.shapeEnds.insert(at);
+            return result;
+        };
+        const QStringList words{
+            QStringLiteral("officeaffinityabcdefghij").repeated(3),
+            QStringLiteral("a\u0301e\u0308o\u0302").repeated(12),
+            QString::fromUcs4(U"\U0001f469\u200d\U0001f4bb\U0001f1f3\U0001f1f4").repeated(8),
+            QStringLiteral("\u0633\u0644\u0627\u0645\u0639\u0644\u064a\u0643\u0645").repeated(8)};
+        for (const auto &word : words) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+            const QList<QTextLayout::FormatRange> normal{{0, int(word.size()), policy(QStringLiteral("normal"))}};
+            const QList<QTextLayout::FormatRange> emergency{{0, int(word.size()), policy(QStringLiteral("break_word"))}};
+            const auto whole = fit(word, normal, 10000, QTextOption::WordWrap, direction);
+            QVERIFY(whole.complete); QCOMPARE(whole.ends.size(), 1);
+            const auto wide = fit(word, emergency, 10000, QTextOption::WordWrap, direction);
+            QCOMPARE(wide.minimum, whole.minimum); QCOMPARE(wide.maximum, whole.maximum);
+            QVERIFY(wide.glyphs == whole.glyphs);
+            for (qreal width : {qreal(0), qreal(51.5), qreal(107.25)}) {
+                const auto used = fit(word, emergency, width, QTextOption::WordWrap, direction);
+                QVERIFY(used.complete); QVERIFY(used.ends.size() > 1); QCOMPARE(used.ends.last(), word.size());
+                QCOMPARE(used.minimum, whole.minimum); QCOMPARE(used.maximum, whole.maximum);
+                QTextBoundaryFinder boundaries(QTextBoundaryFinder::Grapheme, word);
+                int previous = 0;
+                for (int end : used.ends) {
+                    QVERIFY(end > previous); boundaries.setPosition(end); QVERIFY(boundaries.isAtBoundary());
+                    QVERIFY(whole.shapeEnds.contains(end)); previous = end;
+                }
+                const auto unchanged = fit(word, normal, width, QTextOption::WrapAtWordBoundaryOrAnywhere, direction);
+                const auto ordinary = fit(word, normal, width, QTextOption::WordWrap, direction);
+                QCOMPARE(unchanged.ends, ordinary.ends); QCOMPARE(unchanged.minimum, whole.minimum);
+                for (auto mode : {QTextOption::NoWrap, QTextOption::ManualWrap}) {
+                    const auto unwrapped = fit(word, emergency, width, mode, direction);
+                    QCOMPARE(unwrapped.ends, whole.ends); QCOMPARE(unwrapped.glyphs.size(), whole.glyphs.size());
+                    for (int i = 0; i < whole.glyphs.size(); ++i) {
+                        QVERIFY(unwrapped.glyphs[i].rawFont() == whole.glyphs[i].rawFont());
+                        QCOMPARE(unwrapped.glyphs[i].glyphIndexes(), whole.glyphs[i].glyphIndexes());
+                    }
+                }
+            }
+        }
+        // Wrap-only policy changes inside a ligature cannot change shaping or
+        // grant a break inside the original shaped cluster.
+        const QString ligatures = QStringLiteral("officeaffinityofficeaffinity");
+        const auto original = fit(ligatures, {}, 10000, QTextOption::WordWrap, Qt::LeftToRight);
+        const QList<QTextLayout::FormatRange> ligatureRanges{{0, 3, policy(QStringLiteral("break_word"))},
+            {3, 2, policy(QStringLiteral("normal"))}, {5, int(ligatures.size() - 5), policy(QStringLiteral("break_word"))}};
+        const auto marked = fit(ligatures, ligatureRanges, 10000, QTextOption::WordWrap, Qt::LeftToRight);
+        QVERIFY(marked.glyphs == original.glyphs); QCOMPARE(marked.minimum, original.minimum);
+        const auto fractured = fit(ligatures, ligatureRanges, 0, QTextOption::WordWrap, Qt::LeftToRight);
+        QVERIFY(fractured.complete);
+        for (int end : fractured.ends) QVERIFY(original.shapeEnds.contains(end));
+        // Real logical projections carry complete char formats, not just the
+        // wrap property. Adjacent equal fonts/paint must still shape together.
+        QTextCharFormat full; full.setFont(font); full.setForeground(Qt::darkBlue);
+        full.setAnchor(true); full.setAnchorHref(QStringLiteral("https://example.test/wrap"));
+        QList<QTextLayout::FormatRange> fullRanges = ligatureRanges;
+        for (auto &range : fullRanges) { auto value = full; value.merge(range.format); range.format = value; }
+        const auto fullBaseline = fit(ligatures, {{0, int(ligatures.size()), full}},
+                                      10000, QTextOption::WordWrap, Qt::LeftToRight);
+        const auto fullMarked = fit(ligatures, fullRanges, 10000, QTextOption::WordWrap, Qt::LeftToRight);
+        QVERIFY(fullMarked.glyphs == fullBaseline.glyphs);
+        QCOMPARE(fullMarked.minimum, fullBaseline.minimum);
+        QTextDocument projectedDocument; projectedDocument.setDefaultFont(font);
+        QTextCursor projectedCursor(&projectedDocument);
+        for (const auto &range : fullRanges)
+            projectedCursor.insertText(ligatures.mid(range.start, range.length), range.format);
+        const QString storedProjectionText = projectedDocument.toRawText();
+        const int storedProjectionCount = projectedDocument.characterCount();
+        QString projectionError;
+        const QVariantMap description{{"first", 0}, {"last", int(ligatures.size())},
+            {"direction", int(Qt::LeftToRight)}, {"joins", QVariantList{}},
+            {"parts", QVariantList{QVariantMap{{"kind", "text"}, {"first", 0}, {"last", int(ligatures.size())}}}}};
+        auto projection = QTextLogicalFlowProjection::create(&projectedDocument, description, &projectionError);
+        QVERIFY2(projection, qPrintable(projectionError));
+        QCOMPARE(projection->projectedText(), ligatures);
+        const auto projectedRanges = projection->textLayout()->formats();
+        QCOMPARE(projectedRanges.size(), fullRanges.size());
+        const auto projectedWide = fit(ligatures, projectedRanges, 10000, QTextOption::WordWrap, Qt::LeftToRight);
+        QVERIFY(projectedWide.glyphs == fullBaseline.glyphs);
+        const auto projectedNarrow = fit(ligatures, projectedRanges, 0, QTextOption::WordWrap, Qt::LeftToRight);
+        QVERIFY(projectedNarrow.complete); QCOMPARE(projectedNarrow.minimum, fullBaseline.minimum);
+        for (int end : projectedNarrow.ends) QVERIFY(fullBaseline.shapeEnds.contains(end));
+        QCOMPARE(projectedDocument.toRawText(), storedProjectionText);
+        QCOMPARE(projectedDocument.characterCount(), storedProjectionCount);
+        for (int at = 0; at < ligatures.size(); ++at) {
+            QCOMPARE(projection->sourceMap().at(at).first, at);
+            QCOMPARE(projection->sourceMap().at(at).last, at + 1);
+        }
+        // Overlays replace the whole native policy map. Stripping wrap before
+        // merging would wrongly retain the earlier height/shift policy.
+        auto metricBase = full; auto metricPolicy = policy(QStringLiteral("normal"));
+        auto metadata = metricPolicy.property(SemanticHtml::inlineStyleProperty).toMap();
+        metadata.insert(QStringLiteral("height"), 80.0);
+        metricBase.setProperty(SemanticHtml::inlineStyleProperty, metadata);
+        const auto tall = fit(ligatures, {{0, int(ligatures.size()), metricBase}},
+                              10000, QTextOption::WordWrap, Qt::LeftToRight);
+        // Bare QTextLayout shapes the resolved format. The Reader's document
+        // layout applies inline height to both native and projected lines later.
+        QCOMPARE(tall.resolvedPolicies.size(), ligatures.size());
+        for (const auto &resolved : tall.resolvedPolicies)
+            QCOMPARE(resolved.value(QStringLiteral("height")), QVariant(80.0));
+        QList<QTextLayout::FormatRange> overlays{{0, int(ligatures.size()), metricBase}};
+        overlays.append(ligatureRanges);
+        const auto overwritten = fit(ligatures, overlays, 10000, QTextOption::WordWrap, Qt::LeftToRight);
+        QVERIFY(overwritten.glyphs == fullBaseline.glyphs);
+        QCOMPARE(overwritten.heights, fullBaseline.heights);
+        QCOMPARE(overwritten.resolvedPolicies, fullBaseline.resolvedPolicies);
+        // Exercise the real height consumer as well: the same fixed inline
+        // height enlarges the document line box without enlarging its glyphs.
+        struct PaintedLine { QRectF block, canvas; QRect ink; QString text; int count = 0; QList<QGlyphRun> glyphs; };
+        const auto paintLine = [&](const QTextCharFormat &format) {
+            QTextDocument document; document.setDefaultFont(font); document.setDocumentMargin(8);
+            document.setTextWidth(1200);
+            QTextCursor cursor(&document); cursor.insertText(ligatures, format);
+            const QSize pixels = document.size().toSize();
+            PaintedLine result;
+            result.block = document.documentLayout()->blockBoundingRect(document.firstBlock());
+            result.canvas = QRectF(QPointF(0, 0), document.size());
+            result.text = document.toRawText(); result.count = document.characterCount();
+            result.glyphs = document.firstBlock().layout()->glyphRuns();
+            QImage image(pixels, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
+            { QPainter painter(&image); document.drawContents(&painter); }
+            for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x)
+                if (image.pixel(x, y) != qRgb(255, 255, 255)) result.ink |= QRect(x, y, 1, 1);
+            return result;
+        };
+        const auto naturalPaint = paintLine(full), tallPaint = paintLine(metricBase);
+        QCOMPARE(tallPaint.text, ligatures); QCOMPARE(tallPaint.text, naturalPaint.text);
+        QCOMPARE(tallPaint.count, naturalPaint.count);
+        QVERIFY(tallPaint.block.height() >= 80.0);
+        QVERIFY(tallPaint.block.height() > naturalPaint.block.height());
+        for (const auto *paint : {&naturalPaint, &tallPaint}) {
+            QVERIFY(!paint->ink.isEmpty());
+            QVERIFY(paint->block.contains(QRectF(paint->ink)));
+            QVERIFY(paint->canvas.contains(QRectF(paint->ink)));
+        }
+        QCOMPARE(tallPaint.glyphs.size(), naturalPaint.glyphs.size());
+        for (int index = 0; index < naturalPaint.glyphs.size(); ++index) {
+            QVERIFY(tallPaint.glyphs[index].rawFont() == naturalPaint.glyphs[index].rawFont());
+            QCOMPARE(tallPaint.glyphs[index].glyphIndexes(), naturalPaint.glyphs[index].glyphIndexes());
+        }
+        // No whitespace separates these ranges: emergency boundaries must never
+        // migrate into the normal prefix/suffix, even across a font item boundary.
+        const QString left = QStringLiteral("NORMALPREFIX"), middle = QStringLiteral("emergencyabcdefghijk").repeated(8);
+        const QString right = QStringLiteral("NORMALSUFFIX"), mixed = left + middle + right;
+        QList<QTextLayout::FormatRange> ranges{{0, int(left.size()), policy(QStringLiteral("normal"))},
+            {int(left.size()), int(middle.size()), policy(QStringLiteral("break_word"))},
+            {int(left.size() + middle.size()), int(right.size()), policy(QStringLiteral("normal"))}};
+        auto emphatic = ranges[1]; emphatic.start += 9; emphatic.length = 7;
+        emphatic.format.setFontWeight(QFont::Bold); ranges.append(emphatic);
+        const auto wide = fit(mixed, ranges, 10000, QTextOption::WordWrap, Qt::LeftToRight);
+        const auto small = fit(mixed, ranges, 70.5, QTextOption::WordWrap, Qt::LeftToRight);
+        QVERIFY(small.complete); QVERIFY(small.ends.size() > 2);
+        QCOMPARE(small.minimum, wide.minimum); QCOMPARE(small.maximum, wide.maximum);
+        for (int end : small.ends) QVERIFY(end == mixed.size() || (end >= left.size() && end <= left.size() + middle.size()));
+        auto large = policy(QStringLiteral("break_word")); large.setFontPointSize(55);
+        const QString varied = QStringLiteral("abcdefghij").repeated(12);
+        const auto variedFit = fit(varied, {{0, int(varied.size()), policy(QStringLiteral("break_word"))},
+            {int(varied.size() - 4), 4, large}}, 70.5, QTextOption::WordWrap, Qt::LeftToRight);
+        QVERIFY(variedFit.complete); QVERIFY(variedFit.ends.first() < varied.size() - 4);
+        const auto firstFont = fit(varied.left(variedFit.ends.first()), {}, 10000, QTextOption::WordWrap, Qt::LeftToRight);
+        QCOMPARE(variedFit.heights.first(), firstFont.heights.first());
+        // A normal word break wins before trying to split a later oversized word.
+        const QString spaced = QStringLiteral("ok ") + middle;
+        const auto prefixed = fit(spaced, {{3, int(middle.size()), policy(QStringLiteral("break_word"))}},
+            70.5, QTextOption::WordWrap, Qt::LeftToRight);
+        QVERIFY(prefixed.complete); QCOMPARE(prefixed.ends.first(), 3);
+        // Even a formatting boundary inside a combining sequence is not a break.
+        const QString joined = QStringLiteral("a\u0301").repeated(20);
+        QList<QTextLayout::FormatRange> split{{0, int(joined.size()), policy(QStringLiteral("break_word"))}};
+        auto color = policy(QStringLiteral("break_word")); color.setForeground(Qt::blue);
+        split.append({1, 1, color});
+        const auto clusters = fit(joined, split, 0, QTextOption::WordWrap, Qt::LeftToRight);
+        QVERIFY(clusters.complete);
+        for (int end : clusters.ends) QCOMPARE(end % 2, 0);
+    }
+
+    void authoredInlineWrapMapsOnlyTextAndKeepsActions()
+    {
+        MainWindow window{QString()}; window.resize(480, 650); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        ExternalUrlReceiver receiver; QDesktopServices::setUrlHandler("https", &receiver, "capture");
+        const auto restoreHandler = qScopeGuard([] { QDesktopServices::unsetUrlHandler("https"); });
+        const QString label = QStringLiteral("AuthoredLongWordabcdefghijk").repeated(5);
+        const QString trail = QStringLiteral("TRAILNORMAL");
+        const QString target = QStringLiteral("https://example.test/authored-wrap");
+        const QJsonObject span{{"kind", "external_link"}, {"text", label}, {"trail", trail}, {"target", target},
+            {"inline_style", QJsonObject{{"wrap", "break_word"}, {"cursor", "help"}}}};
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{span,
+            QJsonObject{{"kind", "text"}, {"text", " After"}}}}};
+        const QJsonObject table{{"kind", "table"}, {"table", QJsonObject{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{
+            QJsonObject{{"spans", paragraph.value("spans")}}}}}}}}}};
+        for (const auto &source : {paragraph, table}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+            QVERIFY(composeReadingBlocks(window, QJsonArray{source}, direction)); window.readingPaneAction_->trigger();
+            auto *browser = window.reading_; auto *doc = browser->document(); QTRY_VERIFY(browser->isVisible());
+            doc->documentLayout()->documentSize(); QCOMPARE(doc->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const auto selected = doc->find(label + trail); QVERIFY(!selected.isNull());
+            QCOMPARE(selected.selectedText(), label + trail);
+            const int start = selected.selectionStart(), end = start + label.size();
+            for (auto block = doc->begin(); block.isValid(); block = block.next()) for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment(); if (!fragment.isValid()) continue;
+                const auto wrap = fragment.charFormat().property(SemanticHtml::inlineStyleProperty).toMap().value("wrap");
+                for (int at = fragment.position(); at < fragment.position() + fragment.length(); ++at) {
+                    if (at >= start && at < end) QCOMPARE(wrap.toString(), QStringLiteral("break_word"));
+                    else QVERIFY(!wrap.isValid());
+                }
+            }
+            auto trailCursor = doc->find(trail); QVERIFY(!trailCursor.isNull());
+            QCOMPARE(trailCursor.charFormat().property(SemanticHtml::inlineStyleProperty).toMap().value("cursor").toString(), QStringLiteral("help"));
+            QCOMPARE(trailCursor.charFormat().anchorHref(), target);
+            const auto raw = doc->toRawText(); const int count = doc->characterCount(); const auto entry = window.currentEntry_;
+            auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->textInterface());
+            auto *ax = accessible->textInterface(); const auto axText = ax->text(0, -1);
+            QCOMPARE(ax->text(start, selected.selectionEnd()), label + trail);
+            browser->setFocus(Qt::TabFocusReason); QTextCursor cursor(doc); cursor.setPosition(selected.block().position()); browser->setTextCursor(cursor);
+            QTest::keyClick(browser, Qt::Key_Tab);
+            QCOMPARE(browser->textCursor().selectionStart(), selected.selectionStart());
+            QCOMPARE(browser->textCursor().selectionEnd(), selected.selectionEnd());
+            const int calls = receiver.opened.size(); QTest::keyClick(browser, Qt::Key_Return);
+            QTRY_COMPARE(receiver.opened.size(), calls + 1); QCOMPARE(receiver.opened.last(), QUrl(target));
+            browser->setTextCursor(selected); QCOMPARE(browser->textCursor().selectedText(), label + trail);
+            for (int width : {900, 480}) {
+                window.resize(width, 650); QCoreApplication::processEvents(); doc->documentLayout()->documentSize();
+                QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(window.currentEntry_, entry);
+                QCOMPARE(ax->text(0, -1), axText); QCOMPARE(browser->textCursor().selectedText(), label + trail);
+                const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if (!directory.isEmpty()) {
+                    QVERIFY(QDir().mkpath(directory));
+                    const QString kind = source.value("kind").toString();
+                    const QString flow = direction == Qt::RightToLeft ? QStringLiteral("rtl") : QStringLiteral("ltr");
+                    const QString name = QStringLiteral("inline-wrap-%1-%2-%3.png").arg(kind, flow).arg(width);
+                    const auto frame = window.grab();
+                    qInfo() << "INLINE_WRAP_FRAME" << name << "window" << window.size()
+                            << "viewport" << browser->viewport()->size() << "pixels" << frame.size()
+                            << "dpr" << frame.devicePixelRatio();
+                    QVERIFY(frame.save(QDir(directory).filePath(name)));
+                }
+            }
+        }
+        for (const QJsonValue &bad : {QJsonValue(QStringLiteral("anywhere")), QJsonValue(QStringLiteral("break-word")), QJsonValue(true), QJsonValue(1)}) {
+            auto invalid = span; invalid.insert("inline_style", QJsonObject{{"wrap", bad}});
+            QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineTextStyle(invalid), std::runtime_error);
+        }
+        auto empty = span; empty.insert("text", "");
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineTextStyle(empty), std::runtime_error);
+        auto malformed = span; malformed.insert("kind", "line_break");
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::inlineTextStyle(malformed), std::runtime_error);
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::scaledText("different", 1, {}, SemanticHtml::Basis::Context,
+            0, false, false, false, 0, {}, true, -1, {}, -1, 0, false, {}, false, span, 12, 12), std::runtime_error);
+        auto *native = window.reading_->document()->documentLayout();
+        QCOMPARE(native->property("_wikidictInlineWrapCapability"), QVariant(QStringLiteral("wikidict.inline-wrap/1")));
+        const auto capability = native->property("_wikidictInlineWrapCapability"); native->setProperty("_wikidictInlineWrapCapability", QVariant());
+        const auto restore = qScopeGuard([&] { native->setProperty("_wikidictInlineWrapCapability", capability); });
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::resolveInlineStyle(window.reading_->document(), span, 12, 12, QString()), std::runtime_error);
     }
 
     void authoredInlineHelpUsesOnlyItsRunAndKeepsAnnotationActions()

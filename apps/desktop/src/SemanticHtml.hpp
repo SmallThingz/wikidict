@@ -2783,7 +2783,7 @@ inline QJsonObject inlineFontSnapshot(const QJsonValue &value) {
 inline QJsonObject inlineTextStyle(const QJsonObject &span) {
     const auto raw = span.value("inline_style");
     if (!present(raw)) return {};
-    const auto style = inlineObject(raw, {"decoration", "line_height", "baseline_shift", "font_normalized", "cursor"});
+    const auto style = inlineObject(raw, {"decoration", "line_height", "baseline_shift", "font_normalized", "cursor", "wrap"});
     if (!span.value("kind").isString() || !span.value("text").isString()
         || (present(span.value("trail")) && !span.value("trail").isString())
         || (present(span.value("target")) && !span.value("target").isString()))
@@ -2797,6 +2797,9 @@ inline QJsonObject inlineTextStyle(const QJsonObject &span) {
         || (!action && !span.value("target").toString().isEmpty())) throw std::runtime_error("invalid inline text policy owner");
     if (present(style.value("cursor")) && (style.value("cursor") != QStringLiteral("help")
         || span.value("text").toString().isEmpty())) throw std::runtime_error("invalid authored inline cursor");
+    if (present(style.value("wrap")) && ((style.value("wrap") != QStringLiteral("normal")
+            && style.value("wrap") != QStringLiteral("break_word")) || span.value("text").toString().isEmpty()))
+        throw std::runtime_error("invalid authored inline wrap");
     if (style.contains("font_normalized") && !style.value("font_normalized").isBool())
         throw std::runtime_error("invalid inline normalized font flag");
     if (style.value("font_normalized").toBool()) {
@@ -2838,7 +2841,8 @@ inline QJsonObject inlineTextStyle(const QJsonObject &span) {
         if (snapshot != ownFont) throw std::runtime_error("explicit shift cannot cross a distinct inline font owner");
     }
     if (!present(style.value("decoration")) && !present(style.value("line_height"))
-        && !present(style.value("baseline_shift")) && !present(style.value("cursor")) && !style.value("font_normalized").toBool())
+        && !present(style.value("baseline_shift")) && !present(style.value("cursor"))
+        && !present(style.value("wrap")) && !style.value("font_normalized").toBool())
         throw std::runtime_error("empty inline text policy");
     if (span.value("text").toString().isEmpty() && span.value("trail").toString().isEmpty()
         && !present(style.value("line_height"))) throw std::runtime_error("empty inline text requires a metric owner");
@@ -2863,6 +2867,11 @@ inline QVariantMap resolveInlineStyle(QTextDocument *document, const QJsonObject
         if (document->documentLayout()->property("_wikidictInlineHelpCursorCapability") != QVariant(QStringLiteral("wikidict.inline-help-cursor/1")))
             throw std::runtime_error("authored Help cursor needs paired native support");
         policy.insert("cursor", QStringLiteral("help"));
+    }
+    if (present(style.value("wrap"))) {
+        if (document->documentLayout()->property("_wikidictInlineWrapCapability") != QVariant(QStringLiteral("wikidict.inline-wrap/1")))
+            throw std::runtime_error("authored inline wrap needs paired native support");
+        policy.insert("wrap", style.value("wrap").toString());
     }
     if (present(style.value("line_height"))) {
         const auto line = style.value("line_height").toObject();
@@ -2921,6 +2930,30 @@ inline QString scaledText(const QString &html, double scale, const QString &tool
                           Basis basis = Basis::Context, qreal normalBodyPoints = 0,
                           bool small = false, bool superscript = false, bool subscript = false, qreal contextPoints = 0,
                           const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}, bool ordinaryLink = false, const QJsonObject &inlineSpan = {}, qreal inlineBodyPoints = 0, qreal inlineContextPoints = 0, const QString &inlineOwnerHtml = {}, const QJsonValue &fontFamily = {}) {
+    if (present(inlineSpan.value("inline_style").toObject().value("wrap"))) {
+        inlineTextStyle(inlineSpan);
+        const auto source = inlineSpan.value("text").toString(), trail = inlineSpan.value("trail").toString();
+        if (html != (source + trail).toHtmlEscaped())
+            throw std::runtime_error("inline wrap lost its exact source text range");
+        if (!trail.isEmpty()) {
+            auto textSpan = inlineSpan; textSpan.insert("trail", QString());
+            auto trailSpan = inlineSpan; trailSpan.insert("text", trail); trailSpan.insert("trail", QString());
+            auto trailStyle = trailSpan.value("inline_style").toObject(); trailStyle.remove("wrap");
+            const bool otherStyle = trailStyle.value("font_normalized").toBool()
+                || present(trailStyle.value("decoration")) || present(trailStyle.value("line_height"))
+                || present(trailStyle.value("baseline_shift")) || present(trailStyle.value("cursor"));
+            if (otherStyle) trailSpan.insert("inline_style", trailStyle); else trailSpan = {};
+            const auto run = [&](const QString &text, const QJsonObject &owner) {
+                return scaledText(text.toHtmlEscaped(), scale, tooltip, basis, normalBodyPoints,
+                    small, superscript, subscript, contextPoints, advisory, metadataOnly, sourceRun,
+                    linkPaint, linkOwner, linkEm, linkUnderline, fontFeatures, ordinaryLink, owner,
+                    inlineBodyPoints, inlineContextPoints, owner.isEmpty() ? QString() : inlineOwnerHtml, fontFamily);
+            };
+            // Two adjacent markers keep every existing font/action field. Only
+            // source text receives wrap; neither trail nor outer bidi isolates do.
+            return run(source, textSpan) + run(trail, trailSpan);
+        }
+    }
     QJsonObject metadata{{"scale", scale}, {"tooltip", tooltip}};
     CompiledContent::containerFontFamily(fontFamily);
     if (present(fontFamily)) metadata.insert("font_family", fontFamily);
