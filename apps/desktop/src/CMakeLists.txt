@@ -124,12 +124,14 @@ if(BUILD_TESTING)
         set_tests_properties(native-unified-entry PROPERTIES
             WORKING_DIRECTORY "${CMAKE_BINARY_DIR}" TIMEOUT 300)
     endif()
-    add_executable(dict-qt-tests ../tests/MainWindowTest.cpp)
+    add_executable(dict-qt-tests
+        ../tests/MainWindowTest.cpp
+        ../tests/MainWindowInlineActionTest.cpp)
     if(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$" AND NOT CMAKE_GENERATOR STREQUAL "Xcode")
         # Avoid optimizing the large test driver; all product translation units
         # and the shipped application retain their normal Release options.
         # Xcode does not support configuration-dependent per-source options.
-        set_property(SOURCE ../tests/MainWindowTest.cpp APPEND PROPERTY
+        set_property(SOURCE ../tests/MainWindowTest.cpp ../tests/MainWindowInlineActionTest.cpp APPEND PROPERTY
             COMPILE_OPTIONS "$<$<CONFIG:Release>:-O0>")
     endif()
     qt_add_resources(dict-qt-tests test_kana_font PREFIX "/fonts"
