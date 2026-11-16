@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,13943 @@
+@@ -3,24 +3,14229 @@
 
 
  #include <QTest>
@@ -40,6 +40,7 @@
 +#include <QtCore/qpointer.h>
 +
 +#include <QCoreApplication>
++#include <QEvent>
 +#include <QGuiApplication>
 +#include <QDir>
 +#include <QFile>
@@ -83,6 +84,72 @@
 +// Exercise the same query an image intrinsic-size handler uses while its
 +// containing logical figure is being laid out. The depth bound is test-only:
 +// a recursive callback is recorded as a failure instead of exhausting the stack.
++class FixedImageMemoProxy : public QObject, public QTextObjectInterface
++{
++    Q_OBJECT
++    Q_INTERFACES(QTextObjectInterface)
++public:
++    static constexpr auto declaration = "_wikidictFixedImageIntrinsicDelegateV1";
++    static constexpr int borderProperty = QTextFormat::UserProperty + 0x7110;
++    explicit FixedImageMemoProxy(QAbstractTextDocumentLayout *layout, bool declare = true)
++        : QObject(layout), native(layout), delegateInterface(layout->handlerForObject(QTextFormat::ImageObject))
++    {
++        for (QObject *child : layout->children())
++            if (qobject_cast<QTextObjectInterface *>(child) == delegateInterface) delegate = child;
++        Q_ASSERT(delegate);
++        if (declare) setProperty(declaration, QVariant::fromValue(delegate.data()));
++        layout->registerHandler(QTextFormat::ImageObject, this);
++    }
++    QPointer<QAbstractTextDocumentLayout> native;
++    QPointer<QObject> delegate;
++    QTextObjectInterface *delegateInterface = nullptr;
++    int calls = 0, change = 0;
++    int intrinsicDepth = 0, dirtyApplied = 0;
++    bool dirtyQueued = false, dirtyOutsideIntrinsic = false;
++    QSizeF intrinsicSize(QTextDocument *document, int position, const QTextFormat &format) override
++    {
++        ++calls;
++        ++intrinsicDepth;
++        const auto leave = qScopeGuard([&] { --intrinsicDepth; });
++        if (!delegate) return {};
++        const auto size = delegateInterface->intrinsicSize(document, position, format);
++        const int selected = change; change = 0;
++        if (selected == 1) setProperty(declaration, QVariant());
++        if (selected == 2) native->registerHandler(QTextFormat::ImageObject, delegate);
++        if (selected == 3) delete delegate.data();
++        if (selected == 4) {
++            // Dirtying synchronously would clear the QTextLayout currently
++            // calling this handler. Deliver only after that layout unwinds.
++            dirtyQueued = QMetaObject::invokeMethod(this,
++                [this, document = QPointer<QTextDocument>(document), position] {
++                    dirtyOutsideIntrinsic = intrinsicDepth == 0;
++                    if (document) {
++                        document->markContentsDirty(position, 1);
++                        ++dirtyApplied;
++                    }
++                }, Qt::QueuedConnection);
++        }
++        return size + (format.boolProperty(borderProperty) ? QSizeF(2, 2) : QSizeF(0, 0));
++    }
++    void drawObject(QPainter *p, const QRectF &box, QTextDocument *document, int position, const QTextFormat &format) override
++    {
++        if (!delegate) return;
++        const bool border = format.boolProperty(borderProperty);
++        if (border) p->fillRect(box, QColor("#204060"));
++        delegateInterface->drawObject(p, border ? box.adjusted(1, 1, -1, -1) : box, document, position, format);
++    }
++};
++
++class FixedImageMemoStaticGetter : public FixedImageMemoProxy
++{
++    Q_OBJECT
++    Q_PROPERTY(QObject* _wikidictFixedImageIntrinsicDelegateV1 READ declaredDelegate)
++public:
++    explicit FixedImageMemoStaticGetter(QAbstractTextDocumentLayout *layout) : FixedImageMemoProxy(layout, false) {}
++    mutable int getterCalls = 0;
++    QObject *declaredDelegate() const { ++getterCalls; return delegate; }
++};
++
 +class FigureWidthQueryHandler : public QObject, public QTextObjectInterface
 +{
 +    Q_OBJECT
@@ -941,6 +1008,225 @@
 +                }
 +            }
 +            QCOMPARE(sawEarlier, !opaque); QCOMPARE(sawCovered, opaque); QVERIFY(sawLater);
++        }
++    }
++
++    void tableIntrinsicFixedImagesBoundDeepWork()
++    {
++        for (int depth : {19, 32}) {
++            QTextDocument document; document.setLayoutEnabled(false); document.setDocumentMargin(0);
++            document.setDefaultFont(QFont("DejaVu Sans", 10));
++            auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native);
++            auto *proxy = new FixedImageMemoProxy(native);
++            native->setProperty("_wikidictCollectTableWork", true);
++            QImage resource(17, 11, QImage::Format_ARGB32_Premultiplied); resource.fill(QColor("#d04020"));
++            const QUrl url("test:fixed-image"); document.addResource(QTextDocument::ImageResource, url, resource);
++            QTextCursor cursor(&document); QList<QTextTable *> tables;
++            for (int level = 0; level < depth; ++level) {
++                QTextTableFormat format; format.setMargin(0); format.setBorder(0); format.setCellPadding(0); format.setCellSpacing(0);
++                format.setProperty(QTextFormat::UserProperty + 0x57d0, QStringLiteral("wikidict.table-box/1"));
++                format.setProperty(QTextFormat::UserProperty + 0x57d2, 0);
++                format.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++                auto *table = cursor.insertTable(1, 1, format); tables.append(table);
++                cursor = table->cellAt(0, 0).firstCursorPosition();
++            }
++            QList<int> imagePositions;
++            for (int index = 0; index < 45; ++index) {
++                if (index) cursor.insertBlock();
++                QTextImageFormat image; image.setName(url.toString()); image.setWidth(15.4 + index % 3); image.setHeight(11.6);
++                image.setProperty(FixedImageMemoProxy::borderProperty, index % 2 == 0);
++                image.setAnchor(true); image.setAnchorHref(QStringLiteral("https://example.test/image/%1").arg(index));
++                imagePositions.append(cursor.position()); cursor.insertImage(image, QTextFrameFormat::InFlow);
++                cursor.insertText(QStringLiteral(" source text %1").arg(index), QTextCharFormat());
++            }
++            const auto raw = document.toRawText(); const auto revision = document.revision();
++            QVariantMap previous;
++            for (qreal width : {900., 480., 900.}) {
++                document.setLayoutEnabled(false); document.setTextWidth(width); document.setLayoutEnabled(true);
++                const auto size = native->documentSize(); QVERIFY(size.width() > 0 && size.height() > 0);
++                QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                const auto work = native->property("_wikidictTableWork").toMap();
++                const auto delta = [&](const char *key) { return work.value(key).toULongLong() - previous.value(key).toULongLong(); };
++                const auto message = QStringLiteral("depth=%1 width=%2 tables=%3 hits=%4 misses=%5 bypass=%6")
++                    .arg(depth).arg(width).arg(delta("tables")).arg(delta("hits")).arg(delta("misses")).arg(delta("bypasses")).toUtf8();
++                QVERIFY2(delta("tables") <= quint64(64 * depth * depth + 8 * depth), message.constData());
++                QVERIFY2(delta("misses") <= quint64(8 * depth * depth), message.constData());
++                QVERIFY2(delta("hits") > 0, message.constData()); QCOMPARE(delta("bypasses"), quint64(0));
++                const auto admitted = work.value("image_positions").toList(); QCOMPARE(admitted.size(), imagePositions.size());
++                for (int position : imagePositions) QVERIFY(admitted.contains(position));
++                for (int level = 0; level < depth; ++level)
++                    QCOMPARE(tables[level]->parentFrame(), level ? static_cast<QTextFrame *>(tables[level - 1]) : document.rootFrame());
++                const auto first = document.findBlock(imagePositions.first()); const auto line = first.layout()->lineAt(0); QVERIFY(line.isValid());
++                const int relative = imagePositions.first() - first.position();
++                const QPointF point = native->blockBoundingRect(first).topLeft()
++                    + QPointF((line.cursorToX(relative) + line.cursorToX(relative + 1)) / 2, line.y() + line.height() / 2);
++                QCOMPARE(native->anchorAt(point), QStringLiteral("https://example.test/image/0"));
++                QCOMPARE(native->hitTest(point, Qt::ExactHit), imagePositions.first());
++                QImage pixels(920, 900, QImage::Format_ARGB32_Premultiplied); pixels.fill(Qt::white);
++                QPainter painter(&pixels); native->draw(&painter, {}); painter.end();
++                bool red = false; for (int y = 0; y < pixels.height() && !red; ++y) for (int x = 0; x < pixels.width(); ++x)
++                    if (pixels.pixelColor(x, y) == QColor("#d04020")) { red = true; break; }
++                QVERIFY(red); QVERIFY(proxy->calls > 0); QCOMPARE(document.toRawText(), raw); QCOMPARE(document.revision(), revision);
++                previous = work;
++            }
++        }
++    }
++
++    void tableIntrinsicFixedImagesMatchUncachedChanges()
++    {
++        QTextDocument cached, original;
++        QImage device(1000, 900, QImage::Format_ARGB32_Premultiplied);
++        device.setDotsPerMeterX(4724); device.setDotsPerMeterY(4724);
++        QList<QTextTable *> cachedTables, originalTables; QList<int> cachedImages, originalImages;
++        const QUrl url("test:metric-image"); QImage resource(21, 9, QImage::Format_ARGB32_Premultiplied); resource.fill(QColor("#c03070"));
++        const auto setup = [&](QTextDocument &document, QList<QTextTable *> &tables, QList<int> &images, bool disabled) {
++            document.setLayoutEnabled(false); document.setDocumentMargin(0); document.setDefaultFont(QFont("DejaVu Sans", 10));
++            auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native);
++            native->setPaintDevice(&device); native->setProperty("_wikidictDisableTableIntrinsicMemo", disabled);
++            native->setProperty("_wikidictCollectTableWork", true); new FixedImageMemoProxy(native);
++            document.addResource(QTextDocument::ImageResource, url, resource); QTextCursor cursor(&document);
++            for (int depth = 0; depth < 4; ++depth) {
++                QTextTableFormat format; format.setMargin(0); format.setBorder(1); format.setCellPadding(2); format.setCellSpacing(0);
++                format.setProperty(QTextFormat::UserProperty + 0x57d0, QStringLiteral("wikidict.table-box/1"));
++                format.setProperty(QTextFormat::UserProperty + 0x57d2, 0);
++                format.setWidth(QTextLength(QTextLength::PercentageLength, depth % 2 ? 75 : 100));
++                auto *table = cursor.insertTable(1, 1, format); tables.append(table); cursor = table->cellAt(0, 0).firstCursorPosition();
++            }
++            for (int index = 0; index < 3; ++index) {
++                QTextImageFormat format; format.setName(url.toString()); format.setWidth(17.4 + index); format.setHeight(12.6);
++                format.setProperty(FixedImageMemoProxy::borderProperty, true);
++                format.setAnchor(true); format.setAnchorHref(QStringLiteral("https://example.test/fixed"));
++                images.append(cursor.position()); cursor.insertImage(format, QTextFrameFormat::InFlow);
++                cursor.insertText(QStringLiteral(" rich wrapped text "), QTextCharFormat());
++            }
++        };
++        setup(cached, cachedTables, cachedImages, false); setup(original, originalTables, originalImages, true);
++        QCOMPARE(cachedImages, originalImages);
++        const auto compare = [&] {
++            auto *a = qobject_cast<QTextDocumentLayout *>(cached.documentLayout()); auto *b = qobject_cast<QTextDocumentLayout *>(original.documentLayout());
++            QCOMPARE(a->documentSize(), b->documentSize()); QCOMPARE(cached.toRawText(), original.toRawText());
++            for (int index = 0; index < cachedTables.size(); ++index) QCOMPARE(a->tableBoundingRect(cachedTables[index]), b->tableBoundingRect(originalTables[index]));
++            QImage left(1000, 900, QImage::Format_ARGB32_Premultiplied), right(left.size(), left.format()); left.fill(Qt::white); right.fill(Qt::white);
++            { QPainter p(&left); a->draw(&p, {}); } { QPainter p(&right); b->draw(&p, {}); } QCOMPARE(left, right);
++            for (int position : cachedImages) {
++                const auto block = cached.findBlock(position);
++                const int local = position - block.position();
++                const auto line = block.layout()->lineForTextPosition(local); QVERIFY(line.isValid());
++                const QPointF point = a->blockBoundingRect(block).topLeft()
++                    + QPointF((line.cursorToX(local) + line.cursorToX(local + 1)) / 2, line.y() + line.height() / 2);
++                QCOMPARE(a->hitTest(point, Qt::ExactHit), b->hitTest(point, Qt::ExactHit));
++                QCOMPARE(a->anchorAt(point), b->anchorAt(point)); QCOMPARE(a->anchorAt(point), QStringLiteral("https://example.test/fixed"));
++            }
++        };
++        for (qreal width : {420., 260., 420.}) {
++            cached.setTextWidth(width); original.setTextWidth(width); cached.setLayoutEnabled(true); original.setLayoutEnabled(true); compare();
++        }
++        for (auto *document : {&cached, &original}) {
++            QTextCursor cursor(document); cursor.setPosition(cachedImages[1]); cursor.setPosition(cachedImages[1] + 1, QTextCursor::KeepAnchor);
++            auto format = cursor.charFormat().toImageFormat(); format.setWidth(37.6); format.setHeight(20.4); cursor.setCharFormat(format);
++        }
++        compare(); cached.undo(); original.undo(); compare();
++        resource.fill(QColor("#20a060")); cached.addResource(QTextDocument::ImageResource, url, resource); original.addResource(QTextDocument::ImageResource, url, resource); compare();
++        device.setDotsPerMeterX(3780); device.setDotsPerMeterY(3780);
++        cached.markContentsDirty(0, cached.characterCount()); original.markContentsDirty(0, original.characterCount()); compare();
++    }
++
++    void tableIntrinsicFixedImagesRejectUnprovedAndRevokedMetrics()
++    {
++        // Missing axes, max-width, floating images, static getters, unknown
++        // handlers, wrong delegates, and revocation retain the uncached path.
++        for (int mode = 0; mode < 13; ++mode) {
++            QTextDocument document; document.setLayoutEnabled(false); document.setTextWidth(420); document.setDocumentMargin(0);
++            auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native);
++            native->setProperty("_wikidictCollectTableWork", true);
++            FixedImageMemoProxy *proxy = mode == 4 ? new FixedImageMemoStaticGetter(native) : new FixedImageMemoProxy(native, mode != 3);
++            if (mode == 5) proxy->setProperty(FixedImageMemoProxy::declaration, QVariant::fromValue(static_cast<QObject *>(proxy)));
++            if (mode >= 6 && mode <= 9) proxy->change = mode - 5;
++            QImage resource(20, 15, QImage::Format_ARGB32_Premultiplied); resource.fill(Qt::red);
++            const QUrl url("test:refused-image"); document.addResource(QTextDocument::ImageResource, url, resource);
++            QTextCursor cursor(&document); QList<QTextTable *> tables;
++            for (int depth = 0; depth < 3; ++depth) {
++                QTextTableFormat format; format.setProperty(QTextFormat::UserProperty + 0x57d0, QStringLiteral("wikidict.table-box/1"));
++                if (mode == 11) format.clearProperty(QTextFormat::UserProperty + 0x57d0);
++                format.setProperty(QTextFormat::UserProperty + 0x57d2, 0); format.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++                auto *table = cursor.insertTable(1, 1, format); tables.append(table);
++                cursor = table->cellAt(0, 0).firstCursorPosition();
++            }
++            QTextImageFormat image; image.setName(url.toString()); image.setWidth(20); if (mode != 0) image.setHeight(15);
++            if (mode == 9) { image.setAnchor(true); image.setAnchorHref(QStringLiteral("https://example.test/deferred")); }
++            if (mode == 1) image.setMaximumWidth(QTextLength(QTextLength::PercentageLength, 100));
++            if (mode == 10) image.setProperty(QTextFormat::UserProperty + 0x57b0, QByteArray("{}"));
++            const int imagePosition = cursor.position();
++            cursor.insertImage(image, mode == 2 ? QTextFrameFormat::FloatLeft : QTextFrameFormat::InFlow);
++            if (mode == 12) {
++                // QTextCursor::charFormat removes ObjectIndex; inspect the
++                // stored image fragment to retain its actual helper identity.
++                QTextFragment imageFragment;
++                const auto block = document.findBlock(imagePosition);
++                for (auto it = block.begin(); !it.atEnd(); ++it)
++                    if (it.fragment().contains(imagePosition)) { imageFragment = it.fragment(); break; }
++                QVERIFY(imageFragment.isValid()); QCOMPARE(imageFragment.position(), imagePosition);
++                QCOMPARE(imageFragment.length(), 1); QCOMPARE(imageFragment.text(), QString(QChar::ObjectReplacementCharacter));
++                const auto storedFormat = imageFragment.charFormat(); QVERIFY(storedFormat.isImageFormat());
++                QVERIFY(storedFormat.objectIndex() >= 0);
++                auto *helper = qobject_cast<QTextFrame *>(document.objectForFormat(storedFormat)); QVERIFY(helper);
++                QCOMPARE(helper->objectIndex(), storedFormat.objectIndex()); QCOMPARE(helper->parentFrame(), tables.last());
++                QCOMPARE(helper->firstPosition(), imagePosition + 1); QCOMPARE(helper->lastPosition(), imagePosition);
++                auto box = helper->frameFormat(); box.setBorder(1); helper->setFrameFormat(box);
++            }
++            cursor.insertText(" source");
++            const auto raw = document.toRawText(); document.setLayoutEnabled(true); native->documentSize();
++            const auto work = native->property("_wikidictTableWork").toMap();
++            if (mode == 9) {
++                QVERIFY(proxy->dirtyQueued); QCOMPARE(proxy->dirtyApplied, 0); QCOMPARE(proxy->intrinsicDepth, 0);
++                QVERIFY(work.value("image_positions").toList().contains(imagePosition));
++                const auto initialSize = native->documentSize();
++                QList<QRectF> initialTables;
++                for (auto *table : tables) initialTables.append(native->tableBoundingRect(table));
++                const auto block = document.findBlock(imagePosition);
++                const int local = imagePosition - block.position();
++                const auto line = block.layout()->lineForTextPosition(local); QVERIFY(line.isValid());
++                const QPointF point = native->blockBoundingRect(block).topLeft()
++                    + QPointF((line.cursorToX(local) + line.cursorToX(local + 1)) / 2, line.y() + line.height() / 2);
++                QCOMPARE(native->hitTest(point, Qt::ExactHit), imagePosition);
++                QCOMPARE(native->anchorAt(point), QStringLiteral("https://example.test/deferred"));
++                const auto pixels = [&] {
++                    QImage result(500, 300, QImage::Format_ARGB32_Premultiplied); result.fill(Qt::white);
++                    QPainter painter(&result); native->draw(&painter, {}); painter.end(); return result;
++                };
++                const auto initialPixels = pixels(); const int initialCalls = proxy->calls;
++                // Delivery is explicit and outside all layout/paint calls.
++                QCoreApplication::sendPostedEvents(proxy, QEvent::MetaCall);
++                QCOMPARE(proxy->dirtyApplied, 1); QVERIFY(proxy->dirtyOutsideIntrinsic);
++                QCOMPARE(proxy->intrinsicDepth, 0); QCOMPARE(native->documentSize(), initialSize);
++                const auto refreshed = native->property("_wikidictTableWork").toMap();
++                QVERIFY(proxy->calls > initialCalls);
++                QVERIFY(refreshed.value("epochs").toULongLong() > work.value("epochs").toULongLong());
++                QVERIFY(refreshed.value("misses").toULongLong() > work.value("misses").toULongLong());
++                QCOMPARE(refreshed.value("invalidations"), work.value("invalidations"));
++                for (int index = 0; index < tables.size(); ++index)
++                    QCOMPARE(native->tableBoundingRect(tables[index]), initialTables[index]);
++                QCOMPARE(pixels(), initialPixels); QCOMPARE(document.toRawText(), raw);
++                QCOMPARE(native->hitTest(point, Qt::ExactHit), imagePosition);
++                QCOMPARE(native->anchorAt(point), QStringLiteral("https://example.test/deferred"));
++                native->setProperty("_wikidictDisableTableIntrinsicMemo", true);
++                document.markContentsDirty(0, document.characterCount());
++                QCOMPARE(native->documentSize(), initialSize);
++                const auto uncached = native->property("_wikidictTableWork").toMap();
++                QVERIFY(uncached.value("bypasses").toULongLong() > refreshed.value("bypasses").toULongLong());
++                QCOMPARE(uncached.value("hits"), refreshed.value("hits"));
++                for (int index = 0; index < tables.size(); ++index)
++                    QCOMPARE(native->tableBoundingRect(tables[index]), initialTables[index]);
++                QCOMPARE(pixels(), initialPixels); QCOMPARE(document.toRawText(), raw);
++                QCOMPARE(native->hitTest(point, Qt::ExactHit), imagePosition);
++                QCOMPARE(native->anchorAt(point), QStringLiteral("https://example.test/deferred"));
++            } else {
++                QVERIFY2(work.value("bypasses").toULongLong() > 0, qPrintable(QString::number(mode)));
++                if (mode >= 6 && mode <= 8) QVERIFY(work.value("invalidations").toULongLong() > 0);
++                else QCOMPARE(work.value("hits").toULongLong(), quint64(0));
++            }
++            QCOMPARE(document.toRawText(), raw);
++            if (mode == 4) QCOMPARE(static_cast<FixedImageMemoStaticGetter *>(proxy)->getterCalls, 0);
 +        }
 +    }
 +
@@ -13966,7 +14252,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +14567,1560 @@
+@@ -648,5 +14853,1560 @@
      }
  }
 

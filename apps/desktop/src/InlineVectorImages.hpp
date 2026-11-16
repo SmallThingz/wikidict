@@ -28,6 +28,11 @@ public:
         for (QObject *child : layout->children())
             if (qobject_cast<QTextObjectInterface *>(child) == fallback_) fallbackOwner_ = child;
         Q_ASSERT(fallback_ && fallbackOwner_);
+        // Private opt-in for the paired native table memo. For ordinary images
+        // with two explicit axes and no maximum width, the branch below uses
+        // this exact stock delegate plus only the format-owned border. Figure
+        // and allocation-dependent media paths are excluded by native admission.
+        setProperty("_wikidictFixedImageIntrinsicDelegateV1", QVariant::fromValue(fallbackOwner_.data()));
         layout->registerHandler(QTextFormat::ImageObject, this);
         connect(layout, &QAbstractTextDocumentLayout::update, this, [this] { ++paintEpoch_; painted_.clear(); });
         connect(layout, &QAbstractTextDocumentLayout::documentSizeChanged, this, [this] { ++paintEpoch_; painted_.clear(); });

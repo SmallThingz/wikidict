@@ -605,6 +605,26 @@ suite was not rerun for this update. No genuine page or full frontend acceptance
 is claimed. Reproduce the selected scope through the maintained build routes and
 the method lists in `qualification.table_boundary_extent`.
 
+## Fixed inline image metrics in owned tables
+
+Owned in-flow table measurement can reuse fixed inline image metrics when the
+registered image handler declares its stock delegate and native admission
+validates that delegate and fixed dimensions. The cache retains format, device
+and handler/delegate identity dependencies; unknown, resource-dependent or
+decorated helper cases keep the original path. Image objects, source text, final
+painting and hit testing remain intact.
+
+Native qualification combines one current control with twelve source-exact
+retained passes. The unchanged production Gui policy is joined from its actual
+build; the failed Test-only policy report remains preserved. Three App controls
+include deferred-commit composition; loaded dictionary behavior is qualified only
+by the retained genuine tag scene and a separate same-profile restart/Quit.
+The original missing-focus-field finish failure is preserved.
+Synchronous document invalidation inside an active intrinsic-size callback is an
+observed unsupported reentrant lifetime; the queued-after-layout control does not
+claim to repair it. No full native/App suite or whole frontend acceptance, and no
+matched speedup measurement, is claimed. See `qualification.fixed_inline_image_memo`.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,

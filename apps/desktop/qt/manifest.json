@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "18530e87dde5c9102d85ea8deaa74a807ab034ceac09ed7a7709233bd776c5af",
-      "bytes": 986103,
+      "sha256": "34cc95f68505d8dbe43fb46010bbdd6942cf82049594d9cecaf25beb179bb8be",
+      "bytes": 992659,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "b5a57f03afbed127aee491175d2cd8bf828d9c415a7737c195b3a918e41589a9",
-          "bytes": 792419
+          "qualified_sha256": "b357df3e3c1812598a9fb82e8b98663c70d28d0f3c8cb8759271920c12a6ec5a",
+          "bytes": 798723
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -201,8 +201,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "63c1048cf1cdcba723b449f9ed0ed0e590137711ccab208b07817562bb61bf89",
-      "bytes": 1225219,
+      "sha256": "92426506fcda0a15f4eaf9138e10e2d498715226329f28b338795e4433edcf7d",
+      "bytes": 1246772,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -215,8 +215,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "bf6812b3066f0de02647b160452ec2dd6d831dab87f979d0f5634be1802ea007",
-          "bytes": 1229975
+          "qualified_sha256": "096c12c3a7846748fd815b226ce9e4dde71f72cf23bf5214cf78e651609bd466",
+          "bytes": 1251242
         }
       ]
     },
@@ -826,6 +826,162 @@
       "full_app_ctest": false,
       "genuine_rendered_acceptance": false,
       "scope": "Exclude only unpainted table-boundary caret storage lines from owned-table scrollable traversal. Preserve ordinary stock scope, actual caret layout, authored paragraph/background/ruler bounds, real table/text extent, scrollport clipping and action reachability. Seven current native controls and the existing Reader table/list ownership method pass; the earlier full UX376 passes/one failure/two skips and diagnostic failure remain historical. No complete-suite rerun or genuine page acceptance is inferred."
+    },
+    "fixed_inline_image_memo": {
+      "date": "2026-11-16",
+      "native_application": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application178.json",
+        "bytes": 296658,
+        "sha256": "224c9a63aa1f8c98742c5d1231a0c151966335a7ade95d272a87335710e21792"
+      },
+      "source_components": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application175.json",
+          "bytes": 288205,
+          "sha256": "2601a53493111477846ea7efc96829ce425b62d6aecbda18469dccef85d46ed9"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application176.json",
+          "bytes": 289560,
+          "sha256": "12573e8eeee4d8151998a5953bacb515f71b3651723eafa58472eb4bd0d123cb"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application177.json",
+          "bytes": 291066,
+          "sha256": "50a8489ea86101b47944655ce44f2743773cfe51b5ca4de4ad688a42d33d6429"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application178.json",
+          "bytes": 296658,
+          "sha256": "224c9a63aa1f8c98742c5d1231a0c151966335a7ade95d272a87335710e21792"
+        }
+      ],
+      "raw_native_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold159/independent-closure01.json",
+        "bytes": 223076,
+        "sha256": "f4270c9971b236eb9aba77cfde6fa2709e5bc32802161f1ce368b375d1e068ad"
+      },
+      "raw_native_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold159/release01.json",
+        "bytes": 550,
+        "sha256": "5bab5e9c9f7fb1f3281957413addcbcc9f2ff13c1c54925e57d2115a544a8dda"
+      },
+      "raw_native_passed": false,
+      "native_policy_qualification": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/inline-action-v01/test-tu-split01/genuine-tag-layout01/fixed-image-memo01/policy-carry15901/qualification01.json",
+        "bytes": 39510,
+        "sha256": "1c08dd4ec7b8b41fbde116e2e8269aa1110b95b009fc8310796883d18f139d69"
+      },
+      "native_product_build_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold157/independent-closure01.json",
+        "bytes": 218727,
+        "sha256": "02c1d15e0a539f2bf9286997821e9b9a185802d9dbffae5a3bcaf30adac86ef2"
+      },
+      "current_methods": [
+        "tableIntrinsicFixedImagesRejectUnprovedAndRevokedMetrics"
+      ],
+      "retained_methods158": [
+        "tableIntrinsicFixedImagesBoundDeepWork",
+        "tableIntrinsicFixedImagesMatchUncachedChanges",
+        "tableIntrinsicMemoBoundsDeepWork",
+        "tableIntrinsicMemoMatchesUncachedMutationAndContext",
+        "tableIntrinsicMemoKeepsInvalidCellRefusal",
+        "tableBoundaryCaretDoesNotExpandGlyphTraversal",
+        "ownedFloatTableGridDoesNotAcquirePageMargin",
+        "ownedTableOverflowKeepsClippedPaintHitAndMutation",
+        "containerScrollportKeepsOneGridViewportAndSource",
+        "containerScrollportUsesAuthoredLineAdvanceInsteadOfFontBounds",
+        "tableCornersClipOnlyExistingOverflowAndKeepSourceActions",
+        "entryBodyPostTableCaretPreservesLeadingAndPendingMargins"
+      ],
+      "retained_native_closure158": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold158/independent-closure01.json",
+        "bytes": 217287,
+        "sha256": "53bae9f3eaa040f6f123e117d4d0e771a9f873df14260a193f3333670c9a17ea"
+      },
+      "complete_repair_methods": [
+        "tableIntrinsicFixedImagesBoundDeepWork",
+        "tableIntrinsicFixedImagesMatchUncachedChanges",
+        "tableIntrinsicFixedImagesRejectUnprovedAndRevokedMetrics",
+        "tableIntrinsicMemoBoundsDeepWork",
+        "tableIntrinsicMemoMatchesUncachedMutationAndContext",
+        "tableIntrinsicMemoKeepsInvalidCellRefusal",
+        "tableBoundaryCaretDoesNotExpandGlyphTraversal",
+        "ownedFloatTableGridDoesNotAcquirePageMargin",
+        "ownedTableOverflowKeepsClippedPaintHitAndMutation",
+        "containerScrollportKeepsOneGridViewportAndSource",
+        "containerScrollportUsesAuthoredLineAdvanceInsteadOfFontBounds",
+        "tableCornersClipOnlyExistingOverflowAndKeepSourceActions",
+        "entryBodyPostTableCaretPreservesLeadingAndPendingMargins"
+      ],
+      "qualification_composed": true,
+      "app_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile212/independent-closure01.json",
+        "bytes": 46008,
+        "sha256": "35184cba6188f644be9e07408b101813ec3a648ca0e1fbb0956ceac97563953b"
+      },
+      "app_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile212/release01.json",
+        "bytes": 483,
+        "sha256": "d4516bc59bd23ed2d104454f0d8385d35276b999bc01a0183532ac2cbcb793dd"
+      },
+      "current_app_methods": [
+        "genuineDeepTagReportsCompositionPhases",
+        "typedInlineTableImageTopKeepsSvgAudioListAndReflow",
+        "ordinaryImageLinkPaintKeepsAlignedFocusAndBitmapStates"
+      ],
+      "genuine_gui_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core209-gui11/mg215-app212-resume01/independent-closure01.json",
+        "bytes": 26160,
+        "sha256": "e55f9bdcc3eadc073dfb7caa16bc80b9a083d545e3f6c832125679b3deb12aa9"
+      },
+      "genuine_gui_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core209-gui11/mg215-app212-resume01/release01.json",
+        "bytes": 519,
+        "sha256": "5b7a855762acf236dbc9676ae4be4f135f216d33ea6dd6cc2b20b627f0ae3a6c"
+      },
+      "retained_rendered_scene_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core209-gui11/mg215-app21201/independent-closure01.json",
+        "bytes": 22195,
+        "sha256": "730528030873e5ae078189025dcc6f2852dc308fa570ac6a5879096791de4203"
+      },
+      "retained_rendered_scene_review": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/desktop-unified-oct28/current-core209-mg215-app21201/manual-review01.json",
+        "bytes": 58755,
+        "sha256": "c869e8fcccdea20666f1f0de8e72550436d0f4795ad6a782e043e42dd4e70b1d"
+      },
+      "retained_scene_worker_passed": false,
+      "current_gui_scope": "Same-owned-profile saved-settings restart, normal Quit and persistence only; rendered owner/resize/link observations are retained separately",
+      "prior_gui_failure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core209-gui11/mg215-app21201/independent-closure01.json",
+        "bytes": 22195,
+        "sha256": "730528030873e5ae078189025dcc6f2852dc308fa570ac6a5879096791de4203"
+      },
+      "prior_app_failure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile211/independent-closure01.json",
+        "bytes": 38810,
+        "sha256": "a8d4cd2fffb56ddb359da1a30dea81cbc8b3c23ee6c4bec8a5f23aff75330ec5"
+      },
+      "prior_app_failure_returncode": -11,
+      "gdb_diagnostic_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/inline-action-v01/test-tu-split01/genuine-tag-layout01/fixed-image-memo01/genuine-gdb02/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 186346,
+        "sha256": "08375c749fb6f568f69c2052edbd29da147d175ac0be05c942cbf056ee9d2f11"
+      },
+      "app_product_build_origin": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile211/independent-closure01.json",
+        "bytes": 38810,
+        "sha256": "a8d4cd2fffb56ddb359da1a30dea81cbc8b3c23ee6c4bec8a5f23aff75330ec5"
+      },
+      "app_composition_only_deferred_commit": true,
+      "loaded_dictionary_commit_from_app_tests": false,
+      "raw_policy_failure_preserved": true,
+      "unsupported_synchronous_dirty_crash_preserved": true,
+      "full_native_suite": false,
+      "full_app_ctest": false,
+      "full_frontend_acceptance": false,
+      "speedup_measured": false,
+      "scope": "Memoize only proved fixed inline image metrics in owned in-flow tables. Preserve stock delegate identity, format and device dependencies, handler/delegate revocation, source content, image objects, hit geometry and ordinary final painting. Unknown or resource-dependent metrics retain the uncached path. Current one native control plus twelve source-exact retained controls compose the native qualification; the original production build policy is independently joined without restamping the failed Test-only run. Three App controls include genuine deferred-commit composition; loaded dictionary commit and navigation are supported by the retained genuine three-owner scene; its failed finish request remains raw failure. The current same-profile restart separately earns normal Quit and persistence."
     }
   },
   "packaged_distribution_source_equivalence": false,
