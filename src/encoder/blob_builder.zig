@@ -40,6 +40,7 @@ fn noLanguageCode(_: ?*const anyopaque, _: []const u8) ?[]const u8 {
 pub const SourceSectionHeading = struct { owner: ?ResolvedLanguage };
 
 pub const LanguageCodes = struct {
+    local_link_targets: ?@import("presentation_compile.zig").LocalLinkTargetSource = null,
     // A selected page borrows its Profile from the page arena. Retain the stable
     // global parent here so the next page resets without dereferencing that view.
     page_style_parent: ?*const @import("table_style_profile.zig").Profile = null,
@@ -60,6 +61,7 @@ pub const LanguageCodes = struct {
     source_nom_label_fn: ?*const fn (?*const anyopaque, []const u8) ?[]const u8 = null,
     // Selected source formatter only; false retains the complete older grammar.
     source_nom_name_format: bool = false,
+    source_naslov_noun: bool = false,
     source_section_fn: ?*const fn (?*const anyopaque, []const u8) ?SourceSectionHeading = null,
     source_headword_fn: ?*const fn (?*const anyopaque, []const u8) ?ResolvedLanguage = null,
     source_headword_static_prefix: ?[]const u8 = null,
@@ -2056,6 +2058,78 @@ fn sourceNomHeadingOwner(codes: LanguageCodes, source: MissingText, raw: languag
     return owner;
 }
 
+// The selected Наслов/Значење source pair declares POS independently of its
+// displayed H2. Only the first complete single-owner noun region is supported;
+// neither category spelling, edition nor the unused third argument supplies it.
+fn sourceNaslovLexeme(codes: LanguageCodes, title: []const u8, raw: ?[]const u8,
+    source: MissingText, owner: ResolvedLanguage, observed: presentation_document.HeadingObservation,
+) ?presentation_document.SourceLexeme {
+    if (!codes.source_naslov_noun or source.unknown or source.lost_missing_range or
+        !std.mem.eql(u8, owner.code, "sr") or !observed.page_wiki_scope_complete) return null;
+    const ns = codes.namespace_catalog orelse return null;
+    const observed_source = observed.page_html_source orelse return null;
+    if (observed_source.ptr != source.bytes.ptr or observed_source.len != source.bytes.len) return null;
+    const authored = raw orelse return null;
+    const first_end = std.mem.indexOfScalar(u8, authored, '\n') orelse return null;
+    const first = std.mem.trimEnd(u8, authored[0..first_end], "\r");
+    const prefix = "{{Наслов|Српски|Именица";
+    if (!std.mem.startsWith(u8, first, prefix) or !std.mem.endsWith(u8, first, "}}") or
+        std.mem.count(u8, authored, "{{Наслов") != 1) return null;
+    const tail = first[prefix.len .. first.len - 2];
+    // The selected Serbian template does not consume arg3. Accept a literal
+    // positional value without interpreting it; named/nested overrides refuse.
+    if (tail.len != 0 and (tail[0] != '|' or tail.len == 1 or
+        std.mem.indexOfAny(u8, tail[1..], "|={}[]<>&\r\n") != null)) return null;
+    const resolved = codes.resolveStrong("Српски") orelse return null;
+    if (!std.mem.eql(u8, resolved.code, owner.code) or !std.mem.eql(u8, resolved.heading, owner.heading)) return null;
+    const marker = "\n{{Значење}}\n";
+    const call_at = std.mem.indexOf(u8, authored, marker) orelse return null;
+    if (std.mem.count(u8, authored, marker) != 1 or
+        !language_source.outsideNestedOrOpaque(authored, call_at + 1)) return null;
+    const definition_at = call_at + marker.len;
+    const definition_end = std.mem.indexOfScalarPos(u8, authored, definition_at, '\n') orelse return null;
+    const line = authored[definition_at..definition_end];
+    if (!std.mem.startsWith(u8, line, ":[1] ") or line.len <= ":[1] ".len or
+        std.mem.indexOfAny(u8, line[5..], "[]{}<>&'\"\t\r") != null or
+        std.mem.trim(u8, line[5..], " ").len != line.len - 5 or
+        !std.unicode.utf8ValidateSlice(line)) return null;
+    // No second sense/continuation is silently omitted by this first subset.
+    const after = std.mem.trimStart(u8, authored[definition_end..], "\r\n");
+    if (!std.mem.startsWith(u8, after, "{{")) return null;
+    const emitted_marker = "<p style=\"margin-bottom: -0.5em; cursor: help;\" title=\"Смисао или семантичко објашњење\">'''Значења:''' {{{1}}}</p>\n";
+    const emitted_at = std.mem.indexOf(u8, source.bytes, emitted_marker) orelse return null;
+    if (std.mem.count(u8, source.bytes, emitted_marker) != 1) return null;
+    const text_at = emitted_at + emitted_marker.len;
+    if (line.len >= source.bytes.len - text_at or !std.mem.eql(u8, source.bytes[text_at..][0..line.len], line) or
+        source.bytes[text_at + line.len] != '\n' or
+        std.mem.count(u8, source.bytes, line) != 1 or
+        !calibratedBoundaryRangesClean(source, text_at, text_at + line.len)) return null;
+    var header: ?blobs.wikitext_syntax.ControlHeading = null;
+    var header_at: usize = 0;
+    // Reuse the completed native root-heading observation. A second H2 cannot
+    // inherit this declaration, even if normal grouping chose the same language.
+    for (observed.page_wiki_openings) |opening| {
+        if (opening >= source.bytes.len) return null;
+        const end = std.mem.indexOfScalarPos(u8, source.bytes, opening, '\n') orelse source.bytes.len;
+        const heading = blobs.wikitext_syntax.controlHeading(source.bytes[opening..end], null) orelse continue;
+        if (heading.level != 2) continue;
+        if (header != null) return null;
+        header = heading; header_at = opening;
+    }
+    const heading = header orelse return null;
+    if (header_at >= emitted_at or !calibratedBoundaryRangesClean(source, header_at,
+        std.mem.indexOfScalarPos(u8, source.bytes, header_at, '\n') orelse source.bytes.len)) return null;
+    const declaration = projectParentheticalDeclaration(codes, .{ .heading = heading.title,
+        .source = source.bytes[header_at..], .root_wiki_heading = true }) orelse return null;
+    if (!std.mem.eql(u8, declaration.name, "Српски") or !std.mem.eql(u8, declaration.label, "српски")) return null;
+    const emitted_owner = resolveProjectParenthetical(codes, declaration) orelse return null;
+    if (!std.mem.eql(u8, emitted_owner.code, owner.code)) return null;
+    const title_end = std.mem.indexOf(u8, heading.title, " <span style=") orelse return null;
+    if (!std.mem.eql(u8, heading.title[0..title_end], title) or ns.ofTitle(declaration.target).id != 4) return null;
+    return .{ .source = source.bytes, .heading_offset = @intFromPtr(heading.title.ptr) - @intFromPtr(source.bytes.ptr),
+        .kind = "Noun", .definition_text = source.bytes[text_at + 1 .. text_at + line.len] };
+}
+
 fn sourceSectionPhysicalHeading(section: language_source.Section) ?[]const u8 {
     if (section.hyphen_marker or section.source.len == 0 or section.source[0] != '=') return null;
     const line = std.mem.trimEnd(u8, section.source[0 .. std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len], "\r");
@@ -3195,6 +3269,14 @@ const SourceNomLeadingRegion = struct {
         };
         if (renderer.fallbacks.any() or blocks.len != 1 or blocks[0].kind != .definition) return false;
         for (blocks[0].spans) |span| {
+            if (span.ruby != null) {
+                const fallback = compiler.plainText(arena.allocator(), &.{span}) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return false,
+                };
+                if (std.mem.trim(u8, fallback, " \t\r\n\x0c").len != 0) return true;
+                continue;
+            }
             if (span.image != null or (span.kind != .text and span.kind != .link and span.kind != .external_link)) continue;
             if (std.mem.trim(u8, span.text, " \t\r\n").len != 0) return true;
         }
@@ -4473,6 +4555,26 @@ fn bindOwnerSourceElements(source: []const u8, original: []const u8, projection:
     range.source_element_projection = issued;
 }
 
+// Numbering deliberately withholds transformed-source projections for phase
+// inputs. An exact selected Table can still borrow Builder's unchanged complete
+// page, without class ancestry or permission to cross a transformed interval.
+fn unchangedTableSourceProjection(sizing: ?presentation_document.FigureSizingSource, original: MissingText,
+    prepared: MissingText, copy: *[1]presentation_document.SourceElementProjection.Copy) ?presentation_document.SourceElementProjection
+{
+    const selected = sizing orelse return null;
+    var owns_original = false;
+    for ([_]?@import("presentation_compile.zig").TableContainingDirectionSource{ selected.table_containing_direction, selected.table_float_source }) |maybe| if (maybe) |table| {
+        if (table.source.ptr == original.bytes.ptr and table.source.len == original.bytes.len) owns_original = true;
+    };
+    if (!owns_original or original.bytes.len == 0 or !std.mem.eql(u8, original.bytes, prepared.bytes)) return null;
+    for ([_]MissingText{ original, prepared }) |tracked| {
+        if (tracked.unknown or tracked.lost_missing_range or tracked.generated_source != null or
+            tracked.ranges.len != 0 or tracked.literal_curly_ranges.len != 0 or tracked.generated_links.len != 0) return null;
+    }
+    copy[0] = .{ .original_start = 0, .prepared_start = 0, .len = original.bytes.len };
+    return .{ .original = original, .prepared = prepared.bytes, .copies = copy };
+}
+
 fn observeSourceElements(sizing: ?presentation_document.FigureSizingSource, source: []const u8) bool {
     const selected = sizing orelse return false;
     if (selected.table_containing_direction) |direction|
@@ -4953,7 +5055,7 @@ pub const PreparedPage = struct {
         } else if (self.ns.kind == .language) {
             try processMain(a, output, codes, self.title, source, raw_source, display_title, &self.stats, &self.fallbacks, poem, phase);
         } else {
-            try processNamespace(a, output, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, codes.table_styles, codes.figure_sizing, self.ns, self.title, source, display_title, &self.stats, &self.fallbacks, poem, phase);
+            try processNamespace(a, output, codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, codes.table_styles, codes.figure_sizing, codes.local_link_targets, self.ns, self.title, source, display_title, &self.stats, &self.fallbacks, poem, phase);
         }
     }
 };
@@ -5016,9 +5118,26 @@ fn processMain(
     const organization_phase = consume_diagnostics.beginConsumePhase(.organization);
     defer consume_diagnostics.endConsumePhase(organization_phase);
     const raw_missing = if (missing_phase) |phase| phase.output() else MissingText.untracked(source_raw);
+    // Normal native pages have no URL/user/header or custom variant override.
+    // Select the pinned core defaults explicitly; body fallback stays separate.
+    const title_defaults = if (display_title == null and std.mem.indexOf(u8, source_raw, "-{T|") != null)
+        @import("presentation_compile.zig").normalTitleDefaults(title, codes.namespace_catalog, .{
+            .namespace_id = 0, .requested_variant = null, .configured_default_variant = null, .disable_title_conversion = false })
+    else null;
+    const title_precedence = if (std.mem.indexOf(u8, source_raw, "-{T|") != null)
+        try presentation_document.displayTitlePrecedenceAlloc(page_allocator, title,
+            if (display_title) |value| .{ .source = value, .page_title = title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null,
+            codes.link_trail, codes.namespace_catalog, codes.behavior_switches, codes.image_options, raw_poem_phase)
+    else null;
+    const local_targets_selected = if (codes.local_link_targets) |target|
+        target.source.ptr == raw_missing.bytes.ptr and target.source.len == raw_missing.bytes.len else false;
     const numbered = try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, raw_missing, .{
         .title = title,
-        .observe_source_elements = observeSourceElements(codes.figure_sizing, raw_missing.bytes),
+        .observe_source_elements = observeSourceElements(codes.figure_sizing, raw_missing.bytes) or
+            local_targets_selected,
+        .local_link_targets = codes.local_link_targets,
+        .display_title_precedence = title_precedence,
+        .normal_title_defaults = title_defaults,
         .link_trail = codes.link_trail,
         .namespace_catalog = codes.namespace_catalog,
         .behavior_switches = codes.behavior_switches,
@@ -5078,8 +5197,11 @@ fn processMain(
     var page_sections: std.ArrayList(language_source.Section) = .empty;
     defer page_sections.deinit(page_allocator);
     var reference_context = try presentation_document.referenceDefinitionsWithMissingAlloc(page_allocator, source_missing);
+    reference_context.local_link_targets = codes.local_link_targets;
     reference_context.citations = numbered.citations;
     reference_context.content_conversion = numbered.content_conversion;
+    reference_context.display_title_precedence = title_precedence;
+    reference_context.normal_title_defaults = title_defaults;
     // Only possible HTML owners need this existing observation before splitting.
     // Other pages retain its original late position and raw-conflict early exit.
     // The precheck supplies no admission: only actual renderer scopes do that.
@@ -5096,7 +5218,7 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
-        codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.source_headword_fn != null or codes.figure_sizing != null or codes.table_styles != null,
+        codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.source_headword_fn != null or codes.figure_sizing != null or codes.table_styles != null or local_targets_selected,
     )
     else
         null;
@@ -5237,6 +5359,8 @@ fn processMain(
             .behavior_switches = codes.behavior_switches,
             .image_options = codes.image_options,
         .figure_sizing = codes.figure_sizing,
+            .display_title_precedence = title_precedence,
+        .normal_title_defaults = title_defaults,
             .poem_phase = poem_phase,
         } };
         break :blk try probe.isPureColorSwatchPrefix(page_prefix);
@@ -5303,7 +5427,7 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
-        literal_alias_candidate or template_peer_candidate or simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or sr_mul_candidate or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null or codes.table_styles != null,
+        literal_alias_candidate or template_peer_candidate or simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or sr_mul_candidate or codes.source_naslov_noun or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null or codes.table_styles != null or local_targets_selected,
     );
 
     var raw_heading_proof: PageRawHeadingProof = .{ .a = heading_arena.allocator(), .codes = codes, .title = title, .raw = raw_source };
@@ -5665,7 +5789,17 @@ fn processMain(
     // Every fragment asks for an exact quote seed, including table-root
     // fragments that carry no inherited HTML scope. ImageMap observations also
     // borrow the selected page bytes: owner concatenation alone loses custody.
-    const needs_source_fragments = pre_observation.scopes.len != 0 or
+    // An already-issued element projection must also reach the final Document,
+    // including selected nested Tables without class or root-Table scopes.
+    // This fallback is only Builder's exact unchanged full page, not a
+    // replacement transform certificate. Its copies outlive synchronous final
+    // Document compilation and never expose a class scope.
+    var direct_table_copy: [1]presentation_document.SourceElementProjection.Copy = undefined;
+    const direct_table_projection = if (numbered.source_element_projection == null)
+        unchangedTableSourceProjection(codes.figure_sizing, raw_missing, source_missing, &direct_table_copy) else null;
+    const final_source_projection: ?*const presentation_document.SourceElementProjection =
+        if (numbered.source_element_projection) |*proof| proof else if (direct_table_projection) |*proof| proof else null;
+    const needs_source_fragments = final_source_projection != null or pre_observation.scopes.len != 0 or
         (if (codes.figure_sizing) |sizing| sizing.text_class_scope != null or sizing.resolve_image_map_no_link_fn != null else false) or
         (codes.table_styles != null and (heading_observation.page_root_wiki_table_openings.len != 0 or heading_observation.page_top_level_wiki_table_openings.len != 0));
     const quote_cuts: PageQuoteCuts = if (needs_source_fragments)
@@ -5677,6 +5811,8 @@ fn processMain(
             .behavior_switches = codes.behavior_switches,
             .image_options = codes.image_options,
         .figure_sizing = codes.figure_sizing,
+            .display_title_precedence = title_precedence,
+        .normal_title_defaults = title_defaults,
             .poem_phase = poem_phase,
         })
     else
@@ -5749,10 +5885,18 @@ fn processMain(
             }
             if (fragments.len != 0) page_allocator.free(fragments);
         }
-        if (codes.figure_sizing != null or codes.table_styles != null) for (fragments) |*fragment| {
+        if (codes.figure_sizing != null or codes.table_styles != null or local_targets_selected) for (fragments) |*fragment| {
             bindOwnerRootTableSource(source, source_raw, heading_observation, fragment);
             bindOwnerTextClassTransition(source, source_raw, numbered.source, numbered.class_scope_transition, fragment);
-            bindOwnerSourceElements(source, source_raw, if (numbered.source_element_projection) |*proof| proof else null, fragment);
+            bindOwnerSourceElements(source, source_raw, final_source_projection, fragment);
+        };
+        const source_lexeme: ?presentation_document.SourceLexeme = lexical: {
+            if (groups.items.len != 1 or !std.mem.eql(u8, group_missing.bytes, source) or
+                !completeContentRanges(source, group.fragments.items, if (preserve_prefix) page_prefix else "")) break :lexical null;
+            var proof = sourceNaslovLexeme(codes, title, raw_source, source_missing, group.language, heading_observation) orelse break :lexical null;
+            // The existing owner constructor copied this complete page byte-for-byte.
+            proof.source = group_missing.bytes;
+            break :lexical proof;
         };
         const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
             page_allocator,
@@ -5774,7 +5918,7 @@ fn processMain(
             heading_projection,
             // This token follows source ownership resolution and grouping. An
             // unresolved group cannot turn arbitrary L2 labels into owners.
-            if (group.language.code.len != 0) .{ .heading = group.language.heading, .code = group.language.code } else null,
+            if (group.language.code.len != 0) .{ .heading = group.language.heading, .code = group.language.code, .source_lexeme = source_lexeme } else null,
             codes.table_styles,
             codes.figure_sizing,
             if (completeContentRanges(source, group.fragments.items, if (preserve_prefix) page_prefix else "") or
@@ -5794,6 +5938,7 @@ fn processNamespace(
     image_options: ?*const @import("namespace_registry").image_options.Registry,
     table_styles: ?*const @import("table_style_profile.zig").Profile,
     figure_sizing: ?presentation_document.FigureSizingSource,
+    local_link_targets: ?@import("presentation_compile.zig").LocalLinkTargetSource,
     ns: PageNamespace,
     title: []const u8,
     source: []const u8,
@@ -5808,9 +5953,27 @@ fn processNamespace(
     // names to avoid collisions between identically named namespace suffixes.
     const local_title = if (kind == .supplemental) title else localNamespaceTitle(title);
     const raw_missing = if (missing_phase) |phase| phase.output() else MissingText.untracked(source);
+    // Normal native pages have no URL/user/header or custom variant override.
+    // Select the pinned core defaults explicitly; body fallback stays separate.
+    const title_defaults = if (display_title == null and std.mem.indexOf(u8, source, "-{T|") != null) title_policy: {
+        // The dump's namespace ID is unsigned; an unrepresentable value cannot
+        // issue the signed namespace policy's main-page-only title receipt.
+        const namespace_id = std.math.cast(i32, ns.id) orelse break :title_policy null;
+        break :title_policy @import("presentation_compile.zig").normalTitleDefaults(local_title, namespace_catalog, .{
+            .namespace_id = namespace_id, .requested_variant = null, .configured_default_variant = null, .disable_title_conversion = false });
+    } else null;
+    const title_precedence = if (std.mem.indexOf(u8, source, "-{T|") != null)
+        try presentation_document.displayTitlePrecedenceAlloc(page_allocator, local_title,
+            if (display_title) |value| .{ .source = value, .page_title = title, .missing = if (missing_phase) |phase| phase.displayTitle() else null } else null,
+            link_trail, namespace_catalog, behavior_switches, image_options, poem_phase)
+    else null;
     const numbered = try presentation_document.preparePageExternalLinksWithMissingAlloc(page_allocator, raw_missing, .{
         .title = local_title,
-        .observe_source_elements = observeSourceElements(figure_sizing, raw_missing.bytes),
+        .observe_source_elements = observeSourceElements(figure_sizing, raw_missing.bytes) or
+            (if (local_link_targets) |target| target.source.ptr == raw_missing.bytes.ptr and target.source.len == raw_missing.bytes.len else false),
+        .local_link_targets = local_link_targets,
+        .display_title_precedence = title_precedence,
+        .normal_title_defaults = title_defaults,
         .link_trail = link_trail,
         .namespace_catalog = namespace_catalog,
         .behavior_switches = behavior_switches,
@@ -5820,16 +5983,24 @@ fn processNamespace(
     });
     fallbacks.merge(numbered.fallbacks);
     defer if (numbered.source_element_projection) |proof| page_allocator.free(proof.copies);
+    var direct_table_copy: [1]presentation_document.SourceElementProjection.Copy = undefined;
+    const direct_table_projection = if (numbered.source_element_projection == null)
+        unchangedTableSourceProjection(figure_sizing, raw_missing, numbered.missing, &direct_table_copy) else null;
+    const final_source_projection: ?*const presentation_document.SourceElementProjection =
+        if (numbered.source_element_projection) |*proof| proof else if (direct_table_projection) |*proof| proof else null;
     var fragment: presentation_document.SourceFragment = .{
         .source = numbered.source, .original_start = 0, .missing = numbered.missing, .whole_body = true,
         .parser_output_range = .{ .page = numbered.source, .start = 0, .prepared = numbered.missing.bytes,
             .original_page = if (std.mem.eql(u8, numbered.source, raw_missing.bytes)) raw_missing.bytes else null },
     };
     bindOwnerTextClassTransition(numbered.source, raw_missing.bytes, numbered.source, numbered.class_scope_transition, &fragment);
-    bindOwnerSourceElements(numbered.source, raw_missing.bytes, if (numbered.source_element_projection) |*proof| proof else null, &fragment);
+    bindOwnerSourceElements(numbered.source, raw_missing.bytes, final_source_projection, &fragment);
     var reference_context = try presentation_document.referenceDefinitionsWithMissingAlloc(page_allocator, numbered.missing);
+    reference_context.local_link_targets = local_link_targets;
     reference_context.citations = numbered.citations;
     reference_context.content_conversion = numbered.content_conversion;
+    reference_context.display_title_precedence = title_precedence;
+    reference_context.normal_title_defaults = title_defaults;
     const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         page_allocator,
         local_title,
@@ -5845,7 +6016,7 @@ fn processNamespace(
         reference_context,
         fallbacks,
         numbered.poem_phase,
-        if (numbered.source_element_projection != null) &.{fragment} else &.{},
+        if (final_source_projection != null) &.{fragment} else &.{},
         null,
         &.{},
         null,
@@ -6109,7 +6280,7 @@ pub const Writer = struct {
         if (ns.kind == .language) {
             try processMain(page_allocator, .{ .direct = &self.spools }, self.language_codes, title, source, raw_source, display_title, &self.stats, &fallbacks, poem_phase, missing_phase);
         } else {
-            try processNamespace(page_allocator, .{ .direct = &self.spools }, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, self.language_codes.table_styles, self.language_codes.figure_sizing, ns, title, source, display_title, &self.stats, &fallbacks, poem_phase, missing_phase);
+            try processNamespace(page_allocator, .{ .direct = &self.spools }, self.language_codes.link_trail, self.language_codes.namespace_catalog, self.language_codes.behavior_switches, self.language_codes.image_options, self.language_codes.table_styles, self.language_codes.figure_sizing, self.language_codes.local_link_targets, ns, title, source, display_title, &self.stats, &fallbacks, poem_phase, missing_phase);
         }
         try self.reportFallback(page_allocator, ns, title, fallbacks, extra_reasons);
     }
@@ -21012,4 +21183,612 @@ test "language group fragment allocation failure preserves provenance and permit
     try std.testing.expectError(error.InvalidPreContext,
         missingOwnerSourceAlloc(arena.allocator(), tracked, &.{invalid}, ""));
     try std.testing.expectEqualStrings(source, tracked.bytes);
+}
+
+test "normal page preparation retains selected nested Table source custody through final Document and Stored codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const compiler = @import("presentation_compile.zig");
+    const styles = @import("table_style_profile.zig");
+    const T = blobs.presentation_types;
+    var phase: []const u8 = "initialize nested custody fixture";
+    var phase_source = @src();
+    errdefer std.debug.print("RU_NESTED_CUSTODY_PHASE={s} source={s}:{d}:{d}\n", .{ phase, phase_source.file, phase_source.line, phase_source.column });
+    const F = struct {
+        const source = "==English==\n===Noun===\nbefore [[Before|first action]]\n<div align=\"center\">\n{| style='margin:0 auto;width:70%'\n| [[Target|complete cell]]\n|}\n</div>\nafter [[After|last action]]\n";
+        const opening = std.mem.indexOf(u8, source, "{|").?;
+        const parent_start = std.mem.indexOf(u8, source, "<div").?;
+        const parent_end = parent_start + "<div align=\"center\">".len;
+        const Bound = struct {
+            source: []const u8,
+            contexts: []const styles.TableContainingDirectionContext,
+            parents: []const []const u8,
+            accepted: usize = 0,
+            opening_offset: usize = opening,
+            wrong_offset: bool = false,
+            fn observe(raw: ?*const anyopaque, _: std.mem.Allocator, whole: []const u8, at: usize) std.mem.Allocator.Error!?compiler.TableContainingDirectionObservation {
+                const self: *@This() = @ptrCast(@alignCast(@constCast(raw orelse return null)));
+                if (whole.ptr != self.source.ptr or whole.len != self.source.len or
+                    at != self.opening_offset + @intFromBool(self.wrong_offset)) return null;
+                self.accepted += 1;
+                return .{ .contexts = self.contexts, .parents = self.parents };
+            }
+        };
+        fn sizing(_: ?*const anyopaque, _: std.mem.Allocator, _: []const u8, _: T.FigureFormat, _: ?u32, _: ?u32) std.mem.Allocator.Error!?T.FigureSizingPolicy { return null; }
+        fn table(entry: *T.Entry) !*T.Table {
+            var found: ?*T.Table = null;
+            const sections = @constCast(entry.sections);
+            for (sections) |*section| try findTable(@constCast(section.blocks), &found);
+            return found orelse error.ExpectedNestedSourceTable;
+        }
+        fn findTable(blocks: []T.Block, found: *?*T.Table) anyerror!void {
+            for (blocks) |*block| {
+                if (block.table) |*value| { try std.testing.expect(found.* == null); found.* = value; }
+                if (block.container) |container| try findTable(@constCast(container.blocks), found);
+            }
+        }
+        fn actions(spans: []const T.Span, counts: *[3]usize) !void {
+            for (spans) |span| if (span.kind == .link) {
+                const targets = [_][]const u8{ "Before", "Target", "After" };
+                const labels = [_][]const u8{ "first action", "complete cell", "last action" };
+                var found = false;
+                for (targets, labels, 0..) |target, label, index| if (std.mem.eql(u8, span.target, target)) {
+                    try std.testing.expectEqualStrings(label, span.text); counts[index] += 1; found = true;
+                };
+                try std.testing.expect(found);
+            };
+        }
+        fn bodyActions(blocks: []const T.Block, counts: *[3]usize) anyerror!void {
+            for (blocks) |block| {
+                try actions(block.spans, counts);
+                if (block.table) |value| for (value.rows) |row| for (row.cells) |cell| try actions(cell.spans, counts);
+                if (block.container) |container| try bodyActions(container.blocks, counts);
+            }
+        }
+        fn compile(allocator: std.mem.Allocator, codes: LanguageCodes, input: []const u8, metadata: ?[]const u8) !PreparedPage {
+            var page: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "nested source custody" };
+            try page.compileWithPhases(allocator, codes, input, input, null, null, metadata, null);
+            try std.testing.expectEqual(@as(usize, 1), page.records.items.len);
+            try std.testing.expectEqual(@as(usize, 1), page.stats.language_records);
+            return page;
+        }
+        fn decode(allocator: std.mem.Allocator, page: PreparedPage) !T.Stored {
+            const record = page.records.items[0];
+            try std.testing.expectEqualStrings("English", record.key);
+            try std.testing.expectEqualStrings("en", record.language_code);
+            return blobs.presentation_codec.decodeAlloc(allocator, record.payload, page.title, .language, .{ .heading = "English", .code = "en" });
+        }
+    };
+    var plain = try styles.parseForTargetAlloc(a, "", .screen); defer plain.deinit();
+    var captured = try styles.parseForTargetAlloc(a, "html{direction:rtl}table{direction:ltr}", .screen); defer captured.deinit();
+    const nodes = [_]styles.ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "div", .parent = 2, .attributes = &.{.{ .name = "align", .value = "center" }} },
+        .{ .tag = "table", .parent = 3, .attributes = &.{.{ .name = "style", .value = "margin:0 auto;width:70%" }} },
+    };
+    const contexts = [_]styles.TableContainingDirectionContext{.{ .styles = &captured, .nodes = &nodes, .root = 2, .table = 4 }};
+    var bound: F.Bound = .{ .source = F.source, .contexts = &contexts, .parents = &.{F.source[F.parent_start..F.parent_end]} };
+    var codes = TestLanguages.codes(); codes.table_styles = &plain;
+    // The independent old path owns the same complete body and actions, but
+    // cannot resolve the source TABLE's automatic margins without its parent.
+    const baseline_page = try F.compile(a, codes, F.source, null);
+    try std.testing.expect(baseline_page.fallbacks.unresolved_table_style);
+    var expected = try F.decode(a, baseline_page);
+    const expected_table = try F.table(&expected.entry);
+    try std.testing.expect(expected_table.style != null and expected_table.style.?.margin_values == null and
+        expected_table.style.?.containing_direction == null);
+    const zero: T.ContainerMargin = .{ .length = .{ .unit = .px, .value = 0 } };
+    expected_table.style.?.margin_values = .{ .top = zero, .right = .auto, .bottom = zero, .left = .auto };
+    expected_table.style.?.containing_direction = .rtl;
+    const selected: compiler.TableContainingDirectionSource = .{ .root_only = true, .source = F.source,
+        .context = &bound, .observe = F.Bound.observe };
+    codes.figure_sizing = .{ .resolve_fn = F.sizing, .table_containing_direction = selected };
+    try std.testing.expect(codes.figure_sizing.?.text_class_scope == null);
+    phase = "independent captured parent and table geometry preflight"; phase_source = @src();
+    const captured_geometry = (try styles.resolveObservedRootTableContainingDirection(a, &contexts, null, expected_table.style.?, true)) orelse return error.ExpectedCapturedNestedTableGeometry;
+    try std.testing.expectEqual(T.TableContainingDirection.rtl, captured_geometry.direction);
+    try std.testing.expect(captured_geometry.responsive_geometry_accounted);
+    phase = "compile nested source through final Document"; phase_source = @src();
+    const page = try F.compile(a, codes, F.source, null);
+    errdefer std.debug.print("RU_NESTED_CUSTODY_ACTUAL accepted={d} report={any}\n", .{ bound.accepted, page.fallbacks });
+    phase = "verify callback received original source and offset"; phase_source = @src();
+    try std.testing.expect(bound.accepted != 0);
+    phase = "verify complete final report"; phase_source = @src();
+    try std.testing.expectEqualDeep(presentation_document.Fallbacks{}, page.fallbacks);
+    const actual = try F.decode(a, page);
+    phase = "verify complete Stored body and style"; phase_source = @src();
+    try std.testing.expectEqualDeep(expected, actual);
+    var actions: [3]usize = .{ 0, 0, 0 };
+    for (actual.entry.sections) |section| try F.bodyActions(section.blocks, &actions);
+    try std.testing.expectEqualDeep([3]usize{ 1, 1, 1 }, actions);
+    try std.testing.expectEqualSlices(u8, page.records.items[0].payload, try blobs.presentation_codec.encodeAlloc(a, actual));
+    // Preserve the original unquoted-parent spelling as a refusal. This
+    // root-only route deliberately admits the exact quoted plain-parent shape;
+    // the captured geometry query alone cannot authorize a different spelling.
+    phase = "verify original unquoted parent refusal"; phase_source = @src();
+    const unquoted_opening = "<div align=center>";
+    const unquoted_source = try std.mem.concat(a, u8, &.{ F.source[0..F.parent_start], unquoted_opening, F.source[F.parent_end..] });
+    var unquoted_bound: F.Bound = .{ .source = unquoted_source, .contexts = &contexts,
+        .parents = &.{unquoted_source[F.parent_start .. F.parent_start + unquoted_opening.len]},
+        .opening_offset = std.mem.indexOf(u8, unquoted_source, "{|").? };
+    var unquoted_codes = codes;
+    unquoted_codes.figure_sizing.?.table_containing_direction = .{ .root_only = true, .source = unquoted_source,
+        .context = &unquoted_bound, .observe = F.Bound.observe };
+    const unquoted_page = try F.compile(a, unquoted_codes, unquoted_source, null);
+    try std.testing.expect(unquoted_bound.accepted != 0);
+    try std.testing.expect(unquoted_page.fallbacks.unresolved_table_style);
+    var unquoted_plain = unquoted_codes; unquoted_plain.figure_sizing = null;
+    const unquoted_baseline = try F.compile(a, unquoted_plain, unquoted_source, null);
+    const unquoted_stored = try F.decode(a, unquoted_page);
+    try std.testing.expectEqualDeep(try F.decode(a, unquoted_baseline), unquoted_stored);
+    try std.testing.expectEqualSlices(u8, unquoted_page.records.items[0].payload,
+        try blobs.presentation_codec.encodeAlloc(a, unquoted_stored));
+    // Detached/equal bytes, tainted current ownership and a foreign callback
+    // retain the original complete output; none may borrow source authority.
+    phase = "verify original six custody refusals"; phase_source = @src();
+    for (0..6) |mode| {
+        errdefer std.debug.print("RU_NESTED_CUSTODY_REFUSAL mode={d}\n", .{mode});
+        bound.accepted = 0; bound.source = F.source; bound.wrong_offset = false;
+        var refused_codes = codes;
+        const input = if (mode == 0) try a.dupe(u8, F.source) else F.source;
+        var metadata: ?[]const u8 = null;
+        if (mode == 1 or mode == 2) {
+            var tracked = MissingText.untracked(input);
+            if (mode == 1) tracked.unknown = true else {
+                // lost_missing_range is deliberately in-process only. A real
+                // discarded range also makes the transformed source unknown;
+                // that existing coordinate flag survives the metadata boundary.
+                tracked = MissingText.transformedFrom(.{ .bytes = input,
+                    .ranges = &.{.{ .start = 0, .end = 1, .occurrence = 1 }} }, input);
+                try std.testing.expect(tracked.unknown and tracked.lost_missing_range);
+                var copy: [1]presentation_document.SourceElementProjection.Copy = undefined;
+                try std.testing.expect(unchangedTableSourceProjection(refused_codes.figure_sizing,
+                    tracked, MissingText.untracked(input), &copy) == null);
+            }
+            metadata = try missing_dependency.encode(a, tracked, MissingText.untracked(""), &.{});
+            var decoded = try missing_dependency.decode(a, metadata.?, input, ""); defer decoded.deinit();
+            try std.testing.expect(decoded.output().unknown and !decoded.output().lost_missing_range);
+            try std.testing.expectEqual(@as(usize, 0), decoded.output().ranges.len);
+        }
+        if (mode == 3) bound.wrong_offset = true;
+        if (mode == 4) bound.source = try a.dupe(u8, F.source);
+        if (mode == 5) refused_codes.figure_sizing.?.table_containing_direction = null;
+        const refused_page = try F.compile(a, refused_codes, input, metadata);
+        try std.testing.expectEqual(@as(usize, 0), bound.accepted);
+        try std.testing.expect(refused_page.fallbacks.unresolved_table_style);
+        try std.testing.expectEqualDeep(try F.decode(a, baseline_page), try F.decode(a, refused_page));
+        const refused = try F.decode(a, refused_page);
+        try std.testing.expectEqualSlices(u8, refused_page.records.items[0].payload, try blobs.presentation_codec.encodeAlloc(a, refused));
+    }
+}
+
+test "ordinary Writer retains issued local targets through language and supplemental source preparation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const io = std.testing.io;
+    const C = @import("presentation_compile.zig");
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, NS.english_test_fixture); defer ns.deinit();
+    const Proof = struct {
+        source: []const u8,
+        calls: usize = 0,
+        accepted: usize = 0,
+        last_guard: []const u8 = "none",
+        fn resolve(context: ?*const anyopaque, _: std.mem.Allocator, operation: C.TableSourceAnchorOperation) C.Error!?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(@constCast(context orelse return null)));
+            self.calls += 1; self.last_guard = "source";
+            if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len) return null;
+            self.last_guard = "token_offset";
+            const at = std.math.sub(usize, @intFromPtr(operation.token.ptr), @intFromPtr(self.source.ptr)) catch return null;
+            self.last_guard = "token_range_and_target";
+            if (at > self.source.len or operation.token.len > self.source.len - at or !std.mem.eql(u8, operation.target, "gh")) return null;
+            self.accepted += 1; self.last_guard = "accepted";
+            return "Resolved";
+        }
+        fn language(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            return if (std.mem.eql(u8, name, "English")) .{ .code = "en", .heading = "English" } else null;
+        }
+        fn code(context: ?*const anyopaque, name: []const u8) ?[]const u8 {
+            return if (language(context, name)) |value| value.code else null;
+        }
+    };
+    for ([_]bool{ false, true }) |supplemental| for (0..3) |mode| {
+        const source = try a.dupe(u8, if (supplemental)
+            "==Section==\nbefore [[gh|visible]]a after\n[https://example.org]\n"
+        else "==English==\nbefore [[gh|visible]]a after\n[https://example.org]\n");
+        var proof = Proof{ .source = source };
+        var phase: []const u8 = "configure source capability";
+        var phase_source = @src();
+        errdefer std.debug.print("LOCAL_TARGET_WRITER supplemental={any} mode={d} phase={s} source={s}:{d}:{d} callback_calls={d} accepted={d} last_guard={s}\n",
+            .{ supplemental, mode, phase, phase_source.file, phase_source.line, phase_source.column, proof.calls, proof.accepted, proof.last_guard });
+        var codes: LanguageCodes = .{ .namespace_catalog = &ns, .get_fn = Proof.code,
+            .resolve_fn = Proof.language, .strong_fn = Proof.language, .trusted_fn = Proof.language };
+        if (mode != 2) codes.local_link_targets = .{
+            .source = if (mode == 1) try a.dupe(u8, source) else source,
+            .namespace_sha256 = ns.source_sha256, .context = &proof, .resolve = Proof.resolve,
+        };
+        const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/{s}-{d}", .{ tmp.sub_path, if (supplemental) "supplemental" else "main", mode });
+        var writer = try Writer.init(io, a, output); defer writer.deinit();
+        writer.language_codes = codes;
+        const title = if (supplemental) "Appendix:Entry" else "Entry";
+        phase = "ordinary addExpandedPage"; phase_source = @src();
+        try writer.addExpandedPage(a, .{ .id = if (supplemental) 100 else 0, .kind = if (supplemental) .supplemental else .language }, title, source, source, null);
+        phase = "finish Writer"; phase_source = @src();
+        _ = try writer.finish(codes);
+        const path = if (supplemental) try std.fs.path.join(a, &.{ output, "supplemental.wikblb" }) else try languageBlobPathAlloc(a, output, "English");
+        var mapped = try mmapPath(io, path); defer mapped.deinit();
+        const blob = try blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find(title)) orelse return error.TestUnexpectedResult;
+        phase = "decode stored entry"; phase_source = @src();
+        const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, title,
+            if (supplemental) .supplemental else .language,
+            if (supplemental) null else .{ .code = "en", .heading = "English" });
+        phase = "stored codec parity"; phase_source = @src();
+        try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+        try std.testing.expect(LeadingRegionFixture.contains(stored.entry, "before"));
+        try std.testing.expect(LeadingRegionFixture.contains(stored.entry, "after"));
+        var internal: usize = 0; var external: usize = 0;
+        var label: std.ArrayList(u8) = .empty;
+        for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind == .link) {
+                phase = "assert internal action target"; phase_source = @src();
+                try std.testing.expectEqualStrings(if (mode == 0) "Resolved" else "gh", span.target);
+                try label.appendSlice(a, span.text); internal += 1;
+            }
+            if (span.kind == .external_link and std.mem.eql(u8, span.target, "https://example.org")) {
+                try std.testing.expectEqualStrings("[1]", span.text); external += 1;
+            }
+        };
+        try std.testing.expect(internal != 0);
+        try std.testing.expectEqualStrings("visiblea", label.items);
+        try std.testing.expectEqual(@as(usize, 1), external);
+    };
+}
+
+
+test "unchanged selected Table page retains direct source custody without numbering projection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const compiler = @import("presentation_compile.zig");
+    const styles = @import("table_style_profile.zig");
+    const T = blobs.presentation_types;
+    const F = struct {
+        const source = "==English==\n===Noun===\nbefore [[Before|first action]]\n{| style='margin:0 auto;width:70%'\n| [[Target#part|complete cell]]\n|}\nafter [[After|last action]]\n";
+        const opening = std.mem.indexOf(u8, source, "{|").?;
+        const Bound = struct {
+            source: []const u8,
+            contexts: []const styles.TableContainingDirectionContext,
+            accepted: usize = 0,
+            fn observe(raw: ?*const anyopaque, _: std.mem.Allocator, whole: []const u8, at: usize) std.mem.Allocator.Error!?compiler.TableContainingDirectionObservation {
+                const self: *@This() = @ptrCast(@alignCast(@constCast(raw orelse return null)));
+                if (whole.ptr != self.source.ptr or whole.len != self.source.len or at != opening) return null;
+                self.accepted += 1;
+                return .{ .contexts = self.contexts, .parents = &.{} };
+            }
+        };
+        fn sizing(_: ?*const anyopaque, _: std.mem.Allocator, _: []const u8, _: T.FigureFormat, _: ?u32, _: ?u32) std.mem.Allocator.Error!?T.FigureSizingPolicy { return null; }
+        fn compile(allocator: std.mem.Allocator, codes: LanguageCodes, input: []const u8, phase: ?*const presentation_document.PoemPhase) !PreparedPage {
+            var page: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "unchanged phase custody" };
+            try processMain(allocator, .{ .prepared = &page }, codes, page.title, input, input, null,
+                &page.stats, &page.fallbacks, phase, null);
+            try std.testing.expectEqual(@as(usize, 1), page.records.items.len);
+            return page;
+        }
+        fn decode(allocator: std.mem.Allocator, page: PreparedPage) !T.Stored {
+            const record = page.records.items[0];
+            try std.testing.expectEqualStrings("English", record.key);
+            try std.testing.expectEqualStrings("en", record.language_code);
+            return blobs.presentation_codec.decodeAlloc(allocator, record.payload, page.title, .language,
+                .{ .heading = "English", .code = "en" });
+        }
+    };
+    var plain = try styles.parseForTargetAlloc(a, "", .screen); defer plain.deinit();
+    var captured = try styles.parseForTargetAlloc(a, "html{direction:rtl}table{direction:ltr}", .screen); defer captured.deinit();
+    const nodes = [_]styles.ObservedStyleNode{
+        .{ .tag = "html", .parent = null, .attributes = &.{} },
+        .{ .tag = "body", .parent = 0, .attributes = &.{} },
+        .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+        .{ .tag = "table", .parent = 2, .attributes = &.{.{ .name = "style", .value = "margin:0 auto;width:70%" }} },
+    };
+    const contexts = [_]styles.TableContainingDirectionContext{.{ .styles = &captured, .nodes = &nodes, .root = 2, .table = 3 }};
+    var bound: F.Bound = .{ .source = F.source, .contexts = &contexts };
+    var codes = TestLanguages.codes(); codes.table_styles = &plain;
+    codes.figure_sizing = .{ .resolve_fn = F.sizing, .table_containing_direction = .{
+        .root_only = true, .source = F.source, .context = &bound, .observe = F.Bound.observe } };
+    const phase: presentation_document.PoemPhase = .{ .full_output = F.source, .items = &.{} };
+    const numbered = try presentation_document.preparePageExternalLinksWithMissingAlloc(a, MissingText.untracked(F.source),
+        .{ .observe_source_elements = true, .figure_sizing = codes.figure_sizing, .poem_phase = &phase });
+    try std.testing.expect(numbered.source_element_projection == null and numbered.poem_phase != null);
+    try std.testing.expectEqualStrings(F.source, numbered.source);
+    const baseline = try F.compile(a, codes, F.source, null);
+    try std.testing.expectEqualDeep(presentation_document.Fallbacks{}, baseline.fallbacks);
+    const expected = try F.decode(a, baseline);
+    bound.accepted = 0;
+    const actual = try F.compile(a, codes, F.source, &phase);
+    try std.testing.expect(bound.accepted != 0);
+    try std.testing.expectEqualDeep(presentation_document.Fallbacks{}, actual.fallbacks);
+    try std.testing.expectEqualDeep(expected, try F.decode(a, actual));
+    try std.testing.expectEqualSlices(u8, baseline.records.items[0].payload, actual.records.items[0].payload);
+    var tables: usize = 0; var actions: [3]usize = .{ 0, 0, 0 };
+    for (expected.entry.sections) |section| for (section.blocks) |block| {
+        for (block.spans) |span| if (span.kind == .link) {
+            if (std.mem.eql(u8, span.target, "Before")) { try std.testing.expectEqualStrings("first action", span.text); actions[0] += 1; }
+            else if (std.mem.eql(u8, span.target, "After")) { try std.testing.expectEqualStrings("last action", span.text); actions[2] += 1; }
+            else return error.UnexpectedOuterAction;
+        };
+        if (block.table) |table| {
+            tables += 1;
+            try std.testing.expectEqual(@as(?T.TableContainingDirection, .rtl), table.style.?.containing_direction);
+            try std.testing.expect(table.style.?.margin_values.?.left == .auto and table.style.?.margin_values.?.right == .auto);
+            try std.testing.expectEqualDeep(T.StyleWidth{ .unit = .percent, .value = 70 }, table.style.?.width.?);
+            for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| if (span.kind == .link) {
+                try std.testing.expectEqualStrings("Target#part", span.target);
+                try std.testing.expectEqualStrings("complete cell", span.text);
+                actions[1] += 1;
+            };
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), tables);
+    try std.testing.expectEqualDeep([3]usize{ 1, 1, 1 }, actions);
+    try std.testing.expectEqualSlices(u8, actual.records.items[0].payload, try blobs.presentation_codec.encodeAlloc(a, expected));
+    var copy: [1]presentation_document.SourceElementProjection.Copy = undefined;
+    const original = MissingText.untracked(F.source);
+    const prepared = MissingText.untracked(try a.dupe(u8, F.source));
+    const direct = unchangedTableSourceProjection(codes.figure_sizing, original, prepared, &copy) orelse return error.ExpectedDirectSource;
+    try std.testing.expect(direct.observed_source == null and direct.original.bytes.ptr == F.source.ptr);
+    try std.testing.expect(direct.prepared.ptr == prepared.bytes.ptr and direct.prepared.ptr != F.source.ptr);
+    try std.testing.expectEqual(@as(?usize, F.opening), direct.originalRange(F.opening, 2));
+    for (0..10) |mode| {
+        var old = original; var next = prepared; var figure = codes.figure_sizing.?;
+        switch (mode) {
+            0 => old.bytes = try a.dupe(u8, F.source),
+            1 => old.unknown = true,
+            2 => next.unknown = true,
+            3 => old.lost_missing_range = true,
+            4 => next.lost_missing_range = true,
+            5 => old.ranges = &.{.{ .start = 0, .end = 1, .occurrence = 1 }},
+            6 => next.literal_curly_ranges = &.{.{ .start = 0, .end = 1 }},
+            7 => next.bytes = next.bytes[1..],
+            8 => figure.table_containing_direction.?.source = try a.dupe(u8, F.source),
+            9 => figure.table_containing_direction = null,
+            else => unreachable,
+        }
+        try std.testing.expect(unchangedTableSourceProjection(figure, old, next, &copy) == null);
+    }
+    const detached = try a.dupe(u8, F.source);
+    bound.accepted = 0;
+    const refused = try F.compile(a, codes, detached, &.{ .full_output = detached, .items = &.{} });
+    try std.testing.expectEqual(@as(usize, 0), bound.accepted);
+    try std.testing.expect(refused.fallbacks.unresolved_table_style);
+    var absent = codes; absent.figure_sizing = null;
+    const refused_reference = try F.compile(a, absent, detached, null);
+    try std.testing.expectEqualDeep(try F.decode(a, refused_reference), try F.decode(a, refused));
+}
+
+
+test "leading definition meaning probe preserves typed Ruby fallback without granting ownership" {
+    const a = std.testing.allocator;
+    try std.testing.expect(try SourceNomLeadingRegion.hasMeaning(a, "Ruby", .{}, "# <ruby>字<rt>じ</rt></ruby>"));
+    try std.testing.expect(try SourceNomLeadingRegion.hasMeaning(a, "Ruby", .{}, "# <ruby>字<rt></rt></ruby>"));
+    try std.testing.expect(!try SourceNomLeadingRegion.hasMeaning(a, "Ruby", .{}, "# <ruby><rt></rt></ruby>"));
+    try std.testing.expect(!try SourceNomLeadingRegion.hasMeaning(a, "Ruby", .{}, "# <ruby><rb></rb>\x0c<rb></rb></ruby>"));
+    try std.testing.expect(try SourceNomLeadingRegion.hasMeaning(a, "Ruby", .{}, "# ordinary"));
+}
+
+test "ordinary page preparation carries accepted explicit title through observers and final Document only" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, NS.english_test_fixture); defer ns.deinit();
+    ns.content_language = "ku"; ns.language_conversion = &.{ "ku", "ku-arab", "ku-latn" };
+    ns.manual_conversion_context = .{ .base = "ku", .fallbacks = &.{"ku-latn"}, .separator_variants = &.{"ku", "ku-arab", "ku-latn"}, .automatic_identity = false,
+        .source_core = "79b81ba96674efc8a803fc956bc501d347d440d2", .source_converter_sha256 = "1f610f299bfc5b2976c440312a30958325006c36fb7b67e33810324f4c50e47e", .siteinfo_sha256 = "f993d95042a6345607e52a273359074d774197a9f212f2cb39cdd249a9d2be8a" };
+    const F = struct {
+        const title = "lêker";
+        const display = "<span class=\"Latn\">lêker</span>";
+        const token = "-{T|ku-latn:lêker;ku-arab:لێکەر}-";
+        const source = "==English==\n===Noun===\n# <span class=\"Latn\" lang=\"ku\">[[Target#part|complete label]]</span> " ++ token ++ " after [https://example.test/retained external]\n";
+        fn code(_: ?*const anyopaque, name: []const u8) ?[]const u8 {
+            return if (std.mem.eql(u8, name, "English")) "en" else null;
+        }
+        fn language(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            return if (std.mem.eql(u8, name, "English")) .{ .heading = "English", .code = "en" } else null;
+        }
+    };
+    const behavior_source = try std.fmt.allocPrint(a, "# wikidict-behavior-switches-v1\n# wiki\t{s}\n# dump-date\t{s}\n# content-language\t{s}\n# namespace-registry-sha256\t{s}\nnocontentconvert\t0\t__NOCC__\n", .{ ns.wiki, ns.dump_date, ns.content_language, std.fmt.bytesToHex(ns.source_sha256, .lower) });
+    var behavior = try NS.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &ns, .behavior_switches = &behavior, .get_fn = F.code,
+        .resolve_fn = F.language, .strong_fn = F.language, .trusted_fn = F.language };
+    // The hidden marker is a parsed inline boundary even though it emits no
+    // text. Keep both adjacent text spans in the independent visible reference.
+    const reference = try std.mem.replaceOwned(u8, a, F.source, F.token, "<span></span>");
+    var actual: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = F.title };
+    var expected: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = F.title };
+    try actual.compileWithPhases(a, codes, F.source, F.source, F.display, null, null, null);
+    try expected.compileWithPhases(a, codes, reference, reference, F.display, null, null, null);
+    try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+    try std.testing.expectEqual(@as(usize, 1), actual.records.items.len);
+    try std.testing.expectEqual(@as(usize, 1), expected.records.items.len);
+    const row = actual.records.items[0];
+    try std.testing.expectEqualStrings("English", row.key);
+    try std.testing.expectEqualStrings("en", row.language_code);
+    try std.testing.expectEqualSlices(u8, expected.records.items[0].payload, row.payload);
+    const stored = try blobs.presentation_codec.decodeAlloc(a, row.payload, F.title, .language, .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualDeep(try blobs.presentation_codec.decodeAlloc(a, expected.records.items[0].payload, F.title, .language, .{ .heading = "English", .code = "en" }), stored);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.display_title.len);
+    try std.testing.expectEqualStrings(F.title, stored.entry.display_title[0].text);
+    try std.testing.expectEqualStrings("Latn", stored.entry.display_title[0].classes);
+    var linked: usize = 0; var external: usize = 0;
+    var before_boundary: usize = 0; var after_boundary: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.kind == .text and span.target.len == 0) {
+            if (std.mem.eql(u8, span.text, " ")) before_boundary += 1;
+            if (std.mem.eql(u8, span.text, " after ")) after_boundary += 1;
+        }
+        if (std.mem.eql(u8, span.target, "Target#part")) {
+            linked += 1; try std.testing.expectEqualStrings("complete label", span.text);
+            try std.testing.expectEqualStrings("Latn", span.classes); try std.testing.expectEqualStrings("ku", span.language);
+        }
+        if (std.mem.eql(u8, span.target, "https://example.test/retained")) external += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), linked);
+    try std.testing.expectEqual(@as(usize, 1), external);
+    try std.testing.expectEqual(@as(usize, 1), before_boundary);
+    try std.testing.expectEqual(@as(usize, 1), after_boundary);
+    try std.testing.expectEqualSlices(u8, row.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+    for ([_]?[]const u8{ null, "<span class=\"Latn\">foreign</span>" }) |display| {
+        var refused: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = F.title };
+        try std.testing.expectError(error.UncompiledPresentation, refused.compileWithPhases(a, codes, F.source, F.source, display, null, null, null));
+        try std.testing.expectEqual(@as(usize, 0), refused.records.items.len);
+    }
+}
+
+
+const NaslovNounSourceTest = struct {
+    const marker = "<p style=\"margin-bottom: -0.5em; cursor: help;\" title=\"Смисао или семантичко објашњење\">'''Значења:''' {{{1}}}</p>\n";
+    const raw = "{{Наслов|Српски|Именица|м}}\n{{Значење}}\n:[1] retained meaning\n\n{{Скраћенице}}\n";
+    const source = "== word <span style=\"font-size:80%;\">([[Викиречник:Српски|српски]])</span> ==\n" ++ marker ++ ":[1] retained meaning\n\n[[Other|support]]\n=== Преводи ===\n[[Target|translation]]";
+    fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        return if (std.mem.eql(u8, name, "Српски") or std.mem.eql(u8, name, "sr")) .{ .code = "sr", .heading = "Српски" } else null;
+    }
+    fn codes(ns: *const @import("namespace_registry").Registry) LanguageCodes {
+        return .{ .namespace_catalog = ns, .source_naslov_noun = true, .resolve_fn = resolve, .strong_fn = resolve };
+    }
+};
+
+test "source Naslov noun declaration binds exact raw owner heading and plain meaning without gender inference" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @embedFile("testdata/sr-naslov-owner/namespace-registry.tsv")); defer ns.deinit();
+    const F = NaslovNounSourceTest;
+    const original = F.source;
+    const observed: presentation_document.HeadingObservation = .{ .page_html_source = original,
+        .page_wiki_scope_complete = true, .page_wiki_openings = &.{0} };
+    const owner: ResolvedLanguage = .{ .code = "sr", .heading = "Српски" };
+    const proof = sourceNaslovLexeme(F.codes(&ns), "word", F.raw, MissingText.untracked(original), owner, observed) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Noun", proof.kind);
+    try std.testing.expectEqualStrings("[1] retained meaning", proof.definition_text);
+    try std.testing.expect(proof.source.ptr == original.ptr);
+    const unrelated_third = "{{Наслов|Српски|Именица|not a gender}}\n{{Значење}}\n:[1] retained meaning\n\n{{Скраћенице}}\n";
+    try std.testing.expect(sourceNaslovLexeme(F.codes(&ns), "word", unrelated_third, MissingText.untracked(original), owner, observed) != null);
+    for (0..12) |mode| {
+        var codes = F.codes(&ns); var raw: ?[]const u8 = F.raw; var input = MissingText.untracked(original);
+        var observation = observed; var language = owner; var title: []const u8 = "word";
+        switch (mode) {
+            0 => codes.source_naslov_noun = false,
+            1 => raw = null,
+            2 => raw = "<nowiki>" ++ F.raw ++ "</nowiki>",
+            3 => raw = "{{Наслов|Енглески|Именица|м}}\n{{Значење}}\n:[1] retained meaning\n\n{{Скраћенице}}\n",
+            4 => raw = "{{Наслов|Српски|Глагол|м}}\n{{Значење}}\n:[1] retained meaning\n\n{{Скраћенице}}\n",
+            5 => raw = "{{Наслов|Српски|Именица|2=Глагол}}\n{{Значење}}\n:[1] retained meaning\n\n{{Скраћенице}}\n",
+            6 => input.unknown = true,
+            7 => observation.page_wiki_scope_complete = false,
+            8 => observation.page_html_source = try a.dupe(u8, original),
+            9 => language.code = "en",
+            10 => title = "foreign",
+            11 => { const start: u32 = @intCast(@intFromPtr(proof.definition_text.ptr) - @intFromPtr(original.ptr));
+                input.ranges = &.{.{ .start = start, .end = start + 1, .occurrence = 1 }}; },
+            else => unreachable,
+        }
+        try std.testing.expect(sourceNaslovLexeme(codes, title, raw, input, language, observation) == null);
+    }
+    const genuine_raw = @embedFile("testdata/sr-naslov-owner/page.raw.wikitext");
+    const genuine = @embedFile("testdata/sr-naslov-owner/page.expanded.wikitext");
+    const start = std.mem.indexOf(u8, genuine, "== ") orelse return error.TestUnexpectedResult;
+    const actual_observation: presentation_document.HeadingObservation = .{ .page_html_source = genuine,
+        .page_wiki_scope_complete = true, .page_wiki_openings = &.{start} };
+    const actual = sourceNaslovLexeme(F.codes(&ns), "аверз", genuine_raw, MissingText.untracked(genuine), owner, actual_observation) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("[1] предња страна новцу", actual.definition_text);
+    try std.testing.expectEqualStrings("Noun", actual.kind);
+}
+
+test "normal Writer source noun metadata preserves complete body headers links and Stored codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @embedFile("testdata/sr-naslov-owner/namespace-registry.tsv")); defer ns.deinit();
+    const F = NaslovNounSourceTest;
+    const codes = F.codes(&ns); var absent = codes; absent.source_naslov_noun = false;
+    var actual: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "word" };
+    var reference: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "word" };
+    try actual.compileWithPhases(a, codes, F.source, F.raw, null, null, null, null);
+    try reference.compileWithPhases(a, absent, F.source, F.raw, null, null, null, null);
+    try std.testing.expectEqual(@as(usize, 1), actual.records.items.len);
+    try std.testing.expectEqual(@as(usize, 1), reference.records.items.len);
+    const codec = blobs.presentation_codec;
+    const result = try codec.decodeAlloc(a, actual.records.items[0].payload, "word", .language, .{ .heading = "Српски", .code = "sr" });
+    const before = try codec.decodeAlloc(a, reference.records.items[0].payload, "word", .language, .{ .heading = "Српски", .code = "sr" });
+    try std.testing.expectEqual(@as(usize, 0), before.entry.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 1), result.entry.organization.lexemes.len);
+    const lexeme = result.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", lexeme.kind);
+    try std.testing.expectEqualStrings("Српски", lexeme.language);
+    try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+    try std.testing.expectEqualStrings("[1] retained meaning", result.entry.sections[lexeme.section].blocks[lexeme.definitions[0].block].spans[0].text);
+    var unchanged = result; unchanged.entry.organization = before.entry.organization;
+    try std.testing.expectEqualDeep(before, unchanged);
+    try std.testing.expectEqualDeep(reference.fallbacks, actual.fallbacks);
+    const bytes = try codec.encodeAlloc(a, result);
+    try std.testing.expectEqualDeep(result, try codec.decodeAlloc(a, bytes, "word", .language, .{ .heading = "Српски", .code = "sr" }));
+}
+
+test "ordinary page preparation carries explicit native title defaults through observers and final Document" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, NS.english_test_fixture); defer ns.deinit();
+    ns.content_language = "ku"; ns.language_conversion = &.{ "ku", "ku-arab", "ku-latn" };
+    ns.manual_conversion_context = .{ .base = "ku", .fallbacks = &.{"ku-latn"}, .separator_variants = &.{"ku", "ku-arab", "ku-latn"}, .automatic_identity = true,
+        .static_default_variant = ns.content_language,
+        .effective_override = .{ .namespace_title = "MediaWiki:Conversiontable/ku", .message_key = "conversiontable/ku",
+            .interface_messages_sha256 = "7b347263a0f8fdd69c877839ad7df66ae0e43939d67d858bf9a439f4b58c5ec7",
+            .language_fallbacks_sha256 = "05003acab314c8838a1c55e8b9647c2e188cc809e9fe8b923d312173107a5a15",
+            .page_index_sha256 = "491adefd785f83b6cab1d16bc9860c6e45a7c03388ac34ae261bb1605e518213", .page_index_bytes = 151520235,
+            .title_index_sha256 = "a4ed505c444ccc43e873079712b74ec8e10c461fc17c7cf50e91ad887bbd7342", .title_index_bytes = 33554496 },
+        .source_core = "79b81ba96674efc8a803fc956bc501d347d440d2", .source_converter_sha256 = "1f610f299bfc5b2976c440312a30958325006c36fb7b67e33810324f4c50e47e", .siteinfo_sha256 = "f993d95042a6345607e52a273359074d774197a9f212f2cb39cdd249a9d2be8a" };
+    const F = struct {
+        const title = "mij";
+        const token = "-{T|ku-latn:mij;ku-arab:مژ}-";
+        const source = "==English==\n===Noun===\n# <span class=\"Latn\" lang=\"ku\">[[Target#part|complete label]]</span> " ++ token ++ " after [https://example.test/retained external]\n";
+        fn code(_: ?*const anyopaque, name: []const u8) ?[]const u8 { return if (std.mem.eql(u8, name, "English")) "en" else null; }
+        fn language(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage { return if (std.mem.eql(u8, name, "English")) .{ .heading = "English", .code = "en" } else null; }
+    };
+    const behavior_source = try std.fmt.allocPrint(a, "# wikidict-behavior-switches-v1\n# wiki\t{s}\n# dump-date\t{s}\n# content-language\t{s}\n# namespace-registry-sha256\t{s}\nnocontentconvert\t0\t__NOCC__\n", .{ ns.wiki, ns.dump_date, ns.content_language, std.fmt.bytesToHex(ns.source_sha256, .lower) });
+    var behavior = try NS.behavior_switches.Registry.init(a, behavior_source, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &ns, .behavior_switches = &behavior, .get_fn = F.code,
+        .resolve_fn = F.language, .strong_fn = F.language, .trusted_fn = F.language };
+    const reference = try std.mem.replaceOwned(u8, a, F.source, F.token, "<span></span>");
+    var actual: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = F.title };
+    var expected: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = F.title };
+    try actual.compileWithPhases(a, codes, F.source, F.source, null, null, null, null);
+    try expected.compileWithPhases(a, codes, reference, reference, null, null, null, null);
+    try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+    try std.testing.expectEqual(@as(usize, 1), actual.records.items.len);
+    try std.testing.expectEqual(@as(usize, 1), expected.records.items.len);
+    const row = actual.records.items[0];
+    try std.testing.expectEqualStrings("English", row.key);
+    try std.testing.expectEqualStrings("en", row.language_code);
+    try std.testing.expectEqualSlices(u8, expected.records.items[0].payload, row.payload);
+    const stored = try blobs.presentation_codec.decodeAlloc(a, row.payload, F.title, .language, .{ .heading = "English", .code = "en" });
+    try std.testing.expectEqualDeep(try blobs.presentation_codec.decodeAlloc(a, expected.records.items[0].payload, F.title, .language, .{ .heading = "English", .code = "en" }), stored);
+    try std.testing.expectEqualStrings(F.title, stored.entry.title);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.display_title.len);
+    var linked: usize = 0; var external: usize = 0; var before_boundary: usize = 0; var after_boundary: usize = 0;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.kind == .text and span.target.len == 0) {
+            if (std.mem.eql(u8, span.text, " ")) before_boundary += 1;
+            if (std.mem.eql(u8, span.text, " after ")) after_boundary += 1;
+        }
+        if (std.mem.eql(u8, span.target, "Target#part")) {
+            linked += 1; try std.testing.expectEqualStrings("complete label", span.text);
+            try std.testing.expectEqualStrings("Latn", span.classes); try std.testing.expectEqualStrings("ku", span.language);
+        }
+        if (std.mem.eql(u8, span.target, "https://example.test/retained")) external += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), linked);
+    try std.testing.expectEqual(@as(usize, 1), external);
+    try std.testing.expectEqual(@as(usize, 1), before_boundary);
+    try std.testing.expectEqual(@as(usize, 1), after_boundary);
+    try std.testing.expectEqualSlices(u8, row.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+    // No source-issued static default means no new normal-title authority;
+    // arbitrary content-language/base fields cannot manufacture the receipt.
+    ns.manual_conversion_context.?.static_default_variant = null;
+    var refused: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = F.title };
+    try std.testing.expectError(error.UncompiledPresentation, refused.compileWithPhases(a, codes, F.source, F.source, null, null, null, null));
+    try std.testing.expectEqual(@as(usize, 0), refused.records.items.len);
 }

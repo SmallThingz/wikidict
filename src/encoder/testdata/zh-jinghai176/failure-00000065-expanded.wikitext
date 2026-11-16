@@ -1,0 +1,35 @@
+==漢語==
+
+{| class="floatright" style="clear: right;margin: 1em 0 1em 1em;border-collapse: collapse;text-align: center"
+|-
+! colspan=2|
+|-
+! style="padding: 0.5em;border: 1px solid var(--border-color-base,#aaa);background: var(--wikt-palette-cyan, #eaffff);color: inherit;font-weight: normal;font-size: smaller;" colspan="2" |[[簡體]]與[[正體]]/[[繁體]]<br>-{<span style="font-size:140%">(<span lang="zh-Hani" class="Hani"><strong class="selflink">淨係</strong></span>)</span>
+| style="padding: 0.5em; background-color:var(--wikt-palette-white, #ffffff);color: inherit;border-top: 1px solid var(--border-color-base,#aaa);border-bottom: 1px solid #aaa; font-size:x-large" lang="zh-Hani" class="Hani" | [[:淨#漢語|-{淨}-]]
+| style="padding: 0.5em; background-color:var(--wikt-palette-white, #ffffff);color: inherit;border-top: 1px solid var(--border-color-base,#aaa);border-right: 1px solid var(--border-color-base,#aaa);border-bottom: 1px solid var(--border-color-base,#aaa); font-size:x-large" lang="zh-Hani" class="Hani" | [[:係#漢語|-{係}-]]}-
+|}__NOTITLECONVERT__
+
+===讀音===
+<div class="standard-box zhpron" style="overflow:auto; max-width:500px; font-size:100%"><div class="vsSwitcher" data-toggle-category="pronunciations">
+* [[w:粵語|粵語]] <small>([[w:香港語言學學會粵語拼音方案|粵拼]])</small>：<span class="zhpron-monospace">zing<sup>6</sup> hai<sup>6</sup></span><span class="vsToggleElement" style="float: right;"></span>
+<div class="vsHide" style="clear:right;">
+<hr>
+
+* [[w:粵語|粵語]]
+** <small>([[w:粵語|標準粵語]]，[[w:廣州話|廣州]]–[[w:香港粵語|香港話]])</small><sup><small><abbr title="添加粵語同音詞"><span class="plainlinks">[//zh.wiktionary.org/w/index.php?title=Module:yue-pron/hom&action=edit +]</span></abbr></small></sup>
+*** <small>[[w:香港語言學學會粵語拼音方案|粵拼]]</small>：<span class="zhpron-monospace">zing<sup>6</sup> hai<sup>6</sup></span>
+*** <small>[[w:耶魯拼音#粤语耶鲁拼音|耶魯粵拼]]</small>：<span class="zhpron-monospace">jihng haih</span>
+*** <small>[[w:廣州話拼音方案|廣州話拼音]]</small>：<span class="zhpron-monospace">dzing<sup>6</sup> hai<sup>6</sup></span>
+*** <small>[[w:廣東拼音方案|廣東拼音]]</small>：<span class="zhpron-monospace">jing<sup>6</sup> hei<sup>6</sup></span>
+*** <small>[[Wiktionary:國際音標|國際音標]] <sup>([[w:粵語音系|幫助]])</sup></small>：<span class="IPA">/t͡sɪŋ²² hɐi̯²²/</span></div></div></div>[[Category:漢語詞元|水08人07]][[Category:粵語詞元|水08人07]][[Category:漢語副詞|水08人07]][[Category:粵語副詞|水08人07]][[Category:有國際音標的漢語詞|水08人07]][[Category:帶「淨」的漢語詞|水08人07]][[Category:帶「係」的漢語詞|水08人07]]<templatestyles src="Template:zh-pron/styles.css" />
+
+===副词===
+<span class="headword-line"><strong class="Hant headword" lang="zh">-{淨係}-</strong></span>[[Category:漢語詞元|水08人07]][[Category:漢語副詞|水08人07]][[Category:有詞條的頁面|淨係]][[Category:有1個詞條的頁面|淨係]]
+#（粵語）唯獨；只是；除了⋯之外，沒有其他的
+#: <dl class="zhusex"><span lang="zh-Hant" class="Hant">-{[[我哋#漢語|我哋]]<b>淨係</b>[[朋友#漢語|朋友]]。}-</span> <span class="skin-nightmode-reset-color" style="color:darkgreen; font-size:x-small;">&#91;[[w:廣州話|廣州話]]，[[w:繁体中文|繁體]]&#93;</span><br><span lang="zh-Hans" class="Hans">-{[[我哋#漢語|我哋]]<b>净系</b>[[朋友#漢語|朋友]]。}-</span> <span class="skin-nightmode-reset-color" style="color:darkgreen; font-size:x-small;">&#91;[[w:廣州話|廣州話]]，[[w:简体中文|簡體]]&#93;</span><dd><span lang="zh-Latn" style="color:#404D52" class="skin-nightmode-reset-color"><i>ngo<sup>5</sup> dei<sup>6</sup> <b>zing<sup>6</sup> hai<sup>6</sup></b> pang<sup>4</sup> jau<sup>5</sup>.</i></span> <span class="skin-nightmode-reset-color" style="color:darkgreen; font-size:x-small;">&#91;[[w:香港語言學學會粵語拼音方案|粵拼]]&#93;</span></dd><dd>我們'''只是'''朋友。</dd></dl>[[Category:有使用例的粵語詞]]
+#: <dl class="zhusex"><span lang="zh-Hant" class="Hant">-{[[我#漢語|我]]<b>淨係</b>[[講#漢語|講]][[句#漢語|句]][[話#漢語|話]]。}-</span> <span class="skin-nightmode-reset-color" style="color:darkgreen; font-size:x-small;">&#91;[[w:廣州話|廣州話]]，[[w:繁体中文|繁體]]&#93;</span><br><span lang="zh-Hans" class="Hans">-{[[我#漢語|我]]<b>净系</b>[[讲#漢語|讲]][[句#漢語|句]][[话#漢語|话]]。}-</span> <span class="skin-nightmode-reset-color" style="color:darkgreen; font-size:x-small;">&#91;[[w:廣州話|廣州話]]，[[w:简体中文|簡體]]&#93;</span><dd><span lang="zh-Latn" style="color:#404D52" class="skin-nightmode-reset-color"><i>ngo<sup>5</sup> <b>zing<sup>6</sup> hai<sup>6</sup></b> gong<sup>2</sup> geoi<sup>3</sup> waa<sup>6</sup>.</i></span> <span class="skin-nightmode-reset-color" style="color:darkgreen; font-size:x-small;">&#91;[[w:香港語言學學會粵語拼音方案|粵拼]]&#93;</span></dd><dd>我'''只是'''講一句話。</dd></dl>[[Category:有使用例的粵語詞]]
+
+===翻譯===
+<div class="NavFrame"><div class="NavHead" style="text-align:left">翻譯</div><div class="NavContent"><table class="translations" role="presentation" data-gloss=""><tr><td class="translations-cell multicolumn-list" colspan="3">[[Category:缺少詞義的翻譯表|淨係]][[Category:有翻譯框的詞條|淨係]]<templatestyles src="Module:translations/styles.css"/>
+*英语：[[only]] and [[no more]], [[just]], [[merely]]
+</table></div></div>

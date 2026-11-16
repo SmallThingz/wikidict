@@ -98,6 +98,7 @@ pub const Registry = struct {
     // Independently authenticated name/alias-copy provider and quoted formatter.
     source_nom_name_format: bool = false,
     source_nom_role: bool = false,
+    source_naslov_noun: bool = false,
     source_nom_names: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     source_headword_role: bool = false,
     source_headword_static_prefix: ?[]const u8 = null,
@@ -5825,4 +5826,17 @@ test "English-only autonym bases cannot promote pre-existing capitalized aliases
         try std.testing.expect(registry.resolveTrusted("Middle english") == null);
         try std.testing.expect(registry.resolveStrong("Middle english") == null);
     }
+}
+
+// Retained Наслов p2519/r697248 and Значење p1102/r452726. The
+// Serbian branch declares noun; arg3 has no meaning in that branch.
+pub const NaslovTemplateRole = enum { header, meaning };
+pub fn sourceNaslovTemplateRole(source: []const u8, role: NaslovTemplateRole) bool {
+    const expected = switch (role) {
+        .header => "a6ab92577e51e93d0e0d408c2a6ea440fa67540dfcd927d5d5bedff1837f5d1b",
+        .meaning => "e8aef090c4c8aa3ae270a630a1efb1ddd01056a9ea8672e07bf7d9b904fe1715",
+    };
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    return std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), expected);
 }

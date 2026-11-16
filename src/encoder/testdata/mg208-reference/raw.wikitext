@@ -1,0 +1,12 @@
+=={{=ja=}}==
+
+{{-mat-|ja}}
+'''崩れる''' (kuduru}}<ref name="KDJ2">{{R:Nihon Kokugo Daijiten 2, intrans)
+# ny ho rava
+
+{{-fanononana-}}
+* {{ja-pron|くずれる|acc=3|acc_ref=DJR,SMK5,NHK}}{{ja-acc-table|verb-ichidan|くずれる|acc=3|て-form-acc=2}}
+
+{{-tsiahy-}}
+* :* {{R:Kanjipedia Kotoba|0006381100}}
+* {{wikibolana|en|崩れる}}

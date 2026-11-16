@@ -137,3 +137,32 @@ test "shared interface message rows preserve explicit missing empty values norma
     };
     try std.testing.checkAllAllocationFailures(a, Probe.run, .{});
 }
+
+// Nonrecursive $N substitution shared with ordinary mw.message plain().
+// A provider is called only for a referenced parameter, in original order.
+pub fn substituteParams(a: A, source: []const u8, count: usize, provider: anytype) ![]const u8 {
+    if (count == 0 or std.mem.indexOfScalar(u8, source, '$') == null) return source;
+    var out: std.ArrayList(u8) = .empty;
+    var remaining = source;
+    var pos: usize = 0;
+    while (pos < remaining.len) {
+        if (remaining[pos] == '$' and pos + 1 < remaining.len and std.ascii.isDigit(remaining[pos + 1])) {
+            var end = pos + 1;
+            var index: usize = 0;
+            while (end < remaining.len and std.ascii.isDigit(remaining[end])) : (end += 1) {
+                index = std.math.add(usize, try std.math.mul(usize, index, 10), @as(usize, remaining[end] - '0')) catch return error.MessageParameterIndexOverflow;
+            }
+            if (index != 0 and index <= count) {
+                try out.appendSlice(a, remaining[0..pos]);
+                try out.appendSlice(a, try provider.get(index - 1));
+                remaining = remaining[end..];
+                pos = 0;
+                continue;
+            }
+        }
+        pos += 1;
+    }
+    if (out.items.len == 0) return source;
+    try out.appendSlice(a, remaining);
+    return out.toOwnedSlice(a);
+}

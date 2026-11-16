@@ -10,6 +10,7 @@ pub const Registry = registry.Registry;
 pub const FigureSourceDefaults = registry.FigureSourceDefaults;
 pub const ManualConversionContext = registry.ManualConversionContext;
 pub const interface_messages = @import("interface_message_snapshot.zig");
+pub const wiki_url = @import("wiki_url.zig");
 pub const normalizeSpacing = registry.normalizeSpacing;
 // Build-time verification of source-authored lowercase labels, without aliases.
 pub const writeLower = @import("unicode_lower").writeLower;

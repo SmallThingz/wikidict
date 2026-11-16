@@ -590,3 +590,19 @@ tools/testdata/sr-authored-head/source.expanded.wikitext whitespace=-blank-at-eo
 src/encoder/testdata/el-cell-line-height/page.expanded.wikitext whitespace=-blank-at-eol
 src/encoder/testdata/th-nested-prefix/page.expanded.wikitext whitespace=-blank-at-eol
 src/encoder/testdata/mg-in-external-angle/page.expanded.wikitext whitespace=-blank-at-eol
+
+# Preserve exact authenticated upstream bytes in current renderer regression fixtures.
+src/encoder/testdata/mg-ti-pos/expanded.wikitext -whitespace
+src/encoder/testdata/mg-ti-pos/raw.wikitext -whitespace
+src/encoder/testdata/sr-naslov-owner/page.expanded.wikitext -whitespace
+src/encoder/testdata/sr-naslov-owner/page.raw.wikitext -whitespace
+src/encoder/testdata/zh-gugli176-expanded.wikitext -whitespace
+src/encoder/testdata/zh-gugli176-reference.wikitext -whitespace
+tools/testdata/sr-centered-missing-cell/page.expanded.wikitext -whitespace
+tools/testdata/sr-centered-missing-cell/response.html -whitespace
+src/encoder/testdata/ku-leker-display188/failure-00000001-expanded.wikitext -whitespace
+src/encoder/testdata/sr-ri207-padding/expanded.wikitext -whitespace
+src/encoder/testdata/sr-ri207-padding/common.css -whitespace
+src/encoder/testdata/mg208-reference/expanded.wikitext -whitespace
+src/encoder/testdata/zh-nokango176/failure-00000001-expanded.wikitext -whitespace
+tools/testdata/sr-centered-missing-cell/page.raw.wikitext -whitespace

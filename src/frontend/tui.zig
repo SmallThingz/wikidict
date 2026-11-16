@@ -848,10 +848,7 @@ const State = struct {
                     } else if (meaning == null) {
                         try formatted.writer.writeAll("No structured meaning for a scored question.\n\nc Cards   o Open entry\nSpace skips without scoring.\nTab changes game.");
                     } else {
-                        for (meaning.?.spans) |span| {
-                            try output.terminalText(&formatted.writer, span.text);
-                            try output.terminalText(&formatted.writer, span.trail);
-                        }
+                        try output.spansPlainText(&formatted.writer, meaning.?.spans);
                         try formatted.writer.writeAll("\n\n");
                         if (self.game == .quiz) {
                             for (self.choices[0..self.choice_count], 0..) |choice, n| {

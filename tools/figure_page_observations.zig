@@ -1202,6 +1202,8 @@ pub const SelectedPage = struct {
     // Exact caller-owned complete original expansion, populated only by select.
     text_class_scope_source: ?[]const u8 = null,
     namespace_catalog: *const namespaces.Registry,
+    // Same immutable Registry used by Book intake; it outlives selected pages.
+    file_registry: ?*const sizing.Registry = null,
     default_width: u32,
     page_title: []const u8 = "",
     occurrences: []const SelectedOccurrence,
@@ -1221,7 +1223,23 @@ pub const SelectedPage = struct {
             else => return null,
         };
         defer a.free(canonical);
-        for (self.occurrences) |selected| if (equal(canonical, selected.source.canonical_file) and
+        // Intake authenticated lexical aliases through this same Registry.
+        // Resolve again without changing the occurrence's source/options key.
+        var resolved_canonical: ?[]const u8 = null;
+        defer if (resolved_canonical) |value| a.free(value);
+        if (self.file_registry) |registry| {
+            if (!registry.file_authority or
+                !std.mem.eql(u8, &registry.namespace_catalog.source_sha256, &self.namespace_catalog.source_sha256)) return null;
+            if (try sizing.Registry.resolveCanonicalFile(registry, a, canonical)) |resolved| {
+                defer a.free(resolved);
+                resolved_canonical = canonicalFile(a, self.namespace_catalog, resolved) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return null,
+                };
+            }
+        }
+        const key = resolved_canonical orelse canonical;
+        for (self.occurrences) |selected| if (equal(key, selected.source.canonical_file) and
             (equal(options, selected.source.original_options) or equal(options, selected.stage_options))) return selected.source;
         return null;
     }
@@ -1416,6 +1434,18 @@ fn figureStyleLineBody(a: A, source: []const u8, range: FigureStyleRange, in_tab
 // ancestry. Unknown producers, stripping/reparenting contexts and collisions
 // with the selected File remain closed. Actual ancestry comes from the DOM.
 fn figureStyleSourceProofs(a: A, ns: *const namespaces.Registry, source: []const u8, ranges: []const FigureStyleRange) ![]FigureStyleProof {
+    return figureStyleSourceProofsIn(a, ns, source, ranges, false, null);
+}
+fn figureStyleSourceProofsIn(a: A, ns: *const namespaces.Registry, source: []const u8,
+    ranges: []const FigureStyleRange, comptime root_missing: bool, preceding_table: ?*?[]const u8) ![]FigureStyleProof
+{
+    return figureStyleSourceProofsRootIn(a, ns, source, ranges, root_missing, preceding_table, false);
+}
+
+fn figureStyleSourceProofsRootIn(a: A, ns: *const namespaces.Registry, source: []const u8,
+    ranges: []const FigureStyleRange, comptime root_missing: bool, preceding_table: ?*?[]const u8, comptime root_without_table: bool) ![]FigureStyleProof
+{
+    if (root_missing and (ranges.len != 1 or ranges[0].media_kind != .missing or preceding_table == null)) return invalid;
     if (ranges.len == 0 or ranges.len > 64) return invalid;
     const proofs = try a.alloc(FigureStyleProof, ranges.len);
     var previous: usize = 0;
@@ -1445,7 +1475,13 @@ fn figureStyleSourceProofs(a: A, ns: *const namespaces.Registry, source: []const
     var html_stack: [128]syntax.Tag = undefined; var depth: usize = 0;
     var table_stack: [64]usize = undefined; var tables: usize = 0;
     var at: usize = 0;
+    var root_table_opening: ?[]const u8 = null;
+    var root_table_end: ?usize = null;
     while (at < source.len) {
+        if (root_missing and std.mem.startsWith(u8, source[at..], "-{")) {
+            at = try authoredRuleRuleFreeConversionEnd(a, ns, source, at);
+            continue;
+        }
         if (source[at] == '<') {
             const tag = syntax.tagAt(source, at) orelse return invalid;
             try figureStyleLiteralAttributes(a, tag);
@@ -1465,6 +1501,7 @@ fn figureStyleSourceProofs(a: A, ns: *const namespaces.Registry, source: []const
             var ordinary = false;
             for ([_][]const u8{ "div", "span", "sup", "sub", "em", "strong", "b", "i", "p", "small", "br", "ref" }) |name|
                 if (tag.is(name)) { ordinary = true; break; };
+            if (root_missing and tag.is("big")) ordinary = true;
             if (!ordinary) return invalid;
             if (tag.closing) {
                 if (tag.attrs.len != 0 or tag.self_closing or depth == 0 or !std.ascii.eqlIgnoreCase(html_stack[depth - 1].name, tag.name)) return invalid;
@@ -1477,15 +1514,25 @@ fn figureStyleSourceProofs(a: A, ns: *const namespaces.Registry, source: []const
         }
         const line_start = at == 0 or source[at - 1] == '\n';
         if (line_start and std.mem.startsWith(u8, source[at..], "{|")) {
+            if (root_missing and root_without_table) return invalid;
             if (tables == table_stack.len) return invalid;
             const end = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse return invalid;
+            if (root_missing) {
+                // This route owns a root File immediately after one complete
+                // root table; nested or HTML-enclosed table prefixes decline.
+                if (tables != 0 or depth != 0) return invalid;
+                root_table_opening = source[at..end];
+                root_table_end = null;
+            }
             const text = try std.fmt.allocPrint(a, "<table {s}>", .{source[at + 2..end]});
             try figureStyleLiteralAttributes(a, syntax.tagAt(text, 0) orelse return invalid);
             table_stack[tables] = depth; tables += 1; at = end; continue;
         }
         if (line_start and std.mem.startsWith(u8, source[at..], "|}")) {
             if (tables == 0 or table_stack[tables - 1] != depth) return invalid;
-            tables -= 1; at += 2; continue;
+            tables -= 1;
+            if (root_missing) root_table_end = at + 2;
+            at += 2; continue;
         }
         if (source[at] == '{' or source[at] == '}') return invalid;
         if (std.mem.startsWith(u8, source[at..], "[[")) {
@@ -1501,6 +1548,16 @@ fn figureStyleSourceProofs(a: A, ns: *const namespaces.Registry, source: []const
                 for (proofs, seen) |proof, *count| if (equal(proof.canonical_file, canonical)) {
                     count.* += 1;
                     if (at != proof.range.start or end != proof.range.end) return invalid;
+                    if (root_missing) {
+                        if (depth != 0 or tables != 0) return invalid;
+                        if (root_without_table) {
+                            if (root_table_opening != null or root_table_end != null) return invalid;
+                        } else {
+                            const table_end = root_table_end orelse return invalid;
+                            if (table_end > at or std.mem.trim(u8, source[table_end..at], " \t\r\n").len != 0) return invalid;
+                            preceding_table.?.* = root_table_opening orelse return invalid;
+                        }
+                    }
                     for (html_stack[0..depth]) |ancestor| if (!ancestor.is("div")) return invalid;
                     try figureStyleLineBody(a, source, proof.range, tables != 0);
                 };
@@ -1573,6 +1630,157 @@ fn figureStyleOperationProofs(a: A, ns: *const namespaces.Registry, source: []co
 // We prove the complete prefix through the table close; later literal/template
 // text cannot be borrowed as emission authority for this earlier closed cell.
 // Every observed same-file candidate is counted before owner eligibility.
+fn figureStyleOperationProofsWithObservedOwner(a: A, ns: *const namespaces.Registry, source: []const u8,
+    ranges: []const FigureStyleRange, html: []const u8, nodes: []const ObservedSiblingNode) ![]FigureStyleProof
+{
+    const cell_route = if (ranges.len == 1 and ranges[0].media_kind == .missing and
+        ranges[0].start < ranges[0].end and ranges[0].end <= source.len) cell: {
+        const start = if (std.mem.lastIndexOfScalar(u8, source[0..ranges[0].start], '\n')) |at| at + 1 else 0;
+        const prefix = std.mem.trim(u8, source[start..ranges[0].start], " \t\r");
+        break :cell prefix.len != 0 and prefix[0] == '|';
+    } else false;
+    if (!cell_route) {
+        // Preserve the ordinary complete-flow contract. Its magic-word refusal
+        // cannot be disabled to adopt a selected source/observed root operation.
+        if (ranges.len == 1 and ranges[0].media_kind == .missing and ranges[0].start <= source.len and
+            std.mem.indexOf(u8, source[0..ranges[0].start], "__") != null) {
+            if (std.mem.indexOf(u8, source[0..ranges[0].start], "{|") == null)
+                return rootMissingAfterCategoryProofs(a, ns, source, ranges, html, nodes);
+            return rootMissingAfterClosedTableProofs(a, ns, source, ranges, html, nodes);
+        }
+        const proofs = try figureStyleOperationProofs(a, ns, source, ranges);
+        try figureStyleCandidates(a, ns, html, nodes, proofs);
+        return proofs;
+    }
+    return centeredMissingFirstCellProofs(a, ns, source, ranges, html, nodes);
+}
+// A complete source prefix and its exact observed root sibling pair prove
+// this one earlier ordinary Missing emission. Later body/unknown producers
+// remain the normal renderer's responsibility and grant no File authority.
+fn rootMissingAfterClosedTableProofs(a: A, ns: *const namespaces.Registry, source: []const u8,
+    ranges: []const FigureStyleRange, html: []const u8, nodes: []const ObservedSiblingNode) ![]FigureStyleProof
+{
+    if (ranges.len != 1 or ranges[0].media_kind != .missing) return invalid;
+    const range = ranges[0];
+    if (range.start >= range.end or range.end > source.len or
+        std.mem.indexOf(u8, source[0..range.start], "__") == null) return invalid;
+    const line_end = std.mem.indexOfScalarPos(u8, source, range.end, '\n') orelse source.len;
+    var preceding_table: ?[]const u8 = null;
+    const proofs = try figureStyleSourceProofsIn(a, ns, source[0..line_end], ranges, true, &preceding_table);
+    const opening = preceding_table orelse return invalid;
+    const constructed = try std.fmt.allocPrint(a, "<table {s}>", .{opening[2..]});
+    const attributes = try sourceInventoryWithRepeatedClass(a, syntax.tagAt(constructed, 0) orelse return invalid, false);
+    // Census every same-file captured candidate before considering eligibility;
+    // an inert/colliding source cannot borrow a later visible occurrence.
+    try figureStyleMissingCandidates(a, ns, html, nodes, &proofs[0], false);
+    if (proofs[0].candidates.len != 1 or nodes.len == 0 or !nodes[0].tag.is("div") or nodes[0].parent != null) return invalid;
+    const frame = nodes[proofs[0].candidates[0].frame];
+    if (frame.parent != 0) return invalid;
+    const previous = frame.previous orelse return invalid;
+    if (previous >= nodes.len) return invalid;
+    const table = nodes[previous];
+    if (!table.tag.is("table") or table.parent != 0 or !sameSiblingAttributes(attributes, table.attributes)) return invalid;
+    const close = syntax.tagAt(html, table.inner_end orelse return invalid) orelse return invalid;
+    if (!close.closing or !close.is("table") or close.attrs.len != 0 or
+        siblingGapEnd(html, close.end) != frame.start) return invalid;
+    return proofs;
+}
+
+// A category-only trailing source line contributes no inline label. The
+// complete preceding prefix is still scanned by the closed source grammar;
+// this route cannot use a table, enclosed File, unknown producer or uncertain
+// converter.
+fn rootMissingAfterCategoryProofs(a: A, ns: *const namespaces.Registry, source: []const u8,
+    ranges: []const FigureStyleRange, html: []const u8, nodes: []const ObservedSiblingNode) ![]FigureStyleProof
+{
+    if (ranges.len != 1 or ranges[0].media_kind != .missing) return invalid;
+    const range = ranges[0];
+    if (range.start >= range.end or range.end > source.len or
+        std.mem.indexOf(u8, source[0..range.start], "__") == null) return invalid;
+    const prefix = source[0..range.start];
+    const category_end = std.mem.trimEnd(u8, prefix, " \t\r\n").len;
+    if (category_end == 0 or std.mem.count(u8, prefix[category_end..], "\n") < 2) return invalid;
+    const category_start = if (std.mem.lastIndexOfScalar(u8, prefix[0..category_end], '\n')) |index| index + 1 else 0;
+    const line = std.mem.trim(u8, prefix[category_start..category_end], " \t\r");
+    if (!std.mem.startsWith(u8, line, "[[")) return invalid;
+    var category: encoder.document_ir.InlineIterator = .{ .input = line, .renderer_boundaries = true };
+    const token = category.next() orelse return invalid;
+    if (token.kind != .link or token.target.len == 0 or token.target[0] == ':' or token.link_has_pipe or
+        token.link_label_restored_close or token.trail.len != 0 or category.cursor != line.len or
+        ns.ofTitle(token.target).id != 14) return invalid;
+    const line_end = std.mem.indexOfScalarPos(u8, source, range.end, '\n') orelse source.len;
+    var table: ?[]const u8 = null;
+    const proofs = try figureStyleSourceProofsRootIn(a, ns, source[0..line_end], ranges, true, &table, true);
+    if (table != null) return invalid;
+    try figureStyleMissingCandidates(a, ns, html, nodes, &proofs[0], false);
+    if (proofs[0].candidates.len != 1 or nodes.len == 0 or !nodes[0].tag.is("div") or nodes[0].parent != null) return invalid;
+    const frame = nodes[proofs[0].candidates[0].frame];
+    if (frame.parent != 0) return invalid;
+    const previous = frame.previous orelse return invalid;
+    if (previous >= nodes.len) return invalid;
+    const paragraph = nodes[previous];
+    if (!paragraph.tag.is("p") or paragraph.parent != 0 or paragraph.attributes.attributes.len != 0) return invalid;
+    const inner_end = paragraph.inner_end orelse return invalid;
+    const body = std.mem.trim(u8, html[paragraph.tag.end..inner_end], " \t\r\n");
+    const br = syntax.tagAt(body, 0) orelse return invalid;
+    if (!br.is("br") or br.closing or std.mem.trim(u8, br.attrs, " \t\r\n").len != 0 or
+        std.mem.trim(u8, body[br.end..], " \t\r\n").len != 0) return invalid;
+    const close = syntax.tagAt(html, inner_end) orelse return invalid;
+    if (!close.is("p") or !close.closing or close.self_closing or close.attrs.len != 0 or
+        siblingGapEnd(html, close.end) != frame.start) return invalid;
+    return proofs;
+}
+
+fn centeredMissingFirstCellProofs(a: A, ns: *const namespaces.Registry, source: []const u8,
+    ranges: []const FigureStyleRange, html: []const u8, nodes: []const ObservedSiblingNode) ![]FigureStyleProof
+{
+    if (ranges.len != 1 or ranges[0].media_kind != .missing) return invalid;
+    const range = ranges[0];
+    if (range.start >= range.end or range.end > source.len) return invalid;
+    const cell_start = if (std.mem.lastIndexOfScalar(u8, source[0..range.start], '\n')) |at| at + 1 else return invalid;
+    const table_start = if (std.mem.lastIndexOf(u8, source[0..cell_start], "\n{|")) |at| at + 1
+        else if (std.mem.startsWith(u8, source, "{|")) @as(usize, 0) else return invalid;
+    const table_line_end = std.mem.indexOfScalarPos(u8, source, table_start, '\n') orelse return invalid;
+    const row_end = std.mem.indexOfScalarPos(u8, source, table_line_end + 1, '\n') orelse return invalid;
+    if (row_end + 1 != cell_start or !equal(std.mem.trim(u8, source[table_line_end + 1..row_end], " \t\r"), "|-")) return invalid;
+    const cell_end = std.mem.indexOfScalarPos(u8, source, range.end, '\n') orelse return invalid;
+    const next_end = std.mem.indexOfScalarPos(u8, source, cell_end + 1, '\n') orelse source.len;
+    const next = std.mem.trim(u8, source[cell_end + 1..next_end], " \t\r");
+    if (!equal(next, "|-") and !equal(next, "|}")) return invalid;
+    const close_start = std.mem.indexOfPos(u8, source, cell_end, "\n|}") orelse return invalid;
+    const close_end = std.mem.indexOfScalarPos(u8, source, close_start + 1, '\n') orelse source.len;
+    if (!equal(std.mem.trim(u8, source[close_start + 1..close_end], " \t\r"), "|}")) return invalid;
+    // Reuse the strict ordinary File/table scanner, including unknown-producer,
+    // nested-link, literal-attribute, complete-cell and balanced-prefix checks.
+    const proofs = try figureStyleSourceProofs(a, ns, source[0..close_end], ranges);
+    const table_text = try std.fmt.allocPrint(a, "<table {s}>", .{source[table_start + 2..table_line_end]});
+    const table_attrs = try sourceInventoryWithRepeatedClass(a, syntax.tagAt(table_text, 0) orelse return invalid, false);
+    const prefix = std.mem.trim(u8, source[cell_start..range.start], " \t\r");
+    const cell_attrs_raw = if (prefix.len == 1) "" else std.mem.trim(u8, prefix[1..prefix.len - 1], " \t\r");
+    const cell_text = try std.fmt.allocPrint(a, "<td {s}>", .{cell_attrs_raw});
+    const cell_attrs = try sourceInventoryWithRepeatedClass(a, syntax.tagAt(cell_text, 0) orelse return invalid, false);
+    try figureStyleMissingCandidates(a, ns, html, nodes, &proofs[0], false);
+    if (proofs[0].candidates.len != 1 or nodes.len == 0 or !nodes[0].tag.is("div") or nodes[0].parent != null) return invalid;
+    const candidate = proofs[0].candidates[0];
+    const frame = nodes[candidate.frame];
+    if (!equal(frame.attributes.get("class") orelse "", "mw-halign-center")) return invalid;
+    const td_index = frame.parent orelse return invalid; const td = nodes[td_index];
+    const tr_index = td.parent orelse return invalid; const tr = nodes[tr_index];
+    const tbody_index = tr.parent orelse return invalid; const tbody = nodes[tbody_index];
+    const table_index = tbody.parent orelse return invalid; const table = nodes[table_index];
+    if (!td.tag.is("td") or !tr.tag.is("tr") or !tbody.tag.is("tbody") or !table.tag.is("table") or
+        table.parent != 0 or tr.attributes.attributes.len != 0 or tbody.attributes.attributes.len != 0 or
+        td.previous != null or tr.previous != null or tbody.previous != null or
+        table.first_child != tbody_index or tbody.first_child != tr_index or tr.first_child != td_index or td.first_child != candidate.frame or
+        !sameSiblingAttributes(table_attrs, table.attributes) or !sameSiblingAttributes(cell_attrs, td.attributes)) return invalid;
+    const frame_close = syntax.tagAt(html, frame.inner_end orelse return invalid) orelse return invalid;
+    const td_close = syntax.tagAt(html, td.inner_end orelse return invalid) orelse return invalid;
+    if (siblingGapEnd(html, table.tag.end) != tbody.start or siblingGapEnd(html, tbody.tag.end) != tr.start or
+        siblingGapEnd(html, tr.tag.end) != td.start or siblingGapEnd(html, td.tag.end) != frame.start or
+        siblingGapEnd(html, frame_close.end) != td.inner_end or siblingGapEnd(html, td_close.end) != tr.inner_end) return invalid;
+    return proofs;
+}
+
 fn figureStyleCandidates(a: A, ns: *const namespaces.Registry, html: []const u8, nodes: []const ObservedSiblingNode, proofs: []FigureStyleProof) !void {
     return figureStyleCandidatesIn(a, ns, html, nodes, proofs, false);
 }
@@ -1673,6 +1881,142 @@ fn figureObservedHasText(html: []const u8, nodes: []const ObservedSiblingNode, i
     }
     return false;
 }
+// A complete returned subtree has a physical element inventory. Publish only
+// direct-child facts owned by a closed DIV, after revalidating every opening,
+// explicit close, raw-text STYLE and unfiltered child gap. The captured root's
+// own siblings and the external shell remain unknown.
+fn figureSiblingGap(raw: []const u8, text_allowed: bool) bool {
+    var at: usize = 0;
+    while (at < raw.len) {
+        if (std.mem.startsWith(u8, raw[at..], "<!--")) {
+            const relative = std.mem.indexOf(u8, raw[at + 4 ..], "-->") orelse return false;
+            const end = at + 4 + relative;
+            const comment = raw[at + 4 .. end];
+            if (std.mem.indexOf(u8, comment, "<!--") != null or std.mem.indexOf(u8, comment, "--!>") != null or
+                (end > at + 4 and raw[end - 1] == '-')) return false;
+            at = end + 3;
+        } else {
+            if (raw[at] == '<' or (!text_allowed and !htmlClassSpace(raw[at]))) return false;
+            at += 1;
+        }
+    }
+    return true;
+}
+fn figureSiblingPhrasing(tag: syntax.Tag) bool {
+    for ([_][]const u8{ "span", "a", "b", "strong", "i", "em", "small", "big", "sup", "sub", "abbr", "cite", "img", "meta", "link", "br", "wbr", "u", "s", "font", "mark" }) |name| if (tag.is(name)) return true;
+    return false;
+}
+fn figureSiblingTagSupported(tag: syntax.Tag) bool {
+    if (figureSiblingPhrasing(tag)) return true;
+    for ([_][]const u8{ "div", "style", "h1", "h2", "h3", "h4", "h5", "h6", "p", "figure", "figcaption", "ul", "ol", "li", "dl", "dt", "dd", "table", "caption", "colgroup", "thead", "tbody", "tfoot", "tr", "th", "td", "col", "hr" }) |name| if (tag.is(name)) return true;
+    // No implicit tree-builder, raw-text/RCDATA, foreign-content, form/button,
+    // select/option, template or active-formatting recovery is inferred here.
+    return false;
+}
+fn figureSiblingChildAllowed(parent: syntax.Tag, child: syntax.Tag) bool {
+    if (!figureSiblingTagSupported(parent) or !figureSiblingTagSupported(child)) return false;
+    if (parent.is("table")) return child.is("caption") or child.is("colgroup") or child.is("thead") or child.is("tbody") or child.is("tfoot");
+    if (parent.is("thead") or parent.is("tbody") or parent.is("tfoot")) return child.is("tr");
+    if (parent.is("tr")) return child.is("td") or child.is("th");
+    if (parent.is("colgroup")) return child.is("col");
+    if (child.is("caption") or child.is("colgroup") or child.is("thead") or child.is("tbody") or child.is("tfoot") or
+        child.is("tr") or child.is("td") or child.is("th") or child.is("col")) return false;
+    if (child.is("figcaption") and !parent.is("figure")) return false;
+    if (parent.is("ul") or parent.is("ol")) return child.is("li") or child.is("style");
+    if (parent.is("dl")) return child.is("dt") or child.is("dd") or child.is("style");
+    if (child.is("li") or child.is("dt") or child.is("dd")) return false;
+    // P-start/block starts and adoption-agency formatting have independent
+    // HTML recovery rules. Admit only the ordinary closed phrasing subset.
+    if (parent.is("p") or figureSiblingPhrasing(parent)) return figureSiblingPhrasing(child);
+    for ([_][]const u8{ "h1", "h2", "h3", "h4", "h5", "h6" }) |heading| if (parent.is(heading)) {
+        for ([_][]const u8{ "h1", "h2", "h3", "h4", "h5", "h6" }) |other| if (child.is(other)) return false;
+    };
+    return true;
+}
+fn figureSiblingInventoryBranch(a: A, html: []const u8, source: []const ObservedSiblingNode,
+    cursor: *usize, depth: usize, inside_link: bool, inside_caption: bool) !?usize
+{
+    if (depth == 128 or cursor.* >= source.len) return null;
+    const index = cursor.*; const node = source[index];
+    if (node.start >= html.len or node.tag.end > html.len) return null;
+    const opening = syntax.tagAt(html, node.start) orelse return null;
+    if (!figureSiblingTagSupported(opening) or opening.closing or opening.end != node.tag.end or opening.name.ptr != node.tag.name.ptr or
+        opening.attrs.ptr != node.tag.attrs.ptr or !equal(opening.name, node.tag.name) or !equal(opening.attrs, node.tag.attrs) or
+        (inside_link and opening.is("a")) or (inside_caption and opening.is("table"))) return null;
+    const fresh = inventoryReturnedMode(a, opening, false, false, true) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory, else => return null,
+    };
+    if (!sameSiblingAttributes(fresh, node.attributes)) return null;
+    cursor.* += 1;
+    const is_void = opening.is("img") or opening.is("meta") or opening.is("link") or opening.is("col") or
+        opening.is("br") or opening.is("hr") or opening.is("wbr") or opening.is("source");
+    if (is_void) return if (node.first_child == null and node.inner_end == null) opening.end else null;
+    if (opening.self_closing) return null;
+    if (opening.is("style")) {
+        if (node.first_child != null or node.inner_end != null) return null;
+        var at = opening.end;
+        while (at < html.len) : (at += 1) {
+            if (html.len - at < 8 or !std.ascii.eqlIgnoreCase(html[at .. at + 7], "</style")) continue;
+            if (html[at + 7] != '>' and html[at + 7] != '/' and !htmlClassSpace(html[at + 7])) continue;
+            const closing = syntax.tagAt(html, at) orelse return null;
+            if (!closing.closing or !closing.is("style") or closing.self_closing or
+                std.mem.trim(u8, closing.attrs, " \t\r\n").len != 0) return null;
+            return closing.end;
+        }
+        return null;
+    }
+    const end = node.inner_end orelse return null;
+    if (end < opening.end or end >= html.len) return null;
+    const closing = syntax.tagAt(html, end) orelse return null;
+    if (!closing.closing or closing.self_closing or !std.ascii.eqlIgnoreCase(opening.name, closing.name) or
+        std.mem.trim(u8, closing.attrs, " \t\r\n").len != 0) return null;
+    var position = opening.end; var previous: ?usize = null; var first: ?usize = null;
+    const text_allowed = !opening.is("table") and !opening.is("thead") and !opening.is("tbody") and
+        !opening.is("tfoot") and !opening.is("tr") and !opening.is("colgroup");
+    while (cursor.* < source.len and source[cursor.*].start < end) {
+        const child_index = cursor.*; const child = source[child_index];
+        if (child.parent != index or child.previous != previous or child.start < position or child.tag.end > end or
+            !figureSiblingGap(html[position..child.start], text_allowed) or !figureSiblingChildAllowed(opening, child.tag)) return null;
+        if (first == null) first = child_index;
+        position = (try figureSiblingInventoryBranch(a, html, source, cursor, depth + 1, inside_link or opening.is("a"), inside_caption or opening.is("caption"))) orelse return null;
+        if (position > end) return null;
+        previous = child_index;
+    }
+    if (node.first_child != first or !figureSiblingGap(html[position..end], text_allowed)) return null;
+    return closing.end;
+}
+fn figureObservedCompleteSiblings(a: A, html: []const u8, source: []const ObservedSiblingNode,
+    nodes: []profile.FigureObservedNode, shift: usize, root_inventory: Inventory) !bool
+{
+    if (source.len == 0 or source.len > 16384 or nodes.len != source.len + shift or source[0].parent != null or
+        source[0].previous != null or source[0].start > html.len or !source[0].tag.is("div") or !figureSiblingGap(html[0..source[0].start], false)) return false;
+    var cursor: usize = 0;
+    const end = (try figureSiblingInventoryBranch(a, html, source, &cursor, 0, false, false)) orelse return false;
+    if (cursor != source.len or end > html.len or !figureSiblingGap(html[end..], false)) return false;
+    // First validate the entire mapping, so a failed publication is atomic.
+    for (source, 0..) |node, index| {
+        const mapped = nodes[index + shift];
+        const expected_inventory = if (index == 0) root_inventory else node.attributes;
+        if (mapped.tag.ptr != node.tag.name.ptr or !equal(mapped.tag, node.tag.name) or
+            mapped.parent != (if (node.parent) |parent| @as(?u32, @intCast(parent + shift)) else if (shift != 0) @as(?u32, @intCast(shift - 1)) else null) or
+            mapped.attributes.len != expected_inventory.attributes.len) return false;
+        for (mapped.attributes, expected_inventory.attributes) |actual, expected|
+            if (!equal(actual.name, expected.name) or !equal(actual.value, expected.value)) return false;
+    }
+    for (source, 0..) |node, index| if (node.parent) |parent| {
+        const closed_dd = source[parent].tag.is("dd") and
+            (if (source[parent].parent) |outer| source[outer].tag.is("dl") else false);
+        if (!source[parent].tag.is("div") and !closed_dd) continue;
+        nodes[parent + shift].known_complete_child_elements = true;
+        nodes[index + shift].known_previous_element_sibling = if (node.previous) |previous| @intCast(previous + shift) else null;
+        nodes[index + shift].known_no_previous_element_sibling = node.previous == null;
+        if (node.previous) |previous| nodes[previous + shift].known_next_element_sibling = @intCast(index + shift);
+        nodes[index + shift].known_no_next_element_sibling = true;
+        if (node.previous) |previous| nodes[previous + shift].known_no_next_element_sibling = false;
+    };
+    return true;
+}
+
 fn figureObservedGraph(a: A, styles: *const profile.Profile, stored: *const PageStyleData, alternative: bool) ![]profile.FigureObservedNode {
     const supplied = try observedOuterPrefix(a, try selectedPageHead(a, stored.page), false);
     const get = try observedOuterPrefix(a, (stored.page.outer_context orelse return invalid).response, true);
@@ -1710,6 +2054,8 @@ fn figureObservedGraph(a: A, styles: *const profile.Profile, stored: *const Page
             }
         }
     }
+    _ = try figureObservedCompleteSiblings(a, html, stored.observed_nodes, result, shell_len,
+        if (alternative) get.root orelse return invalid else stored.observed_nodes[0].attributes);
     return result;
 }
 // Caller selected this exact Missing Figure/caption through the strict factory.
@@ -2975,16 +3321,56 @@ fn intrinsicTableSourceOpenings(a: A, source: []const u8) ![]const usize {
     return result.toOwnedSlice(a);
 }
 
+// Reuse the selected diagnostic environment only in test builds. This does
+// not turn a null compiler context into a source/ownership proof context.
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+fn intrinsicTableIssueTraceEnabled(context: compiler.Context) bool {
+    if (!@import("builtin").is_test) return false;
+    if (context.table_viewport_trace) return true;
+    const raw = getenv("WIKIDICT_TABLE_VIEWPORT_TRACE") orelse return false;
+    // Diagnostic parsing must not introduce a new issuer error or replace its
+    // original result for malformed environment values.
+    return compiler.tableViewportTraceEnabled(std.mem.span(raw)) catch false;
+}
+
+const IntrinsicTableIssueTrace = struct {
+    enabled: bool,
+    openings: usize = 0,
+    captured_tables: usize = 0,
+    geometry_refusals: usize = 0,
+    candidates: usize = 0,
+    opening: ?usize = null,
+    candidate: ?u32 = null,
+    head: ?usize = null,
+    identity_calls: usize = 0,
+    identity_refusals: usize = 0,
+    captured_cell_checks: usize = 0,
+    captured_cell_refusals: usize = 0,
+    selected: usize = 0,
+    last_pair_stage: []const u8 = "not_entered",
+
+    fn refused(self: @This(), comptime stage: []const u8) []const SelectedFloatingTable {
+        if (self.enabled) std.debug.print("KU_INTRINSIC_REFUSAL stage={s} openings={d} captured_tables={d} geometry_refusals={d} candidates={d} opening={any} candidate={any} head={any} identity_calls={d} identity_refusals={d} captured_cell_checks={d} captured_cell_refusals={d} selected={d} last_pair_stage={s}\n", .{
+            stage, self.openings, self.captured_tables, self.geometry_refusals, self.candidates,
+            self.opening, self.candidate, self.head, self.identity_calls, self.identity_refusals,
+            self.captured_cell_checks, self.captured_cell_refusals, self.selected, self.last_pair_stage,
+        });
+        return &.{};
+    }
+};
+
 fn selectIntrinsicTableStyles(a: A, ns: *const namespaces.Registry, parent: *const profile.Profile,
     stored: *const PageStyleData, source: []const u8, context: compiler.Context) ![]const SelectedFloatingTable
 {
-    if (stored.figure_alternative_sources == null) return &.{};
+    var trace: IntrinsicTableIssueTrace = .{ .enabled = intrinsicTableIssueTraceEnabled(context) };
+    if (stored.figure_alternative_sources == null) return trace.refused("alternative_sources");
     const openings = try intrinsicTableSourceOpenings(a, source);
-    if (openings.len == 0) return &.{};
+    trace.openings = openings.len;
+    if (openings.len == 0) return trace.refused("source_openings");
     var has_candidate = false;
     for (stored.observed_nodes) |node| if (node.tag.is("table") and node.attributes.get("border") != null and
         node.attributes.get("cellpadding") != null and node.attributes.get("cellspacing") != null) { has_candidate = true; break; };
-    if (!has_candidate) return &.{};
+    if (!has_candidate) return trace.refused("captured_family");
     const html = try selectedStoredHtml(a, stored);
     const root: u32 = @intCast(stored.outer.ancestors.len);
     const pages = try a.alloc(FloatingTablePageContext, 2);
@@ -2997,43 +3383,59 @@ fn selectIntrinsicTableStyles(a: A, ns: *const namespaces.Registry, parent: *con
         if (!node.tag.is("table")) continue;
         const full: profile.TableContainingDirectionContext = .{ .intrinsic_viewport = true,
             .styles = pages[0].styles, .nodes = pages[0].nodes, .root = root, .table = @intCast(root + index) };
-        if (profile.observedIntrinsicTableGeometry(full) == null) continue;
+        trace.captured_tables += 1;
+        if (profile.observedIntrinsicTableGeometry(full) == null) { trace.geometry_refusals += 1; continue; }
         // A same-family nested/foreign owner must not vanish from the census.
         // This first source family admits only actual parser-root children.
-        if (node.parent != 0 or candidates.items.len == 64) return &.{};
+        trace.candidate = @intCast(index);
+        if (node.parent != 0 or candidates.items.len == 64) return trace.refused("candidate_parent_or_limit");
         try candidates.append(a, @intCast(index));
+        trace.candidates = candidates.items.len;
     }
-    if (candidates.items.len == 0) return &.{};
+    if (candidates.items.len == 0) return trace.refused("candidate_geometry");
     var compile_context = context; compile_context.namespace_catalog = ns;
+    // Forward only the existing diagnostic opt-in; source/proof context is unchanged.
+    compile_context.table_viewport_trace = context.table_viewport_trace or trace.enabled;
     const counts = try a.alloc(usize, candidates.items.len); @memset(counts, 0);
     var selected: std.ArrayList(SelectedFloatingTable) = .empty;
     for (openings) |opening| {
-        const opening_end = std.mem.indexOfScalarPos(u8, source, opening, '\n') orelse return &.{};
+        trace.opening = opening; trace.candidate = null; trace.head = null;
+        const opening_end = std.mem.indexOfScalarPos(u8, source, opening, '\n') orelse return trace.refused("opening_line");
         const tag: syntax.Tag = .{ .name = "table", .attrs = std.mem.trimEnd(u8, source[opening + 2 .. opening_end], "\r"),
             .end = opening_end, .closing = false, .self_closing = false };
-        const attrs = inventory(a, tag) catch |err| switch (err) { error.OutOfMemory => return err, else => return &.{} };
-        if (profile.intrinsicTableLegacyGeometry(try figureObservedAttributes(a, attrs)) == null) continue;
+        const attrs = inventory(a, tag) catch |err| switch (err) { error.OutOfMemory => return err, else => return trace.refused("opening_attributes") };
+        if (profile.intrinsicTableLegacyGeometry(try figureObservedAttributes(a, attrs)) == null) { trace.last_pair_stage = "source_geometry"; continue; }
         var owner: ?usize = null;
         for (candidates.items, 0..) |index, ordinal| {
+            trace.candidate = index;
             var both = true;
-            for (pages) |page| {
+            for (pages, 0..) |page, head| {
+                trace.head = head;
+                trace.identity_calls += 1;
                 const full: profile.TableContainingDirectionContext = .{ .intrinsic_viewport = true,
                     .styles = page.styles, .nodes = page.nodes, .root = root, .table = root + index };
                 const cells = (compiler.Renderer.intrinsicTableIdentityAlloc(a, source, opening, compile_context, full)
-                    catch |err| switch (err) { error.OutOfMemory => return err, else => null }) orelse { both = false; break; };
+                    catch |err| switch (err) { error.OutOfMemory => return err, else => null }) orelse {
+                    trace.identity_refusals += 1; trace.last_pair_stage = "source_identity";
+                    both = false; break;
+                };
                 for (cells) |cell| {
-                    if (!try intrinsicTableCapturedCellMatches(a, html, stored.observed_nodes, root, cell)) { both = false; break; }
+                    trace.captured_cell_checks += 1;
+                    if (!try intrinsicTableCapturedCellMatches(a, html, stored.observed_nodes, root, cell)) {
+                        trace.captured_cell_refusals += 1; trace.last_pair_stage = "captured_cell_body";
+                        both = false; break;
+                    }
                 }
                 if (!both) break;
             }
             if (!both) continue;
             counts[ordinal] += 1;
-            if (owner != null) return &.{};
+            if (owner != null) return trace.refused("ambiguous_source_owner");
             owner = ordinal;
         }
-        const ordinal = owner orelse return &.{};
+        const ordinal = owner orelse return trace.refused("source_owner");
         const captured_index = candidates.items[ordinal];
-        if (!floatingTableOrdinaryOpening(source, opening)) return &.{};
+        if (!floatingTableOrdinaryOpening(source, opening)) return trace.refused("ordinary_opening");
         const contexts = try a.alloc(profile.TableContainingDirectionContext, 2);
         const links = try a.alloc(profile.TableContainingDirectionContext, 2);
         for (pages, 0..) |page, arm| {
@@ -3048,18 +3450,215 @@ fn selectIntrinsicTableStyles(a: A, ns: *const namespaces.Registry, parent: *con
             contexts[arm] = .{ .intrinsic_viewport = true, .styles = page.styles, .nodes = nodes, .root = root, .table = root + 1 };
             links[arm] = .{ .intrinsic_viewport = true, .styles = page.styles, .nodes = page.nodes, .root = root, .table = root + captured_index };
         }
-        const end = std.mem.indexOfScalarPos(u8, source, opening, '\n') orelse return &.{};
+        const end = std.mem.indexOfScalarPos(u8, source, opening, '\n') orelse return trace.refused("selected_opening_line");
         try selected.append(a, .{ .opening_start = opening, .opening_end = end,
             .contexts = contexts, .link_contexts = links, .page_contexts = pages });
+        trace.selected = selected.items.len;
     }
     // Bijection, not ordinal pairing: every captured family member has one
     // complete source body and vice versa, across both authenticated heads.
-    if (selected.items.len != candidates.items.len) return &.{};
-    for (counts) |count| if (count != 1) return &.{};
+    if (selected.items.len != candidates.items.len) return trace.refused("complete_bijection_count");
+    for (counts) |count| if (count != 1) return trace.refused("complete_bijection_multiplicity");
     return selected.toOwnedSlice(a);
 }
 
+const InlineMissingProof = struct {
+    token: []const u8, file: []const u8, label: []const u8, href: []const u8, title: []const u8, width: u32,
+    table_opening: []const u8, row_opening: []const u8, cell_opening: []const u8,
+    contexts: []const profile.InlineMissingContext,
+};
+
+fn inlineMissingLiteralParents(a: A, source: []const u8, start: usize, end: usize) !?struct {
+    table: []const u8, row: []const u8, cell: []const u8,
+    table_attributes: Inventory, row_attributes: Inventory, cell_attributes: Inventory,
+} {
+    if (start >= end or end > source.len) return null;
+    var table: ?struct { start: usize, tag: syntax.Tag, pair: syntax.Pair } = null;
+    var row: ?struct { start: usize, tag: syntax.Tag, pair: syntax.Pair } = null;
+    var cell: ?struct { start: usize, tag: syntax.Tag, pair: syntax.Pair } = null;
+    var cursor: usize = 0; var remaining: usize = 4096;
+    while (std.mem.indexOfScalarPos(u8, source, cursor, '<')) |at| {
+        if (at >= start) break;
+        if (remaining == 0) return null;
+        remaining -= 1;
+        const tag = syntax.tagAt(source, at) orelse { cursor = at + 1; continue; };
+        cursor = tag.end;
+        if (tag.closing or tag.self_closing) continue;
+        const pair = syntax.matchingTag(source, tag) orelse continue;
+        if (!(tag.end <= start and pair.inner_end >= end)) continue;
+        if (tag.isOpaque()) return null;
+        if (tag.is("table")) {
+            if (table != null) return null;
+            table = .{ .start = at, .tag = tag, .pair = pair };
+        } else if (tag.is("tr")) {
+            if (row != null) return null;
+            row = .{ .start = at, .tag = tag, .pair = pair };
+        } else if (tag.is("td")) {
+            if (cell != null) return null;
+            cell = .{ .start = at, .tag = tag, .pair = pair };
+        } else if (cell != null or row != null or table != null) return null;
+    }
+    const t = table orelse return null; const r = row orelse return null; const c = cell orelse return null;
+    if (t.tag.end > r.start or r.pair.end > t.pair.inner_end or r.tag.end > c.start or c.pair.end > r.pair.inner_end or
+        std.mem.trim(u8, source[c.tag.end..start], " \t\r\n").len != 0 or
+        std.mem.trim(u8, source[end..c.pair.inner_end], " \t\r\n").len != 0) return null;
+    const table_attributes = inventory(a, t.tag) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
+    const row_attributes = inventory(a, r.tag) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
+    const cell_attributes = inventory(a, c.tag) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
+    for ([_]Inventory{table_attributes, row_attributes, cell_attributes}) |attributes| for (attributes.attributes) |attribute| {
+        if (!equal(attribute.name, "class") and !equal(attribute.name, "id") and !equal(attribute.name, "style") and
+            !equal(attribute.name, "lang") and !equal(attribute.name, "dir")) return null;
+    };
+    return .{ .table = source[t.start..t.tag.end], .row = source[r.start..r.tag.end], .cell = source[c.start..c.tag.end],
+        .table_attributes = table_attributes, .row_attributes = row_attributes, .cell_attributes = cell_attributes };
+}
+
+fn selectInlineMissingStyles(a: A, ns: *const namespaces.Registry, registry: ?*const sizing.Registry,
+    parent: *const profile.Profile, stored: *const PageStyleData, source: []const u8, selected_context: ?compiler.Context) ![]const InlineMissingProof
+{
+    const context = selected_context orelse return &.{};
+    const files = registry orelse return &.{};
+    if (!files.file_authority or !std.mem.eql(u8, &files.namespace_catalog.source_sha256, &ns.source_sha256) or
+        context.namespace_catalog != ns or context.image_options == null or context.figure_sizing == null or
+        (context.figure_sizing.?.source_context orelse return &.{}).missing_media_profile != .f45897 or stored.observed_nodes.len > 512) return &.{};
+    var result: std.ArrayList(InlineMissingProof) = .empty; defer result.deinit(a);
+    var primary_styles: ?*const profile.Profile = null; var alternative_styles: ?*const profile.Profile = null;
+    var primary: ?[]profile.FigureObservedNode = null; var alternative: ?[]profile.FigureObservedNode = null;
+    const shift: u32 = @intCast(stored.outer.ancestors.len);
+    const html = stored.observed_html; const nodes = stored.observed_nodes;
+    for (nodes, 0..) |label_node, label_index| {
+        if (!label_node.tag.is("span") or !equal(label_node.attributes.get("class") orelse "", "mw-file-element mw-broken-media")) continue;
+        const anchor_index = label_node.parent orelse continue; const anchor = nodes[anchor_index];
+        const wrapper_index = anchor.parent orelse continue; const wrapper = nodes[wrapper_index];
+        if (!wrapper.tag.is("span") or !equal(wrapper.attributes.get("typeof") orelse "", "mw:Error mw:File")) continue;
+        if (!anchor.tag.is("a") or !equal(anchor.attributes.get("class") orelse "", "new") or
+            wrapper.attributes.attributes.len != 1 or anchor.attributes.attributes.len != 3 or label_node.attributes.attributes.len != 2 or
+            wrapper.first_child != anchor_index or anchor.first_child != label_index or label_node.first_child != null or
+            anchor.previous != null or label_node.previous != null or wrapper.tag.end != anchor.start or anchor.tag.end != label_node.start) continue;
+        const label_end = label_node.inner_end orelse continue;
+        const label_close = syntax.tagAt(html, label_end) orelse continue;
+        const anchor_close = syntax.tagAt(html, anchor.inner_end orelse continue) orelse continue;
+        const wrapper_close = syntax.tagAt(html, wrapper.inner_end orelse continue) orelse continue;
+        if (!label_close.closing or !label_close.is("span") or label_close.end != anchor.inner_end or
+            !anchor_close.closing or !anchor_close.is("a") or anchor_close.end != wrapper.inner_end or
+            !wrapper_close.closing or !wrapper_close.is("span")) continue;
+        const cell_index = wrapper.parent orelse continue; const cell = nodes[cell_index];
+        const row_index = cell.parent orelse continue; const row = nodes[row_index];
+        const group_index = row.parent orelse continue; const group = nodes[group_index];
+        const table_index = group.parent orelse continue; const table = nodes[table_index];
+        if (!cell.tag.is("td") or !row.tag.is("tr") or !group.tag.is("tbody") or !table.tag.is("table") or
+            group.attributes.attributes.len != 0 or cell.first_child != wrapper_index or wrapper.previous != null or
+            std.mem.trim(u8, html[cell.tag.end..wrapper.start], " \t\r\n").len != 0 or
+            std.mem.trim(u8, html[wrapper_close.end..cell.inner_end orelse continue], " \t\r\n").len != 0) continue;
+        const file = (try missingAnchorFile(a, ns, anchor.attributes)) orelse continue;
+        if (!try sizing.Registry.isMissingFile(files, a, file)) continue;
+        const label = try decodedAttribute(a, html[label_node.tag.end..label_end]);
+        const width = positiveAttribute(label_node.attributes, "data-width") catch continue;
+        const href = anchor.attributes.get("href") orelse continue;
+        if (label.len == 0 or std.mem.indexOfAny(u8, label, "\x00\r\n\t<>&[]{}") != null or
+            (!std.mem.startsWith(u8, href, "//") and !std.mem.startsWith(u8, href, "https://"))) continue;
+        var token_start: ?usize = null; var token_end: usize = 0; var options: []const u8 = "";
+        var scan: usize = 0; var count: usize = 0; var examined: usize = 0;
+        while (std.mem.indexOfPos(u8, source, scan, "[[")) |start| {
+            scan = start + 2; examined += 1; if (examined > 16384) return invalid;
+            var iterator: encoder.document_ir.InlineIterator = .{ .input = source, .cursor = start, .renderer_boundaries = true };
+            const node = iterator.next() orelse continue;
+            if (node.kind != .link) continue;
+            const target = (try compiler.figureObservationFileTargetAlloc(a, node.target, context)) orelse continue;
+            const canonical = canonicalFile(a, ns, target) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => continue };
+            if (!equal(canonical, file)) continue;
+            count += 1;
+            if (!node.link_has_pipe or node.link_empty_label or node.link_label_restored_close or node.trail.len != 0) continue;
+            token_start = start; token_end = iterator.cursor; options = node.text;
+        }
+        if (count != 1) continue;
+        const start = token_start orelse continue;
+        const parsed = compiler.inlineMissingOptions(options, context) orelse continue;
+        if (parsed.width != width or !equal(parsed.label, label)) continue;
+        const parents = (try inlineMissingLiteralParents(a, source, start, token_end)) orelse continue;
+        if (!outerSameAttributes(parents.cell_attributes, cell.attributes, false) or
+            !outerSameAttributes(parents.row_attributes, row.attributes, false) or
+            !outerSameAttributes(parents.table_attributes, table.attributes, false)) continue;
+        // A unique source operation must also have a unique captured action:
+        // identical-file siblings cannot borrow each other's parent or label.
+        var captured_count: usize = 0;
+        for (nodes) |candidate| if (candidate.tag.is("a")) {
+            const owner = candidate.parent orelse continue;
+            if (!nodes[owner].tag.is("span") or
+                !profile.Profile.hasClass(nodes[owner].attributes.get("typeof") orelse "", "mw:Error") or
+                !profile.Profile.hasClass(nodes[owner].attributes.get("typeof") orelse "", "mw:File")) continue;
+            if (try missingAnchorFile(a, ns, candidate.attributes)) |canonical| if (equal(canonical, file)) { captured_count += 1; };
+        };
+        if (captured_count != 1) continue;
+        if (primary == null) {
+            primary_styles = try figureContextStyles(a, parent, stored, false);
+            alternative_styles = try figureContextStyles(a, parent, stored, true);
+            primary = try figureObservedGraph(a, primary_styles.?, stored, false);
+            alternative = try figureObservedGraph(a, alternative_styles.?, stored, true);
+        }
+        const contexts = try a.alloc(profile.InlineMissingContext, 2);
+        for ([_][]profile.FigureObservedNode{ primary.?, alternative.? }, 0..) |graph, arm| {
+            contexts[arm] = .{ .styles = if (arm == 0) primary_styles.? else alternative_styles.?, .nodes = graph,
+                .root = shift, .wrapper = shift + @as(u32, @intCast(wrapper_index)), .anchor = shift + @as(u32, @intCast(anchor_index)),
+                .label = shift + @as(u32, @intCast(label_index)) };
+        }
+        if (!profile.inlineMissingContextValid(contexts[0]) or !profile.inlineMissingContextValid(contexts[1])) continue;
+        try result.append(a, .{ .token = source[start..token_end], .file = file, .label = label, .href = href, .title = anchor.attributes.get("title").?, .width = width,
+            .table_opening = parents.table, .row_opening = parents.row, .cell_opening = parents.cell, .contexts = contexts });
+        if (result.items.len > 64) return invalid;
+    }
+    return result.toOwnedSlice(a);
+}
+
+const OrdinaryPlainLinkPage = struct {
+    // Selection-owned storage outlives every temporary observation Renderer.
+    // Callback allocators may be destroyed before final page compilation.
+    allocator: A,
+    stored: *const PageStyleData,
+    parent: *const profile.Profile,
+    selected_profile: *const profile.Profile,
+    context: compiler.Context,
+    original_source: []const u8,
+    namespace_sha256: [32]u8,
+    contexts: ?[]const profile.ObservedInlineLinkPaintContext = null,
+    html: ?[]const u8 = null,
+    cache: std.ArrayList(Entry) = .empty,
+    const Entry = struct { token: []const u8, target: []const u8, observation: compiler.OrdinaryLinkPaintObservation };
+
+    fn create(a: A, ns: *const namespaces.Registry, parent: *const profile.Profile, selected: *const profile.Profile,
+        stored: *const PageStyleData, source: []const u8, context: ?compiler.Context) !?*OrdinaryPlainLinkPage
+    {
+        const supplied = context orelse return null;
+        if (supplied.namespace_catalog != ns or !equal(supplied.title, stored.page.title)) return null;
+        const independent = try responseSource(a, ns, stored.page);
+        if (!equal(independent.source, source)) return null;
+        const result = try a.create(OrdinaryPlainLinkPage);
+        result.* = .{ .allocator = a, .stored = stored, .parent = parent, .selected_profile = selected, .context = supplied,
+            .original_source = try a.dupe(u8, independent.source), .namespace_sha256 = ns.source_sha256 };
+        return result;
+    }
+
+    fn prepare(self: *OrdinaryPlainLinkPage) !void {
+        if (self.contexts != null) return;
+        const a = self.allocator;
+        const contexts = try a.alloc(profile.ObservedInlineLinkPaintContext, 2);
+        for (contexts, 0..) |*context, index| {
+            const styles = try figureContextStyles(a, self.parent, self.stored, index != 0);
+            const graph = try figureObservedGraph(a, styles, self.stored, index != 0);
+            context.* = .{ .styles = styles, .nodes = graph, .root = @intCast(self.stored.outer.ancestors.len) };
+        }
+        self.html = try selectedStoredHtml(a, self.stored);
+        self.contexts = contexts;
+    }
+
+    fn same(a: A, first: profile.ObservedPlainInlineLinkStyle, second: profile.ObservedPlainInlineLinkStyle) !bool {
+        return equal(try std.json.Stringify.valueAlloc(a, first, .{}), try std.json.Stringify.valueAlloc(a, second, .{}));
+    }
+};
+
 pub const SelectedPageStyles = struct {
+    ordinary_link_page: ?*OrdinaryPlainLinkPage = null,
+    inline_missing: []const InlineMissingProof = &.{},
     intrinsic_tables: []const SelectedFloatingTable = &.{},
     authored_element_original: []const u8 = "",
     authored_element_styles: []const SelectedAuthoredElementStyle = &.{},
@@ -3072,6 +3671,104 @@ pub const SelectedPageStyles = struct {
     namespace_catalog: *const namespaces.Registry,
     figure_styles: []const SelectedFigureStyle = &.{},
     figure_assets: []const compiler.FigureObservedAsset = &.{},
+    pub fn ordinaryLinkPaint(raw: ?*const anyopaque, a: A, operation: compiler.OrdinaryLinkPaintOperation) A.Error!?compiler.OrdinaryLinkPaintObservation {
+        _ = a;
+        const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
+        return self.ordinaryLinkPaintIn(operation) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+    }
+
+    fn ordinaryLinkPaintIn(self: *const SelectedPageStyles,
+        operation: compiler.OrdinaryLinkPaintOperation) !?compiler.OrdinaryLinkPaintObservation
+    {
+        const owner = self.ordinary_link_page orelse return null;
+        // Graphs, styles, labels, font/paint strings and cache entries all escape
+        // this call. Keep them in the same arena as their selected Book owner.
+        const a = owner.allocator;
+        if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
+            operation.scope != &self.scope or self.scope.page_styles != self.styles or self.styles != owner.selected_profile or
+            !equal(operation.title, owner.context.title) or !equal(operation.title, owner.stored.page.title) or
+            !std.mem.eql(u8, &operation.namespace_sha256, &owner.namespace_sha256) or
+            !std.mem.eql(u8, &self.namespace_catalog.source_sha256, &owner.namespace_sha256) or
+            owner.context.namespace_catalog != self.namespace_catalog or !equal(self.source, owner.original_source)) return null;
+        const start = std.math.sub(usize, @intFromPtr(operation.token.ptr), @intFromPtr(self.source.ptr)) catch return null;
+        if (operation.token.len == 0 or start >= self.source.len or operation.token.len > self.source.len - start or
+            !equal(operation.token, self.source[start..][0..operation.token.len]) or !std.mem.startsWith(u8, operation.token, "[[")) return null;
+        const pair = syntax.balanced(operation.token, 0) orelse return null;
+        if (pair.end != operation.token.len) return null;
+        // Inspect the real following bytes too: a separately emitted trail
+        // cannot borrow the one-Span source A's action/focus ownership.
+        var parser: encoder.document_ir.InlineIterator = .{ .input = self.source[start..], .renderer_boundaries = true,
+            .link_trail = owner.context.link_trail };
+        const token = parser.next() orelse return null;
+        if (token.kind != .link or token.link_has_pipe or token.link_empty_label or token.link_label_restored_close or
+            token.trail.len != 0 or parser.cursor != operation.token.len or token.target.len == 0 or
+            std.mem.indexOfAny(u8, token.target, "<>{}[]&'|#\t\r\n\x0c") != null) return null;
+        {
+            // Canonical target validation does not escape. Release its temporary
+            // strings before lookup, including the common cache-hit path.
+            var validation = std.heap.ArenaAllocator.init(a); defer validation.deinit();
+            const destination = (try compiler.literalSourceLinkDestinationAlloc(validation.allocator(), self.namespace_catalog, token.target)) orelse return null;
+            if (destination.external or !equal(destination.target, operation.target)) return null;
+        }
+        for (owner.cache.items) |entry| if (equal(entry.token, operation.token) and equal(entry.target, operation.target)) return entry.observation;
+        try owner.prepare();
+        const contexts = owner.contexts orelse return null;
+        const html = owner.html orelse return null;
+        const samples = (try profile.observedInlineLinkViewportSamples(a, contexts)) orelse return null;
+        var agreed: ?profile.ObservedPlainInlineLinkStyle = null;
+        var label: ?[]const u8 = null;
+        var matched: usize = 0;
+        // Every matching captured A participates. Repeated equal tokens at
+        // different locations cannot silently select a preferred font/paint.
+        for (owner.stored.observed_nodes, 0..) |node, index| {
+            if (!std.ascii.eqlIgnoreCase(node.tag.name, "a")) continue;
+            if (node.inner_end == null) return null;
+            const observed_pair = syntax.matchingTag(html, node.tag) orelse return null;
+            if (observed_pair.inner_end != node.inner_end.? or node.start >= observed_pair.end or observed_pair.end > html.len) return null;
+            if (!try noteInlineCorrespondsIn(a, self.namespace_catalog, operation.token, html[node.start..observed_pair.end],
+                0, false, true, owner.context, null)) continue;
+            if (node.first_child != null) return null;
+            const text = (try noteInlineText(a, html[node.tag.end..observed_pair.inner_end])) orelse return null;
+            if (text.len == 0 or std.mem.indexOfAny(u8, text, "<>&\t\r\n\x0c") != null) return null;
+            if (label) |prior| { if (!equal(prior, text)) return null; } else label = text;
+            const subject: u32 = @intCast(owner.stored.outer.ancestors.len + index);
+            for (contexts) |context| for (samples) |sample| {
+                const value = (try profile.resolveObservedPlainInlineLinkStyle(a, context, subject, sample.width)) orelse return null;
+                if (agreed) |prior| { if (!try OrdinaryPlainLinkPage.same(a, prior, value)) return null; } else agreed = value;
+            };
+            matched += 1;
+        }
+        if (matched == 0) return null;
+        const value = agreed orelse return null;
+        const result: compiler.OrdinaryLinkPaintObservation = .{ .profile = self.styles,
+             .label = label orelse return null, .font = value.font, .paint = value.paint, .wrap = value.wrap };
+        // The token was proved to be an interval of the retained selected
+        // source. The normalized target belongs to the caller and must be owned.
+        const target = try a.dupe(u8, operation.target);
+        errdefer a.free(target);
+        try owner.cache.append(a, .{ .token = operation.token, .target = target, .observation = result });
+        return result;
+    }
+
+    pub fn inlineMissing(raw: ?*const anyopaque, a: A, operation: compiler.InlineMissingOperation) A.Error!?compiler.InlineMissingObservation {
+        const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
+        if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
+            !equal(self.source, self.authored_element_original)) return null;
+        const file = canonicalFile(a, self.namespace_catalog, operation.file) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory, else => return null,
+        };
+        for (self.inline_missing) |proof| {
+            if (operation.token.ptr != proof.token.ptr or operation.token.len != proof.token.len or !equal(file, proof.file)) continue;
+            return .{ .profile = self.styles, .label = proof.label, .href = proof.href, .title = proof.title, .data_width = proof.width,
+                .table_opening = proof.table_opening, .row_opening = proof.row_opening, .cell_opening = proof.cell_opening,
+                .contexts = proof.contexts };
+        }
+        return null;
+    }
+
     pub fn authoredElementStyle(raw: ?*const anyopaque, a: A, operation: compiler.AuthoredElementStyleOperation) A.Error!?compiler.AuthoredElementStyleObservation {
         _ = a;
         const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
@@ -3122,8 +3819,23 @@ pub const SelectedPageStyles = struct {
         return .{ .intrinsic_viewport = true, .source = self.source, .context = self, .observe = intrinsicTable };
     }
 
+    fn prefixTable(raw: ?*const anyopaque, a: A, source: []const u8, opening: usize) A.Error!?compiler.TableContainingDirectionObservation {
+        const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
+        return SelectedPrefixTable.observe(self.prefix_table orelse return null, a, source, opening);
+    }
+    fn prefixPreflight(raw: ?*const anyopaque, source: []const u8) ?compiler.ObservedTextClassScope {
+        const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
+        const prefix = self.prefix_table orelse return null;
+        if (source.ptr != self.source.ptr or source.len != self.source.len or
+            prefix.source.ptr != source.ptr or prefix.source.len != source.len or self.scope.page_styles != self.styles) return null;
+        return .{ .source = self.source, .scope = &self.scope };
+    }
     pub fn tablePrefixSource(self: *const SelectedPageStyles) ?compiler.TableContainingDirectionSource {
-        return if (self.prefix_table) |selected| selected.capability() else null;
+        var result = (self.prefix_table orelse return null).capability();
+        result.context = self;
+        result.observe = prefixTable;
+        result.preflight_scope = prefixPreflight;
+        return result;
     }
     pub fn figureStyle(raw: ?*const anyopaque, a: A, operation: compiler.FigureStyleOperation) A.Error!?compiler.FigureStyleObservation {
         const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
@@ -3162,6 +3874,8 @@ pub const Book = struct {
     defaults_sha256: [32]u8,
     default_width: u32,
     pages: []const Page,
+    // Borrowed authenticated normal input, retained through worker completion.
+    file_registry: ?*const sizing.Registry = null,
     table_roots: []const PreparedTableRoot = &.{},
     missing_link_paint: ?encoder.presentation_types.MissingLinkPaint = null,
     pub fn init(parent: A, bytes: []const u8, ns: *const namespaces.Registry, registry: *const sizing.Registry, defaults_sha256: [32]u8, default_width: u32) !Book {
@@ -3225,7 +3939,7 @@ pub const Book = struct {
         const missing_contract = class_contract or paint_contract or equal(doc.schema, "wikidict.figure-page-observations.v2");
         if ((!equal(doc.schema, "wikidict.figure-page-observations.v1") and !missing_contract and !svg_language_contract) or !equal(doc.wiki, ns.wiki) or !equal(doc.date, ns.dump_date) or
             !hashEqual(ns.source_sha256, doc.namespace_sha256) or !hashEqual(defaults_sha256, doc.defaults_sha256) or
-            doc.pages.len == 0 or doc.pages.len + table_roots.len > max_pages) return invalid;
+            (doc.pages.len == 0 and table_roots.len == 0) or doc.pages.len + table_roots.len > max_pages) return invalid;
         const served: ?ValidatedMissingSet = if (doc.missing_link_styles) |styles| selected: {
             const observed_set = equal(styles.profile, missing_observed_set_profile);
             try missingStyleShape(shape, observed_set);
@@ -3376,8 +4090,8 @@ pub const Book = struct {
                         try figureStyleCandidates(a, ns, source_and_html.html, observed_nodes.items, selected);
                         break :relation selected;
                     } else ordinary: {
-                        const selected = try figureStyleOperationProofs(a, ns, source_and_html.source, ranges);
-                        try figureStyleCandidates(a, ns, source_and_html.html, observed_nodes.items, selected);
+                        const selected = try figureStyleOperationProofsWithObservedOwner(a, ns, source_and_html.source, ranges,
+                            source_and_html.html, observed_nodes.items);
                         break :ordinary selected;
                     };
                     selected_styles.figure_styles = proofs;
@@ -3525,13 +4239,13 @@ pub const Book = struct {
         std.mem.sort(Page, pages, {}, struct {
             fn less(_: void, left: Page, right: Page) bool { return left.page_id < right.page_id; }
         }.less);
-        return .{ .arena = arena, .namespace_sha256 = ns.source_sha256, .defaults_sha256 = defaults_sha256, .default_width = default_width, .pages = pages, .table_roots = table_roots, .missing_link_paint = link_paint };
+        return .{ .arena = arena, .namespace_sha256 = ns.source_sha256, .defaults_sha256 = defaults_sha256, .default_width = default_width, .pages = pages, .file_registry = registry, .table_roots = table_roots, .missing_link_paint = link_paint };
     }
     pub fn deinit(self: *Book) void { self.arena.deinit(); self.* = undefined; }
     // Called only with the complete original expansion, before source preparation.
     // `a` is the caller's existing page/process arena: selected arrays, normalized
     // options and the returned object are reclaimed together on success or error.
-    // Book and namespace storage must outlive every selected page/worker and codec
+    // Book, namespace and its authenticated file Registry must outlive every selected page/worker and codec
     // construction; there is deliberately no individually-owned selected handle.
     // This selector issues no media callback or geometry policy. A zero-media
     // page can contribute only its independently authenticated source/style scope.
@@ -3625,8 +4339,12 @@ pub const Book = struct {
                 node.* = complete[index];
                 node.parent = if (index == 0) null else &alternative[index - 1];
                 node.page_style_root = alternative_root;
-                if (index == 0) {
-                    const attributes = stored.outer.ancestors[0].attributes;
+                if (index == 0 or index + 1 == alternative.len) {
+                    // Match figureObservedGraph/figureContextStyles: the GET
+                    // arm owns its real parser-root attributes too. API-only
+                    // absence must not erase a GET-only selector obligation.
+                    const attributes = if (index == 0) stored.outer.ancestors[0].attributes
+                        else stored.outer.root_attributes orelse return invalid;
                     const inventory_ptr = try a.create(Inventory); inventory_ptr.* = attributes;
                     node.classes = attributes.get("class") orelse ""; node.id = attributes.get("id") orelse "";
                     node.language = attributes.get("lang");
@@ -3647,6 +4365,22 @@ pub const Book = struct {
             scope.source_div_parent_tags = page.source_div_parent_tags;
             scope.source_div_parent_tags_source = expanded;
             scope.source_literal_divs = page.source_literal_divs;
+            if (context) |selected| if (selected.namespace_catalog == ns and equal(selected.title, title) and
+                stored.observed_html.len != 0) {
+                // Full identity was checked above. Complete local joins may
+                // now consume the real parser trail callback and page title;
+                // load-time no-context proofs remain unchanged.
+                var joined: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+                defer joined.deinit(a);
+                try joined.appendSlice(a, page.source_literal_divs);
+                try appendOrderedLiteralDivParentsIn(a, ns, expanded, stored.observed_html,
+                    stored.observed_nodes, &joined, selected);
+                scope.source_literal_divs = try joined.toOwnedSlice(a);
+                scope.source_bullet_rubies = try selectedRootBulletRubyProofs(a, ns, stored, expanded, complete_root, scope.source_literal_divs, selected);
+                scope.source_bullet_rubies_source = expanded;
+                scope.source_inline_rubies = try selectedRootInlineRubyProofs(a, ns, stored, expanded, complete_root, scope.source_literal_divs, selected);
+                scope.source_inline_rubies_source = expanded;
+            };
             scope.source_literal_divs_source = expanded;
             scope.source_root_children = page.source_root_children;
             scope.source_root_parent_groups = page.source_root_parent_groups;
@@ -3659,12 +4393,14 @@ pub const Book = struct {
             }
             scope.page_styles = styles;
             scope.page_style_root = root;
-            if (rowColorOuterAbsent(complete) and rowColorOuterAbsent(alternative)) {
-                if (try observedRowColorOwners(a, expanded, stored.observed_nodes)) |owners|
-                    scope.closed_row_colors = .{ .styles = styles, .source = expanded, .root = root, .attribute = "bgcolor", .owners = owners };
-            }
+            scope.closed_row_colors = try observedClosedRowColors(a, styles, root, expanded,
+                stored.observed_nodes, complete, alternative);
+            scope.page_source_image = try selectedPageSourceImage(a, styles, root, expanded, page.source,
+                if (scope.closed_row_colors) |*rows| rows else null);
             const figure_operations = try selectedBlockMediaOperations(a, ns, expanded, stored, context);
             const selected_figures = try selectFigureStylesIn(a, parent, figure_operations, .{ .source = expanded, .root = root });
+            scope.unobserved_counter_resets = try observedUnobservedPageCounters(a, stored, styles, root, expanded,
+                scope.page_source_image, selected_figures, context);
             var empty_captions: std.ArrayList(profile.EmptyMissingCaptionOperation) = .empty;
             for (selected_figures) |figure| if (figure.proof.empty_caption and figure.proof.range.media_kind == .missing)
                 try empty_captions.append(a, .{ .start = figure.proof.range.start, .end = figure.proof.range.end });
@@ -3686,8 +4422,10 @@ pub const Book = struct {
                     scope.page_static_motion = .{ .styles = styles, .source = expanded, .root = root };
             }
             const result = try a.create(SelectedPageStyles);
-            result.* = .{ .prefix_table = try selectedPrefixTableAlloc(a, ns, parent, stored, expanded), .styles = styles, .scope = scope, .source = expanded, .namespace_catalog = ns,
+            result.* = .{ .ordinary_link_page = try OrdinaryPlainLinkPage.create(a, ns, parent, styles, stored, expanded, context),
+                .prefix_table = try selectedPrefixTableAlloc(a, ns, parent, stored, expanded), .styles = styles, .scope = scope, .source = expanded, .namespace_catalog = ns,
                 .figure_styles = selected_figures, .figure_assets = figure_operations.figure_assets,
+                .inline_missing = try selectInlineMissingStyles(a, ns, self.file_registry, parent, stored, expanded, context),
                 .authored_element_original = expanded, .intrinsic_tables = intrinsic_tables, .floating_tables = selected_tables, .authored_element_styles = try selectAuthoredElementStyles(a, parent, stored) };
             return result;
         }
@@ -3743,7 +4481,7 @@ pub const Book = struct {
                     !missingThumbnailOptionsForOccurrence(context.image_options.?, slot.stage_options, occurrence.*))) return null;
             }
             const result = try a.create(SelectedPage);
-            result.* = .{ .namespace_catalog = ns, .default_width = default_width, .page_title = title, .occurrences = selected, .image_map_no_link = if (page.image_map_no_link) |proof| .{ .body = expanded[proof.body_start..][0..proof.body.len], .body_start = proof.body_start, .line = proof.line, .text = proof.text } else null, .missing_link_paint = self.missing_link_paint,
+            result.* = .{ .namespace_catalog = ns, .file_registry = self.file_registry, .default_width = default_width, .page_title = title, .occurrences = selected, .image_map_no_link = if (page.image_map_no_link) |proof| .{ .body = expanded[proof.body_start..][0..proof.body.len], .body_start = proof.body_start, .line = proof.line, .text = proof.text } else null, .missing_link_paint = self.missing_link_paint,
                 .text_class_scope = page.text_class_scope, .text_class_scope_source = if (page.text_class_scope != null) expanded else null };
             if (result.text_class_scope) |*scope| if (page.source_siblings.len != 0) {
                 scope.source_siblings = page.source_siblings;
@@ -5132,18 +5870,20 @@ fn observedTextClassScopeToEnd(a: A, ns: *const namespaces.Registry, html: []con
 fn observedTextClassScopeToEndIn(a: A, ns: *const namespaces.Registry, html: []const u8,
     nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize, current_literal: bool) !profile.BoundedTextClassScope
 {
-    return observedTextClassScopeToEndWithRootOptions(a, ns, html, nodes, root_end, current_literal, null, false);
+    return observedTextClassScopeToEndWithRootOptions(a, ns, html, nodes, root_end, current_literal, null, false, false);
 }
 
 fn observedTextClassScopeToEndWithSections(a: A, ns: *const namespaces.Registry, html: []const u8,
     nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize, expected_root: ?Inventory,
     retain_sections: bool) !profile.BoundedTextClassScope
 {
-    return observedTextClassScopeToEndWithRootOptions(a, ns, html, nodes, root_end, false, expected_root, retain_sections);
+    // The independent root issuer has authenticated this complete text/html GET.
+    // Keep its comment token boundaries; source/API inventories remain strict.
+    return observedTextClassScopeToEndWithRootOptions(a, ns, html, nodes, root_end, false, expected_root, retain_sections, true);
 }
 
 fn observedTextClassScopeToEndWithRootOptions(a: A, ns: *const namespaces.Registry, html: []const u8,
-    nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize, current_literal: bool, expected_root: ?Inventory, retain_sections: bool) !profile.BoundedTextClassScope
+    nodes: ?*std.ArrayList(ObservedSiblingNode), root_end: ?*usize, current_literal: bool, expected_root: ?Inventory, retain_sections: bool, returned_html_comments: bool) !profile.BoundedTextClassScope
 {
     if (html.len == 0 or html.len > max_response or !std.unicode.utf8ValidateSlice(html) or std.mem.indexOfScalar(u8, html, 0) != null) return invalid;
     var stack: [128]ObservedOpenNode = undefined;
@@ -5165,8 +5905,16 @@ fn observedTextClassScopeToEndWithRootOptions(a: A, ns: *const namespaces.Regist
             for (stack[0..depth]) |open| if (open.tag.is("ruby")) return invalid;
             if (std.mem.startsWith(u8, html[at + 4 ..], ">") or std.mem.startsWith(u8, html[at + 4 ..], "->")) return invalid;
             const end = std.mem.indexOfPos(u8, html, at + 4, "-->") orelse return invalid;
-            if (std.mem.indexOf(u8, html[at + 4 .. end], "--") != null or
-                (end > at + 4 and html[end - 1] == '-')) return invalid;
+            const comment = html[at + 4 .. end];
+            // HTML's comment-end state keeps internal double hyphens as data
+            // unless followed by a terminator. The returned report may contain
+            // template names such as --lang--; it creates no element or text.
+            // Still refuse nested/alternate termination and abrupt/truncated
+            // forms, so the first --> is the same complete browser boundary.
+            const ambiguous = if (returned_html_comments)
+                std.mem.indexOf(u8, comment, "<!--") != null or std.mem.indexOf(u8, comment, "--!>") != null
+            else std.mem.indexOf(u8, comment, "--") != null;
+            if (ambiguous or (end > at + 4 and html[end - 1] == '-')) return invalid;
             at = end + 3;
             continue;
         }
@@ -7105,11 +7853,90 @@ fn appendOuterClasses(a: A, result: *std.ArrayList(u8), classes: []const u8) !vo
         try result.appendSlice(a, name);
     }
 }
+fn uniqueCounterRootClass(a: A, stored: *const PageStyleData, source: []const u8) !?[]const u8 {
+    const outer = stored.page.outer_context orelse return null;
+    const start = stored.outer.root_start orelse return null;
+    const end = stored.outer.root_open_end orelse return null;
+    if (start >= end or end > outer.response.len or
+        !std.mem.endsWith(u8, std.mem.trim(u8, outer.response, " \t\r\n"), "</html>")) return null;
+    // Counters extend to following siblings. Census the entire authenticated
+    // GET, not just the API body and its selected ancestor chain. Only this
+    // exact validated root opening is omitted from the outside inventory.
+    var outside: std.ArrayList(u8) = .empty; defer outside.deinit(a);
+    for ([_][]const u8{ source, outer.response[0..start], outer.response[end..] }) |bytes| if (bytes.len != 0)
+        appendAuthoredSourceClasses(a, &outside, bytes) catch |err| {
+            if (err == error.InvalidFigurePageObservations) return null;
+            return err;
+        };
+    for (stored.observed_nodes[1..]) |node| try appendOuterClasses(a, &outside, node.attributes.get("class") orelse "");
+    for (stored.outer.ancestors) |node| try appendOuterClasses(a, &outside, node.attributes.get("class") orelse "");
+    const get = stored.outer.root_attributes orelse return null;
+    const primary = stored.observed_nodes[0].attributes;
+    var unique: std.ArrayList(u8) = .empty; defer unique.deinit(a);
+    var names = std.mem.tokenizeAny(u8, get.get("class") orelse "", " \t\r\n\x0c");
+    while (names.next()) |name| {
+        if (!profile.Profile.hasClass(primary.get("class") orelse "", name) or profile.Profile.hasClass(outside.items, name)) continue;
+        if (name.len == 0 or name.len > 128) continue;
+        var simple = true;
+        for (name) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_') { simple = false; break; };
+        if (simple) try appendOuterClasses(a, &unique, name);
+    }
+    return if (unique.items.len != 0) try unique.toOwnedSlice(a) else null;
+}
+// The selected Page.source is authenticated Book-arena storage. Counter
+// currentness may share it on pages that still owe positive row-color owners.
+fn selectedPageSourceImage(a: A, styles: *const profile.Profile, root: *const profile.TextElement,
+    source: []const u8, retained: []const u8, rows: ?*const profile.ClosedRowColorProof) !?*const profile.PageSourceImage
+{
+    if (!equal(source, retained)) return null;
+    var snapshot = retained;
+    // The zero-owner variant already owns an independent image. Reuse that
+    // allocation as bytes only; its absence/consumption contract stays separate.
+    if (rows) |row| if (row.styles == styles and row.root == root and
+        row.source.ptr == source.ptr and row.source.len == source.len) {
+        if (row.absent_source) |owned| snapshot = owned;
+    };
+    const value: profile.PageSourceImage = .{ .styles = styles, .root = root,
+        .source = source, .snapshot = snapshot };
+    if (!profile.pageSourceImageCurrent(&value)) return null;
+    const result = try a.create(profile.PageSourceImage); result.* = value;
+    return result;
+}
+
+fn observedUnobservedPageCounters(a: A, stored: *const PageStyleData, styles: *const profile.Profile,
+    root: *const profile.TextElement, source: []const u8, source_image: ?*const profile.PageSourceImage,
+    figures: []const SelectedFigureStyle, context: ?compiler.Context) !?profile.UnobservedCounterResetProof
+{
+    const current = context orelse return null;
+    const image = source_image orelse return null;
+    if (image.styles != styles or image.root != root or image.source.ptr != source.ptr or image.source.len != source.len or
+        !profile.pageSourceImageCurrent(image)) return null;
+    if (figures.len == 0 or figures[0].contexts.len != 2 or stored.observed_nodes.len == 0 or
+        !equal(current.title, stored.page.title) or current.external_links_prepared or current.citations != null or current.poem_phase != null) return null;
+    const unique = (try uniqueCounterRootClass(a, stored, source)) orelse return null;
+    var inline_styles: std.ArrayList(u8) = .empty; defer inline_styles.deinit(a);
+    const outer = stored.page.outer_context orelse return null;
+    for ([_][]const u8{ source, outer.response }) |bytes|
+        appendAuthoredSourceAttributeTokensMode(a, &inline_styles, bytes, "style", true) catch |err| {
+            if (err == error.InvalidFigurePageObservations) return null;
+            return err;
+        };
+    const prepared = try compiler.preparePageExternalLinksAlloc(a, source, current);
+    if (prepared.generated_external_labels != 0 or prepared.fallbacks.any()) return null;
+    return profile.observedUnobservedCounterResets(a, styles, root, image, figures[0].contexts, unique, inline_styles.items) catch |err|
+        if (err == error.StyleProfileLimit) null else return err;
+}
+
 const ObservedOuterContext = struct {
     ids: ?[]const u8 = null,
     classes: []const u8,
     ancestors: []const OuterObservedNode,
     html_classes: []const u8,
+    // Exact parser-root inventory from this validated GET, distinct from the
+    // API parser root retained by PageStyleData/SelectedPageStyles.
+    root_attributes: ?Inventory = null,
+    root_start: ?usize = null,
+    root_open_end: ?usize = null,
 };
 fn observedOuterClasses(a: A, ns: *const namespaces.Registry, page: RawPage, outer: RawOuterContext, scope: profile.BoundedTextClassScope) ![]const u8 {
     return (try observedOuterContext(a, ns, page, outer, scope)).classes;
@@ -7190,7 +8017,9 @@ fn observedOuterContext(a: A, ns: *const namespaces.Registry, page: RawPage, out
     try appendOuterClasses(a, &html_classes, supplied.ancestors[0].attributes.get("class") orelse "");
     const id_superset = outerIdSuperset(a, observed.ancestors, supplied.ancestors, root) catch |err|
         if (err == error.InvalidFigurePageObservations) null else return err;
-    return .{ .classes = try result.toOwnedSlice(a), .ancestors = observed.ancestors, .html_classes = try html_classes.toOwnedSlice(a), .ids = id_superset };
+    return .{ .classes = try result.toOwnedSlice(a), .ancestors = observed.ancestors,
+        .html_classes = try html_classes.toOwnedSlice(a), .ids = id_superset, .root_attributes = root,
+        .root_start = observed.root_start, .root_open_end = observed.root_open_end };
 }
 
 // Keep the complete source class census even when the next ordinary quoted
@@ -7229,6 +8058,9 @@ fn appendAuthoredSourceClasses(a: A, result: *std.ArrayList(u8), source: []const
     return appendAuthoredSourceAttributeTokens(a, result, source, "class");
 }
 fn appendAuthoredSourceAttributeTokens(a: A, result: *std.ArrayList(u8), source: []const u8, name: []const u8) !void {
+    return appendAuthoredSourceAttributeTokensMode(a, result, source, name, false);
+}
+fn appendAuthoredSourceAttributeTokensMode(a: A, result: *std.ArrayList(u8), source: []const u8, name: []const u8, style_values: bool) !void {
     if (source.len == 0 or source.len > max_response or !std.unicode.utf8ValidateSlice(source) or std.mem.indexOfScalar(u8, source, 0) != null) return invalid;
     // Match Tag.attribute source whitespace, including vertical tab. The
     // returned HTML inventory deliberately keeps its separate HTML grammar.
@@ -7270,7 +8102,11 @@ fn appendAuthoredSourceAttributeTokens(a: A, result: *std.ArrayList(u8), source:
         value_bytes += raw.len;
         const decoded = try decodedAttribute(a, raw);
         defer a.free(decoded);
-        try appendOuterClasses(a, result, decoded);
+        if (style_values) {
+            if (!profile.counterDeclarationStreamClosed(decoded)) return invalid;
+            if (decoded.len >= 65536 or result.items.len > 65536 - decoded.len - 1) return invalid;
+            try result.appendSlice(a, decoded); try result.append(a, ';');
+        } else try appendOuterClasses(a, result, decoded);
         if (quoted) {
             cursor += 1;
             if (cursor < source.len and !std.ascii.isWhitespace(source[cursor]) and
@@ -8668,12 +9504,22 @@ const SourceRootTableAnchor = struct {
     cell_ordinal: usize = 0, eligible: bool = false, actual_root: bool = false,
 };
 fn rootTableAttributes(a: A, attrs: []const u8) !?Inventory {
+    return rootTableAttributesIn(a, attrs, false);
+}
+fn rootTableAttributesIn(a: A, attrs: []const u8, comptime header: bool) !?Inventory {
     if (std.mem.indexOfAny(u8, attrs, "{}[]<>|\r\n\x00") != null or std.mem.indexOf(u8, attrs, "__") != null) return null;
     const synthetic = try std.mem.concat(a, u8, &.{ "<table ", attrs, ">" });
     const tag = syntax.tagAt(synthetic, 0) orelse return null;
     const parsed = inventory(a, tag) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null };
     for (parsed.attributes) |attribute| {
         if (siblingLiteralAttribute(attribute.name, attribute.value)) continue;
+        if (header and (std.ascii.eqlIgnoreCase(attribute.name, "colspan") or std.ascii.eqlIgnoreCase(attribute.name, "rowspan"))) {
+            if (attribute.value.len == 0) return null;
+            for (attribute.value) |byte| if (!std.ascii.isDigit(byte)) return null;
+            const span = std.fmt.parseInt(u16, attribute.value, 10) catch return null;
+            if (span == 0) return null;
+            continue;
+        }
         if (!equal(attribute.name, "cellpadding") or attribute.value.len == 0) return null;
         for (attribute.value) |byte| if (!std.ascii.isDigit(byte)) return null;
     }
@@ -11651,7 +12497,8 @@ test "normal Figure operation capability retains explicit ranges and unproved Mi
 
 const AuthoredElementStyleRange = struct { start: usize, end: usize };
 
-// A WikiTable cell may spell a positive integral span without quotes. This
+// A WikiTable cell may spell a positive integral span or percentage width
+// without quotes. This
 // validates only a preceding cell's closed attribute boundary; the ordinary
 // table emitter still owns its geometry and the captured tree owns every edge.
 fn authoredPrefixWikiCellAttributes(a: A, raw: []const u8) !void {
@@ -11678,12 +12525,18 @@ fn authoredPrefixWikiCellAttributes(a: A, raw: []const u8) !void {
             if (at == raw.len) return invalid;
             at += 1;
         } else {
-            if (!std.ascii.eqlIgnoreCase(name, "colspan") and !std.ascii.eqlIgnoreCase(name, "rowspan")) return invalid;
+            const width = std.ascii.eqlIgnoreCase(name, "width");
+            if (!width and !std.ascii.eqlIgnoreCase(name, "colspan") and !std.ascii.eqlIgnoreCase(name, "rowspan")) return invalid;
             const value_start = at;
             while (at < raw.len and std.ascii.isDigit(raw[at])) : (at += 1) {}
-            if (at == value_start or (at < raw.len and !std.ascii.isWhitespace(raw[at]))) return invalid;
-            const span = std.fmt.parseInt(u16, raw[value_start..at], 10) catch return invalid;
-            if (span == 0) return invalid;
+            if (at == value_start) return invalid;
+            const scalar = std.fmt.parseInt(u16, raw[value_start..at], 10) catch return invalid;
+            if (scalar == 0) return invalid;
+            if (width) {
+                if (scalar > 100 or at == raw.len or raw[at] != '%') return invalid;
+                at += 1;
+            }
+            if (at < raw.len and !std.ascii.isWhitespace(raw[at])) return invalid;
             try quoted.appendSlice(a, raw[emitted..value_start]);
             try quoted.append(a, '"');
             try quoted.appendSlice(a, raw[value_start..at]);
@@ -11712,6 +12565,31 @@ fn authoredElementPrefixForRole(a: A, ns: *const namespaces.Registry, source: []
     range: AuthoredElementStyleRange, existing_note: bool, prior_notes: []const profile.SourceLiteralDivProof,
     allow_rule: bool, immediate_parent: ?*?usize) !void
 {
+    return authoredElementPrefixForRoleIn(a, ns, source, range, existing_note, prior_notes, allow_rule, immediate_parent, false);
+}
+fn authoredElementPrefixForRoleIn(a: A, ns: *const namespaces.Registry, source: []const u8,
+    range: AuthoredElementStyleRange, existing_note: bool, prior_notes: []const profile.SourceLiteralDivProof,
+    allow_rule: bool, immediate_parent: ?*?usize, root_table: bool) !void
+{
+    return authoredElementPrefixForRoleScan(a, ns, source, range, existing_note, prior_notes,
+        allow_rule, immediate_parent, root_table, null, false);
+}
+fn hasClosedParserRootTableSource(a: A, ns: *const namespaces.Registry, source: []const u8,
+    prior_notes: []const profile.SourceLiteralDivProof) !bool
+{
+    var closed_end: usize = 0;
+    authoredElementPrefixForRoleScan(a, ns, source, .{ .start = source.len, .end = source.len },
+        false, prior_notes, false, null, true, &closed_end, false) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return false,
+    };
+    return closed_end != 0;
+}
+fn authoredElementPrefixForRoleScan(a: A, ns: *const namespaces.Registry, source: []const u8,
+    requested_range: AuthoredElementStyleRange, existing_note: bool, prior_notes: []const profile.SourceLiteralDivProof,
+    allow_rule: bool, immediate_parent: ?*?usize, root_table: bool, first_root_end: ?*usize, root_bullet: bool) !void
+{
+    var range = requested_range;
     const WikiTable = struct { depth: usize, cell: bool = false };
     var html: [256]syntax.Tag = undefined; var depth: usize = 0;
     var tables: [64]WikiTable = undefined; var table_count: usize = 0;
@@ -11760,6 +12638,7 @@ fn authoredElementPrefixForRole(a: A, ns: *const namespaces.Registry, source: []
             }
             if (tag.is("templatestyles") or tag.is("references")) { at = tag.end; continue; }
             if (at == range.start) {
+                if (root_table or (root_bullet and (depth != 0 or table_count != 0))) return invalid;
                 const rule = allow_rule and tag.end == range.end and compiler.authoredRuleSourceOpening(source, tag) != null;
                 if (!rule and (tag.closing or tag.self_closing or (!tag.is("div") and !tag.is("span")))) return invalid;
                 if (immediate_parent) |parent| parent.* = if (depth == 0) null else
@@ -11797,6 +12676,13 @@ fn authoredElementPrefixForRole(a: A, ns: *const namespaces.Registry, source: []
         }
         const line_start = at == 0 or source[at - 1] == '\n';
         if (line_start and std.mem.startsWith(u8, source[at..], "{|")) {
+            // Optional applicability selects an actual root opening through
+            // this same protected/link/HTML/table lexical state machine.
+            if (first_root_end != null and !found and depth == 0 and table_count == 0) range.start = at;
+            if (root_table and at == range.start) {
+                if (depth != 0 or table_count != 0) return invalid;
+                found = true;
+            }
             if (table_count == tables.len or (table_count != 0 and !tables[table_count - 1].cell)) return invalid;
             const end = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse return invalid;
             // Reuse the ordinary closed-quoted WikiTable grammar. This is
@@ -11806,7 +12692,14 @@ fn authoredElementPrefixForRole(a: A, ns: *const namespaces.Registry, source: []
         }
         if (line_start and std.mem.startsWith(u8, source[at..], "|}")) {
             if (table_count == 0 or tables[table_count - 1].depth != depth) return invalid;
-            table_count -= 1; at += 2; continue;
+            table_count -= 1; at += 2;
+            if (first_root_end) |closed_end| if (found and depth == 0 and table_count == 0) {
+                const line_end = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse source.len;
+                if (std.mem.trim(u8, source[at..line_end], " \t\r").len != 0) return invalid;
+                closed_end.* = at;
+                return;
+            };
+            continue;
         }
         if (line_start and table_count != 0 and (source[at] == '|' or source[at] == '!')) {
             const end = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse source.len;
@@ -11831,7 +12724,7 @@ fn authoredElementPrefixForRole(a: A, ns: *const namespaces.Registry, source: []
         };
         at += 1;
     }
-    if (!found or at != range.end) return invalid;
+    if (!found or at != range.end or (root_table and (depth != 0 or table_count != 0))) return invalid;
 }
 
 fn literalDivAttributes(a: A, tag: syntax.Tag) !?Inventory {
@@ -12034,13 +12927,30 @@ fn noteRemoteHrefMatches(a: A, expected: []const u8, actual: []const u8) !bool {
     }
     return true;
 }
+fn orderedLocalFragmentCorresponds(a: A, ns: *const namespaces.Registry, page: []const u8,
+    fragment: []const u8, target: []const u8) !bool
+{
+    if (fragment.len == 0 or std.mem.indexOfAny(u8, fragment, "#?\\\x00\r\n\t") != null) return false;
+    // Source destinations already use Registry.normalizeTitle on the complete
+    // page+fragment. Use that same operation here; normalizing a fragment alone
+    // would incorrectly capitalize its first character as a page title.
+    const joined = try std.fmt.allocPrint(a, "{s}#{s}", .{ page, fragment });
+    const normalized = ns.normalizeTitle(a, joined, 0, .any) catch |err| switch (err) {
+        error.OutOfMemory => return err, else => return false,
+    };
+    return equal(normalized, target);
+}
+
 fn noteLinkCorresponds(a: A, ns: *const namespaces.Registry, target: []const u8, inv: Inventory) !bool {
+    return noteLinkCorrespondsIn(a, ns, target, inv, false);
+}
+fn noteLinkCorrespondsIn(a: A, ns: *const namespaces.Registry, target: []const u8, inv: Inventory, comptime normalized_fragment: bool) !bool {
     for (inv.attributes) |attr| if (!equal(attr.name, "href") and !equal(attr.name, "class") and !equal(attr.name, "title")) return false;
     const href = inv.get("href") orelse return false;
     const title = inv.get("title") orelse return false;
     const resolved = (try compiler.literalSourceLinkDestinationAlloc(a, ns, target)) orelse return false;
-    const source_hash = std.mem.indexOfScalar(u8, target, '#') orelse target.len;
-    const source_page = ns.normalizeTitle(a, target[0..source_hash], 0, .any) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
+    const source_hash = std.mem.indexOfScalar(u8, resolved.source_title, '#') orelse resolved.source_title.len;
+    const source_page = ns.normalizeTitle(a, resolved.source_title[0..source_hash], 0, .any) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
     if (resolved.external) {
         if (!equal(inv.get("class") orelse return false, "extiw") or !equal(title, source_page)) return false;
         return noteRemoteHrefMatches(a, resolved.target, href);
@@ -12060,7 +12970,11 @@ fn noteLinkCorresponds(a: A, ns: *const namespaces.Registry, target: []const u8,
     } else return false;
     const normalized = ns.normalizeTitle(a, page, 0, .any) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
     if (!equal(normalized, expected_page) or (rh == resolved.target.len) != (fragment == null)) return false;
-    if (fragment) |value| if (!equal(value, resolved.target[rh + 1..])) return false;
+    if (fragment) |value| {
+        if (comptime normalized_fragment) {
+            if (!try orderedLocalFragmentCorresponds(a, ns, normalized, value, resolved.target)) return false;
+        } else if (!equal(value, resolved.target[rh + 1..])) return false;
+    }
     if (red) {
         if (!equal(inv.get("class") orelse return false, "new") or !std.mem.startsWith(u8, title, expected_page)) return false;
         const suffix = title[expected_page.len..];
@@ -12071,27 +12985,274 @@ fn noteLinkCorresponds(a: A, ns: *const namespaces.Registry, target: []const u8,
     } else if (inv.get("class") != null or !equal(title, expected_page)) return false;
     return true;
 }
+fn orderedSelfLinkCorresponds(a: A, ns: *const namespaces.Registry, context: compiler.Context,
+    target: []const u8, inv: Inventory) !bool
+{
+    if (context.namespace_catalog != ns or context.title.len == 0) return false;
+    const resolved = (try compiler.literalSourceLinkDestinationAlloc(a, ns, target)) orelse return false;
+    if (resolved.external) return false;
+    const hash = std.mem.indexOfScalar(u8, resolved.target, '#') orelse resolved.target.len;
+    const destination = ns.normalizeTitle(a, resolved.target[0..hash], 0, .any) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
+    const current = ns.normalizeTitle(a, context.title, 0, .any) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
+    if (!equal(destination, current)) return false;
+    if (hash == resolved.target.len) return inv.attributes.len == 1 and
+        equal(inv.get("class") orelse return false, "mw-selflink selflink");
+    // A same-page section action is still an A with an exact fragment, not
+    // the inert whole-page self-link above. It grants no foreign-page shortcut.
+    if (inv.attributes.len != 2 or !equal(inv.get("class") orelse return false, "mw-selflink-fragment")) return false;
+    const href = inv.get("href") orelse return false;
+    if (href.len < 2 or href[0] != '#' or std.mem.indexOfAny(u8, href[1..], "#?") != null) return false;
+    const fragment = (try noteUrlDecoded(a, href[1..])) orelse return false;
+    return orderedLocalFragmentCorresponds(a, ns, current, fragment, resolved.target);
+}
+fn orderedDivLinkCorresponds(a: A, ns: *const namespaces.Registry, target: []const u8, captured: Inventory, current_origin: ?[]const u8) !bool {
+    var attributes: std.ArrayList(Attribute) = .empty;
+    defer attributes.deinit(a);
+    var inv = captured;
+    if (current_origin) |origin| {
+        // Canonical-GET transport is selected only by the authenticated Table
+        // root issuer. Keep the existing title/fragment/redlink comparator and
+        // all unknown attributes; normalize only the exact GET transport forms.
+        if (!equal(captured.get("rel") orelse return false, "mw:WikiLink")) return false;
+        const original_href = captured.get("href") orelse return false;
+        const local_href = if (std.mem.startsWith(u8, original_href, origin)) original_href[origin.len..] else original_href;
+        var current_redlink: ?[]const u8 = null;
+        const edit_suffix = "?action=edit&redlink=1";
+        const href_hash = std.mem.indexOfScalar(u8, local_href, '#') orelse local_href.len;
+        const edit_href = local_href[0..href_hash];
+        if (equal(captured.get("class") orelse "", "new") and std.mem.startsWith(u8, edit_href, "/wiki/") and
+            std.mem.endsWith(u8, edit_href, edit_suffix)) {
+            const path_title = edit_href["/wiki/".len .. edit_href.len - edit_suffix.len];
+            if (path_title.len == 0 or std.mem.indexOfAny(u8, path_title, "&#?") != null or
+                !equal(captured.get("typeof") orelse return false, "mw:LocalizedAttrs")) return false;
+            const raw = captured.get("data-mw-i18n") orelse return false;
+            if (raw.len > 4096) return false;
+            const Shape = struct { title: struct { lang: []const u8, key: []const u8, params: []const []const u8 } };
+            const parsed = std.json.parseFromSliceLeaky(Shape, a, raw, .{}) catch |err| switch (err) {
+                error.OutOfMemory => return err, else => return false,
+            };
+            const resolved = (try compiler.literalSourceLinkDestinationAlloc(a, ns, target)) orelse return false;
+            if (resolved.external) return false;
+            const hash = std.mem.indexOfScalar(u8, resolved.target, '#') orelse resolved.target.len;
+            const page = ns.normalizeTitle(a, resolved.target[0..hash], 0, .any) catch |err| switch (err) {
+                error.OutOfMemory => return err, else => return false,
+            };
+            if (!equal(parsed.title.lang, "x-page") or !equal(parsed.title.key, "red-link-title") or
+                parsed.title.params.len != 1 or !equal(parsed.title.params[0], page)) return false;
+            if (href_hash != local_href.len) {
+                // A GET edit link can retain the source section that its API
+                // counterpart omits. Verify it before the old redlink adapter;
+                // this grants neither a different native action nor styles.
+                if (hash == resolved.target.len) return false;
+                const fragment = (try noteUrlDecoded(a, local_href[href_hash + 1..])) orelse return false;
+                if (!try orderedLocalFragmentCorresponds(a, ns, page, fragment, resolved.target)) return false;
+            }
+            // This GET-only generated spelling carries no paint or body proof.
+            // Feed its exact title path to the existing redlink/tooltip checker;
+            // the source action and label remain owned by the ordinary compiler.
+            current_redlink = try std.mem.concat(a, u8, &.{ "/w/index.php?title=", path_title, "&action=edit&redlink=1" });
+        }
+        for (captured.attributes) |attribute| {
+            if (equal(attribute.name, "rel")) continue;
+            if (current_redlink != null and (equal(attribute.name, "typeof") or equal(attribute.name, "data-mw-i18n"))) continue;
+            var value = attribute;
+            if (equal(value.name, "href")) {
+                if (current_redlink) |href| value.value = href else if (std.mem.startsWith(u8, value.value, origin)) {
+                    const path = value.value[origin.len..];
+                    if (!std.mem.startsWith(u8, path, "/wiki/") and !std.mem.startsWith(u8, path, "/w/index.php?title=")) return false;
+                    value.value = path;
+                }
+            }
+            try attributes.append(a, value);
+        }
+        inv = .{ .attributes = attributes.items };
+    }
+    if (try noteLinkCorrespondsIn(a, ns, target, inv, true)) return true;
+    // MediaWiki's missing-page A resolves the page edit action, so the captured
+    // redlink omits the source fragment. Keep that distinction explicit: this
+    // proves the source occurrence only; the native action retains its original
+    // complete target, including the fragment, through the ordinary compiler.
+    const hash = std.mem.indexOfScalar(u8, target, '#') orelse return false;
+    if (hash == 0 or hash + 1 == target.len or std.mem.indexOfAny(u8, target[hash + 1..], "#<>[]{}\\\x00\r\n\t") != null or
+        !equal(inv.get("class") orelse return false, "new")) return false;
+    const href = inv.get("href") orelse return false;
+    if (!std.mem.startsWith(u8, href, "/w/index.php?title=") or
+        !std.mem.endsWith(u8, href, "&action=edit&redlink=1") or std.mem.indexOfScalar(u8, href, '#') != null) return false;
+    return noteLinkCorresponds(a, ns, target[0..hash], inv);
+}
+
+fn orderedDivInlineCorresponds(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
+    depth: usize, in_link: bool) anyerror!bool
+{
+    return noteInlineCorrespondsIn(a, ns, source, html, depth, in_link, true, null, null);
+}
+
+// A closed ordinary text atom may contain literal bracket notation or an
+// entity-escaped angle. Ask the normal inline tokenizer to exclude actions;
+// keep template/magic/protected syntax outside the complete-body domain.
+fn orderedDivText(a: A, raw: []const u8, captured: bool) !?[]const u8 {
+    if (!captured) {
+        var iterator: encoder.document_ir.InlineIterator = .{ .input = raw, .renderer_boundaries = true };
+        while (iterator.next()) |node| if (node.kind != .text) return null;
+    }
+    const value = decodedAttribute(a, raw) catch |err| switch (err) { error.OutOfMemory => return err, else => return null };
+    if (!std.unicode.utf8ValidateSlice(value) or std.mem.indexOfAny(u8, raw, "<{}\\\x00") != null or
+        std.mem.indexOfAny(u8, value, "{}\\\x00") != null or std.mem.indexOf(u8, value, "[[") != null or
+        std.mem.indexOf(u8, value, "]]") != null or std.mem.indexOf(u8, value, "''") != null or
+        std.mem.indexOf(u8, value, "://") != null or std.mem.indexOf(u8, value, "__") != null) return null;
+    for (value, 0..) |_, at| for ([_][]const u8{ "ISBN", "RFC", "PMID" }) |magic| {
+        if (value.len - at >= magic.len and std.ascii.eqlIgnoreCase(value[at..][0..magic.len], magic)) return null;
+    };
+    var result: std.ArrayList(u8) = .empty; var space = false;
+    for (value) |byte| {
+        if (std.mem.indexOfScalar(u8, ordered_html_space, byte) != null) { if (!space) try result.append(a, ' '); space = true; }
+        else { if (byte < 0x20 or byte == 0x7f) return null; try result.append(a, byte); space = false; }
+    }
+    return try result.toOwnedSlice(a);
+}
+
 fn noteInlineCorresponds(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8, depth: usize, in_link: bool) anyerror!bool {
+    return noteInlineCorrespondsIn(a, ns, source, html, depth, in_link, false, null, null);
+}
+fn orderedInlineAttributesCorrespond(source: Inventory, captured: Inventory) bool {
+    if (sameSiblingAttributes(source, captured)) return true;
+    // HTML output retains lang and drops only its identical XML spelling.
+    // Every other source attribute still needs its exact returned counterpart.
+    const xml = source.get("xml:lang") orelse return false;
+    const language = source.get("lang") orelse return false;
+    if (language.len == 0 or !equal(xml, language) or captured.get("xml:lang") != null or
+        captured.attributes.len + 1 != source.attributes.len) return false;
+    for (source.attributes) |attribute| {
+        if (std.ascii.eqlIgnoreCase(attribute.name, "xml:lang")) continue;
+        if (!equal(attribute.value, captured.get(attribute.name) orelse return false)) return false;
+    }
+    return true;
+}
+
+// A list/paragraph edge can trim a suffix made solely of horizontal spaces
+// and hidden Category metadata. It cannot erase a visible token or a trail.
+fn orderedHiddenCategoryTail(a: A, ns: *const namespaces.Registry, source: []const u8, context: compiler.Context) !bool {
+    if (context.namespace_catalog != ns) return false;
+    var at: usize = 0; var count: usize = 0;
+    while (at < source.len) {
+        while (at < source.len and (source[at] == ' ' or source[at] == '\t')) : (at += 1) {}
+        if (at == source.len) break;
+        if (count == 32 or !std.mem.startsWith(u8, source[at..], "[[")) return false;
+        const pair = syntax.balanced(source, at) orelse return false;
+        var iterator: encoder.document_ir.InlineIterator = .{ .input = source[at..], .renderer_boundaries = true, .link_trail = context.link_trail };
+        const link = iterator.next() orelse return false;
+        if (link.kind != .link or link.link_empty_label or link.link_label_restored_close or link.trail.len != 0 or
+            iterator.cursor != pair.end - at or link.target.len == 0 or link.target[0] == ':' or
+            ns.ofTitle(link.target).id != 14 or std.mem.trim(u8, link.target, " \t\r\n").len != link.target.len or
+            std.mem.indexOfAny(u8, link.target, "[]{}<>|&'#\r\n") != null or ns.ofTitle(link.target).text.len == 0 or
+            (link.link_has_pipe and try noteInlineText(a, link.text) == null)) return false;
+        at = pair.end; count += 1;
+    }
+    return count != 0;
+}
+
+fn noteInlineCorrespondsIn(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8, depth: usize, in_link: bool, ordered: bool, context: ?compiler.Context, current_origin: ?[]const u8) anyerror!bool {
     if (depth >= 32 or source.len > 32768 or html.len > 65536) return false;
     var at: usize = 0; var observed: usize = 0;
     while (at < source.len) {
+        if (ordered and depth == 0 and !in_link and observed == html.len and (source[at] == ' ' or source[at] == '\t'))
+            if (context) |selected| if (try orderedHiddenCategoryTail(a, ns, source[at..], selected)) return true;
+        const literal_colon = "<nowiki>:</nowiki>";
         if (std.mem.startsWith(u8, source[at..], "[[")) {
             if (in_link) return false;
             const pair = syntax.balanced(source, at) orelse return false;
-            var iterator: encoder.document_ir.InlineIterator = .{ .input = source[at..pair.end], .renderer_boundaries = true };
+            const selected = if (ordered) context else null;
+            var iterator: encoder.document_ir.InlineIterator = .{
+                .input = if (selected != null) source[at..] else source[at..pair.end], .renderer_boundaries = true,
+                .link_trail = if (selected) |value| value.link_trail else .{} };
             const link = iterator.next() orelse return false;
-            if (link.kind != .link or !link.link_has_pipe or link.link_empty_label or link.link_label_restored_close or
-                link.trail.len != 0 or iterator.cursor != pair.end - at) return false;
+            if (link.kind != .link or (!ordered and !link.link_has_pipe) or link.link_empty_label or link.link_label_restored_close or
+                (selected == null and link.trail.len != 0) or iterator.cursor != pair.end - at + link.trail.len) return false;
+            if (ordered and selected != null and link.target.len != 0 and link.target[0] != ':' and
+                ns.ofTitle(link.target).id == 14)
+            {
+                // The ordinary parser consumes a Category metadata token without
+                // displaying its label or creating an A. Leading-colon Category
+                // actions remain on the existing visible-link path below.
+                if (std.mem.trim(u8, link.target, " \t\r\n").len != link.target.len or
+                    std.mem.indexOfAny(u8, link.target, "[]{}<>|&'#\r\n") != null or
+                    ns.ofTitle(link.target).text.len == 0 or
+                    (link.link_has_pipe and try noteInlineText(a, link.text) == null)) return false;
+                // Category metadata owns only the balanced token. A tokenizer
+                // trail is ordinary following text because no visible A exists.
+                at += iterator.cursor - link.trail.len;
+                continue;
+            }
             const tag = currentLiteralHtmlTagAt(html, observed) orelse return false;
             if (!tag.is("a") or tag.closing or tag.self_closing) return false;
             const close = syntax.matchingTag(html, tag) orelse return false;
             const closing = currentLiteralHtmlTagAt(html, close.inner_end) orelse return false;
             if (!closing.closing or closing.attrs.len != 0) return false;
             const attrs = inventory(a, tag) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
-            if (!try noteLinkCorresponds(a, ns, link.target, attrs) or
-                !try noteInlineCorresponds(a, ns, link.text, html[tag.end..close.inner_end], depth + 1, true)) return false;
-            at = pair.end; observed = close.end;
-        } else if (source[at] == '<') {
+            const self_link = if (selected) |value| try orderedSelfLinkCorresponds(a, ns, value, link.target, attrs) else false;
+            const label = html[tag.end..close.inner_end];
+            // Match the ordinary unpiped escaped-Category label: its authored
+            // colon selects a text action but is not displayed. Keep explicit
+            // labels, metadata links and every other family on their old path.
+            const source_label = if (ordered and !link.link_has_pipe and
+                link.text.ptr == link.target.ptr and link.text.len == link.target.len and
+                std.mem.startsWith(u8, link.target, ":") and ns.ofTitle(link.target[1..]).id == 14)
+                link.text[1..] else link.text;
+            // A trail belongs after all label children but inside A. Literal
+            // byte correspondence prevents moving it into an emphasis owner.
+            if (!std.mem.endsWith(u8, label, link.trail) or
+                (!self_link and !(if (ordered) try orderedDivLinkCorresponds(a, ns, link.target, attrs, current_origin) else try noteLinkCorresponds(a, ns, link.target, attrs))) or
+                !try noteInlineCorrespondsIn(a, ns, source_label, label[0..label.len - link.trail.len], depth + 1, true, ordered, context, current_origin)) return false;
+            at += iterator.cursor; observed = close.end;
+        } else if (ordered and std.mem.startsWith(u8, source[at..], "''")) {
+            var count: usize = 2;
+            while (at + count < source.len and source[at + count] == '\'') : (count += 1) {}
+            if (count == 5) {
+                const bold_end = std.mem.indexOfPos(u8, source, at + 5, "'''") orelse return false;
+                const italic_end = std.mem.indexOfPos(u8, source, bold_end + 3, "''") orelse return false;
+                if (bold_end + 3 >= source.len or source[bold_end + 3] == '\'') return false;
+                const italic = currentLiteralHtmlTagAt(html, observed) orelse return false;
+                if (!italic.is("i") or italic.closing or italic.self_closing or italic.attrs.len != 0) return false;
+                const italic_pair = syntax.matchingTag(html, italic) orelse return false;
+                const bold = currentLiteralHtmlTagAt(html, italic.end) orelse return false;
+                if (!bold.is("b") or bold.closing or bold.self_closing or bold.attrs.len != 0) return false;
+                const bold_pair = syntax.matchingTag(html, bold) orelse return false;
+                const bold_close = currentLiteralHtmlTagAt(html, bold_pair.inner_end) orelse return false;
+                const italic_close = currentLiteralHtmlTagAt(html, italic_pair.inner_end) orelse return false;
+                if (bold_pair.end > italic_pair.inner_end or bold_close.attrs.len != 0 or italic_close.attrs.len != 0 or
+                    !try noteInlineCorrespondsIn(a, ns, source[at + 5..bold_end], html[bold.end..bold_pair.inner_end], depth + 1, in_link, true, context, current_origin) or
+                    !try noteInlineCorrespondsIn(a, ns, source[bold_end + 3..italic_end], html[bold_pair.end..italic_pair.inner_end], depth + 1, in_link, true, context, current_origin)) return false;
+                at = italic_end + 2; observed = italic_pair.end; continue;
+            }
+            if (count != 2 and count != 3) return false;
+            const marker = source[at..][0..count];
+            const end = std.mem.indexOfPos(u8, source, at + count, marker) orelse return false;
+            if (end + count < source.len and source[end + count] == '\'') return false;
+            const actual = currentLiteralHtmlTagAt(html, observed) orelse return false;
+            if (!actual.is(if (count == 2) "i" else "b") or actual.closing or actual.self_closing or actual.attrs.len != 0) return false;
+            const pair = syntax.matchingTag(html, actual) orelse return false;
+            const close = currentLiteralHtmlTagAt(html, pair.inner_end) orelse return false;
+            if (!close.closing or close.attrs.len != 0 or
+                !try noteInlineCorrespondsIn(a, ns, source[at + count..end], html[actual.end..pair.inner_end], depth + 1, in_link, true, context, current_origin)) return false;
+            at = end + count; observed = pair.end;
+        } else if (ordered and (std.mem.startsWith(u8, source[at..], "[http://") or std.mem.startsWith(u8, source[at..], "[https://"))) {
+            if (in_link) return false;
+            var iterator: encoder.document_ir.InlineIterator = .{ .input = source, .cursor = at, .renderer_boundaries = true };
+            const link = iterator.next() orelse return false;
+            if (link.kind != .external_link or link.text.len == 0 or link.text.ptr == link.target.ptr or
+                link.external_label_prefix.len != 0 or !encoder.document_ir.validExternalUrl(link.target) or
+                std.mem.indexOfAny(u8, link.target, "<>\\\x00\r\n\t ") != null or iterator.cursor <= at or source[iterator.cursor - 1] != ']') return false;
+            const actual = currentLiteralHtmlTagAt(html, observed) orelse return false;
+            if (!actual.is("a") or actual.closing or actual.self_closing) return false;
+            const attrs = inventory(a, actual) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
+            if (attrs.attributes.len != 3 or !equal(attrs.get("href") orelse return false, link.target) or
+                !equal(attrs.get("rel") orelse return false, "nofollow") or !equal(attrs.get("class") orelse return false, "external text")) return false;
+            const pair = syntax.matchingTag(html, actual) orelse return false;
+            const close = currentLiteralHtmlTagAt(html, pair.inner_end) orelse return false;
+            if (!close.closing or close.attrs.len != 0 or
+                !try noteInlineCorrespondsIn(a, ns, link.text, html[actual.end..pair.inner_end], depth + 1, true, true, context, current_origin)) return false;
+            at = iterator.cursor; observed = pair.end;
+        } else if (source[at] == '<' and !(ordered and in_link and std.mem.startsWith(u8, source[at..], literal_colon))) {
             const tag = syntax.tagAt(source, at) orelse return false;
             const actual = currentLiteralHtmlTagAt(html, observed) orelse return false;
             if (tag.closing or actual.closing or !std.ascii.eqlIgnoreCase(tag.name, actual.name)) return false;
@@ -12100,7 +13261,7 @@ fn noteInlineCorresponds(a: A, ns: *const namespaces.Registry, source: []const u
             if (!allowed) return false;
             const expected_attrs = sourceInventoryWithRepeatedClass(a, tag, false) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
             const actual_attrs = inventory(a, actual) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
-            if (!sameSiblingAttributes(expected_attrs, actual_attrs)) return false;
+            if (!(if (ordered) orderedInlineAttributesCorrespond(expected_attrs, actual_attrs) else sameSiblingAttributes(expected_attrs, actual_attrs))) return false;
             if (tag.is("br")) { at = tag.end; observed = actual.end; continue; }
             if (tag.self_closing or actual.self_closing) return false;
             const pair = syntax.matchingTag(source, tag) orelse return false;
@@ -12108,14 +13269,57 @@ fn noteInlineCorresponds(a: A, ns: *const namespaces.Registry, source: []const u
             const source_close = syntax.tagAt(source, pair.inner_end) orelse return false;
             const actual_close = currentLiteralHtmlTagAt(html, actual_pair.inner_end) orelse return false;
             if (!source_close.closing or !actual_close.closing or source_close.attrs.len != 0 or actual_close.attrs.len != 0) return false;
-            if (!try noteInlineCorresponds(a, ns, source[tag.end..pair.inner_end], html[actual.end..actual_pair.inner_end], depth + 1, in_link)) return false;
+            if (!try noteInlineCorrespondsIn(a, ns, source[tag.end..pair.inner_end], html[actual.end..actual_pair.inner_end], depth + 1, in_link, ordered, context, current_origin)) return false;
             at = pair.end; observed = actual_pair.end;
         } else {
-            var end = at + 1;
-            while (end < source.len and source[end] != '<' and !std.mem.startsWith(u8, source[end..], "[[")) : (end += 1) {}
+            var end = at; var copied = at;
+            var folded: std.ArrayList(u8) = .empty;
+            defer folded.deinit(a);
+            var has_folded_text = false;
+            var metadata_suffix_start: ?usize = null;
+            var metadata_count: usize = 0;
+            // Protected punctuation has no HTML element boundary. Compare its
+            // literal value with the SAME complete surrounding captured run.
+            while (end < source.len) {
+                if (ordered and in_link and std.mem.startsWith(u8, source[end..], literal_colon)) {
+                    try folded.appendSlice(a, source[copied..end]);
+                    try folded.append(a, ':');
+                    end += literal_colon.len; copied = end; has_folded_text = true;
+                    metadata_suffix_start = null;
+                    continue;
+                }
+                // Hidden metadata has no captured text boundary. Keep its
+                // surrounding literal whitespace/words in this SAME full run;
+                // a following visible element is still checked independently.
+                if (ordered and depth == 0 and !in_link and std.mem.startsWith(u8, source[end..], "[[")) {
+                    if (context) |selected| {
+                        if (syntax.balanced(source, end)) |category| {
+                        if (try orderedHiddenCategoryTail(a, ns, source[end..category.end], selected)) {
+                            if (metadata_count == 32) return false;
+                            try folded.appendSlice(a, source[copied..end]);
+                            if (metadata_suffix_start == null) metadata_suffix_start = end;
+                            end = category.end; copied = end; has_folded_text = true; metadata_count += 1;
+                            continue;
+                        }
+                        }
+                    }
+                }
+                if (source[end] == '<' or std.mem.startsWith(u8, source[end..], "[[") or
+                    (ordered and (std.mem.startsWith(u8, source[end..], "''") or
+                        std.mem.startsWith(u8, source[end..], "[http://") or std.mem.startsWith(u8, source[end..], "[https://")))) break;
+                if (source[end] != ' ' and source[end] != '\t') metadata_suffix_start = null;
+                end += 1;
+            }
+            if (end == at) return false;
+            if (has_folded_text) try folded.appendSlice(a, source[copied..end]);
+            const literal_source = if (has_folded_text) folded.items else source[at..end];
             const actual_end = std.mem.indexOfScalarPos(u8, html, observed, '<') orelse html.len;
-            const expected_text = (try noteInlineText(a, source[at..end])) orelse return false;
-            const actual_text = (try noteInlineText(a, html[observed..actual_end])) orelse return false;
+            const tail_start = metadata_suffix_start orelse end;
+            const metadata_tail = ordered and depth == 0 and !in_link and actual_end == html.len and
+                tail_start < source.len and (if (context) |selected| try orderedHiddenCategoryTail(a, ns, source[tail_start..], selected) else false);
+            const source_text = if (metadata_tail) std.mem.trimEnd(u8, literal_source, " \t") else literal_source;
+            const expected_text = (if (ordered) try orderedDivText(a, source_text, false) else try noteInlineText(a, source_text)) orelse return false;
+            const actual_text = (if (ordered) try orderedDivText(a, html[observed..actual_end], true) else try noteInlineText(a, html[observed..actual_end])) orelse return false;
             if (!equal(expected_text, actual_text)) return false;
             at = end; observed = actual_end;
         }
@@ -12328,6 +13532,823 @@ fn appendObservedNoteDivParents(a: A, ns: *const namespaces.Registry, source: []
     }
 }
 
+const ordered_html_space = " \t\n\r\x0c";
+
+fn orderedParagraphLines(source: []const u8, start: usize, stop: usize) bool {
+    if (start >= stop or stop > source.len) return false;
+    const line_start = if (std.mem.lastIndexOfScalar(u8, source[0..start], '\n')) |at| at + 1 else 0;
+    // A literal block opener or generated TD on this same source line would
+    // suppress a generated P. Only a complete independent inline line enters.
+    if (std.mem.trim(u8, source[line_start..start], ordered_html_space).len != 0) return false;
+    var at = line_start;
+    const content_end = start + std.mem.trimEnd(u8, source[start..stop], ordered_html_space).len;
+    while (at < content_end) {
+        const end = @min(std.mem.indexOfScalarPos(u8, source, at, '\n') orelse content_end, content_end);
+        const line = source[at..end];
+        if (line.len == 0 or line[0] == ' ' or std.mem.trim(u8, line, ordered_html_space).len == 0 or
+            encoder.document_ir.classifyLine(line).kind != .paragraph or
+            std.mem.startsWith(u8, line, "=") or std.mem.startsWith(u8, line, "----")) return false;
+        at = end + 1;
+    }
+    return true;
+}
+
+// Match generated paragraph owners rather than erasing their boundaries.
+// MediaWiki BlockLevelPass closes a P before the physical line containing a
+// literal DIV opener/closer. The only split admitted here is that exact closing
+// line after one complete inline paragraph; both segments match independently.
+fn orderedCellInlineCorresponds(a: A, ns: *const namespaces.Registry, source: []const u8,
+    start: usize, stop: usize, captured: []const u8) anyerror!bool
+{
+    return orderedCellInlineCorrespondsIn(a, ns, source, start, stop, captured, null, null);
+}
+fn orderedCellInlineCorrespondsIn(a: A, ns: *const namespaces.Registry, source: []const u8,
+    start: usize, stop: usize, captured: []const u8, context: ?compiler.Context, current_origin: ?[]const u8) anyerror!bool
+{
+    if (start > stop or stop > source.len) return false;
+    const html = std.mem.trim(u8, captured, ordered_html_space);
+    var cursor: usize = 0; var paragraphs: usize = 0; var closes: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, html, cursor, '<')) |at| {
+        const tag = currentLiteralHtmlTagAt(html, at) orelse return false;
+        cursor = tag.end;
+        if (tag.is("p")) {
+            if (tag.attrs.len != 0 or tag.self_closing) return false;
+            if (tag.closing) closes += 1 else paragraphs += 1;
+        }
+    }
+    const original = std.mem.trim(u8, source[start..stop], ordered_html_space);
+    if (paragraphs == 0 and closes == 0) {
+        // A single bare line stays on its literal DIV/TD opening line. A
+        // later independent line would start a paragraph and cannot lose it.
+        if (original.len == 0 or std.mem.indexOfScalar(u8, original, '\n') != null) return false;
+        const first = @intFromPtr(original.ptr) - @intFromPtr(source.ptr);
+        const line_start = if (std.mem.lastIndexOfScalar(u8, source[0..first], '\n')) |at| at + 1 else 0;
+        if (std.mem.trim(u8, source[line_start..first], ordered_html_space).len == 0) return false;
+        return noteInlineCorrespondsIn(a, ns, original, html, 0, false, true, context, current_origin);
+    }
+    if (paragraphs != 1 or closes != 1) return false;
+    const tag = currentLiteralHtmlTagAt(html, 0) orelse return false;
+    if (!tag.is("p") or tag.closing or tag.self_closing or tag.attrs.len != 0) return false;
+    const pair = syntax.matchingTag(html, tag) orelse return false;
+    const close = currentLiteralHtmlTagAt(html, pair.inner_end) orelse return false;
+    if (!close.is("p") or !close.closing or close.attrs.len != 0) return false;
+    const paragraph = std.mem.trim(u8, html[tag.end..pair.inner_end], ordered_html_space);
+    const tail = std.mem.trim(u8, html[pair.end..], ordered_html_space);
+    if (paragraph.len == 0) return false;
+    if (tail.len == 0) {
+        // A block boundary on a nonempty last line closes P before that line,
+        // so it cannot be absorbed into the paragraph owner.
+        if (syntax.tagAt(source, stop)) |boundary| if (boundary.is("div")) {
+            const last = if (std.mem.lastIndexOfScalar(u8, source[0..stop], '\n')) |at| at + 1 else 0;
+            if (std.mem.trim(u8, source[last..stop], ordered_html_space).len != 0) return false;
+        };
+        return orderedParagraphLines(source, start, stop) and
+            try noteInlineCorrespondsIn(a, ns, original, paragraph, 0, false, true, context, current_origin);
+    }
+    // No arbitrary bare text or second P can cross this owner boundary.
+    const boundary = syntax.tagAt(source, stop) orelse return false;
+    if (!boundary.is("div") or !boundary.closing or boundary.self_closing or boundary.attrs.len != 0) return false;
+    const newline = std.mem.lastIndexOfScalar(u8, source[start..stop], '\n') orelse return false;
+    const split = start + newline + 1;
+    if (split >= stop or !orderedParagraphLines(source, start, split)) return false;
+    const last = source[split..stop];
+    if (last.len == 0 or last[0] == ' ' or encoder.document_ir.classifyLine(last).kind != .paragraph) return false;
+    const prefix = std.mem.trim(u8, source[start..split], ordered_html_space);
+    const suffix = std.mem.trim(u8, last, ordered_html_space);
+    if (prefix.len == 0 or suffix.len == 0) return false;
+    return try noteInlineCorrespondsIn(a, ns, prefix, paragraph, 0, false, true, context, current_origin) and
+        try noteInlineCorrespondsIn(a, ns, suffix, tail, 0, false, true, context, current_origin);
+}
+
+
+// A same-line continuation needs an already-issued complete root operation.
+// The ordered join below rechecks both captured bodies and their immediate
+// sibling relation; this source lookup alone never grants an ancestor edge.
+fn orderedRootDivPredecessor(a: A, source: []const u8, start: usize,
+    proofs: []const profile.SourceLiteralDivProof) !?profile.SourceLiteralDivProof
+{
+    if (start > source.len) return null;
+    const line_start = if (std.mem.lastIndexOfScalar(u8, source[0..start], '\n')) |line| line + 1 else 0;
+    if (line_start == start) return null;
+    var found: ?profile.SourceLiteralDivProof = null;
+    for (proofs) |proof| {
+        const range = proof.range;
+        if (proof.parent_start != null or proof.wiki_cell_parent != null or proof.restored_ul != null or
+            range.anchor_start < line_start or range.anchor_start >= range.anchor_end or
+            range.anchor_end > start or std.mem.trim(u8, source[range.anchor_end..start], " \t").len != 0) continue;
+        const tag = syntax.tagAt(source, range.anchor_start) orelse continue;
+        if (!tag.is("div") or tag.closing or tag.self_closing or tag.html_pre) continue;
+        const pair = syntax.matchingTag(source, tag) orelse continue;
+        if (pair.end != range.anchor_end or !try authoredLiteralRootPrefix(a, source, range.anchor_start)) continue;
+        if (found != null) return null;
+        found = proof;
+    }
+    return found;
+}
+
+// Complete local source/captured joins supplement the conservative unique-DIV
+// issuer. Attribute census chooses only an ordered candidate; every accepted
+// operation still proves its actual parent and all body text, actions and grids.
+// Negative class custody for one ordinary source list operation. The API
+// comparison owns the entire list, including every label/action. GET identity
+// is independently authenticated; every matching Ruby there contributes its
+// whole ancestor class path, so repeated spellings cannot choose an ordinal.
+fn bulletRubyClasses(a: A, source: []const u8, ruby: []const u8, html: []const u8,
+    nodes: []const ObservedSiblingNode, classes: *std.ArrayList(u8)) !bool
+{
+    const expected = std.mem.count(u8, source, ruby);
+    if (expected == 0 or expected > 4096 or nodes.len == 0) return false;
+    var count: usize = 0;
+    for (nodes, 0..) |node, index| {
+        if (!node.tag.is("ruby")) continue;
+        const end = intrinsicTableCapturedNodeEnd(html, node) orelse return false;
+        if (!equal(html[node.start..end], ruby)) continue;
+        count += 1;
+        // Include all descendants too. The receipt also serves RT/RP own
+        // queries and must not erase an authored inner class or sibling.
+        for (nodes[index..]) |child| {
+            if (child.start >= end) break;
+            try appendOuterClasses(a, classes, child.attributes.get("class") orelse "");
+        }
+        var current: ?usize = index;
+        var remaining: usize = 128;
+        while (current) |at| {
+            if (remaining == 0 or at >= nodes.len) return false;
+            remaining -= 1;
+            const parent = nodes[at];
+            try appendOuterClasses(a, classes, parent.attributes.get("class") orelse "");
+            if (parent.parent) |next| {
+                if (next >= at) return false;
+            } else if (at != 0) return false;
+            current = parent.parent;
+        }
+        if (classes.items.len > 65536) return false;
+    }
+    return count == expected;
+}
+
+fn observedRootBulletRubyProofs(a: A, ns: *const namespaces.Registry, source: []const u8,
+    html: []const u8, nodes: []const ObservedSiblingNode, get_html: []const u8,
+    get_nodes: []const ObservedSiblingNode, outer_classes: []const u8,
+    root: *const profile.TextElement, prior_notes: []const profile.SourceLiteralDivProof,
+    context: compiler.Context) ![]const profile.SourceBulletRubyProof
+{
+    if (context.namespace_catalog != ns or nodes.len == 0 or nodes[0].parent != null or
+        !nodes[0].tag.is("div") or get_nodes.len == 0 or get_nodes[0].parent != null or
+        !get_nodes[0].tag.is("div") or !root.physical_ancestry_complete) return &.{};
+    var result: std.ArrayList(profile.SourceBulletRubyProof) = .empty;
+    var no_proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+    defer no_proofs.deinit(a);
+    var join: OrderedLiteralDivJoin = .{ .a = a, .ns = ns, .source = source, .html = html,
+        .nodes = nodes, .graph = &.{}, .proofs = &no_proofs, .context = context };
+    var at: usize = 0;
+    while (at < source.len) {
+        const line_end = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse source.len;
+        const line = encoder.document_ir.classifyLine(source[at..line_end]);
+        if (!equal(line.list_path, "*")) { at = if (line_end < source.len) line_end + 1 else line_end; continue; }
+        const group_start = at;
+        var lines: std.ArrayList(OrderedLiteralDivJoin.ListLine) = .empty;
+        defer lines.deinit(a);
+        var line_starts: std.ArrayList(usize) = .empty;
+        defer line_starts.deinit(a);
+        var valid_prefix = true;
+        while (at < source.len) {
+            const stop = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse source.len;
+            const item = encoder.document_ir.classifyLine(source[at..stop]);
+            if (item.list_path.len == 0) break;
+            if (!equal(item.list_path, "*") or lines.items.len == 256) { valid_prefix = false; break; }
+            try lines.append(a, .{ .path = item.list_path, .text = item.text });
+            try line_starts.append(a, at);
+            at = if (stop < source.len) stop + 1 else stop;
+        }
+        // Always advance on an unsupported nested list; it cannot become a
+        // shorter candidate at the next line.
+        if (!valid_prefix) {
+            while (at < source.len) {
+                const stop = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse source.len;
+                const item = encoder.document_ir.classifyLine(source[at..stop]);
+                if (item.list_path.len == 0) break;
+                at = if (stop < source.len) stop + 1 else stop;
+            }
+            continue;
+        }
+        if (lines.items.len == 0 or std.mem.count(u8, source, source[group_start..at]) != 1) continue;
+        if (std.mem.indexOf(u8, source[group_start..at], "<ruby") == null) continue;
+        for (lines.items) |item| {
+            const stop = @intFromPtr(item.text.ptr) - @intFromPtr(source.ptr) + item.text.len;
+            const start = @intFromPtr(item.text.ptr) - @intFromPtr(source.ptr);
+            const opening = syntax.tagAt(source, start);
+            if (opening) |tag| {
+                if (!tag.is("span") or tag.closing or tag.self_closing) { valid_prefix = false; }
+                else if (syntax.matchingTag(source, tag)) |pair| {
+                    var parent: ?usize = null;
+                    // Reuse completed note/list proofs from this same source and captured graph;
+                    // the shared scanner still checks their exact opener run, parent and interval.
+                    authoredElementPrefixForRoleScan(a, ns, source, .{ .start = start, .end = pair.end },
+                        false, prior_notes, false, &parent, false, null, true) catch |err| switch (err) {
+                        error.OutOfMemory => return err, else => { valid_prefix = false; },
+                    };
+                    if (parent != null or pair.end > stop) valid_prefix = false;
+                } else valid_prefix = false;
+            } else valid_prefix = false;
+        }
+        if (!valid_prefix) continue;
+        var matches: usize = 0;
+        for (nodes, 0..) |node, index| {
+            if (node.parent != 0 or !node.tag.is("ul")) continue;
+            var cursor: usize = 0;
+            join.remaining = 8192;
+            if (try join.list(lines.items, &cursor, "", index, 0) and cursor == lines.items.len) matches += 1;
+        }
+        if (matches != 1) continue;
+        for (lines.items, line_starts.items) |item, line_start| {
+            var offset: usize = 0;
+            while (std.mem.indexOfPos(u8, item.text, offset, "<ruby")) |position| {
+                offset = position + 1;
+                const opening = syntax.tagAt(item.text, position) orelse continue;
+                if (!opening.is("ruby") or opening.closing or opening.self_closing) continue;
+                const pair = syntax.matchingTag(item.text, opening) orelse continue;
+                const ruby = item.text[position..pair.end];
+                var classes: std.ArrayList(u8) = .empty;
+                defer classes.deinit(a);
+                try appendOuterClasses(a, &classes, outer_classes);
+                if (!try bulletRubyClasses(a, source, ruby, html, nodes, &classes) or
+                    !try bulletRubyClasses(a, source, ruby, get_html, get_nodes, &classes)) continue;
+                const ruby_start = @intFromPtr(ruby.ptr) - @intFromPtr(source.ptr);
+                const item_end = @intFromPtr(item.text.ptr) - @intFromPtr(source.ptr) + item.text.len;
+                if (result.items.len == 4096) return &.{};
+                try result.append(a, .{ .line_start = line_start, .line_end = item_end,
+                    .ruby_start = ruby_start, .ruby_end = ruby_start + ruby.len,
+                    .classes = try a.dupe(u8, classes.items), .root = root });
+                offset = pair.end;
+            }
+        }
+    }
+    return try result.toOwnedSlice(a);
+}
+
+fn selectedRootBulletRubyProofs(a: A, ns: *const namespaces.Registry, stored: *const PageStyleData,
+    source: []const u8, root: *const profile.TextElement, prior_notes: []const profile.SourceLiteralDivProof,
+    context: compiler.Context) ![]const profile.SourceBulletRubyProof
+{
+    const outer = stored.page.outer_context orelse return &.{};
+    const start = stored.outer.root_start orelse return &.{};
+    if (start >= outer.response.len) return &.{};
+    var get_nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    defer get_nodes.deinit(a);
+    var end: usize = 0;
+    _ = observedTextClassScopeToEndWithSections(a, ns, outer.response[start..], &get_nodes, &end,
+        stored.outer.root_attributes, true) catch |err| switch (err) { error.OutOfMemory => return err, else => return &.{} };
+    if (end == 0) return &.{};
+    return observedRootBulletRubyProofs(a, ns, source, stored.observed_html, stored.observed_nodes,
+        outer.response[start..][0..end], get_nodes.items, stored.outer.classes, root, prior_notes, context);
+}
+
+// A complete ordinary source line is joined to one complete parser-root P.
+// Ruby identity is independently checked in both captured trees; every matching
+// occurrence contributes all descendant and ancestor classes, never an ordinal.
+fn inlineRubyClasses(a: A, ns: *const namespaces.Registry, source: []const u8, ruby: []const u8,
+    html: []const u8, nodes: []const ObservedSiblingNode, context: compiler.Context,
+    origin: ?[]const u8, classes: *std.ArrayList(u8)) !bool
+{
+    const expected = std.mem.count(u8, source, ruby);
+    if (expected == 0 or expected > 4096 or nodes.len == 0) return false;
+    var count: usize = 0;
+    for (nodes, 0..) |node, index| {
+        if (!node.tag.is("ruby")) continue;
+        const end = intrinsicTableCapturedNodeEnd(html, node) orelse return false;
+        if (!try noteInlineCorrespondsIn(a, ns, ruby, html[node.start..end], 0, false, true, context, origin)) continue;
+        count += 1;
+        for (nodes[index..]) |child| {
+            if (child.start >= end) break;
+            try appendOuterClasses(a, classes, child.attributes.get("class") orelse "");
+        }
+        var current: ?usize = index;
+        var remaining: usize = 128;
+        while (current) |at| {
+            if (remaining == 0 or at >= nodes.len) return false;
+            remaining -= 1;
+            const parent = nodes[at];
+            try appendOuterClasses(a, classes, parent.attributes.get("class") orelse "");
+            if (parent.parent) |next| {
+                if (next >= at) return false;
+            } else if (at != 0) return false;
+            current = parent.parent;
+        }
+        if (classes.items.len > 65536) return false;
+    }
+    return count == expected;
+}
+
+fn observedRootInlineRubyProofs(a: A, ns: *const namespaces.Registry, source: []const u8,
+    html: []const u8, nodes: []const ObservedSiblingNode, get_html: []const u8,
+    get_nodes: []const ObservedSiblingNode, outer_classes: []const u8,
+    root: *const profile.TextElement, prior_notes: []const profile.SourceLiteralDivProof,
+    context: compiler.Context, origin: []const u8) ![]const profile.SourceInlineRubyProof
+{
+    if (context.namespace_catalog != ns or context.title.len == 0 or nodes.len == 0 or
+        nodes[0].parent != null or !nodes[0].tag.is("div") or get_nodes.len == 0 or
+        get_nodes[0].parent != null or !get_nodes[0].tag.is("div") or !root.physical_ancestry_complete or
+        !equal(origin, (try missingStyleOrigin(a, ns.wiki)).origin)) return &.{};
+    var result: std.ArrayList(profile.SourceInlineRubyProof) = .empty;
+    var at: usize = 0;
+    while (at < source.len) {
+        const start = at;
+        const end = std.mem.indexOfScalarPos(u8, source, start, '\n') orelse source.len;
+        at = if (end < source.len) end + 1 else end;
+        const line = source[start..end];
+        if (line.len == 0 or line[0] != '<' or std.mem.indexOf(u8, line, "<ruby") == null or
+            std.mem.count(u8, source, line) != 1) continue;
+        const opening = syntax.tagAt(source, start) orelse continue;
+        if (!opening.is("span") or opening.closing or opening.self_closing) continue;
+        const pair = syntax.matchingTag(source, opening) orelse continue;
+        if (pair.end > end) continue;
+        var parent: ?usize = null;
+        authoredElementPrefixForRoleScan(a, ns, source, .{ .start = start, .end = pair.end },
+            false, prior_notes, false, &parent, false, null, true) catch |err| switch (err) {
+            error.OutOfMemory => return err, else => continue,
+        };
+        if (parent != null) continue;
+        var matches: usize = 0;
+        for (nodes) |node| {
+            if (node.parent != 0 or !node.tag.is("p") or node.tag.attrs.len != 0) continue;
+            const inner_end = node.inner_end orelse continue;
+            if (inner_end < node.tag.end) continue;
+            const body = std.mem.trim(u8, html[node.tag.end..inner_end], "\r\n");
+            if (try noteInlineCorrespondsIn(a, ns, line, body, 0, false, true, context, null)) matches += 1;
+        }
+        if (matches != 1) continue;
+        var position: usize = 0;
+        while (std.mem.indexOfPos(u8, line, position, "<ruby")) |ruby_at| {
+            position = ruby_at + 1;
+            const ruby_tag = syntax.tagAt(line, ruby_at) orelse continue;
+            if (!ruby_tag.is("ruby") or ruby_tag.closing or ruby_tag.self_closing) continue;
+            const ruby_pair = syntax.matchingTag(line, ruby_tag) orelse continue;
+            const ruby = line[ruby_at..ruby_pair.end];
+            var classes: std.ArrayList(u8) = .empty;
+            defer classes.deinit(a);
+            try appendOuterClasses(a, &classes, outer_classes);
+            if (!try inlineRubyClasses(a, ns, source, ruby, html, nodes, context, null, &classes) or
+                !try inlineRubyClasses(a, ns, source, ruby, get_html, get_nodes, context, origin, &classes)) continue;
+            if (result.items.len == 4096) return &.{};
+            try result.append(a, .{ .line_start = start, .line_end = end,
+                .ruby_start = start + ruby_at, .ruby_end = start + ruby_pair.end,
+                .classes = try a.dupe(u8, classes.items), .root = root });
+            position = ruby_pair.end;
+        }
+    }
+    return try result.toOwnedSlice(a);
+}
+
+fn selectedRootInlineRubyProofs(a: A, ns: *const namespaces.Registry, stored: *const PageStyleData,
+    source: []const u8, root: *const profile.TextElement, prior_notes: []const profile.SourceLiteralDivProof,
+    context: compiler.Context) ![]const profile.SourceInlineRubyProof
+{
+    const outer = stored.page.outer_context orelse return &.{};
+    const start = stored.outer.root_start orelse return &.{};
+    if (start >= outer.response.len) return &.{};
+    var get_nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    defer get_nodes.deinit(a);
+    var end: usize = 0;
+    _ = observedTextClassScopeToEndWithSections(a, ns, outer.response[start..], &get_nodes, &end,
+        stored.outer.root_attributes, true) catch |err| switch (err) { error.OutOfMemory => return err, else => return &.{} };
+    if (end == 0) return &.{};
+    return observedRootInlineRubyProofs(a, ns, source, stored.observed_html, stored.observed_nodes,
+        outer.response[start..][0..end], get_nodes.items, stored.outer.classes, root, prior_notes, context,
+        (try missingStyleOrigin(a, ns.wiki)).origin);
+}
+
+const OrderedLiteralDivJoin = struct {
+    a: A,
+    ns: *const namespaces.Registry,
+    source: []const u8,
+    html: []const u8,
+    nodes: []const ObservedSiblingNode,
+    graph: []const profile.ObservedStyleNode,
+    proofs: *std.ArrayList(profile.SourceLiteralDivProof),
+    remaining: usize = 8192,
+    context: ?compiler.Context = null,
+    current_origin: ?[]const u8 = null,
+    diagnose_inline_refusal: bool = false,
+    const CellContext = struct { subject: usize, proof: profile.SourceWikiCellParentProof };
+
+    fn spend(self: *@This()) bool {
+        if (self.remaining == 0) return false;
+        self.remaining -= 1; return true;
+    }
+    fn end(self: *const @This(), index: usize) ?usize {
+        if (index >= self.nodes.len) return null;
+        return intrinsicTableCapturedNodeEnd(self.html, self.nodes[index]);
+    }
+    fn child(self: *const @This(), parent: usize, after: ?usize) ?usize {
+        var index = if (after) |value| value + 1 else parent + 1;
+        while (index < self.nodes.len) : (index += 1) {
+            if (self.nodes[index].start >= (self.nodes[parent].inner_end orelse return null)) return null;
+            if (self.nodes[index].parent == parent) return index;
+        }
+        return null;
+    }
+    fn whitespace(self: *const @This(), start: usize, stop: usize) bool {
+        return start <= stop and stop <= self.html.len and std.mem.trim(u8, self.html[start..stop], ordered_html_space).len == 0;
+    }
+    fn known(self: *const @This(), start: usize) ?profile.SourceLiteralDivProof {
+        for (self.proofs.items) |proof| if (proof.range.anchor_start == start) return proof;
+        return null;
+    }
+    fn candidate(self: *@This(), start: usize) !?usize {
+        const selected = syntax.tagAt(self.source, start) orelse return null;
+        const attrs = (try literalDivAttributes(self.a, selected)) orelse return null;
+        var count: usize = 0; var ordinal: ?usize = null; var cursor: usize = 0;
+        // Keep protected/foreign spellings in the census. They cannot disappear
+        // merely because the prefix/body validator will later refuse them.
+        while (std.mem.indexOfScalarPos(u8, self.source, cursor, '<')) |at| {
+            cursor = at + 1;
+            const tag = syntax.tagAt(self.source, at) orelse continue;
+            if (!tag.is("div") or tag.closing) continue;
+            const other = inventory(self.a, tag) catch |err| switch (err) { error.OutOfMemory => return err, else => return null };
+            if (!sameSiblingAttributes(attrs, other)) continue;
+            if (at == start) ordinal = count;
+            count += 1; if (count > 4096) return null;
+        }
+        const occurrence = ordinal orelse return null;
+        var observed_count: usize = 0; var found: ?usize = null;
+        for (self.nodes, 0..) |node, index| if (node.tag.is("div") and sameSiblingAttributes(attrs, node.attributes)) {
+            if (observed_count == occurrence) found = index;
+            observed_count += 1;
+        };
+        return if (observed_count == count) found else null;
+    }
+    fn rootPrefix(self: *@This(), start: usize, observed: usize, depth: usize) anyerror!bool {
+        if (try authoredLiteralRootPrefix(self.a, self.source, start)) return true;
+        const prior = (try orderedRootDivPredecessor(self.a, self.source, start, self.proofs.items)) orelse return false;
+        const previous = (try self.candidate(prior.range.anchor_start)) orelse return false;
+        if (observed >= self.nodes.len or previous >= observed or self.nodes[previous].parent != 0 or
+            self.nodes[observed].parent != 0 or self.nodes[observed].previous != previous or
+            self.child(0, previous) != observed or !self.whitespace(self.end(previous) orelse return false, self.nodes[observed].start)) return false;
+        // The prior receipt selects an operation, not an unchecked attribute
+        // match. Compare its whole body again without publishing any new proof.
+        return self.div(prior.range.anchor_start, previous, null, depth + 1, false, null);
+    }
+    fn div(self: *@This(), start: usize, observed: usize, parent_start: ?usize, depth: usize, issue: bool, cell: ?CellContext) anyerror!bool {
+        if (depth >= 32 or !self.spend() or observed >= self.nodes.len) return false;
+        const tag = syntax.tagAt(self.source, start) orelse return false;
+        const attrs = (try literalDivAttributes(self.a, tag)) orelse return false;
+        const pair = syntax.matchingTag(self.source, tag) orelse return false;
+        const node = self.nodes[observed];
+        if (pair.end <= tag.end or pair.end > self.source.len or !node.tag.is("div") or
+            !sameSiblingAttributes(attrs, node.attributes) or (try self.candidate(start)) != observed) return false;
+        const close = syntax.tagAt(self.source, pair.inner_end) orelse return false;
+        if (!close.closing or close.self_closing or close.attrs.len != 0 or !close.is("div") or close.end != pair.end) return false;
+        const captured_end = self.end(observed) orelse return false;
+        const captured_close = currentLiteralHtmlTagAt(self.html, node.inner_end orelse return false) orelse return false;
+        if (!captured_close.closing or captured_close.attrs.len != 0 or captured_close.end != captured_end) return false;
+        const cell_parent = if (cell) |held| (if (node.parent == held.subject) held.proof else null) else null;
+        if (issue and cell != null) {
+            const held = cell.?;
+            if (start < held.proof.body_start or pair.end > held.proof.body_end) return false;
+            if (cell_parent == null) {
+                const parent = parent_start orelse return false;
+                if (parent >= start or (try self.candidate(parent)) != node.parent) return false;
+            } else if (parent_start != null) return false;
+        } else if (issue) {
+            var lexical_parent: ?usize = null;
+            authoredElementPrefixForRole(self.a, self.ns, self.source, .{ .start = start, .end = pair.end },
+                false, self.proofs.items, false, &lexical_parent) catch |err| switch (err) { error.OutOfMemory => return err, else => return false };
+            if (lexical_parent != parent_start) return false;
+            if (parent_start) |parent| {
+                if (parent >= start or (try self.candidate(parent)) != node.parent) return false;
+            } else if (node.parent != 0 or !try self.rootPrefix(start, observed, depth)) return false;
+        }
+        const before = self.proofs.items.len;
+        var complete = false;
+        defer if (!complete) self.proofs.shrinkRetainingCapacity(before);
+        if (issue) { if (self.known(start)) |prior| {
+            if (prior.parent_start != parent_start or prior.range.anchor_end != pair.end or
+                !std.meta.eql(prior.wiki_cell_parent, cell_parent)) return false;
+        } else try self.proofs.append(self.a, .{ .range = .{ .anchor_start = start, .anchor_end = pair.end,
+            .name_start = start + 1, .name_len = tag.name.len,
+            .attrs_start = @intFromPtr(tag.attrs.ptr) - @intFromPtr(self.source.ptr), .attrs_len = tag.attrs.len },
+            .parent_start = parent_start, .wiki_cell_parent = cell_parent }); }
+        if (!try self.body(tag.end, pair.inner_end, observed, start, depth + 1, issue, cell)) return false;
+        complete = true; return true;
+    }
+    fn body(self: *@This(), start: usize, stop: usize, observed: usize, source_parent: ?usize, depth: usize, issue: bool, cell_context: ?CellContext) anyerror!bool {
+        if (depth >= 32 or start > stop or stop > self.source.len or !self.spend()) return false;
+        const node = self.nodes[observed];
+        const inner_end = node.inner_end orelse return false;
+        var at = start; var captured = node.tag.end; var previous: ?usize = null;
+        while (at < stop) {
+            while (at < stop and std.mem.indexOfScalar(u8, ordered_html_space, self.source[at]) != null) : (at += 1) {}
+            if (at == stop) break;
+            const next = self.child(observed, previous);
+            if (std.mem.startsWith(u8, self.source[at..stop], "<div")) {
+                const index = next orelse return false;
+                if (!self.whitespace(captured, self.nodes[index].start) or !try self.div(at, index, source_parent, depth + 1, issue, cell_context)) return false;
+                const pair = syntax.matchingTag(self.source, syntax.tagAt(self.source, at).?) orelse return false;
+                if (pair.end > stop) return false;
+                at = pair.end; captured = self.end(index) orelse return false; previous = index;
+            } else if (std.mem.startsWith(u8, self.source[at..stop], "{|")) {
+                const index = next orelse return false;
+                if (!self.whitespace(captured, self.nodes[index].start)) return false;
+                const joined = (try compiler.Renderer.literalTableBodyIdentityAlloc(self.a, self.source, at,
+                    (self.context orelse .{ .namespace_catalog = self.ns }), self.graph, @intCast(index))) orelse return false;
+                if (joined.end > stop or !try self.tableGaps(index)) return false;
+                for (joined.cells) |cell| {
+                    if (cell.subject >= self.nodes.len) return false;
+                    const cell_node = self.nodes[cell.subject];
+                    const cell_end = cell_node.inner_end orelse return false;
+                    _ = cell_end;
+                    const begin = @intFromPtr(cell.source_body.ptr) - @intFromPtr(self.source.ptr);
+                    // The same complete grid/body join may retain this exact
+                    // generated boundary. Nested grids remain comparison-only.
+                    const parent = if (issue and cell_context == null) source_parent else null;
+                    const capability = if (parent) |outer| try self.cellParent(at, joined.end, cell, outer) else null;
+                    if (!try self.body(begin, begin + cell.source_body.len, cell.subject, null, depth + 1,
+                        capability != null, capability)) return false;
+                }
+                at = joined.end; captured = self.end(index) orelse return false; previous = index;
+            } else if ((at == 0 or self.source[at - 1] == '\n') and (self.source[at] == '*' or self.source[at] == ':')) {
+                const index = next orelse return false;
+                if (!self.whitespace(captured, self.nodes[index].start)) return false;
+                var lines: std.ArrayList(ListLine) = .empty;
+                while (at < stop) {
+                    const line_end = @min(std.mem.indexOfScalarPos(u8, self.source, at, '\n') orelse stop, stop);
+                    const line = encoder.document_ir.classifyLine(self.source[at..line_end]);
+                    if (line.list_path.len == 0) break;
+                    if (line.list_path.len > 8 or lines.items.len == 4096) return false;
+                    for (line.list_path) |marker| if (marker != '*' and marker != ':') return false;
+                    try lines.append(self.a, .{ .path = line.list_path, .text = line.text });
+                    at = if (line_end < stop) line_end + 1 else line_end;
+                }
+                var cursor: usize = 0;
+                if (!try self.list(lines.items, &cursor, "", index, depth + 1) or cursor != lines.items.len) return false;
+                captured = self.end(index) orelse return false; previous = index;
+            } else {
+                // Find the next direct literal DIV boundary. Inline source
+                // before it must match its complete captured owner interval.
+                var boundary = stop; var scan = at;
+                while (std.mem.indexOfScalarPos(u8, self.source[0..stop], scan, '<')) |opening| {
+                    const tag = syntax.tagAt(self.source, opening) orelse return false;
+                    if (tag.is("div") and !tag.closing) { boundary = opening; break; }
+                    scan = tag.end;
+                }
+                var observed_boundary = inner_end; var before_div: ?usize = null;
+                if (boundary != stop) {
+                    var direct = previous;
+                    while (self.child(observed, direct)) |index| {
+                        if (self.nodes[index].tag.is("div")) { observed_boundary = self.nodes[index].start; before_div = direct; break; }
+                        direct = index;
+                    }
+                    if (observed_boundary == inner_end) return false;
+                }
+                const actual = self.html[captured..observed_boundary];
+                if (issue and cell_context == null) {
+                    if (!try noteInlineCorrespondsIn(self.a, self.ns,
+                        std.mem.trim(u8, self.source[at..boundary], ordered_html_space),
+                        std.mem.trim(u8, actual, ordered_html_space), 0, false, true, self.context, self.current_origin)) return false;
+                } else if (!try orderedCellInlineCorrespondsIn(self.a, self.ns, self.source, at, boundary, actual, self.context, self.current_origin)) return false;
+                if (boundary == stop) return true;
+                at = boundary; captured = observed_boundary; previous = before_div;
+            }
+        }
+        return self.child(observed, previous) == null and self.whitespace(captured, inner_end);
+    }
+    fn cellParent(self: *@This(), table_start: usize, table_end: usize,
+        cell: compiler.Renderer.LiteralTableBodyCell, outer: ?usize) !?CellContext
+    {
+        const row = cell.row_opening orelse return null;
+        if ((if (outer) |parent| self.known(parent) == null or parent >= table_start else false) or cell.subject >= self.nodes.len or
+            row.len < 2 or !std.mem.startsWith(u8, row, "|-") or cell.source_body.len == 0) return null;
+        const table_open_end = std.mem.indexOfScalarPos(u8, self.source, table_start, '\n') orelse return null;
+        const row_start = std.math.sub(usize, @intFromPtr(row.ptr), @intFromPtr(self.source.ptr)) catch return null;
+        const attrs_start = std.math.sub(usize, @intFromPtr(cell.cell_attrs.ptr), @intFromPtr(self.source.ptr)) catch return null;
+        const body_start = std.math.sub(usize, @intFromPtr(cell.source_body.ptr), @intFromPtr(self.source.ptr)) catch return null;
+        if (table_start >= table_open_end or table_end > self.source.len or row_start < table_open_end or
+            row.len > table_end -| row_start or attrs_start < row_start + row.len or
+            cell.cell_attrs.len > table_end -| attrs_start or body_start < attrs_start + cell.cell_attrs.len or
+            cell.source_body.len > table_end -| body_start) return null;
+        if (cell.cell_attrs.len == 0 and (attrs_start < 2 or attrs_start != body_start or self.source[attrs_start] != '\n' or
+            self.source[attrs_start - 2] != '\n' or self.source[attrs_start - 1] != @as(u8, if (cell.header) '!' else '|'))) return null;
+        var current: usize = cell.subject;
+        for ([_][]const u8{ if (cell.header) "th" else "td", "tr", "tbody", "table" }) |name| {
+            const node = self.nodes[current];
+            if (!std.ascii.eqlIgnoreCase(node.tag.name, name)) return null;
+            // Unknown or interactive attributes cannot acquire the new edge.
+            // CSS declarations and dynamic selectors remain ordinary queries.
+            for (node.attributes.attributes) |attribute| {
+                const allowed = if (std.mem.eql(u8, name, "tbody")) false else
+                    std.ascii.eqlIgnoreCase(attribute.name, "class") or std.ascii.eqlIgnoreCase(attribute.name, "id") or
+                    std.ascii.eqlIgnoreCase(attribute.name, "style") or std.ascii.eqlIgnoreCase(attribute.name, "lang") or
+                    std.ascii.eqlIgnoreCase(attribute.name, "dir") or std.ascii.eqlIgnoreCase(attribute.name, "align") or
+                    std.ascii.eqlIgnoreCase(attribute.name, "valign") or std.ascii.eqlIgnoreCase(attribute.name, "width") or
+                    std.ascii.eqlIgnoreCase(attribute.name, "height") or std.ascii.eqlIgnoreCase(attribute.name, "bgcolor") or
+                    std.ascii.eqlIgnoreCase(attribute.name, "border") or std.ascii.eqlIgnoreCase(attribute.name, "cellpadding") or
+                    std.ascii.eqlIgnoreCase(attribute.name, "cellspacing") or std.ascii.eqlIgnoreCase(attribute.name, "colspan") or
+                    std.ascii.eqlIgnoreCase(attribute.name, "rowspan");
+                if (!allowed) return null;
+            }
+            current = node.parent orelse return null;
+        }
+        if (outer) |parent| {
+            if ((try self.candidate(parent)) != current) return null;
+        } else if (current != 0) return null;
+        return .{ .subject = cell.subject, .proof = .{ .parent_start = outer,
+            .table_start = table_start, .table_open_end = table_open_end, .table_end = table_end,
+            .row_start = row_start, .row_end = row_start + row.len,
+            .attrs_start = attrs_start, .attrs_end = attrs_start + cell.cell_attrs.len,
+            .body_start = body_start, .body_end = body_start + cell.source_body.len, .header = cell.header } };
+    }
+    fn table(self: *@This(), start: usize, observed: usize, issue: bool) anyerror!?usize {
+        if (!self.spend() or observed >= self.nodes.len or !self.nodes[observed].tag.is("table")) return null;
+        const joined = (try compiler.Renderer.literalTableBodyIdentityAlloc(self.a, self.source, start,
+            (self.context orelse .{ .namespace_catalog = self.ns }), self.graph, @intCast(observed))) orelse return null;
+        const line_end = std.mem.indexOfScalarPos(u8, self.source, joined.end, '\n') orelse self.source.len;
+        if (joined.end < start + 2 or joined.end > self.source.len or
+            !equal(self.source[joined.end - 2..joined.end], "|}") or
+            std.mem.trim(u8, self.source[joined.end..line_end], " \t\r").len != 0 or
+            !try self.tableGaps(observed)) return null;
+        const before = self.proofs.items.len;
+        var complete = false;
+        defer if (!complete) self.proofs.shrinkRetainingCapacity(before);
+        for (joined.cells) |cell| {
+            if (cell.subject >= self.nodes.len) return null;
+            const begin = @intFromPtr(cell.source_body.ptr) - @intFromPtr(self.source.ptr);
+            const capability = if (issue) try self.cellParent(start, joined.end, cell, null) else null;
+            if (issue and capability == null) return null;
+            if (!try self.body(begin, begin + cell.source_body.len, cell.subject, null, 1, issue, capability)) return null;
+        }
+        complete = true;
+        return joined.end;
+    }
+    fn rootTable(self: *@This(), start: usize) anyerror!void {
+        // Count complete bodies across every captured parent before selecting
+        // the parser-root edge. Identical nested or protected spellings cannot
+        // disappear from the correspondence census.
+        var selected: ?usize = null; var stop: usize = 0;
+        for (self.nodes, 0..) |node, index| if (node.tag.is("table")) {
+            if (try self.table(start, index, false)) |end_at| {
+                if (selected != null) return;
+                selected = index; stop = end_at;
+            }
+        };
+        const observed = selected orelse return;
+        var count: usize = 0; var at: usize = 0;
+        while (std.mem.indexOfPos(u8, self.source, at, "{|")) |candidate_start| {
+            at = candidate_start + 2;
+            if (candidate_start != 0 and self.source[candidate_start - 1] != '\n') continue;
+            if (try self.table(candidate_start, observed, false) != null) {
+                count += 1; if (count > 1) return;
+            }
+        }
+        if (count != 1 or self.nodes[observed].parent != 0) return;
+        authoredElementPrefixForRoleIn(self.a, self.ns, self.source, .{ .start = start, .end = stop },
+            false, self.proofs.items, false, null, true) catch |err| switch (err) { error.OutOfMemory => return err, else => return };
+        _ = try self.table(start, observed, true);
+    }
+    const ListLine = struct { path: []const u8, text: []const u8 };
+    fn list(self: *@This(), lines: []const ListLine, cursor: *usize, prefix: []const u8, group: usize, depth: usize) anyerror!bool {
+        if (depth >= 32 or cursor.* >= lines.len or !self.spend() or group >= self.nodes.len) return false;
+        const first_path = lines[cursor.*].path;
+        if (first_path.len != prefix.len + 1 or !std.mem.startsWith(u8, first_path, prefix)) return false;
+        const marker = first_path[prefix.len];
+        const node = self.nodes[group];
+        if (!node.tag.is(if (marker == '*') "ul" else "dl") or node.attributes.attributes.len != 0) return false;
+        var previous: ?usize = null; var captured = node.tag.end;
+        while (cursor.* < lines.len) {
+            const line = lines[cursor.*];
+            if (line.path.len < first_path.len or !equal(line.path[0..first_path.len], first_path)) break;
+            if (line.path.len != first_path.len) return false;
+            const item = self.child(group, previous) orelse return false;
+            const item_node = self.nodes[item];
+            if (!item_node.tag.is(if (marker == '*') "li" else "dd") or item_node.attributes.attributes.len != 0 or
+                !self.whitespace(captured, item_node.start)) return false;
+            const item_end = item_node.inner_end orelse return false;
+            var nested: ?usize = null;
+            var child_cursor: ?usize = null;
+            while (self.child(item, child_cursor)) |child_index| {
+                child_cursor = child_index;
+                if (self.nodes[child_index].tag.is("ul") or self.nodes[child_index].tag.is("dl")) { nested = child_index; break; }
+            }
+            const label_end = if (nested) |index| self.nodes[index].start else item_end;
+            if (!try noteInlineCorrespondsIn(self.a, self.ns, std.mem.trim(u8, line.text, ordered_html_space),
+                std.mem.trim(u8, self.html[item_node.tag.end..label_end], ordered_html_space), 0, false, true, self.context, self.current_origin)) {
+                if (@import("builtin").is_test and self.diagnose_inline_refusal)
+                    std.debug.print("MAI_ORDERED_INLINE source_offset={d} item={d} source={s}\n", .{
+                        @intFromPtr(line.text.ptr) - @intFromPtr(self.source.ptr), item, line.text[0..@min(line.text.len, 512)] });
+                return false;
+            }
+            cursor.* += 1;
+            var nested_previous: ?usize = null; var nested_end = label_end;
+            while (cursor.* < lines.len and lines[cursor.*].path.len > first_path.len and
+                std.mem.startsWith(u8, lines[cursor.*].path, first_path)) {
+                const child_index = if (nested_previous) |prior| self.child(item, prior) orelse return false else nested orelse return false;
+                if (!self.whitespace(nested_end, self.nodes[child_index].start) or
+                    !try self.list(lines, cursor, first_path, child_index, depth + 1)) return false;
+                nested_previous = child_index; nested_end = self.end(child_index) orelse return false;
+            }
+            if (nested != null and nested_previous == null) return false;
+            if (nested_previous) |prior| if (self.child(item, prior) != null) return false;
+            if (!self.whitespace(nested_end, item_end)) return false;
+            previous = item; captured = self.end(item) orelse return false;
+        }
+        return previous != null and self.child(group, previous) == null and self.whitespace(captured, node.inner_end orelse return false);
+    }
+    fn tableGaps(self: *@This(), table_index: usize) !bool {
+        const stop = self.nodes[table_index].inner_end orelse return false;
+        for (self.nodes[table_index..], table_index..) |node, index| {
+            if (node.start > stop) break;
+            if (!node.tag.is("table") and !node.tag.is("tbody") and !node.tag.is("tr")) continue;
+            var cursor = node.tag.end; var previous: ?usize = null;
+            while (self.child(index, previous)) |child_index| {
+                if (!self.whitespace(cursor, self.nodes[child_index].start)) return false;
+                cursor = self.end(child_index) orelse return false; previous = child_index;
+            }
+            if (!self.whitespace(cursor, node.inner_end orelse return false)) return false;
+        }
+        return true;
+    }
+};
+
+fn appendOrderedLiteralDivParents(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
+    nodes: []const ObservedSiblingNode, proofs: *std.ArrayList(profile.SourceLiteralDivProof)) !void
+{
+    return appendOrderedLiteralDivParentsIn(a, ns, source, html, nodes, proofs, null);
+}
+fn appendOrderedLiteralDivParentsIn(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
+    nodes: []const ObservedSiblingNode, proofs: *std.ArrayList(profile.SourceLiteralDivProof), context: ?compiler.Context) !void
+{
+    if (context) |selected| if (selected.namespace_catalog != ns or selected.title.len == 0) return;
+    if (source.len > 4 * 1024 * 1024 or nodes.len == 0 or nodes.len > 65536 or nodes[0].parent != null) return;
+    // This optional issuer requires a complete source Table or a same-line
+    // continuation of an already-issued root DIV. Unrelated graphs stay untouched.
+    var applicable = try hasClosedParserRootTableSource(a, ns, source, proofs.items);
+    var candidate_cursor: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, source, candidate_cursor, '<')) |start| {
+        candidate_cursor = start + 1;
+        const tag = syntax.tagAt(source, start) orelse continue;
+        if ((try literalDivAttributes(a, tag)) == null) continue;
+        const pair = syntax.matchingTag(source, tag) orelse continue;
+        if (std.mem.indexOf(u8, source[tag.end..pair.inner_end], "\n{|") == null and
+            try orderedRootDivPredecessor(a, source, start, proofs.items) == null) continue;
+        var known = false;
+        for (proofs.items) |proof| if (proof.range.anchor_start == start) { known = true; break; };
+        if (!known) { applicable = true; break; }
+    }
+    if (!applicable) return;
+    const graph = try a.alloc(profile.ObservedStyleNode, nodes.len);
+    var stack: [128]usize = undefined; var depth: usize = 0;
+    var last_start: ?usize = null;
+    for (nodes, graph, 0..) |node, *out, index| {
+        if (node.start >= html.len or node.tag.end > html.len or (if (node.parent) |parent| parent >= index else index != 0)) return;
+        if (last_start) |prior| if (node.start <= prior) return;
+        last_start = node.start;
+        while (depth != 0 and node.start >= nodes[stack[depth - 1]].inner_end.?) depth -= 1;
+        const physical_parent: ?usize = if (depth == 0) null else stack[depth - 1];
+        if (node.parent != physical_parent) return;
+        const actual = currentLiteralHtmlTagAt(html, node.start) orelse return;
+        if (actual.name.ptr != node.tag.name.ptr or actual.name.len != node.tag.name.len or
+            actual.attrs.ptr != node.tag.attrs.ptr or actual.attrs.len != node.tag.attrs.len or actual.end != node.tag.end or
+            // This tag was read with the authenticated returned-HTML lexer.
+            // Keep its existing quoted-value grammar and exact node inventory;
+            // source/wikitext attribute inventories remain unchanged.
+            !sameSiblingAttributes(try inventoryReturnedMode(a, actual, false, false, true), node.attributes)) return;
+        if (node.inner_end) |inner_end| {
+            if (depth == stack.len or inner_end < node.tag.end or inner_end >= html.len) return;
+            const close = currentLiteralHtmlTagAt(html, inner_end) orelse return;
+            if (!close.closing or close.attrs.len != 0 or !std.ascii.eqlIgnoreCase(close.name, node.tag.name) or
+                (if (physical_parent) |parent| close.end > nodes[parent].inner_end.? else false)) return;
+            stack[depth] = index; depth += 1;
+        }
+        out.* = .{ .tag = node.tag.name, .parent = if (node.parent) |parent| @intCast(parent) else null,
+            .attributes = try figureObservedAttributes(a, node.attributes) };
+    }
+    var join: OrderedLiteralDivJoin = .{ .a = a, .ns = ns, .source = source, .html = html, .nodes = nodes, .graph = graph, .proofs = proofs, .context = context };
+    var cursor: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, source, cursor, '<')) |start| {
+        cursor = start + 1;
+        const tag = syntax.tagAt(source, start) orelse continue;
+        if ((try literalDivAttributes(a, tag)) == null or join.known(start) != null) continue;
+        const pair = syntax.matchingTag(source, tag) orelse continue;
+        // Keep repeated/ordinary families strict. Besides complete grids, a
+        // same-line root continuation proves both adjacent complete bodies and
+        // their exact captured sibling relation before publishing its own edge.
+        if (std.mem.indexOf(u8, source[tag.end..pair.inner_end], "\n{|") == null and
+            try orderedRootDivPredecessor(a, source, start, proofs.items) == null) continue;
+        var parent_start: ?usize = null;
+        authoredElementPrefixForRole(a, ns, source, .{ .start = start, .end = pair.end },
+            false, proofs.items, false, &parent_start) catch |err| switch (err) { error.OutOfMemory => return err, else => continue };
+        if (parent_start) |parent| if (join.known(parent) == null) continue;
+        const selected = (try join.candidate(start)) orelse continue;
+        _ = try join.div(start, selected, parent_start, 0, true, null);
+    }
+    cursor = 0;
+    while (std.mem.indexOfPos(u8, source, cursor, "{|")) |start| {
+        cursor = start + 2;
+        if (start != 0 and source[start - 1] != '\n') continue;
+        try join.rootTable(start);
+    }
+}
+
 fn observedLiteralDivParents(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8,
     nodes: []const ObservedSiblingNode) ![]const profile.SourceLiteralDivProof
 {
@@ -12424,6 +14445,7 @@ fn observedLiteralDivParents(a: A, ns: *const namespaces.Registry, source: []con
         };
         if (!exists) try result.append(a, note);
     }
+    try appendOrderedLiteralDivParents(a, ns, source, html, nodes, &result);
     return try result.toOwnedSlice(a);
 }
 
@@ -14240,26 +16262,128 @@ pub const RawTableRoot = struct {
     receipt: []const u8,
     styles: TableDirectionResources,
 };
+const TableRootParentContainer = struct {
+    start: usize,
+    end: usize,
+    styles: *const profile.Profile,
+    context: profile.TableContainingDirectionContext,
+    element: u32,
+    environment: profile.CustomEnvironment,
+};
+
+fn tableRootParentContainerAlloc(a: A, ns: *const namespaces.Registry, input: RawTableRoot,
+    source_parent: TableDirectionLocalParent, html: []const u8, nodes: []const ObservedSiblingNode,
+    parent_index: usize, table_index: usize, context: profile.TableContainingDirectionContext,
+    sources: []const profile.Source) !?TableRootParentContainer
+{
+    const opening = syntax.tagAt(source_parent.opening, 0) orelse return null;
+    const authored = try inventory(a, opening);
+    if (authored.attributes.len != 1 or authored.get("style") == null) return null;
+    const start = @intFromPtr(source_parent.opening.ptr) - @intFromPtr(input.source.ptr);
+    const source_tag = syntax.tagAt(input.source, start) orelse return null;
+    const source_pair = syntax.matchingTag(input.source, source_tag) orelse return null;
+    if (source_pair.end <= source_tag.end or source_pair.end > input.source.len or
+        source_tag.end > input.source_table.start or input.source_table.start >= source_pair.inner_end or
+        std.mem.trim(u8, input.source[source_tag.end..input.source_table.start], ordered_html_space).len != 0 or
+        std.mem.count(u8, input.source[source_tag.end..source_pair.inner_end], "\n{|") != 1) return null;
+    const parent = nodes[parent_index];
+    const inner_end = parent.inner_end orelse return null;
+    const table_end = intrinsicTableCapturedNodeEnd(html, nodes[table_index]) orelse return null;
+    if (parent.first_child != table_index or nodes[table_index].previous != null or
+        parent.tag.end > nodes[table_index].start or table_end > inner_end or
+        std.mem.trim(u8, html[parent.tag.end..nodes[table_index].start], ordered_html_space).len != 0 or
+        std.mem.trim(u8, html[table_end..inner_end], ordered_html_space).len != 0) return null;
+    const close = syntax.tagAt(input.source, source_pair.inner_end) orelse return null;
+    if (!close.closing or !close.is("div") or close.attrs.len != 0 or close.end != source_pair.end) return null;
+    // Reuse the complete ordered body correspondence, including every cell,
+    // action and literal footer. Its comparison-only mode issues no cell/DIV
+    // ancestry and does not borrow the Table's geometry proof.
+    const graph = try a.alloc(profile.ObservedStyleNode, nodes.len);
+    for (nodes, graph, 0..) |node, *out, index| {
+        if (node.start >= html.len or node.tag.end > html.len or
+            (if (node.parent) |owner| owner >= index else index != 0)) return null;
+        out.* = .{ .tag = node.tag.name, .parent = if (node.parent) |owner| @intCast(owner) else null,
+            .attributes = try figureObservedAttributes(a, node.attributes) };
+    }
+    var proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+    defer proofs.deinit(a);
+    var join: OrderedLiteralDivJoin = .{ .a = a, .ns = ns, .source = input.source,
+        .html = html, .nodes = nodes, .graph = graph, .proofs = &proofs,
+        .current_origin = (try missingStyleOrigin(a, ns.wiki)).origin };
+    const matches = join.body(source_tag.end, source_pair.inner_end, parent_index, start, 0, false, null) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory, else => return null,
+    };
+    if (!matches or proofs.items.len != 0) return null;
+    const subject = context.nodes[context.table].parent orelse return null;
+    if (subject == 0 or subject > 32 or subject >= context.table or subject >= context.nodes.len or !equal(context.nodes[subject].tag, "div")) return null;
+    if (context.styles.page_style_parent != null or context.styles.custom_properties != null) return null;
+    const styles = try a.create(profile.Profile);
+    // The authenticated head was already parsed for this exact Table root.
+    // Borrow its immutable rule inventory; own only this operation's custom
+    // environment arena. Both lifetimes are bounded by the same Book owner.
+    styles.* = context.styles.*;
+    styles.arena = std.heap.ArenaAllocator.init(a);
+    var retained = false;
+    defer if (!retained) styles.deinit();
+    const ancestors = try a.alloc(profile.CustomElement, subject);
+    for (context.nodes[0..subject], ancestors, 0..) |node, *out, index| {
+        if (if (node.parent) |owner| owner + 1 != index else index != 0) return null;
+        out.* = .{ .tag = node.tag, .root = index == 0 };
+        for (node.attributes) |attribute| {
+            if (equal(attribute.name, "class")) out.classes = attribute.value;
+            if (equal(attribute.name, "id")) out.id = attribute.value;
+            if (equal(attribute.name, "style")) out.inline_css = attribute.value;
+        }
+    }
+    profile.attachCustomProperties(styles, sources, .{ .dark = null, .ancestors = ancestors }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory, else => return null,
+    };
+    const custom = @constCast(styles.custom_properties orelse return null);
+    custom.page_title = try styles.arena.allocator().dupe(u8, input.title);
+    var own: profile.CustomElement = .{ .tag = "div" };
+    for (context.nodes[subject].attributes) |attribute| {
+        if (equal(attribute.name, "class")) own.classes = attribute.value;
+        if (equal(attribute.name, "id")) own.id = attribute.value;
+        if (equal(attribute.name, "style")) own.inline_css = attribute.value;
+    }
+    const environment = try custom.element(a, custom.root_environment, own, own.inline_css);
+    var selected = context; selected.styles = styles;
+    retained = true;
+    return .{ .start = start, .end = source_pair.end, .styles = styles, .context = selected,
+        .element = subject, .environment = environment };
+}
+
 const PreparedTableRoot = struct {
     input: RawTableRoot,
     contexts: []const profile.TableContainingDirectionContext,
     parent: ?struct { start: usize, end: usize },
+    parent_container: ?TableRootParentContainer = null,
 };
-const TableRootSignature = struct { table: Inventory, header: Inventory, text: []const u8 };
+const TableRootSignature = struct { table: Inventory, row: Inventory, header: Inventory, text: []const u8 };
 fn sameTableRootSignature(left: TableRootSignature, right: TableRootSignature) bool {
-    return sameSiblingAttributes(left.table, right.table) and sameSiblingAttributes(left.header, right.header) and equal(left.text, right.text);
+    return sameSiblingAttributes(left.table, right.table) and sameSiblingAttributes(left.row, right.row) and
+        sameSiblingAttributes(left.header, right.header) and equal(left.text, right.text);
 }
 fn sourceTableRootSignature(a: A, source: []const u8, at: usize) !?TableRootSignature {
     if (at >= source.len or (at != 0 and source[at - 1] != '\n') or !std.mem.startsWith(u8, source[at..], "{|")) return null;
     const end = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse return null;
     const table = (try rootTableAttributes(a, source[at + 2..end])) orelse return null;
-    const header_end = std.mem.indexOfScalarPos(u8, source, end + 1, '\n') orelse return null;
-    const header = source[end + 1..header_end];
+    var header_start = end + 1;
+    var header_end = std.mem.indexOfScalarPos(u8, source, header_start, '\n') orelse return null;
+    var row: Inventory = .{ .attributes = &.{} };
+    if (std.mem.startsWith(u8, source[header_start..header_end], "|-")) {
+        // A real first-row opener is part of the occurrence, including every
+        // attribute. It cannot be discarded to find a later matching header.
+        row = (try rootTableAttributes(a, source[header_start + 2..header_end])) orelse return null;
+        header_start = header_end + 1;
+        header_end = std.mem.indexOfScalarPos(u8, source, header_start, '\n') orelse return null;
+    }
+    const header = source[header_start..header_end];
     if (!std.mem.startsWith(u8, header, "!") or std.mem.startsWith(u8, header, "!!")) return null;
     const split = std.mem.indexOfScalar(u8, header, '|') orelse return null;
-    const attributes = (try rootTableAttributes(a, header[1..split])) orelse return null;
+    const attributes = (try rootTableAttributesIn(a, header[1..split], true)) orelse return null;
     const text = (try rootTableLiteralText(a, std.mem.trim(u8, header[split + 1..], " \t\r"))) orelse return null;
-    return .{ .table = table, .header = attributes, .text = text };
+    return .{ .table = table, .row = row, .header = attributes, .text = text };
 }
 fn observedTableRootSignature(a: A, html: []const u8, nodes: []const ObservedSiblingNode, index: usize) !?TableRootSignature {
     const table = nodes[index];
@@ -14272,10 +16396,14 @@ fn observedTableRootSignature(a: A, html: []const u8, nodes: []const ObservedSib
     if (!header.tag.is("th") or header.first_child != null) return null;
     const end = header.inner_end orelse return null;
     const text = (try rootTableLiteralText(a, std.mem.trim(u8, html[header.tag.end..end], " \t\r\n"))) orelse return null;
-    return .{ .table = table.attributes, .header = header.attributes, .text = text };
+    return .{ .table = table.attributes, .row = row.attributes, .header = header.attributes, .text = text };
 }
-fn plainCenteredTableParent(attributes: Inventory) bool {
-    return attributes.attributes.len == 1 and equal(attributes.get("align") orelse "", "center");
+fn literalTableRootParent(attributes: Inventory) bool {
+    if (attributes.attributes.len != 1) return false;
+    if (attributes.get("align")) |alignment| return equal(alignment, "center");
+    // Retain authored style verbatim. This is occurrence correspondence only;
+    // the ordinary compiler/Profile still owns every box and layout property.
+    return siblingLiteralAttribute("style", attributes.get("style") orelse return false);
 }
 fn tableRootGeneratedSection(attributes: Inventory) bool {
     if (attributes.attributes.len != 3) return false;
@@ -14283,11 +16411,10 @@ fn tableRootGeneratedSection(attributes: Inventory) bool {
     if (ordinal.len == 0 or ordinal.len > 20 or (ordinal.len > 1 and ordinal[0] == '0')) return false;
     for (ordinal) |byte| if (!std.ascii.isDigit(byte)) return false;
     _ = std.fmt.parseInt(u64, ordinal, 10) catch return false;
-    for ([_][]const u8{ "id", "aria-labelledby" }) |name| {
-        const value = attributes.get(name) orelse return false;
-        if (value.len == 0 or value.len > 256) return false;
-        for (value) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '_' and byte != '.' and byte != ':' and byte != '-') return false;
-    }
+    // The maintained complete-GET SECTION grammar admits real Unicode IDs
+    // without changing them or granting any authored source parent.
+    currentLiteralSection(attributes) catch return false;
+    _ = attributes.get("aria-labelledby") orelse return false;
     return true;
 }
 fn tableRootCurrentReceipt(a: A, ns: *const namespaces.Registry, input: RawTableRoot) !void {
@@ -14365,7 +16492,7 @@ fn preparedTableRootAlloc(a: A, ns: *const namespaces.Registry, input: RawTableR
     if (parents.len > 1) return invalid;
     if (parents.len == 1) {
         const tag = syntax.tagAt(parents[0].opening, 0) orelse return invalid;
-        if (!tag.is("div") or !plainCenteredTableParent(try outerInventory(a, tag))) return invalid;
+        if (!tag.is("div") or !literalTableRootParent(try outerInventory(a, tag))) return invalid;
     }
     const source_end = std.mem.indexOfScalarPos(u8, input.source, input.source_table.start, '\n') orelse return invalid;
     if (input.source_table.end != source_end) return invalid;
@@ -14390,15 +16517,25 @@ fn preparedTableRootAlloc(a: A, ns: *const namespaces.Registry, input: RawTableR
     if (root_start + table.start != input.observed_table.start or root_start + table.tag.end != input.observed_table.end) return invalid;
     const parent_index = table.parent orelse return invalid;
     var section_parent = parent_index;
+    var no_previous_table = false;
     if (parents.len == 1) {
         const parent = nodes.items[parent_index];
-        if (!parent.tag.is("div") or !equal(parent.attributes.get("align") orelse "", "center")) return invalid;
+        if (!parent.tag.is("div")) return invalid;
+        const source_parent = try outerInventory(a, syntax.tagAt(parents[0].opening, 0) orelse return invalid);
+        const authored = source_parent.attributes[0];
+        if (!equal(parent.attributes.get(authored.name) orelse return invalid, authored.value)) return invalid;
+        // The existing source-parent parser requires only whitespace from the
+        // exact DIV opening to this TABLE. Independently require the captured
+        // TABLE to be that same DIV's first element, with a literal empty gap.
+        no_previous_table = equal(authored.name, "style") and parent.first_child == table_index and
+            table.previous == null and parent.tag.end <= table.start and
+            std.mem.trim(u8, body[parent.tag.end..table.start], " \t\r\n").len == 0;
         section_parent = parent.parent orelse return invalid;
-        // Parsoid metadata is retained in the full cascade, never stripped to
-        // manufacture attribute absence. This finite family adds no authored style.
+        // Keep both the exact authored attribute and every observed Parsoid
+        // attribute in the cascade. Extra authored attributes cannot borrow it.
         for (parent.attributes.attributes) |attribute| {
-            var known = false;
-            for ([_][]const u8{ "align", "about", "typeof", "id", "data-mw" }) |name|
+            var known = equal(attribute.name, authored.name);
+            for ([_][]const u8{ "about", "typeof", "id", "data-mw" }) |name|
                 if (equal(attribute.name, name)) { known = true; break; };
             if (!known) return invalid;
         }
@@ -14433,12 +16570,18 @@ fn preparedTableRootAlloc(a: A, ns: *const namespaces.Registry, input: RawTableR
         graph_parent = @intCast(at); at += 1;
     }
     const selected_table: u32 = @intCast(at);
-    graph[at] = .{ .tag = "table", .attributes = try tableDirectionCopiedAttributes(a, table.attributes), .parent = graph_parent };
+    graph[at] = .{ .tag = "table", .attributes = try tableDirectionCopiedAttributes(a, table.attributes), .parent = graph_parent,
+        .known_no_previous_element_sibling = no_previous_table };
     const styles = try a.create(profile.Profile);
     styles.* = try profile.parseSourcesForTargetAlloc(a, root.sources, .screen);
     const contexts = try a.alloc(profile.TableContainingDirectionContext, 1);
     contexts[0] = .{ .styles = styles, .nodes = graph, .root = root.root, .table = selected_table };
-    return .{ .input = input, .contexts = contexts, .parent = if (parents.len == 1) .{
+    const parent_container = if (parents.len == 1)
+        (tableRootParentContainerAlloc(a, ns, input, parents[0], body, nodes.items,
+            parent_index, table_index, contexts[0], root.sources) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory, else => null,
+            }) else null;
+    return .{ .input = input, .contexts = contexts, .parent_container = parent_container, .parent = if (parents.len == 1) .{
         .start = @intFromPtr(parents[0].opening.ptr) - @intFromPtr(input.source.ptr),
         .end = @intFromPtr(parents[0].opening.ptr) - @intFromPtr(input.source.ptr) + parents[0].opening.len } else null };
 }
@@ -14451,6 +16594,14 @@ fn selectedTableRootAlloc(a: A, selected: *const PreparedTableRoot, source: []co
     const Bound = struct {
         source: []const u8,
         selected: *const PreparedTableRoot,
+        fn container(raw: ?*const anyopaque, _: A, operation: compiler.AuthoredElementStyleOperation) A.Error!?compiler.TableParentContainerObservation {
+            const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
+            const parent = self.selected.parent_container orelse return null;
+            if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
+                !equal(self.source, self.selected.input.source) or parent.start >= parent.end or parent.end > self.source.len or
+                operation.element.ptr != self.source[parent.start..].ptr or operation.element.len != parent.end - parent.start) return null;
+            return .{ .context = parent.context, .element = parent.element, .environment = parent.environment };
+        }
         fn observe(raw: ?*const anyopaque, alloc: A, whole: []const u8, at: usize) A.Error!?compiler.TableContainingDirectionObservation {
             const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
             if (whole.ptr != self.source.ptr or whole.len != self.source.len or at != self.selected.input.source_table.start) return null;
@@ -14460,7 +16611,8 @@ fn selectedTableRootAlloc(a: A, selected: *const PreparedTableRoot, source: []co
         }
     };
     const bound = try a.create(Bound); bound.* = .{ .source = source, .selected = selected };
-    return .{ .root_only = true, .source = source, .context = bound, .observe = Bound.observe };
+    return .{ .root_only = true, .source = source, .context = bound, .observe = Bound.observe,
+        .observe_parent_container = if (selected.parent_container != null) Bound.container else null };
 }
 
 
@@ -15842,6 +17994,11 @@ fn sourceRowColorOwners(a: A, source: []const u8) !?[]const profile.RowColorOwne
 }
 
 fn observedRowColorOwners(a: A, source: []const u8, nodes: []const ObservedSiblingNode) !?[]const profile.RowColorOwner {
+    if (profile.rowColorSourceAbsent(source)) {
+        if (nodes.len == 0) return null;
+        for (nodes) |node| if (node.attributes.get("bgcolor") != null) return null;
+        return &.{};
+    }
     const owners = (try sourceRowColorOwners(a, source)) orelse return null;
     var captured: std.ArrayList(Inventory) = .empty;
     for (nodes) |node| if (node.attributes.get("bgcolor") != null) {
@@ -15866,6 +18023,16 @@ fn observedRowColorOwners(a: A, source: []const u8, nodes: []const ObservedSibli
         if (!found) return null;
     }
     return owners;
+}
+
+fn observedClosedRowColors(a: A, styles: *const profile.Profile, root: *const profile.TextElement,
+    source: []const u8, nodes: []const ObservedSiblingNode,
+    complete: []const profile.TextElement, alternative: []const profile.TextElement) !?profile.ClosedRowColorProof
+{
+    if (!rowColorOuterAbsent(complete) or !rowColorOuterAbsent(alternative)) return null;
+    const owners = (try observedRowColorOwners(a, source, nodes)) orelse return null;
+    return .{ .styles = styles, .source = source, .root = root, .attribute = "bgcolor", .owners = owners,
+        .absent_source = if (owners.len == 0) try a.dupe(u8, source) else null };
 }
 
 fn rowColorOuterAbsent(nodes: []const profile.TextElement) bool {
@@ -16639,6 +18806,20 @@ pub fn bindSourceParentTextAlloc(a: A, page: *const SourceParentTextPage, source
             const selected = self.table orelse return null;
             return selected.observe(selected.context, alloc, whole, opening);
         }
+        fn observeParentContainer(raw: ?*const anyopaque, alloc: A, operation: compiler.AuthoredElementStyleOperation) A.Error!?compiler.TableParentContainerObservation {
+            const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
+            if (!self.same(operation.source)) return null;
+            const selected = self.table orelse return null;
+            const observe = selected.observe_parent_container orelse return null;
+            return observe(selected.context, alloc, operation);
+        }
+        fn preflightScope(raw: ?*const anyopaque, whole: []const u8) ?compiler.ObservedTextClassScope {
+            const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
+            if (!self.same(whole)) return null;
+            const selected = self.table orelse return null;
+            const preflight = selected.preflight_scope orelse return null;
+            return preflight(selected.context, whole);
+        }
         fn observeParent(raw: ?*const anyopaque, alloc: A, whole: []const u8, operation: compiler.SourceParentTextOperation) A.Error!?[]const profile.SourceParentTypographyContext {
             const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
             if (!self.same(whole) or operation.source.len == 0) return null;
@@ -16655,6 +18836,9 @@ pub fn bindSourceParentTextAlloc(a: A, page: *const SourceParentTextPage, source
     // Preserve unrelated capabilities on an existing same-source table owner.
     var result = table orelse compiler.TableContainingDirectionSource{ .source = source, .context = bound, .observe = Bound.observeTable };
     result.source = source; result.context = bound; result.observe = Bound.observeTable;
+    // Every retained callback sharing context must still receive its original issuer.
+    result.observe_parent_container = if (result.observe_parent_container != null) Bound.observeParentContainer else null;
+    result.preflight_scope = if (result.preflight_scope != null) Bound.preflightScope else null;
     result.parent_context = bound; result.observe_parent = Bound.observeParent;
     result.source_parent_responsive = page.body_skin_responsive;
     return result;
@@ -17681,12 +19865,19 @@ test "authored head refuses crossed rehashed source page revision and unrelated 
 }
 
 test "authored Rule actual source and literal parents select both complete page style contexts" {
+    var rule193_checkpoint: []const u8 = "namespace/source";
+    var rule193_context_index: usize = 0;
+    var rule193_root: ?u32 = null; var rule193_element: ?u32 = null; var rule193_nodes: usize = 0;
+    var rule193_tail = false; var rule193_unresolved = false;
+    errdefer std.debug.print("AUTHORED_RULE_SETUP stage={s} arm={d} root={any} element={any} nodes={d} tail={any} profile_unresolved={any}\n",
+        .{ rule193_checkpoint, rule193_context_index, rule193_root, rule193_element, rule193_nodes, rule193_tail, rule193_unresolved });
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
     const page = try AuthoredHeadTesting.page(a); const supplied = try responseSource(a, &ns, page);
     var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
     const scope = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
     const outer = try observedOuterContext(a, &ns, page, page.outer_context.?, scope);
+    rule193_checkpoint = "source/captured proof";
     const proofs = try authoredElementStyleProofsWithHtml(a, &ns, supplied.source, supplied.html, page.authored_style_operations.?, nodes.items);
     try std.testing.expectEqual(@as(usize, 1), proofs.len);
     try std.testing.expectEqual(@as(usize, 1), proofs[0].candidates.len);
@@ -17695,14 +19886,17 @@ test "authored Rule actual source and literal parents select both complete page 
     try std.testing.expectEqualStrings("<hr />", supplied.html[node.start..node.tag.end]);
     try std.testing.expectEqualStrings("NavContent", nodes.items[node.parent.?].attributes.get("class").?);
     const shape = try json(a, @embedFile(AuthoredHeadTesting.prefix ++ "alexander.page.json"));
+    rule193_checkpoint = "page styles/profile";
     const stored = (try observedPageStyleProfile(a, &ns, "wikidict.figure-page-observations.v8", page, shape, supplied.html, scope, outer)) orelse return error.TestUnexpectedResult;
     stored.observed_nodes = nodes.items; stored.observed_html = supplied.html; stored.authored_element_styles = proofs;
     try std.testing.expect(page.figure_style_operations == null and stored.figure_styles.len == 0);
     const served = try validateObservedStyleSet(a, page.page_styles.?, ns.wiki);
     try std.testing.expectEqual(@as(usize, 3), stored.context_sources.len);
+    rule193_checkpoint = "alternative sources";
     const alternative_sources = stored.figure_alternative_sources orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), alternative_sources.len);
     // Genuine API selects source 3; GET selects source 0. Both retain gadget/site.
+    rule193_checkpoint = "head source custody";
     for (stored.context_sources, [_]usize{ 3, 1, 2 }) |selected_source, source_index| {
         try std.testing.expectEqualStrings(served.responses[source_index], selected_source.css);
         try std.testing.expectEqualStrings(served.urls[source_index], selected_source.base_url);
@@ -17711,6 +19905,7 @@ test "authored Rule actual source and literal parents select both complete page 
         try std.testing.expectEqualStrings(served.responses[source_index], selected_source.css);
         try std.testing.expectEqualStrings(served.urls[source_index], selected_source.base_url);
     }
+    rule193_checkpoint = "changed head negatives";
     const get = page.outer_context.?.response;
     const head_end = std.mem.indexOf(u8, get, "</head>") orelse return error.TestUnexpectedResult;
     for ([_][]const u8{
@@ -17722,26 +19917,34 @@ test "authored Rule actual source and literal parents select both complete page 
         try std.testing.expectError(error.InvalidFigurePageObservations,
             observedPageStyleProfile(a, &ns, "wikidict.figure-page-observations.v8", changed, shape, supplied.html, scope, outer));
     }
+    rule193_checkpoint = "selected styles/alternative refusal";
     var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
     stored.figure_alternative_sources = null;
     try std.testing.expectError(error.InvalidFigurePageObservations, selectAuthoredElementStyles(a, &parent, stored));
     stored.figure_alternative_sources = alternative_sources;
+    rule193_checkpoint = "selected styles/both contexts";
     const choices = try selectAuthoredElementStyles(a, &parent, stored);
     try std.testing.expectEqual(@as(usize, 2), choices[0].contexts.len);
     const selected: SelectedPageStyles = .{ .styles = &parent, .scope = scope, .source = supplied.source,
         .namespace_catalog = &ns, .authored_element_styles = choices, .authored_element_original = supplied.source };
+    rule193_checkpoint = "selected operation callback";
     const observation = (try SelectedPageStyles.authoredElementStyle(&selected, a,
         .{ .source = supplied.source, .element = supplied.source[417..421] })) orelse return error.TestUnexpectedResult;
     for (observation.contexts) |context| {
+        rule193_root = context.root; rule193_element = context.element; rule193_nodes = context.nodes.len;
+        rule193_tail = context.rule_anonymous_tail != null; rule193_unresolved = context.styles.globally_unresolved;
         try std.testing.expectEqualStrings("hr", context.nodes[context.element].tag);
         try std.testing.expect(context.nodes[context.element].parent != null);
+        rule193_checkpoint = "computed HR";
         const computed = (try profile.resolveObservedAuthoredRule(a, context)) orelse return error.TestUnexpectedResult;
+        rule193_checkpoint = "computed HR style assertions";
         try std.testing.expectEqualDeep(encoder.presentation_types.StyleLength{ .unit = .px, .value = 1 }, computed.style.height);
         try std.testing.expectEqualStrings("#a2a9b1", computed.style.fill.rgb);
         try std.testing.expectEqualDeep(encoder.presentation_types.StyleLength{ .unit = .em, .value = 0.2 }, computed.style.margins.top);
         try std.testing.expectEqualDeep(computed.style.margins.top, computed.style.margins.bottom);
         try std.testing.expectEqual(@as(f32, 0), computed.style.margins.left.value);
         try std.testing.expectEqual(@as(f32, 0), computed.style.margins.right.value);
+        rule193_checkpoint = "anonymous tail";
         const tail = context.rule_anonymous_tail orelse return error.TestUnexpectedResult;
         try std.testing.expectEqualStrings("[[#catlinks|Страна категорија]]", tail.tail_source);
         try std.testing.expectEqualStrings("<div class=\"NavContent\" style=\"text-align:center;padding:0.5em\"><hr>[[#catlinks|Страна категорија]]</div>", tail.parent_source);
@@ -17749,7 +19952,9 @@ test "authored Rule actual source and literal parents select both complete page 
         try std.testing.expectEqualStrings("a", context.nodes[tail.anchor].tag);
         try std.testing.expectEqual(context.nodes[context.element].parent, context.nodes[tail.anchor].parent);
         try std.testing.expectEqual(proofs[0].rule_anonymous_tail.?.anchor + context.root, tail.anchor);
+        rule193_context_index += 1;
     }
+    rule193_checkpoint = "foreign source and range negatives";
     const copied = try a.dupe(u8, supplied.source);
     try std.testing.expect(try SelectedPageStyles.authoredElementStyle(&selected, a, .{ .source = copied, .element = copied[417..421] }) == null);
     try std.testing.expect(try SelectedPageStyles.authoredElementStyle(&selected, a, .{ .source = supplied.source, .element = supplied.source[417..420] }) == null);
@@ -18265,6 +20470,15 @@ test "repeated DIV negative parent tag requires every source and observed member
     }
 }
 
+fn prefixTableEntityText(html: []const u8, node: ObservedSiblingNode) ?[]const u8 {
+    if (!node.tag.is("span") or node.first_child != null or node.attributes.attributes.len != 1 or
+        !equal(node.attributes.get("typeof") orelse return null, "mw:Entity")) return null;
+    const end = node.inner_end orelse return null;
+    if (node.tag.end > end or end > html.len) return null;
+    const text = html[node.tag.end..end];
+    return if (equal(text, " ") or equal(text, "\xc2\xa0")) text else null;
+}
+
 fn prefixTableOpeningStart(source: []const u8) ?usize {
     var at: usize = 0;
     while (at < source.len) {
@@ -18419,6 +20633,11 @@ fn selectedPrefixTableAlloc(a: A, ns: *const namespaces.Registry, parent: *const
         // Exact first-child + previous-null + whitespace-gap proof above.
         // This node alone receives the actual no-previous-element fact.
         nodes[shift + table_index].known_no_previous_element_sibling = true;
+        for (stored.observed_nodes, 0..) |node, index| {
+            if (node.start <= table.start or node.start >= (table.inner_end orelse return null)) continue;
+            if (prefixTableEntityText(html, node)) |text|
+                nodes[shift + index].captured_entity_text = try a.dupe(u8, text);
+        }
         context.* = .{ .generated_prefix_section = @intCast(shift + section_index),
             .styles = styles, .nodes = nodes, .root = shift, .table = @intCast(shift + table_index) };
     }
@@ -18479,6 +20698,18 @@ test "actual MG prefix TABLE binds both complete heads and neutral SECTION0 with
     try std.testing.expect(prefixTableOpeningStart("text\n{|x") == null);
     try std.testing.expectEqual(@as(?usize, 0), prefixTableOpeningStart("{|x"));
     try std.testing.expectEqual(@as(?usize, 3), prefixTableOpeningStart("\n\r\n{|x"));
+    for (styles.prefix_table.?.contexts) |context| {
+        var nbsp: usize = 0; var spaces: usize = 0;
+        for (context.nodes) |node| if (node.captured_entity_text) |text| {
+            try std.testing.expectEqualStrings("span", node.tag);
+            try std.testing.expectEqual(@as(usize, 1), node.attributes.len);
+            try std.testing.expectEqualStrings("mw:Entity", node.attributes[0].value);
+            if (equal(text, "\xc2\xa0")) nbsp += 1 else if (equal(text, " ")) spaces += 1 else return error.TestUnexpectedResult;
+        };
+        try std.testing.expectEqual(@as(usize, 1), nbsp);
+        try std.testing.expectEqual(@as(usize, 1), spaces);
+    }
+
 }
 
 test "MG prefix TABLE refuses changed transclusion identity generated owner effects and foreign source" {
@@ -18511,6 +20742,8 @@ test "MG prefix TABLE refuses changed transclusion identity generated owner effe
 }
 
 test "actual retained MG prefix source emits Q banner with all source body actions and independent image owner" {
+    var q_phase = @src();
+    errdefer std.debug.print("MG_PREFIX_SOURCE checkpoint={s}:{d}\n", .{ q_phase.file, q_phase.line });
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     const T = CurrentGetLiteralTesting;
     var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
@@ -18519,15 +20752,19 @@ test "actual retained MG prefix source emits Q banner with all source body actio
     const source = original.current_get_literal.?.expanded_source;
     var book = try T.book(a, &ns, &files, shape); defer book.deinit();
     var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    q_phase = @src();
     const styles = (try book.selectPageStyles(a, &ns, 0, 3099, 37649537, original.title, original.current_get_literal.?.raw_source,
         source, Testing.hash(T.defaults), &parent)) orelse return error.TestUnexpectedResult;
+    q_phase = @src();
     const selected = styles.prefix_table orelse return error.TestUnexpectedResult;
     // The ordinary ancestry API still withholds its paragraph-boundary proof
     // for this single leading LF; only the complete prefix operation admits it.
     try std.testing.expect((try tableDirectionLocalParentsAlloc(a, &ns, source, selected.opening_start)) == null);
+    q_phase = @src();
     const capability = styles.tablePrefixSource() orelse return error.TestUnexpectedResult;
     try std.testing.expect(capability.prefix_viewport and capability.root_only);
     try std.testing.expectEqualStrings("https://mg.wiktionary.org", capability.article_origin.?);
+    q_phase = @src();
     const observed = (try capability.observe(capability.context, a, source, 1)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 2), observed.contexts.len);
     try std.testing.expect(observed.link_contexts.ptr == observed.contexts.ptr and observed.link_contexts.len == observed.contexts.len);
@@ -18540,14 +20777,38 @@ test "actual retained MG prefix source emits Q banner with all source body actio
             _: ?u32, _: ?u32) A.Error!?encoder.presentation_types.FigureSizingPolicy { return null; }
     };
     var renderer: compiler.Renderer = .{ .a = a, .content_root = .parser_output,
+        // Preserve Book's existing complete source and captured root scope.
+        // The consumed prefix is still independently owned by projection below.
+        .bounded_text_class_scope = &styles.scope, .bounded_text_class_source = source,
         .context = .{ .title = original.title, .language = "Unclassified", .namespace_catalog = &ns,
             .table_styles = styles.styles, .text_paint_styles = styles.styles, .observe_source_elements = true,
-            .figure_sizing = .{ .resolve_fn = NoSizing.resolve, .table_containing_direction = capability } },
+            .table_viewport_trace = true,
+            .figure_sizing = .{ .resolve_fn = NoSizing.resolve, .table_containing_direction = capability,
+                .text_class_scope = .{ .source = source, .scope = &styles.scope } } },
         .table_direction_binding = .{ .projection = &projection, .owner = compiler.MissingText.untracked(prefix), .page_start = 0 } };
+    q_phase = @src();
     const blocks = try renderer.renderBodyWithMissing(compiler.MissingText.untracked(prefix));
     var emitted: ?compiler.Table = null;
     for (blocks) |block| if (block.table) |table| { try std.testing.expect(emitted == null); emitted = table; };
+    q_phase = @src();
     const banner = emitted orelse return error.TestUnexpectedResult;
+    q_phase = @src();
+    if (renderer.fallbacks.any()) {
+        const ancestor = renderer.page_ancestor_effect;
+        std.debug.print("MG_PREFIX_FALLBACK_REPORT report={any} preflight_decline={s} table_style_branch={s} ancestor_reason={s} ancestor_depth={any} ancestor_declaration_offset={any}\n", .{
+            renderer.fallbacks, renderer.table_page_preflight_decline orelse "none", renderer.table_style_trace_branch orelse "none",
+            if (ancestor) |value| @tagName(value.reason) else "none",
+            if (ancestor) |value| @as(?usize, value.ancestor_depth) else null,
+            if (ancestor) |value| @as(?usize, value.declaration_offset) else null,
+        });
+        if (ancestor) |value| {
+            const selector = if (value.rule) |rule| if (rule.provenance) |provenance| provenance.selector else "" else "";
+            std.debug.print("MG_PREFIX_ANCESTOR declaration={s} declaration_bytes={d} declaration_truncated={any} selector={s} selector_bytes={d} selector_truncated={any}\n", .{
+                value.declaration[0..@min(value.declaration.len, 256)], value.declaration.len, value.declaration.len > 256,
+                selector[0..@min(selector.len, 256)], selector.len, selector.len > 256,
+            });
+        }
+    }
     try std.testing.expect(!renderer.fallbacks.any());
     try std.testing.expectEqual(@as(usize, 1), banner.rows.len);
     try std.testing.expectEqual(@as(usize, 1), banner.rows[0].cells.len);
@@ -18561,12 +20822,14 @@ test "actual retained MG prefix source emits Q banner with all source body actio
     try std.testing.expectEqual(@as(f32, 100), banner.style.?.width.?.value);
     try std.testing.expect(banner.style.?.containing_direction != null and banner.block_viewport.?.box_style.containing_direction != null);
     var baseline: compiler.Renderer = .{ .a = a, .context = .{ .title = original.title, .namespace_catalog = &ns } };
+    q_phase = @src();
     const old_blocks = try baseline.renderBodyWithMissing(compiler.MissingText.untracked(prefix));
     var old: ?compiler.Table = null;
     for (old_blocks) |block| if (block.table) |table| { try std.testing.expect(old == null); old = table; };
     const before = old orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(before.rows.len, banner.rows.len);
     var images: usize = 0; var links: usize = 0;
+    q_phase = @src();
     for (before.rows[0].cells, banner.rows[0].cells) |old_cell, cell| {
         try std.testing.expectEqualStrings(try compiler.plainText(a, old_cell.spans), try compiler.plainText(a, cell.spans));
         try std.testing.expectEqual(old_cell.spans.len, cell.spans.len);
@@ -18585,15 +20848,41 @@ test "actual retained MG prefix source emits Q banner with all source body actio
                 try std.testing.expectEqual(encoder.presentation_types.InlineImageVerticalAlign.middle, image.vertical_align.?);
                 try std.testing.expectEqualDeep(owner.font_family, span.font_family);
                 try std.testing.expectEqual(owner.font_scale, span.font_scale);
+                const paint = span.link_paint orelse return error.TestUnexpectedResult;
+                const outline = paint.focus_outline orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(encoder.presentation_types.StyleLengthUnit.px, outline.width.unit);
+                try std.testing.expectEqual(@as(f32, 2), outline.width.value);
+                try std.testing.expectEqualStrings("#3366cc", outline.color.value.?);
+                try std.testing.expectEqual(encoder.presentation_types.StyleLengthUnit.px, outline.offset.unit);
+                try std.testing.expectEqual(@as(f32, 0), outline.offset.value);
+                try std.testing.expectEqual(encoder.presentation_types.StyleLengthUnit.px, outline.radius.unit);
+                try std.testing.expectEqual(@as(f32, 2), outline.radius.value);
+                // The retained day palette and real A selectors compute all
+                // eight states; these remain data rather than bitmap ink.
+                const expected_paint: encoder.presentation_types.LinkPaint = .{
+                    .normal = .{ .foreground = "#3366cc", .underline = false },
+                    .hover = .{ .foreground = "#3056a9", .underline = true },
+                    .active = .{ .foreground = "#233566", .underline = true },
+                    .hover_active = .{ .foreground = "#233566", .underline = true },
+                    .visited = .{ .foreground = "#6a60b0", .underline = false },
+                    .visited_hover = .{ .foreground = "#534fa3", .underline = true },
+                    .visited_active = .{ .foreground = "#353262", .underline = true },
+                    .visited_hover_active = .{ .foreground = "#353262", .underline = true },
+                    .underline_on_focus = true, .focus_outline = outline,
+                };
+                try std.testing.expectEqualDeep(expected_paint, paint);
+                try std.testing.expect(encoder.presentation_types.validLinkPaint(paint));
             } else if (span.kind == .link) { links += 1; try std.testing.expect(span.link_paint != null); }
         }
     }
     try std.testing.expectEqual(@as(usize, 1), images); try std.testing.expectEqual(@as(usize, 10), links);
     const codec = encoder.presentation_codec;
+    q_phase = @src();
     const bytes = try codec.encodeBuildAlloc(a, &[_]compiler.Span{},
         &[_]struct { level: u8 = 0, title: []const u8 = "", blocks: []const compiler.Block }{.{ .blocks = blocks }},
         encoder.presentation_types.Layout{}, &.{}, renderer.media.items);
-    try std.testing.expectEqualStrings("DPRQ", bytes[0..4]);
+    try std.testing.expectEqualStrings("DPRR", bytes[0..4]);
+    q_phase = @src();
     const stored = try codec.decodeAlloc(a, bytes, original.title, .language, .{ .code = "", .heading = "Unclassified" });
     try std.testing.expectEqualStrings("Unclassified", stored.entry.language.?);
     try std.testing.expectEqualStrings("", stored.entry.language_code);
@@ -18782,6 +21071,16 @@ test "literal DIV prefix accepts only closed numeric wiki cell span attributes b
 }
 
 test "retained KU full GET intrinsic Table issuer binds all ten complete source grids and both captured heads" {
+    try KuFullGetIntrinsicOracleTesting.run(@import("source_internal_link.zig").ControlledKuTitleInputsTesting);
+}
+pub const KuFullGetIntrinsicOracleTesting = if (@import("builtin").is_test) struct {
+    pub fn run(comptime TargetInputs: type) !void {
+    const Failure = struct {
+        fn at(comptime stage: []const u8, comptime location: std.builtin.SourceLocation) error{TestUnexpectedResult} {
+            std.debug.print("KU_INTRINSIC_ISSUER stage={s} source={s}:{d}:{d}\n", .{ stage, location.file, location.line, location.column });
+            return error.TestUnexpectedResult;
+        }
+    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
     var ns = try namespaces.Registry.init(a, MissingServedTesting.namespace); defer ns.deinit();
     const shape = try FullGetRootTesting.shape(a);
@@ -18791,17 +21090,48 @@ test "retained KU full GET intrinsic Table issuer binds all ten complete source 
     const supplied = try responseSource(a, &ns, page);
     var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
     const doc = try MissingServedTesting.document(a);
-    const bound = (try book.selectPageStyles(a, &ns, page.namespace_id, page.page_id, page.revision_id,
-        page.title, supplied.source, supplied.source, Testing.hash(doc.missing_link_styles.?.defaults), &parent)) orelse return error.TestUnexpectedResult;
-    const capability = bound.tableIntrinsicSource() orelse return error.TestUnexpectedResult;
+    // The caller explicitly selects controlled or authentic normal inputs.
+    // Both paths retain this complete strict source/captured oracle.
+    var normal_targets = try TargetInputs.load(a, &ns); defer normal_targets.deinit();
+    const targets = try normal_targets.targets(a, supplied.source);
+    try @import("source_internal_link.zig").ControlledKuTitleInputsTesting.verify(a, &ns, supplied.source, targets);
+    const bound = (try book.selectPageStylesForCompiler(a, &ns, page.namespace_id, page.page_id, page.revision_id,
+        page.title, supplied.source, supplied.source, Testing.hash(doc.missing_link_styles.?.defaults), &parent,
+        .{ .title = page.title, .namespace_catalog = &ns, .local_link_targets = targets })) orelse return Failure.at("selectPageStyles", @src());
+    errdefer {
+        var ku193_nodes: usize = 0; var ku193_tables: usize = 0; var ku193_family: usize = 0;
+        var ku193_nonroot: usize = 0; var ku193_css: usize = 0; var ku193_alternative_css: usize = 0;
+        var ku193_stored = false; var ku193_alternative = false; var ku193_truncated = false;
+        if (book.pages.len != 0) if (book.pages[0].page_styles) |stored| {
+            ku193_stored = true;
+            ku193_nodes = stored.observed_nodes.len;
+            ku193_truncated = stored.observed_nodes.len > 8192;
+            ku193_css = stored.context_sources.len;
+            if (stored.figure_alternative_sources) |sources| { ku193_alternative = true; ku193_alternative_css = sources.len; }
+            for (stored.observed_nodes[0..@min(stored.observed_nodes.len, 8192)]) |node| {
+                if (!node.tag.is("table")) continue;
+                ku193_tables += 1;
+                if (node.attributes.get("border") != null and node.attributes.get("cellpadding") != null and node.attributes.get("cellspacing") != null) {
+                    ku193_family += 1;
+                    if (node.parent != 0) ku193_nonroot += 1;
+                }
+            }
+        };
+        std.debug.print("KU_INTRINSIC_SETUP selected={d} source_bytes={d} literal_openings={d} stored_present={any} nodes={d} tables={d} attributed_family={d} nonroot_family={d} scan_truncated={any} context_css={d} alternative_present={any} alternative_css={d} interwiki_rows={d} profile_unresolved={any} source_root={any} static_motion={any}\n",
+            .{ bound.intrinsic_tables.len, supplied.source.len, std.mem.count(u8, supplied.source, "{|"), ku193_stored, ku193_nodes,
+                ku193_tables, ku193_family, ku193_nonroot, ku193_truncated, ku193_css, ku193_alternative,
+                ku193_alternative_css, ns.interwiki_rows.len, bound.styles.globally_unresolved,
+                bound.scope.page_style_root != null, bound.scope.page_static_motion != null });
+    }
+    const capability = bound.tableIntrinsicSource() orelse return Failure.at("tableIntrinsicSource", @src());
     try std.testing.expect(capability.intrinsic_viewport and !capability.prefix_viewport and !capability.root_only);
     const selected = bound.intrinsic_tables;
     try std.testing.expectEqual(@as(usize, 10), selected.len);
     var rows: usize = 0; var cells: usize = 0; var centers: usize = 0; var links: usize = 0;
     for (selected, [_]usize{13,16,28,5,3,4,9,9,5,10}) |owner, expected_rows| {
-        const observed = (try capability.observe(capability.context, a, supplied.source, owner.opening_start)) orelse return error.TestUnexpectedResult;
+        const observed = (try capability.observe(capability.context, a, supplied.source, owner.opening_start)) orelse return Failure.at("observe selected source table", @src());
         try std.testing.expect(observed.contexts.ptr == owner.contexts.ptr and observed.parents.len == 0);
-        const motion = observed.static_motion orelse return error.TestUnexpectedResult;
+        const motion = observed.static_motion orelse return Failure.at("selected static motion", @src());
         try std.testing.expect(motion.contexts.ptr == owner.contexts.ptr and motion.proof.styles == bound.styles);
         try std.testing.expect(motion.proof.source.ptr == supplied.source.ptr and motion.proof.root == bound.scope.page_style_root);
         try std.testing.expectEqual(@as(usize, 2), owner.contexts.len);
@@ -18812,7 +21142,7 @@ test "retained KU full GET intrinsic Table issuer binds all ten complete source 
             try std.testing.expect(context.styles == full.styles and context.root == full.root);
             try std.testing.expectEqualDeep(profile.observedIntrinsicTableGeometry(context), profile.observedIntrinsicTableGeometry(full));
             const identity = (try compiler.Renderer.intrinsicTableIdentityAlloc(a, supplied.source, owner.opening_start,
-                .{ .title = page.title, .namespace_catalog = &ns }, full)) orelse return error.TestUnexpectedResult;
+                .{ .title = page.title, .namespace_catalog = &ns, .local_link_targets = targets }, full)) orelse return Failure.at("per-head intrinsic source identity", @src());
             try std.testing.expectEqual(expected_rows * 14, identity.len);
         }
         const full = owner.link_contexts[0];
@@ -18837,15 +21167,16 @@ test "retained KU full GET intrinsic Table issuer binds all ten complete source 
     try std.testing.expect((try capability.observe(capability.context, a, supplied.source, selected[0].opening_start + 1)) == null);
     var without_motion_bound = bound.*;
     without_motion_bound.scope.page_static_motion = null;
-    const without_motion_capability = without_motion_bound.tableIntrinsicSource() orelse return error.TestUnexpectedResult;
+    const without_motion_capability = without_motion_bound.tableIntrinsicSource() orelse return Failure.at("without-motion capability", @src());
     const without_motion = (try without_motion_capability.observe(without_motion_capability.context, a,
-        supplied.source, selected[0].opening_start)) orelse return error.TestUnexpectedResult;
+        supplied.source, selected[0].opening_start)) orelse return Failure.at("without-motion observation", @src());
     try std.testing.expect(without_motion.static_motion == null);
-    const retained_motion = (try capability.observe(capability.context, a, supplied.source, selected[0].opening_start)) orelse return error.TestUnexpectedResult;
+    const retained_motion = (try capability.observe(capability.context, a, supplied.source, selected[0].opening_start)) orelse return Failure.at("retained motion observation", @src());
     try std.testing.expect(retained_motion.static_motion != null);
     try std.testing.expect(digestMatches(supplied.source, "ed942971342411e72720f64881ff55ebbc3d36a3a019d96da2b5ce8f199bcb42"));
     try std.testing.expect(digestMatches(supplied.html, "72866b7e71bb94a5ba773a06324a24d26bd2e1611134f20211a6f9894cdb0a33"));
-}
+    }
+} else struct {};
 
 test "intrinsic Table issuer refuses missing extra changed and ambiguous complete occurrence correspondence" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
@@ -18896,7 +21227,7 @@ test "intrinsic Table identity preserves direct text positions across emphasis l
             const attrs = " border=\"1\" cellpadding=\"4\" cellspacing=\"0\" style=\"border:1px solid #aaa;border-collapse:collapse\"";
             const source = try std.mem.concat(allocator, u8, &.{ "{|", attrs, "\n|-\n|", source_body, "\n|}" });
             const html = try std.mem.concat(allocator, u8, &.{
-                "<div class=\"mw-parser-output\" lang=\"ku\" dir=\"ltr\"><table", attrs,
+                "<div class=\"mw-content-ltr mw-parser-output\" lang=\"ku\" dir=\"ltr\"><table", attrs,
                 "><tbody><tr><td>", captured_body, "</td></tr></tbody></table></div>" });
             var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
             _ = try observedTextClassScopeWithElements(allocator, registry, html, &nodes);
@@ -18922,8 +21253,8 @@ test "intrinsic Table identity preserves direct text positions across emphasis l
     };
     try Check.run(a, &ns, &styles, "''a''bc", "<i>a</i>bc", true);
     try Check.run(a, &ns, &styles, "''a''bc", "<i>ab</i>c", false);
-    try Check.run(a, &ns, &styles, "a[[Word|b]]c", "a<a href=\"/wiki/Word\" title=\"Word\">b</a>c", true);
-    try Check.run(a, &ns, &styles, "a[[Word|b]]c", "<a href=\"/wiki/Word\" title=\"Word\">ab</a>c", false);
+    try Check.run(a, &ns, &styles, "a[[Word|b]] c", "a<a href=\"/wiki/Word\" title=\"Word\">b</a> c", true);
+    try Check.run(a, &ns, &styles, "a[[Word|b]] c", "<a href=\"/wiki/Word\" title=\"Word\">ab</a> c", false);
     try Check.run(a, &ns, &styles, "a<span></span>b", "a<span></span>b", true);
     try Check.run(a, &ns, &styles, "a<span></span>b", "ab<span></span>", false);
     try Check.run(a, &ns, &styles, "''a''b&amp;c", "<i>&#97;</i>b&#38;c\n", true);
@@ -18968,6 +21299,7 @@ test "retained TH distinct Rules use both existing Figure heads and exact source
             .{ .source = source, .element = source[range.start..range.end] })) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(@as(usize, 2), observation.contexts.len);
         try std.testing.expect(choice.contexts[0].styles != choice.contexts[1].styles);
+        var first_style: ?encoder.presentation_types.RuleStyle = null;
         for (observation.contexts) |context| {
             try std.testing.expectEqual(retained.observed_nodes.len + retained.outer.ancestors.len, context.nodes.len);
             const own = context.nodes[context.element];
@@ -18977,12 +21309,38 @@ test "retained TH distinct Rules use both existing Figure heads and exact source
                 try std.testing.expectEqualStrings(expected.name, actual.name);
                 try std.testing.expectEqualStrings(expected.value, actual.value);
             }
+            // Both complete retained heads must resolve the actual HR, including
+            // the bare focus rule and every independent box/font declaration.
+            const computed = (try profile.resolveObservedAuthoredRule(a, context)) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualDeep(encoder.presentation_types.StyleLength{ .unit = .px, .value = 1 }, computed.style.height);
+            try std.testing.expectEqualStrings("#a2a9b1", computed.style.fill.rgb);
+            try std.testing.expectEqualDeep(encoder.presentation_types.StyleLength{ .unit = .em, .value = 0.2 }, computed.style.margins.top);
+            try std.testing.expectEqualDeep(computed.style.margins.top, computed.style.margins.bottom);
+            try std.testing.expect(computed.style.margins.left.value == 0 and computed.style.margins.right.value == 0);
+            try std.testing.expectEqual(@as(?encoder.presentation_types.FigureClear, if (index == 0) null else .right), computed.style.clear);
+            if (first_style) |prior| try std.testing.expectEqualDeep(prior, computed.style) else first_style = computed.style;
             const immediate = own.parent orelse return error.TestUnexpectedResult;
             if (index == 0) {
                 var parent_class: ?[]const u8 = null;
                 for (context.nodes[immediate].attributes) |attr| if (equal(attr.name, "class")) { parent_class = attr.value; };
                 try std.testing.expectEqualStrings("vsHide", parent_class orelse return error.TestUnexpectedResult);
-            } else try std.testing.expectEqual(context.root, immediate);
+            } else {
+                // The two closes before this HR end vsHide and vsSwitcher;
+                // the original outer pronunciation DIV still owns the Rule.
+                const parent_opening = syntax.tagAt(source, 5614) orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqualStrings("<div class=\"standard-box zhpron\" style=\"overflow:auto; max-width:500px; font-size:100%\">", source[5614..parent_opening.end]);
+                const parent_pair = syntax.matchingTag(source, parent_opening) orelse return error.TestUnexpectedResult;
+                try std.testing.expect(parent_opening.end <= range.start and range.end <= parent_pair.inner_end);
+                const original_parent = try outerInventory(a, parent_opening);
+                const captured_parent = context.nodes[immediate];
+                try std.testing.expectEqualStrings("div", captured_parent.tag);
+                try std.testing.expectEqual(original_parent.attributes.len, captured_parent.attributes.len);
+                for (original_parent.attributes, captured_parent.attributes) |expected, actual| {
+                    try std.testing.expectEqualStrings(expected.name, actual.name);
+                    try std.testing.expectEqualStrings(expected.value, actual.value);
+                }
+                try std.testing.expectEqual(@as(?u32, context.root), captured_parent.parent);
+            }
         }
         const foreign = try a.dupe(u8, source);
         try std.testing.expect(try SelectedPageStyles.authoredElementStyle(&selected, a,
@@ -19074,4 +21432,3802 @@ test "retained TH Rule queries preserve both complete heads bare inner paint and
     }
     // This authentic complete-input query remains an unearned native control;
     // it does not substitute for the subsequent mixed body/parent-flow issuer.
+}
+
+const CenteredMissingCellTesting = struct {
+    const prefix = "testdata/sr-centered-missing-cell/";
+    const source = @embedFile(prefix ++ "page.expanded.wikitext");
+    const html = @embedFile(prefix ++ "response.html");
+    const range: FigureStyleRange = .{ .start = 403, .end = 509, .media_kind = .missing };
+    fn nodes(a: A, ns: *const namespaces.Registry, body: []const u8) ![]const ObservedSiblingNode {
+        var result: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, ns, body, &result);
+        return result.items;
+    }
+};
+test "actual SR centered Missing first cell retains full source and exact containing owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = CenteredMissingCellTesting;
+    var ns = try namespaces.Registry.init(a, @embedFile(F.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const page = try json(a, @embedFile(F.prefix ++ "actual-page.json"));
+    try std.testing.expectEqual(@as(u64, 24273), try number(page, "page_id"));
+    try std.testing.expectEqual(@as(u64, 34924), try number(page, "revision_id"));
+    const response = try field(try json(a, try string(page, "response")), "parse");
+    try std.testing.expectEqualStrings(F.source, try string(response, "wikitext"));
+    try std.testing.expectEqualStrings(F.html, try string(response, "text"));
+    try std.testing.expectEqual(@as(usize, 5265), F.source.len);
+    try std.testing.expect(digestMatches(F.source, "48b1383ee38454d081f811b7a4ae675de5e6ba740ca088b5b18a6da56b62665b"));
+    try std.testing.expect(digestMatches(F.html, "e119b2ab57711197790bbd6fd9f0a7486961dd33560ba929b7e4c0d52f523bbd"));
+    try std.testing.expectEqualStrings("[[Датотека:Gr 2euro.jpg|умањено|центар|200п|[1] Аверз грчког 2-евра]]", F.source[F.range.start..F.range.end]);
+    try std.testing.expect(std.mem.indexOf(u8, F.source, "{{{1}}}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, F.source, "-{ [[Avers]]") != null);
+    // The old closed-flow contract remains a refusal; no page-wide grammar waiver.
+    try std.testing.expectError(invalid, figureStyleOperationProofs(a, &ns, F.source, &.{F.range}));
+    const nodes = try F.nodes(a, &ns, F.html);
+    const proofs = try figureStyleOperationProofsWithObservedOwner(a, &ns, F.source, &.{F.range}, F.html, nodes);
+    try std.testing.expectEqual(@as(usize, 1), proofs.len);
+    try std.testing.expectEqualDeep(F.range, proofs[0].range);
+    try std.testing.expectEqualStrings("Датотека:Gr 2euro.jpg", proofs[0].canonical_file);
+    try std.testing.expectEqualStrings("[1] Аверз грчког 2-евра", F.source[proofs[0].caption_start..proofs[0].options_end]);
+    const candidate = proofs[0].candidates[0]; const frame = nodes[candidate.frame];
+    const td = nodes[frame.parent.?]; const tr = nodes[td.parent.?];
+    const tbody = nodes[tr.parent.?]; const table = nodes[tbody.parent.?];
+    try std.testing.expect(td.tag.is("td") and tr.tag.is("tr") and tbody.tag.is("tbody") and table.tag.is("table"));
+    try std.testing.expectEqual(@as(?usize, 0), table.parent);
+    try std.testing.expectEqualStrings("3", td.attributes.get("colspan").?);
+    try std.testing.expectEqualStrings("infobox vcard", table.attributes.get("class").?);
+    try std.testing.expectEqualStrings("mw-halign-center", frame.attributes.get("class").?);
+    const observed = try observedImages(a, &ns, F.html, &.{.{ .start = F.range.start, .end = F.range.end,
+        .canonical_file = "Датотека:Gr 2euro.jpg", .missing_content = true }});
+    const missing = observed[0].missing_content.?;
+    try std.testing.expect(missing.centered and !missing.right and !missing.default_size and !missing.paint_root_proven);
+    try std.testing.expectEqual(@as(u32, 200), missing.data_width);
+    try std.testing.expectEqualStrings("Датотека:Gr 2euro.jpg", missing.label);
+    try std.testing.expectEqualStrings("//commons.wikimedia.org/wiki/Special:UploadWizard?uselang=sr&wpDestFile=Gr_2euro.jpg", missing.href);
+}
+test "centered Missing cell issuer refuses changed owners duplicates and unproved source contexts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = CenteredMissingCellTesting;
+    var ns = try namespaces.Registry.init(a, @embedFile(F.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const nodes = try F.nodes(a, &ns, F.html);
+    for ([_][]const u8{ "{{unknown}}\n", "<ref>\n", "<nowiki>\n", "[[Other|\n", "<div>\n", "{|\n| " }) |prefix| {
+        const changed = try std.mem.concat(a, u8, &.{prefix, F.source});
+        var range = F.range; range.start += prefix.len; range.end += prefix.len;
+        try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, changed, &.{range}, F.html, nodes));
+    }
+    for ([_]struct { before: []const u8, after: []const u8 }{
+        .{ .before = "colspan=\"3\"", .after = "colspan=\"2\"" },
+        .{ .before = "class=\"infobox vcard\"", .after = "class=\"infobox\"" },
+        .{ .before = "<tr>\n<td colspan=\"3\">", .after = "<tr><td>foreign</td>\n<td colspan=\"3\">" },
+        .{ .before = "<tbody><tr>\n<td colspan=\"3\">", .after = "<tbody class=\"foreign\"><tr>\n<td colspan=\"3\">" },
+        .{ .before = "mw-halign-center", .after = "mw-halign-right" },
+        .{ .before = "mw:Error mw:File/Thumb", .after = "mw:File/Thumb" },
+    }) |mutation| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, F.html, mutation.before));
+        const changed = try std.mem.replaceOwned(u8, a, F.html, mutation.before, mutation.after);
+        const changed_nodes = try F.nodes(a, &ns, changed);
+        try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, F.source, &.{F.range}, changed, changed_nodes));
+    }
+    const proof = try figureStyleOperationProofsWithObservedOwner(a, &ns, F.source, &.{F.range}, F.html, nodes);
+    const frame = nodes[proof[0].candidates[0].frame];
+    const frame_end = (syntax.tagAt(F.html, frame.inner_end.?) orelse return error.TestUnexpectedResult).end;
+    const root_end = nodes[0].inner_end.?;
+    const duplicate = try std.mem.concat(a, u8, &.{ F.html[0..root_end], F.html[frame.start..frame_end], F.html[root_end..] });
+    try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, F.source, &.{F.range}, duplicate, try F.nodes(a, &ns, duplicate)));
+    for (0..3) |mode| {
+        var wrong = F.range;
+        switch (mode) { 0 => wrong.start += 1, 1 => wrong.end -= 1, else => wrong.end = F.source.len + 1 }
+        try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, F.source, &.{wrong}, F.html, nodes));
+    }
+}
+test "centered Missing options bind exact observed width and reject default or conflicting alignment" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(CenteredMissingCellTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const behavior = @embedFile("testdata/sr-admiral/behavior-switches.tsv");
+    var options = try namespaces.image_options.Registry.init(a, @embedFile("testdata/sr-admiral/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, Testing.hash(behavior)); defer options.deinit();
+    const observed: ObservedMissing = .{ .label = "Датотека:Gr 2euro.jpg", .href = "//commons.wikimedia.org/wiki/Special:UploadWizard?wpDestFile=Gr_2euro.jpg",
+        .data_width = 200, .element = .{ .attributes = &.{} }, .default_size = false, .centered = true };
+    for ([_][]const u8{ "умањено|центар|200п|Caption", "200px|мини|центар|Caption", "центар|200px|мини|Caption" }) |value|
+        try std.testing.expect(missingThumbnailOptionsForObservation(&options, value, observed));
+    for ([_][]const u8{ "мини|центар|Caption", "мини|200px|Caption", "мини|десно|200px|Caption", "мини|центар|201px|Caption",
+        "мини|центар|200px|alt=Other|Caption", "мини|центар|центар|200px|Caption", "мини|десно|центар|200px|Caption" }) |value|
+        try std.testing.expect(!missingThumbnailOptionsForObservation(&options, value, observed));
+}
+
+const IndependentRuTableRootTesting = struct {
+    const namespace = @embedFile("testdata/ru-denaske114/namespace-registry.tsv");
+    const raw = @embedFile("testdata/ru-root-language93/raw.wikitext");
+    fn input(a: A) !RawTableRoot {
+        const doc = try std.json.parseFromSliceLeaky(Document, a,
+            @embedFile("testdata/ru-current-table-root/figure-page-observations.json"), .{ .allocate = .alloc_always });
+        try std.testing.expectEqual(@as(usize, 0), doc.pages.len);
+        try std.testing.expectEqual(@as(usize, 1), doc.table_roots.?.len);
+        return doc.table_roots.?[0];
+    }
+    fn document(a: A, ns: *const namespaces.Registry, roots: ?[]const RawTableRoot) !Document {
+        var doc = try std.json.parseFromSliceLeaky(Document, a,
+            @embedFile("testdata/ru-current-table-root/figure-page-observations.json"), .{ .allocate = .alloc_always });
+        try std.testing.expect(hashEqual(ns.source_sha256, doc.namespace_sha256));
+        doc.table_roots = roots;
+        return doc;
+    }
+};
+
+test "actual RU independent table root enrolls complete GET first row styled parent and Unicode section ancestry without media" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = IndependentRuTableRootTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    const input = try T.input(a);
+    try std.testing.expectEqual(@as(u64, 1500042), input.page_id);
+    try std.testing.expectEqual(@as(u64, 10248798), input.revision_id);
+    try std.testing.expectEqualStrings("𛀁", input.title);
+    try std.testing.expect(digestMatches(T.raw, input.raw_sha256));
+    try std.testing.expect(digestMatches(input.source, "59188f807c4c2b6de829e42c79e8ceabb757562a17dd8a2f3c8ff20068564ecb"));
+    try std.testing.expect(digestMatches(input.response, "54a7b4432c192d1ff1052110e486b5ac257448a51cdbbc6d32c0ea05bcd71ef1"));
+    const signature = (try sourceTableRootSignature(a, input.source, input.source_table.start)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 0), signature.row.attributes.len);
+    try std.testing.expectEqualStrings("11", signature.header.get("colspan").?);
+    try std.testing.expectEqualStrings("background:#efefef;text-align:center", signature.header.get("style").?);
+    try std.testing.expectEqualStrings("Хирагана", signature.text);
+    const roots = [_]RawTableRoot{input};
+    const doc = try T.document(a, &ns, &roots);
+    var files = try Testing.registry(a, &ns, doc); defer files.deinit();
+    var defaults: [32]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&defaults, doc.defaults_sha256);
+    var book = try Book.init(std.testing.allocator, try std.json.Stringify.valueAlloc(a, doc, .{}), &ns, &files, defaults, 220);
+    defer book.deinit();
+    try std.testing.expectEqual(@as(usize, 0), book.pages.len);
+    try std.testing.expectEqual(@as(usize, 1), book.table_roots.len);
+    const source = try a.dupe(u8, input.source);
+    const selected = (try book.selectTableRoot(a, &ns, 0, input.page_id, input.revision_id, input.title, T.raw, source, defaults)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(selected.root_only);
+    const observation = (try selected.observe(selected.context, a, source, input.source_table.start)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), observation.contexts.len);
+    try std.testing.expectEqual(@as(usize, 1), observation.parents.len);
+    try std.testing.expectEqualStrings("<div style=\"width:auto;margin:0px;overflow:auto;\">", observation.parents[0]);
+    try std.testing.expect(@intFromPtr(observation.parents[0].ptr) >= @intFromPtr(source.ptr));
+    try std.testing.expect(@intFromPtr(observation.parents[0].ptr) + observation.parents[0].len <= @intFromPtr(source.ptr) + source.len);
+    const context = observation.contexts[0];
+    const parent = context.nodes[context.nodes[context.table].parent.?];
+    try std.testing.expectEqualStrings("div", parent.tag);
+    try std.testing.expectEqual(@as(usize, 5), parent.attributes.len);
+    var style: ?[]const u8 = null;
+    for (parent.attributes) |attribute| if (equal(attribute.name, "style")) { style = attribute.value; };
+    try std.testing.expectEqualStrings("width:auto;margin:0px;overflow:auto;", style.?);
+    const near = context.nodes[parent.parent.?];
+    const far = context.nodes[near.parent.?];
+    try std.testing.expectEqualStrings("section", near.tag);
+    try std.testing.expectEqualStrings("section", far.tag);
+    for ([_]struct { node: profile.ObservedStyleNode, label: []const u8, ordinal: []const u8 }{
+        .{ .node = near, .label = "Этимология", .ordinal = "5" },
+        .{ .node = far, .label = "Японский", .ordinal = "1" },
+    }) |expected| {
+        try std.testing.expectEqual(@as(usize, 3), expected.node.attributes.len);
+        for (expected.node.attributes) |attribute| {
+            if (equal(attribute.name, "aria-labelledby")) try std.testing.expectEqualStrings(expected.label, attribute.value);
+            if (equal(attribute.name, "data-mw-section-id")) try std.testing.expectEqualStrings(expected.ordinal, attribute.value);
+        }
+    }
+    try std.testing.expectEqual(@as(?u32, context.root), far.parent);
+    const other = try a.dupe(u8, source);
+    try std.testing.expect((try selected.observe(selected.context, a, other, input.source_table.start)) == null);
+    try std.testing.expect((try selected.observe(selected.context, a, source, input.source_table.start + 1)) == null);
+    try std.testing.expect((try book.selectTableRoot(a, &ns, 0, input.page_id, input.revision_id + 1, input.title, T.raw, source, defaults)) == null);
+    try std.testing.expect((try book.selectTableRoot(a, &ns, 0, input.page_id, input.revision_id, input.title, "foreign", source, defaults)) == null);
+    try std.testing.expect((try book.selectTableRoot(a, &ns, 0, input.page_id, input.revision_id, input.title, T.raw, source[0 .. source.len - 1], defaults)) == null);
+    for ([_]?[]const RawTableRoot{ null, &.{} }) |absent| {
+        const empty = try T.document(a, &ns, absent);
+        try std.testing.expectError(invalid, Book.init(a, try std.json.Stringify.valueAlloc(a, empty, .{}), &ns, &files, defaults, 220));
+    }
+}
+
+test "independent table root retains first row header span parent and section distinctions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = IndependentRuTableRootTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    const input = try T.input(a);
+    for ([_]struct { from: []const u8, to: []const u8 }{
+        .{ .from = "\n|-\n!colspan=\"11\"", .to = "\n|- style=\"background:red\"\n!colspan=\"11\"" },
+        .{ .from = "!colspan=\"11\"", .to = "!colspan=\"10\"" },
+        .{ .from = "width:auto;margin:0px;overflow:auto;", .to = "width:auto;margin:1px;overflow:auto;" },
+        .{ .from = "width:auto;margin:0px;overflow:auto;", .to = "width:auto;margin:0px;overflow:visible;" },
+    }) |mutation| {
+        var changed = input;
+        changed.source = try std.mem.replaceOwned(u8, a, input.source, mutation.from, mutation.to);
+        changed.source_table.start = std.mem.indexOf(u8, changed.source, "{|class=\"wikitable\" style=\"clear:none").?;
+        changed.source_table.end = std.mem.indexOfScalarPos(u8, changed.source, changed.source_table.start, '\n').?;
+        try std.testing.expectError(invalid, preparedTableRootAlloc(a, &ns, changed));
+    }
+    const plain = "{| class=\"wikitable\"\n! style=\"text-align:center\"|Header\n|}\n";
+    const explicit = "{| class=\"wikitable\"\n|-\n! style=\"text-align:center\"|Header\n|}\n";
+    try std.testing.expect(sameTableRootSignature((try sourceTableRootSignature(a, plain, 0)).?, (try sourceTableRootSignature(a, explicit, 0)).?));
+    for ([_][]const u8{
+        "{|\n|-\n|-\n! style=\"text-align:center\"|Header\n|}\n",
+        "{|\n|- onclick=\"bad\"\n! style=\"text-align:center\"|Header\n|}\n",
+        "{|\n|-\n! colspan=\"0\"|Header\n|}\n",
+        "{|\n|-\n! colspan=\"65536\"|Header\n|}\n",
+        "{|\n|-\n! colspan=\"2\" COLSPAN=\"3\"|Header\n|}\n",
+        "{|\n|-\n! colspan=\"2\"|[[Target|Header]]\n|}\n",
+    }) |source| try std.testing.expect((try sourceTableRootSignature(a, source, 0)) == null);
+    for ([_][]const u8{ "data-mw-section-id='1' id='a' aria-labelledby='Японский'",
+        "data-mw-section-id='5' id='b' aria-labelledby='Символ_хираганы_(архаический)'" }) |attrs| {
+        const opening = try std.fmt.allocPrint(a, "<section {s}>", .{attrs});
+        try std.testing.expect(tableRootGeneratedSection(try inventory(a, syntax.tagAt(opening, 0).?)));
+    }
+    for ([_][]const u8{ "data-mw-section-id='-1' id='a' aria-labelledby='Японский'",
+        "data-mw-section-id='01' id='a' aria-labelledby='Японский'",
+        "data-mw-section-id='1' id='a' aria-labelledby='two labels'",
+        "data-mw-section-id='1' id='a' aria-labelledby='Японский' style='color:red'" }) |attrs| {
+        const opening = try std.fmt.allocPrint(a, "<section {s}>", .{attrs});
+        try std.testing.expect(!tableRootGeneratedSection(try inventory(a, syntax.tagAt(opening, 0).?)));
+    }
+}
+
+test "independent styled table root proves no previous sibling only from joint source and captured first child" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = IndependentRuTableRootTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    const input = try T.input(a);
+    const prepared = try preparedTableRootAlloc(a, &ns, input);
+    const context = prepared.contexts[0];
+    try std.testing.expect(context.nodes[context.table].known_no_previous_element_sibling);
+    try std.testing.expect(context.nodes[context.table].known_previous_element_sibling == null);
+    for (context.nodes, 0..) |node, index| if (index != context.table)
+        try std.testing.expect(!node.known_no_previous_element_sibling);
+    const source = try a.dupe(u8, input.source);
+    const bound = try selectedTableRootAlloc(a, &prepared, source);
+    const observed = (try bound.observe(bound.context, a, source, input.source_table.start)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(observed.contexts[0].nodes[observed.contexts[0].table].known_no_previous_element_sibling);
+    const foreign = try a.dupe(u8, source);
+    try std.testing.expect((try bound.observe(bound.context, a, foreign, input.source_table.start)) == null);
+    try std.testing.expect((try bound.observe(bound.context, a, source, input.source_table.start + 1)) == null);
+    for ([_][]const u8{ "<p>before</p>\n", "before\n" }) |before| {
+        var changed = input;
+        changed.source = try std.mem.concat(a, u8, &.{ input.source[0..input.source_table.start], before, input.source[input.source_table.start..] });
+        changed.source_table.start += before.len;
+        changed.source_table.end += before.len;
+        try std.testing.expectError(invalid, preparedTableRootAlloc(a, &ns, changed));
+    }
+    var unknown = input;
+    unknown.source = try std.mem.replaceOwned(u8, a, input.source,
+        "<div style=\"width:auto;margin:0px;overflow:auto;\">", "<nav style=\"width:auto;margin:0px;overflow:auto;\">");
+    try std.testing.expectError(invalid, preparedTableRootAlloc(a, &ns, unknown));
+    // Controlled capture mutations refresh only the local descriptor so the
+    // first-child/gap checks are exercised rather than the checksum guard.
+    // They are negative fixtures, never substituted for an acquired response.
+    for ([_][]const u8{ "<p>before</p>\n", "before\n", "<!-- gap -->\n" }) |before| {
+        var changed = input;
+        changed.response = try std.mem.concat(a, u8, &.{ input.response[0..input.observed_table.start], before, input.response[input.observed_table.start..] });
+        changed.observed_table.start += before.len;
+        changed.observed_table.end += before.len;
+        const receipt = try json(a, input.receipt);
+        const rows = (try field(receipt, "sources")).array.items;
+        try rows[0].object.put(a, "bytes", .{ .integer = @intCast(changed.response.len) });
+        const hash = std.fmt.bytesToHex(Testing.hash(changed.response), .lower);
+        try rows[0].object.put(a, "sha256", .{ .string = try a.dupe(u8, &hash) });
+        changed.receipt = try std.json.Stringify.valueAlloc(a, receipt, .{});
+        const denied = try preparedTableRootAlloc(a, &ns, changed);
+        const kept = denied.contexts[0];
+        try std.testing.expect(!kept.nodes[kept.table].known_no_previous_element_sibling);
+        try std.testing.expect(kept.nodes[kept.table].known_previous_element_sibling == null);
+        // The ordinary ancestor receipt is still exact; absence of an earlier
+        // sibling is a separate fact and cannot be manufactured from it.
+        try std.testing.expectEqualStrings("table", kept.nodes[kept.table].tag);
+        const parent = kept.nodes[kept.nodes[kept.table].parent.?];
+        try std.testing.expectEqualStrings("div", parent.tag);
+    }
+}
+
+test "intrinsic captured link trails preserve direct text ownership and current language boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, MissingServedTesting.namespace); defer ns.deinit();
+    var styles = try profile.parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    const Check = struct {
+        fn run(allocator: A, registry: *const namespaces.Registry, sheet: *const profile.Profile,
+            source_body: []const u8, captured_body: []const u8, trail: encoder.document_ir.LinkTrail, expected: bool) !void
+        {
+            const attrs = " border=\"1\" cellpadding=\"4\" cellspacing=\"0\" style=\"border:1px solid #aaa;border-collapse:collapse\"";
+            const source = try std.mem.concat(allocator, u8, &.{ "{|", attrs, "\n|-\n|", source_body, "\n|}" });
+            const html = try std.mem.concat(allocator, u8, &.{
+                "<div class=\"mw-content-ltr mw-parser-output\" lang=\"ku\" dir=\"ltr\"><table", attrs,
+                "><tbody><tr><td>", captured_body, "</td></tr></tbody></table></div>" });
+            var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+            _ = try observedTextClassScopeWithElements(allocator, registry, html, &nodes);
+            const full = try allocator.alloc(profile.ObservedStyleNode, nodes.items.len + 2);
+            full[0] = .{ .tag = "html", .parent = null, .attributes = &.{} };
+            full[1] = .{ .tag = "body", .parent = 0, .attributes = &.{} };
+            for (nodes.items, 0..) |node, index| full[index + 2] = .{
+                .tag = node.tag.name, .parent = if (node.parent) |parent| @intCast(parent + 2) else 1,
+                .attributes = try figureObservedAttributes(allocator, node.attributes),
+                .empty = figureObservedEmpty(html, node), .has_text = figureObservedHasText(html, nodes.items, index),
+            };
+            const cells = try compiler.Renderer.intrinsicTableIdentityAlloc(allocator, source, 0,
+                .{ .title = "Other", .namespace_catalog = registry, .link_trail = trail },
+                .{ .intrinsic_viewport = true, .styles = sheet, .nodes = full, .root = 2, .table = 3 });
+            if (cells) |matched| {
+                try std.testing.expectEqual(@as(usize, 1), matched.len);
+                try std.testing.expectEqual(expected, try intrinsicTableCapturedCellMatches(allocator, html, nodes.items, 2, matched[0]));
+            } else try std.testing.expect(!expected);
+        }
+        fn noTrail(_: ?*const anyopaque, _: u21) bool { return false; }
+        fn selectedTrail(_: ?*const anyopaque, cp: u21) bool { return cp == 0x44b; }
+    };
+    try Check.run(a, &ns, &styles, "[[d]]a", "<a href=\"/wiki/d\" title=\"d\">da</a>", .{}, true);
+    try Check.run(a, &ns, &styles, "[[d]]a", "<a href=\"/wiki/d\" title=\"d\">d</a>a", .{}, false);
+    try Check.run(a, &ns, &styles, "[[d]]a", "<a href=\"/wiki/a\" title=\"a\">da</a>", .{}, false);
+    try Check.run(a, &ns, &styles, "[[d]]a", "<a href=\"/wiki/d\" title=\"d\">da</a>", .{ .contains_fn = Check.noTrail }, false);
+    try Check.run(a, &ns, &styles, "[[d]]a", "<a href=\"/wiki/d\" title=\"d\">d</a>a", .{ .contains_fn = Check.noTrail }, true);
+    // A label's final inline owner must not acquire the literal trailing text.
+    try Check.run(a, &ns, &styles, "[[d|<i>d</i>]]a", "<a href=\"/wiki/d\" title=\"d\"><i>d</i>a</a>", .{}, true);
+    try Check.run(a, &ns, &styles, "[[d|<i>d</i>]]a", "<a href=\"/wiki/d\" title=\"d\"><i>da</i></a>", .{}, false);
+    // Use the same parser callback interface as normal language metadata;
+    // product code neither hardcodes ASCII nor invents a Unicode trail rule.
+    try Check.run(a, &ns, &styles, "[[d]]\xd1\x8b", "<a href=\"/wiki/d\" title=\"d\">d\xd1\x8b</a>", .{ .contains_fn = Check.selectedTrail }, true);
+    try Check.run(a, &ns, &styles, "[[d]]\xd1\x8b", "<a href=\"/wiki/d\" title=\"d\">d\xd1\x8b</a>", .{}, false);
+}
+
+
+test "retained TH root literal category keeps separate two head custom environments and exact operation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const bytes = @embedFile("testdata/th-missing-figure-style/figure-page-observations.json");
+    const document = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+    var files = try ThPaletteTesting.registry(a, &ns, document); defer files.deinit();
+    const defaults = Testing.hash(@embedFile(ThPaletteTesting.prefix ++ "figure-siteinfo.raw.json"));
+    var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+    var parent = try profile.parseForTargetAlloc(a, @embedFile(ThPaletteTesting.prefix ++ "common.css"), .screen); defer parent.deinit();
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    const raw = @embedFile(ThPaletteTesting.prefix ++ "page.raw.wikitext");
+    try std.testing.expect(digestMatches(source, "137238f617ab7c056dff9a2fca60e50a5e5182732784cc35a2755cf0d78045df"));
+    const selected = (try book.selectPageStyles(a, &ns, 0, 108817, 2190988, "間", raw, source, defaults, &parent)) orelse return error.TestUnexpectedResult;
+    const root = selected.scope.page_style_complete_root orelse return error.TestUnexpectedResult;
+    const alternate = root.alternative_ancestry orelse return error.TestUnexpectedResult;
+    try std.testing.expect(root != alternate and root.physical_ancestry_complete and alternate.physical_ancestry_complete);
+    for ([_]*const profile.TextElement{ root, alternate }) |node| {
+        const environment = node.observed_custom_environment orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("#f8f9fa", environment.get("--wikt-palette-paleblue").known);
+        try std.testing.expectEqualStrings("#9e9e9e", environment.get("--wikt-palette-grey").known);
+    }
+    try std.testing.expect(selected.scope.source_literal_divs_source.?.ptr == source.ptr);
+    const opening = syntax.tagAt(source, 5614) orelse return error.TestUnexpectedResult;
+    const pair = syntax.matchingTag(source, opening) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("<div class=\"standard-box zhpron\" style=\"overflow:auto; max-width:500px; font-size:100%\">", source[5614..opening.end]);
+    var found: usize = 0;
+    for (selected.scope.source_literal_divs) |proof| if (proof.range.anchor_start == 5614) {
+        found += 1; try std.testing.expect(proof.parent_start == null);
+        try std.testing.expectEqual(pair.end, proof.range.anchor_end);
+        try std.testing.expectEqual(@as(usize, 24511), proof.range.anchor_end - proof.range.anchor_start);
+    };
+    try std.testing.expectEqual(@as(usize, 1), found);
+    // The actual failed nested category has this exact complete parent receipt.
+    // Resolve both retained heads independently through the source declarations;
+    // full Renderer body/action/codec coverage is in the paired compiler control.
+    const nested = syntax.tagAt(source, 20529) orelse return error.TestUnexpectedResult;
+    const nested_pair = syntax.matchingTag(source, nested) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("<div style=\"background-color:var(--wikt-palette-lighterblue, #ebf4ff); margin: 0 -5px -5px; padding: 0 5px 5px;\">", source[20529..nested.end]);
+    const nested_proof = PriorNotePrefixTesting.find(selected.scope.source_literal_divs, 20529) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?usize, 5614), nested_proof.parent_start);
+    try std.testing.expectEqual(nested_pair.end, nested_proof.range.anchor_end);
+    try std.testing.expect(nested_pair.end < pair.end);
+    const custom = selected.styles.custom_properties orelse return error.TestUnexpectedResult;
+    var nested_environments: [2]profile.CustomEnvironment = undefined;
+    for ([_]*const profile.TextElement{ root, alternate }, 0..) |node, index| {
+        const environment = node.observed_custom_environment orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("#ebf4ff", environment.get("--wikt-palette-lighterblue").known);
+        const outer_environment = try custom.element(a, environment, .{ .tag = opening.name,
+            .classes = opening.attr("class") orelse "", .id = opening.attr("id") orelse "" }, opening.attr("style") orelse "");
+        nested_environments[index] = try custom.element(a, outer_environment, .{ .tag = nested.name,
+            .classes = nested.attr("class") orelse "", .id = nested.attr("id") orelse "" }, nested.attr("style") orelse "");
+    }
+    const nested_environment = try profile.intersectCustomEnvironmentsAlloc(a, nested_environments[0], nested_environments[1]);
+    try std.testing.expect(nested_environment.complete);
+    try std.testing.expectEqualStrings("#ebf4ff", nested_environment.get("--wikt-palette-lighterblue").known);
+    // Complete body and historical identity remain mandatory; root environments
+    // cannot make a different revision or changed source into this operation.
+    try std.testing.expect((try book.selectPageStyles(a, &ns, 0, 108817, 2190989, "間", raw, source, defaults, &parent)) == null);
+    try std.testing.expect((try book.selectPageStyles(a, &ns, 0, 108817, 2190988, "間", raw, source[1..], defaults, &parent)) == null);
+}
+
+
+test "returned table root comments retain double hyphen data without changing observed nodes or source mode" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, IndependentRuTableRootTesting.namespace); defer ns.deinit();
+    const root = "<div class='mw-content-ltr mw-parser-output' lang='ru' dir='ltr'>";
+    const tail = "<section data-mw-section-id='1' id='x' aria-labelledby='Японский'><div style='overflow:auto'><table><tbody><tr><td><a href='/wiki/Kept'>kept</a></td></tr></tbody></table></div></section></div>";
+    const comment = "<!-- report: Шаблон:--lang--; <table class='foreign'><tr><td>hidden</td></tr></table> -->";
+    const plain = root ++ tail;
+    const captured = root ++ comment ++ tail;
+    const inventory_value = try inventory(a, syntax.tagAt(root, 0).?);
+    var baseline: std.ArrayList(ObservedSiblingNode) = .empty;
+    var actual: std.ArrayList(ObservedSiblingNode) = .empty;
+    var plain_end: usize = 0; var actual_end: usize = 0;
+    const plain_scope = try observedTextClassScopeToEndWithSections(a, &ns, plain, &baseline, &plain_end, inventory_value, true);
+    const actual_scope = try observedTextClassScopeToEndWithSections(a, &ns, captured, &actual, &actual_end, inventory_value, true);
+    try std.testing.expectEqual(plain.len, plain_end);
+    try std.testing.expectEqual(captured.len, actual_end);
+    try std.testing.expectEqualDeep(plain_scope, actual_scope);
+    try std.testing.expectEqual(@as(usize, 8), actual.items.len);
+    try std.testing.expectEqual(baseline.items.len, actual.items.len);
+    for (baseline.items, actual.items, 0..) |left, right, index| {
+        try std.testing.expectEqualStrings(left.tag.name, right.tag.name);
+        try std.testing.expect(sameSiblingAttributes(left.attributes, right.attributes));
+        try std.testing.expectEqual(left.parent, right.parent);
+        try std.testing.expectEqual(left.previous, right.previous);
+        try std.testing.expectEqual(left.first_child, right.first_child);
+        try std.testing.expectEqual(left.start + (if (index == 0) @as(usize, 0) else comment.len), right.start);
+        try std.testing.expectEqual(left.inner_end == null, right.inner_end == null);
+        if (left.inner_end) |end| try std.testing.expectEqual(@as(?usize, end + comment.len), right.inner_end);
+    }
+    try std.testing.expectEqualStrings("/wiki/Kept", actual.items[7].attributes.get("href").?);
+    try std.testing.expectEqualStrings("kept", captured[actual.items[7].tag.end..(actual.items[7].inner_end orelse return error.TestUnexpectedResult)]);
+    // The same bytes do not silently relax ordinary/source observation mode.
+    var rejected_end: usize = 0;
+    try std.testing.expectError(invalid, observedTextClassScopeToEndWithRootOptions(a, &ns, captured, null,
+        &rejected_end, false, inventory_value, true, false));
+    for ([_][]const u8{
+        "<!-->", "<!--->", "<!-- nested <!-- inner -->", "<!-- early --!> <div> -->",
+        "<!-- unclosed", "<!-- trailing --->", "<!-- nul\x00 -->",
+    }) |malformed| {
+        const bytes = try std.mem.concat(a, u8, &.{ root, malformed, tail });
+        try std.testing.expectError(invalid, observedTextClassScopeToEndWithSections(a, &ns, bytes, null,
+            &rejected_end, inventory_value, true));
+    }
+    const retained = try IndependentRuTableRootTesting.input(a);
+    try std.testing.expect(std.mem.indexOf(u8, retained.response, "Шаблон:--lang--") != null);
+    try std.testing.expect(digestMatches(retained.response, "54a7b4432c192d1ff1052110e486b5ac257448a51cdbbc6d32c0ea05bcd71ef1"));
+    // Existing real Book/first-child/whole Writer controls consume this unchanged
+    // complete response and independently retain every source/header/parent gate.
+}
+
+const OrderedLiteralDivTesting = struct {
+    const root = "<div class='mw-content-ltr mw-parser-output' lang='th' dir='ltr'>";
+    const outer = "<div class='outer' style='padding:4px'>\n";
+    const open = "<div class='repeat' style='background-color:#ffffe0'>\n";
+    const one = open ++ "* [[A|alpha]]\n*: ''detail''\n<div class='same'>\n{| class='wikitable'\n|- style='text-align:left'\n! colspan=2|head\n|-\n| [[Target#part|label]]\n| <i>one</i>\n|}</div></div>\n";
+    const two = open ++ "* [[B|beta]]\n<div class='same'>\n{| class='wikitable'\n|-\n|colspan=2|[https://example.test/path 2014] <b>two</b>\n|}\n</div></div>\n";
+    const source = outer ++ one ++ two ++ "</div>";
+    const one_html = open ++ "<ul><li><a href='/wiki/A' title='A'>alpha</a><dl><dd><i>detail</i></dd></dl></li></ul>\n<div class='same'>\n<table class='wikitable'><tbody><tr style='text-align:left'><th colspan='2'>head</th></tr><tr><td><a href='/wiki/Target#part' title='Target'>label</a></td><td><i>one</i></td></tr></tbody></table></div></div>\n";
+    const two_html = open ++ "<ul><li><a href='/wiki/B' title='B'>beta</a></li></ul>\n<div class='same'>\n<table class='wikitable'><tbody><tr><td colspan='2'><a rel='nofollow' class='external text' href='https://example.test/path'>2014</a> <b>two</b></td></tr></tbody></table>\n</div></div>\n";
+    const captured = outer ++ one_html ++ two_html ++ "</div>";
+    fn issue(a: A, ns: *const namespaces.Registry, source_value: []const u8, body: []const u8) ![]const profile.SourceLiteralDivProof {
+        const html = try std.mem.concat(a, u8, &.{ root, body, "</div>" });
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, ns, html, &nodes);
+        var proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+        try appendOrderedLiteralDivParents(a, ns, source_value, html, nodes.items, &proofs);
+        return proofs.toOwnedSlice(a);
+    }
+    fn replace(a: A, input: []const u8, before: []const u8, after: []const u8) ![]const u8 {
+        const at = std.mem.indexOf(u8, input, before) orelse return error.TestUnexpectedResult;
+        return std.mem.concat(a, u8, &.{ input[0..at], after, input[at + before.len..] });
+    }
+    fn check(a: A, source_value: []const u8, proofs: []const profile.SourceLiteralDivProof, start: usize, parent: ?usize) !void {
+        _ = a;
+        const proof = PriorNotePrefixTesting.find(proofs, start) orelse return error.TestUnexpectedResult;
+        const tag = syntax.tagAt(source_value, start) orelse return error.TestUnexpectedResult;
+        const pair = syntax.matchingTag(source_value, tag) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(parent, proof.parent_start);
+        try std.testing.expectEqual(pair.end, proof.range.anchor_end);
+        try std.testing.expectEqual(start + 1, proof.range.name_start);
+        try std.testing.expectEqual(tag.name.len, proof.range.name_len);
+        try std.testing.expectEqual(@intFromPtr(tag.attrs.ptr) - @intFromPtr(source_value.ptr), proof.range.attrs_start);
+        try std.testing.expectEqual(tag.attrs.len, proof.range.attrs_len);
+        try std.testing.expect(proof.restored_ul == null);
+    }
+};
+
+test "ordered literal DIV correspondence retains repeated siblings complete tables and exact source parents" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = OrderedLiteralDivTesting;
+    const proofs = try T.issue(a, &ns, T.source, T.captured);
+    try std.testing.expectEqual(@as(usize, 5), proofs.len);
+    const one = T.outer.len; const two = one + T.one.len;
+    try T.check(a, T.source, proofs, 0, null);
+    try T.check(a, T.source, proofs, one, 0); try T.check(a, T.source, proofs, two, 0);
+    try T.check(a, T.source, proofs, one + std.mem.indexOf(u8, T.one, "<div class='same'>").?, one);
+    try T.check(a, T.source, proofs, two + std.mem.indexOf(u8, T.two, "<div class='same'>").?, two);
+    // Actual returned redlink behavior is a page edit action, while source
+    // fragments remain in the original native link target. No paint is issued.
+    const red = "<a href='/w/index.php?title=Target&amp;action=edit&amp;redlink=1' class='new' title='Target (missing)'>label</a>";
+    const changed = try T.replace(a, T.captured, "<a href='/wiki/Target#part' title='Target'>label</a>", red);
+    try std.testing.expectEqual(@as(usize, 5), (try T.issue(a, &ns, T.source, changed)).len);
+    try std.testing.expect(!try noteInlineCorresponds(a, &ns, "[[Target#part|label]]", red, 0, false));
+    try std.testing.expect(!try orderedDivInlineCorresponds(a, &ns, "[[Target#part|label]]",
+        "<a href='/w/index.php?title=Other&amp;action=edit&amp;redlink=1' class='new' title='Other (missing)'>label</a>", 0, false));
+}
+
+test "ordered literal DIV correspondence rejects missing reordered foreign and incomplete captured bodies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = OrderedLiteralDivTesting;
+    for ([_][]const u8{
+        T.outer ++ T.two_html ++ T.one_html ++ "</div>",
+        T.outer ++ T.one_html ++ "</div>",
+        T.outer ++ T.one_html ++ T.two_html ++ T.two_html ++ "</div>",
+        T.outer ++ "<div class='foreign'>" ++ T.one_html ++ "</div>" ++ T.two_html ++ "</div>",
+        try T.replace(a, T.captured, "<td><i>one</i></td>", ""),
+        try T.replace(a, T.captured, "<th colspan='2'>head</th>", "<th colspan='1'>head</th>"),
+        try T.replace(a, T.captured, "<i>one</i>", "<i>changed</i>"),
+        try T.replace(a, T.captured, "title='Target'>label", "title='Target'>changed"),
+        try T.replace(a, T.captured, "/wiki/Target#part", "/wiki/Target#other"),
+        try T.replace(a, T.captured, "https://example.test/path", "https://example.test/foreign"),
+        try T.replace(a, T.captured, "2014</a> <b>two</b>", "2014</a> t<b>wo</b>"),
+        try T.replace(a, T.captured, "<tbody><tr style", "<tbody>extra<tr style"),
+        try T.replace(a, T.captured, "<dl><dd>", "<dl class='foreign'><dd>"),
+        try T.replace(a, T.captured, "</tbody></table>", "</tbody></table>foreign"),
+    }, 0..) |captured, mode| {
+        errdefer std.debug.print("ORDERED_DIV_CAPTURE mode={d}\n", .{mode});
+        try std.testing.expectEqual(@as(usize, 0), (try T.issue(a, &ns, T.source, captured)).len);
+    }
+    for ([_][]const u8{
+        T.outer ++ T.two ++ T.one ++ "</div>",
+        "<nowiki>" ++ T.source ++ "</nowiki>",
+        "<!--" ++ T.source ++ "-->",
+        try T.replace(a, T.source, "<i>one</i>", "{{foreign}}"),
+        try T.replace(a, T.source, "<i>one</i>", "[[File:Foreign.png|thumb]]"),
+        try T.replace(a, T.source, "<i>one</i>", "<ref>one</ref>"),
+        try T.replace(a, T.source, "<i>one</i>", "__TOC__"),
+        try T.replace(a, T.source, "<i>one</i>", "RFC 123"),
+        try T.replace(a, T.source, "|}<", "|}foreign<"),
+    }, 0..) |source_value, mode| {
+        errdefer std.debug.print("ORDERED_DIV_SOURCE mode={d}\n", .{mode});
+        try std.testing.expectEqual(@as(usize, 0), (try T.issue(a, &ns, source_value, T.captured)).len);
+    }
+    const html = T.root ++ T.captured ++ "</div>";
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, html, &nodes);
+    for (0..4) |mode| {
+        const copied = try a.dupe(ObservedSiblingNode, nodes.items);
+        var selected_html: []const u8 = html;
+        switch (mode) {
+            0 => selected_html = try a.dupe(u8, html),
+            1 => copied[2].parent = 0,
+            2 => copied[2].start += 1,
+            3 => { const temporary = copied[2]; copied[2] = copied[3]; copied[3] = temporary; },
+            else => unreachable,
+        }
+        var proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+        try appendOrderedLiteralDivParents(a, &ns, T.source, selected_html, copied, &proofs);
+        try std.testing.expectEqual(@as(usize, 0), proofs.items.len);
+    }
+}
+
+test "ordered Table cell payload correspondence keeps generated paragraphs without issuing cell DIV ancestry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = OrderedLiteralDivTesting;
+    const source = "<div class='outer'>\n{| class='wikitable'\n|-\n|<div class='cell'>\n\t'''''Notes''' for text:''\n<div class='cell-inner'>\n\t* [t] &lt;>;<br>\n\t* kept.</div></div>\n|}</div>";
+    const content = "<div class='cell'>\n<p>\t<i><b>Notes</b> for text:</i>\n</p><div class='cell-inner'>\n<p>\t* [t] &lt;&gt;;<br>\n</p>\t* kept.</div></div>";
+    const captured = "<div class='outer'>\n<table class='wikitable'><tbody><tr><td>" ++ content ++ "</td></tr></tbody></table></div>";
+    const proofs = try T.issue(a, &ns, source, captured);
+    try std.testing.expectEqual(@as(usize, 1), proofs.len); try T.check(a, source, proofs, 0, null);
+    try std.testing.expect(PriorNotePrefixTesting.find(proofs, std.mem.indexOf(u8, source, "<div class='cell'>").?) == null);
+    try std.testing.expect(PriorNotePrefixTesting.find(proofs, std.mem.indexOf(u8, source, "<div class='cell-inner'>").?) == null);
+    for ([_][2][]const u8{
+        .{ "<p>", "<p style='margin:10px'>" }, .{ "<b>Notes</b>", "<b>Note</b>s" },
+        .{ "* [t]", "* [s]" }, .{ "* kept.", "* removed." },
+        .{ "<div class='cell-inner'>", "<div class='foreign'>" },
+        .{ "<br>", "<br><br>" },
+    }) |edit| try std.testing.expectEqual(@as(usize, 0), (try T.issue(a, &ns, source,
+        try T.replace(a, captured, edit[0], edit[1]))).len);
+    // Paragraphs are owners, not removable markup. A complete independent
+    // source line enters one P; a literal closing-DIV line closes it first.
+    const paragraph_source = "<div>\nAB\n</div>";
+    const paragraph_stop = std.mem.indexOf(u8, paragraph_source, "</div>").?;
+    try std.testing.expect(try orderedCellInlineCorresponds(a, &ns, paragraph_source, 6, paragraph_stop, "<p>AB</p>"));
+    for ([_][]const u8{ "AB", "<p>A</p><p>B</p>", "A<p>B</p>", "<p>A</p>B", "<p>AB</p><p></p>",
+        "<p style='margin:0'>AB</p>", "<p>AB", "<p><p>AB</p></p>" }) |html| {
+        try std.testing.expect(!try orderedCellInlineCorresponds(a, &ns, paragraph_source, 6, paragraph_stop, html));
+    }
+    const bare_source = "<div>AB</div>";
+    try std.testing.expect(try orderedCellInlineCorresponds(a, &ns, bare_source, 5, 7, "AB"));
+    try std.testing.expect(!try orderedCellInlineCorresponds(a, &ns, bare_source, 5, 7, "<p>AB</p>"));
+    try std.testing.expect(!try orderedCellInlineCorresponds(a, &ns, bare_source, 5, 7, "<p>A</p><p>B</p>"));
+    const split_source = "<div>\nA<br>\nB</div>";
+    const split_stop = std.mem.indexOf(u8, split_source, "</div>").?;
+    try std.testing.expect(try orderedCellInlineCorresponds(a, &ns, split_source, 6, split_stop, "<p>A<br></p>B"));
+    // Same aggregate text/BR, different paragraph placement or outside tail.
+    for ([_][]const u8{ "<p>A<br>B</p>", "<p>A</p><br>B", "A<br><p>B</p>",
+        "<p>A<br></p><p>B</p>", "A<br>B", "<p>A<br></p>C" }) |html| {
+        try std.testing.expect(!try orderedCellInlineCorresponds(a, &ns, split_source, 6, split_stop, html));
+    }
+    for ([_][]const u8{ "<div>\nA\n\nB\n</div>", "<div>\n AB\n</div>" }) |source_value| {
+        try std.testing.expect(!try orderedCellInlineCorresponds(a, &ns, source_value, 6,
+            std.mem.indexOf(u8, source_value, "</div>").?, "<p>A B</p>"));
+    }
+    // Keep the complete issuing path strict too: flattening or splitting the
+    // generated P cannot earn the outer DIV proof even if aggregate text agrees.
+    for ([_][2][]const u8{
+        .{ "<p>\t<i><b>Notes</b> for text:</i>\n</p>", "\t<i><b>Notes</b> for text:</i>" },
+        .{ "<p>\t* [t] &lt;&gt;;<br>\n</p>\t* kept.", "<p>\t* [t] &lt;&gt;;<br>\t* kept.</p>" },
+        .{ "<p>\t* [t] &lt;&gt;;<br>\n</p>\t* kept.", "<p>\t* [t] &lt;&gt;;<br></p><p>\t* kept.</p>" },
+    }) |edit| try std.testing.expectEqual(@as(usize, 0), (try T.issue(a, &ns, source,
+        try T.replace(a, captured, edit[0], edit[1]))).len);
+    // HTML collapses precisely SP/TAB/LF/CR/FF. VT is neither HTML space nor
+    // an acceptable control scalar, including when source and capture agree.
+    try std.testing.expect(try orderedDivInlineCorresponds(a, &ns, "A \t\n\r\x0cB", "A B", 0, false));
+    for ([_][2][]const u8{ .{ "A\x0bB", "A B" }, .{ "A B", "A\x0bB" }, .{ "A\x0bB", "A\x0bB" } }) |pair| {
+        try std.testing.expect(!try orderedDivInlineCorresponds(a, &ns, pair[0], pair[1], 0, false));
+    }
+    const vt_source = try T.replace(a, source, "* [t]", "*\x0b[t]");
+    const vt_capture = try T.replace(a, captured, "* [t]", "*\x0b[t]");
+    try std.testing.expectEqual(@as(usize, 0), (try T.issue(a, &ns, vt_source, captured)).len);
+    try std.testing.expectEqual(@as(usize, 0), (try T.issue(a, &ns, source, vt_capture)).len);
+    try std.testing.expectEqual(@as(usize, 0), (try T.issue(a, &ns, vt_source, vt_capture)).len);
+
+}
+
+test "retained TH ordered repeated DIV table body correspondence preserves prior notes and complete parent occurrences" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const document = try std.json.parseFromSliceLeaky(Document, a, @embedFile("testdata/th-missing-figure-style/figure-page-observations.json"), .{ .allocate = .alloc_always });
+    const supplied = try responseSource(a, &ns, document.pages[2]);
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    try std.testing.expectEqualStrings(source, supplied.source);
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
+    const proofs = try observedLiteralDivParents(a, &ns, source, supplied.html, nodes.items);
+    for ([_]struct { start: usize, parent: ?usize }{
+        .{ .start = 20529, .parent = 5614 }, .{ .start = 20643, .parent = 20529 },
+        .{ .start = 20920, .parent = 20643 }, .{ .start = 24789, .parent = 20529 },
+        .{ .start = 25437, .parent = 24789 },
+    }) |expected| {
+        errdefer std.debug.print("TH_ORDERED_DIV source={d}\n", .{expected.start});
+        try OrderedLiteralDivTesting.check(a, source, proofs, expected.start, expected.parent);
+    }
+    for ([_]usize{ 18077, 19048, 20243 }) |start| {
+        const proof = PriorNotePrefixTesting.find(proofs, start) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(?usize, 8544), proof.parent_start);
+        try std.testing.expect(proof.restored_ul != null);
+    }
+    // Complete ordered cell correspondence supplies the generated physical
+    // boundary, without replacing its independent style/native-flow queries.
+    const cell = std.mem.indexOf(u8, source, "<div class=\"standard-box mw-collapsible mw-collapsed\">").?;
+    try std.testing.expectEqual(@as(usize, 27219), cell);
+    const cell_proof = PriorNotePrefixTesting.find(proofs, cell) orelse return error.TestUnexpectedResult;
+    const cap = cell_proof.wiki_cell_parent orelse return error.TestUnexpectedResult;
+    try std.testing.expect(cell_proof.parent_start == null and !cap.header);
+    try std.testing.expectEqual(@as(?usize, 25437), cap.parent_start);
+    try std.testing.expectEqual(@as(usize, 25458), cap.table_start);
+    try std.testing.expectEqual(@as(usize, 27219), cap.body_start);
+    try std.testing.expectEqualStrings("|-", source[cap.row_start..cap.row_end]);
+    try std.testing.expectEqualStrings("colspan=2 style=\"text-align:left; font-size:90%\"", source[cap.attrs_start..cap.attrs_end]);
+    try OrderedLiteralDivTesting.check(a, source, proofs, 27357, 27219);
+    try std.testing.expect(PriorNotePrefixTesting.find(proofs, 27357).?.wiki_cell_parent == null);
+}
+
+const OrderedLiteralDivRenderTesting = struct {
+    fn inspect(blocks: anytype, text: *std.ArrayList(u8), a: A, actions: *std.ArrayList([]const u8), tables: *usize, painted: *usize) anyerror!void {
+        for (blocks) |block| {
+            try spans(block.spans, text, a, actions);
+            if (block.container) |container| {
+                if (container.style.background != null or container.style.padding != null) painted.* += 1;
+                try inspect(container.blocks, text, a, actions, tables, painted);
+            }
+            if (block.table) |table| {
+                tables.* += 1;
+                for (table.rows) |row| {
+                    var columns: usize = 0;
+                    for (row.cells) |cell| {
+                    columns += cell.colspan;
+                    try spans(cell.spans, text, a, actions);
+                    if (cell.blocks) |children| try inspect(children, text, a, actions, tables, painted);
+                    try std.testing.expect(cell.nested_table == null);
+                    }
+                    try std.testing.expectEqual(@as(usize, 2), columns);
+                }
+            }
+        }
+    }
+    fn spans(values: anytype, text: *std.ArrayList(u8), a: A, actions: *std.ArrayList([]const u8)) !void {
+        for (values) |span| {
+            for (span.text) |byte| if (!std.ascii.isWhitespace(byte)) try text.append(a, byte);
+            if (span.kind == .link or span.kind == .external_link) try actions.append(a, span.target);
+        }
+    }
+};
+
+test "issued ordered DIV parents retain full rendered body actions and Stored codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var phase = @src(); errdefer std.debug.print("ORDERED_DIV_RENDER source={s}:{d}\n", .{ phase.file, phase.line });
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = OrderedLiteralDivTesting;
+    const proofs = try T.issue(a, &ns, T.source, T.captured);
+    try std.testing.expectEqual(@as(usize, 5), proofs.len);
+    var styles = try profile.parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    var alternate: profile.TextElement = .{ .tag = "div", .classes = "mw-parser-output client-js", .ancestry_complete = true, .physical_ancestry_complete = true };
+    var root: profile.TextElement = .{ .tag = "div", .classes = "mw-parser-output", .ancestry_complete = true, .physical_ancestry_complete = true, .alternative_ancestry = &alternate };
+    var scope: profile.BoundedTextClassScope = .{ .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "outer repeat same wikitable",
+        .complete_ancestor_class_superset = "mw-parser-output client-js outer repeat same wikitable", .complete_ancestor_id_superset = "",
+        .page_styles = &styles, .page_style_root = &root, .page_style_complete_root = &root,
+        .source_literal_divs_source = T.source, .source_literal_divs = proofs };
+    const tracked = compiler.MissingText.untracked(T.source);
+    const projection: compiler.SourceElementProjection = .{ .original = tracked, .prepared = T.source,
+        .copies = &.{.{ .original_start = 0, .prepared_start = 0, .len = T.source.len }},
+        .observed_source = .{ .source = T.source, .scope = &scope } };
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns, .table_styles = &styles, .observe_source_elements = true },
+        .content_root = .parser_output, .body_missing = tracked,
+        .source_element_binding = .{ .scope = &scope, .projection = &projection, .owner = tracked, .page_start = 0 },
+        .figure_class_source_binding = .{ .scope = &scope, .projection = &projection, .owner = tracked, .page_start = 0 } };
+    phase = @src();
+    const blocks = try renderer.renderBodyWithMissing(tracked);
+    errdefer std.debug.print("ORDERED_DIV_RENDER report={any}\n", .{renderer.fallbacks});
+    try std.testing.expect(!renderer.fallbacks.any());
+    const codec = encoder.presentation_codec;
+    phase = @src();
+    const bytes = try codec.encodeBuildAlloc(a, &[_]compiler.Span{},
+        &[_]struct { level: u8 = 2, title: []const u8 = "Thai", blocks: []const compiler.Block }{.{ .blocks = blocks }},
+        encoder.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+    const stored = try codec.decodeAlloc(a, bytes, "ordered DIV body", .language, .{ .code = "th", .heading = "Thai" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    inline for (.{ blocks, stored.entry.sections[0].blocks }) |body| {
+        var text: std.ArrayList(u8) = .empty; var actions: std.ArrayList([]const u8) = .empty;
+        var tables: usize = 0; var painted: usize = 0;
+        try OrderedLiteralDivRenderTesting.inspect(body, &text, a, &actions, &tables, &painted);
+        try std.testing.expectEqualStrings("alphadetailheadlabelonebeta2014two", text.items);
+        try std.testing.expectEqual(@as(usize, 2), tables); try std.testing.expectEqual(@as(usize, 3), painted);
+        try std.testing.expectEqual(@as(usize, 4), actions.items.len);
+        for ([_][]const u8{ "A", "Target#part", "B", "https://example.test/path" }, actions.items) |expected, actual|
+            try std.testing.expectEqualStrings(expected, actual);
+    }
+}
+
+
+test "captured FR redirected file lookup retains exact page occurrence options assets and callback authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const bytes = @embedFile("testdata/figure-page-observations/fr-cauannos-alias/figure-page-observations.json");
+    const doc = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/figure-page-observations/fr-cauannos-alias/namespace-registry.tsv")); defer ns.deinit();
+    var files = try Testing.registry(a, &ns, doc); defer files.deinit();
+    const requested = "Fichier:'Florence' (5609040971).jpg";
+    const canonical = "Fichier:'Florence' - geograph.org.uk - 2364107.jpg";
+    const original = files.records[0];
+    try std.testing.expectEqualStrings(canonical, original.canonical_file);
+    // Closed controlled rows retain the exact supplied imageinfo identity and
+    // redirect relation. They do not stand in for the full production Registry.
+    var rows = [_]sizing.Record{ original, original }; rows[0].canonical_file = requested;
+    files.records = &rows; files.resolved_files = &.{ canonical, canonical };
+    var defaults: [32]u8 = undefined; _ = try std.fmt.hexToBytes(&defaults, doc.defaults_sha256);
+    var book = try Book.init(std.testing.allocator, bytes, &ns, &files, defaults, 250); defer book.deinit();
+    const behavior_bytes = @embedFile("testdata/figure-page-observations/fr-cauannos-alias/behavior-switches.tsv");
+    var behavior = try namespaces.behavior_switches.Registry.init(a, behavior_bytes, ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    var images = try namespaces.image_options.Registry.init(a, @embedFile("testdata/figure-page-observations/fr-cauannos-alias/image-options.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, Testing.hash(behavior_bytes)); defer images.deinit();
+    const page = doc.pages[0];
+    const source = try Testing.source(a, doc);
+    const raw = @embedFile("testdata/figure-page-observations/fr-cauannos-alias/page.raw.wikitext");
+    const context: compiler.Context = .{ .title = page.title, .namespace_catalog = &ns, .behavior_switches = &behavior, .image_options = &images };
+    const selected = (try book.select(a, &ns, page.namespace_id, page.page_id, page.revision_id, page.title, raw, source, defaults, 250, context)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(selected.file_registry == &files);
+    const options = "vignette|redresse|Un chat-huant.";
+    try std.testing.expectEqualStrings(options, selected.occurrences[0].source.original_options);
+    // Callback allocations are independently owned, not leaked into Book.
+    try std.testing.expectEqual(@as(?u32, 190), try SelectedPage.width(selected, std.testing.allocator, requested, .thumbnail, options, 250));
+    try std.testing.expectEqual(@as(?u32, 190), try SelectedPage.width(selected, a, "'Florence' (5609040971).jpg", .thumbnail, options, 250));
+    try std.testing.expectEqual(@as(?u32, 190), try SelectedPage.width(selected, a, canonical, .thumbnail, options, 250));
+    try std.testing.expectEqual(@as(?u32, 190), try SelectedPage.width(selected, a, requested, .thumbnail, selected.occurrences[0].stage_options, 250));
+    var failure = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory, SelectedPage.width(selected, failure.allocator(), requested, .thumbnail, options, 250));
+    for ([_][]const u8{ "Fichier:Invented.jpg", "Fichier:Missing.jpg" }) |foreign|
+        try std.testing.expect((try SelectedPage.width(selected, a, foreign, .thumbnail, options, 250)) == null);
+    try std.testing.expect((try SelectedPage.width(selected, a, requested, .framed, options, 250)) == null);
+    try std.testing.expect((try SelectedPage.width(selected, a, requested, .thumbnail, "vignette|redresse|Changed caption", 250)) == null);
+    try std.testing.expect((try SelectedPage.width(selected, a, requested, .thumbnail, options, 251)) == null);
+    var no_registry = selected.*; no_registry.file_registry = null;
+    try std.testing.expect((try SelectedPage.width(&no_registry, a, requested, .thumbnail, options, 250)) == null);
+    var foreign_ns = ns; foreign_ns.source_sha256[0] ^= 1;
+    var foreign_registry = files; foreign_registry.namespace_catalog = &foreign_ns;
+    var wrong_registry = selected.*; wrong_registry.file_registry = &foreign_registry;
+    try std.testing.expect((try SelectedPage.width(&wrong_registry, a, requested, .thumbnail, options, 250)) == null);
+    files.file_authority = false;
+    try std.testing.expect((try SelectedPage.width(selected, a, requested, .thumbnail, options, 250)) == null);
+    files.file_authority = true;
+    files.resolved_files = &.{ "Fichier:Invented.jpg", canonical };
+    try std.testing.expect((try SelectedPage.width(selected, a, requested, .thumbnail, options, 250)) == null);
+    files.records = rows[1..]; files.resolved_files = &.{canonical};
+    try std.testing.expect((try SelectedPage.width(selected, a, requested, .thumbnail, options, 250)) == null);
+    files.records = &rows; files.resolved_files = &.{ canonical, canonical };
+    try std.testing.expect((try book.select(a, &ns, page.namespace_id, page.page_id, page.revision_id + 1, page.title, raw, source, defaults, 250, context)) == null);
+    try std.testing.expect((try book.select(a, &ns, page.namespace_id, page.page_id, page.revision_id, page.title, "changed raw", source, defaults, 250, context)) == null);
+    try std.testing.expect((try book.select(a, &ns, page.namespace_id, page.page_id, page.revision_id, page.title, raw, source[0 .. source.len - 1], defaults, 250, context)) == null);
+    var changed_rows = rows;
+    changed_rows[0].original_width += 1; changed_rows[1].original_width += 1;
+    files.records = &changed_rows;
+    try std.testing.expectError(invalid, Book.init(a, bytes, &ns, &files, defaults, 250));
+}
+
+
+test "ordered DIV issuer leaves unrelated returned graphs untouched and validates every applicable proof" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    // This graph deliberately cannot pass the ordered issuer's attribute check.
+    // A nonapplicable invocation must issue nothing; applicability restores the
+    // exact strict graph check, rather than accepting this boolean attribute.
+    const html = "<div class='mw-parser-output'><span hidden></span></div>";
+    const root = currentLiteralHtmlTagAt(html, 0).?;
+    const child_start = std.mem.indexOf(u8, html, "<span").?;
+    const child = currentLiteralHtmlTagAt(html, child_start).?;
+    const nodes = [_]ObservedSiblingNode{
+        .{ .tag = root, .attributes = try inventory(a, root), .start = 0, .parent = null, .previous = null,
+            .inner_end = std.mem.indexOf(u8, html, "</div>").?, .first_child = 1 },
+        .{ .tag = child, .attributes = .{ .attributes = &.{} }, .start = child_start,
+            .inner_end = std.mem.indexOf(u8, html, "</span>").?, .parent = 0, .previous = null },
+    };
+    const actual = try CurrentGetLiteralTesting.raw(a, try CurrentGetLiteralTesting.shape(a));
+    const source = actual.current_get_literal.?.expanded_source;
+    try std.testing.expect(std.mem.indexOf(u8, source, "<div") == null);
+    for ([_][]const u8{ "ordinary text", "<div>ordinary body</div>", "<div>\n{|\n|unclosed",
+        "{|\n|unclosed", "<nowiki>\n{|\n|hidden\n|}\n</nowiki>",
+        "<!--\n{|\n|hidden\n|}\n-->", "<pre>\n{|\n|hidden\n|}\n</pre>",
+    }) |unrelated| {
+        var proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+        try appendOrderedLiteralDivParents(a, &ns, unrelated, html, &nodes, &proofs);
+        try std.testing.expectEqual(@as(usize, 0), proofs.items.len);
+    }
+    var proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+    // This genuine MG source has no DIV, but does have a complete parser-root
+    // WikiTable banner. It is now applicable and must reject the invalid graph.
+    try std.testing.expect(try hasClosedParserRootTableSource(a, &ns, source, proofs.items));
+    try std.testing.expectError(invalid, appendOrderedLiteralDivParents(a, &ns, source, html, &nodes, &proofs));
+    try std.testing.expectEqual(@as(usize, 0), proofs.items.len);
+    try std.testing.expectError(invalid, appendOrderedLiteralDivParents(a, &ns, OrderedLiteralDivTesting.source, html, &nodes, &proofs));
+    try std.testing.expectEqual(@as(usize, 0), proofs.items.len);
+    // A complete root candidate still restores strict captured-graph checks.
+    // Its independent footer is not part of the table proof.
+    try std.testing.expectError(invalid, appendOrderedLiteralDivParents(a, &ns,
+        "{|\n|-\n|complete\n|}\nindependent footer", html, &nodes, &proofs));
+    try std.testing.expectEqual(@as(usize, 0), proofs.items.len);
+    // The fully authenticated positive graph still issues all five ordered
+    // occurrences; no graph, body, topology or rollback predicate changed.
+    try std.testing.expectEqual(@as(usize, 5), (try OrderedLiteralDivTesting.issue(a, &ns,
+        OrderedLiteralDivTesting.source, OrderedLiteralDivTesting.captured)).len);
+}
+
+const RootMissingAfterTableTesting = struct {
+    fn document(a: A) !Document {
+        return std.json.parseFromSliceLeaky(Document, a, @embedFile("testdata/sr-authored-head/candidate-seven01.json"), .{});
+    }
+    fn nodes(a: A, ns: *const namespaces.Registry, html: []const u8) ![]const ObservedSiblingNode {
+        var values: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, ns, html, &values);
+        return values.items;
+    }
+};
+
+test "retained SR root Missing after closed table keeps whole source refusal and exact observed owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const doc = try RootMissingAfterTableTesting.document(a);
+    const page = doc.pages[2];
+    try std.testing.expectEqualStrings("år", page.title);
+    try std.testing.expectEqual(@as(u64, 30732), page.page_id);
+    try std.testing.expectEqual(@as(u64, 684280), page.revision_id);
+    const supplied = try responseSource(a, &ns, page);
+    try std.testing.expectEqual(@as(usize, 5015), supplied.source.len);
+    try std.testing.expect(digestMatches(supplied.source, "4c21ac830e6d26b9d018d6389b5825c59e95746fdc55d9ff48f4764b571a5e83"));
+    try std.testing.expect(digestMatches(supplied.html, "99655cbf653f7849729d04e11e45beee30d77497a0d63dcb35a8ba5c54fed2d6"));
+    const ranges = page.figure_style_operations.?;
+    try std.testing.expectEqual(@as(usize, 1), ranges.len);
+    try std.testing.expectEqualDeep(FigureStyleRange{ .start = 1133, .end = 1179, .media_kind = .missing }, ranges[0]);
+    try std.testing.expectEqualStrings("[[Слика:...|десно|250п|мини|.]]", supplied.source[ranges[0].start..ranges[0].end]);
+    try std.testing.expect(std.mem.indexOf(u8, supplied.source, "__NOEDITSECTION__") != null);
+    try std.testing.expect(std.mem.indexOf(u8, supplied.source, "-{ år }-") != null);
+    // Neither the legacy whole-flow contract nor its ordinary scanner gains
+    // converter or magic-word authority from the new selected owner route.
+    try std.testing.expectError(invalid, figureStyleOperationProofs(a, &ns, supplied.source, ranges));
+    const nodes = try RootMissingAfterTableTesting.nodes(a, &ns, supplied.html);
+    const proofs = try figureStyleOperationProofsWithObservedOwner(a, &ns, supplied.source, ranges, supplied.html, nodes);
+    try std.testing.expectEqual(@as(usize, 1), proofs.len);
+    try std.testing.expectEqualDeep(ranges[0], proofs[0].range);
+    try std.testing.expectEqualStrings("Датотека:...", proofs[0].canonical_file);
+    try std.testing.expectEqualStrings(".", supplied.source[proofs[0].caption_start..proofs[0].options_end]);
+    const frame = nodes[proofs[0].candidates[0].frame];
+    try std.testing.expectEqual(@as(?usize, 0), frame.parent);
+    const table = nodes[frame.previous.?];
+    try std.testing.expect(table.tag.is("table"));
+    try std.testing.expectEqual(@as(?usize, 0), table.parent);
+    try std.testing.expectEqualStrings("all", table.attributes.get("rules").?);
+    try std.testing.expectEqualStrings("3", table.attributes.get("cellpadding").?);
+    try std.testing.expectEqualStrings("0", table.attributes.get("cellspacing").?);
+    try std.testing.expectEqualStrings("mw-halign-right", frame.attributes.get("class").?);
+    const captured = (try observedImages(a, &ns, supplied.html, page.occurrences))[0].missing_content.?;
+    try std.testing.expect(captured.right and !captured.centered and !captured.default_size);
+    try std.testing.expectEqual(@as(u32, 250), captured.data_width);
+}
+
+test "root Missing prefix keeps parent table collision inert and converter refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const doc = try RootMissingAfterTableTesting.document(a); const page = doc.pages[2];
+    const supplied = try responseSource(a, &ns, page); const range = page.figure_style_operations.?[0];
+    const nodes = try RootMissingAfterTableTesting.nodes(a, &ns, supplied.html);
+    for ([_][]const u8{ "{{unknown}}\n", "<ref>\n", "<nowiki>\n", "[[Other|\n", "<div>\n", "{|\n| ",
+        "-{sr:one;sr-el:two}-\n", "-{R|text}-\n", "-{[[File:Other.png]]}-\n" }) |prefix| {
+        const changed = try std.mem.concat(a, u8, &.{prefix, supplied.source});
+        var shifted = range; shifted.start += prefix.len; shifted.end += prefix.len;
+        try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, changed, &.{shifted}, supplied.html, nodes));
+    }
+    const unclosed = try std.mem.replaceOwned(u8, a, supplied.source, "|}\n[[Слика:", "| \n[[Слика:");
+    try std.testing.expect(!equal(unclosed, supplied.source));
+    try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, unclosed, &.{range}, supplied.html, nodes));
+    for ([_]struct { before: []const u8, after: []const u8 }{
+        .{ .before = "rules=\"all\" cellpadding=\"3\"", .after = "rules=\"cols\" cellpadding=\"3\"" },
+        .{ .before = "mw-halign-right\" typeof=\"mw:Error mw:File/Thumb", .after = "mw-halign-right\" typeof=\"mw:File/Thumb" },
+    }) |mutation| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, supplied.html, mutation.before));
+        const changed = try std.mem.replaceOwned(u8, a, supplied.html, mutation.before, mutation.after);
+        try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, supplied.source, &.{range}, changed,
+            try RootMissingAfterTableTesting.nodes(a, &ns, changed)));
+    }
+    const proof = try figureStyleOperationProofsWithObservedOwner(a, &ns, supplied.source, &.{range}, supplied.html, nodes);
+    const frame = nodes[proof[0].candidates[0].frame];
+    const frame_end = (syntax.tagAt(supplied.html, frame.inner_end.?) orelse return error.TestUnexpectedResult).end;
+    const root_end = nodes[0].inner_end.?;
+    const duplicate = try std.mem.concat(a, u8, &.{supplied.html[0..root_end], supplied.html[frame.start..frame_end], supplied.html[root_end..]});
+    try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, supplied.source, &.{range}, duplicate,
+        try RootMissingAfterTableTesting.nodes(a, &ns, duplicate)));
+    const nested = try std.mem.concat(a, u8, &.{supplied.html[0..frame.start], "<div>", supplied.html[frame.start..frame_end], "</div>", supplied.html[frame_end..]});
+    try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, supplied.source, &.{range}, nested,
+        try RootMissingAfterTableTesting.nodes(a, &ns, nested)));
+    const extra = try std.mem.concat(a, u8, &.{supplied.html[0..frame.start], "<span>foreign</span>", supplied.html[frame.start..]});
+    try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, supplied.source, &.{range}, extra,
+        try RootMissingAfterTableTesting.nodes(a, &ns, extra)));
+    for (0..3) |mode| {
+        var changed = range;
+        switch (mode) { 0 => changed.start += 1, 1 => changed.end -= 1, else => changed.end = supplied.source.len + 1 }
+        try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, supplied.source, &.{changed}, supplied.html, nodes));
+    }
+}
+
+test "retained SR root Missing Book retains exact source and selected Missing operation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile(AuthoredHeadTesting.prefix ++ "interwiki-map.tsv"));
+    try ns.attachLanguageConversion(@embedFile(AuthoredHeadTesting.prefix ++ "figure-siteinfo.raw.json"));
+    const seven = try RootMissingAfterTableTesting.document(a); const page = seven.pages[2];
+    const supplied = try responseSource(a, &ns, page);
+    // Construct only the independent missing-file fact in this unit fixture.
+    // It cannot supply image assets, paint, source, ancestors or a successful file.
+    var files: sizing.Registry = .{ .arena = std.heap.ArenaAllocator.init(a), .namespace_catalog = &ns,
+        .records = &.{}, .file_authority = true }; defer files.deinit();
+    try files.missing_files.put(files.arena.allocator(), "Датотека:...", {});
+    var only = seven; only.pages = &.{page};
+    var book = try NormalAuthoredRuleTesting.book(a, &ns, &files, only); defer book.deinit();
+    try std.testing.expectEqual(@as(usize, 1), book.pages.len);
+    try std.testing.expectEqualStrings("år", book.pages[0].title);
+    try std.testing.expectEqualStrings(supplied.source, book.pages[0].source);
+    try std.testing.expectEqual(@as(usize, 1), book.pages[0].occurrences.len);
+    const occurrence = book.pages[0].occurrences[0];
+    try std.testing.expectEqualStrings("десно|250п|мини|.", occurrence.original_options);
+    try std.testing.expectEqualStrings("Датотека:...", occurrence.canonical_file);
+    const styles = book.pages[0].page_styles orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), styles.figure_styles.len);
+    try std.testing.expectEqualDeep(page.figure_style_operations.?[0], styles.figure_styles[0].range);
+    try std.testing.expect(try sizing.Registry.isMissingFile(&files, a, "Датотека:..."));
+    try std.testing.expectEqual(@as(?encoder.presentation_types.FigureSizingPolicy, null), try sizing.Registry.resolve(&files, a, "Датотека:...", .thumbnail, 250, null));
+}
+
+
+test "retained TH percent title matches exact captured anchor without double encoding or relaxed correspondence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const document = try std.json.parseFromSliceLeaky(Document, a, @embedFile("testdata/th-missing-figure-style/figure-page-observations.json"), .{ .allocate = .alloc_always });
+    const supplied = try responseSource(a, &ns, document.pages[2]);
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    try std.testing.expectEqualStrings(source, supplied.source);
+    const target = "w:แบกซเตอร์%27s_transcription_for_Middle_Chinese";
+    try std.testing.expect(std.mem.indexOf(u8, source, "[[" ++ target ++ "|แบกซเตอร์]]") != null);
+    const occurrence = std.mem.indexOf(u8, supplied.html, "%27s_transcription_for_Middle_Chinese") orelse return error.TestUnexpectedResult;
+    const start = std.mem.lastIndexOf(u8, supplied.html[0..occurrence], "<a ") orelse return error.TestUnexpectedResult;
+    const open = syntax.tagAt(supplied.html, start) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(open.is("a") and !open.closing);
+    const captured = try inventory(a, open);
+    const resolved = (try compiler.literalSourceLinkDestinationAlloc(a, &ns, target)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(resolved.external);
+    try std.testing.expectEqualStrings("w:แบกซเตอร์'s transcription for Middle Chinese", resolved.source_title);
+    const href = captured.get("href") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(href, resolved.target);
+    try std.testing.expect(std.mem.indexOf(u8, resolved.target, "%2527") == null);
+    try std.testing.expect(try noteLinkCorresponds(a, &ns, target, captured));
+    for ([_]struct { field: []const u8, from: []const u8, to: []const u8 }{
+        .{ .field = "href", .from = "%27", .to = "%2527" },
+        .{ .field = "href", .from = "th.wikipedia.org", .to = "en.wikipedia.org" },
+        .{ .field = "title", .from = "'", .to = "%27" },
+        .{ .field = "class", .from = "extiw", .to = "external" },
+    }) |case| {
+        var changed = captured;
+        const attributes = try a.dupe(@TypeOf(captured.attributes[0]), captured.attributes);
+        for (attributes) |*attr| if (equal(attr.name, case.field)) {
+            attr.value = try OrderedLiteralDivTesting.replace(a, attr.value, case.from, case.to);
+        };
+        changed.attributes = attributes;
+        try std.testing.expect(!try noteLinkCorresponds(a, &ns, target, changed));
+    }
+    try std.testing.expect(!try noteLinkCorresponds(a, &ns, "w:แบกซเตอร์%2527s_transcription_for_Middle_Chinese", captured));
+    try std.testing.expect(!try noteLinkCorresponds(a, &ns, "w:แบกซเตอร์%FFs_transcription_for_Middle_Chinese", captured));
+    try std.testing.expect(!try noteLinkCorresponds(a, &ns, "w:แบกซเตอร์%27s_transcription_for_Middle_Chinese#foreign", captured));
+}
+
+
+test "retained TH Japanese overflow DIV Table keeps the actual spaced close source grid and parent receipt" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var phase = @src(); errdefer std.debug.print("TH_SPACED_TABLE_CLOSE source={s}:{d}\n", .{ phase.file, phase.line });
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const document = try std.json.parseFromSliceLeaky(Document, a, @embedFile("testdata/th-missing-figure-style/figure-page-observations.json"), .{ .allocate = .alloc_always });
+    const supplied = try responseSource(a, &ns, document.pages[2]);
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    try std.testing.expectEqualStrings(source, supplied.source);
+    try std.testing.expect(digestMatches(source, "137238f617ab7c056dff9a2fca60e50a5e5182732784cc35a2755cf0d78045df"));
+    const owner_opening = syntax.tagAt(source, 42919) orelse return error.TestUnexpectedResult;
+    const owner_pair = syntax.matchingTag(source, owner_opening) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("<div style=\"width:auto;margin:0px;overflow:auto;\">", source[42919..owner_opening.end]);
+    try std.testing.expectEqualStrings("|} </div>", source[43321..owner_pair.end]);
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
+    const captured_start = std.mem.indexOf(u8, supplied.html, source[42919..owner_opening.end]) orelse return error.TestUnexpectedResult;
+    var captured_owner: ?usize = null;
+    for (nodes.items, 0..) |node, index| if (node.start == captured_start) { captured_owner = index; break; };
+    const owner = captured_owner orelse return error.TestUnexpectedResult;
+    var captured_table: ?u32 = null;
+    for (nodes.items, 0..) |node, index| if (node.parent == owner and node.tag.is("table")) {
+        try std.testing.expect(captured_table == null); captured_table = @intCast(index);
+    };
+    const table = captured_table orelse return error.TestUnexpectedResult;
+    const graph = try a.alloc(profile.ObservedStyleNode, nodes.items.len);
+    for (nodes.items, graph) |node, *out| out.* = .{ .tag = node.tag.name,
+        .parent = if (node.parent) |parent| @intCast(parent) else null,
+        .attributes = try figureObservedAttributes(a, node.attributes) };
+    phase = @src();
+    const identity = (try compiler.Renderer.literalTableBodyIdentityAlloc(a, source, 42970,
+        .{ .namespace_catalog = &ns }, graph, table)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 43323), identity.end);
+    try std.testing.expectEqual(@as(usize, 3), identity.cells.len);
+    for (identity.cells) |cell| {
+        try std.testing.expect(cell.subject < graph.len and equal(graph[cell.subject].tag, "td"));
+        try std.testing.expect(@intFromPtr(cell.source_body.ptr) >= @intFromPtr(source[42970..].ptr));
+        try std.testing.expect(@intFromPtr(cell.source_body.ptr) + cell.source_body.len <= @intFromPtr(source[43321..].ptr));
+    }
+    try std.testing.expect((try compiler.Renderer.literalTableBodyIdentityAlloc(a, source, 42971,
+        .{ .namespace_catalog = &ns }, graph, table)) == null);
+    try std.testing.expect((try compiler.Renderer.literalTableBodyIdentityAlloc(a, source, 42970,
+        .{ .namespace_catalog = &ns }, graph, @intCast(owner))) == null);
+    phase = @src();
+    const proofs = try observedLiteralDivParents(a, &ns, source, supplied.html, nodes.items);
+    const proof = PriorNotePrefixTesting.find(proofs, 42919) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(proof.parent_start == null);
+    try std.testing.expectEqual(owner_pair.end, proof.range.anchor_end);
+    try OrderedLiteralDivTesting.check(a, source, proofs, 42919, null);
+}
+
+const SpacedLiteralTableRenderTesting = struct {
+    fn run(a: A, ns: *const namespaces.Registry, source_value: []const u8, captured_value: []const u8) ![]const u8 {
+    var phase = @src(); errdefer std.debug.print("ORDERED_DIV_RENDER source={s}:{d}\n", .{ phase.file, phase.line });
+    const proofs = try OrderedLiteralDivTesting.issue(a, ns, source_value, captured_value);
+    try std.testing.expectEqual(@as(usize, 5), proofs.len);
+    var styles = try profile.parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    var alternate: profile.TextElement = .{ .tag = "div", .classes = "mw-parser-output client-js", .ancestry_complete = true, .physical_ancestry_complete = true };
+    var root: profile.TextElement = .{ .tag = "div", .classes = "mw-parser-output", .ancestry_complete = true, .physical_ancestry_complete = true, .alternative_ancestry = &alternate };
+    var scope: profile.BoundedTextClassScope = .{ .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "outer repeat same wikitable",
+        .complete_ancestor_class_superset = "mw-parser-output client-js outer repeat same wikitable", .complete_ancestor_id_superset = "",
+        .page_styles = &styles, .page_style_root = &root, .page_style_complete_root = &root,
+        .source_literal_divs_source = source_value, .source_literal_divs = proofs };
+    const tracked = compiler.MissingText.untracked(source_value);
+    const projection: compiler.SourceElementProjection = .{ .original = tracked, .prepared = source_value,
+        .copies = &.{.{ .original_start = 0, .prepared_start = 0, .len = source_value.len }},
+        .observed_source = .{ .source = source_value, .scope = &scope } };
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{ .namespace_catalog = ns, .table_styles = &styles, .observe_source_elements = true },
+        .content_root = .parser_output, .body_missing = tracked,
+        .source_element_binding = .{ .scope = &scope, .projection = &projection, .owner = tracked, .page_start = 0 },
+        .figure_class_source_binding = .{ .scope = &scope, .projection = &projection, .owner = tracked, .page_start = 0 } };
+    phase = @src();
+    const blocks = try renderer.renderBodyWithMissing(tracked);
+    errdefer std.debug.print("ORDERED_DIV_RENDER report={any}\n", .{renderer.fallbacks});
+    try std.testing.expect(!renderer.fallbacks.any());
+    const codec = encoder.presentation_codec;
+    phase = @src();
+    const bytes = try codec.encodeBuildAlloc(a, &[_]compiler.Span{},
+        &[_]struct { level: u8 = 2, title: []const u8 = "Thai", blocks: []const compiler.Block }{.{ .blocks = blocks }},
+        encoder.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+    const stored = try codec.decodeAlloc(a, bytes, "ordered DIV body", .language, .{ .code = "th", .heading = "Thai" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    inline for (.{ blocks, stored.entry.sections[0].blocks }) |body| {
+        var text: std.ArrayList(u8) = .empty; var actions: std.ArrayList([]const u8) = .empty;
+        var tables: usize = 0; var painted: usize = 0;
+        try OrderedLiteralDivRenderTesting.inspect(body, &text, a, &actions, &tables, &painted);
+        try std.testing.expectEqualStrings("alphadetailheadlabelonebeta2014two", text.items);
+        try std.testing.expectEqual(@as(usize, 2), tables); try std.testing.expectEqual(@as(usize, 3), painted);
+        try std.testing.expectEqual(@as(usize, 4), actions.items.len);
+        for ([_][]const u8{ "A", "Target#part", "B", "https://example.test/path" }, actions.items) |expected, actual|
+            try std.testing.expectEqualStrings(expected, actual);
+    }
+    return bytes;
+    }
+};
+
+test "literal Table spaced closing DIV preserves every rendered block action and Stored codec byte" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = OrderedLiteralDivTesting;
+    const expected = try SpacedLiteralTableRenderTesting.run(a, &ns, T.source, T.captured);
+    for ([_][]const u8{ " ", "\t", " \t " }) |space| {
+        const source = try T.replace(a, T.source, "|}</div>", try std.mem.concat(a, u8, &.{ "|}", space, "</div>" }));
+        const captured = try T.replace(a, T.captured, "</table></div>", try std.mem.concat(a, u8, &.{ "</table>", space, "</div>" }));
+        try std.testing.expectEqualSlices(u8, expected, try SpacedLiteralTableRenderTesting.run(a, &ns, source, captured));
+    }
+    for ([_][]const u8{ " x", " <!--gap-->", "\x0b" }) |foreign| {
+        const source = try T.replace(a, T.source, "|}</div>", try std.mem.concat(a, u8, &.{ "|}", foreign, "</div>" }));
+        const proofs = try T.issue(a, &ns, source, T.captured);
+        try std.testing.expect(PriorNotePrefixTesting.find(proofs, 0) == null);
+    }
+}
+
+test "retained SR no table root Missing binds category blank paragraph and exact observed root" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const seven = try RootMissingAfterTableTesting.document(a); const page = seven.pages[5];
+    try std.testing.expectEqualStrings("báseň", page.title);
+    try std.testing.expectEqual(@as(u64, 31546), page.page_id);
+    try std.testing.expectEqual(@as(u64, 418980), page.revision_id);
+    const supplied = try responseSource(a, &ns, page);
+    try std.testing.expect(digestMatches(supplied.source, "a5555521f598007543f96ebcda5d5c0be456b98e8de7e61924e2dfa2b5061fbf"));
+    try std.testing.expect(digestMatches(supplied.html, "bd9f6843a905bd6cc9868dfee7f1401d541f3b38d9145760d76c7d00eab56949"));
+    const range = page.figure_style_operations.?[0];
+    try std.testing.expectEqualDeep(FigureStyleRange{ .start = 234, .end = 367, .media_kind = .missing }, range);
+    try std.testing.expect(std.mem.indexOf(u8, supplied.source[0..range.start], "{|") == null);
+    try std.testing.expectError(invalid, figureStyleOperationProofs(a, &ns, supplied.source, &.{range}));
+    const nodes = try RootMissingAfterTableTesting.nodes(a, &ns, supplied.html);
+    const proofs = try figureStyleOperationProofsWithObservedOwner(a, &ns, supplied.source, &.{range}, supplied.html, nodes);
+    try std.testing.expectEqual(@as(usize, 1), proofs.len);
+    try std.testing.expectEqualStrings("Датотека:Portrait krasko-ivan.jpg", proofs[0].canonical_file);
+    try std.testing.expectEqualStrings("Познати словачки песник Иван Краско.", supplied.source[proofs[0].caption_start..proofs[0].options_end]);
+    const frame = nodes[proofs[0].candidates[0].frame];
+    try std.testing.expectEqual(@as(?usize, 0), frame.parent);
+    try std.testing.expect(nodes[frame.previous.?].tag.is("p"));
+}
+
+test "no table root Missing refuses foreign source flow category gaps root paragraph and colliding candidates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const seven = try RootMissingAfterTableTesting.document(a); const page = seven.pages[5];
+    const supplied = try responseSource(a, &ns, page); const range = page.figure_style_operations.?[0];
+    const nodes = try RootMissingAfterTableTesting.nodes(a, &ns, supplied.html);
+    for ([_][]const u8{ "{{unknown}}\n", "<div>\n", "<ref>\n", "<nowiki>\n", "{|\n| foreign\n|}\n",
+        "-{sr:one;sr-el:two}-\n", "-{R|unknown}-\n", "[[File:Portrait krasko-ivan.jpg|thumb|other]]\n" }) |prefix| {
+        const changed = try std.mem.concat(a, u8, &.{prefix, supplied.source});
+        var shifted = range; shifted.start += prefix.len; shifted.end += prefix.len;
+        try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, changed, &.{shifted}, supplied.html, nodes));
+    }
+    const category = "[[Категорија:Словачка именица]]";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, supplied.source[0..range.start], category));
+    const escaped = try std.mem.replaceOwned(u8, a, supplied.source, category, "[[:Категорија:Словачка именица]]");
+    var shifted = range; shifted.start += 1; shifted.end += 1;
+    try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, escaped, &.{shifted}, supplied.html, nodes));
+    const gap_start = std.mem.trimEnd(u8, supplied.source[0..range.start], " \t\r\n").len;
+    const shortened = try std.mem.concat(a, u8, &.{ supplied.source[0..gap_start], "\n", supplied.source[range.start..] });
+    shifted = range; shifted.start -= range.start - gap_start - 1; shifted.end -= range.start - gap_start - 1;
+    try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, shortened, &.{shifted}, supplied.html, nodes));
+    for ([_]struct { old: []const u8, new: []const u8 }{
+        .{ .old = "<p><br />\n</p>\n<figure", .new = "<p>visible<br />\n</p>\n<figure" },
+        .{ .old = "<p><br />\n</p>\n<figure", .new = "<p class=\"foreign\"><br />\n</p>\n<figure" },
+        .{ .old = "<p><br />\n</p>\n<figure", .new = "<p><img />\n</p>\n<figure" },
+        .{ .old = "<p><br />\n</p>\n<figure", .new = "<p><br />\n</p>text<figure" },
+        .{ .old = "mw-halign-right\" typeof=\"mw:Error mw:File/Thumb", .new = "mw-halign-right\" typeof=\"mw:File/Thumb" },
+    }) |mutation| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, supplied.html, mutation.old));
+        const changed = try std.mem.replaceOwned(u8, a, supplied.html, mutation.old, mutation.new);
+        const changed_nodes = try RootMissingAfterTableTesting.nodes(a, &ns, changed);
+        try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, supplied.source, &.{range}, changed, changed_nodes));
+    }
+    const proofs = try figureStyleOperationProofsWithObservedOwner(a, &ns, supplied.source, &.{range}, supplied.html, nodes);
+    const frame = proofs[0].candidates[0].frame;
+    const foreign = try a.dupe(ObservedSiblingNode, nodes); foreign[frame].parent = frame - 1;
+    try std.testing.expectError(invalid, figureStyleOperationProofsWithObservedOwner(a, &ns, supplied.source, &.{range}, supplied.html, foreign));
+}
+
+
+test "ordered wiki cell DIV ancestry requires complete row cell body and noninteractive physical parents" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = OrderedLiteralDivTesting;
+    const source = "<div class='outer'>\n{| class='wikitable'\n|-\n|colspan=2 style='font-size:90%'|<div class='cell'>\n\t'''''Notes''' for text:''\n<div class='cell-inner'>\n\t* [t] &lt;>;<br>\n\t* [[Target#part|kept]].</div></div>\n|}</div>";
+    const content = "<div class='cell'>\n<p>\t<i><b>Notes</b> for text:</i>\n</p><div class='cell-inner'>\n<p>\t* [t] &lt;&gt;;<br>\n</p>\t* <a href='/wiki/Target#part' title='Target'>kept</a>.</div></div>";
+    const captured = "<div class='outer'>\n<table class='wikitable'><tbody><tr><td colspan='2' style='font-size:90%'>" ++ content ++ "</td></tr></tbody></table></div>";
+    const proofs = try T.issue(a, &ns, source, captured);
+    try std.testing.expectEqual(@as(usize, 3), proofs.len);
+    const start = std.mem.indexOf(u8, source, "<div class='cell'>").?;
+    const nested = std.mem.indexOf(u8, source, "<div class='cell-inner'>").?;
+    try T.check(a, source, proofs, 0, null); try T.check(a, source, proofs, start, null); try T.check(a, source, proofs, nested, start);
+    const cap = PriorNotePrefixTesting.find(proofs, start).?.wiki_cell_parent orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?usize, 0), cap.parent_start);
+    try std.testing.expectEqual(start, cap.body_start);
+    try std.testing.expectEqualStrings("{| class='wikitable'", source[cap.table_start..cap.table_open_end]);
+    try std.testing.expectEqualStrings("|-", source[cap.row_start..cap.row_end]);
+    try std.testing.expectEqualStrings("colspan=2 style='font-size:90%'", source[cap.attrs_start..cap.attrs_end]);
+    try std.testing.expect(PriorNotePrefixTesting.find(proofs, nested).?.wiki_cell_parent == null);
+    // The same fully compared body cannot borrow an interactive/unknown parent.
+    for ([_]struct { source_from: []const u8, source_to: []const u8, html_from: []const u8, html_to: []const u8 }{
+        .{ .source_from = "|colspan=2", .source_to = "|tabindex=0 colspan=2", .html_from = "<td colspan", .html_to = "<td tabindex='0' colspan" },
+        .{ .source_from = "|-\n", .source_to = "|- contenteditable=true\n", .html_from = "<tr>", .html_to = "<tr contenteditable='true'>" },
+        .{ .source_from = "{| class", .source_to = "{| data-unknown=yes class", .html_from = "<table class", .html_to = "<table data-unknown='yes' class" },
+        .{ .source_from = "|colspan=2", .source_to = "|onclick='act()' colspan=2", .html_from = "<td colspan", .html_to = "<td onclick='act()' colspan" },
+    }, 0..) |edit, mode| {
+        errdefer std.debug.print("ORDERED_CELL_PARENT mode={d}\n", .{mode});
+        const changed = try T.replace(a, source, edit.source_from, edit.source_to);
+        const html = try T.replace(a, captured, edit.html_from, edit.html_to);
+        if (mode == 3) {
+            // Event handlers fail the complete observed-tree intake before the
+            // ordered issuer can return any parent capability.
+            try std.testing.expectError(invalid, T.issue(a, &ns, changed, html));
+            continue;
+        }
+        const refused = try T.issue(a, &ns, changed, html);
+        try std.testing.expect(PriorNotePrefixTesting.find(refused, std.mem.indexOf(u8, changed, "<div class='cell'>").?) == null);
+    }
+    for ([_][2][]const u8{
+        .{ "<tbody>", "<tbody class='foreign'>" }, .{ "<tr>", "<tr><td>foreign</td>" },
+        .{ "<td colspan='2'", "<td colspan='1'" }, .{ "<p>\t<i>", "<p>foreign<i>" },
+        .{ "<b>Notes</b>", "<b>Note</b>s" }, .{ "#part", "#foreign" },
+        .{ "</td></tr>", "</td><td></td></tr>" }, .{ "<div class='cell-inner'>", "<div class='foreign'>" },
+    }) |edit| {
+        const refused = try T.issue(a, &ns, source, try T.replace(a, captured, edit[0], edit[1]));
+        try std.testing.expect(PriorNotePrefixTesting.find(refused, start) == null);
+    }
+    const html = try std.mem.concat(a, u8, &.{T.root, captured, "</div>"});
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, html, &nodes);
+    for (0..3) |mode| {
+        const changed = try a.dupe(ObservedSiblingNode, nodes.items);
+        const selected_html = if (mode == 0) try a.dupe(u8, html) else html;
+        for (changed) |*node| if (node.tag.is("td")) {
+            if (mode == 1) node.parent = 1;
+            if (mode == 2) node.start += 1;
+        };
+        var refused: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+        try appendOrderedLiteralDivParents(a, &ns, source, selected_html, changed, &refused);
+        try std.testing.expect(PriorNotePrefixTesting.find(refused.items, start) == null);
+    }
+}
+
+test "literal DIV prefix admits exact positive integer percentage cell width and retains malformed scalar refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_][]const u8{ "width=1%", "width=48%", "WIDTH=100%", "colspan=2 width=48% style='text-align:left'" }) |raw|
+        try authoredPrefixWikiCellAttributes(a, raw);
+    for ([_][]const u8{ "width=0%", "width=101%", "width=-1%", "width=+1%", "width=.5%", "width=1.5%",
+        "width=%", "width=48", "width=48px", "width=48%%", "width=48%foreign", "width=48%onclick='x'",
+        "width=48% onclick='x'", "width=48% width=1%", "align=left", "colspan=0", "colspan=2%", "rowspan=65536" }) |raw|
+        try std.testing.expectError(invalid, authoredPrefixWikiCellAttributes(a, raw));
+    // This is the retained source spelling, not a normalized replacement input.
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    const owner = syntax.tagAt(source, 42919) orelse return error.TestUnexpectedResult;
+    const pair = syntax.matchingTag(source, owner) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, source[owner.end..pair.inner_end], "| width=1% |") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source[owner.end..pair.inner_end], "| width=48%|") != null);
+    const one = try profile.resolveInlineCellWithLegacyHintsAlloc(a, null, null, "1%", "");
+    const forty_eight = try profile.resolveInlineCellWithLegacyHintsAlloc(a, null, null, "48%", "");
+    try std.testing.expect(!one.unresolved and !forty_eight.unresolved);
+    try std.testing.expectEqual(encoder.presentation_types.StyleWidth{ .unit = .percent, .value = 1 }, one.style.?.width.?);
+    try std.testing.expectEqual(encoder.presentation_types.StyleWidth{ .unit = .percent, .value = 48 }, forty_eight.style.?.width.?);
+}
+
+const LiteralPercentCellWidthTesting = struct {
+    fn count(blocks: anytype) anyerror!usize {
+        var result: usize = 0;
+        for (blocks) |block| {
+            if (block.container) |container| result += try count(container.blocks);
+            if (block.table) |table| for (table.rows) |row| for (row.cells) |cell| {
+                if (cell.style) |style| if (style.width) |width| {
+                    try std.testing.expectEqual(encoder.presentation_types.StyleWidth{ .unit = .percent, .value = 48 }, width);
+                    result += 1;
+                };
+                if (cell.blocks) |children| result += try count(children);
+            };
+        }
+        return result;
+    }
+};
+
+test "literal percentage cell width keeps captured identity full body actions layout and Stored bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = OrderedLiteralDivTesting;
+    const source = try T.replace(a, T.source, "! colspan=2|head", "! colspan=2 width=48%|head");
+    const quoted = try T.replace(a, source, "width=48%", "width='48%'");
+    const captured = try T.replace(a, T.captured, "<th colspan='2'>head", "<th colspan='2' width='48%'>head");
+    const actual = try SpacedLiteralTableRenderTesting.run(a, &ns, source, captured);
+    const expected = try SpacedLiteralTableRenderTesting.run(a, &ns, quoted, captured);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    const codec = encoder.presentation_codec;
+    const stored = try codec.decodeAlloc(a, actual, "ordered DIV body", .language, .{ .code = "th", .heading = "Thai" });
+    try std.testing.expectEqual(@as(usize, 1), try LiteralPercentCellWidthTesting.count(stored.entry.sections[0].blocks));
+    for ([_][]const u8{ "47%", "48", "49%" }) |different| {
+        const changed = try T.replace(a, captured, "width='48%'", try std.fmt.allocPrint(a, "width='{s}'", .{different}));
+        const proofs = try T.issue(a, &ns, source, changed);
+        try std.testing.expect(PriorNotePrefixTesting.find(proofs, 0) == null);
+    }
+    const foreign = try T.replace(a, captured, "<th colspan='2' width='48%'>head", "<th colspan='2' width='48%'><div>head</div>");
+    try std.testing.expect(PriorNotePrefixTesting.find(try T.issue(a, &ns, source, foreign), 0) == null);
+}
+
+test "selected prefix Table page preflight relation owns exact Book source scope and both captured heads" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = CurrentGetLiteralTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    var files = try T.registry(a, &ns); defer files.deinit();
+    const shape = try T.shape(a); const original = try T.raw(a, shape);
+    const source = original.current_get_literal.?.expanded_source;
+    var book = try T.book(a, &ns, &files, shape); defer book.deinit();
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const selected = (try book.selectPageStyles(a, &ns, 0, 3099, 37649537, original.title,
+        original.current_get_literal.?.raw_source, source, Testing.hash(T.defaults), &parent)) orelse return error.TestUnexpectedResult;
+    const capability = selected.tablePrefixSource() orelse return error.TestUnexpectedResult;
+    const issue = capability.preflight_scope orelse return error.TestUnexpectedResult;
+    const observed = issue(capability.context, source) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(observed.scope == &selected.scope and observed.scope.page_styles == selected.styles);
+    try std.testing.expect(observed.source.ptr == source.ptr and observed.source.len == source.len);
+    const table = (try capability.observe(capability.context, a, source, 1)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), table.contexts.len);
+    try std.testing.expect(table.contexts.ptr == selected.prefix_table.?.contexts.ptr);
+    // Distinct observed computations are related by the actual issuer, not by
+    // pretending their allocated Profile objects equal the page Profile.
+    try std.testing.expect(table.contexts[0].styles != selected.styles and table.contexts[1].styles != selected.styles);
+    const foreign = try a.dupe(u8, source);
+    try std.testing.expect(issue(capability.context, foreign) == null);
+    try std.testing.expect(issue(capability.context, source[1..]) == null);
+    try std.testing.expect(issue(null, source) == null);
+    var changed = selected.*;
+    changed.source = foreign;
+    try std.testing.expect(issue(&changed, source) == null);
+    changed = selected.*; changed.prefix_table = null;
+    try std.testing.expect(issue(&changed, source) == null);
+    changed = selected.*; changed.scope.page_styles = &parent;
+    try std.testing.expect(issue(&changed, source) == null);
+    try std.testing.expect((try capability.observe(capability.context, a, source, 2)) == null);
+}
+
+test "ordered literal DIV cell proof distinguishes explicit bare opener from absent or foreign cell custody" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = OrderedLiteralDivTesting;
+    // Same physical delimiter/empty-TD/leading-LF shape as the retained Mai
+    // cell. This controlled body does not replace its complete saved oracle.
+    const source = "<div>\n{| class='noprint' style='width:100%'\n|-\n|\n<div class='NavFrame'>\n<div style='height:1.6em;font-weight:bold'>[[Monat|Monate]]</div>\n</div>\n|}\n</div>";
+    const captured = "<div>\n<table class='noprint' style='width:100%'><tbody><tr><td>\n<div class='NavFrame'>\n<div style='height:1.6em;font-weight:bold'><a href='/wiki/Monat' title='Monat'>Monate</a></div>\n</div>\n</td></tr></tbody></table>\n</div>";
+    const start = std.mem.indexOf(u8, source, "<div class='NavFrame'>").?;
+    const proofs = try T.issue(a, &ns, source, captured);
+    const child = PriorNotePrefixTesting.find(proofs, start) orelse return error.TestUnexpectedResult;
+    const cap = child.wiki_cell_parent orelse return error.TestUnexpectedResult;
+    try std.testing.expect(child.parent_start == null);
+    try std.testing.expectEqual(@as(?usize, 0), cap.parent_start);
+    try std.testing.expectEqual(cap.attrs_start, cap.attrs_end);
+    try std.testing.expectEqual(cap.attrs_end, cap.body_start);
+    try std.testing.expectEqualStrings("|\n<div", source[cap.attrs_start - 1..][0..6]);
+    try std.testing.expectEqual(start, cap.body_start + 1);
+    const inner = PriorNotePrefixTesting.find(proofs, std.mem.indexOf(u8, source, "<div style=").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?usize, start), inner.parent_start);
+    try std.testing.expect(inner.wiki_cell_parent == null);
+    for ([_][2][]const u8{
+        .{ "<td>", "<td class='foreign'>" },
+        .{ "<td>", "<td></td><td>" },
+        .{ "<tr>", "<tr style='font-size:50%'>" },
+        .{ "/wiki/Monat", "/wiki/Jahr" },
+        .{ ">Monate</a>", ">Monat</a>e" },
+    }, 0..) |edit, mode| {
+        errdefer std.debug.print("EMPTY_TD_CAPTURE mode={d}\n", .{mode});
+        const rejected = try T.issue(a, &ns, source, try T.replace(a, captured, edit[0], edit[1]));
+        try std.testing.expect(PriorNotePrefixTesting.find(rejected, start) == null);
+    }
+    const without_row = try T.replace(a, source, "|-\n", "");
+    const absent = try T.issue(a, &ns, without_row, captured);
+    const absent_start = std.mem.indexOf(u8, without_row, "<div class='NavFrame'>").?;
+    try std.testing.expect(PriorNotePrefixTesting.find(absent, absent_start) == null);
+    // The new initial domain is a physical bare cell line. Keep the older
+    // same-line/no-receipt refusal rather than treating empty as missing.
+    const inline_source = try T.replace(a, source, "|\n<div", "|<div");
+    const inline_proofs = try T.issue(a, &ns, inline_source, captured);
+    try std.testing.expect(PriorNotePrefixTesting.find(inline_proofs, std.mem.indexOf(u8, inline_source, "<div class='NavFrame'>").?) == null);
+    const html = try std.mem.concat(a, u8, &.{ T.root, captured, "</div>" });
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, html, &nodes);
+    var refused: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+    try appendOrderedLiteralDivParents(a, &ns, source, try a.dupe(u8, html), nodes.items, &refused);
+    try std.testing.expectEqual(@as(usize, 0), refused.items.len);
+}
+
+test "selected ordered DIV join uses actual link trail callback and exact self page without shifting inline owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const context: compiler.Context = .{ .title = "Mai", .namespace_catalog = &ns };
+    const source = "[[Jahr]]es [[Mai]]";
+    const html = "<a href='/wiki/Jahr' title='Jahr'>Jahres</a> <a class='mw-selflink selflink'>Mai</a>";
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, source, html, 0, false, true, context, null));
+    try std.testing.expect(!try orderedDivInlineCorresponds(a, &ns, source, html, 0, false));
+    const formatted = "[[Jahr|''Jahr'']]es";
+    const formatted_html = "<a href='/wiki/Jahr' title='Jahr'><i>Jahr</i>es</a>";
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, formatted, formatted_html, 0, false, true, context, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, formatted,
+        "<a href='/wiki/Jahr' title='Jahr'><i>Jahres</i></a>", 0, false, true, context, null));
+    for (0..6) |mode| {
+        var changed = context; var altered: []const u8 = html;
+        switch (mode) {
+            0 => changed.title = "Other",
+            1 => changed.title = "",
+            2 => changed.namespace_catalog = null,
+            3 => changed.link_trail = .{ .contains_fn = struct {
+                fn noTrail(_: ?*const anyopaque, _: u21) bool { return false; }
+            }.noTrail },
+            4 => altered = try OrderedLiteralDivTesting.replace(a, html, "class='mw-selflink selflink'", "class='mw-selflink selflink' href='/wiki/Mai'"),
+            5 => altered = try OrderedLiteralDivTesting.replace(a, html, ">Mai</a>", ">Juni</a>"),
+            else => unreachable,
+        }
+        try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, source, altered, 0, false, true, changed, null));
+    }
+    // The callback is used, not a second hard-coded ASCII/Unicode rule.
+    var selected = context;
+    selected.link_trail = .{ .contains_fn = struct {
+        fn digits(_: ?*const anyopaque, cp: u21) bool { return cp == '2'; }
+    }.digits };
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, "[[Jahr]]2",
+        "<a href='/wiki/Jahr' title='Jahr'>Jahr2</a>", 0, false, true, selected, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, "[[Jahr]]2",
+        "<a href='/wiki/Jahr' title='Jahr'>Jahr2</a>", 0, false, true, context, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, "[[Mai#part]]",
+        "<a class='mw-selflink selflink'>Mai#part</a>", 0, false, true, context, null));
+}
+
+test "retained complete Mai source and capture issue first bare TD navigation chain with every month action intact" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var phase = @src(); errdefer std.debug.print("DE_EMPTY_TD_SOURCE source={s}:{d}\n", .{phase.file, phase.line});
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const document = try std.json.parseFromSlice(Document, a, @embedFile("testdata/de-mai-figure-style/original.json"), .{});
+    const page = document.value.pages[0];
+    const supplied = try responseSource(a, &ns, page);
+    try std.testing.expect(digestMatches(supplied.source, "01d3e7a45d3f9d3504311fdba3eebed4c8a1a2d9f8760c0f9bc11f75b8b00ed8"));
+    try std.testing.expect(digestMatches(supplied.html, "fcbea660fbfde6f129dfbb5262065aa32d50d3ecbc63c5ddc138a0e7a44acc29"));
+    const first = std.mem.indexOf(u8, supplied.source, "<div>\n{| class=\"noprint\"").?;
+    const child = std.mem.indexOfPos(u8, supplied.source, first, "<div class=\"NavFrame\"").?;
+    const header = std.mem.indexOfPos(u8, supplied.source, child, "<div style=\"height: 1.6em;").?;
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
+    var proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+    const context: compiler.Context = .{ .title = page.title, .namespace_catalog = &ns };
+    phase = @src();
+    try appendOrderedLiteralDivParentsIn(a, &ns, supplied.source, supplied.html, nodes.items, &proofs, context);
+    const frame = PriorNotePrefixTesting.find(proofs.items, child) orelse return error.TestUnexpectedResult;
+    const cap = frame.wiki_cell_parent orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?usize, first), cap.parent_start);
+    try std.testing.expectEqual(cap.attrs_start, cap.attrs_end);
+    try std.testing.expectEqual(cap.attrs_end, cap.body_start);
+    try std.testing.expectEqual(child, cap.body_start + 1);
+    const heading = PriorNotePrefixTesting.find(proofs.items, header) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?usize, child), heading.parent_start);
+    try std.testing.expect(std.mem.indexOf(u8, supplied.source[cap.body_start..cap.body_end], "[[Dezember]]") != null);
+    // Every source/captured text/action is checked before the local proof can
+    // escape. Same total text with a changed destination or owner must revoke it.
+    for ([_][2][]const u8{
+        .{ "href=\"/wiki/Monat\"", "href=\"/wiki/Jahr\"" },
+        .{ ">Jahres</a>", ">Jahr</a>es" },
+        .{ ">Dezember</a>", ">Dezembe</a>r" },
+        .{ "class=\"mw-selflink selflink\">Mai", "class=\"mw-selflink selflink\">Juni" },
+    }, 0..) |edit, mode| {
+        phase = @src();
+        errdefer std.debug.print("DE_EMPTY_TD_CAPTURE mode={d}\n", .{mode});
+        // Mutate this proved captured frame, not an earlier unrelated page link.
+        const frame_start = std.mem.indexOf(u8, supplied.html, "<div class=\"NavFrame\"") orelse return error.TestUnexpectedResult;
+        const frame_tag = syntax.tagAt(supplied.html, frame_start) orelse return error.TestUnexpectedResult;
+        const frame_pair = syntax.matchingTag(supplied.html, frame_tag) orelse return error.TestUnexpectedResult;
+        const changed_frame = try OrderedLiteralDivTesting.replace(a, supplied.html[frame_start..frame_pair.end], edit[0], edit[1]);
+        const html = try std.mem.concat(a, u8, &.{ supplied.html[0..frame_start], changed_frame, supplied.html[frame_pair.end..] });
+        var changed_nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, &ns, html, &changed_nodes);
+        var rejected: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+        try appendOrderedLiteralDivParentsIn(a, &ns, supplied.source, html, changed_nodes.items, &rejected, context);
+        try std.testing.expect(PriorNotePrefixTesting.find(rejected.items, child) == null);
+    }
+}
+
+test "actual RU root-only parent Container requires complete Table footer body and exact selected source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = IndependentRuTableRootTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    const input = try T.input(a);
+    const prepared = try preparedTableRootAlloc(a, &ns, input);
+    const parent = prepared.parent_container orelse return error.TestUnexpectedResult;
+    const source = try a.dupe(u8, input.source);
+    const capability = try selectedTableRootAlloc(a, &prepared, source);
+    const callback = capability.observe_parent_container orelse return error.TestUnexpectedResult;
+    const operation: compiler.AuthoredElementStyleOperation = .{ .source = source, .element = source[parent.start..parent.end] };
+    const observed = (try callback(capability.context, a, operation)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(observed.context.styles == parent.styles and observed.context.nodes.ptr == prepared.contexts[0].nodes.ptr);
+    try std.testing.expect(observed.context.styles != prepared.contexts[0].styles);
+    try std.testing.expect(observed.context.styles.observed_figure_rules.ptr == prepared.contexts[0].styles.observed_figure_rules.ptr);
+    try std.testing.expect(observed.context.styles.container_rules.ptr == prepared.contexts[0].styles.container_rules.ptr);
+    try std.testing.expectEqualStrings("div", observed.context.nodes[observed.element].tag);
+    const own = observed.context.nodes[observed.element];
+    var metadata: usize = 0;
+    for (own.attributes) |attribute| {
+        if (equal(attribute.name, "about") or equal(attribute.name, "typeof") or equal(attribute.name, "id") or equal(attribute.name, "data-mw")) metadata += 1;
+        if (equal(attribute.name, "style")) try std.testing.expectEqualStrings("width:auto;margin:0px;overflow:auto;", attribute.value);
+    }
+    try std.testing.expectEqual(@as(usize, 4), metadata);
+    const section = observed.context.nodes[own.parent.?];
+    try std.testing.expectEqualStrings("section", section.tag);
+    var label = false;
+    for (section.attributes) |attribute| if (equal(attribute.name, "aria-labelledby")) { try std.testing.expectEqualStrings("Этимология", attribute.value); label = true; };
+    try std.testing.expect(label);
+    try std.testing.expect(parent.styles.custom_properties != null);
+    const foreign = try a.dupe(u8, source);
+    try std.testing.expect((try callback(capability.context, a, .{ .source = foreign, .element = foreign[parent.start..parent.end] })) == null);
+    try std.testing.expect((try callback(capability.context, a, .{ .source = source, .element = operation.element[0 .. operation.element.len - 1] })) == null);
+    try std.testing.expect((try callback(null, a, operation)) == null);
+    const changed_source = try a.dupe(u8, input.source);
+    const footer = std.mem.indexOf(u8, changed_source, "Дополнительные символы") orelse return error.TestUnexpectedResult;
+    // Д -> Ж preserves valid UTF-8 and all Table/header/parent signatures.
+    changed_source[footer + 1] = 0x96;
+    var changed = input; changed.source = changed_source;
+    const withheld = try preparedTableRootAlloc(a, &ns, changed);
+    try std.testing.expect(withheld.contexts.len == 1 and withheld.parent != null);
+    try std.testing.expect(withheld.parent_container == null);
+    const no_parent = try selectedTableRootAlloc(a, &withheld, changed.source);
+    try std.testing.expect(no_parent.observe_parent_container == null);
+    // The original whole-source/full Stored Writer oracle remains independent;
+    // this test certifies no page scope or final body/paint acceptance.
+    try std.testing.expect(capability.root_only and !capability.prefix_viewport and !capability.intrinsic_viewport);
+}
+
+test "root GET ordered body comparison binds exact origin rel target and unchanged normal mode" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = IndependentRuTableRootTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    const input = try T.input(a);
+    const start = std.mem.indexOfPos(u8, input.response, input.observed_table.end, "<a ") orelse return error.TestUnexpectedResult;
+    const tag = currentLiteralHtmlTagAt(input.response, start) orelse return error.TestUnexpectedResult;
+    const attributes = try inventory(a, tag);
+    const target = attributes.get("title") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ん", target);
+    const origin = (try missingStyleOrigin(a, ns.wiki)).origin;
+    try std.testing.expect(try orderedDivLinkCorresponds(a, &ns, target, attributes, origin));
+    try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, target, attributes, null));
+    try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, "い", attributes, origin));
+    try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, target, attributes, "http://ru.wiktionary.org"));
+    const original_href = attributes.get("href").?;
+    for ([_][]const u8{ "https://foreign.invalid/wiki/", "https://ru.wiktionary.org.evil/wiki/" }) |prefix| {
+        const changed = try a.dupe(Attribute, attributes.attributes);
+        for (changed) |*attribute| if (equal(attribute.name, "href")) { attribute.value = try std.mem.concat(a, u8, &.{ prefix, target }); };
+        try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, target, .{ .attributes = changed }, origin));
+    }
+    const changed = try a.dupe(Attribute, attributes.attributes);
+    for (changed) |*attribute| if (equal(attribute.name, "rel")) { attribute.value = "mw:WikiLink/Interwiki"; };
+    try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, target, .{ .attributes = changed }, origin));
+    var no_rel: std.ArrayList(Attribute) = .empty;
+    for (attributes.attributes) |attribute| if (!equal(attribute.name, "rel")) try no_rel.append(a, attribute);
+    try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, target, .{ .attributes = no_rel.items }, origin));
+    const extra = try a.alloc(Attribute, attributes.attributes.len + 1);
+    @memcpy(extra[0..attributes.attributes.len], attributes.attributes);
+    extra[attributes.attributes.len] = .{ .name = "onclick", .value = "unknown" };
+    try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, target, .{ .attributes = extra }, origin));
+    try std.testing.expectEqualStrings(original_href, attributes.get("href").?);
+    try std.testing.expectEqualStrings("mw:WikiLink", attributes.get("rel").?);
+}
+
+test "parser root Table cell proof requires complete unique body and keeps following footer independent" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = OrderedLiteralDivTesting;
+    const table = "{| class='noprint' style='width:100%'\n|-\n|\n<div class='NavFrame'><div style='height:1.6em'>[[A|alpha]]</div><div>second [[B#part|beta]]</div></div>\n<div style='clear:both'></div>\n|}";
+    const captured = "<table class='noprint' style='width:100%'><tbody><tr><td>\n<div class='NavFrame'><div style='height:1.6em'><a href='/wiki/A' title='A'>alpha</a></div><div>second <a href='/wiki/B#part' title='B'>beta</a></div></div>\n<div style='clear:both'></div>\n</td></tr></tbody></table>";
+    const footer = "\n<div style='margin-top:20px'>footer [[Tail|tail]]</div>";
+    const captured_footer = "\n<div style='margin-top:20px'>footer <a href='/wiki/Tail' title='Tail'>tail</a></div>";
+    const source = table ++ footer;
+    const proofs = try T.issue(a, &ns, source, captured ++ captured_footer);
+    const start = std.mem.indexOf(u8, source, "<div class='NavFrame'>").?;
+    const child = PriorNotePrefixTesting.find(proofs, start) orelse return error.TestUnexpectedResult;
+    const cap = child.wiki_cell_parent orelse return error.TestUnexpectedResult;
+    try std.testing.expect(cap.parent_start == null and child.parent_start == null);
+    try std.testing.expectEqual(@as(usize, 0), cap.table_start);
+    try std.testing.expectEqual(table.len, cap.table_end);
+    try std.testing.expect(cap.body_end < cap.table_end and cap.table_end < source.len);
+    try std.testing.expectEqualStrings(footer, source[cap.table_end..]);
+    for (0..8) |mode| {
+        errdefer std.debug.print("ROOT_TABLE_JOIN mode={d}\n", .{mode});
+        const changed_source = switch (mode) {
+            0 => try std.mem.concat(a, u8, &.{"<div>", "\n", source, "</div>"}),
+            1 => try std.mem.concat(a, u8, &.{"<nowiki>\n", source, "</nowiki>"}),
+            2 => try std.mem.concat(a, u8, &.{source, "\n", table}),
+            3 => try T.replace(a, source, "|}\n", "|}unexpected\n"),
+            else => source,
+        };
+        const changed_html = switch (mode) {
+            4 => "<div>" ++ captured ++ "</div>" ++ captured_footer,
+            5 => captured ++ captured ++ captured_footer,
+            6 => try T.replace(a, captured ++ captured_footer, "/wiki/A", "/wiki/Other"),
+            7 => try T.replace(a, captured ++ captured_footer, ">alpha</a>", ">alph</a>a"),
+            else => captured ++ captured_footer,
+        };
+        const refused = try T.issue(a, &ns, changed_source, changed_html);
+        for (refused) |proof| if (proof.wiki_cell_parent) |value| try std.testing.expect(value.parent_start != null);
+    }
+}
+
+test "retained complete Mai parser root Anthroponym table proves every body action and excludes its footer" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var phase = @src(); errdefer std.debug.print("DE_ROOT_TABLE source={s}:{d}\n", .{phase.file, phase.line});
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const doc = try std.json.parseFromSliceLeaky(Document, a, @embedFile("testdata/de-mai-figure-style/original.json"), .{});
+    const page = doc.pages[0]; const supplied = try responseSource(a, &ns, page);
+    try std.testing.expect(digestMatches(supplied.source, "01d3e7a45d3f9d3504311fdba3eebed4c8a1a2d9f8760c0f9bc11f75b8b00ed8"));
+    try std.testing.expect(digestMatches(supplied.html, "fcbea660fbfde6f129dfbb5262065aa32d50d3ecbc63c5ddc138a0e7a44acc29"));
+    const start: usize = 54889;
+    const frame_start = std.mem.indexOfPos(u8, supplied.source, start, "<div class=\"NavFrame\"").?;
+    const context: compiler.Context = .{ .title = page.title, .namespace_catalog = &ns };
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
+    var proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+    phase = @src();
+    try appendOrderedLiteralDivParentsIn(a, &ns, supplied.source, supplied.html, nodes.items, &proofs, context);
+    const frame = PriorNotePrefixTesting.find(proofs.items, frame_start) orelse return error.TestUnexpectedResult;
+    const cap = frame.wiki_cell_parent orelse return error.TestUnexpectedResult;
+    try std.testing.expect(cap.parent_start == null and frame.parent_start == null);
+    try std.testing.expectEqual(start, cap.table_start);
+    try std.testing.expectEqual(@as(usize, 940), cap.table_end - cap.table_start);
+    try std.testing.expectEqual(cap.attrs_start, cap.attrs_end);
+    const body = supplied.source[cap.body_start..cap.body_end];
+    for ([_][]const u8{ "[[Anthroponym]]e", "[[Verzeichnis:International/Weibliche Vornamen|weibliche Vornamen]]",
+        "[[Verzeichnis:International/Männliche Vornamen|männliche Vornamen]]",
+        "[[Verzeichnis:International/Vornamen mit mehrdeutiger Geschlechtszugehörigkeit|geschlechtsmehrdeutige Vornamen]]",
+        "[[Verzeichnis:International/Nachnamen|Nachnamen]]", "'''[[Verzeichnis:Deutsch/Namen|hier]]'''", "'''[[Hilfe:Vor- und Nachnamen|Hilfe]]'''" }) |token|
+        try std.testing.expect(std.mem.indexOf(u8, body, token) != null);
+    try std.testing.expect(std.mem.startsWith(u8, supplied.source[cap.table_end..], "\n\n<div style=\"margin-top:20px;"));
+    // The complete HTML candidate must retain all seven destinations, label
+    // ownership, formatting, clear child and final close before issuing any edge.
+    for ([_][2][]const u8{
+        .{ "href=\"/wiki/Anthroponym\"", "href=\"/wiki/Other\"" },
+        .{ ">Anthroponyme</a>", ">Anthroponym</a>e" },
+        .{ "title=\"Verzeichnis:Deutsch/Namen\">hier</a>", "title=\"Verzeichnis:Deutsch/Namen\">hie</a>r" },
+        .{ "href=\"/wiki/Hilfe:Vor-_und_Nachnamen\"", "href=\"/wiki/Hilfe:Other\"" },
+    }, 0..) |edit, mode| {
+        phase = @src(); errdefer std.debug.print("DE_ROOT_TABLE_CAPTURE mode={d}\n", .{mode});
+        const html = try OrderedLiteralDivTesting.replace(a, supplied.html, edit[0], edit[1]);
+        var changed: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, &ns, html, &changed);
+        var rejected: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+        try appendOrderedLiteralDivParentsIn(a, &ns, supplied.source, html, changed.items, &rejected, context);
+        try std.testing.expect(PriorNotePrefixTesting.find(rejected.items, frame_start) == null);
+    }
+}
+
+test "ordered returned graph preserves exact retained MG caption greater than inventory and source strictness" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = CurrentGetLiteralTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    const raw = try T.raw(a, try T.shape(a));
+    const captured = raw.outer_context.?.response;
+    const marker = "<span typeof=\"mw:File\" data-mw='{\"caption\":\"Fiaviana";
+    const at = std.mem.indexOf(u8, captured, marker) orelse return error.TestUnexpectedResult;
+    const tag = currentLiteralHtmlTagAt(captured, at) orelse return error.TestUnexpectedResult;
+    const opening = captured[at..tag.end];
+    try std.testing.expect(std.mem.indexOfScalar(u8, tag.attrs, '>') != null);
+    try std.testing.expectError(invalid, inventory(a, tag));
+    const returned = try inventoryReturnedMode(a, tag, false, false, true);
+    const metadata = returned.get("data-mw") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, metadata, "</span>") != null);
+    const root = "<div class=\"mw-content-ltr mw-parser-output\" lang=\"mg\" dir=\"ltr\" data-mw-parsoid-version=\"0.24.0.0-alpha27\" data-mw-html-version=\"2.8.0\">";
+    const html = try std.mem.concat(a, u8, &.{ root, opening, "caption</span></div>" });
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    var end: usize = 0;
+    _ = try observedTextClassScopeToEndIn(a, &ns, html, &nodes, &end, true);
+    try std.testing.expectEqual(html.len, end);
+    try std.testing.expectEqual(@as(usize, 2), nodes.items.len);
+    try std.testing.expectEqualStrings(metadata, nodes.items[1].attributes.get("data-mw").?);
+    // Trigger the Table applicability census without a matching captured grid.
+    // Accepting returned attribute syntax cannot manufacture any source proof.
+    const source = "{|\n|-\n| example\n|}";
+    var proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+    try appendOrderedLiteralDivParents(a, &ns, source, html, nodes.items, &proofs);
+    try std.testing.expectEqual(@as(usize, 0), proofs.items.len);
+    const attributes = try a.dupe(Attribute, nodes.items[1].attributes.attributes);
+    for (attributes) |*attribute| if (equal(attribute.name, "data-mw")) { attribute.value = "foreign caption"; };
+    const original = nodes.items[1];
+    nodes.items[1].attributes = .{ .attributes = attributes };
+    try appendOrderedLiteralDivParents(a, &ns, source, html, nodes.items, &proofs);
+    try std.testing.expectEqual(@as(usize, 0), proofs.items.len);
+    nodes.items[1] = original;
+    nodes.items[1].tag = currentLiteralHtmlTagAt(try a.dupe(u8, html), root.len).?;
+    try appendOrderedLiteralDivParents(a, &ns, source, html, nodes.items, &proofs);
+    try std.testing.expectEqual(@as(usize, 0), proofs.items.len);
+    for ([_][]const u8{ "<span title=bare>", "<span title='raw < child'>", "<span title='unterminated>" }) |bad| {
+        if (currentLiteralHtmlTagAt(bad, 0)) |bad_tag| try std.testing.expectError(invalid, inventoryReturnedMode(a, bad_tag, false, false, true));
+    }
+}
+
+const AdjacentRootDiv156Test = struct {
+    const first = "<div class='prior'><i>See:</i> [[A|alpha]]</div>";
+    const second = "<div><span lang='ja' class='Jpan' style='font-size:275%'>[[B|字]]</span></div>";
+    const source = first ++ second;
+    const first_html = "<div class='prior'><i>See:</i> <a href='/wiki/A' title='A'>alpha</a></div>";
+    const second_html = "<div><span lang='ja' class='Jpan' style='font-size:275%'><a href='/wiki/B' title='B'>字</a></span></div>";
+    const captured = first_html ++ second_html;
+    fn issue(a: A, ns: *const namespaces.Registry, input: []const u8, body: []const u8) ![]const profile.SourceLiteralDivProof {
+        const html = try std.mem.concat(a, u8, &.{ OrderedLiteralDivTesting.root, body, "</div>" });
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, ns, html, &nodes);
+        return observedLiteralDivParents(a, ns, input, html, nodes.items);
+    }
+    fn noSizing(_: ?*const anyopaque, _: A, _: []const u8, _: encoder.presentation_types.FigureFormat,
+        _: ?u32, _: ?u32) A.Error!?encoder.presentation_types.FigureSizingPolicy { return null; }
+    fn render(a: A, ns: *const namespaces.Registry, input: []const u8, proofs: []const profile.SourceLiteralDivProof) !encoder.presentation_types.Stored {
+        var styles = try profile.parseForTargetAlloc(a, ".mw-parser-output > div{background:#ffeecc;padding:2px}", .screen); defer styles.deinit();
+        var alternate: profile.TextElement = .{ .tag = "div", .classes = "mw-parser-output client-js", .ancestry_complete = true, .physical_ancestry_complete = true };
+        var root: profile.TextElement = .{ .tag = "div", .classes = "mw-parser-output", .ancestry_complete = true, .physical_ancestry_complete = true, .alternative_ancestry = &alternate };
+        var scope: profile.BoundedTextClassScope = .{ .root_tag = "div", .root_classes = "mw-parser-output", .subtree_classes = "prior Jpan",
+            .complete_ancestor_class_superset = "mw-parser-output client-js prior Jpan", .complete_ancestor_id_superset = "",
+            .page_styles = &styles, .page_style_root = &root, .page_style_complete_root = &root,
+            .source_literal_divs_source = input, .source_literal_divs = proofs };
+        const tracked = compiler.MissingText.untracked(input);
+        const projection: compiler.SourceElementProjection = .{ .original = tracked, .prepared = input,
+            .copies = &.{.{ .original_start = 0, .prepared_start = 0, .len = input.len }},
+            .observed_source = .{ .source = input, .scope = &scope } };
+        var renderer: compiler.Renderer = .{ .a = a,
+            .context = .{ .namespace_catalog = ns, .table_styles = &styles, .observe_source_elements = true,
+                // The existing page-style query consumes this complete observed
+                // source scope as well as the exact live projection below.
+                .figure_sizing = .{ .resolve_fn = noSizing,
+                    .text_class_scope = .{ .source = input, .scope = &scope } } },
+            .content_root = .parser_output, .body_missing = tracked,
+            .source_element_binding = .{ .scope = &scope, .projection = &projection, .owner = tracked, .page_start = 0 },
+            .figure_class_source_binding = .{ .scope = &scope, .projection = &projection, .owner = tracked, .page_start = 0 } };
+        const blocks = try renderer.renderBodyWithMissing(tracked);
+        try std.testing.expect(!renderer.fallbacks.any());
+        const codec = encoder.presentation_codec;
+        const bytes = try codec.encodeBuildAlloc(a, &[_]compiler.Span{},
+            &[_]struct { level: u8 = 2, title: []const u8 = "Thai", blocks: []const compiler.Block }{.{ .blocks = blocks }},
+            encoder.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+        const stored = try codec.decodeAlloc(a, bytes, "adjacent root DIV", .language, .{ .code = "th", .heading = "Thai" });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+        var text: std.ArrayList(u8) = .empty; var actions: std.ArrayList([]const u8) = .empty;
+        var tables: usize = 0; var painted: usize = 0;
+        try OrderedLiteralDivRenderTesting.inspect(stored.entry.sections[0].blocks, &text, a, &actions, &tables, &painted);
+        try std.testing.expectEqualStrings("See:alpha字", text.items);
+        try std.testing.expectEqual(@as(usize, 0), tables); try std.testing.expectEqual(@as(usize, 2), painted);
+        try std.testing.expectEqual(@as(usize, 2), actions.items.len);
+        try std.testing.expectEqualStrings("A", actions.items[0]); try std.testing.expectEqualStrings("B", actions.items[1]);
+        var headwords: usize = 0;
+        for (stored.entry.sections[0].blocks) |block| if (block.container) |container| {
+            for (container.blocks) |child| for (child.spans) |span| if (std.mem.eql(u8, span.text, "字")) {
+                headwords += 1; try std.testing.expectEqualStrings("ja", span.language);
+                try std.testing.expectEqualStrings("Jpan", span.classes);
+                try std.testing.expectEqual(@as(?f32, 2.75), span.font_scale);
+                try std.testing.expect(span.kind == .link and std.mem.eql(u8, span.target, "B"));
+            };
+        };
+        try std.testing.expectEqual(@as(usize, 1), headwords);
+        return stored;
+    }
+};
+
+test "retained TH same-line headword DIV proves complete adjacent captured root bodies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const document = try std.json.parseFromSliceLeaky(Document, a, @embedFile("testdata/th-missing-figure-style/figure-page-observations.json"), .{ .allocate = .alloc_always });
+    const supplied = try responseSource(a, &ns, document.pages[2]);
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    try std.testing.expectEqualStrings(source, supplied.source);
+    const previous = syntax.tagAt(source, 36428) orelse return error.TestUnexpectedResult;
+    const previous_pair = syntax.matchingTag(source, previous) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 36698), previous_pair.end);
+    const tag = syntax.tagAt(source, 36698) orelse return error.TestUnexpectedResult;
+    const pair = syntax.matchingTag(source, tag) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("<div>", source[36698..tag.end]);
+    try std.testing.expectEqualStrings("<span lang=\"ja\" class=\"Jpan headword\" style=\"font-size:275%; line-height:1;\">間</span>", source[tag.end..pair.inner_end]);
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
+    const proofs = try observedLiteralDivParents(a, &ns, source, supplied.html, nodes.items);
+    try OrderedLiteralDivTesting.check(a, source, proofs, 36428, null);
+    try OrderedLiteralDivTesting.check(a, source, proofs, 36698, null);
+    try std.testing.expect(PriorNotePrefixTesting.find(proofs, 36698).?.wiki_cell_parent == null);
+    const captured = std.mem.indexOf(u8, supplied.html, "<div><span lang=\"ja\" class=\"Jpan headword\"") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 62766), captured);
+    var selected: ?usize = null;
+    for (nodes.items, 0..) |node, index| if (node.start == captured) { try std.testing.expect(selected == null); selected = index; };
+    const current = nodes.items[selected orelse return error.TestUnexpectedResult];
+    try std.testing.expectEqual(@as(?usize, 0), current.parent);
+    const prior = nodes.items[current.previous orelse return error.TestUnexpectedResult];
+    try std.testing.expectEqual(@as(?usize, 0), prior.parent);
+    try std.testing.expectEqualStrings(source[36698..pair.end], supplied.html[captured..intrinsicTableCapturedNodeEnd(supplied.html, current).?]);
+    // Original strict whole-page oracles stay independent of this new receipt.
+    for ([_]usize{ 20529, 20643, 20920, 24789, 25437, 27219, 27357, 42919 }) |start|
+        try std.testing.expect(PriorNotePrefixTesting.find(proofs, start) != null);
+}
+
+test "same-line root DIV continuation preserves full painted body actions font and Stored codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = AdjacentRootDiv156Test;
+    const proofs = try T.issue(a, &ns, T.source, T.captured);
+    try std.testing.expectEqual(@as(usize, 2), proofs.len);
+    try OrderedLiteralDivTesting.check(a, T.source, proofs, T.first.len, null);
+    const reference = T.first ++ "\n" ++ T.second;
+    const reference_proofs = try T.issue(a, &ns, reference, T.first_html ++ "\n" ++ T.second_html);
+    try std.testing.expectEqual(@as(usize, 2), reference_proofs.len);
+    const actual = try T.render(a, &ns, T.source, proofs);
+    const expected = try T.render(a, &ns, reference, reference_proofs);
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, expected), try encoder.presentation_codec.encodeAlloc(a, actual));
+}
+
+test "adjacent root DIV proof refuses changed reordered incomplete and foreign sibling custody" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const T = AdjacentRootDiv156Test; const U = OrderedLiteralDivTesting;
+    for ([_][]const u8{
+        try U.replace(a, T.captured, ">alpha<", ">changed<"),
+        try U.replace(a, T.captured, ">字<", ">foreign<"),
+        try U.replace(a, T.captured, "href='/wiki/A'", "href='/wiki/Foreign'"),
+        try U.replace(a, T.captured, "font-size:275%", "font-size:200%"),
+        T.second_html ++ T.first_html,
+        T.first_html ++ "<span>gap</span>" ++ T.second_html,
+        T.first_html ++ "text" ++ T.second_html,
+        T.first_html ++ "<div class='foreign'>" ++ T.second_html ++ "</div>",
+    }) |captured| try std.testing.expect(PriorNotePrefixTesting.find(try T.issue(a, &ns, T.source, captured), T.first.len) == null);
+    for ([_][]const u8{
+        T.first ++ "text" ++ T.second, T.first ++ "<!--gap-->" ++ T.second,
+        "before" ++ T.source, "<nowiki>" ++ T.source ++ "</nowiki>",
+        "<span>" ++ T.source ++ "</span>",
+    }) |source| {
+        const start = std.mem.indexOf(u8, source, T.second).?;
+        try std.testing.expect(PriorNotePrefixTesting.find(try T.issue(a, &ns, source, T.captured), start) == null);
+    }
+    const html = U.root ++ T.captured ++ "</div>";
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, html, &nodes);
+    const existing = try T.issue(a, &ns, T.source, T.captured);
+    const original_prior = PriorNotePrefixTesting.find(existing, 0).?;
+    var target: ?usize = null;
+    for (nodes.items, 0..) |node, index| if (node.tag.is("div") and node.start == U.root.len + T.first_html.len) { target = index; };
+    for (0..5) |mode| {
+        var proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+        if (mode != 0) try proofs.append(a, original_prior);
+        const copied = try a.dupe(ObservedSiblingNode, nodes.items);
+        var selected_html: []const u8 = html;
+        switch (mode) {
+            0 => {},
+            1 => selected_html = try a.dupe(u8, html),
+            2 => copied[target.?].previous = null,
+            3 => copied[target.?].parent = 1,
+            4 => proofs.items[0].range.anchor_end -= 1,
+            else => unreachable,
+        }
+        try appendOrderedLiteralDivParents(a, &ns, T.source, selected_html, copied, &proofs);
+        try std.testing.expect(PriorNotePrefixTesting.find(proofs.items, T.first.len) == null);
+    }
+}
+
+test "retained TH escaped Category text link keeps exact correspondence action label and Stored codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const document = try std.json.parseFromSliceLeaky(Document, a, @embedFile("testdata/th-missing-figure-style/figure-page-observations.json"), .{ .allocate = .alloc_always });
+    const supplied = try responseSource(a, &ns, document.pages[2]);
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    try std.testing.expectEqualStrings(source, supplied.source);
+    const label = "Category:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วย 間";
+    const target = ":" ++ label;
+    const original = "[[" ++ target ++ "]]";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, original));
+    const prior = syntax.tagAt(supplied.html, 62035) orelse return error.TestUnexpectedResult;
+    const prior_pair = syntax.matchingTag(supplied.html, prior) orelse return error.TestUnexpectedResult;
+    const start = std.mem.indexOfPos(u8, supplied.html, prior.end, "<a ") orelse return error.TestUnexpectedResult;
+    const tag = syntax.tagAt(supplied.html, start) orelse return error.TestUnexpectedResult;
+    const pair = syntax.matchingTag(supplied.html, tag) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(pair.end < prior_pair.inner_end);
+    const actual = supplied.html[start..pair.end];
+    try std.testing.expectEqualStrings(label, supplied.html[tag.end..pair.inner_end]);
+    const attrs = try inventory(a, tag);
+    const resolved = (try compiler.literalSourceLinkDestinationAlloc(a, &ns, target)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!resolved.external);
+    try std.testing.expectEqual(@as(i32, 14), ns.ofTitle(resolved.target).id);
+    try std.testing.expectEqualStrings("หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่สะกดด้วย 間", resolved.target);
+    try std.testing.expect(try noteLinkCorresponds(a, &ns, target, attrs));
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, original, actual, 0, false, true, null, null));
+    const reference = "[[" ++ target ++ "|" ++ label ++ "]]";
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, reference, actual, 0, false, true, null, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, "[[" ++ label ++ "]]", actual, 0, false, true, null, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, "[[" ++ target ++ "|" ++ target ++ "]]", actual, 0, false, true, null, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, original, actual, 0, true, true, null, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, original, actual, 0, false, false, null, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, "<nowiki>" ++ original ++ "</nowiki>", actual, 0, false, true, null, null));
+    for ([_]struct { field: []const u8, value: []const u8 }{
+        .{ .field = "href", .value = "/wiki/Foreign" },
+        .{ .field = "title", .value = "Foreign" },
+    }) |case| {
+        const changed = try a.dupe(Attribute, attrs.attributes);
+        for (changed) |*attribute| if (equal(attribute.name, case.field)) { attribute.value = case.value; };
+        try std.testing.expect(!try noteLinkCorresponds(a, &ns, target, .{ .attributes = changed }));
+    }
+    const extra = try a.alloc(Attribute, attrs.attributes.len + 1);
+    @memcpy(extra[0..attrs.attributes.len], attrs.attributes);
+    extra[attrs.attributes.len] = .{ .name = "class", .value = "foreign" };
+    try std.testing.expect(!try noteLinkCorresponds(a, &ns, target, .{ .attributes = extra }));
+    const wrong_label = try OrderedLiteralDivTesting.replace(a, actual, label, target);
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, original, wrong_label, 0, false, true, null, null));
+    for ([_][]const u8{ "Category:Foreign", "File:Foreign.svg", ":File:Foreign.svg", ":Category:", ":Category:Bad[title]" }) |bad|
+        try std.testing.expect((try compiler.literalSourceLinkDestinationAlloc(a, &ns, bad)) == null);
+    const T = struct {
+        fn render(allocator: A, catalog: *const namespaces.Registry, body: []const u8) !encoder.presentation_types.Stored {
+            var renderer: compiler.Renderer = .{ .a = allocator, .context = .{ .namespace_catalog = catalog } };
+            const blocks = try renderer.renderBody(body);
+            try std.testing.expect(!renderer.fallbacks.any());
+            const codec = encoder.presentation_codec;
+            const bytes = try codec.encodeBuildAlloc(allocator, &[_]compiler.Span{},
+                &[_]struct { level: u8 = 2, title: []const u8 = "Japanese", blocks: []const compiler.Block }{.{ .blocks = blocks }},
+                encoder.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+            const stored = try codec.decodeAlloc(allocator, bytes, "escaped Category", .language, .{ .code = "ja", .heading = "Japanese" });
+            try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(allocator, stored));
+            return stored;
+        }
+    };
+    const stored = try T.render(a, &ns, original);
+    try std.testing.expectEqualDeep(try T.render(a, &ns, reference), stored);
+    const blocks = stored.entry.sections[0].blocks;
+    try std.testing.expectEqual(@as(usize, 1), blocks.len);
+    try std.testing.expectEqual(@as(usize, 1), blocks[0].spans.len);
+    const span = blocks[0].spans[0];
+    try std.testing.expectEqualStrings(label, span.text);
+    try std.testing.expect(span.kind == .link);
+    try std.testing.expectEqualStrings(resolved.target, try ns.normalizeTitle(a, span.target, 0, .any));
+}
+
+
+test "retained Mai complete bgcolor absence requires source returned inventories and both outer states" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const document = try std.json.parseFromSliceLeaky(Document, a, @embedFile("testdata/de-mai-figure-style/original.json"), .{ .allocate = .alloc_always });
+    const page = document.pages[0];
+    const supplied = try responseSource(a, &ns, page);
+    const source = @embedFile("testdata/de-mai301/page.expanded.wikitext");
+    try std.testing.expectEqualStrings(source, supplied.source);
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    const text_scope = try observedTextClassScopeToEndIn(a, &ns, supplied.html, &nodes, null, false);
+    const outer = try observedOuterContext(a, &ns, page, page.outer_context.?, text_scope);
+    const complete = try a.alloc(profile.TextElement, outer.ancestors.len + 1);
+    for (outer.ancestors, complete[0..outer.ancestors.len]) |node, *out| {
+        const attrs = try a.create(Inventory); attrs.* = node.attributes;
+        out.* = .{ .tag = node.tag, .attribute_presence = .{ .ctx = attrs, .get = Inventory.presence } };
+    }
+    const attrs = try a.create(Inventory); attrs.* = nodes.items[0].attributes;
+    complete[complete.len - 1] = .{ .tag = "div", .attribute_presence = .{ .ctx = attrs, .get = Inventory.presence } };
+    var styles = try profile.parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    const root: profile.TextElement = .{ .tag = "div", .classes = text_scope.root_classes };
+    const proof = (try observedClosedRowColors(a, &styles, &root, source, nodes.items, complete, complete)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(proof.source.ptr == source.ptr and proof.root == &root and proof.styles == &styles);
+    try std.testing.expect(proof.owners.len == 0 and proof.absent_source.?.ptr != source.ptr);
+    try std.testing.expect(profile.closedRowColorAbsenceValid(&proof));
+    const present: Inventory = .{ .attributes = &.{.{ .name = "bgcolor", .value = "red" }} };
+    const changed = try a.dupe(ObservedSiblingNode, nodes.items); changed[0].attributes = present;
+    try std.testing.expect((try observedClosedRowColors(a, &styles, &root, source, changed, complete, complete)) == null);
+    try std.testing.expect((try observedClosedRowColors(a, &styles, &root, source, &.{}, complete, complete)) == null);
+    const other = try a.dupe(profile.TextElement, complete);
+    other[0].attribute_presence = .{ .ctx = &present, .get = Inventory.presence };
+    try std.testing.expect((try observedClosedRowColors(a, &styles, &root, source, nodes.items, complete, other)) == null);
+    other[0].attribute_presence = null;
+    try std.testing.expect((try observedClosedRowColors(a, &styles, &root, source, nodes.items, other, complete)) == null);
+    for ([_][]const u8{ "<tr bgcolor='red'>body</tr>", "<tr bg&#99;olor='red'>body</tr>", "{{unknown}}" }) |bad| {
+        try std.testing.expect((try observedClosedRowColors(a, &styles, &root, bad, nodes.items, complete, complete)) == null);
+    }
+    try std.testing.expect((try observedClosedRowColors(a, &styles, &root, source, nodes.items, &.{}, complete)) == null);
+}
+
+test "retained complete Mai repeated translation roots preserve exact ordered parent and body proofs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/de-mai-figure-style/interwiki-map.tsv"));
+    const document = try std.json.parseFromSlice(Document, a, @embedFile("testdata/de-mai-figure-style/original.json"), .{});
+    const page = document.value.pages[0];
+    const supplied = try responseSource(a, &ns, page);
+    try std.testing.expect(digestMatches(supplied.source, "01d3e7a45d3f9d3504311fdba3eebed4c8a1a2d9f8760c0f9bc11f75b8b00ed8"));
+    try std.testing.expect(digestMatches(supplied.html, "fcbea660fbfde6f129dfbb5262065aa32d50d3ecbc63c5ddc138a0e7a44acc29"));
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
+    const context: compiler.Context = .{ .title = page.title, .namespace_catalog = &ns };
+    var proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+    try appendOrderedLiteralDivParentsIn(a, &ns, supplied.source, supplied.html, nodes.items, &proofs, context);
+    const graph = try a.alloc(profile.ObservedStyleNode, nodes.items.len);
+    for (nodes.items, graph) |node, *out| out.* = .{ .tag = node.tag.name,
+        .parent = if (node.parent) |parent| @intCast(parent) else null,
+        .attributes = try figureObservedAttributes(a, node.attributes) };
+    var join: OrderedLiteralDivJoin = .{ .a = a, .ns = &ns, .source = supplied.source,
+        .html = supplied.html, .nodes = nodes.items, .graph = graph, .proofs = &proofs, .context = context, .diagnose_inline_refusal = true };
+    var complete: usize = 0;
+    for ([_]usize{ 10499, 53800, 60241 }) |root_start| {
+        const root_tag = syntax.tagAt(supplied.source, root_start) orelse return error.TestUnexpectedResult;
+        const root_pair = syntax.matchingTag(supplied.source, root_tag) orelse return error.TestUnexpectedResult;
+        const frame_start = std.mem.indexOfPos(u8, supplied.source, root_tag.end, "<div class=\"NavFrame uetabelle\">") orelse return error.TestUnexpectedResult;
+        const head_start = std.mem.indexOfPos(u8, supplied.source, frame_start, "<div class=\"NavHead uetabelle__head\">") orelse return error.TestUnexpectedResult;
+        const content_start = std.mem.indexOfPos(u8, supplied.source, head_start, "<div class=\"NavContent uetabelle__content\">") orelse return error.TestUnexpectedResult;
+        try std.testing.expect(content_start < root_pair.inner_end);
+        var lexical: ?usize = null;
+        var prefix_ok = true;
+        authoredElementPrefixForRole(a, &ns, supplied.source, .{ .start = root_start, .end = root_pair.end }, false,
+            proofs.items, false, &lexical) catch |err| switch (err) { error.OutOfMemory => return err, else => prefix_ok = false };
+        const root_node = try join.candidate(root_start);
+        const frame_node = try join.candidate(frame_start);
+        const head_node = try join.candidate(head_start);
+        const content_node = try join.candidate(content_start);
+        join.remaining = 8192;
+        const root_prefix = if (root_node) |index| try join.rootPrefix(root_start, index, 0) else false;
+        // Comparison-only probes publish no new parent receipts. They expose
+        // the existing first failed local obligation on the genuine full page.
+        join.remaining = 8192;
+        const head_body = if (head_node) |index| try join.div(head_start, index, frame_start, 0, false, null) else false;
+        join.remaining = 8192;
+        const content_body = if (content_node) |index| try join.div(content_start, index, frame_start, 0, false, null) else false;
+        const root = PriorNotePrefixTesting.find(proofs.items, root_start);
+        const frame = PriorNotePrefixTesting.find(proofs.items, frame_start);
+        const content = PriorNotePrefixTesting.find(proofs.items, content_start);
+        const chain = root != null and frame != null and content != null and root.?.parent_start == null and
+            frame.?.parent_start == root_start and content.?.parent_start == frame_start;
+        std.debug.print("MAI_ORDERED_DIV root={d} census={any}/{any}/{any}/{any} lexical={} parent={any} root_prefix={} head_body={} content_body={} chain={}\n",
+            .{ root_start, root_node, frame_node, head_node, content_node, prefix_ok, lexical, root_prefix, head_body, content_body, chain });
+        if (chain) complete += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), complete);
+}
+
+
+test "ordered captured inline correspondence retains redundant language and hidden category semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const context: compiler.Context = .{ .title = "Mai", .namespace_catalog = &ns };
+    const source = "<span lang=\"af\" xml:lang=\"af\">[[Mei#Mei (Afrikaans)|Mei]]</span>[[Kategorie:Übersetzungen (Afrikaans)]]";
+    const html = "<span lang=\"af\"><a href=\"/wiki/Mei#Mei_(Afrikaans)\" title=\"Mei\">Mei</a></span>";
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, source, html, 0, false, true, context, null));
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, "[[Kategorie:Words|key]]right", "right", 0, false, true, context, null));
+    // Metadata cannot consume an authored visible escaped-Category action.
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, "[[:Kategorie:Words]]", "", 0, false, true, context, null));
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, "[[:Kategorie:Words]]",
+        "<a href=\"/wiki/Kategorie:Words\" title=\"Kategorie:Words\">Kategorie:Words</a>", 0, false, true, context, null));
+    for ([_][]const u8{
+        "<span lang=\"af\" xml:lang=\"de\">[[Mei#Mei (Afrikaans)|Mei]]</span>[[Kategorie:Übersetzungen (Afrikaans)]]",
+        "<span xml:lang=\"af\">[[Mei#Mei (Afrikaans)|Mei]]</span>[[Kategorie:Übersetzungen (Afrikaans)]]",
+        "<span lang=\"af\" xml:lang=\"af\" title=\"foreign\">[[Mei#Mei (Afrikaans)|Mei]]</span>[[Kategorie:Übersetzungen (Afrikaans)]]",
+        "<nowiki>[[Kategorie:Words]]</nowiki>", "[[Kategorie:{{unknown}}]]", "[[Kategorie:Words|[[foreign]]]]",
+    }) |changed| try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, changed, html, 0, false, true, context, null));
+    for ([_][]const u8{
+        "<span lang=\"de\"><a href=\"/wiki/Mei#Mei_(Afrikaans)\" title=\"Mei\">Mei</a></span>",
+        "<span lang=\"af\" title=\"foreign\"><a href=\"/wiki/Mei#Mei_(Afrikaans)\" title=\"Mei\">Mei</a></span>",
+        "<span lang=\"af\"><a href=\"/wiki/Foreign\" title=\"Mei\">Mei</a></span>",
+        "<span lang=\"af\"><a href=\"/wiki/Mei#Mei_(Afrikaans)\" title=\"Mei\">Changed</a></span>",
+    }) |changed| try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, source, changed, 0, false, true, context, null));
+    // The unrelated conservative note/list path keeps its old exact inventory.
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, source, html, 0, false, false, context, null));
+}
+
+
+test "retained Mai API and GET root inventories keep distinct Parsoid counter obligations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    var files = try MaiCenteredTest.registry(a, &ns); defer files.deinit();
+    const defaults = Testing.hash(@embedFile("testdata/de-mai301/figure-siteinfo.raw.json"));
+    var parent = try profile.parseForTargetAlloc(a, PageStylesV7Testing.css, .screen); defer parent.deinit();
+    const selector = ".mw-parser-output[data-mw-parsoid-version]";
+    const declaration = "counter-reset:mw-numbered-ext-link";
+    var empty = try profile.parseForTargetAlloc(a, "", .screen); defer empty.deinit();
+    var counter = try profile.joinPageSourcesAlloc(a, &empty,
+        &.{.{ .css = selector ++ "{" ++ declaration ++ "}", .base_url = "" }}, &.{}); defer counter.deinit();
+    for ([_][]const u8{ @embedFile("testdata/de-mai-figure-style/original.json"),
+        @embedFile("testdata/de-mai-figure-style/reference.json") }) |bytes| {
+        const doc = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+        const page = doc.pages[0];
+        const supplied = try responseSource(a, &ns, page);
+        var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+        const selected = (try book.selectPageStyles(a, &ns, 0, 721, 10777072, "Mai",
+            PageStylesV7Testing.raw, supplied.source, defaults, &parent)) orelse return error.TestUnexpectedResult;
+        const stored = book.pages[0].page_styles orelse return error.TestUnexpectedResult;
+        const api = selected.scope.page_style_complete_root orelse return error.TestUnexpectedResult;
+        const get = api.alternative_ancestry orelse return error.TestUnexpectedResult;
+        const expected_api = stored.observed_nodes[0].attributes;
+        const expected_get = stored.outer.root_attributes orelse return error.TestUnexpectedResult;
+        try std.testing.expect(expected_api.get("data-mw-parsoid-version") == null);
+        try std.testing.expectEqualStrings("0.25.0.0-alpha1", expected_get.get("data-mw-parsoid-version").?);
+        try std.testing.expectEqualStrings("2.8.0", expected_get.get("data-mw-html-version").?);
+        for ([_]struct { node: *const profile.TextElement, expected: Inventory }{
+            .{ .node = api, .expected = expected_api }, .{ .node = get, .expected = expected_get },
+        }) |arm| {
+            const source = arm.node.attribute_presence orelse return error.TestUnexpectedResult;
+            try std.testing.expect(source.get == Inventory.presence);
+            const actual: *const Inventory = @ptrCast(@alignCast(source.ctx orelse return error.TestUnexpectedResult));
+            try std.testing.expect(sameSiblingAttributes(arm.expected, actual.*));
+            try std.testing.expectEqualStrings(arm.expected.get("class") orelse "", arm.node.classes);
+            try std.testing.expectEqualStrings(arm.expected.get("id") orelse "", arm.node.id);
+            try std.testing.expectEqual(arm.expected.get("lang"), arm.node.language);
+            try std.testing.expectEqualStrings(arm.expected.get("style") orelse "", arm.node.observed_inline_style.?);
+            try std.testing.expect(arm.node.physical_ancestry_complete and arm.node.ancestry_complete);
+        }
+        try std.testing.expectEqual(profile.AttributePresence.absent, api.attribute_presence.?.get(api.attribute_presence.?.ctx, "data-mw-parsoid-version"));
+        try std.testing.expectEqual(profile.AttributePresence.present, get.attribute_presence.?.get(get.attribute_presence.?.ctx, "data-mw-parsoid-version"));
+        // The complete observed graph already used this same alternative role.
+        // The TextElement view must not silently replace it with the API root.
+        const graph = try figureObservedGraph(a, selected.styles, stored, true);
+        const graph_root = graph[stored.outer.ancestors.len];
+        try std.testing.expectEqual(expected_get.attributes.len, graph_root.attributes.len);
+        for (graph_root.attributes) |attribute|
+            try std.testing.expectEqualStrings(expected_get.get(attribute.name).?, attribute.value);
+        try std.testing.expect(!selected.scope.page_style_root.?.physical_ancestry_complete);
+        try std.testing.expect(selected.scope.page_style_root != api and api != get and get.alternative_ancestry == null);
+        var api_only = api.*; api_only.alternative_ancestry = null; api_only.page_style_root = &api_only;
+        const absent = try counter.containerRuleMatchesIn(a, &api_only); defer a.free(absent.rules);
+        try std.testing.expect(!absent.unresolved and absent.rules.len == 0);
+        var both = api_only; both.alternative_ancestry = get;
+        const obligation = (try counter.pageAncestorEffectBlockerIn(a, &both)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(profile.PageAncestorEffectBlocker.Reason.declaration, obligation.reason);
+        try std.testing.expectEqualStrings(declaration, obligation.declaration);
+        try std.testing.expectEqualStrings(selector, obligation.rule.?.provenance.?.selector);
+        try std.testing.expectEqual(profile.ContainerSelectorMatch.unknown, obligation.rule.?.match);
+        var unknown = api_only; unknown.attribute_presence = null;
+        try std.testing.expect((try counter.pageAncestorEffectBlockerIn(a, &unknown)) != null);
+        try std.testing.expect((try book.selectPageStyles(a, &ns, 0, 722, 10777072, "Mai", PageStylesV7Testing.raw,
+            supplied.source, defaults, &parent)) == null);
+        try std.testing.expect((try book.selectPageStyles(a, &ns, 0, 721, 10777072, "Mai", PageStylesV7Testing.raw,
+            supplied.source[0 .. supplied.source.len - 1], defaults, &parent)) == null);
+    }
+}
+
+
+test "ordered Mai local fragments use whole title normalization and exact same page actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const context: compiler.Context = .{ .title = "Mai", .namespace_catalog = &ns };
+    const target = "Mei#Mei (Afrikaans)";
+    const raw = "[[Mei#Mei (Afrikaans)|Mei]]";
+    const html = "<a href='/wiki/Mei#Mei_(Afrikaans)' title='Mei'>Mei</a>";
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, raw, html, 0, false, true, context, null));
+    const expected = try inventory(a, currentLiteralHtmlTagAt(html, 0).?);
+    try std.testing.expect(try orderedDivLinkCorresponds(a, &ns, target, expected, null));
+    // The conservative non-ordered note matcher keeps its original comparator.
+    try std.testing.expect(!try noteLinkCorresponds(a, &ns, target, expected));
+    try std.testing.expect(try orderedDivLinkCorresponds(a, &ns, target,
+        try inventory(a, currentLiteralHtmlTagAt("<a href='/wiki/Mei#Mei_%28Afrikaans%29' title='Mei'>", 0).?), null));
+    for ([_][]const u8{
+        "<a href='/wiki/Foreign#Mei_(Afrikaans)' title='Mei'>",
+        "<a href='/wiki/Mei#Mei_(afrik aans)' title='Mei'>",
+        "<a href='/wiki/Mei#Mei_(Afrikaans)' title='Foreign'>",
+        "<a href='/wiki/Mei#Mei_(Afrikaans)' title='Mei' class='new'>",
+        "<a href='/wiki/Mei#Mei_(Afrikaans)' title='Mei' data-foreign='1'>",
+        "<a href='/wiki/Mei#Mei_%GG' title='Mei'>",
+        "<a href='/wiki/Mei#Mei_(Afrikaans)%23foreign' title='Mei'>",
+        "<a href='/wiki/Mei#Mei_(Afrikaans)?foreign=1' title='Mei'>",
+        "<a href='https://foreign.test/wiki/Mei#Mei_(Afrikaans)' title='Mei'>",
+    }) |changed| try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, target,
+        try inventory(a, currentLiteralHtmlTagAt(changed, 0).?), null));
+    const self_target = "Mai#Mai (Deutsch)";
+    const self_html = "<a class='mw-selflink-fragment' href='#Mai_(Deutsch)'>Mai</a>";
+    const self_attrs = try inventory(a, currentLiteralHtmlTagAt(self_html, 0).?);
+    try std.testing.expect(try orderedSelfLinkCorresponds(a, &ns, context, self_target, self_attrs));
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, "[[Mai#Mai (Deutsch)|Mai]]", self_html, 0, false, true, context, null));
+    var foreign_context = context; foreign_context.title = "Juni";
+    try std.testing.expect(!try orderedSelfLinkCorresponds(a, &ns, foreign_context, self_target, self_attrs));
+    try std.testing.expect(!try orderedSelfLinkCorresponds(a, &ns, context, "Juni#Mai (Deutsch)", self_attrs));
+    for ([_][]const u8{
+        "<a class='mw-selflink-fragment' href='#Mai_(French)'>",
+        "<a class='mw-selflink-fragment' href='#Mai_(Deutsch)%23foreign'>",
+        "<a class='mw-selflink-fragment' href='/wiki/Mai#Mai_(Deutsch)'>",
+        "<a class='mw-selflink-fragment' href='#Mai_(Deutsch)' title='Mai'>",
+        "<a class='mw-selflink selflink' href='#Mai_(Deutsch)'>",
+    }) |changed| try std.testing.expect(!try orderedSelfLinkCorresponds(a, &ns, context, self_target,
+        try inventory(a, currentLiteralHtmlTagAt(changed, 0).?)));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, "[[Mai#Mai (Deutsch)|Foreign]]", self_html, 0, false, true, context, null));
+}
+
+const InlineMissingBookTest = if (@import("builtin").is_test) struct {
+    fn check(a: A, ns: *const namespaces.Registry, files: *const sizing.Registry, book: *const Book) !void {
+        const source = CenteredMissingCellTesting.source;
+        const token = "[[Image:Sr-averz.ogg|noicon|175px]]";
+        const at = std.mem.indexOf(u8, source, token) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, token));
+        const behavior = @embedFile("testdata/sr-admiral/behavior-switches.tsv");
+        var options = try namespaces.image_options.Registry.init(a, @embedFile("testdata/sr-admiral/image-options.tsv"),
+            ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256, Testing.hash(behavior)); defer options.deinit();
+        var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+        const context: compiler.Context = .{ .title = "аверз", .namespace_catalog = ns, .image_options = &options,
+            .table_styles = &parent, .figure_sizing = .{ .ctx = files, .resolve_fn = sizing.Registry.resolve,
+                .source_context = .{ .namespace_sha256 = ns.source_sha256, .defaults = ns.figure_source_defaults.?, .missing_media_profile = .f45897 } } };
+        const raw_fixture = @embedFile("testdata/sr-centered-missing-cell/page.raw.wikitext");
+        try std.testing.expect(raw_fixture.len < 4096);
+        const raw = try a.dupe(u8, raw_fixture);
+        try std.testing.expect(digestMatches(raw, "07e97d6f54d6f2747a9002c94db0da690dd679a36757052d084066aff4855580"));
+        const selected = (try book.selectPageStylesForCompiler(a, ns, 0, 24273, 34924, "аверз", raw, source,
+            book.defaults_sha256, &parent, context)) orelse return error.TestUnexpectedResult;
+        try OrdinaryLinkCacheLifetimeTest.genuine(a, selected);
+        try std.testing.expectEqual(@as(usize, 1), selected.inline_missing.len);
+        const proof = selected.inline_missing[0];
+        const operation: compiler.InlineMissingOperation = .{ .source = source, .token = source[at..][0..token.len], .file = "Sr-averz.ogg" };
+        const observed = (try SelectedPageStyles.inlineMissing(selected, a, operation)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(observed.profile == selected.styles);
+        try std.testing.expectEqualStrings("noicon", observed.label);
+        try std.testing.expectEqualStrings("//commons.wikimedia.org/wiki/Special:UploadWizard?uselang=sr&wpDestFile=Sr-averz.ogg", observed.href);
+        try std.testing.expectEqual(@as(u32, 175), observed.data_width);
+        try std.testing.expectEqualStrings("<td class=\"audiofile\">", observed.cell_opening);
+        try std.testing.expectEqualStrings("<tr>", observed.row_opening);
+        try std.testing.expectEqual(@as(usize, 2), observed.contexts.len);
+        for (observed.contexts) |arm| {
+            try std.testing.expect(profile.inlineMissingContextValid(arm));
+            try std.testing.expectEqualStrings("span", arm.nodes[arm.wrapper].tag);
+            try std.testing.expectEqualStrings("td", arm.nodes[arm.nodes[arm.wrapper].parent.?].tag);
+        }
+        // Both independently retained heads are client-nojs. Their exact
+        // .audiofile TD has display:none; the adjacent audiometa remains visible.
+        // This is the actual Book operation, not a fabricated test capability.
+        try std.testing.expect(try profile.observedInlineMissingCellHidden(a, observed.contexts));
+        try std.testing.expect(try sizing.Registry.isMissingFile(files, a, proof.file));
+        try std.testing.expect(!try sizing.Registry.isMissingFile(files, a, "Loudspeaker.svg"));
+        try std.testing.expect(!try sizing.Registry.isMissingFile(files, a, "Unobserved.ogg"));
+        for (0..4) |mode| {
+            var changed = operation;
+            switch (mode) {
+                0 => changed.source = try a.dupe(u8, source),
+                1 => changed.token = try a.dupe(u8, operation.token),
+                2 => changed.token = operation.token[1..],
+                else => changed.file = "Loudspeaker.svg",
+            }
+            try std.testing.expect((try SelectedPageStyles.inlineMissing(selected, a, changed)) == null);
+        }
+        var admitted: ?Page = null;
+        for (book.pages) |page| if (page.page_id == 24273) { admitted = page; };
+        const stored = (admitted orelse return error.TestUnexpectedResult).page_styles.?;
+        var unproved_files = files.*; unproved_files.file_authority = false;
+        try std.testing.expectEqual(@as(usize, 0), (try selectInlineMissingStyles(a, ns, &unproved_files, &parent, stored, source, context)).len);
+        unproved_files = files.*; unproved_files.missing_files = .{};
+        try std.testing.expectEqual(@as(usize, 0), (try selectInlineMissingStyles(a, ns, &unproved_files, &parent, stored, source, context)).len);
+        for ([_][2][]const u8{
+            .{ "noicon|175px", "noicon|176px" }, .{ "noicon|175px", "other|175px" },
+            .{ "<td class=\"audiofile\">", "<td class=\"other\">" },
+            .{ "<td class=\"audiofile\">", "<td class=\"audiofile\">foreign" },
+            .{ "[[Image:Sr-averz.ogg|noicon|175px]]", "[[Image:Sr-averz.ogg|noicon|175px]][[Image:Sr-averz.ogg|noicon|175px]]" },
+        }) |edit| {
+            const changed = try std.mem.replaceOwned(u8, a, source, edit[0], edit[1]);
+            try std.testing.expect(!equal(changed, source));
+            try std.testing.expectEqual(@as(usize, 0), (try selectInlineMissingStyles(a, ns, files, &parent, stored, changed, context)).len);
+        }
+        for ([_][2][]const u8{
+            .{ "data-width=\"175\">noicon", "data-width=\"176\">noicon" },
+            .{ "data-width=\"175\">noicon", "data-width=\"175\">foreign" },
+            .{ "typeof=\"mw:Error mw:File\"", "typeof=\"mw:File\"" },
+            .{ "data-width=\"175\">noicon", "data-width=\"175\"><b>noicon</b>" },
+        }) |edit| {
+            var changed = stored.*;
+            changed.observed_html = try std.mem.replaceOwned(u8, a, stored.observed_html, edit[0], edit[1]);
+            try std.testing.expect(!equal(changed.observed_html, stored.observed_html));
+            changed.observed_nodes = try CenteredMissingCellTesting.nodes(a, ns, changed.observed_html);
+            try std.testing.expectEqual(@as(usize, 0), (try selectInlineMissingStyles(a, ns, files, &parent, &changed, source, context)).len);
+        }
+    }
+} else struct {};
+
+test "retained Mai counter boundary includes following GET siblings and generated source custody" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/de-mai-figure-style/interwiki-map.tsv"));
+    var files = try MaiCenteredTest.registry(a, &ns); defer files.deinit();
+    const defaults = Testing.hash(@embedFile("testdata/de-mai301/figure-siteinfo.raw.json"));
+    var parent = try profile.parseForTargetAlloc(a, PageStylesV7Testing.css, .screen); defer parent.deinit();
+    var values: std.ArrayList(u8) = .empty; defer values.deinit(a);
+    try appendAuthoredSourceAttributeTokensMode(a, &values, "<i style=\"--separator:'.'\"></i><b style=\"--separator:'x'\"></b>", "style", true);
+    try std.testing.expectEqualStrings("--separator:'.';--separator:'x';", values.items);
+    for ([_][]const u8{
+        "<i style=\"x:'\"></i><b style=\"--separator:counter(page-links)\"></b><u style=\"y:'\"></u>",
+        "<i style=\"x:'bad\n;--separator:counter(page-links)\"></i>",
+        "<i style=\"x:/*\"></i><b style=\"--separator:counter(page-links)\"></b><u style=\"x:*/\"></u>",
+    }) |source| {
+        values.clearRetainingCapacity();
+        try std.testing.expectError(invalid, appendAuthoredSourceAttributeTokensMode(a, &values, source, "style", true));
+    }
+    for ([_][]const u8{ @embedFile("testdata/de-mai-figure-style/original.json"), @embedFile("testdata/de-mai-figure-style/reference.json") }) |bytes| {
+        const doc = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+        const supplied = try responseSource(a, &ns, doc.pages[0]);
+        var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+        const selected = (try book.selectPageStylesForCompiler(a, &ns, 0, 721, 10777072, "Mai", PageStylesV7Testing.raw,
+            supplied.source, defaults, &parent, .{ .title = "Mai", .namespace_catalog = &ns })) orelse return error.TestUnexpectedResult;
+        const stored = book.pages[0].page_styles orelse return error.TestUnexpectedResult;
+        const unique = (try uniqueCounterRootClass(a, stored, supplied.source)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(profile.Profile.hasClass(unique, "mw-parser-output"));
+        const counter = selected.scope.unobserved_counter_resets orelse return error.TestUnexpectedResult;
+        try std.testing.expect(counter.resets.len != 0 and counter.source.ptr == supplied.source.ptr);
+        try std.testing.expect(counter.source_snapshot.ptr == selected.scope.closed_row_colors.?.absent_source.?.ptr);
+        // The GET role's real reset remains present. The issued proof records
+        // only observational irrelevance; it never substitutes API absence.
+        const get = selected.scope.page_style_complete_root.?.alternative_ancestry.?;
+        try std.testing.expectEqual(profile.AttributePresence.present, get.attribute_presence.?.get(get.attribute_presence.?.ctx, "data-mw-parsoid-version"));
+        var changed = stored.*;
+        var outer = changed.page.outer_context.?;
+        const end = std.mem.lastIndexOf(u8, outer.response, "</html>") orelse return error.TestUnexpectedResult;
+        outer.response = try std.mem.concat(a, u8, &.{outer.response[0..end], "<div class='mw-parser-output mw-content-ltr'></div>", outer.response[end..]});
+        changed.page.outer_context = outer;
+        try std.testing.expect((try uniqueCounterRootClass(a, &changed, supplied.source)) == null);
+        var foreign_source = try std.mem.concat(a, u8, &.{supplied.source, "<div class='mw-parser-output mw-content-ltr'></div>"});
+        try std.testing.expect((try uniqueCounterRootClass(a, stored, foreign_source)) == null);
+        foreign_source = try std.mem.concat(a, u8, &.{supplied.source, "<div class='mw&#45;parser-output mw&#45;content-ltr'></div>"});
+        try std.testing.expect((try uniqueCounterRootClass(a, stored, foreign_source)) == null);
+        outer = stored.page.outer_context.?; outer.response = outer.response[0 .. stored.outer.root_open_end.?];
+        changed = stored.*; changed.page.outer_context = outer;
+        try std.testing.expect((try uniqueCounterRootClass(a, &changed, supplied.source)) == null);
+        try std.testing.expect((try observedUnobservedPageCounters(a, stored, selected.styles, selected.scope.page_style_root.?, supplied.source,
+            selected.scope.page_source_image, selected.figure_styles, null)) == null);
+    }
+}
+
+test "ordered hidden Category leaves adjacent ordinary text while visible actions retain trails" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const context: compiler.Context = .{ .title = "Mai", .namespace_catalog = &ns };
+    for ([_][]const u8{ "[[Kategorie:Words]]right", "[[Kategorie:Words|key]]right" }) |source| {
+        try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, source, "right", 0, false, true, context, null));
+        try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, source, "wrong", 0, false, true, context, null));
+        try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, source, "", 0, false, true, context, null));
+    }
+    const visible = "[[:Kategorie:Words]]right";
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, visible,
+        "<a href=\"/wiki/Kategorie:Words\" title=\"Kategorie:Words\">Kategorie:Wordsright</a>", 0, false, true, context, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, visible, "right", 0, false, true, context, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, "<nowiki>[[Kategorie:Words]]</nowiki>right", "right", 0, false, true, context, null));
+}
+
+test "retained Mai translation links require exact normal interwiki authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const map = @embedFile("testdata/de-mai-figure-style/interwiki-map.tsv");
+    try std.testing.expect(digestMatches(map, "e07a20a7940cf6b76bb1a0582b067a86bb056b0300efdd307b78aa29d364a423"));
+    const document = try std.json.parseFromSlice(Document, a, @embedFile("testdata/de-mai-figure-style/original.json"), .{});
+    const supplied = try responseSource(a, &ns, document.value.pages[0]);
+    const source_start = std.mem.indexOf(u8, supplied.source, "*[[Afrikaans]]: ") orelse return error.TestUnexpectedResult;
+    const source_end = std.mem.indexOfScalarPos(u8, supplied.source, source_start, '\n') orelse return error.TestUnexpectedResult;
+    const html_start = std.mem.indexOf(u8, supplied.html, "<li><a href=\"/wiki/Afrikaans\"") orelse return error.TestUnexpectedResult;
+    const opening = currentLiteralHtmlTagAt(supplied.html, html_start) orelse return error.TestUnexpectedResult;
+    const pair = syntax.matchingTag(supplied.html, opening) orelse return error.TestUnexpectedResult;
+    const source = supplied.source[source_start + 1..source_end];
+    const html = supplied.html[opening.end..pair.inner_end];
+    const context: compiler.Context = .{ .title = document.value.pages[0].title, .namespace_catalog = &ns };
+    var checkpoint: []const u8 = "absent interwiki map refuses genuine first translation row";
+    errdefer std.debug.print("MAI_INTERWIKI checkpoint={s}\n", .{checkpoint});
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, source, html, 0, false, true, context, null));
+    checkpoint = "full authentic normal interwiki map matches genuine first translation row";
+    try ns.attachInterwikiMap(map);
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, source, html, 0, false, true, context, null));
+    checkpoint = "foreign interwiki authority refuses unchanged captured translation row";
+    const wrong = try a.dupe(u8, map);
+    const af = std.mem.indexOf(u8, wrong, "https://af.wiktionary.org/wiki/$1") orelse return error.TestUnexpectedResult;
+    wrong[af + "https://".len] = 'x';
+    try ns.attachInterwikiMap(wrong);
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, source, html, 0, false, true, context, null));
+}
+
+
+
+test "current GET ordered redlinks bind retained target metadata and complete inline labels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = IndependentRuTableRootTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    const input = try T.input(a);
+    const origin = (try missingStyleOrigin(a, ns.wiki)).origin;
+    for ([_][]const u8{ "ゎ", "ゕ", "ぁ", "ぃ", "ゅ", "ぅ", "ゖ", "ぇ", "ょ", "ぉ" }) |target| {
+        const token = try std.fmt.allocPrint(a, "[[{s}]]", .{target});
+        try std.testing.expect(std.mem.indexOf(u8, input.source, token) != null);
+        const needle = try std.fmt.allocPrint(a, "<a rel=\"mw:WikiLink\" href=\"{s}/wiki/{s}?action=edit&amp;redlink=1\"", .{origin, target});
+        const at = std.mem.indexOfPos(u8, input.response, input.observed_table.end, needle) orelse return error.TestUnexpectedResult;
+        const tag = currentLiteralHtmlTagAt(input.response, at) orelse return error.TestUnexpectedResult;
+        const pair = syntax.matchingTag(input.response, tag) orelse return error.TestUnexpectedResult;
+        const attrs = try inventory(a, tag);
+        try std.testing.expect(try orderedDivLinkCorresponds(a, &ns, target, attrs, origin));
+        try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, token, input.response[at..pair.end], 0, false, true, null, origin));
+        try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, target, attrs, null));
+        try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, "foreign", attrs, origin));
+        try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, target, attrs, "https://foreign.invalid"));
+        try std.testing.expectEqualStrings(target, input.response[tag.end..pair.inner_end]);
+    }
+    const legacy = [_]Attribute{
+        .{ .name = "href", .value = "/w/index.php?title=%E3%82%8E&action=edit&redlink=1" },
+        .{ .name = "title", .value = "ゎ (страница не существует)" }, .{ .name = "class", .value = "new" },
+    };
+    try std.testing.expect(try orderedDivLinkCorresponds(a, &ns, "ゎ", .{ .attributes = &legacy }, null));
+}
+
+test "current GET ordered redlink metadata cannot hide foreign query title or unknown attributes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = IndependentRuTableRootTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    const input = try T.input(a);
+    const origin = (try missingStyleOrigin(a, ns.wiki)).origin;
+    const needle = "<a rel=\"mw:WikiLink\" href=\"https://ru.wiktionary.org/wiki/ゎ?action=edit&amp;redlink=1\"";
+    const at = std.mem.indexOfPos(u8, input.response, input.observed_table.end, needle) orelse return error.TestUnexpectedResult;
+    const tag = currentLiteralHtmlTagAt(input.response, at) orelse return error.TestUnexpectedResult;
+    const original = try inventory(a, tag);
+    try std.testing.expect(try orderedDivLinkCorresponds(a, &ns, "ゎ", original, origin));
+    for ([_]Attribute{
+        .{ .name = "href", .value = "https://foreign.invalid/wiki/ゎ?action=edit&redlink=1" },
+        .{ .name = "href", .value = "https://ru.wiktionary.org.evil/wiki/ゎ?action=edit&redlink=1" },
+        .{ .name = "href", .value = "https://ru.wiktionary.org/wiki/ゎ?unknown=1&action=edit&redlink=1" },
+        .{ .name = "href", .value = "https://ru.wiktionary.org/wiki/%ZZ?action=edit&redlink=1" },
+        .{ .name = "href", .value = "https://ru.wiktionary.org/wiki/%25E3%2582%258E?action=edit&redlink=1" },
+        .{ .name = "href", .value = "https://ru.wiktionary.org/wiki/わ?action=edit&redlink=1" },
+        .{ .name = "href", .value = "https://ru.wiktionary.org/wiki/ゎ#part?action=edit&redlink=1" },
+        .{ .name = "href", .value = "https://ru.wiktionary.org/wiki/ゎ?redlink=1&action=edit" },
+        .{ .name = "href", .value = "https://ru.wiktionary.org/wiki/ゎ" },
+        .{ .name = "rel", .value = "mw:WikiLink/Interwiki" },
+        .{ .name = "class", .value = "" },
+        .{ .name = "title", .value = "foreign (страница не существует)" },
+        .{ .name = "typeof", .value = "authored-lookalike" },
+        .{ .name = "data-mw-i18n", .value = "{" },
+        .{ .name = "data-mw-i18n", .value = "{\"title\":{\"lang\":\"foreign\",\"key\":\"red-link-title\",\"params\":[\"ゎ\"]}}" },
+        .{ .name = "data-mw-i18n", .value = "{\"title\":{\"lang\":\"x-page\",\"key\":\"foreign\",\"params\":[\"ゎ\"]}}" },
+        .{ .name = "data-mw-i18n", .value = "{\"title\":{\"lang\":\"x-page\",\"key\":\"red-link-title\",\"params\":[\"foreign\"]}}" },
+        .{ .name = "data-mw-i18n", .value = "{\"title\":{\"lang\":\"x-page\",\"key\":\"red-link-title\",\"params\":[\"ゎ\",\"foreign\"]}}" },
+        .{ .name = "data-mw-i18n", .value = "{\"title\":{\"lang\":\"x-page\",\"key\":\"red-link-title\",\"params\":[\"ゎ\"],\"unknown\":true}}" },
+    }) |edit| {
+        const attrs = try a.dupe(Attribute, original.attributes);
+        var reached = false;
+        for (attrs) |*attribute| if (equal(attribute.name, edit.name)) { attribute.value = edit.value; reached = true; };
+        try std.testing.expect(reached);
+        try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, "ゎ", .{ .attributes = attrs }, origin));
+    }
+    for ([_][]const u8{ "typeof", "data-mw-i18n", "title", "class", "rel" }) |absent| {
+        var attrs: std.ArrayList(Attribute) = .empty;
+        for (original.attributes) |attribute| if (!equal(attribute.name, absent)) try attrs.append(a, attribute);
+        try std.testing.expect(attrs.items.len + 1 == original.attributes.len);
+        try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, "ゎ", .{ .attributes = attrs.items }, origin));
+    }
+    const extra = try a.alloc(Attribute, original.attributes.len + 1);
+    @memcpy(extra[0..original.attributes.len], original.attributes);
+    extra[original.attributes.len] = .{ .name = "onclick", .value = "unknown" };
+    try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, "ゎ", .{ .attributes = extra }, origin));
+    const oversized = try a.dupe(Attribute, original.attributes);
+    const raw = try a.alloc(u8, 4097); @memset(raw, ' ');
+    for (oversized) |*attribute| if (equal(attribute.name, "data-mw-i18n")) { attribute.value = raw; };
+    try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, "ゎ", .{ .attributes = oversized }, origin));
+    try std.testing.expect(try orderedDivLinkCorresponds(a, &ns, "ゎ", original, origin));
+}
+
+test "ordered inline Category tails and protected literal colons retain visible source boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const context: compiler.Context = .{ .title = "Mai", .namespace_catalog = &ns };
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, "shown [[Kategorie:One]] [[Kategorie:Two]]", "shown", 0, false, true, context, null));
+    for ([_][]const u8{ "shown [[:Kategorie:One]]", "shown [[Kategorie:One]]visible", "shown [[Kategorie:One]] &nbsp;", "shown [[Kategorie:{{unknown}}]]", "shown <nowiki>[[Kategorie:One]]</nowiki>" }) |source|
+        try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, source, "shown", 0, false, true, context, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, "<span>shown [[Kategorie:One]]</span>", "<span>shown</span>", 0, false, true, context, null));
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, "''veraltet<nowiki>:</nowiki>''", "<i>veraltet:</i>", 0, true, true, context, null));
+    for ([_]struct { source: []const u8, html: []const u8 }{
+        .{ .source = "left<nowiki>:</nowiki>right", .html = "left:right" },
+        .{ .source = "<nowiki>:</nowiki>right", .html = ":right" },
+        .{ .source = "left<nowiki>:</nowiki><nowiki>:</nowiki>", .html = "left::" },
+    }) |pair| {
+        try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, pair.source, pair.html, 0, true, true, context, null));
+        try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, pair.source, "foreign", 0, true, true, context, null));
+    }
+    for ([_][]const u8{ "''veraltet<nowiki>foreign</nowiki>''", "''veraltet<nowiki class=\"foreign\">:</nowiki>''", "''veraltet<nowiki>:</nowiki>visible''", "''veraltet<nowiki>:</nowiki>" }) |source|
+        try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, source, "<i>veraltet:</i>", 0, true, true, context, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, "''veraltet<nowiki>:</nowiki>''", "<i>veraltet:</i>", 0, true, false, context, null));
+}
+
+test "retained Mai Burmese and Russian rows preserve complete captured inline body correspondence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/de-mai-figure-style/interwiki-map.tsv"));
+    const document = try std.json.parseFromSlice(Document, a, @embedFile("testdata/de-mai-figure-style/original.json"), .{});
+    const supplied = try responseSource(a, &ns, document.value.pages[0]);
+    const context: compiler.Context = .{ .title = document.value.pages[0].title, .namespace_catalog = &ns };
+    for ([_][]const u8{ "Birmanisch", "Russisch" }) |language| {
+        errdefer std.debug.print("MAI_RETAINED_INLINE language={s}\n", .{language});
+        const source_needle = try std.fmt.allocPrint(a, "*[[{s}]]:", .{language});
+        const source_start = std.mem.indexOf(u8, supplied.source, source_needle) orelse return error.TestUnexpectedResult;
+        const source_end = std.mem.indexOfScalarPos(u8, supplied.source, source_start, '\n') orelse return error.TestUnexpectedResult;
+        const html_needle = try std.fmt.allocPrint(a, "<li><a href=\"/wiki/{s}\"", .{language});
+        const html_start = std.mem.indexOf(u8, supplied.html, html_needle) orelse return error.TestUnexpectedResult;
+        const opening = currentLiteralHtmlTagAt(supplied.html, html_start) orelse return error.TestUnexpectedResult;
+        const pair = syntax.matchingTag(supplied.html, opening) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, supplied.source[source_start + 1..source_end], supplied.html[opening.end..pair.inner_end], 0, false, true, context, null));
+    }
+}
+
+test "source parent text binding forwards original opaque callbacks with exact source and errors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, TableRootTesting.namespace); defer ns.deinit();
+    var styles = try profile.parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    const source: []const u8 = "<div>{|\n|body\n|}</div>";
+    const nodes = [_]profile.ObservedStyleNode{
+        .{ .tag = "div", .attributes = &.{}, .parent = null },
+        .{ .tag = "table", .attributes = &.{}, .parent = 0 },
+    };
+    const Probe = struct {
+        source: []const u8,
+        contexts: []const profile.TableContainingDirectionContext,
+        parents: []const []const u8,
+        scope: *const profile.BoundedTextClassScope,
+        calls: [3]usize = .{ 0, 0, 0 },
+        fail: bool = false,
+        refuse: bool = false,
+        var expected: ?*const anyopaque = null;
+        fn get(raw: ?*const anyopaque) ?*@This() {
+            // Reject the old wrong-context call without interpreting foreign memory.
+            if (raw == null or raw != expected) return null;
+            return @ptrCast(@alignCast(@constCast(raw.?)));
+        }
+        fn table(raw: ?*const anyopaque, _: A, whole: []const u8, opening: usize) A.Error!?compiler.TableContainingDirectionObservation {
+            const self = get(raw) orelse return null;
+            self.calls[0] += 1;
+            if (self.fail) return error.OutOfMemory;
+            if (self.refuse or whole.ptr != self.source.ptr or whole.len != self.source.len or opening != 5) return null;
+            return .{ .contexts = self.contexts, .parents = self.parents };
+        }
+        fn container(raw: ?*const anyopaque, _: A, operation: compiler.AuthoredElementStyleOperation) A.Error!?compiler.TableParentContainerObservation {
+            const self = get(raw) orelse return null;
+            self.calls[1] += 1;
+            if (self.fail) return error.OutOfMemory;
+            if (self.refuse or operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
+                operation.element.ptr != self.source.ptr or operation.element.len != 5) return null;
+            return .{ .context = self.contexts[0], .element = 0, .environment = .{ .complete = true } };
+        }
+        fn preflight(raw: ?*const anyopaque, whole: []const u8) ?compiler.ObservedTextClassScope {
+            const self = get(raw) orelse return null;
+            self.calls[2] += 1;
+            if (self.refuse or whole.ptr != self.source.ptr or whole.len != self.source.len) return null;
+            return .{ .source = whole, .scope = self.scope };
+        }
+    };
+    const contexts = [_]profile.TableContainingDirectionContext{.{ .styles = &styles, .nodes = &nodes, .root = 0, .table = 1 }};
+    const parents = [_][]const u8{source[0..5]};
+    const scope: profile.BoundedTextClassScope = .{ .root_tag = "div", .root_classes = "", .subtree_classes = "" };
+    var probe: Probe = .{ .source = source, .contexts = &contexts, .parents = &parents, .scope = &scope };
+    Probe.expected = &probe; defer Probe.expected = null;
+    const original: compiler.TableContainingDirectionSource = .{ .root_only = true, .article_origin = "https://fr.wiktionary.org",
+        .source = source, .context = &probe, .observe = Probe.table, .observe_parent_container = Probe.container,
+        .preflight_scope = Probe.preflight, .source_parent_responsive = true };
+    const page: SourceParentTextPage = .{ .ns = &ns, .html = "", .styles = &styles, .body_skin_responsive = false };
+    const wrapped = try bindSourceParentTextAlloc(a, &page, source, original);
+    try std.testing.expect(wrapped.context != original.context and wrapped.parent_context == wrapped.context);
+    try std.testing.expect(wrapped.root_only == original.root_only and wrapped.intrinsic_viewport == original.intrinsic_viewport and
+        wrapped.prefix_viewport == original.prefix_viewport and wrapped.anchors == null and wrapped.observe_parent != null);
+    try std.testing.expectEqualStrings(original.article_origin.?, wrapped.article_origin.?);
+    try std.testing.expectEqual(@as(?bool, false), wrapped.source_parent_responsive);
+    const operation: compiler.AuthoredElementStyleOperation = .{ .source = source, .element = source[0..5] };
+    const table = (try wrapped.observe(wrapped.context, a, source, 5)) orelse return error.TestUnexpectedResult;
+    const container = (try wrapped.observe_parent_container.?(wrapped.context, a, operation)) orelse return error.TestUnexpectedResult;
+    const preflight = wrapped.preflight_scope.?(wrapped.context, source) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(table.contexts.ptr == probe.contexts.ptr and table.parents.ptr == probe.parents.ptr);
+    try std.testing.expect(container.context.styles == &styles and container.context.nodes.ptr == probe.contexts[0].nodes.ptr and
+        container.context.root == 0 and container.context.table == 1);
+    try std.testing.expect(container.element == 0 and container.environment.complete);
+    try std.testing.expect(preflight.scope == &scope and preflight.source.ptr == source.ptr and preflight.source.len == source.len);
+    try std.testing.expectEqual([3]usize{ 1, 1, 1 }, probe.calls);
+    const foreign = try a.dupe(u8, source);
+    for ([_][]const u8{ foreign, source[1..] }) |other| {
+        try std.testing.expect(try wrapped.observe(wrapped.context, a, other, 5) == null);
+        try std.testing.expect(try wrapped.observe_parent_container.?(wrapped.context, a, .{ .source = other, .element = other[0..5] }) == null);
+        try std.testing.expect(wrapped.preflight_scope.?(wrapped.context, other) == null);
+    }
+    try std.testing.expect(try wrapped.observe(null, a, source, 5) == null);
+    try std.testing.expect(try wrapped.observe_parent_container.?(null, a, operation) == null);
+    try std.testing.expect(wrapped.preflight_scope.?(null, source) == null);
+    try std.testing.expectEqual([3]usize{ 1, 1, 1 }, probe.calls);
+    try std.testing.expect(try wrapped.observe(wrapped.context, a, source, 6) == null);
+    try std.testing.expect(try wrapped.observe_parent_container.?(wrapped.context, a, .{ .source = source, .element = source[1..5] }) == null);
+    probe.refuse = true;
+    try std.testing.expect(try wrapped.observe(wrapped.context, a, source, 5) == null);
+    try std.testing.expect(try wrapped.observe_parent_container.?(wrapped.context, a, operation) == null);
+    try std.testing.expect(wrapped.preflight_scope.?(wrapped.context, source) == null);
+    probe.refuse = false; probe.fail = true;
+    try std.testing.expectError(error.OutOfMemory, wrapped.observe(wrapped.context, a, source, 5));
+    try std.testing.expectError(error.OutOfMemory, wrapped.observe_parent_container.?(wrapped.context, a, operation));
+    probe.fail = false;
+    const nested = try bindSourceParentTextAlloc(a, &page, source, wrapped);
+    try std.testing.expect((try nested.observe(nested.context, a, source, 5)).?.contexts.ptr == probe.contexts.ptr);
+    try std.testing.expect((try nested.observe_parent_container.?(nested.context, a, operation)).?.element == 0);
+    try std.testing.expect(nested.preflight_scope.?(nested.context, source).?.scope == &scope);
+    var absent = original; absent.observe_parent_container = null; absent.preflight_scope = null;
+    const without_optional = try bindSourceParentTextAlloc(a, &page, source, absent);
+    try std.testing.expect(without_optional.observe_parent_container == null and without_optional.preflight_scope == null);
+    const without_table = try bindSourceParentTextAlloc(a, &page, source, null);
+    try std.testing.expect(without_table.observe_parent_container == null and without_table.preflight_scope == null and without_table.observe_parent != null);
+    try std.testing.expect(try without_table.observe(without_table.context, a, source, 5) == null);
+    try std.testing.expectError(invalid, bindSourceParentTextAlloc(a, &page, foreign, original));
+    try std.testing.expectEqual([3]usize{ 5, 5, 3 }, probe.calls);
+}
+
+test "source parent text binding preserves genuine selected prefix Table issuer context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = CurrentGetLiteralTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    var files = try T.registry(a, &ns); defer files.deinit();
+    const shape = try T.shape(a); const raw = try T.raw(a, shape);
+    const source = raw.current_get_literal.?.expanded_source;
+    var book = try T.book(a, &ns, &files, shape); defer book.deinit();
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const selected = (try book.selectPageStyles(a, &ns, 0, 3099, 37649537, raw.title,
+        raw.current_get_literal.?.raw_source, source, Testing.hash(T.defaults), &parent)) orelse return error.TestUnexpectedResult;
+    const original = selected.tablePrefixSource() orelse return error.TestUnexpectedResult;
+    const page: SourceParentTextPage = .{ .ns = &ns, .html = "", .styles = &parent };
+    const wrapped = try bindSourceParentTextAlloc(a, &page, source, original);
+    const before = original.preflight_scope.?(original.context, source) orelse return error.TestUnexpectedResult;
+    const after = wrapped.preflight_scope.?(wrapped.context, source) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(before.scope == after.scope and after.scope == &selected.scope);
+    try std.testing.expect(after.source.ptr == source.ptr and after.source.len == source.len);
+    try std.testing.expect(wrapped.prefix_viewport == original.prefix_viewport and wrapped.observe_parent_container == null);
+    const observed = (try wrapped.observe(wrapped.context, a, source, 1)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(observed.contexts.ptr == selected.prefix_table.?.contexts.ptr and observed.contexts.len == 2);
+    const foreign = try a.dupe(u8, source);
+    try std.testing.expect(wrapped.preflight_scope.?(wrapped.context, foreign) == null);
+    try std.testing.expect(try wrapped.observe(wrapped.context, a, foreign, 1) == null);
+    var changed = selected.*; changed.scope.page_styles = &parent;
+    const changed_source = changed.tablePrefixSource() orelse return error.TestUnexpectedResult;
+    const refused = try bindSourceParentTextAlloc(a, &page, source, changed_source);
+    try std.testing.expect(refused.preflight_scope.?(refused.context, source) == null);
+}
+
+test "retained Mai complete ID census refutes only absent ancestor requirements" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/de-mai-figure-style/interwiki-map.tsv"));
+    var files = try MaiCenteredTest.registry(a, &ns); defer files.deinit();
+    const defaults = Testing.hash(@embedFile("testdata/de-mai301/figure-siteinfo.raw.json"));
+    var parent = try profile.parseForTargetAlloc(a, PageStylesV7Testing.css, .screen); defer parent.deinit();
+    var empty = try profile.parseForTargetAlloc(a, "", .screen); defer empty.deinit();
+    var probe = try profile.joinPageSourcesAlloc(a, &empty,
+        &.{.{ .css = "#contentSub > div:not(:empty){font-size:var(--font-size-small,0.875rem)}", .base_url = "" }}, &.{}); defer probe.deinit();
+    for ([_][]const u8{ @embedFile("testdata/de-mai-figure-style/original.json"), @embedFile("testdata/de-mai-figure-style/reference.json") }) |bytes| {
+        const doc = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+        const supplied = try responseSource(a, &ns, doc.pages[0]);
+        var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+        const selected = (try book.selectPageStylesForCompiler(a, &ns, 0, 721, 10777072, "Mai", PageStylesV7Testing.raw,
+            supplied.source, defaults, &parent, .{ .title = "Mai", .namespace_catalog = &ns })) orelse return error.TestUnexpectedResult;
+        const stored = book.pages[0].page_styles orelse return error.TestUnexpectedResult;
+        const ids = selected.scope.complete_ancestor_id_superset orelse return error.TestUnexpectedResult;
+        try std.testing.expect(profile.Profile.hasClass(ids, "content") and profile.Profile.hasClass(ids, "mw-content-text"));
+        try std.testing.expect(profile.Profile.hasClass(ids, "Deutsch") and !profile.Profile.hasClass(ids, "contentSub"));
+        const root = selected.scope.page_style_root orelse return error.TestUnexpectedResult;
+        try std.testing.expect((try probe.pageUnprovedInheritanceBlockerWithClosedCountersIn(a, root, null, null, null, null, null, null, null, null)) != null);
+        try std.testing.expect((try probe.pageUnprovedInheritanceBlockerWithClosedCountersIn(a, root, null, null, null, null, null, null, null, ids)) == null);
+        // The real issuer also retains decoded authored collisions. This changed
+        // source is a refusal contrast, never a replacement retained capture.
+        const changed = try std.mem.concat(a, u8, &.{ supplied.source, "<span id='content&#83;ub'></span>" });
+        const collision = (try completeObservedTextIdSuperset(a, stored.observed_nodes, stored.outer.ids, changed)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(profile.Profile.hasClass(collision, "contentSub"));
+        try std.testing.expect((try probe.pageUnprovedInheritanceBlockerWithClosedCountersIn(a, root, null, null, null, null, null, null, null, collision)) != null);
+        const unknown = try std.mem.concat(a, u8, &.{ supplied.source, "<span id='{{unknown}}'></span>" });
+        try std.testing.expect((try completeObservedTextIdSuperset(a, stored.observed_nodes, stored.outer.ids, unknown)) == null);
+        try std.testing.expect((try completeObservedTextIdSuperset(a, stored.observed_nodes, null, supplied.source)) == null);
+    }
+}
+
+
+test "ordered hidden Category metadata folds only inside the same complete visible plain run" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const context: compiler.Context = .{ .title = "Mai", .namespace_catalog = &ns };
+    const source = "before [[Kategorie:One]] [[Kategorie:Two]] <em title=\"owner\">after</em>";
+    const captured = "before <em title=\"owner\">after</em>";
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, source, captured, 0, false, true, context, null));
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, "before [[Kategorie:One]]middle [[Kategorie:Two]] <em>after</em>", "before middle <em>after</em>", 0, false, true, context, null));
+    for ([_][]const u8{ "before <em title=\"owner\">foreign</em>", "before <em title=\"foreign\">after</em>", "<em title=\"owner\">after</em>", "before <em title=\"owner\">after</em>visible" }) |html|
+        try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, source, html, 0, false, true, context, null));
+    for ([_][]const u8{ "before [[:Kategorie:One]] [[Kategorie:Two]] <em title=\"owner\">after</em>", "before [[Kategorie:{{unknown}}]] [[Kategorie:Two]] <em title=\"owner\">after</em>", "before <nowiki>[[Kategorie:One]]</nowiki> [[Kategorie:Two]] <em title=\"owner\">after</em>", "before [[Kategorie:One]]visible [[Kategorie:Two]] <em title=\"owner\">after</em>" }) |value|
+        try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, value, captured, 0, false, true, context, null));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, source, captured, 0, false, false, context, null));
+    var foreign = context; foreign.namespace_catalog = null;
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, source, captured, 0, false, true, foreign, null));
+}
+
+test "retained Mai Urdu row preserves all hidden metadata gaps and following visible gender owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/de-mai-figure-style/interwiki-map.tsv"));
+    const document = try std.json.parseFromSlice(Document, a, @embedFile("testdata/de-mai-figure-style/original.json"), .{});
+    const supplied = try responseSource(a, &ns, document.value.pages[0]);
+    const context: compiler.Context = .{ .title = document.value.pages[0].title, .namespace_catalog = &ns };
+    const source_start = std.mem.indexOf(u8, supplied.source, "*[[Urdu]]:") orelse return error.TestUnexpectedResult;
+    const source_end = std.mem.indexOfScalarPos(u8, supplied.source, source_start, '\n') orelse return error.TestUnexpectedResult;
+    const html_start = std.mem.indexOf(u8, supplied.html, "<li><a href=\"/wiki/Urdu\"") orelse return error.TestUnexpectedResult;
+    const opening = currentLiteralHtmlTagAt(supplied.html, html_start) orelse return error.TestUnexpectedResult;
+    const pair = syntax.matchingTag(supplied.html, opening) orelse return error.TestUnexpectedResult;
+    const original = supplied.source[source_start + 1..source_end];
+    const html = supplied.html[opening.end..pair.inner_end];
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, original, "[[Kategorie:"));
+    try std.testing.expect(std.mem.indexOf(u8, original, "Umschrift fehlt (ur)") != null);
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, original, html, 0, false, true, context, null));
+    const changed = try OrderedLiteralDivTesting.replace(a, html, ">f</em>", ">foreign</em>");
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, original, changed, 0, false, true, context, null));
+}
+
+
+test "actual RU root-only parent retains observed language when excluding unrelated Container rules" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = IndependentRuTableRootTesting;
+    var ns = try namespaces.Registry.init(a, T.namespace); defer ns.deinit();
+    const input = try T.input(a);
+    const prepared = try preparedTableRootAlloc(a, &ns, input);
+    const parent = prepared.parent_container orelse return error.TestUnexpectedResult;
+    const source = try a.dupe(u8, input.source);
+    const capability = try selectedTableRootAlloc(a, &prepared, source);
+    const callback = capability.observe_parent_container orelse return error.TestUnexpectedResult;
+    const operation: compiler.AuthoredElementStyleOperation = .{ .source = source, .element = source[parent.start..parent.end] };
+    const observed = (try callback(capability.context, a, operation)) orelse return error.TestUnexpectedResult;
+    const context = observed.context;
+    try std.testing.expect(context.styles.page_style_parent == null);
+    // Retain each observed parent edge and each actual language attribute. This
+    // test asks only about these language rules, not other Container decisions.
+    const elements = try a.alloc(profile.TextElement, context.nodes.len);
+    for (context.nodes, elements) |node, *element| {
+        element.* = .{ .tag = node.tag, .parent = if (node.parent) |index| &elements[index] else null,
+            .physical_ancestry_complete = true, .ancestry_complete = true };
+        for (node.attributes) |attribute| {
+            if (equal(attribute.name, "lang")) element.language = attribute.value;
+            if (equal(attribute.name, "class")) element.classes = attribute.value;
+            if (equal(attribute.name, "id")) element.id = attribute.value;
+        }
+    }
+    const owner = &elements[observed.element];
+    try std.testing.expectEqualStrings("div", owner.tag);
+    try std.testing.expectEqualStrings("section", owner.parent.?.tag);
+    try std.testing.expectEqualStrings("section", owner.parent.?.parent.?.tag);
+    var cursor: ?*const profile.TextElement = owner;
+    var language: ?[]const u8 = null;
+    while (cursor) |node| : (cursor = node.parent) if (node.language) |value| { language = value; break; };
+    try std.testing.expectEqualStrings("ru", language orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqual(@as(usize, 3), input.styles.responses.len);
+    const css = input.styles.responses[2];
+    const begin = std.mem.indexOf(u8, css, ":lang(chu),:lang(cu),:lang(orv){") orelse return error.TestUnexpectedResult;
+    const opening = std.mem.indexOfScalarPos(u8, css, begin, '{') orelse return error.TestUnexpectedResult;
+    const ending = std.mem.indexOfScalarPos(u8, css, opening, '}') orelse return error.TestUnexpectedResult;
+    const declarations = css[opening + 1 .. ending];
+    var retained: usize = 0;
+    for (context.styles.container_rules) |rule| if (std.mem.eql(u8, rule.css, declarations)) { retained += 1; };
+    try std.testing.expectEqual(@as(usize, 3), retained);
+    const matched = try context.styles.containerRuleMatchesIn(a, owner); defer a.free(matched.rules);
+    try std.testing.expect(!matched.unresolved);
+    for (matched.rules) |rule| try std.testing.expect(!std.mem.eql(u8, rule.css, declarations));
+    // A live nearest override must restore the unresolved candidates, even
+    // though this is the same selected source, parent pointer and stylesheet.
+    owner.language = "cu";
+    const changed = try context.styles.containerRuleMatchesIn(a, owner); defer a.free(changed.rules);
+    var kept: usize = 0;
+    for (changed.rules) |rule| if (std.mem.eql(u8, rule.css, declarations)) {
+        kept += 1; try std.testing.expect(rule.match == .unknown);
+    };
+    try std.testing.expect(kept != 0);
+    // The independently authenticated observation was not changed by the query.
+    try std.testing.expect((try callback(capability.context, a, operation)) != null);
+    try std.testing.expect(capability.root_only and !capability.prefix_viewport and !capability.intrinsic_viewport);
+}
+
+test "retained TH complete list issues first Ruby ancestry without borrowing sibling heading classes" {
+    var diagnostic_stage: []const u8 = "setup";
+    errdefer std.debug.print("TH_BULLET_TEST stage={s}\n", .{diagnostic_stage});
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const bytes = @embedFile("testdata/th-missing-figure-style/figure-page-observations.json");
+    const document = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+    const page = document.pages[2];
+    diagnostic_stage = "source_response";
+    const supplied = try responseSource(a, &ns, page);
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    try std.testing.expectEqualStrings(source, supplied.source);
+    var files = try ThPaletteTesting.registry(a, &ns, document); defer files.deinit();
+    const defaults = Testing.hash(@embedFile(ThPaletteTesting.prefix ++ "figure-siteinfo.raw.json"));
+    diagnostic_stage = "book_init";
+    var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+    var data: ?*const PageStyleData = null;
+    var prior_notes: []const profile.SourceLiteralDivProof = &.{};
+    for (book.pages) |item| if (item.page_id == page.page_id) {
+        try std.testing.expect(data == null); data = item.page_styles; prior_notes = item.source_literal_divs;
+    };
+    diagnostic_stage = "retained_page";
+    const retained = data orelse return error.TestUnexpectedResult;
+    var root: profile.TextElement = .{ .tag = "div", .physical_ancestry_complete = true };
+    diagnostic_stage = "issuer";
+    const proofs = try selectedRootBulletRubyProofs(a, &ns, retained, source, &root, prior_notes,
+        .{ .namespace_catalog = &ns, .title = page.title });
+    diagnostic_stage = "first_ruby_census";
+    var first: ?profile.SourceBulletRubyProof = null;
+    for (proofs) |proof| if (proof.ruby_start == 41964) { try std.testing.expect(first == null); first = proof; };
+    const Diagnostic = struct {
+        fn inspect(alloc: A, registry: *const namespaces.Registry, stored: *const PageStyleData,
+            input: []const u8, owner: *const profile.TextElement, diagnostic_notes: []const profile.SourceLiteralDivProof, context: compiler.Context) !void
+        {
+            const ruby_start = std.mem.indexOf(u8, input, "<ruby>") orelse {
+                std.debug.print("TH_BULLET_ISSUER stage=source_ruby absent\n", .{}); return;
+            };
+            const ruby_pair = syntax.matchingTag(input, syntax.tagAt(input, ruby_start).?) orelse return invalid;
+            const ruby = input[ruby_start..ruby_pair.end];
+            const outer = stored.page.outer_context orelse {
+                std.debug.print("TH_BULLET_ISSUER stage=get_context absent\n", .{}); return;
+            };
+            const start = stored.outer.root_start orelse {
+                std.debug.print("TH_BULLET_ISSUER stage=get_root absent\n", .{}); return;
+            };
+            if (start >= outer.response.len) return invalid;
+            var get_nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+            defer get_nodes.deinit(alloc);
+            var get_end: usize = 0;
+            _ = observedTextClassScopeToEndWithSections(alloc, registry, outer.response[start..], &get_nodes, &get_end,
+                stored.outer.root_attributes, true) catch |err| {
+                std.debug.print("TH_BULLET_ISSUER stage=get_graph error={s} root_start={d} bytes={d}\n",
+                    .{ @errorName(err), start, outer.response.len }); return;
+            };
+            std.debug.print("TH_BULLET_ISSUER stage=get_graph nodes={d} end={d} api_nodes={d} root_closed={any} ns_same={any}\n",
+                .{ get_nodes.items.len, get_end, stored.observed_nodes.len, owner.physical_ancestry_complete, context.namespace_catalog == registry });
+            if (get_end == 0) return;
+            var group_start = if (std.mem.lastIndexOfScalar(u8, input[0..ruby_start], '\n')) |line_break| line_break + 1 else 0;
+            while (group_start != 0) {
+                const previous = if (std.mem.lastIndexOfScalar(u8, input[0 .. group_start - 1], '\n')) |line_break| line_break + 1 else 0;
+                const prior = encoder.document_ir.classifyLine(input[previous .. group_start - 1]);
+                if (prior.list_path.len == 0) break;
+                group_start = previous;
+            }
+            var lines: std.ArrayList(OrderedLiteralDivJoin.ListLine) = .empty;
+            defer lines.deinit(alloc);
+            var at = group_start;
+            var prefixes = true;
+            while (at < input.len) {
+                const end = std.mem.indexOfScalarPos(u8, input, at, '\n') orelse input.len;
+                const line = encoder.document_ir.classifyLine(input[at..end]);
+                if (line.list_path.len == 0) break;
+                if (lines.items.len == 8) return invalid;
+                try lines.append(alloc, .{ .path = line.list_path, .text = line.text });
+                const opening_start = @intFromPtr(line.text.ptr) - @intFromPtr(input.ptr);
+                const opening = syntax.tagAt(input, opening_start) orelse return invalid;
+                const pair = syntax.matchingTag(input, opening) orelse return invalid;
+                var parent: ?usize = null;
+                var passed = true;
+                authoredElementPrefixForRoleScan(alloc, registry, input, .{ .start = opening_start, .end = pair.end },
+                    false, diagnostic_notes, false, &parent, false, null, true) catch |err| {
+                    passed = false;
+                    std.debug.print("TH_BULLET_ISSUER stage=source_prefix line={d} opening={d} error={s}\n",
+                        .{ lines.items.len - 1, opening_start, @errorName(err) });
+                };
+                prefixes = prefixes and passed and parent == null and pair.end <= end and equal(line.list_path, "*");
+                std.debug.print("TH_BULLET_ISSUER stage=source_line line={d} start={d} end={d} passed={any} parent={any} pair_end={d}\n",
+                    .{ lines.items.len - 1, at, end, passed, parent, pair.end });
+                at = if (end < input.len) end + 1 else end;
+            }
+            std.debug.print("TH_BULLET_ISSUER stage=source_group start={d} end={d} lines={d} prefixes={any} occurrences={d}\n",
+                .{ group_start, at, lines.items.len, prefixes, std.mem.count(u8, input, input[group_start..at]) });
+            var diagnostic_proofs: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+            defer diagnostic_proofs.deinit(alloc);
+            var join: OrderedLiteralDivJoin = .{ .a = alloc, .ns = registry, .source = input,
+                .html = stored.observed_html, .nodes = stored.observed_nodes, .graph = &.{},
+                .proofs = &diagnostic_proofs, .context = context, .diagnose_inline_refusal = true };
+            var candidates: usize = 0;
+            for (stored.observed_nodes, 0..) |node, index| {
+                if (node.parent != 0 or !node.tag.is("ul")) continue;
+                const end = intrinsicTableCapturedNodeEnd(stored.observed_html, node) orelse return invalid;
+                if (std.mem.indexOf(u8, stored.observed_html[node.start..end], ruby) == null) continue;
+                if (candidates == 8) return invalid;
+                candidates += 1;
+                var cursor: usize = 0;
+                join.remaining = 8192;
+                const matched = join.list(lines.items, &cursor, "", index, 0) catch |err| {
+                    std.debug.print("TH_BULLET_ISSUER stage=complete_list index={d} error={s}\n", .{ index, @errorName(err) }); continue;
+                };
+                std.debug.print("TH_BULLET_ISSUER stage=complete_list index={d} matched={any} consumed={d} expected={d}\n",
+                    .{ index, matched, cursor, lines.items.len });
+            }
+            var classes: std.ArrayList(u8) = .empty;
+            defer classes.deinit(alloc);
+            try appendOuterClasses(alloc, &classes, stored.outer.classes);
+            const api = try bulletRubyClasses(alloc, input, ruby, stored.observed_html, stored.observed_nodes, &classes);
+            const get = try bulletRubyClasses(alloc, input, ruby, outer.response[start..][0..get_end], get_nodes.items, &classes);
+            std.debug.print("TH_BULLET_ISSUER stage=class_census candidates={d} source_count={d} api={any} get={any} class_bytes={d} heading_present={any}\n",
+                .{ candidates, std.mem.count(u8, input, ruby), api, get, classes.items.len, profile.Profile.hasClass(classes.items, "mw-heading") });
+        }
+    };
+    if (first == null) Diagnostic.inspect(a, &ns, retained, source, &root, prior_notes,
+        .{ .namespace_catalog = &ns, .title = page.title }) catch |err| {
+        std.debug.print("TH_BULLET_ISSUER stage=diagnostic error={s}\n", .{@errorName(err)});
+    };
+    diagnostic_stage = "first_ruby_present";
+    const selected = first orelse return error.TestUnexpectedResult;
+    diagnostic_stage = "line_start";
+    try std.testing.expectEqual(@as(usize, 41889), selected.line_start);
+    diagnostic_stage = "line_end";
+    try std.testing.expectEqual(@as(usize, 42231), selected.line_end);
+    diagnostic_stage = "ruby_body";
+    try std.testing.expectEqualStrings("<ruby>間性<rp>(</rp><rt>かんせい</rt><rp>)</rp></ruby>", source[selected.ruby_start..selected.ruby_end]);
+    diagnostic_stage = "root_and_jpan";
+    try std.testing.expect(selected.root == &root and profile.Profile.hasClass(selected.classes, "Jpan"));
+    diagnostic_stage = "heading_absence";
+    try std.testing.expect(!profile.Profile.hasClass(selected.classes, "mw-heading"));
+    diagnostic_stage = "sibling_heading_present";
+    try std.testing.expect(profile.Profile.hasClass(retained.scope.subtree_classes, "mw-heading"));
+    // Entire supplied source and both captures remain borrowed and unchanged.
+    try std.testing.expectEqualStrings(source, supplied.source);
+}
+
+test "root bullet ancestry retains heading paths and refuses changed complete list or Ruby census" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const source = "* <span>[[Target|<ruby>x<rp>(</rp><rt>r</rt><rp>)</rp></ruby>]]</span>";
+    const root_open = "<div class='mw-content-ltr mw-parser-output' lang='th' dir='ltr'>";
+    const item = "<span><a href='/wiki/Target' title='Target'><ruby>x<rp>(</rp><rt>r</rt><rp>)</rp></ruby></a></span>";
+    const api = root_open ++ "<ul><li>" ++ item ++ "</li></ul></div>";
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, api, &nodes);
+    var root: profile.TextElement = .{ .tag = "div", .physical_ancestry_complete = true };
+    const context: compiler.Context = .{ .namespace_catalog = &ns, .title = "Page" };
+    for (0..5) |mode| {
+        const get = switch (mode) {
+            0 => api,
+            1 => root_open ++ "<div class='mw-heading'><ul><li>" ++ item ++ "</li></ul></div></div>",
+            2 => root_open ++ "<ul><li>" ++ item ++ "</li><li>" ++ item ++ "</li></ul></div>",
+            3 => root_open ++ "<ul><li><ruby>other<rp>(</rp><rt>r</rt><rp>)</rp></ruby></li></ul></div>",
+            4 => api,
+            else => unreachable,
+        };
+        var get_nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, &ns, get, &get_nodes);
+        const input = if (mode == 4) source ++ " tail" else source;
+        const proofs = try observedRootBulletRubyProofs(a, &ns, input, api, nodes.items, get, get_nodes.items, "outer", &root, &.{}, context);
+        if (mode < 2) {
+            try std.testing.expectEqual(@as(usize, 1), proofs.len);
+            try std.testing.expectEqual(mode == 1, profile.Profile.hasClass(proofs[0].classes, "mw-heading"));
+        } else try std.testing.expectEqual(@as(usize, 0), proofs.len);
+    }
+    for ([_][]const u8{ "<nowiki>\n" ++ source ++ "\n</nowiki>", "<div>\n" ++ source ++ "\n</div>", "{|\n|-\n|\n" ++ source ++ "\n|}", "** <span>[[Target|<ruby>x<rp>(</rp><rt>r</rt><rp>)</rp></ruby>]]</span>" }) |foreign| {
+        const proofs = try observedRootBulletRubyProofs(a, &ns, foreign, api, nodes.items, api, nodes.items, "", &root, &.{}, context);
+        try std.testing.expectEqual(@as(usize, 0), proofs.len);
+    }
+}
+
+test "ordinary retained Mai plain A issuer joins complete source captured states and rejects foreign operation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/de-mai-figure-style/interwiki-map.tsv"));
+    var files = try MaiCenteredTest.registry(a, &ns); defer files.deinit();
+    const defaults = Testing.hash(@embedFile("testdata/de-mai301/figure-siteinfo.raw.json"));
+    var parent = try profile.parseForTargetAlloc(a, PageStylesV7Testing.css, .screen); defer parent.deinit();
+    for ([_][]const u8{ @embedFile("testdata/de-mai-figure-style/original.json"), @embedFile("testdata/de-mai-figure-style/reference.json") }, 0..) |bytes, case_index| {
+        var issuer_phase: []const u8 = "response_source";
+        var selected_diagnostic: ?*const SelectedPageStyles = null;
+        errdefer {
+            const diagnostic_owner = if (selected_diagnostic) |selected_value| selected_value.ordinary_link_page else null;
+            std.debug.print("MAI_PLAIN_ISSUER193 case={d} stage={s} selected={any} owner={any} contexts_ready={any} cache_entries={d}\n", .{
+                case_index, issuer_phase, selected_diagnostic != null, diagnostic_owner != null,
+                if (diagnostic_owner) |owner_value| owner_value.contexts != null else false,
+                if (diagnostic_owner) |owner_value| owner_value.cache.items.len else 0,
+            });
+        }
+        const doc = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+        const supplied = try responseSource(a, &ns, doc.pages[0]);
+        const source = try a.dupe(u8, supplied.source);
+        issuer_phase = "book_intake";
+        var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+        issuer_phase = "page_selection";
+        const selected = (try book.selectPageStylesForCompiler(a, &ns, 0, 721, 10777072, "Mai", PageStylesV7Testing.raw,
+            source, defaults, &parent, .{ .title = "Mai", .namespace_catalog = &ns })) orelse return error.TestUnexpectedResult;
+        selected_diagnostic = selected;
+        issuer_phase = "source_token";
+        const at = std.mem.indexOf(u8, source, "[[Jahr]]") orelse return error.TestUnexpectedResult;
+        const token = source[at..][0.."[[Jahr]]".len];
+        const operation: compiler.OrdinaryLinkPaintOperation = .{ .source = source, .token = token, .target = "Jahr", .title = "Mai",
+            .namespace_sha256 = ns.source_sha256, .scope = &selected.scope };
+        issuer_phase = "ordinary_callback";
+        const observed = (try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation)) orelse return error.TestUnexpectedResult;
+        issuer_phase = "observation_assertions";
+        try std.testing.expectEqualStrings("Jahr", observed.label);
+        try std.testing.expectEqual(encoder.presentation_types.TextWrap.break_word, observed.wrap.?);
+        try std.testing.expectEqualStrings("#3366cc", observed.paint.normal.foreground);
+        try std.testing.expectEqualStrings("#3056a9", observed.paint.hover.foreground);
+        try std.testing.expectEqualStrings("#233566", observed.paint.hover_active.foreground);
+        try std.testing.expectEqualStrings("#6a60b0", observed.paint.visited.foreground);
+        try std.testing.expectEqualStrings("#534fa3", observed.paint.visited_hover.foreground);
+        try std.testing.expectEqualStrings("#353262", observed.paint.visited_hover_active.foreground);
+        try std.testing.expect(observed.font.font_normalized and observed.font.font_scale != null and observed.font.font_scale.? > 0);
+        try std.testing.expectEqualStrings("de", observed.font.language);
+        try std.testing.expectEqualDeep(encoder.presentation_types.StyleLength{ .unit = .px, .value = 2 }, observed.paint.focus_outline.?.width);
+        try std.testing.expect(observed.profile == selected.styles and observed.paint.underline_on_focus);
+        issuer_phase = "cache_repeat";
+        const repeat = (try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualDeep(observed, repeat);
+        try std.testing.expectEqual(@as(usize, 1), selected.ordinary_link_page.?.cache.items.len);
+        issuer_phase = "foreign_operation_refusals";
+        var foreign = operation; foreign.source = try a.dupe(u8, source);
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, foreign)) == null);
+        foreign = operation; foreign.token = try a.dupe(u8, token);
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, foreign)) == null);
+        foreign = operation; foreign.target = "Foreign";
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, foreign)) == null);
+        foreign = operation; foreign.title = "Foreign";
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, foreign)) == null);
+        foreign = operation; foreign.namespace_sha256[0] ^= 1;
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, foreign)) == null);
+        var other_scope = selected.scope; foreign = operation; foreign.scope = &other_scope;
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, foreign)) == null);
+        issuer_phase = "mutated_source_refusal";
+        source[at + 2] = 'X';
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation)) == null);
+        issuer_phase = "restored_source_acceptance";
+        source[at + 2] = 'J';
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation)) != null);
+        // Same token/target cannot borrow a one-leaf occurrence if its source
+        // has an independently emitted trail or a rich label.
+        issuer_phase = "piped_source_refusal";
+        const piped = std.mem.indexOf(u8, source, "[[Maie|") orelse return error.TestUnexpectedResult;
+        const piped_pair = syntax.balanced(source, piped) orelse return error.TestUnexpectedResult;
+        foreign = operation; foreign.token = source[piped..piped_pair.end]; foreign.target = "Maie";
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, foreign)) == null);
+        issuer_phase = "trailed_source_refusal";
+        const trailed = std.mem.indexOf(u8, source, "[[fünf]]te") orelse return error.TestUnexpectedResult;
+        foreign = operation; foreign.token = source[trailed..][0.."[[fünf]]".len]; foreign.target = "fünf";
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, foreign)) == null);
+    }
+}
+
+const OrdinaryLinkCacheLifetimeTest = if (@import("builtin").is_test) struct {
+    fn snapshot(a: A, value: ?compiler.OrdinaryLinkPaintObservation) ![]const u8 {
+        const observed = value orelse return a.dupe(u8, "null");
+        return std.json.Stringify.valueAlloc(a, .{ .label = observed.label, .font = observed.font,
+            .paint = observed.paint, .wrap = observed.wrap }, .{});
+    }
+    fn ruleWitness(selected: *const SelectedPageStyles) !void {
+        const contexts = selected.ordinary_link_page.?.contexts orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 2), contexts.len);
+        var found: usize = 0;
+        for (contexts) |context| for (context.styles.observed_figure_rules) |rule| {
+            if (rule.source_byte_start != 56860 or !equal(rule.css, "line-height:1.6em !important") or
+                rule.raw_selector.len != 11 or !std.mem.startsWith(u8, rule.raw_selector, "h1:lang(")) continue;
+            const weak = rule.weak_selector orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 1), weak.chain.len);
+            try std.testing.expectEqualStrings("h1", weak.chain[0].positive.tag orelse return error.TestUnexpectedResult);
+            try std.testing.expectEqual(@as(usize, 0), weak.chain[0].positive.ids.len);
+            try std.testing.expectEqual(@as(usize, 0), weak.chain[0].positive.classes.len);
+            found += 1;
+        };
+        try std.testing.expect(found != 0);
+    }
+    // Called by the existing genuine selected SR Book control. A null style is
+    // still a refusal: this lifetime check never manufactures a paint result.
+    fn genuine(a: A, selected: *const SelectedPageStyles) !void {
+        const owner = selected.ordinary_link_page orelse return error.TestUnexpectedResult;
+        try std.testing.expect(owner.contexts == null);
+        var storage: [8192]u8 = undefined;
+        var fixed = std.heap.FixedBufferAllocator.init(&storage);
+        var first: ?compiler.OrdinaryLinkPaintObservation = null;
+        const source = selected.source;
+        const token = "[[глава]]";
+        const start = std.mem.indexOf(u8, source, token) orelse return error.TestUnexpectedResult;
+        var operation: compiler.OrdinaryLinkPaintOperation = .{ .source = source, .token = source[start..][0..token.len],
+            .target = "глава", .title = "аверз", .namespace_sha256 = selected.namespace_catalog.source_sha256, .scope = &selected.scope };
+        {
+            var probe = std.heap.ArenaAllocator.init(fixed.allocator()); defer probe.deinit();
+            operation.target = try probe.allocator().dupe(u8, "глава");
+            first = try SelectedPageStyles.ordinaryLinkPaint(selected, probe.allocator(), operation);
+            try ruleWitness(selected);
+        }
+        const before = try snapshot(a, first);
+        fixed.reset(); @memset(&storage, 0xa5);
+        operation.target = "глава";
+        const repeated = try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation);
+        try std.testing.expectEqualStrings(before, try snapshot(a, repeated));
+        try ruleWitness(selected);
+        const other = "[[лице]]";
+        const other_start = std.mem.indexOf(u8, source, other) orelse return error.TestUnexpectedResult;
+        operation.token = source[other_start..][0..other.len]; operation.target = "лице";
+        _ = try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation);
+        try ruleWitness(selected);
+        operation.source = try a.dupe(u8, source);
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation)) == null);
+    }
+    fn encoded(a: A, first: compiler.OrdinaryLinkPaintObservation, second: compiler.OrdinaryLinkPaintObservation) ![]const u8 {
+        var spans: [3]compiler.Span = .{ .{ .text = "" }, .{ .text = " " }, .{ .text = "" } };
+        for ([_]compiler.OrdinaryLinkPaintObservation{ first, second }, [_]usize{ 0, 2 }, [_][]const u8{ "Target", "Other" }) |value, index, target| {
+            spans[index] = .{ .kind = .link, .text = value.label, .target = target,
+                .language = value.font.language, .classes = value.font.classes,
+                .role = std.meta.stringToEnum(compiler.Role, @tagName(value.font.role)) orelse return error.TestUnexpectedResult,
+                .font_scale = value.font.font_scale, .font_scale_basis = value.font.font_scale_basis, .font_scale_set = true,
+                .font_family = value.font.font_family, .font_features = value.font.font_features,
+                .foreground = value.paint.normal.foreground, .foreground_set = true, .link_paint = value.paint,
+                .flags = .{ .bold = value.font.bold, .italic = value.font.italic, .underline = value.paint.normal.underline } };
+        }
+        const blocks = [_]compiler.Block{.{ .kind = .paragraph, .spans = &spans }};
+        const bytes = try encoder.presentation_codec.encodeBuildAlloc(a, &[_]compiler.Span{},
+            &[_]struct { level: u8 = 2, title: []const u8 = "German", blocks: []const compiler.Block }{.{ .blocks = &blocks }},
+            encoder.presentation_types.Layout{}, &.{}, &.{});
+        const stored = try encoder.presentation_codec.decodeAlloc(a, bytes, "cache lifetime", .language, .{ .code = "de", .heading = "German" });
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, stored));
+        const actual = stored.entry.sections[0].blocks[0].spans;
+        try std.testing.expectEqual(@as(usize, 3), actual.len);
+        try std.testing.expectEqualStrings("Target", actual[0].text); try std.testing.expectEqualStrings("Target", actual[0].target);
+        try std.testing.expectEqualStrings(" ", actual[1].text);
+        try std.testing.expectEqualStrings("Other", actual[2].text); try std.testing.expectEqualStrings("Other", actual[2].target);
+        try std.testing.expectEqualDeep(first.paint, actual[0].link_paint.?);
+        try std.testing.expectEqualDeep(second.paint, actual[2].link_paint.?);
+        return bytes;
+    }
+} else struct {};
+
+test "ordinary link callback cache owns transient target label font and paint through caller destruction" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const source = "[[Target]] [[Other]]";
+    const html = "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><span lang='de'><a href='/wiki/Target' title='Target'>Target</a> <a href='/wiki/Other' title='Other'>Other</a></span></div>";
+    const css = "html,body{font-family:sans-serif;color:#202122}body{font-size:.875em}" ++
+        "a{color:#36c;text-decoration:none;border-radius:2px;font-style:italic}" ++
+        "a:visited{color:#6a60b0}a:visited:hover{color:#534fa3}a:visited:active{color:#353262}" ++
+        "a:hover{color:#3056a9;text-decoration:underline}a:active{color:#233566;text-decoration:underline}" ++
+        "a:focus{text-decoration:underline}:focus{outline-color:#36c}a:focus-visible{outline:solid 2px #36c}";
+    var styles = try profile.parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    var observed: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, html, &observed);
+    const graph = try a.alloc(profile.ObservedStyleNode, observed.items.len + 2);
+    graph[0] = .{ .tag = "html", .parent = null, .attributes = &.{} };
+    graph[1] = .{ .tag = "body", .parent = 0, .attributes = &.{} };
+    for (observed.items, 0..) |node, index| graph[index + 2] = .{ .tag = node.tag.name,
+        .parent = if (node.parent) |parent| @intCast(parent + 2) else 1,
+        .attributes = try figureObservedAttributes(a, node.attributes), .has_text = figureObservedHasText(html, observed.items, index) };
+    const contexts = [_]profile.ObservedInlineLinkPaintContext{
+        .{ .styles = &styles, .nodes = graph, .root = 2 }, .{ .styles = &styles, .nodes = graph, .root = 2 } };
+    const outer = [_]OuterObservedNode{ .{ .tag = "html", .attributes = .{ .attributes = &.{} } },
+        .{ .tag = "body", .attributes = .{ .attributes = &.{} } } };
+    const stored: PageStyleData = .{ .authored_sources = &.{}, .context_sources = &.{},
+        .page = .{ .namespace_id = 0, .page_id = 1, .revision_id = 1, .title = "Page", .raw_sha256 = "", .occurrences = &.{} },
+        .scope = .{ .root_tag = "div", .root_classes = "mw-content-ltr mw-parser-output", .subtree_classes = "mw-content-ltr mw-parser-output" },
+        .outer = .{ .classes = "", .ancestors = &outer, .html_classes = "" }, .observed_nodes = observed.items, .observed_html = html };
+    var owner: OrdinaryPlainLinkPage = .{ .allocator = a, .stored = &stored, .parent = &styles, .selected_profile = &styles,
+        .context = .{ .title = "Page", .namespace_catalog = &ns }, .original_source = source, .namespace_sha256 = ns.source_sha256,
+        .contexts = &contexts, .html = html };
+    var selected: SelectedPageStyles = .{ .ordinary_link_page = &owner, .styles = &styles,
+        .scope = .{ .root_tag = "div", .root_classes = "mw-content-ltr mw-parser-output", .subtree_classes = "mw-content-ltr mw-parser-output", .page_styles = &styles }, .source = source, .namespace_catalog = &ns };
+    const storage = try a.alloc(u8, 4 * 1024 * 1024);
+    var fixed = std.heap.FixedBufferAllocator.init(storage);
+    var operation: compiler.OrdinaryLinkPaintOperation = .{ .source = source, .token = source[0..10], .target = "Target", .title = "Page",
+        .namespace_sha256 = ns.source_sha256, .scope = &selected.scope };
+    var first: compiler.OrdinaryLinkPaintObservation = undefined;
+    {
+        var probe = std.heap.ArenaAllocator.init(fixed.allocator()); defer probe.deinit();
+        operation.target = try probe.allocator().dupe(u8, "Target");
+        first = (try SelectedPageStyles.ordinaryLinkPaint(&selected, probe.allocator(), operation)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), owner.cache.items.len);
+        try std.testing.expect(owner.cache.items[0].target.ptr != operation.target.ptr);
+        try std.testing.expectEqualStrings("Target", owner.cache.items[0].target);
+    }
+    const first_bytes = try OrdinaryLinkCacheLifetimeTest.snapshot(a, first);
+    fixed.reset(); @memset(storage, 0xa5);
+    operation.target = "Target";
+    const hit = (try SelectedPageStyles.ordinaryLinkPaint(&selected, fixed.allocator(), operation)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(first_bytes, try OrdinaryLinkCacheLifetimeTest.snapshot(a, hit));
+    try std.testing.expectEqual(@as(usize, 1), owner.cache.items.len);
+    operation.token = source[11..]; operation.target = try fixed.allocator().dupe(u8, "Other");
+    const second = (try SelectedPageStyles.ordinaryLinkPaint(&selected, fixed.allocator(), operation)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), owner.cache.items.len);
+    try std.testing.expect(owner.cache.items[1].target.ptr != operation.target.ptr);
+    const before = try OrdinaryLinkCacheLifetimeTest.encoded(a, first, second);
+    fixed.reset(); @memset(storage, 0x5a);
+    operation.target = "Other";
+    const other_hit = (try SelectedPageStyles.ordinaryLinkPaint(&selected, fixed.allocator(), operation)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u8, before, try OrdinaryLinkCacheLifetimeTest.encoded(a, hit, other_hit));
+    try std.testing.expectEqual(@as(?f32, 0.875), hit.font.font_scale);
+    try std.testing.expect(hit.font.font_normalized and hit.font.italic and hit.font.font_scale_basis == .normal_body);
+    try std.testing.expectEqualStrings("de", hit.font.language);
+    try std.testing.expectEqualStrings("#3366cc", hit.paint.normal.foreground);
+    try std.testing.expectEqualStrings("#233566", hit.paint.hover_active.foreground);
+    try std.testing.expectEqualStrings("#353262", hit.paint.visited_hover_active.foreground);
+    for (0..5) |mode| {
+        var foreign = operation;
+        switch (mode) {
+            0 => foreign.source = try a.dupe(u8, source),
+            1 => foreign.token = try a.dupe(u8, operation.token),
+            2 => foreign.target = "Foreign",
+            3 => foreign.title = "Foreign",
+            else => foreign.namespace_sha256[0] ^= 1,
+        }
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(&selected, a, foreign)) == null);
+        try std.testing.expectEqual(@as(usize, 2), owner.cache.items.len);
+    }
+    var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
+    const before_entries = owner.cache.items.len;
+    const original_allocator = owner.allocator; owner.allocator = failing.allocator();
+    try std.testing.expectError(error.OutOfMemory, SelectedPageStyles.ordinaryLinkPaint(&selected, a, operation));
+    owner.allocator = original_allocator;
+    try std.testing.expectEqual(before_entries, owner.cache.items.len);
+    try std.testing.expectEqualSlices(u8, before, try OrdinaryLinkCacheLifetimeTest.encoded(a, first, second));
+}
+
+test "root bullet ancestry consumes only completed exact prior note restoration proofs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const N = NoteIdentityTesting;
+    const closed_notes = N.outer ++ N.source_one ++ "<ul>\n* [[Next|kept]]\n" ++ N.source_two ++ "</div>";
+    const prefix = closed_notes ++ "\n\n";
+    const bullet = "* <span>[[Target|<ruby>x<rp>(</rp><rt>r</rt><rp>)</rp></ruby>]]</span>";
+    const source = prefix ++ bullet;
+    const captured_prefix = N.outer ++ N.captured_one ++ "<ul><li><a href='/wiki/Next' title='Next'>kept</a></li></ul>" ++ N.captured_two ++ "</div>";
+    const captured_item = "<span><a href='/wiki/Target' title='Target'><ruby>x<rp>(</rp><rt>r</rt><rp>)</rp></ruby></a></span>";
+    const html = N.root ++ captured_prefix ++ "<ul><li>" ++ captured_item ++ "</li></ul></div>";
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, html, &nodes);
+    var notes: std.ArrayList(profile.SourceLiteralDivProof) = .empty;
+    try appendObservedNoteDivParents(a, &ns, source, html, nodes.items, &notes);
+    var selected_note: ?usize = null;
+    for (notes.items, 0..) |proof, index| if (proof.restored_ul != null) {
+        try std.testing.expect(selected_note == null);
+        selected_note = index;
+    };
+    const note_index = selected_note orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?usize, 0), notes.items[note_index].parent_start);
+    var root: profile.TextElement = .{ .tag = "div", .physical_ancestry_complete = true };
+    const context: compiler.Context = .{ .namespace_catalog = &ns, .title = "Target" };
+    const complete = try observedRootBulletRubyProofs(a, &ns, source, html, nodes.items, html, nodes.items,
+        "", &root, notes.items, context);
+    try std.testing.expectEqual(@as(usize, 1), complete.len);
+    try std.testing.expectEqual(prefix.len, complete[0].line_start);
+    try std.testing.expectEqual(source.len, complete[0].line_end);
+    try std.testing.expectEqualStrings("<ruby>x<rp>(</rp><rt>r</rt><rp>)</rp></ruby>", source[complete[0].ruby_start..complete[0].ruby_end]);
+    try std.testing.expect(complete[0].root == &root);
+    // The original fixture had two adjacent physical '*' lines. Its first
+    // item still belongs to the preceding note and cannot be a partial root list.
+    const adjacent_source = closed_notes ++ "\n" ++ bullet;
+    const adjacent = try observedRootBulletRubyProofs(a, &ns, adjacent_source, html, nodes.items, html, nodes.items,
+        "", &root, notes.items, context);
+    try std.testing.expectEqual(@as(usize, 0), adjacent.len);
+    for (0..8) |mode| {
+        const changed = try a.dupe(profile.SourceLiteralDivProof, notes.items);
+        switch (mode) {
+            0 => {},
+            1 => changed[note_index].restored_ul = null,
+            2 => changed[note_index].parent_start = null,
+            3 => changed[note_index].range.anchor_end -= 1,
+            4 => changed[note_index].restored_ul.?.end -= 1,
+            5 => changed[note_index].restored_ul.?.depth = 0,
+            6 => changed[note_index].restored_ul.?.body_end = source.len,
+            7 => changed[note_index].restored_ul.?.items = 0,
+            else => unreachable,
+        }
+        const unavailable: []const profile.SourceLiteralDivProof = if (mode == 0) &.{} else changed;
+        const refused = try observedRootBulletRubyProofs(a, &ns, source, html, nodes.items, html, nodes.items,
+            "", &root, unavailable, context);
+        try std.testing.expectEqual(@as(usize, 0), refused.len);
+    }
+    const foreign = try a.dupe(u8, source);
+    foreign[notes.items[note_index].range.anchor_end + 1] = 'o';
+    const refused = try observedRootBulletRubyProofs(a, &ns, foreign, html, nodes.items, html, nodes.items,
+        "", &root, notes.items, context);
+    try std.testing.expectEqual(@as(usize, 0), refused.len);
+}
+
+test "intrinsic last cell retains authored ASCII spaces without lending LF or changing legacy CRLF endpoints" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, MissingServedTesting.namespace); defer ns.deinit();
+    var styles = try profile.parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    const Check = struct {
+        fn run(allocator: A, registry: *const namespaces.Registry, sheet: *const profile.Profile,
+            header: bool, body: []const u8, captured: []const u8, expected: ?bool, native_body: ?[]const u8) !void
+        {
+            const attrs = " border=\"1\" cellpadding=\"4\" cellspacing=\"0\" style=\"border:1px solid #aaa; border-collapse:collapse\"";
+            const source = try std.mem.concat(allocator, u8, &.{ "{|", attrs, "\n|-\n", if (header) "!" else "|", body, "\n|}" });
+            const tag = if (header) "th" else "td";
+            const html = try std.mem.concat(allocator, u8, &.{
+                "<div class=\"mw-content-ltr mw-parser-output\" lang=\"ku\" dir=\"ltr\"><table", attrs,
+                "><tbody><tr><", tag, ">", captured, "</", tag, "></tr></tbody></table></div>" });
+            var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+            _ = try observedTextClassScopeWithElements(allocator, registry, html, &nodes);
+            const full = try allocator.alloc(profile.ObservedStyleNode, nodes.items.len + 2);
+            full[0] = .{ .tag = "html", .parent = null, .attributes = &.{} };
+            full[1] = .{ .tag = "body", .parent = 0, .attributes = &.{} };
+            for (nodes.items, 0..) |node, index| full[index + 2] = .{
+                .tag = node.tag.name, .parent = if (node.parent) |parent| @intCast(parent + 2) else 1,
+                .attributes = try figureObservedAttributes(allocator, node.attributes),
+                .empty = figureObservedEmpty(html, node), .has_text = figureObservedHasText(html, nodes.items, index),
+            };
+            const identity = try compiler.Renderer.intrinsicTableIdentityAlloc(allocator, source, 0,
+                .{ .title = "Other", .namespace_catalog = registry },
+                .{ .intrinsic_viewport = true, .styles = sheet, .nodes = full, .root = 2, .table = 3 });
+            const matched = expected orelse { try std.testing.expect(identity == null); return; };
+            const cells = identity orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 1), cells.len);
+            const original = native_body orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(original, cells[0].source_body);
+            const at = std.mem.indexOf(u8, source, original) orelse return error.TestUnexpectedResult;
+            try std.testing.expect(cells[0].source_body.ptr == source[at..].ptr);
+            try std.testing.expect(std.mem.indexOfScalar(u8, cells[0].source_body, '\n') == null);
+            try std.testing.expectEqual(matched, try intrinsicTableCapturedCellMatches(allocator, html, nodes.items, 2, cells[0]));
+        }
+    };
+    // Actual first KU table header3 is ![[parsî]] SPACE LF; the retained GET
+    // TH owns the matching A followed by its real cell-ending LF. The source
+    // space stays in the borrowed body; no LF is manufactured in that body.
+    const link = "<a href=\"/wiki/pars%C3%AE\" title=\"parsî\">parsî</a>";
+    try Check.run(a, &ns, &styles, true, "[[parsî]] ", link ++ "\n", true, "[[parsî]] ");
+    try Check.run(a, &ns, &styles, false, "[[parsî]]   ", link ++ "\n", true, "[[parsî]]   ");
+    try Check.run(a, &ns, &styles, true, "[[parsî]]", link ++ "\n", true, "[[parsî]]");
+    try Check.run(a, &ns, &styles, true, "[[parsî]]", link, true, "[[parsî]]");
+    // Existing normalization stays byte-for-byte for TAB/CR/mixed stripped
+    // tails. These bare captures were accepted by the old endpoint too.
+    for ([_][]const u8{ "[[parsî]]\t", "[[parsî]]\r", "[[parsî]] \r", "[[parsî]] \t\r" }) |body| {
+        try Check.run(a, &ns, &styles, true, body, link, true, "[[parsî]]");
+        try Check.run(a, &ns, &styles, true, body, link ++ "\n", null, null);
+    }
+    // No general whitespace-presence waiver: preserved authored source text
+    // and complete per-owner text runs still have to match the captured body.
+    // Initial cell whitespace is trimmed by Parser.php1431/1434/1439, just
+    // as the existing captured direct-text boundary comparator already permits.
+    // Retain the complete source bytes; the new full body/action/codec control
+    // below independently covers this formerly misclassified negative.
+    try Check.run(a, &ns, &styles, true, "[[parsî]] ", link, true, "[[parsî]] ");
+    try Check.run(a, &ns, &styles, true, "[[parsî]] x ", link ++ "y\n", false, "[[parsî]] x ");
+    try Check.run(a, &ns, &styles, true, "x[[parsî]] ", "<a href=\"/wiki/pars%C3%AE\" title=\"parsî\">xparsî</a>\n", false, "x[[parsî]] ");
+    try Check.run(a, &ns, &styles, true, "[[foreign]] ", link ++ "\n", null, null);
+    try Check.run(a, &ns, &styles, true, "[[parsî]] ", "<a href=\"/wiki/foreign\" title=\"parsî\">parsî</a>\n", null, null);
+    try Check.run(a, &ns, &styles, true, "[[parsî]] ", "<a href=\"/wiki/pars%C3%AE\" title=\"parsî\" data-foreign=\"x\">parsî</a>\n", null, null);
+    // A cell separator is not a physical LF boundary, and literal body/child
+    // line breaks remain refused by the unchanged ordinary source-body rules.
+    try Check.run(a, &ns, &styles, false, "[[parsî]]||x", link ++ "\n</td><td>x\n", null, null);
+    try Check.run(a, &ns, &styles, true, "[[parsî]]\nX", link ++ "\nX", null, null);
+    try Check.run(a, &ns, &styles, true, "<b>[[parsî]]\n</b>", "<b>" ++ link ++ "\n</b>", null, null);
+}
+
+const CompleteCapturedSiblingsTesting = if (@import("builtin").is_test) struct {
+    const html = "<div class=\"mw-content-ltr mw-parser-output\" lang=\"en\" dir=\"ltr\"><style>.x:after{content:'<div>'}</style><!-- gap --><div class=\"NavFrame\"><hr></div><div class=\"NavFrame\"></div></div>";
+    fn observed(a: A, source: []const ObservedSiblingNode) ![]profile.FigureObservedNode {
+        const out = try a.alloc(profile.FigureObservedNode, source.len);
+        for (source, out) |node, *mapped| mapped.* = .{ .tag = node.tag.name,
+            .attributes = try figureObservedAttributes(a, node.attributes),
+            .parent = if (node.parent) |parent| @intCast(parent) else null };
+        return out;
+    }
+} else struct {};
+
+test "complete captured siblings retain STYLE and refuse incomplete foreign implicit and fostered inventories" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, namespaces.english_test_fixture); defer ns.deinit();
+    const T = CompleteCapturedSiblingsTesting;
+    var source: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, T.html, &source);
+    try std.testing.expectEqual(@as(usize, 5), source.items.len);
+    const out = try T.observed(a, source.items);
+    try std.testing.expect(try figureObservedCompleteSiblings(a, T.html, source.items, out, 0, source.items[0].attributes));
+    try std.testing.expect(out[0].known_complete_child_elements);
+    try std.testing.expect(out[0].known_previous_element_sibling == null and !out[0].known_no_previous_element_sibling);
+    try std.testing.expectEqualStrings("style", out[1].tag);
+    try std.testing.expectEqual(@as(?u32, 1), out[2].known_previous_element_sibling);
+    try std.testing.expectEqual(@as(?u32, 2), out[4].known_previous_element_sibling);
+    try std.testing.expect(out[1].known_no_previous_element_sibling and out[4].known_no_next_element_sibling);
+    for (0..12) |mode| {
+        const changed = try a.dupe(ObservedSiblingNode, source.items);
+        const mapped = try T.observed(a, changed);
+        var html: []const u8 = T.html;
+        var selected: []const ObservedSiblingNode = changed;
+        switch (mode) {
+            0 => changed[2].previous = null,
+            1 => changed[0].first_child = null,
+            2 => changed[2].parent = 1,
+            3 => changed[2].inner_end = null,
+            4 => changed[1].first_child = 2,
+            5 => changed[1].inner_end = changed[1].tag.end,
+            6 => changed[2].tag.name = try a.dupe(u8, changed[2].tag.name),
+            7 => changed[2].start += 1,
+            8 => selected = changed[0 .. changed.len - 1],
+            9 => mapped[2].parent = 1,
+            10 => html = try a.dupe(u8, html),
+            11 => {
+                const attrs = try a.dupe(Attribute, changed[2].attributes.attributes);
+                attrs[0].value = "foreign"; changed[2].attributes.attributes = attrs;
+            },
+            else => unreachable,
+        }
+        try std.testing.expect(!try figureObservedCompleteSiblings(a, html, selected, mapped, 0, changed[0].attributes));
+        for (mapped) |node| try std.testing.expect(!node.known_complete_child_elements and node.known_previous_element_sibling == null and !node.known_no_previous_element_sibling);
+    }
+    for ([_][]const u8{
+        "<p><div>x</div></p>", "<p><figure><figcaption>x</figcaption></figure></p>",
+        "<p><figcaption>x</figcaption></p>", "<b><div>x</div></b>", "<span><table><tbody><tr><td>x</td></tr></tbody></table></span>",
+        "<select><option>x</option></select>", "<button><button>x</button></button>", "<form><form>x</form></form>",
+        "<svg><title>x</title></svg>", "<textarea><div>x</div></textarea>", "<script>x</script>",
+        "<p><article>x</article></p>",
+        "<table><caption><table><tbody><tr><td>x</td></tr></tbody></table></caption></table>",
+        "<table><caption><div><table><tbody><tr><td>x</td></tr></tbody></table></div></caption></table>", "<h2><h3>x</h3></h2>", "<table><div>x</div></table>", "<table><tr><td>x</td></tr></table>",
+        "<a href='/wiki/A'><span><a href='/wiki/B'>x</a></span></a>", "<div><span>x</div>", "<style>unterminated",
+    }) |body| {
+        const html = try std.mem.concat(a, u8, &.{ "<div class=\"mw-content-ltr mw-parser-output\" lang=\"en\" dir=\"ltr\">", body, "</div>" });
+        var bad: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = observedTextClassScopeWithElements(a, &ns, html, &bad) catch |err| { try std.testing.expect(err == invalid); continue; };
+        const mapped = try T.observed(a, bad.items);
+        try std.testing.expect(!try figureObservedCompleteSiblings(a, html, bad.items, mapped, 0, bad.items[0].attributes));
+    }
+}
+
+test "authored Rule complete actual graph preserves preceding STYLE in both selected stylesheet roles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(AuthoredHeadTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const page = try AuthoredHeadTesting.page(a); const supplied = try responseSource(a, &ns, page);
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    const scope = try observedTextClassScopeWithElements(a, &ns, supplied.html, &nodes);
+    const outer = try observedOuterContext(a, &ns, page, page.outer_context.?, scope);
+    const proofs = try authoredElementStyleProofsWithHtml(a, &ns, supplied.source, supplied.html, page.authored_style_operations.?, nodes.items);
+    const shape = try json(a, @embedFile(AuthoredHeadTesting.prefix ++ "alexander.page.json"));
+    const stored = (try observedPageStyleProfile(a, &ns, "wikidict.figure-page-observations.v8", page, shape, supplied.html, scope, outer)) orelse return error.TestUnexpectedResult;
+    stored.observed_nodes = nodes.items; stored.observed_html = supplied.html; stored.authored_element_styles = proofs;
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const choices = try selectAuthoredElementStyles(a, &parent, stored);
+    try std.testing.expectEqual(@as(usize, 1), choices.len);
+    try std.testing.expectEqual(@as(usize, 2), choices[0].contexts.len);
+    for (choices[0].contexts) |context| {
+        const root = context.root;
+        try std.testing.expectEqual(@as(u32, 8), root);
+        const frame = root + 2;
+        var frame_class: []const u8 = "";
+        for (context.nodes[frame].attributes) |attribute| if (equal(attribute.name, "class")) { frame_class = attribute.value; };
+        try std.testing.expectEqualStrings("NavFrame", frame_class);
+        try std.testing.expect(context.nodes[root].known_complete_child_elements);
+        try std.testing.expectEqual(@as(?u32, root + 1), context.nodes[frame].known_previous_element_sibling);
+        try std.testing.expectEqualStrings("style", context.nodes[root + 1].tag);
+        try std.testing.expectEqual(@as(?u32, frame), context.nodes[root + 1].known_next_element_sibling);
+        try std.testing.expect(context.nodes[root].known_previous_element_sibling == null and !context.nodes[root].known_no_previous_element_sibling);
+        for (context.nodes[0..root]) |node| try std.testing.expect(!node.known_complete_child_elements and node.known_previous_element_sibling == null and !node.known_no_previous_element_sibling);
+        var actual_rule = false;
+        for (context.styles.observed_figure_rules) |rule| {
+            if (equal(rule.raw_selector, "div.NavFrame + div.NavFrame")) actual_rule = true;
+        }
+        try std.testing.expect(actual_rule);
+    }
+}
+
+
+
+test "retained TH complete headword line issues Ruby ancestry with exact linked reading in both captures" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const bytes = @embedFile("testdata/th-missing-figure-style/figure-page-observations.json");
+    const document = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+    const page = document.pages[2];
+    const supplied = try responseSource(a, &ns, page);
+    const source = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    try std.testing.expectEqualStrings(source, supplied.source);
+    var files = try ThPaletteTesting.registry(a, &ns, document); defer files.deinit();
+    const defaults = Testing.hash(@embedFile(ThPaletteTesting.prefix ++ "figure-siteinfo.raw.json"));
+    var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+    var data: ?*const PageStyleData = null;
+    var prior_notes: []const profile.SourceLiteralDivProof = &.{};
+    for (book.pages) |item| if (item.page_id == page.page_id) {
+        try std.testing.expect(data == null); data = item.page_styles; prior_notes = item.source_literal_divs;
+    };
+    var root: profile.TextElement = .{ .tag = "div", .physical_ancestry_complete = true };
+    const proofs = try selectedRootInlineRubyProofs(a, &ns, data orelse return error.TestUnexpectedResult,
+        source, &root, prior_notes, .{ .namespace_catalog = &ns, .title = page.title });
+    var first: ?profile.SourceInlineRubyProof = null;
+    for (proofs) |proof| if (proof.ruby_start == 45161) { try std.testing.expect(first == null); first = proof; };
+    const issued = first orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 45093), issued.line_start);
+    try std.testing.expectEqual(@as(usize, 47162), issued.line_end);
+    try std.testing.expect(issued.root == &root and !profile.Profile.hasClass(issued.classes, "mw-heading"));
+    try std.testing.expect(profile.Profile.hasClass(issued.classes, "headword-line") and
+        profile.Profile.hasClass(issued.classes, "headword") and profile.Profile.hasClass(issued.classes, "new"));
+    const opening = syntax.tagAt(source, issued.ruby_start).?;
+    try std.testing.expectEqual(syntax.matchingTag(source, opening).?.end, issued.ruby_end);
+    try std.testing.expect(std.mem.indexOf(u8, source[issued.ruby_start..issued.ruby_end], "[[:") != null);
+}
+
+test "root inline Ruby census retains heading and child classes and refuses incomplete foreign occurrence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const ruby = "<ruby>x<rp>(</rp><rt>[[Target|reading]]</rt><rp>)</rp></ruby>";
+    const source = "<span><strong>" ++ ruby ++ "</strong> tail</span>";
+    const root_open = "<div class='mw-content-ltr mw-parser-output' lang='th' dir='ltr'>";
+    const api_ruby = "<ruby>x<rp>(</rp><rt><a href='/wiki/Target' title='Target'>reading</a></rt><rp>)</rp></ruby>";
+    const get_ruby = "<ruby>x<rp>(</rp><rt><a rel='mw:WikiLink' href='https://th.wiktionary.org/wiki/Target' title='Target'>reading</a></rt><rp>)</rp></ruby>";
+    const api = root_open ++ "<p><span><strong>" ++ api_ruby ++ "</strong> tail</span></p></div>";
+    var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, api, &nodes);
+    var root: profile.TextElement = .{ .tag = "div", .physical_ancestry_complete = true };
+    const context: compiler.Context = .{ .namespace_catalog = &ns, .title = "Page" };
+    const origin = (try missingStyleOrigin(a, ns.wiki)).origin;
+    for (0..7) |mode| {
+        const get = switch (mode) {
+            0 => root_open ++ "<p><span><strong>" ++ get_ruby ++ "</strong> tail</span></p></div>",
+            1 => root_open ++ "<div class='mw-heading'><p><span><strong>" ++ get_ruby ++ "</strong> tail</span></p></div></div>",
+            2 => root_open ++ "<p>" ++ get_ruby ++ get_ruby ++ "</p></div>",
+            3 => root_open ++ "<p><ruby>foreign<rp>(</rp><rt>reading</rt><rp>)</rp></ruby></p></div>",
+            4, 5, 6 => root_open ++ "<p>" ++ get_ruby ++ "</p></div>",
+            else => unreachable,
+        };
+        var get_nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, &ns, get, &get_nodes);
+        const input = if (mode == 4) source ++ " extra" else source;
+        var selected = context;
+        if (mode == 5) selected.namespace_catalog = null;
+        const proofs = try observedRootInlineRubyProofs(a, &ns, input, api, nodes.items, get, get_nodes.items,
+            "outer", &root, &.{}, selected, if (mode == 6) "https://foreign.invalid" else origin);
+        if (mode < 2) {
+            try std.testing.expectEqual(@as(usize, 1), proofs.len);
+            try std.testing.expectEqual(mode == 1, profile.Profile.hasClass(proofs[0].classes, "mw-heading"));
+        } else try std.testing.expectEqual(@as(usize, 0), proofs.len);
+    }
+    // A foreign occurrence still needs a complete admitted captured Ruby.
+    // Keep the original malformed captured input as a separate intake refusal.
+    try std.testing.expectError(error.InvalidFigurePageObservations,
+        observedTextClassScopeWithElements(a, &ns, root_open ++ "<p><ruby>foreign</ruby></p></div>", null));
+    const get = root_open ++ "<p>" ++ get_ruby ++ "</p></div>";
+    var get_nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, get, &get_nodes);
+    for ([_][]const u8{ "<nowiki>\n" ++ source ++ "\n</nowiki>", "<div>\n" ++ source ++ "\n</div>",
+        "{|\n|-\n|\n" ++ source ++ "\n|}", "* " ++ source, " " ++ source, source ++ "\n" ++ source }) |other| {
+        try std.testing.expectEqual(@as(usize, 0), (try observedRootInlineRubyProofs(a, &ns, other,
+            api, nodes.items, get, get_nodes.items, "", &root, &.{}, context, origin)).len);
+    }
+}
+
+test "current GET redlink fragment is exact source metadata before ordinary occurrence correspondence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    const origin = (try missingStyleOrigin(a, ns.wiki)).origin;
+    const token = "[[:あいだ#ภาษาญี่ปุ่น|あいだ]]";
+    const html = "<a rel=\"mw:WikiLink\" href=\"https://th.wiktionary.org/wiki/あいだ?action=edit&amp;redlink=1#ภาษาญี่ปุ่น\" title=\"あいだ (ไม่มีหน้านี้)\" class=\"new\" typeof=\"mw:LocalizedAttrs\" data-mw-i18n='{\"title\":{\"lang\":\"x-page\",\"key\":\"red-link-title\",\"params\":[\"あいだ\"]}}'>あいだ</a>";
+    const tag = currentLiteralHtmlTagAt(html, 0).?;
+    const original = try inventory(a, tag);
+    const context: compiler.Context = .{ .namespace_catalog = &ns, .title = "間" };
+    try std.testing.expect(try noteInlineCorrespondsIn(a, &ns, token, html, 0, false, true, context, origin));
+    try std.testing.expect(!try noteInlineCorrespondsIn(a, &ns, token, html, 0, false, true, context, null));
+    for ([_]Attribute{
+        .{ .name = "href", .value = "https://th.wiktionary.org/wiki/あいだ?action=edit&redlink=1#foreign" },
+        .{ .name = "href", .value = "https://foreign.invalid/wiki/あいだ?action=edit&redlink=1#ภาษาญี่ปุ่น" },
+        .{ .name = "href", .value = "https://th.wiktionary.org/wiki/foreign?action=edit&redlink=1#ภาษาญี่ปุ่น" },
+        .{ .name = "href", .value = "https://th.wiktionary.org/wiki/あいだ?action=edit&redlink=1#" },
+        .{ .name = "href", .value = "https://th.wiktionary.org/wiki/あいだ?action=edit&redlink=1#ภาษาญี่ปุ่น#extra" },
+        .{ .name = "data-mw-i18n", .value = "{\"title\":{\"lang\":\"x-page\",\"key\":\"red-link-title\",\"params\":[\"foreign\"]}}" },
+    }) |edit| {
+        const attrs = try a.dupe(Attribute, original.attributes);
+        for (attrs) |*attribute| if (equal(attribute.name, edit.name)) { attribute.value = edit.value; };
+        try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, ":あいだ#ภาษาญี่ปุ่น", .{ .attributes = attrs }, origin));
+    }
+    try std.testing.expect(!try orderedDivLinkCorresponds(a, &ns, ":あいだ", original, origin));
+}
+
+const IntrinsicCellSpace10Test = struct {
+    const attrs = " border=\"1\" cellpadding=\"4\" cellspacing=\"0\" style=\"border:1px solid #aaa; border-collapse:collapse\"";
+    fn source(a: A, body: []const u8) ![]const u8 {
+        return std.mem.concat(a, u8, &.{ "{|", attrs, "\n|-\n|", body, "\n|}" });
+    }
+    fn check(a: A, ns: *const namespaces.Registry, styles: *const profile.Profile,
+        body: []const u8, captured: []const u8, accepted: bool, captured_match: bool) !void
+    {
+        const input = try source(a, body);
+        const html = try std.mem.concat(a, u8, &.{
+            "<div class=\"mw-content-ltr mw-parser-output\" lang=\"ku\" dir=\"ltr\"><table", attrs,
+            "><tbody><tr><td>", captured, "</td></tr></tbody></table></div>" });
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, ns, html, &nodes);
+        const full = try a.alloc(profile.ObservedStyleNode, nodes.items.len + 2);
+        full[0] = .{ .tag = "html", .parent = null, .attributes = &.{} };
+        full[1] = .{ .tag = "body", .parent = 0, .attributes = &.{} };
+        for (nodes.items, 0..) |node, index| full[index + 2] = .{
+            .tag = node.tag.name, .parent = if (node.parent) |parent| @intCast(parent + 2) else 1,
+            .attributes = try figureObservedAttributes(a, node.attributes),
+            .empty = figureObservedEmpty(html, node), .has_text = figureObservedHasText(html, nodes.items, index),
+        };
+        const identity = try compiler.Renderer.intrinsicTableIdentityAlloc(a, input, 0,
+            .{ .title = "Other", .namespace_catalog = ns },
+            .{ .intrinsic_viewport = true, .styles = styles, .nodes = full, .root = 2, .table = 3 });
+        if (!accepted) { try std.testing.expect(identity == null); return; }
+        const cells = identity orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(std.mem.count(u8, body, "||") + 1, cells.len);
+        // Existing cellContent already chooses its borrowed start after raw
+        // leading spaces. The graph's preserved trailing range stays exact.
+        const first_body = std.mem.trimStart(u8, body[0 .. std.mem.indexOf(u8, body, "||") orelse body.len], " ");
+        try std.testing.expectEqualStrings(first_body, cells[0].source_body);
+        const body_at = std.mem.indexOf(u8, input, first_body) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(cells[0].source_body.ptr == input[body_at..].ptr);
+        for (cells) |cell| try std.testing.expectEqual(captured_match,
+            try intrinsicTableCapturedCellMatches(a, html, nodes.items, 2, cell));
+    }
+    fn render(a: A, ns: *const namespaces.Registry, styles: *const profile.Profile,
+        input: []const u8) !encoder.presentation_types.Stored
+    {
+        // Explicitly controlled empty profile; this is ordinary source/body
+        // boundary parity, not qualification of the genuine KU stylesheets.
+        var renderer: compiler.Renderer = .{ .a = a,
+            .context = .{ .namespace_catalog = ns, .table_styles = styles, .text_paint_styles = styles } };
+        const blocks = try renderer.renderBody(input);
+        const codec = encoder.presentation_codec;
+        const bytes = try codec.encodeBuildAlloc(a, &[_]compiler.Span{},
+            &[_]struct { level: u8 = 2, title: []const u8 = "Boundary", blocks: []const compiler.Block }{.{ .blocks = blocks }},
+            encoder.presentation_types.Layout{}, try renderer.finishReferences(), renderer.media.items);
+        const stored = try codec.decodeAlloc(a, bytes, "Boundary", .language, .{ .code = "ku", .heading = "Boundary" });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+        return stored;
+    }
+};
+
+test "intrinsic single line cell boundary spaces preserve source and ordinary body action codec semantics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, MissingServedTesting.namespace); defer ns.deinit();
+    var styles = try profile.parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    const T = IntrinsicCellSpace10Test;
+    // Retained KU cell101 is exactly this closed CENTER plus ASCII space.
+    // Parser.php1431/1434/1439 trims initial cell data, not the source receipt.
+    try T.check(a, &ns, &styles, "<center>-</center> ", "<center>-</center>", true, true);
+    // The actual failing cell ends at ||, not a physical LF. The second cell
+    // remains independently matched; no optional LF lends this first proof.
+    try T.check(a, &ns, &styles, "<center>-</center> ||x", "<center>-</center></td><td>x", true, true);
+    try T.check(a, &ns, &styles, "  <center>-</center>  ", "<center>-</center>\n", true, true);
+    const link = "<a href=\"/wiki/pars%C3%AE\" title=\"parsî\">parsî</a>";
+    try T.check(a, &ns, &styles, "[[parsî]] ", link, true, true);
+    try T.check(a, &ns, &styles, "[[parsî]] ", link ++ "\n", true, true);
+    // Interior/inline-child whitespace and characters remain owned by their
+    // exact gap; trimming a cell edge cannot manufacture their correspondence.
+    try T.check(a, &ns, &styles, "<b>a</b> <i>b</i>", "<b>a</b><i>b</i>", false, false);
+    try T.check(a, &ns, &styles, "<b>a</b> <i>b</i>", "<b>a</b> <i>b</i>", true, true);
+    try T.check(a, &ns, &styles, "<center> </center> ", "<center></center>", false, false);
+    try T.check(a, &ns, &styles, "<center>-</center>&nbsp; ", "<center>-</center>", false, false);
+    try T.check(a, &ns, &styles, "<center>-</center> x ", "<center>-</center> y", true, false);
+    try T.check(a, &ns, &styles, "<center>-</center>\nX", "<center>-</center>\nX", false, false);
+    try T.check(a, &ns, &styles, "[[foreign]] ", link, false, false);
+    try T.check(a, &ns, &styles, "[[parsî]] ", "<a href=\"/wiki/foreign\" title=\"parsî\">parsî</a>", false, false);
+    const input = try T.source(a, "[[parsî]] ");
+    const reference = try T.source(a, "[[parsî]]");
+    const actual = try T.render(a, &ns, &styles, input);
+    try std.testing.expectEqualDeep(try T.render(a, &ns, &styles, reference), actual);
+    const table = actual.entry.sections[0].blocks[0].table orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+    const spans = table.rows[0].cells[0].spans;
+    try std.testing.expectEqual(@as(usize, 1), spans.len);
+    try std.testing.expect(spans[0].kind == .link);
+    try std.testing.expectEqualStrings("parsî", spans[0].text);
+    try std.testing.expectEqualStrings("parsî", spans[0].target);
+}
+
+
+test "explicit closed DD sibling publication retains literal Mai Jahr neighbours and refuses implicit list recovery" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    for ([_][]const u8{ @embedFile("testdata/de-mai-figure-style/original.json"), @embedFile("testdata/de-mai-figure-style/reference.json") }, 0..) |bytes, case_index| {
+        var stage: []const u8 = "response_source";
+        var source_count: usize = 0; var matched_count: usize = 0;
+        var current_index: ?usize = null; var parent_index: ?usize = null; var previous_index: ?usize = null;
+        errdefer std.debug.print("MAI_DD_CERT case={d} stage={s} nodes={d} matches={d} index={?d} parent={?d} previous={?d}\n",
+            .{ case_index, stage, source_count, matched_count, current_index, parent_index, previous_index });
+        const doc = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+        const supplied = try responseSource(a, &ns, doc.pages[0]);
+        var source: std.ArrayList(ObservedSiblingNode) = .empty;
+        stage = "capture_inventory";
+        _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &source);
+        source_count = source.items.len;
+        stage = "complete_raw_inventory";
+        const mapped = try CompleteCapturedSiblingsTesting.observed(a, source.items);
+        try std.testing.expect(try figureObservedCompleteSiblings(a, supplied.html, source.items, mapped, 0, source.items[0].attributes));
+        stage = "source_plain_and_trailed_tokens";
+        try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, supplied.source, "[[Jahr]]"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, supplied.source, "[[Jahr]]es"));
+        var matches: usize = 0; var trailed: usize = 0;
+        for (source.items, 0..) |node, index| {
+            if (!node.tag.is("a")) continue;
+            var is_jahr = false;
+            for (node.attributes.attributes) |attribute| if (equal(attribute.name, "title") and equal(attribute.value, "Jahr")) { is_jahr = true; };
+            if (!is_jahr) continue;
+            current_index = index;
+            stage = "plain_label_domain";
+            const closing_at = node.inner_end orelse return error.TestUnexpectedResult;
+            const plain_label = supplied.html[node.tag.end..closing_at];
+            // The source issuer selects the untrailed [[Jahr]] occurrence.
+            // Its separate [[Jahr]]es occurrence has the same title/target but
+            // a different captured label and remains outside that operation.
+            if (!equal(plain_label, "Jahr")) {
+                try std.testing.expectEqualStrings("Jahres", plain_label);
+                trailed += 1;
+                continue;
+            }
+            stage = "jahr_parent";
+            const parent = node.parent orelse return error.TestUnexpectedResult;
+            parent_index = parent;
+            try std.testing.expect(source.items[parent].tag.is("dd") and mapped[parent].known_complete_child_elements);
+            stage = "jahr_previous";
+            const previous = node.previous orelse return error.TestUnexpectedResult;
+            previous_index = previous;
+            var is_monat = false;
+            for (source.items[previous].attributes.attributes) |attribute| if (equal(attribute.name, "title") and equal(attribute.value, "Monat")) { is_monat = true; };
+            stage = "previous_monat_title";
+            try std.testing.expect(is_monat);
+            stage = "reciprocal_previous";
+            try std.testing.expectEqual(@as(?u32, @intCast(previous)), mapped[index].known_previous_element_sibling);
+            try std.testing.expectEqual(@as(?u32, @intCast(index)), mapped[previous].known_next_element_sibling);
+            stage = "jahr_last_child";
+            try std.testing.expect(mapped[index].known_no_next_element_sibling and mapped[index].known_next_element_sibling == null);
+            matches += 1; matched_count = matches;
+        }
+        stage = "unique_jahr_count";
+        try std.testing.expectEqual(@as(usize, 1), matches);
+        stage = "unique_trailed_label_count";
+        try std.testing.expectEqual(@as(usize, 1), trailed);
+    }
+    try std.testing.expectEqualStrings("de", ns.content_language);
+    for ([_]struct { body: []const u8, reject_at_intake: bool }{
+        .{ .body = "<dl><dd><a>x</a><dd><a>y</a></dd></dl>", .reject_at_intake = true },
+        .{ .body = "<dl><dd><a>x</a></dl>", .reject_at_intake = true },
+        .{ .body = "<dd><a>x</a></dd>", .reject_at_intake = false },
+        .{ .body = "<dl><dd><div><dd><a>x</a></dd></div></dd></dl>", .reject_at_intake = false },
+    }) |case| {
+        const body = case.body;
+        var stage: []const u8 = "implicit_inventory";
+        errdefer std.debug.print("MAI_DD_CERT negative={s} stage={s}\n", .{ body, stage });
+        const html = try std.mem.concat(a, u8, &.{ "<div class=\"mw-content-ltr mw-parser-output\" lang=\"de\" dir=\"ltr\">", body, "</div>" });
+        var source: std.ArrayList(ObservedSiblingNode) = .empty;
+        if (case.reject_at_intake) {
+            // Strict returned-HTML intake rejects unmatched DD closures before
+            // a complete child inventory can be offered for publication.
+            try std.testing.expectError(error.InvalidFigurePageObservations,
+                observedTextClassScopeWithElements(a, &ns, html, &source));
+            continue;
+        }
+        _ = try observedTextClassScopeWithElements(a, &ns, html, &source);
+        const mapped = try CompleteCapturedSiblingsTesting.observed(a, source.items);
+        stage = "implicit_complete_refusal";
+        try std.testing.expect(!try figureObservedCompleteSiblings(a, html, source.items, mapped, 0, source.items[0].attributes));
+        stage = "implicit_atomic_publication";
+        for (mapped) |node| try std.testing.expect(!node.known_complete_child_elements);
+    }
+}
+
+test "retained positive KU rows reuse authenticated Book source image without erasing row consumption" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, MissingServedTesting.namespace); defer ns.deinit();
+    const shape = try FullGetRootTesting.shape(a);
+    const page = try FullGetRootTesting.raw(a, shape);
+    var files = try FullGetRootTesting.registry(a, &ns); defer files.deinit();
+    var book = try FullGetRootTesting.book(a, &ns, &files, shape); defer book.deinit();
+    const supplied = try responseSource(a, &ns, page);
+    const doc = try MissingServedTesting.document(a);
+    var parent = try profile.parseForTargetAlloc(a, "", .screen); defer parent.deinit();
+    const context: compiler.Context = .{ .title = page.title, .namespace_catalog = &ns };
+    const selected = (try book.selectPageStylesForCompiler(a, &ns, page.namespace_id, page.page_id, page.revision_id,
+        page.title, supplied.source, supplied.source, Testing.hash(doc.missing_link_styles.?.defaults), &parent, context)) orelse return error.TestUnexpectedResult;
+    const rows = selected.scope.closed_row_colors orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 22), rows.owners.len);
+    try std.testing.expect(rows.absent_source == null);
+    const image = selected.scope.page_source_image orelse return error.TestUnexpectedResult;
+    try std.testing.expect(image.styles == selected.styles and image.root == selected.scope.page_style_root);
+    try std.testing.expect(image.source.ptr == supplied.source.ptr and image.source.len == supplied.source.len);
+    try std.testing.expect(image.snapshot.ptr == book.pages[0].source.ptr and image.snapshot.len == book.pages[0].source.len);
+    try std.testing.expect(profile.pageSourceImageCurrent(image));
+    // The same borrowed storage is not an independent immutable image.
+    try std.testing.expect((try selectedPageSourceImage(a, selected.styles, image.root,
+        image.snapshot, image.snapshot, null)) == null);
+    try std.testing.expect(selected.figure_styles.len != 0 and selected.figure_styles[0].contexts.len == 2);
+    // Real complete source/captured roles, with an explicitly controlled counter
+    // policy. This does not qualify the genuine KU stylesheet's other effects.
+    var policy = try profile.parseForTargetAlloc(a,
+        ".mw-parser-output[data-mw-parsoid-version]{counter-reset:page-links}" ++
+        ".mw-parser-output[data-mw-parsoid-version] a.autonumber:empty::after{content:counter(page-links);counter-increment:page-links}", .screen);
+    defer policy.deinit();
+    var policy_image = image.*; policy_image.styles = &policy;
+    var contexts = [_]profile.FigureObservedContext{ selected.figure_styles[0].contexts[0], selected.figure_styles[0].contexts[1] };
+    for (&contexts) |*current| current.styles = &policy;
+    const figures = try a.dupe(SelectedFigureStyle, selected.figure_styles);
+    figures[0].contexts = &contexts;
+    const stored = book.pages[0].page_styles orelse return error.TestUnexpectedResult;
+    const proof = (try observedUnobservedPageCounters(a, stored, &policy, image.root,
+        supplied.source, &policy_image, figures, context)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(proof.source_image == &policy_image and proof.source_snapshot.ptr == book.pages[0].source.ptr);
+    try std.testing.expect(profile.unobservedCounterSourceCurrent(&proof));
+    try std.testing.expectEqual(@as(usize, 22), selected.scope.closed_row_colors.?.owners.len);
+    try std.testing.expect(selected.scope.closed_row_colors.?.absent_source == null);
+    var cached = context; cached.external_links_prepared = true;
+    try std.testing.expect((try observedUnobservedPageCounters(a, stored, &policy, image.root,
+        supplied.source, &policy_image, figures, cached)) == null);
+    try std.testing.expect((try observedUnobservedPageCounters(a, stored, &policy, image.root,
+        supplied.source, &policy_image, figures, null)) == null);
+    // Anonymous external labels are generated by the maintained ordinary
+    // producer even when the raw source contains no autonumber/CSS token.
+    const anonymous = try std.mem.concat(a, u8, &.{ supplied.source, "\n[https://example.test]\n" });
+    const generated = try compiler.preparePageExternalLinksAlloc(a, anonymous, context);
+    try std.testing.expect(generated.generated_external_labels != null and generated.generated_external_labels.? > 0);
+    const anonymous_image: profile.PageSourceImage = .{ .styles = &policy, .root = image.root,
+        .source = anonymous, .snapshot = try a.dupe(u8, anonymous) };
+    try std.testing.expect((try observedUnobservedPageCounters(a, stored, &policy, image.root,
+        anonymous, &anonymous_image, figures, context)) == null);
+    const old = supplied.source[0]; @constCast(supplied.source)[0] = 'X';
+    try std.testing.expect(!profile.pageSourceImageCurrent(image) and !profile.unobservedCounterSourceCurrent(&proof));
+    @constCast(supplied.source)[0] = old;
+    try std.testing.expect(profile.unobservedCounterSourceCurrent(&proof));
 }

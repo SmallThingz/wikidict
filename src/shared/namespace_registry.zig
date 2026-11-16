@@ -29,6 +29,9 @@ pub const ManualConversionContext = struct {
     fallbacks: []const []const u8,
     separator_variants: []const []const u8,
     automatic_identity: bool,
+    // Pinned LanguageConverter static default; not a request preference and
+    // deliberately distinct from the body choice fallback.
+    static_default_variant: ?[]const u8 = null,
     source_core: []const u8,
     source_converter_sha256: []const u8,
     siteinfo_sha256: []const u8,
@@ -312,6 +315,9 @@ pub const Registry = struct {
         std.crypto.hash.sha2.Sha256.hash(raw, &site_digest, .{});
         self.manual_conversion_context = .{
             .base = self.content_language, .fallbacks = source_profile.fallbacks,
+            // The exact four converter profiles above all map to their main
+            // code in this core's languagesWithStaticDefaultVariant table.
+            .static_default_variant = self.content_language,
             .separator_variants = source_profile.separators,
             // Defaults alone do not prove the effective table: ordinary
             // Conversiontable/<base> overrides must be authenticated separately.
@@ -851,5 +857,24 @@ test "captured ZH manual choices bind exact base variants without automatic conv
         try std.testing.expect(!std.mem.eql(u8, changed, raw));
         try registry.attachLanguageConversion(changed);
         try std.testing.expect(registry.manual_conversion_context == null);
+    }
+}
+
+test "static title default is a pinned converter source capability distinct from body fallback" {
+    const a = std.testing.allocator;
+    for ([_]struct { namespace: []const u8, site: []const u8, base: []const u8 }{
+        .{ .namespace = @embedFile("testdata/sr-sampa-tt/namespace-registry.tsv"), .site = @embedFile("testdata/sr-sampa-tt/namespace-siteinfo.raw.json"), .base = "sr" },
+        .{ .namespace = @embedFile("testdata/zh-manual-choices/namespace-registry.tsv"), .site = @embedFile("testdata/zh-manual-choices/namespace-siteinfo.raw.json"), .base = "zh" },
+    }) |title_case_data| {
+        var ns = try Registry.init(a, title_case_data.namespace); defer ns.deinit();
+        try ns.attachLanguageConversion(title_case_data.site);
+        const profile = ns.manual_conversion_context orelse return error.TestUnexpectedResult;
+        const selected = profile.static_default_variant orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(title_case_data.base, selected);
+        try std.testing.expect(profile.fallbacks.len > 0 and !std.mem.eql(u8, profile.fallbacks[0], selected));
+        try std.testing.expect(!profile.automatic_identity and profile.effective_override == null);
+        const foreign = try std.mem.replaceOwned(u8, a, title_case_data.site, "79b81ba96674efc8a803fc956bc501d347d440d2", "0000000000000000000000000000000000000000"); defer a.free(foreign);
+        try ns.attachLanguageConversion(foreign);
+        try std.testing.expect(ns.manual_conversion_context == null);
     }
 }

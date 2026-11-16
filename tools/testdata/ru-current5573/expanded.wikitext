@@ -1,0 +1,103 @@
+= Японский[[Категория:Японский язык|𛀁]] =
+
+=== Символ хираганы (архаический) ===
+[[Файл:Hiragana E 01.svg|thumb|150px|Архаический символ хираганы Е]]
+'''𛀁''' (е, ye)
+
+==== Использование ====
+* <span lang="ja">[[𛀁#Японский|𛀁]]</span> и <span lang="ja">[[𛀀#Японский|𛀀]]</span> использовались в японском языке до X века — в то время фонемы /e/, /je/ и /we/ были различимы.
+: {| class="wikitable" style="text-align: center;"
+|-
+|
+! /e/ !! /je/
+|-
+! хирагана
+| [[японский язык|яп.]]&#160;<span lang="ja">[[え#Японский|え]]</span> || [[японский язык|яп.]]&#160;<span lang="ja">[[𛀁#Японский|𛀁]]</span>
+|-
+! катакана
+| [[японский язык|яп.]]&#160;<span lang="ja">[[𛀀#Японский|𛀀]]</span> || [[японский язык|яп.]]&#160;<span lang="ja">[[エ#Японский|エ]]</span>
+|}
+: В современном японском языке фонемы /e/ и /je/ слились и произносятся как /e/ и записываются как <span lang="ja">[[え#Японский|え]]</span> и <span lang="ja">[[エ#Японский|エ]]</span>.
+*В период, когда /je/ и /e/ имели чёткое разграничение, японский язык записывался в основном при помощи [[w:Манъёгана|манъёганы]] и поэтому 𛀁 и 𛀀 обычно не включаются в [[w:Историческая орфография каны|историческую орфографию каны]].
+
+=== Произношение ===
+<ul class="transcription " style="margin-left:0; list-style:none;"><li>[[w:Международный фонетический алфавит|МФА]]:&nbsp;&#91;<span class="IPA" style="white-space: nowrap;">je</span>&#93;</li></ul>
+
+=== Этимология ===
+Упрощенние иероглифа [[江]].
+
+<div style="width:auto;margin:0px;overflow:auto;">
+{|class="wikitable" style="clear:none;margin:0.2em auto;width:70%;border-collapse:collapse;"
+|-
+!colspan="11" style="background:#efefef;text-align:center"|Хирагана
+|-
+|style="text-align:center;width:9%"|[[ん]]
+|style="text-align:center;width:9%"|[[わ]][[ゎ]]
+|style="text-align:center;width:9%"|[[ら]]
+|style="text-align:center;width:9%"|[[や]][[ゃ]]
+|style="text-align:center;width:9%"|[[ま]]
+|style="text-align:center;width:9%"|[[は]][[ば]][[ぱ]]
+|style="text-align:center;width:9%"|[[な]]
+|style="text-align:center;width:9%"|[[た]][[だ]]
+|style="text-align:center;width:9%"|[[さ]][[ざ]]
+|style="text-align:center;width:9%"|[[か]][[ゕ]][[が]]
+|style="text-align:center;width:9%"|[[あ]][[ぁ]]
+|-
+|style="text-align:center;width:9%"|
+|style="text-align:center;width:9%"|[[ゐ]]
+|style="text-align:center;width:9%"|[[り]]
+|style="text-align:center;width:9%"|
+|style="text-align:center;width:9%"|[[み]]
+|style="text-align:center;width:9%"|[[ひ]][[び]][[ぴ]]
+|style="text-align:center;width:9%"|[[に]]
+|style="text-align:center;width:9%"|[[ち]][[ぢ]]
+|style="text-align:center;width:9%"|[[し]][[じ]]
+|style="text-align:center;width:9%"|[[き]][[ぎ]]
+|style="text-align:center;width:9%"|[[い]][[ぃ]]
+|-
+|style="text-align:center;width:9%"|
+|style="text-align:center;width:9%"|
+|style="text-align:center;width:9%"|[[る]]
+|style="text-align:center;width:9%"|[[ゆ]][[ゅ]]
+|style="text-align:center;width:9%"|[[む]]
+|style="text-align:center;width:9%"|[[ふ]][[ぶ]][[ぷ]]
+|style="text-align:center;width:9%"|[[ぬ]]
+|style="text-align:center;width:9%"|[[つ]][[っ]][[づ]]
+|style="text-align:center;width:9%"|[[す]][[ず]]
+|style="text-align:center;width:9%"|[[く]][[ぐ]]
+|style="text-align:center;width:9%"|[[う]][[ぅ]][[ゔ]]
+|-
+|style="text-align:center;width:9%"|
+|style="text-align:center;width:9%"|[[ゑ]]
+|style="text-align:center;width:9%"|[[れ]]
+|style="text-align:center;width:9%"|
+|style="text-align:center;width:9%"|[[め]]
+|style="text-align:center;width:9%"|[[へ]][[べ]][[ぺ]]
+|style="text-align:center;width:9%"|[[ね]]
+|style="text-align:center;width:9%"|[[て]][[で]]
+|style="text-align:center;width:9%"|[[せ]][[ぜ]]
+|style="text-align:center;width:9%"|[[け]][[ゖ]][[げ]]
+|style="text-align:center;width:9%"|[[え]][[ぇ]]
+|-
+|style="text-align:center;width:9%"|
+|style="text-align:center;width:9%"|[[を]]
+|style="text-align:center;width:9%"|[[ろ]]
+|style="text-align:center;width:9%"|[[よ]][[ょ]]
+|style="text-align:center;width:9%"|[[も]]
+|style="text-align:center;width:9%"|[[ほ]][[ぼ]][[ぽ]]
+|style="text-align:center;width:9%"|[[の]]
+|style="text-align:center;width:9%"|[[と]][[ど]]
+|style="text-align:center;width:9%"|[[そ]][[ぞ]]
+|style="text-align:center;width:9%"|[[こ]][[ご]]
+|style="text-align:center;width:9%"|[[お]][[ぉ]]
+|-
+|colspan="11" class="Unicode"|
+<div style="clear:both;background:#efefef;text-align:center">'''Дополнительные символы'''</div>
+<div style="text-align:center"><span style="float:left;width:2.1em">[[ー]]</span><span style="float:left;width:2.1em">[[ゝ]]</span><span style="float:left;width:2.1em">[[ゞ]]</span><span style="float:left;width:2.1em">[[ゟ]]</span><span style="float:left;width:2.1em">[[ゔ]]</span></div>
+|-
+|colspan="11" class="Unicode"|
+
+|}
+</div>[[Категория:Символы хираганы]]
+
+[[Категория:Хирагана/ja]]

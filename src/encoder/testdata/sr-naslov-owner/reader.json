@@ -1,0 +1,3759 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "аверз",
+  "kind": "language",
+  "language": "Српски",
+  "match_mode": "exact-utf8",
+  "record_count": 1,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0,
+          1,
+          2
+        ]
+      },
+      "title": "аверз",
+      "display_title": [],
+      "kind": "language",
+      "language": "Српски",
+      "language_code": "sr",
+      "sections": [
+        {
+          "level": 2,
+          "title": "аверз (српски)",
+          "anchor": "аверз_(српски)",
+          "anchor_fallback": ".D0.B0.D0.B2.D0.B5.D1.80.D0.B7_.28.D1.81.D1.80.D0.BF.D1.81.D0.BA.D0.B8.29",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "аверз ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "(",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 0.800000011920929,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "српски",
+                  "target": "Викиречник:Српски",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 0.800000011920929,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ")",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 0.800000011920929,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 2,
+              "anchor": "аверз_(српски)",
+              "anchor_fallback": ".D0.B0.D0.B2.D0.B5.D1.80.D0.B7_.28.D1.81.D1.80.D0.BF.D1.81.D0.BA.D0.B8.29",
+              "table": null
+            },
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [],
+                        "header": false,
+                        "colspan": 3,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "blocks": [
+                          {
+                            "kind": "paragraph",
+                            "depth": 0,
+                            "spans": [],
+                            "feature": null,
+                            "list_path": "",
+                            "number": "",
+                            "level": 0,
+                            "anchor": "",
+                            "anchor_fallback": "",
+                            "table": null,
+                            "figure": {
+                              "missing_content": {
+                                "label": {
+                                  "kind": "external_link",
+                                  "text": "Датотека:Gr 2euro.jpg",
+                                  "target": "//commons.wikimedia.org/wiki/Special:UploadWizard?uselang=sr&wpDestFile=Gr_2euro.jpg",
+                                  "trail": "",
+                                  "language": "sr",
+                                  "classes": "",
+                                  "direction": "ltr",
+                                  "explanation": "",
+                                  "tooltip": "Датотека:Gr 2euro.jpg",
+                                  "foreground": "#bf3c2c",
+                                  "font_scale": 0.8271999955177307,
+                                  "font_scale_basis": "normal_body",
+                                  "bold": false,
+                                  "italic": false,
+                                  "code": false,
+                                  "small": false,
+                                  "superscript": false,
+                                  "subscript": false,
+                                  "strike": false,
+                                  "underline": false,
+                                  "role": "normal"
+                                },
+                                "width": {
+                                  "unit": "px",
+                                  "value": 200
+                                },
+                                "line_height": {
+                                  "unit": "em",
+                                  "value": 1.3235199451446533
+                                }
+                              },
+                              "caption": [
+                                {
+                                  "kind": "text",
+                                  "text": "[1] Аверз грчког 2-евра",
+                                  "target": "",
+                                  "trail": "",
+                                  "language": "sr",
+                                  "classes": "",
+                                  "direction": "ltr",
+                                  "explanation": "",
+                                  "tooltip": null,
+                                  "foreground": "#202122",
+                                  "font_scale": 0.7779200077056885,
+                                  "font_scale_basis": "normal_body",
+                                  "bold": false,
+                                  "italic": false,
+                                  "code": false,
+                                  "small": false,
+                                  "superscript": false,
+                                  "subscript": false,
+                                  "strike": false,
+                                  "underline": false,
+                                  "role": "normal"
+                                }
+                              ],
+                              "caption_text_align": "left",
+                              "format": "thumbnail",
+                              "frame_min_width": {
+                                "unit": "px",
+                                "value": 100
+                              },
+                              "table_caption_layout": {
+                                "collapse": "collapse",
+                                "wrapper": {
+                                  "clear": "none",
+                                  "margin_values": {
+                                    "top": {
+                                      "length": {
+                                        "unit": "px",
+                                        "value": 0
+                                      }
+                                    },
+                                    "right": {
+                                      "auto": {}
+                                    },
+                                    "bottom": {
+                                      "length": {
+                                        "unit": "em",
+                                        "value": 0.4399999976158142
+                                      }
+                                    },
+                                    "left": {
+                                      "auto": {}
+                                    }
+                                  }
+                                },
+                                "table_border": {
+                                  "top": {
+                                    "solid": {
+                                      "width": {
+                                        "unit": "px",
+                                        "value": 1
+                                      },
+                                      "color": {
+                                        "kind": "rgb",
+                                        "value": "#c8ccd1"
+                                      }
+                                    }
+                                  },
+                                  "right": {
+                                    "solid": {
+                                      "width": {
+                                        "unit": "px",
+                                        "value": 1
+                                      },
+                                      "color": {
+                                        "kind": "rgb",
+                                        "value": "#c8ccd1"
+                                      }
+                                    }
+                                  },
+                                  "bottom": {
+                                    "none": {}
+                                  },
+                                  "left": {
+                                    "solid": {
+                                      "width": {
+                                        "unit": "px",
+                                        "value": 1
+                                      },
+                                      "color": {
+                                        "kind": "rgb",
+                                        "value": "#c8ccd1"
+                                      }
+                                    }
+                                  }
+                                },
+                                "caption_border": {
+                                  "top": {
+                                    "none": {}
+                                  },
+                                  "right": {
+                                    "solid": {
+                                      "width": {
+                                        "unit": "px",
+                                        "value": 1
+                                      },
+                                      "color": {
+                                        "kind": "rgb",
+                                        "value": "#c8ccd1"
+                                      }
+                                    }
+                                  },
+                                  "bottom": {
+                                    "solid": {
+                                      "width": {
+                                        "unit": "px",
+                                        "value": 1
+                                      },
+                                      "color": {
+                                        "kind": "rgb",
+                                        "value": "#c8ccd1"
+                                      }
+                                    }
+                                  },
+                                  "left": {
+                                    "solid": {
+                                      "width": {
+                                        "unit": "px",
+                                        "value": 1
+                                      },
+                                      "color": {
+                                        "kind": "rgb",
+                                        "value": "#c8ccd1"
+                                      }
+                                    }
+                                  }
+                                },
+                                "media": {
+                                  "strut": {
+                                    "font_scale": 0.8799999952316284,
+                                    "bold": false,
+                                    "italic": false,
+                                    "code": false,
+                                    "language": "sr",
+                                    "direction": "ltr"
+                                  },
+                                  "vertical_align": "baseline",
+                                  "max_width": null,
+                                  "positioning": null,
+                                  "after": null,
+                                  "focus_outline": null
+                                },
+                                "caption_before": {
+                                  "margins": {
+                                    "top": {
+                                      "unit": "px",
+                                      "value": 0
+                                    },
+                                    "right": {
+                                      "unit": "px",
+                                      "value": 0
+                                    },
+                                    "bottom": {
+                                      "unit": "px",
+                                      "value": 0
+                                    },
+                                    "left": {
+                                      "unit": "px",
+                                      "value": 3
+                                    }
+                                  },
+                                  "width": {
+                                    "length": {
+                                      "unit": "px",
+                                      "value": 15
+                                    }
+                                  },
+                                  "float_side": "right",
+                                  "height": {
+                                    "unit": "px",
+                                    "value": 11
+                                  }
+                                },
+                                "viewport_states": [
+                                  {
+                                    "max_width_px": 639,
+                                    "wrapper": {
+                                      "clear": "none",
+                                      "margin_values": {
+                                        "top": {
+                                          "length": {
+                                            "unit": "px",
+                                            "value": 0
+                                          }
+                                        },
+                                        "right": {
+                                          "auto": {}
+                                        },
+                                        "bottom": {
+                                          "length": {
+                                            "unit": "px",
+                                            "value": 0
+                                          }
+                                        },
+                                        "left": {
+                                          "auto": {}
+                                        }
+                                      }
+                                    },
+                                    "media": {
+                                      "strut": {
+                                        "font_scale": 0.8799999952316284,
+                                        "bold": false,
+                                        "italic": false,
+                                        "code": false,
+                                        "language": "sr",
+                                        "direction": "ltr"
+                                      },
+                                      "vertical_align": "baseline",
+                                      "max_width": null,
+                                      "positioning": null,
+                                      "after": null,
+                                      "focus_outline": null
+                                    },
+                                    "caption_before": null
+                                  }
+                                ],
+                                "missing_link_paint": {
+                                  "normal": {
+                                    "foreground": "#bf3c2c",
+                                    "underline": false
+                                  },
+                                  "hover": {
+                                    "foreground": "#9f3526",
+                                    "underline": false
+                                  },
+                                  "active": {
+                                    "foreground": "#612419",
+                                    "underline": false
+                                  },
+                                  "visited": {
+                                    "foreground": "#9f5555",
+                                    "underline": false
+                                  },
+                                  "visited_hover": {
+                                    "foreground": "#854848",
+                                    "underline": false
+                                  },
+                                  "visited_active": {
+                                    "foreground": "#512e2e",
+                                    "underline": false
+                                  },
+                                  "underline_on_focus": false,
+                                  "focus_outline": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 2
+                                    },
+                                    "color": {
+                                      "kind": "rgb",
+                                      "value": "#3366cc"
+                                    },
+                                    "radius": {
+                                      "unit": "px",
+                                      "value": 2
+                                    },
+                                    "offset": {
+                                      "unit": "px",
+                                      "value": 0
+                                    }
+                                  }
+                                }
+                              },
+                              "placement": "center",
+                              "clear": "none",
+                              "margins": {
+                                "top": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "right": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "bottom": {
+                                  "unit": "em",
+                                  "value": 0.4399999976158142
+                                },
+                                "left": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              },
+                              "image_insets": {
+                                "top": {
+                                  "unit": "px",
+                                  "value": 3
+                                },
+                                "right": {
+                                  "unit": "px",
+                                  "value": 3
+                                },
+                                "bottom": {
+                                  "unit": "px",
+                                  "value": 3
+                                },
+                                "left": {
+                                  "unit": "px",
+                                  "value": 3
+                                }
+                              },
+                              "caption_padding": {
+                                "top": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "right": {
+                                  "unit": "px",
+                                  "value": 6
+                                },
+                                "bottom": {
+                                  "unit": "px",
+                                  "value": 6
+                                },
+                                "left": {
+                                  "unit": "px",
+                                  "value": 6
+                                }
+                              },
+                              "caption_font_scale": 0.7779200077056885,
+                              "caption_line_height": {
+                                "unit": "em",
+                                "value": 1.089087963104248
+                              },
+                              "frame_background": {
+                                "kind": "rgb",
+                                "value": "#f8f9fa"
+                              },
+                              "frame_border": {
+                                "kind": "none"
+                              },
+                              "image_background": {
+                                "kind": "rgb",
+                                "value": "#ffffff"
+                              },
+                              "image_border": {
+                                "kind": "solid",
+                                "width": {
+                                  "unit": "px",
+                                  "value": 1
+                                },
+                                "color": {
+                                  "kind": "rgb",
+                                  "value": "#c8ccd1"
+                                }
+                              },
+                              "caption_foreground": {
+                                "kind": "rgb",
+                                "value": "#202122"
+                              },
+                              "caption_background": {
+                                "kind": "rgb",
+                                "value": "#f8f9fa"
+                              }
+                            }
+                          }
+                        ],
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "Падеж",
+                            "target": "Помоћ:Падеж",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f4f4f4",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top",
+                          "width": {
+                            "unit": "px",
+                            "value": 65
+                          }
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "Једнина",
+                            "target": "Помоћ:Једнина",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "Множина",
+                            "target": "Помоћ:Множина",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "Номинатив",
+                            "target": "Помоћ:Номинатив",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f4f4f4",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверз",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверзи",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "Генитив",
+                            "target": "Помоћ:Генитив",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f4f4f4",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверза",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверза",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "Датив",
+                            "target": "Помоћ:Датив",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f4f4f4",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверзу",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверзима",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "Акузатив",
+                            "target": "Помоћ:Акузатив",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f4f4f4",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверз",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверзе",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "Вокатив",
+                            "target": "Помоћ:Вокатив",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f4f4f4",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверзе",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверзи",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "Инструментал",
+                            "target": "Помоћ:Инструментал",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f4f4f4",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверзом",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверзима",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "Локатив",
+                            "target": "Помоћ:Локатив",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f4f4f4",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверзу",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "аверзима",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8799999952316284,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f8f9fa",
+                        "style": {
+                          "text_align": "left",
+                          "vertical_align": "top"
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "geometry": {
+                  "border": null,
+                  "cell_spacing": 0,
+                  "cell_padding": 3,
+                  "width": null
+                },
+                "style": {
+                  "background": "#f8f9fa",
+                  "border": {
+                    "solid": {
+                      "width": {
+                        "unit": "px",
+                        "value": 1
+                      },
+                      "color": "#aaaaaa"
+                    }
+                  },
+                  "collapse": "collapse",
+                  "float_side": "right",
+                  "clear": "right",
+                  "line_height": {
+                    "value": 1.3199999332427979,
+                    "font_scale_basis": "normal_body"
+                  }
+                }
+              }
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Слогови:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Раздвајање речи на слогове",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Раздвајање речи на слогове",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "{{{1}}}",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Раздвајање речи на слогове",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "preformatted",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "а-верз, ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": true,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "множина:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 0.8500000238418579,
+                  "bold": false,
+                  "italic": false,
+                  "code": true,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " а-вер-зи",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": true,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Изговор:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Објашњење изговора по међународном стандарду (IPA) и примери изговора речи",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "IPA",
+                  "target": "Помоћ:МФА",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ": ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "[...] ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "Аудио: ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "audiotable",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 1,
+                  "font_scale_basis": "normal_body",
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "",
+                  "target": "File:Loudspeaker.svg",
+                  "trail": "",
+                  "language": "",
+                  "classes": "wikidict-media wikidict-media-file-4c6f7564737065616b65722e737667 audiotable",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 1,
+                  "font_scale_basis": "normal_body",
+                  "image": {
+                    "file": "Loudspeaker.svg",
+                    "width_px": 12
+                  },
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " · ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "audiotable",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 1,
+                  "font_scale_basis": "normal_body",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "(",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "audiotable",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 0.800000011920929,
+                  "font_scale_basis": "normal_body",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "датотека",
+                  "target": "Image:sr-averz.ogg",
+                  "trail": "",
+                  "language": "",
+                  "classes": "audiotable",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 0.800000011920929,
+                  "font_scale_basis": "normal_body",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ")",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "audiotable",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 0.800000011920929,
+                  "font_scale_basis": "normal_body",
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Значења:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Смисао или семантичко објашњење",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Смисао или семантичко објашњење",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "{{{1}}}",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Смисао или семантичко објашњење",
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "[1] предња страна новцу",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Скраћенице:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Акроними, скраћени облици писања или изговора",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "av",
+                  "target": "av",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ", ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "as",
+                  "target": "as",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Порекло:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Етимологија речи",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "(фран)",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Синоними:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Речи које се у одређеном контексту равноправно користе или могу користити.",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "[1] ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "глава",
+                  "target": "глава",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ", ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "лице",
+                  "target": "лице",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Супротне речи:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Антоними",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "[1] ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "реверз",
+                  "target": "реверз",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Примери:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "{{{1}}}",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "[1]",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Изреке и пословице:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Пробране српске пословице где та реч игра посебну улогу",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Асоцијације:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Асоцијације главне речи",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "[1]",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Изведене речи:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Преводи",
+          "anchor": "Преводи",
+          "anchor_fallback": ".D0.9F.D1.80.D0.B5.D0.B2.D0.BE.D0.B4.D0.B8",
+          "blocks": []
+        },
+        {
+          "level": 3,
+          "title": "Преводи",
+          "anchor": "Преводи_2",
+          "anchor_fallback": ".D0.9F.D1.80.D0.B5.D0.B2.D0.BE.D0.B4.D0.B8_2",
+          "blocks": [
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "• ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "Бошњачки:",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "line_break",
+                            "text": "\n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "• ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "Енглески:",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "line_break",
+                            "text": "\n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "• ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "Италијански:",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "line_break",
+                            "text": "\n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "• ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "Македонски:",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "line_break",
+                            "text": "\n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "• ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "Немачки: [1] ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "Avers",
+                            "target": "Avers",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "external_link",
+                            "text": "☞",
+                            "target": "https://de.wiktionary.org/wiki/Avers",
+                            "trail": "",
+                            "language": "",
+                            "classes": "extiw",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "external_link",
+                            "text": "de",
+                            "target": "https://de.wiktionary.org/wiki/Avers",
+                            "trail": "",
+                            "language": "",
+                            "classes": "extiw",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": true,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0",
+                        "style": {
+                          "border": {
+                            "solid": {
+                              "width": {
+                                "unit": "px",
+                                "value": 5
+                              },
+                              "color": "#eeeeee"
+                            }
+                          },
+                          "padding": {
+                            "top": {
+                              "unit": "px",
+                              "value": 2
+                            },
+                            "right": {
+                              "unit": "px",
+                              "value": 2
+                            },
+                            "bottom": {
+                              "unit": "px",
+                              "value": 2
+                            },
+                            "left": {
+                              "unit": "px",
+                              "value": 2
+                            }
+                          },
+                          "vertical_align": "top"
+                        }
+                      },
+                      {
+                        "spans": [],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "• ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "Руски:",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "line_break",
+                            "text": "\n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "• ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "Словеначки:",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "line_break",
+                            "text": "\n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "• ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "Француски:",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "line_break",
+                            "text": "\n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "• ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "Хрватски:",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "line_break",
+                            "text": "\n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "• ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "Шпански:",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Преводи на друге језике",
+                            "foreground": "#0000c0",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0",
+                        "style": {
+                          "border": {
+                            "solid": {
+                              "width": {
+                                "unit": "px",
+                                "value": 5
+                              },
+                              "color": "#eeeeee"
+                            }
+                          },
+                          "padding": {
+                            "top": {
+                              "unit": "px",
+                              "value": 2
+                            },
+                            "right": {
+                              "unit": "px",
+                              "value": 2
+                            },
+                            "bottom": {
+                              "unit": "px",
+                              "value": 2
+                            },
+                            "left": {
+                              "unit": "px",
+                              "value": 2
+                            }
+                          },
+                          "vertical_align": "top"
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "geometry": {
+                  "border": 0,
+                  "cell_spacing": null,
+                  "cell_padding": null,
+                  "width": null
+                }
+              }
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Сродни чланци са  ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Сродни чланци са википедије",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "external_link",
+                  "text": "Википедије",
+                  "target": "https://sr.wikipedia.org/wiki/",
+                  "trail": "",
+                  "language": "",
+                  "classes": "extiw",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Сродни чланци са википедије",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ":",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Сродни чланци са википедије",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "[1] ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "external_link",
+                  "text": "аверз",
+                  "target": "https://sr.wikipedia.org/wiki/%D0%B0%D0%B2%D0%B5%D1%80%D0%B7",
+                  "trail": "",
+                  "language": "",
+                  "classes": "extiw",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Сличне речи:",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "Речи које се слично изговарају или се слично пишу",
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "Avers",
+                  "target": "Avers",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [
+        {
+          "file": "Loudspeaker.svg",
+          "kind": "image",
+          "caption": "Loudspeaker.svg"
+        }
+      ],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

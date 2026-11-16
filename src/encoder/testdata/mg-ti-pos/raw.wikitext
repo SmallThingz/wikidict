@@ -1,0 +1,1493 @@
+=={{=tl=}}==
+
+{{-ana-|tl}}
+'''ti''' 
+# ny [[litera]] T
+{{-fanononana-}}
+* {{tl-IPA}}
+
+{{-famakiana fanampiny-}}
+list:Latin script letter names/tl
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=en=}}==
+
+{{-ana-|en}}
+'''ti''' 
+# Ny feo ampiasaina amin'ny solfège ho an'ny [[naoty]] [[fahafito]] amin'ny [[ambaratonga]] [[lehibe]]
+
+{{-fanononana-}}
+* {{audio|en|en-us-ti.ogg|a=US}}
+* {{rhymes|en|iː|s=1}}
+* {{homophones|en|T|te|tea|tee}}
+* {{fanononana|/tiː/|en}}
+
+{{-dika-mitovy-}}
+* [[si]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=bsa=}}==
+
+{{-ana-|bsa}}
+'''ti''' 
+# atao hoe mpiara-mipetraka [[aminy]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=ak=}}==
+
+{{-mat-|ak}}
+'''ti''' 
+# [[manindrona]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+{{-ana-|ak}}
+'''ti''' 
+# lohany amin'ny [[ampahany]] amin'ny [[vatana]]
+# lohan'ny [[vondrona]] iray na [[fahefana]] iray
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+=={{=sq=}}==
+
+{{-solo-ana-|sq}}
+'''ti''' 
+# [[ianao]]
+
+{{-fanononana-}}
+* {{fanononana|[ti]|sq}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=rup=}}==
+
+{{-solo-ana-|rup}}
+'''ti''' 
+# [[ianao]]
+
+{{-teny mifandraika-}}
+* [[tini]]
+* [[tu]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=ast=}}==
+
+{{-tenim-piontanana-|ast}}
+'''ti''' 
+# teny entina miantso ny osy
+
+{{-fanononana-}}
+* {{ast-IPA}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=bdq=}}==
+
+{{-ana-|bdq}}
+'''ti''' 
+# [[tanana]]
+
+{{-fanononana-}}
+* {{fanononana|/tiː/|bdq}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=bnk=}}==
+
+{{-ana-|bnk}}
+'''ti''' 
+# rano [[masira]] be izy io
+# [[ranomasimbe]], ny rano sira [[mitohy]] [[mandrakotra]] ny ankamaroan'ny velaran-tany
+# [[faritra|Faritra]] [[lehibe]] misy rano [[masira]] izay kely [[kokoa]] noho ny [[ranomasimbe]], ary [[matetika]] [[mifandray]] amin'ny ranomasimbe na [[ranomasina]] lehibe kokoa
+# [[farihy]] izy io, [[indrindra]] raha [[lehibe]] na misy sira na misy sira
+# onja [[tokana]], onjan-drano
+# ny onjan'ny [[ranomasina]], [[indrindra]] [[rehefa]] avo na [[masiaka]]
+# miaina na ampiasaina amin'ny [[ranomasina]], na amin'ny ranomasina, na akaikin'ny ranomasina, na [[tahaka]] ny ranomasina
+# [[zavatra]] [[lehibe]] na [[masiaka]] [[tahaka]] ny [[ranomasina]] amin'ny habetsany na ny [[habeny]]
+# [[vatolampy]] [[midadasika]] sy [[maizina]],
+# [[menaka]] be dia be
+
+{{-dika-mitovy-}}
+* [[si]]
+
+{{-tsiahy-}}
+* Darrell T. Tryon, ''New Hebrides languages: an internal classification'' (1976)
+* {{wikibolana|en|ti}}
+=={{=bol=}}==
+
+{{-mat-|bol}}
+'''ti''' 
+# [[mihinana]] izy, [[indrindra]]
+
+{{-fanononana-}}
+* {{hyph|bol|ti}}
+* {{fanononana|/tíː/|bol}}
+
+{{-tsiahy-}}
+* {{Tsiahy:bol:Gimba2009|page=147}}
+* {{wikibolana|en|ti}}
+=={{=br=}}==
+
+{{-etim-}}
+:Avy amin'ny fototeny {{ine-pro}} ''*(s)teg-''. Avy amin'ny {{xbm}} ''ty'', avy amin'ny {{obt}} ''tig'', avy amin'ny {{cel-bry-pro}} ''*tɨɣ'', avy amin'ny {{cel-pro}} ''*tegos''. Anisan'ny teny mitovy fiaviana aminy ny {{cy}} ''tŷ''.
+{{-ana-|br}}
+'''ti''' 
+# [[trano]]
+{{-fanononana-}}
+* {{rhymes|br|iː|s=1}}
+* {{hyph|br|ti}}
+* {{fanononana|/ˈtiː/|br}}
+
+{{-teny mifandraika-}}
+* [[arc'hanti]]
+* [[ti-kêr]]
+
+{{-tsiahy-}}
+* {{Tsiahy:br:Cornillet:2017|page=1272}}
+* {{Tsiahy:br:Devri}}
+* {{wikibolana|en|ti}}
+=={{=bee=}}==
+
+{{-ana-|bee}}
+'''ti''' 
+# [[rano]]
+
+{{-tsiahy-}}
+* Yasuhiko Nagano, Randy J. LaPolla, ''New Research on Zhangzhung and Related Himalayan Languages'' (2001)
+* ''Tibeto-Himalayan Languages of Uttarkhand'' (1989), section ''Chaudangsi-Byangsi'', page 161:
+* {{wikibolana|en|ti}}
+=={{=cdn=}}==
+
+{{-ana-|cdn}}
+'''ti''' 
+# [[rano]]
+
+{{-tsiahy-}}
+* ''Tibeto-Himalayan Languages of Uttarkhand'' (1989), section ''Chaudangsi-Byangsi'', page 161:
+* {{wikibolana|en|ti}}
+=={{=cho=}}==
+
+{{-etim-}}
+:Nindramina avy amin'ny {{en}} ''tea''.
+{{-ana-|cho}}
+'''ti''' 
+# ny [[zavamaniry]] dite (Camellia sinensis (karazana), [[karazana]] zavamaniry ity
+# ny [[ravina]] [[maina]] na ny [[tsimoka]] amin'ny [[zavamaniry]] dite, [[karazana]] ravina toy
+# zava-pisotro vita amin'ny [[famafazana]] [[ravina]] [[maina]] na [[voany]] amin'ny rano [[mafana]]
+# Ny dite mamy dia dite [[mangatsiaka]] misy [[siramamy]] [[fanampiny]]
+# zava-pisotro [[mitovy]] amin'ny dite Camellia sinensis (karazana) amin'ny [[fomba]] [[sasany]]:
+# zava-pisotro vita amin'ny [[fanondrahana]] [[ampahany]] amin'ny [[zavamaniry]] [[samihafa]] ao [[anaty]] [[ranon-javatra]]
+# hena natolotra ho toy ny zava-pisotro [[mafana]]
+# [[kaopy]] misy iray amin'ireo zava-pisotro ireo, [[matetika]] misy [[ronono]], [[siramamy]], [[voasarimakirana]], na tapioka
+# vera iray amin'ireto zava-pisotro [[ireto]]
+# [[sakafo]] [[maivana]] amin'ny tolakandro, [[matetika]] nefa tsy [[voatery]] misy dite
+# , ny [[sakafo]] [[hariva]] [[lehibe]] [[indrindra]], na misy na tsia ny zava-pisotro dite
+# [[fiatoana]] amin'ny [[lalao]] eo anelanelan'ny fotoam-pivoriana [[faharoa]] sy ny fotoam-pivoriana [[fahatelo]]
+# [[fotoana]] iray, [[vondrona]] ara-tantara amin'ny fotoana avy any Shina, eo amin'ny habetsahan'ny fotoana [[ilaina]] mba hisotro [[haingana]] ny dite nentim-paharazana
+
+{{-fanononana-}}
+* Transcription: tii'
+* {{fanononana|/tiː(ʔ)/|cho}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=chk=}}==
+
+{{-etim-}}
+:Nindramina avy amin'ny {{en}} ''tea''.
+{{-ana-|chk}}
+'''ti''' 
+# ny [[zavamaniry]] dite (Camellia sinensis (karazana), [[karazana]] zavamaniry ity
+# ny [[ravina]] [[maina]] na ny [[tsimoka]] amin'ny [[zavamaniry]] dite, [[karazana]] ravina toy
+# zava-pisotro vita amin'ny [[famafazana]] [[ravina]] [[maina]] na [[voany]] amin'ny rano [[mafana]]
+# Ny dite mamy dia dite [[mangatsiaka]] misy [[siramamy]] [[fanampiny]]
+# zava-pisotro [[mitovy]] amin'ny dite Camellia sinensis (karazana) amin'ny [[fomba]] [[sasany]]:
+# zava-pisotro vita amin'ny [[fanondrahana]] [[ampahany]] amin'ny [[zavamaniry]] [[samihafa]] ao [[anaty]] [[ranon-javatra]]
+# hena natolotra ho toy ny zava-pisotro [[mafana]]
+# [[kaopy]] misy iray amin'ireo zava-pisotro ireo, [[matetika]] misy [[ronono]], [[siramamy]], [[voasarimakirana]], na tapioka
+# vera iray amin'ireto zava-pisotro [[ireto]]
+# [[sakafo]] [[maivana]] amin'ny tolakandro, [[matetika]] nefa tsy [[voatery]] misy dite
+# , ny [[sakafo]] [[hariva]] [[lehibe]] [[indrindra]], na misy na tsia ny zava-pisotro dite
+# [[fiatoana]] amin'ny [[lalao]] eo anelanelan'ny fotoam-pivoriana [[faharoa]] sy ny fotoam-pivoriana [[fahatelo]]
+# [[fotoana]] iray, [[vondrona]] ara-tantara amin'ny fotoana avy any Shina, eo amin'ny habetsahan'ny fotoana [[ilaina]] mba hisotro [[haingana]] ny dite nentim-paharazana
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=kw=}}==
+
+{{-etim-}}
+:Avy amin'ny {{cnx}} ''tye'', avy amin'ny {{oco}} ''tof'', avy amin'ny {{cel-pro}} ''*tungeti'' (midika hoe ''hanao fianianana'' (anglisy: ''to swear an oath'')). Nindramina avy amin'ny {{en}} ''tee''. Avy amin'ny ''to'' (midika hoe ''tafo'' (anglisy: ''roof'')) (sokajy: ''n'') + -i.
+{{-mat-|kw}}
+'''ti''' 
+# mianiana, [[manao]] [[voady]]
+# [[manao]] tafo
+
+{{-dika-mitovy-}}
+* [[kossya]]
+* [[lia]]
+* [[mollethi]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+{{-ana-|kw}}
+'''ti''' 
+# [[fianianana]], [[voady]]
+# [[zavatra]] [[mitovy]] [[endrika]] amin'ilay [[taratasy]]
+# [[mandefa]] [[vaovao]] any amin'ny [[toerana]] [[mihoatra]] ny iray amin'ny [[fotoana]] iray
+# [[faritra]] [[fisaka]] amin'ny tany izay anaovan'ny [[mpilalao]] ny [[tifitra]] [[voalohany]] ao amin'ny [[lavaka]] [[filalaovana]] golf
+# mazàna hazo na [[plastika]] izay [[anaovana]] [[baolina]]
+# [[toerana]] iray ao amin'ny [[kianja filalaovana]] curling izay itodihan'ny vato
+# [[marika]] tadiavin'ny [[mpilalao]] amin'ny [[lalao]]
+# sombin-javatra [[ambony]] izay toa elo, napetraka eo amin'ny stupa any amin'ny [[firenena]] Azia [[atsimo|Atsimo]] [[atsinanana|Atsinanana]]
+
+{{-dika-mitovy-}}
+* [[li]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+=={{=co=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{la}} ''te''. Anisan'ny teny mitovy fiaviana aminy ny {{it}} ''te, ti'' sy {{fr}} ''te''.
+{{-solo-ana-|co}}
+'''ti''' 
+# [[ianao]]
+
+{{-tsiahy-}}
+* https://infcor.adecec.net/
+* {{wikibolana|en|ti}}
+=={{=cs=}}==
+
+{{-etim-}}
+:Endrika miovaovan'ny {{cs}} ''ten'' na {{cs}} ''ty''.
+{{-solo-ana-|cs}}
+'''ti''' 
+# [[ireo]]
+#* ''Kde jsou Pavel s Ivanou? Ti přijdou později.''
+# ho anao
+#* ''Dávám ti to na opravu.''
+
+{{-fanononana-}}
+* {{cs-IPA}}
+* {{audio|Cs-ti.ogg|ti}}
+* {{audio|LL-Q9056 (ces)-Anavaline-ti.wav|ti}}
+* {{audio|LL-Q9056 (ces)-Ghost4Man-ti.wav|ti}}
+
+{{-dika-mitovy-}}
+* [[oni]]
+* [[tobě]]
+
+{{-teny mifandraika-}}
+* [[tito]]
+* [[ty]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=da=}}==
+
+{{-e-mat-|da}}
+'''ti''' 
+# filaza mandidy ny matoanteny [[tie]]
+
+{{-fanononana-}}
+* {{fanononana|/tiːˀ/|da}}
+* {{fanononana|[ˈtˢiˀ]|da}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+{{-isa-|da}}
+'''ti''' 
+# [[folo]]
+
+{{-fanononana-}}
+* {{fanononana|/tiːˀ/|da}}
+* {{fanononana|[ˈtˢiˀ]|da}}
+
+{{-teny mifandraika-}}
+* [[tiende]]
+* [[tital]]
+* [[selvtiende]]
+* [[titusinder]]
+* [[tiår,tiårig,tiårs]]
+* [[tiøre]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+=={{=drd=}}==
+
+{{-ana-|drd}}
+'''ti''' 
+# [[rano]]
+
+{{-tsiahy-}}
+* ''A Descriptive Grammar of Darma: An Endangered Tibeto-Burman Language'' (2007)
+* {{wikibolana|en|ti}}
+=={{=dgr=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{ath-pro}} ''*tuˑ''.
+{{-ana-|dgr}}
+'''ti''' 
+# [[rano]]
+# [[ranon-javatra]]
+# [[farihy]]
+
+{{-tsiahy-}}
+* ''Tłįįchǫ yati Enįhtł'è'' (1996; published by the Dogrib Divisional Board of Education, Dogrib Language Centre)
+* Thomas Sebeok, ''Native Languages of the Americas'', volume 1, page 292: [Howren] notes u > i in Dogrib (ti 'water', Hare-Bearlake tu; this shift occurs also in Ingalik and Tanaina in Alaska)
+* {{wikibolana|en|ti}}
+=={{=egl=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{la}} ''tibi'', {{la}} ''te''.
+{{-solo-ana-|egl}}
+'''ti''' 
+# [[ianao]] na
+
+{{-fanononana-}}
+* {{IPA|egl|/ˈti/|[ˈti]|a=Ferrara}}
+* {{IPA|egl|[ˈti]|a=Mirandola}}
+* {{IPA|egl|[ˈti˧]|a=Parma}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=fax=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{roa-opt}} ''ti'', avy amin'ny {{la}} ''tibi''.
+{{-solo-ana-|fax}}
+'''ti''' 
+# , [[ianao]]
+
+{{-tsiahy-}}
+* {{Tsiahy:fax:Diccionariu|268}}
+* {{wikibolana|en|ti}}
+=={{=fj=}}==
+
+{{-etim-}}
+:Nindramina avy amin'ny {{en}} ''tea''.
+{{-ana-|fj}}
+'''ti''' 
+# dite (pisotro vita amin'ny [[ravina]] dite)
+#* ''Au gunu '''ti''' ena mataka.''
+# Zava-pisotro vita amin'ny [[famafazana]] ny [[ampahany]] amin'ny [[zavamaniry]] ao [[anaty]] rano [[mafana]]
+#* '''''ti''' ni moli.''
+
+{{-fanononana-}}
+* {{fanononana|/ti/|fj}}
+
+{{-tsiahy-}}
+* {{Tsiahy:fj:Gatty:2009|+|page=267}}
+* {{wikibolana|en|ti}}
+=={{=fi=}}==
+
+{{-etim-}}
+:Nindramina avy amin'ny {{en}} ''dit''.
+{{-ana-|fi}}
+'''ti''' 
+# [[famantarana]] fohy amin'ny teny Morse
+
+{{-fanononana-}}
+* As {{m|fi|tiistai}}.
+* {{fi-p}}
+
+{{-dika-mitovy-}}
+* [[piste]]
+
+{{-teny mifandraika-}}
+* [[titata]]
+* [[titaus]]
+* [[titari]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=fr=}}==
+
+{{-kianteny-|fr}}
+'''ti''' 
+# [[mari-panontaniana]]
+
+{{-fanononana-}}
+* {{fr-IPA}}
+* {{audio|fr|LL-Q150 (fra)-LoquaxFR-ti.wav|a=<<France>> (<<Vosges>>)}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=fur=}}==
+
+{{-solo-ana-|fur}}
+'''ti''' 
+# ny ekipam-panatanjahantena ankafizin'ny [[olona]] iray
+# ho anao
+# [[ianao]] [[ihany]]
+
+{{-teny mifandraika-}}
+* [[tu]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=gl=}}==
+
+{{-solo-ana-|gl}}
+'''ti''' 
+# [[ianao]] (tokana)
+
+{{-fanononana-}}
+* {{gl-pr}}
+* {{hyph|gl|ti}}
+
+{{-dika-mitovy-}}
+* [[vós]]
+* [[vostede]]
+* [[Vde.]]
+
+{{-tsiahy-}}
+* {{Tsiahy:roa-opt:DDGM}}
+* {{Tsiahy:gl:DDLG}}
+* {{Tsiahy:gl:TILG}}
+* {{Tsiahy:TLPGP}}
+* {{wikibolana|en|ti}}
+=={{=ht=}}==
+
+{{-mpam-|ht}}
+'''ti''' 
+# [[kely]]
+
+{{-fanononana-}}
+* {{fanononana|/ti/|ht}}
+
+{{-teny mifandraika-}}
+* [[tidejene]]
+* [[timoun]]
+* [[tibèt]]
+* [[tichat]]
+* [[tichemen]]
+* [[tichen]]
+* [[tifi]]
+* [[tigason]]
+* [[tigigit]]
+* [[tigout]]
+* [[tigranmoun]]
+* [[tikochon]]
+* [[tikòk]]
+* [[tiloulout]]
+* [[tilyon]]
+* [[timal]]
+* [[timedam]]
+* [[timesye]]
+* [[timouton]]
+* [[tinon]]
+* [[tipen]]
+* [[tipichout]]
+* [[tipitit]]
+* [[tipoul]]
+* [[tirivyè]]
+* [[tiròch]]
+* [[titit]]
+
+{{-tsiahy-}}
+* {{Tsiahy:ht:Targète|page=190}}
+* {{wikibolana|en|ti}}
+=={{=ha=}}==
+
+{{-etim-}}
+:Nindramina avy amin'ny {{en}} ''tea''.
+{{-ana-|ha}}
+'''ti''' 
+# ny [[zavamaniry]] dite (Camellia sinensis (karazana), [[karazana]] zavamaniry ity
+# ny [[ravina]] [[maina]] na ny [[tsimoka]] amin'ny [[zavamaniry]] dite, [[karazana]] ravina toy
+# zava-pisotro vita amin'ny [[famafazana]] [[ravina]] [[maina]] na [[voany]] amin'ny rano [[mafana]]
+# Ny dite mamy dia dite [[mangatsiaka]] misy [[siramamy]] [[fanampiny]]
+# zava-pisotro [[mitovy]] amin'ny dite Camellia sinensis (karazana) amin'ny [[fomba]] [[sasany]]:
+# zava-pisotro vita amin'ny [[fanondrahana]] [[ampahany]] amin'ny [[zavamaniry]] [[samihafa]] ao [[anaty]] [[ranon-javatra]]
+# hena natolotra ho toy ny zava-pisotro [[mafana]]
+# [[kaopy]] misy iray amin'ireo zava-pisotro ireo, [[matetika]] misy [[ronono]], [[siramamy]], [[voasarimakirana]], na tapioka
+# vera iray amin'ireto zava-pisotro [[ireto]]
+# [[sakafo]] [[maivana]] amin'ny tolakandro, [[matetika]] nefa tsy [[voatery]] misy dite
+# , ny [[sakafo]] [[hariva]] [[lehibe]] [[indrindra]], na misy na tsia ny zava-pisotro dite
+# [[fiatoana]] amin'ny [[lalao]] eo anelanelan'ny fotoam-pivoriana [[faharoa]] sy ny fotoam-pivoriana [[fahatelo]]
+# [[fotoana]] iray, [[vondrona]] ara-tantara amin'ny fotoana avy any Shina, eo amin'ny habetsahan'ny fotoana [[ilaina]] mba hisotro [[haingana]] ny dite nentim-paharazana
+
+{{-fanononana-}}
+* {{ha-IPA|tî}}
+
+{{-dika-mitovy-}}
+* [[shayi]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=hu=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{urj-pro}} ''*te''. Ampitahao amin'ny {{fi}} ''te''.
+{{-ana-|hu}}
+'''ti''' 
+# Ny feo ampiasaina amin'ny [[mozika]] hanehoana ny feon-kira [[fahafito]] amin'ny [[ambaratonga]] [[lehibe]]
+# [[teboka]] (ny [[marika]] fohy, iray amin'ireo marika roa ampiasaina amin'ny fehezan-dalàna Morse)
+
+{{-fanononana-}}
+* {{hu-IPA}}
+* {{rhymes|hu|ti|s=1}}
+* {{audio|Hu-ti.ogg|ti}}
+
+{{-famakiana fanampiny-}}
+* {{q|Hungarian}} [https://web.archive.org/web/20160324012424/http://cotcot.hu/cikk/2008/07/01/mi-ez-szolmizacio An article on solfège with hand signs]
+* {{Tsiahy:ErtSz|1|you guys}}
+* {{Tsiahy:ErtSz|2|ti [solfège sign]}}
+* {{cln|hu|2-letter words|terms with multiple lemma etymologies|terms with noun and pronoun etymologies|second person pronouns}}
+* {{topics|hu|Music}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+{{-solo-ana-|hu}}
+'''ti''' 
+# [[ianareo|Ianareo]] [[rehetra]], [[fomba]] tsotsotra ilazana hoe ianareo [[olona]]
+
+{{-fanononana-}}
+* {{hu-IPA}}
+* {{rhymes|hu|ti|s=1}}
+* {{audio|Hu-ti.ogg|ti}}
+
+{{-teny mifandraika-}}
+* [[Note: In all these forms, ti is optional and only serves for emphasis.]]
+* [[tialattatok]]
+* [[tiáltalatok]]
+* [[tielőttetek]]
+* [[tinektek]]
+* [[tiveletek]]
+* [[tihozzátok]]
+
+{{-famakiana fanampiny-}}
+* {{Tsiahy:ErtSz|1|you guys}}
+* {{Tsiahy:ErtSz|2|ti [solfège sign]}}
+* {{cln|hu|2-letter words|terms with multiple lemma etymologies|terms with noun and pronoun etymologies|second person pronouns}}
+* {{topics|hu|Music}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+=={{=iba=}}==
+
+{{-mpampitohy-|iba}}
+'''ti''' 
+# ((havana) iza, iza, inona)
+
+{{-fanononana-}}
+* {{fanononana|/tiʔ/|iba}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=io=}}==
+
+{{-solo-ana-|io}}
+'''ti''' 
+# [[endrika]] hafa an'ny iti, , ireo [[olona]] ireo, ireo [[zavatra]] ireo
+#* '''''Ti''' esas plu forta, ma ci plu bela.''
+#* ''Yes, ma me kredas ke '''ti''' esas plu bona.''
+
+{{-fanononana-}}
+* {{fanononana|/ti/|io}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=id=}}==
+
+{{-ana-|id}}
+'''ti''' 
+# feo ampiasaina amin'ny [[mozika]] mba hanondroana ny [[naoty]] [[fahafito]] amin'ny [[ambaratonga]] [[lehibe]]
+{{-fanononana-}}
+* {{id-pr}}
+
+{{-dika-mitovy-}}
+* [[si]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=iso=}}==
+
+{{-mat-|iso}}
+'''ti''' 
+# azo ampiasaina hanehoana ny [[fotoana]] ho avy, toy ny hoe 'will'
+#* ''Mẹ '''ti''' nya.''
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=ist=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{la}} ''tū''.
+{{-solo-ana-|ist}}
+'''ti''' 
+# [[ianao]] (mpanonona [[anarana]] ho an'ny tena manokana amin'ny [[endrika]] faharoa)
+#* '''''Ti''' son la manduleîna inzucherada. – Antonio Ive, Canti popolari istriani: raccolti a Rovigno, 5, Ermanno Loescher, pejy 29, 1877''
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=it=}}==
+
+{{-solo-ana-|it}}
+'''ti''' 
+# , [[ianao]]
+
+{{-fanononana-}}
+* {{it-pr|ti°}}
+
+{{-famakiana fanampiny-}}
+* {{pedia|Italian grammar#Pronouns|Italian grammar: Pronouns}}
+* {{pedia|Ti (nota)|lang=it}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+{{-ana-|it}}
+'''ti''' 
+# ti (fanamarihana)
+# b (lahatsoratra sy ambaratonga)
+
+{{-fanononana-}}
+* {{it-pr|**tì*}}
+* {{it-pr|tì°,#tì*}}
+
+{{-famakiana fanampiny-}}
+* {{pedia|Italian grammar#Pronouns|Italian grammar: Pronouns}}
+* {{pedia|Ti (nota)|lang=it}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+=={{=ja=}}==
+
+{{-rômanizasiona-|ja}}
+'''ti''' 
+# Ny [[litera]] [[japoney]] ti amin'ny [[soratra]] Kunrei-shiki
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=kg=}}==
+
+{{-ana-|kg}}
+'''ti''' 
+# ny [[zavamaniry]] dite (Camellia sinensis (karazana), [[karazana]] zavamaniry ity
+# ny [[ravina]] [[maina]] na ny [[tsimoka]] amin'ny [[zavamaniry]] dite, [[karazana]] ravina toy
+# zava-pisotro vita amin'ny [[famafazana]] [[ravina]] [[maina]] na [[voany]] amin'ny rano [[mafana]]
+# Ny dite mamy dia dite [[mangatsiaka]] misy [[siramamy]] [[fanampiny]]
+# zava-pisotro [[mitovy]] amin'ny dite Camellia sinensis (karazana) amin'ny [[fomba]] [[sasany]]:
+# zava-pisotro vita amin'ny [[fanondrahana]] [[ampahany]] amin'ny [[zavamaniry]] [[samihafa]] ao [[anaty]] [[ranon-javatra]]
+# hena natolotra ho toy ny zava-pisotro [[mafana]]
+# [[kaopy]] misy iray amin'ireo zava-pisotro ireo, [[matetika]] misy [[ronono]], [[siramamy]], [[voasarimakirana]], na tapioka
+# vera iray amin'ireto zava-pisotro [[ireto]]
+# [[sakafo]] [[maivana]] amin'ny tolakandro, [[matetika]] nefa tsy [[voatery]] misy dite
+# , ny [[sakafo]] [[hariva]] [[lehibe]] [[indrindra]], na misy na tsia ny zava-pisotro dite
+# [[fiatoana]] amin'ny [[lalao]] eo anelanelan'ny fotoam-pivoriana [[faharoa]] sy ny fotoam-pivoriana [[fahatelo]]
+# [[fotoana]] iray, [[vondrona]] ara-tantara amin'ny fotoana avy any Shina, eo amin'ny habetsahan'ny fotoana [[ilaina]] mba hisotro [[haingana]] ny dite nentim-paharazana
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=lld=}}==
+
+{{-etim-}}
+:Avy amin'ny fampiarahana ny ''te'' + ''i''.
+{{-fanafohezana-|lld}}
+'''ti''' 
+# ao amin'ny (maro an'ny lahy)
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=cnh=}}==
+
+{{-ana-|cnh}}
+'''ti''' 
+# [[rano]]
+
+{{-tsiahy-}}
+* [//www.zodictionary.com/en2hk/beta/index.php?searchterm=water English to Hakha-Chin Online Dictionary]
+* [//chin-dictionary.com/search/water English to Chin (Hakha) Dictionary]
+* {{wikibolana|en|ti}}
+=={{=lij=}}==
+
+{{-solo-ana-|lij}}
+'''ti''' 
+# [[ianao]] [[tokana]]
+
+{{-fanononana-}}
+* {{fanononana|/ti/|lij}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=ln=}}==
+
+{{-etim-}}
+:Nindramina avy amin'ny {{kg}} ''ti''.
+{{-ana-|ln}}
+'''ti''' 
+# ny [[zavamaniry]] dite (Camellia sinensis (karazana), [[karazana]] zavamaniry ity
+# ny [[ravina]] [[maina]] na ny [[tsimoka]] amin'ny [[zavamaniry]] dite, [[karazana]] ravina toy
+# zava-pisotro vita amin'ny [[famafazana]] [[ravina]] [[maina]] na [[voany]] amin'ny rano [[mafana]]
+# Ny dite mamy dia dite [[mangatsiaka]] misy [[siramamy]] [[fanampiny]]
+# zava-pisotro [[mitovy]] amin'ny dite Camellia sinensis (karazana) amin'ny [[fomba]] [[sasany]]:
+# zava-pisotro vita amin'ny [[fanondrahana]] [[ampahany]] amin'ny [[zavamaniry]] [[samihafa]] ao [[anaty]] [[ranon-javatra]]
+# hena natolotra ho toy ny zava-pisotro [[mafana]]
+# [[kaopy]] misy iray amin'ireo zava-pisotro ireo, [[matetika]] misy [[ronono]], [[siramamy]], [[voasarimakirana]], na tapioka
+# vera iray amin'ireto zava-pisotro [[ireto]]
+# [[sakafo]] [[maivana]] amin'ny tolakandro, [[matetika]] nefa tsy [[voatery]] misy dite
+# , ny [[sakafo]] [[hariva]] [[lehibe]] [[indrindra]], na misy na tsia ny zava-pisotro dite
+# [[fiatoana]] amin'ny [[lalao]] eo anelanelan'ny fotoam-pivoriana [[faharoa]] sy ny fotoam-pivoriana [[fahatelo]]
+# [[fotoana]] iray, [[vondrona]] ara-tantara amin'ny fotoana avy any Shina, eo amin'ny habetsahan'ny fotoana [[ilaina]] mba hisotro [[haingana]] ny dite nentim-paharazana
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=uvl=}}==
+
+{{-ana-|uvl}}
+'''ti''' 
+# ny [[zavamaniry]] dite (Camellia sinensis (karazana), [[karazana]] zavamaniry ity
+# ny [[ravina]] [[maina]] na ny [[tsimoka]] amin'ny [[zavamaniry]] dite, [[karazana]] ravina toy
+# zava-pisotro vita amin'ny [[famafazana]] [[ravina]] [[maina]] na [[voany]] amin'ny rano [[mafana]]
+# Ny dite mamy dia dite [[mangatsiaka]] misy [[siramamy]] [[fanampiny]]
+# zava-pisotro [[mitovy]] amin'ny dite Camellia sinensis (karazana) amin'ny [[fomba]] [[sasany]]:
+# zava-pisotro vita amin'ny [[fanondrahana]] [[ampahany]] amin'ny [[zavamaniry]] [[samihafa]] ao [[anaty]] [[ranon-javatra]]
+# hena natolotra ho toy ny zava-pisotro [[mafana]]
+# [[kaopy]] misy iray amin'ireo zava-pisotro ireo, [[matetika]] misy [[ronono]], [[siramamy]], [[voasarimakirana]], na tapioka
+# vera iray amin'ireto zava-pisotro [[ireto]]
+# [[sakafo]] [[maivana]] amin'ny tolakandro, [[matetika]] nefa tsy [[voatery]] misy dite
+# , ny [[sakafo]] [[hariva]] [[lehibe]] [[indrindra]], na misy na tsia ny zava-pisotro dite
+# [[fiatoana]] amin'ny [[lalao]] eo anelanelan'ny fotoam-pivoriana [[faharoa]] sy ny fotoam-pivoriana [[fahatelo]]
+# [[fotoana]] iray, [[vondrona]] ara-tantara amin'ny fotoana avy any Shina, eo amin'ny habetsahan'ny fotoana [[ilaina]] mba hisotro [[haingana]] ny dite nentim-paharazana
+
+{{-tsiahy-}}
+* Greg Pearson, René van den Berg, ''Lote grammar sketch'' (2008)
+* {{wikibolana|en|ti}}
+=={{=taa=}}==
+
+{{-etim-}}
+:Avy amin'ny {{ath-pro}} ''*tαh'' (midika hoe ''eo amin'ny, mandritra'' (anglisy: ''among, during'')). Ampitahao amin'ny {{nv}} ''-tah'' (midika hoe ''ankoatra izany, ankoatra'' (anglisy: ''among'')), {{aht}} ''tah'' (midika hoe ''ankoatra izany, ankoatra'' (anglisy: ''among'')).
+{{-mpampitohy-|taa}}
+'''ti''' 
+# [[mandritra]] ny
+# eo amin'ny, eo [[afovoany]]
+# [[fotoana]], [[toerana]]
+
+{{-fanononana-}}
+* {{fanononana|/tʰi/|taa}}
+
+{{-tsiahy-}}
+* {{Tsiahy:taa:Kari 2024|page=352-353}}
+* {{wikibolana|en|ti}}
+=={{=mhi=}}==
+
+{{-etim-}}
+:Mitovy fiaviana amin'ny {{lgg}} ''tì''.
+{{-e-mat-|mhi}}
+'''ti''' 
+# [[teraka]]
+# filaza manoro ny matoanteny [[tị]]
+
+{{-fanononana-}}
+* {{mhi-IPA|tị}}
+* {{hyph|mhi|ti}}
+* {{mhi-verb|tị}}
+* # {{senseid|mhi|born}} {{lb|mhi|intransitive}} to [[be born]]
+* {{mhi-conj|intr|tị|tị́}}
+* {{mhi-IPA|tị́}}
+* {{mhi-verb form|tị́}}
+* # {{lb|mhi|'Burulo}} {{inflection of|mhi|tị|id=born||1//2|non-past|ind}}
+
+{{-tsiahy-}}
+* {{Tsiahy:mhi:Blackings & Fabb:2003|page=301}}
+* {{wikibolana|en|ti}}
+=={{=mrh=}}==
+
+{{-ana-|mrh}}
+'''ti''' 
+# [[rano]]
+
+{{-tsiahy-}}
+* Fred W. Savidge, ''A grammar and dictionary of the Lakher language'' (1908)
+* [https://web.archive.org/web/20160304002038/http://www.marasaw.com/english-mara.html marasaw.com wordlist]
+* {{wikibolana|en|ti}}
+=={{=mh=}}==
+
+{{-etim-}}
+:Nindramina avy amin'ny {{en}} ''tea''. Teny iray fiaviana amin'ny {{mh}} ''wōja'' sy {{mh}} ''oja''.
+{{-mat-|mh}}
+'''ti''' 
+# [[manondraka]] dite
+
+{{-fanononana-}}
+* {{mh-ipa-rows|tiy}}
+
+{{-tsiahy-}}
+* {{Tsiahy:mh:MEOD|MED2T.htm#ti}}
+* {{wikibolana|en|ti}}
+
+{{-ana-|mh}}
+'''ti''' 
+# ny [[zavamaniry]] dite (Camellia sinensis (karazana), [[karazana]] zavamaniry ity
+# ny [[ravina]] [[maina]] na ny [[tsimoka]] amin'ny [[zavamaniry]] dite, [[karazana]] ravina toy
+# zava-pisotro vita amin'ny [[famafazana]] [[ravina]] [[maina]] na [[voany]] amin'ny rano [[mafana]]
+# Ny dite mamy dia dite [[mangatsiaka]] misy [[siramamy]] [[fanampiny]]
+# zava-pisotro [[mitovy]] amin'ny dite Camellia sinensis (karazana) amin'ny [[fomba]] [[sasany]]:
+# zava-pisotro vita amin'ny [[fanondrahana]] [[ampahany]] amin'ny [[zavamaniry]] [[samihafa]] ao [[anaty]] [[ranon-javatra]]
+# hena natolotra ho toy ny zava-pisotro [[mafana]]
+# [[kaopy]] misy iray amin'ireo zava-pisotro ireo, [[matetika]] misy [[ronono]], [[siramamy]], [[voasarimakirana]], na tapioka
+# vera iray amin'ireto zava-pisotro [[ireto]]
+# [[sakafo]] [[maivana]] amin'ny tolakandro, [[matetika]] nefa tsy [[voatery]] misy dite
+# , ny [[sakafo]] [[hariva]] [[lehibe]] [[indrindra]], na misy na tsia ny zava-pisotro dite
+# [[fiatoana]] amin'ny [[lalao]] eo anelanelan'ny fotoam-pivoriana [[faharoa]] sy ny fotoam-pivoriana [[fahatelo]]
+# [[fotoana]] iray, [[vondrona]] ara-tantara amin'ny fotoana avy any Shina, eo amin'ny habetsahan'ny fotoana [[ilaina]] mba hisotro [[haingana]] ny dite nentim-paharazana
+
+{{-fanononana-}}
+* {{mh-ipa-rows|tiy}}
+
+{{-dika-mitovy-}}
+* [[oja]]
+* [[wōja]]
+
+{{-tsiahy-}}
+* {{Tsiahy:mh:MEOD|MED2T.htm#ti}}
+* {{wikibolana|en|ti}}
+
+=={{=mfe=}}==
+
+{{-etim-}}
+:Avy amin'ny {{fr}} ''petit''. Ampitahao amin'ny {{rcf}} ''ti'' sy {{ht}} ''ti''.
+{{-mat-|mfe}}
+'''ti''' 
+# [[afaka]] ampiasaina hanondroana ny [[fe-potoana]] [[taloha]]
+
+{{-fanononana-}}
+* {{fanononana|/t͡si/|mfe}}
+* {{fanononana|/t͡ɕi/|mfe}}
+
+{{-teny mifandraika-}}
+* [[ti ape]]
+* [[ti finn]]
+* [[ti pou]]
+
+{{-tsiahy-}}
+* {{Tsiahy:mfe:Baker:1987|page=315}}
+* {{Tsiahy:mfe:Carpooran:2011|page=1031}}
+* {{wikibolana|en|ti}}
+
+{{-mpam-|mfe}}
+'''ti''' 
+# [[kely]]
+
+{{-teny mifandraika-}}
+* [[ti-dezene]]
+* [[ti-dimounn]]
+* [[tipti]]
+* [[ti-baba]]
+* [[ti-bonom]]
+* [[tifi]]
+* [[ti-pima]]
+* [[ti-ser]]
+* [[ti-seve]]
+
+{{-tsiahy-}}
+* {{Tsiahy:mfe:Baker:1987|page=315}}
+* {{Tsiahy:mfe:Carpooran:2011|page=1031}}
+* {{wikibolana|en|ti}}
+
+=={{=enm=}}==
+
+{{-mpam-|enm}}
+'''ti''' 
+# [[endrika]] hafa amin'ny ti
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=lus=}}==
+
+{{-mat-|lus}}
+'''ti''' 
+# [[manao]] [[izany]]
+# [[miteny]]
+# [[mieritreritra]] izy, [[palitao]] [[japoney]] nentim-paharazana vita amin'ny [[mololo]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=moh=}}==
+
+{{-ana-|moh}}
+'''ti''' 
+# ny [[zavamaniry]] dite (Camellia sinensis (karazana), [[karazana]] zavamaniry ity
+# ny [[ravina]] [[maina]] na ny [[tsimoka]] amin'ny [[zavamaniry]] dite, [[karazana]] ravina toy
+# zava-pisotro vita amin'ny [[famafazana]] [[ravina]] [[maina]] na [[voany]] amin'ny rano [[mafana]]
+# Ny dite mamy dia dite [[mangatsiaka]] misy [[siramamy]] [[fanampiny]]
+# zava-pisotro [[mitovy]] amin'ny dite Camellia sinensis (karazana) amin'ny [[fomba]] [[sasany]]:
+# zava-pisotro vita amin'ny [[fanondrahana]] [[ampahany]] amin'ny [[zavamaniry]] [[samihafa]] ao [[anaty]] [[ranon-javatra]]
+# hena natolotra ho toy ny zava-pisotro [[mafana]]
+# [[kaopy]] misy iray amin'ireo zava-pisotro ireo, [[matetika]] misy [[ronono]], [[siramamy]], [[voasarimakirana]], na tapioka
+# vera iray amin'ireto zava-pisotro [[ireto]]
+# [[sakafo]] [[maivana]] amin'ny tolakandro, [[matetika]] nefa tsy [[voatery]] misy dite
+# , ny [[sakafo]] [[hariva]] [[lehibe]] [[indrindra]], na misy na tsia ny zava-pisotro dite
+# [[fiatoana]] amin'ny [[lalao]] eo anelanelan'ny fotoam-pivoriana [[faharoa]] sy ny fotoam-pivoriana [[fahatelo]]
+# [[fotoana]] iray, [[vondrona]] ara-tantara amin'ny fotoana avy any Shina, eo amin'ny habetsahan'ny fotoana [[ilaina]] mba hisotro [[haingana]] ny dite nentim-paharazana
+
+{{-tsiahy-}}
+* {{Tsiahy:moh:KTD|page=84}}
+* {{wikibolana|en|ti}}
+=={{=mtq=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{mkh-vie-pro}} ''*diː ~ tiː'' (midika hoe ''to go, to walk'' amin'ny teny anglisy). Mitovy fiaviana amin'ny {{vi}} ''đi''.
+{{-mat-|mtq}}
+'''ti''' 
+# [[mihetsika]] izy, [[afaka]] [[mandeha]]
+#* ''Da ti no đỉ?''
+{{-fanononana-}}
+* {{fanononana|/ti¹/|mtq}}
+
+{{-tsiahy-}}
+* {{Tsiahy:Nguyễn Văn Khang, Bùi Chỉ, Hoàng Văn Hành 2002}}
+* {{wikibolana|en|ti}}
+=={{=kmr=}}==
+
+{{-tamb-|kmr}}
+'''ti''' 
+# na dia kely aza
+#* '''''ti'''kes''
+#* ''Min '''ti'''tišt ne kirî e''
+#* ''Kes li wir '''ti''' ne bû.''
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=nb=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{non}} ''tíu'', avy amin'ny {{gem-pro}} ''*tehun'' (midika hoe ''folo'' (anglisy: ''ten'')), avy amin'ny {{ine-pro}} ''*déḱm̥'' (midika hoe ''folo'' (anglisy: ''ten'')). Mitovy fiaviana amin'ny {{is}} ''tíu'', {{fo}} ''tíggju'', {{sv}} ''tio'', {{da}} ''ti'' sy {{en}} ''ten''.
+{{-isa-|nb}}
+'''ti''' 
+# [[folo]]
+
+{{-fanononana-}}
+* {{homophones|nb|tee}}
+
+{{-teny mifandraika-}}
+* [[tiende]]
+* [[tidel]]
+* [[tikamp]]
+* [[titusen]]
+* [[titusenvis]]
+* [[tiår]]
+* [[årti]]
+
+{{-tsiahy-}}
+* {{Tsiahy:nb:OB}}
+* {{wikibolana|en|ti}}
+=={{=nn=}}==
+
+{{-ana-|nn}}
+'''ti''' 
+# feo ampiasaina amin'ny [[mozika]] hanondroana ny [[naoty]] [[fahafito]] amin'ny [[ambaratonga]] [[lehibe]]
+{{-fanononana-}}
+* {{nn-pronu-note}}
+* {{rhymes|nn|iː|s=1}}
+* {{homophones|nn|tee|tid}}
+* {{fanononana|/tiː/|nn}}
+
+{{-tsiahy-}}
+* {{Tsiahy:nn:OB}}
+* {{wikibolana|en|ti}}
+
+{{-isa-|nn}}
+'''ti''' 
+# [[folo]]
+
+{{-fanononana-}}
+* {{nn-pronu-note}}
+* {{rhymes|nn|iː|s=1}}
+* {{homophones|nn|tee|tid}}
+* {{fanononana|/tiː/|nn}}
+
+{{-teny mifandraika-}}
+* [[tiande]]
+* [[tiend]]
+* [[ti på topp]]
+* [[tiar]]
+* [[tidel]]
+* [[tidels]]
+* [[tidelt]]
+* [[tidobbel]]
+* [[tidoble]]
+* [[tifald]]
+* [[tifaldig]]
+* [[tifotkreps]]
+* [[tigong]]
+* [[tikamp]]
+* [[tikjempar]]
+* [[tikroning]]
+* [[titusen]]
+* [[tiår]]
+
+{{-tsiahy-}}
+* {{Tsiahy:nn:OB}}
+* {{wikibolana|en|ti}}
+
+=={{=fro=}}==
+
+{{-solo-ana-|fro}}
+'''ti''' 
+# ny (fanononana amin'ny maha-izy azy amin'ny [[endrika]] tokana)
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=goh=}}==
+
+{{-mp.ank-teny-|goh}}
+'''ti''' 
+# [[endrika]] hafa amin'ny zi
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=pi=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{sa}} ''त्रि''.
+{{-isa-|pi}}
+'''ti''' 
+# [[telo]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=lae=}}==
+
+{{-ana-|lae}}
+'''ti''' 
+# [[rano]]
+
+{{-tsiahy-}}
+* 1972, Paul Benedict, ''Sino-Tibetan: A Conspectus'', p. 26 (as Manchati)
+* {{wikibolana|en|ti}}
+=={{=pms=}}==
+
+{{-solo-ana-|pms}}
+'''ti''' 
+# [[ianao]]
+
+{{-fanononana-}}
+* {{fanononana|/ti/|pms}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=myp=}}==
+
+{{-solo-ana-|myp}}
+'''ti''' 
+# i (fanononana [[anaram-bosotra]] amin'ny [[olona]] voalohany)
+# [[izaho]] (fanononana [[zavatra]] amin'ny [[olona]] voalohany)
+
+{{-fanononana-}}
+* {{fanononana|/t͡ʃɪ̀/|myp}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=pon=}}==
+
+{{-mat-|pon}}
+'''ti''' 
+# [[manana]], [[monina]] ao amin'ny vatan'olombelona
+# [[miaraka]]
+
+{{-teny mifandraika-}}
+* [[tihda]]
+
+{{-tsiahy-}}
+* {{Tsiahy:pon:NPEOD|+|url=pnp-k.htm#7212}}
+* {{wikibolana|en|ti}}
+=={{=pot=}}==
+
+{{-ana-|pot}}
+'''ti''' 
+# ny [[zavamaniry]] dite (Camellia sinensis (karazana), [[karazana]] zavamaniry ity
+# ny [[ravina]] [[maina]] na ny [[tsimoka]] amin'ny [[zavamaniry]] dite, [[karazana]] ravina toy
+# zava-pisotro vita amin'ny [[famafazana]] [[ravina]] [[maina]] na [[voany]] amin'ny rano [[mafana]]
+# Ny dite mamy dia dite [[mangatsiaka]] misy [[siramamy]] [[fanampiny]]
+# zava-pisotro [[mitovy]] amin'ny dite Camellia sinensis (karazana) amin'ny [[fomba]] [[sasany]]:
+# zava-pisotro vita amin'ny [[fanondrahana]] [[ampahany]] amin'ny [[zavamaniry]] [[samihafa]] ao [[anaty]] [[ranon-javatra]]
+# hena natolotra ho toy ny zava-pisotro [[mafana]]
+# [[kaopy]] misy iray amin'ireo zava-pisotro ireo, [[matetika]] misy [[ronono]], [[siramamy]], [[voasarimakirana]], na tapioka
+# vera iray amin'ireto zava-pisotro [[ireto]]
+# [[sakafo]] [[maivana]] amin'ny tolakandro, [[matetika]] nefa tsy [[voatery]] misy dite
+# , ny [[sakafo]] [[hariva]] [[lehibe]] [[indrindra]], na misy na tsia ny zava-pisotro dite
+# [[fiatoana]] amin'ny [[lalao]] eo anelanelan'ny fotoam-pivoriana [[faharoa]] sy ny fotoam-pivoriana [[fahatelo]]
+# [[fotoana]] iray, [[vondrona]] ara-tantara amin'ny fotoana avy any Shina, eo amin'ny habetsahan'ny fotoana [[ilaina]] mba hisotro [[haingana]] ny dite nentim-paharazana
+
+{{-fanononana-}}
+* {{pot-IPA}}
+
+{{-tsiahy-}}
+* {{Tsiahy:pot:CPN|2=6752}}
+* {{Tsiahy:pot:Lockwood:2017|page=89}}
+* {{wikibolana|en|ti}}
+=={{=rcf=}}==
+
+{{-etim-}}
+:Avy amin'ny {{fr}} ''petit''. Ampitahao amin'ny {{mfe}} ''ti'' sy {{ht}} ''ti''.
+{{-mpam-|rcf}}
+'''ti''' 
+# [[kely]]
+
+{{-teny mifandraika-}}
+* [[tiblan]]
+
+{{-tsiahy-}}
+* {{Tsiahy:rcf:Armand|page=353}}
+* {{wikibolana|en|ti}}
+=={{=sco=}}==
+
+{{-mp.ank-teny-|sco}}
+'''ti''' 
+# amin'ny [[lalana]] [[mankany]], mankany
+# [[manondro]] ny [[toerana]] haleha na ny toerana [[farany]]: [[mankany]] amin'ny, mba hahatongavana na hahatratrarana
+# ampiasaina hanondroana ny [[lasibatra]] na ny [[mpandray]] ny [[hetsika]]
+# mba hifandray, tsindrio [[manohitra]], fiantraikany, sns
+# hifarana na hahatratra: [[mampiseho]] ny toe-javatra [[farany]] aorian'ny [[zava-mitranga]]
+# mba hahatonga na hiteraka (voka-dratsy na vokatra)
+# ampiasaina aorian'ny adjectif mba hanondroana ny [[fampiharana]]
+# [[manondro]] ny [[ambaratonga]] na ny ambaratonga [[tratra]]
+# ampiasaina hamaritana ny [[zavatra]] misy zavatra
+# [[manondro]] ny faran'ny [[elanelana]]
+# ho toy ny
+# ampiasaina hanondroana ny tahan'ny [[fampitahana]], raha [[oharina]] amin'ny
+# ampiasaina hanondroana fa ny fehezan-teny teo aloha dia [[tokony]] hampitomboina ho amin'ny hery ny [[manaraka]] [[soatoavina]], [[manondro]] exponentiation
+# [[mialoha]] (ny ora voalaza)
+# [[miaraka]] amin'ny ora [[voatondro]]
+# [[araka]] ny
+# ampiasaina amin'ny [[fomba]] [[fiteny]] maro [[miaraka]] amin'ny [[matoanteny]] isan-karazany: [[mijanona]] amin'ny [[ankavia]], [[manaiky]] ny [[tolo-kevitra]], [[manatrika]] ny [[raharaha]], sns. Jereo ny [[fidirana]] [[tsirairay]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+{{-kianteny-|sco}}
+'''ti''' 
+# Teny kely ampiasaina alohan'ny [[matoanteny]] iray mba hampisehoana fa amin'ny endriny [[fototra]] izy io
+# toy ny etsy [[ambony]], [[miaraka]] amin'ny [[matoanteny]] [[voatondro]]
+# ampiasaina hanondroana [[adidy]] avy amin'ny, na toromarika nomena, ny [[lohahevitra]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+=={{=ssv=}}==
+
+{{-ana-|ssv}}
+'''ti''' 
+# ny tsipìka (fitaovam-piadiana handefasana zana-tsipìka)
+
+{{-tsiahy-}}
+* Darrell T. Tryon, ''New Hebrides languages: an internal classification'' (1976)
+* {{wikibolana|en|ti}}
+=={{=sl=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{sla-pro}} ''*ty'', avy amin'ny {{ine-pro}} ''*túh₂''. Nindramina avy amin'ny {{en}} ''ti''.
+{{-ana-|sl}}
+'''ti''' 
+# [[mampiasa|Mampiasa]] teny toy ny hoe [[ianao]], [[izaho]], [[izahay]], izy ireo fa tsy [[fomba]] [[fiteny]] [[ofisialy]]
+#* ''S svojo šefico sva prešli na '''ti'''.''
+# ti, si
+
+{{-fanononana-}}
+* {{sl-IPA|tȋ}}
+
+{{-dika-mitovy-}}
+* [[sȋ]]
+
+{{-teny mifandraika-}}
+* [[biti na ti]]
+* [[preiti na ti]]
+* [[priti na ti]]
+* [[tīkati]]
+
+{{-famakiana fanampiny-}}
+{{Tsiahy:sl:FR}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+{{-solo-ana-|sl}}
+'''ti''' 
+# [[ianao]] (singular), ianao
+# [[zavatra]] iray (eo anivon'ny [[vondrona]] hafa), [[mpikambana]] iray ao amin'ny vondrona iray
+# [[zavatra]] roa na [[olona]] roa, [[mifanohitra]] amin'ny zavatra hafa
+# [[olona]] [[rehetra]] (mihatra amin'ny olona amin'ny ankapobeny)
+# [[olona]], [[fikambanana]] na [[zavatra]]
+# ampiasaina ho toy ny [[mpisolo]] [[anarana]] [[mifandraika]] amin'ny faran'ny fehezan-teny mifandraika
+
+{{-fanononana-}}
+* {{sl-IPA|tȋ}}
+
+{{-famakiana fanampiny-}}
+{{Tsiahy:sl:FR}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+=={{=xsl=}}==
+
+{{-ana-|xsl}}
+'''ti''' 
+# [[fomba]] iray hafa ilazana ny " tu "
+{{-fanononana-}}
+* {{xsl-IPA}}
+* {{hyph|xsl|ti}}
+
+{{-tsiahy-}}
+* {{Tsiahy:den:Rice:1989|page=44}}
+* {{wikibolana|en|ti}}
+=={{=sux=}}==
+
+{{-rômanizasiona-|sux}}
+'''ti''' 
+# rômanizasiôna ny teny [[𒋾]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=lax=}}==
+
+{{-etim-}}
+:Avy amin'ny {{tbq-bdg-pro}} ''*tɯi¹'' (midika hoe ''rano'' (anglisy: ''water'')), avy amin'ny {{sit-pro}} ''*s-turʔ'' (midika hoe ''rano'' (anglisy: ''water; fluid; liquid; river; to soak; to spit'')).
+{{-ana-|lax}}
+'''ti''' 
+# [[rano]]
+
+{{-tsiahy-}}
+* ''The Bodos in Assam: a socio-cultural study, year 2005-2006'' (2007)
+* {{wikibolana|en|ti}}
+=={{=tpi=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{en}} ''tea''.
+{{-ana-|tpi}}
+'''ti''' 
+# ny [[zavamaniry]] dite (Camellia sinensis (karazana), [[karazana]] zavamaniry ity
+# ny [[ravina]] [[maina]] na ny [[tsimoka]] amin'ny [[zavamaniry]] dite, [[karazana]] ravina toy
+# zava-pisotro vita amin'ny [[famafazana]] [[ravina]] [[maina]] na [[voany]] amin'ny rano [[mafana]]
+# Ny dite mamy dia dite [[mangatsiaka]] misy [[siramamy]] [[fanampiny]]
+# zava-pisotro [[mitovy]] amin'ny dite Camellia sinensis (karazana) amin'ny [[fomba]] [[sasany]]:
+# zava-pisotro vita amin'ny [[fanondrahana]] [[ampahany]] amin'ny [[zavamaniry]] [[samihafa]] ao [[anaty]] [[ranon-javatra]]
+# hena natolotra ho toy ny zava-pisotro [[mafana]]
+# [[kaopy]] misy iray amin'ireo zava-pisotro ireo, [[matetika]] misy [[ronono]], [[siramamy]], [[voasarimakirana]], na tapioka
+# vera iray amin'ireto zava-pisotro [[ireto]]
+# [[sakafo]] [[maivana]] amin'ny tolakandro, [[matetika]] nefa tsy [[voatery]] misy dite
+# , ny [[sakafo]] [[hariva]] [[lehibe]] [[indrindra]], na misy na tsia ny zava-pisotro dite
+# [[fiatoana]] amin'ny [[lalao]] eo anelanelan'ny fotoam-pivoriana [[faharoa]] sy ny fotoam-pivoriana [[fahatelo]]
+# [[fotoana]] iray, [[vondrona]] ara-tantara amin'ny fotoana avy any Shina, eo amin'ny habetsahan'ny fotoana [[ilaina]] mba hisotro [[haingana]] ny dite nentim-paharazana
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=ttj=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{bnt-cmn}} ''*tì'' (midika hoe ''milaza; teny nindramina; fa, izany hoe'' (anglisy: ''say; quote; that, namely'')).
+{{-tamb-|ttj}}
+'''ti''' 
+# toy izao
+
+{{-fanononana-}}
+* {{fanononana|/ti/|ttj}}
+
+{{-tsiahy-}}
+* {{Tsiahy:ttj:Kaji:2007|pages=438-439}}
+* {{Tsiahy:bnt:BLR|2879}}
+* {{wikibolana|en|ti}}
+=={{=vay=}}==
+
+{{-ana-|vay}}
+'''ti''' 
+# [[rano]]
+
+{{-tsiahy-}}
+* Paul K. Benedict, ''Sino-Tibetan: A Conspectus'' (1972, {{ISBN|0521081750}}), page 26
+* {{wikibolana|en|ti}}
+=={{=vi=}}==
+
+{{-ana-|vi}}
+'''ti''' 
+# sampan-draharaha, [[fizarana]] ao amin'ny [[minisitera]]
+# [[endrika]] hafa amin'ny tí, , nono
+
+{{-fanononana-}}
+* {{vi-IPA}}
+
+{{-dika-mitovy-}}
+* [[sở]]
+
+{{-teny mifandraika-}}
+* [[âm ti]]
+* [[công ti]]
+* [[minh ti]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+=={{=nnp=}}==
+
+{{-ana-|nnp}}
+'''ti''' 
+# [[rano]]
+
+{{-fanononana-}}
+* {{fanononana|/ti⁵²/|nnp}}
+
+{{-tsiahy-}}
+* Robbins Burling, Mankai Wangsu, ''Wancho Phonology and word list'', ''Linguistics of the Tibeto-Burman Area 21.2'' (1998)
+* {{wikibolana|en|ti}}
+=={{=hus=}}==
+
+{{-tamb-|hus}}
+'''ti''' 
+# ho any amin'ny [[Fanjakana|fanjakana]] miasa
+# mba hanarona na hametrahana
+# [[mandroso]], mandroso (mitohy amin'ny hetsika)
+# [[mitohy]], amin'ny [[halavany]]
+# tatỳ [[aoriana]]
+# Ny [[vintana]] izay [[tsara]] [[kokoa]] noho ny vintana dimampolo-dimampolo
+# amin'ny [[baolina]] iray, ho any amin'ny [[toerana]] misy [[vilany]]
+
+{{-tsiahy-}}
+* [http://www.native-languages.org/huasteco_words.htm wordlist]
+* {{wikibolana|en|ti}}
+=={{=cy=}}==
+
+{{-etim-}}
+:Nolovaina avy amin'ny {{cel-bry-pro}} ''*ti'', avy amin'ny {{cel-pro}} ''*tū'', avy amin'ny {{ine-pro}} ''*túh₂''. Nindramina avy amin'ny {{en}} ''tee''.
+{{-ana-|cy}}
+'''ti''' 
+# [[zavatra]] [[mitovy]] [[endrika]] amin'ilay [[taratasy]]
+# [[mandefa]] [[vaovao]] any amin'ny [[toerana]] [[mihoatra]] ny iray amin'ny [[fotoana]] iray
+# [[faritra]] [[fisaka]] amin'ny tany izay anaovan'ny [[mpilalao]] ny [[tifitra]] [[voalohany]] ao amin'ny [[lavaka]] [[filalaovana]] golf
+# mazàna hazo na [[plastika]] izay [[anaovana]] [[baolina]]
+# [[toerana]] iray ao amin'ny [[kianja filalaovana]] curling izay itodihan'ny vato
+# [[marika]] tadiavin'ny [[mpilalao]] amin'ny [[lalao]]
+# sombin-javatra [[ambony]] izay toa elo, napetraka eo amin'ny stupa any amin'ny [[firenena]] Azia [[atsimo|Atsimo]] [[atsinanana|Atsinanana]]
+
+{{-fanononana-}}
+* {{homophones|cy|tu|tŷ|qq1=South Wales|qq2=South Wales}}
+* {{rhymes|cy|iː|s=1}}
+* {{fanononana|/tiː/|cy}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+{{-solo-ana-|cy}}
+'''ti''' 
+# [[ianao]]
+
+{{-fanononana-}}
+* {{homophones|cy|tu|tŷ|qq1=South Wales|qq2=South Wales}}
+* {{rhymes|cy|iː|s=1}}
+* {{fanononana|/tiː/|cy}}
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+=={{=yo=}}==
+
+{{-mat-|yo}}
+'''ti''' 
+# [[manosika]] sy miantehitra amin'ny hafa
+# [[manakatona]]
+# [[tonga]] any
+# tsy [[afaka]] tsy afaka, tsy afaka
+# [[mahatsiaro]] ho [[menatra]] ary saro-kenatra
+#* ''Ojú máa ń '''tì''' mí nígbà tí mo bá ń sọ̀rọ̀ nípa ara mi.''
+
+{{-fanononana-}}
+* {{sense|high-tone}} {{yo-IPA|tí}}
+* {{sense|mid-tone}} {{yo-IPA|ti}}
+* {{sense|low-tone}} {{yo-IPA|tì}}
+
+{{-teny mifandraika-}}
+* [[ó tì]]
+* [[tijú]]
+
+{{-tsiahy-}}
+* {{Tsiahy:yo:GYLD|entry=tì1}}
+* {{wikibolana|en|ti}}
+
+{{-solo-ana-|yo}}
+'''ti''' 
+# izay, iza
+#* ''Adìyẹ '''tí''' mo rà.''
+
+{{-fanononana-}}
+* {{sense|high-tone}} {{yo-IPA|tí}}
+* {{sense|mid-tone}} {{yo-IPA|ti}}
+* {{sense|low-tone}} {{yo-IPA|tì}}
+
+{{-dika-mitovy-}}
+* [[yí]]
+* [[Yoruba varieties (which, who, that)]]
+* [[{| class="wikitable" border="1" style="text-align: center"]]
+* [[! style="width:11%" | Language Family]]
+* [[! style="width:11%" | Variety Group]]
+* [[! style="width:11%" | Variety]]
+* [[! style="width:11%" | Words]]
+* [[rowspan="6" | Proto-Itsekiri-SEY]]
+* [[style="background: var(--wikt-palette-lighterblue,AliceBlue)" rowspan="6" | Southeast Yoruba]]
+* [[style="background: var(--wikt-palette-lighterblue,AliceBlue)" | Ìjẹ̀bú]]
+* [[style="background: var(--wikt-palette-lighterblue,AliceBlue)" | {{l-self|yo|rìí, {{l-self|yo|kí, {{l-self|yo|rèé]]
+* [[style="background: var(--wikt-palette-lighterblue,AliceBlue)" | Ìkálẹ̀]]
+* [[style="background: var(--wikt-palette-lighterblue,AliceBlue)" | {{l-self|yo|yí]]
+* [[style="background: var(--wikt-palette-lighterblue,AliceBlue)" | Ìlàjẹ]]
+* [[style="background: var(--wikt-palette-lighterblue,AliceBlue)" | Oǹdó]]
+* [[style="background: var(--wikt-palette-lighterblue,AliceBlue)" | Ọ̀wọ̀]]
+* [[style="background: var(--wikt-palette-lighterblue,AliceBlue)" | -]]
+* [[style="background: var(--wikt-palette-lighterblue,AliceBlue)" | Usẹn]]
+* [[rowspan="23" | Proto-Yoruba]]
+* [[style="background: var(--wikt-palette-green-1,Honeydew)" rowspan="5" | Central Yoruba]]
+* [[style="background: var(--wikt-palette-green-1,Honeydew)" | Èkìtì]]
+* [[style="background: var(--wikt-palette-green-1,Honeydew)" | {{l-self|yo|kí]]
+* [[style="background: var(--wikt-palette-green-1,Honeydew)" | Ifẹ̀]]
+* [[style="background: var(--wikt-palette-green-1,Honeydew)" | -]]
+* [[style="background: var(--wikt-palette-green-1,Honeydew)" | Ìgbómìnà]]
+* [[style="background: var(--wikt-palette-green-1,Honeydew)" | Ìjẹ̀ṣà]]
+* [[style="background: var(--wikt-palette-green-1,Honeydew)" | Western Àkókó]]
+* [[style="background: var(--wikt-palette-yellow-1,Ivory)" rowspan="6" | Northwest Yoruba]]
+* [[style="background: var(--wikt-palette-yellow-1,Ivory)" | Àwórì]]
+* [[style="background: var(--wikt-palette-yellow-1,Ivory)" | {{l-self|yo|tí]]
+* [[style="background: var(--wikt-palette-yellow-1,Ivory)" | Ẹ̀gbá]]
+* [[style="background: var(--wikt-palette-yellow-1,Ivory)" | -]]
+* [[style="background: var(--wikt-palette-yellow-1,Ivory)" | Ìbàdàn]]
+* [[style="background: var(--wikt-palette-yellow-1,Ivory)" | Òǹkò]]
+* [[style="background: var(--wikt-palette-yellow-1,Ivory)" | Ọ̀yọ́]]
+* [[style="background: var(--wikt-palette-yellow-1,Ivory)" | Standard Yorùbá]]
+* [[style="background: var(--wikt-palette-amber-1,OldLace)" rowspan="5" | Northeast Yoruba/Okun]]
+* [[style="background: var(--wikt-palette-amber-1,OldLace)" | Ìbùnú]]
+* [[style="background: var(--wikt-palette-amber-1,OldLace)" | -]]
+* [[style="background: var(--wikt-palette-amber-1,OldLace)" | Ìjùmú]]
+* [[style="background: var(--wikt-palette-amber-1,OldLace)" | Ìyàgbà]]
+* [[style="background: var(--wikt-palette-amber-1,OldLace)" | Owé]]
+* [[style="background: var(--wikt-palette-amber-1,OldLace)" | Ọ̀wọ̀rọ̀]]
+* [[}]]
+
+{{-tsiahy-}}
+* {{Tsiahy:yo:GYLD|entry=tì1}}
+* {{wikibolana|en|ti}}
+
+=={{=ctz=}}==
+
+{{-ana-|ctz}}
+'''ti''' 
+# [[endrika]] hafa amin'ny lti
+# [[omaly]]
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}
+
+{{-mpam-|ctz}}
+'''ti''' 
+# [[endrika]] hafa amin'ny ITI
+
+{{-tsiahy-}}
+{{wikibolana|en|ti}}

@@ -1,0 +1,18 @@
+==<span >Japoney [[sokajy:japoney]]</span>==
+
+===[[Image:Open book 01.svg|30px|link=help:karazan-teny]] Matoanteny [[sokajy:japoney]][[Catégorie:Matoanteny amin'ny teny japoney]]===
+'''崩れる''' (kuduru}}<ref name="KDJ2">{{R:Nihon Kokugo Daijiten 2, intrans)
+# ny ho rava
+
+====<span title="Fampahalalàna ara-peo an'ilay teny 崩れる">[[Image:Nuvola apps edu languages.svg|30px|link=help:fanononana]] Fanononana</span>==== 
+* 
+{| class='wikitable'
+|-
+|
+<ul><li><span class="usage-label-accent"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[w:Tokyo dialect|Tokyo]]</span><span class="ib-brac label-brac">)</span></span> <span lang="ja" class="Jpan">く<span style="border-top:1px solid;position:relative;padding:1px;">ずれ<span style="position:absolute;top:0;bottom:67%;right:0%;border-right:1px solid;"></span></span>る</span> <span class="Latn"><samp>[kùzúréꜜrù]</samp></span> ([[中高型|Nakadaka]] – [3])<ref name="DJR"><span class="book">'''2006''', <cite><span class="Jpan" lang="ja">大辞林</span> (''[[w:Daijirin|Daijirin]]'')</cite>, Third Edition (in Japanese), [[w:Tōkyō|Tōkyō]]: [[w:Sanseidō|Sanseidō]], [[Special:BookSources/4-385-13905-9|→ISBN]]</span></ref><ref name="SMK5"><span class="book">'''1997''', <cite><span class="Jpan" lang="ja">新明解国語辞典</span> (''[[w:Shin_Meikai_kokugo_jiten|Shin Meikai Kokugo Jiten]]'')</cite>, Fifth Edition (in Japanese), [[w:Tōkyō|Tōkyō]]: [[w:Sanseidō|Sanseidō]], [[Special:BookSources/4-385-13143-0|→ISBN]]</span></ref><ref name="NHK"><span class="book">'''1998''', <cite><span class="Jpan" lang="ja">NHK日本語発音アクセント辞典</span> (''[[w:NHK|NHK]] Japanese Pronunciation Accent Dictionary'')</cite> (in Japanese), [[w:Tōkyō|Tōkyō]]: [[w:NHK|NHK]], [[Special:BookSources/978-4-14-011112-3|→ISBN]]</span></ref></li><li>[[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:Japanese pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">[kɯ̟zɨɾe̞ɾɯ̟]</span>[[Category:Japanese terms with IPA pronunciation|山08れる]]</li></ul>[[Sokajy:Pejy misy fanononana amin'ny teny japoney]]
+|}[[:Endrika:ja-acc-table]]
+
+<h4>[[File:Books-aj.svg aj ashton 01f.svg|35px|link=Wiktionary:Tsiahy]] Tsiahy</h4>
+* :* “[https://www.kanjipedia.jp/kotoba/0006381100 <span class="Jpan" lang="ja">崩れる</span>]”, in&#32;<cite><span class="Jpan" lang="ja">漢字ぺディア</span></cite>&#32;&#91;<cite>Kanjipedia</cite>&#93;&lrm;<sup>[https://www.kanjipedia.jp]</sup>, [[w:ja:日本漢字能力検定協会|The Japan Kanji Aptitude Testing Foundation]], 2015–2026
+* 
+* Ity pejy ity dia nadika avy amin'ny pejy [[:en:崩れる|崩れる]] tao amin'ny Wikibolana amin'ny teny anglisy. ([http://en.wiktionary.org//w/index.php?title=%E5%B4%A9%E3%82%8C%E3%82%8B&action=history lisitry ny mpandray anjara])[[sokajy:Pejy avy any amin'ny wikibolana anglisy]]

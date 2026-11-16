@@ -174,7 +174,7 @@ pub fn siteServerForInstall(runtime: *const rt.Context) ?[]const u8 {
     return host.site_server;
 }
 
-pub const SiteUrlConfig = struct { server: []const u8, script: []const u8, article_path: []const u8 };
+pub const SiteUrlConfig = rt.namespace_registry.wiki_url.SiteUrlConfig;
 
 // These captured edition constants cannot vary with a page or a Lua call.
 // Reading them must not make a loadData module spuriously effectful.

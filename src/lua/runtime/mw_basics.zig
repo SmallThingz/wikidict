@@ -427,30 +427,13 @@ fn appendMessageParams(runtime: *rt.Context, ctx: *MessageCtx, values: []const V
 }
 
 fn substituteMessageParams(runtime: *rt.Context, source: []const u8, params: []const Value) ![]const u8 {
-    if (params.len == 0 or std.mem.indexOfScalar(u8, source, '$') == null) return source;
-    var out: std.ArrayList(u8) = .empty;
-    var remaining = source;
-    var pos: usize = 0;
-    while (pos < remaining.len) {
-        if (remaining[pos] == '$' and pos + 1 < remaining.len and std.ascii.isDigit(remaining[pos + 1])) {
-            var end = pos + 1;
-            var index: usize = 0;
-            while (end < remaining.len and std.ascii.isDigit(remaining[end])) : (end += 1) {
-                index = std.math.add(usize, try std.math.mul(usize, index, 10), @as(usize, remaining[end] - '0')) catch return error.MessageParameterIndexOverflow;
-            }
-            if (index != 0 and index <= params.len) {
-                try out.appendSlice(runtime.allocator, remaining[0..pos]);
-                try out.appendSlice(runtime.allocator, try messageParamString(runtime, params[index - 1]));
-                remaining = remaining[end..];
-                pos = 0;
-                continue;
-            }
-        }
-        pos += 1;
-    }
-    if (out.items.len == 0) return source;
-    try out.appendSlice(runtime.allocator, remaining);
-    return out.toOwnedSlice(runtime.allocator);
+    const Parameters = struct {
+        runtime: *rt.Context,
+        values: []const Value,
+        pub fn get(self: @This(), index: usize) ![]const u8 { return messageParamString(self.runtime, self.values[index]); }
+    };
+    return rt.namespace_registry.interface_messages.substituteParams(runtime.allocator, source, params.len,
+        Parameters{ .runtime = runtime, .values = params });
 }
 
 // Extension renderers share the captured/local message lookup and substitution

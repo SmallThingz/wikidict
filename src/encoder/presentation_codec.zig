@@ -30,6 +30,11 @@ pub const inline_styles_magic = "DPRO";
 pub const body_adjoining_magic = "DPRP";
 pub const table_corners_magic = "DPRQ";
 pub const intrinsic_table_magic = "DPRR";
+pub const ruby_magic = "DPRS";
+/// S payload layout with an explicit bounded 17..32 Table capability.
+pub const deep_tables_magic = "DPRT";
+/// Full S/T Span fields plus a data-only inline padding group.
+pub const inline_padding_groups_magic = "DPRU";
 const container_owner_font_flag: u32 = 0x10000;
 const container_height_flag: u32 = 0x20000;
 const container_columns_flag: u32 = 0x40000;
@@ -82,8 +87,16 @@ const Encoder = struct {
     rule_styles: bool = false,
     inline_styles: bool = false,
     capability_p: bool = false,
+    text_flow: bool = false,
     capability_q: bool = false,
     capability_r: bool = false,
+    capability_s: bool = false,
+    capability_t: bool = false,
+    capability_u: bool = false,
+    in_inline_padding_group: bool = false,
+    inline_padding_action: ?types.InlinePaddingGroupAction = null,
+    ruby_depth: usize = 0,
+    ruby_gap: bool = false,
     out: std.ArrayList(u8) = .empty,
     table_depth: usize = 0,
     content_depth: usize = 0,
@@ -184,11 +197,13 @@ const Encoder = struct {
     }
     fn inlineTextStyle(self: *Encoder, value: types.InlineTextStyle) !void {
         if (!self.inline_styles or self.version != .container_fonts or !types.validInlineTextStyle(value)) return error.InvalidPresentation;
+        if (value.wrap != null and (!self.capability_p or !self.text_flow)) return error.InvalidPresentation;
         const flags: u8 = @as(u8, @intFromBool(value.decoration != null)) |
             (@as(u8, @intFromBool(value.line_height != null)) << 1) |
             (@as(u8, @intFromBool(value.baseline_shift != null)) << 2) |
             (@as(u8, @intFromBool(value.font_normalized)) << 3) |
-            (@as(u8, @intFromBool(value.cursor != null)) << 4);
+            (@as(u8, @intFromBool(value.cursor != null)) << 4) |
+            (@as(u8, @intFromBool(value.wrap != null)) << 5);
         try self.byte(flags);
         if (value.decoration) |line| {
             try self.enumByte(types.InlineUnderlineStyle, line.style);
@@ -206,10 +221,19 @@ const Encoder = struct {
         };
         if (value.baseline_shift) |shift| try self.inlineComputedLength(shift);
         if (value.cursor) |cursor| try self.enumByte(types.InlineCursor, cursor);
+        if (value.wrap) |wrap| try self.enumByte(types.TextWrap, wrap);
     }
 
-    fn span(self: *Encoder, value: anytype) !void {
+    fn span(self: *Encoder, value: anytype) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
+        if (self.ruby_depth != 0 and !(if (self.ruby_gap) types.validRubyChild(value) else types.validRubyBodyChild(value))) return error.InvalidPresentation;
+        if (types.spanHasRuby(value) and (!self.capability_s or !types.validRubyOwner(value))) return error.InvalidPresentation;
+        if (self.in_inline_padding_group and !types.validRubyBodyChild(value)) return error.InvalidPresentation;
+        if (self.inline_padding_action != null and (!std.mem.eql(u8, @tagName(value.kind), "text") or value.target.len != 0)) return error.InvalidPresentation;
+        if (types.spanHasInlinePaddingGroup(value) and (!self.capability_u or !types.validInlinePaddingGroupOwner(value))) return error.InvalidPresentation;
+        if (!types.spanHasRuby(value) and !types.spanHasInlinePaddingGroup(value))
+            if (self.inline_padding_action) |action| try action.check(value);
         if (!types.validSpanInlineStyle(value) or !types.validSpanLinkPaint(value)) return error.InvalidPresentation;
+        if (spanImage(value) != null and spanLinkPaint(value) != null and !self.capability_r) return error.InvalidPresentation;
         if (self.link_paint) |paint| if (!types.validFigureLinkPaintSpan(paint, value)) return error.InvalidPresentation;
         if (comptime @hasField(@TypeOf(value), "pending_container"))
             if (value.pending_container != null) return error.InvalidPresentation;
@@ -313,6 +337,74 @@ const Encoder = struct {
                 try self.string(advice);
             }
         }
+        if (self.capability_s) {
+            try self.byte(@intFromBool(types.spanHasRuby(value)));
+            if (comptime @hasField(@TypeOf(value), "ruby")) if (value.ruby) |payload| try self.ruby(payload.*);
+        }
+        if (self.capability_u) {
+            try self.byte(@intFromBool(types.spanHasInlinePaddingGroup(value)));
+            if (comptime @hasField(@TypeOf(value), "inline_padding_group")) if (value.inline_padding_group) |group|
+                try self.inlinePaddingGroup(group.*, types.InlinePaddingGroupAction.from(value));
+        }
+    }
+    fn inlinePaddingGroup(self: *Encoder, value: anytype, action: ?types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
+        if (!types.validInlinePaddingGroup(value) or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
+        const previous_group = self.in_inline_padding_group;
+        const previous_action = self.inline_padding_action;
+        self.in_inline_padding_group = true;
+        self.inline_padding_action = action orelse previous_action;
+        self.content_depth += 1;
+        defer self.content_depth -= 1;
+        defer self.in_inline_padding_group = previous_group;
+        defer self.inline_padding_action = previous_action;
+        try self.styleLength(value.left);
+        try self.styleLength(value.right);
+        try self.spans(value.spans);
+    }
+    fn rubyOwner(self: *Encoder, value: types.RubyOwner) !void {
+        if (!types.validRubyOwnerContext(value)) return error.InvalidPresentation;
+        if (self.inline_padding_action) |action| try action.checkRubyOwner(value);
+        if (self.remaining_items == 0) return error.PresentationTooLarge;
+        self.remaining_items -= 1;
+        try self.inlineFontSnapshot(value.font);
+        try self.string(value.direction);
+        try self.byte(@intFromBool(value.inline_style != null));
+        if (value.inline_style) |style| try self.inlineTextStyle(style);
+        try self.byte(@intFromBool(value.foreground != null));
+        if (value.foreground) |ink| try self.string(ink);
+        try self.byte(@intFromBool(value.background != null));
+        if (value.background) |ink| try self.string(ink);
+    }
+    fn ruby(self: *Encoder, value: anytype) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
+        if (!types.validRuby(value) or self.ruby_depth >= types.max_ruby_depth or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
+        self.ruby_depth += 1; defer self.ruby_depth -= 1;
+        self.content_depth += 1; defer self.content_depth -= 1;
+        try self.count(value.segments.len);
+        for (value.segments) |segment| {
+            try self.rubySpans(segment.gap_before, true);
+            try self.count(segment.bases.len);
+            for (segment.bases) |base| {
+                try self.rubySpans(base.gap_before, true);
+                try self.rubyOwner(base.owner);
+                try self.rubySpans(base.spans, false);
+            }
+            try self.count(segment.annotations.len);
+            for (segment.annotations) |annotation| {
+                try self.writeU32(annotation.base_start);
+                try self.writeU32(annotation.base_count);
+                try self.writeU32(annotation.level);
+                try self.rubyOwner(annotation.owner);
+                try self.rubySpans(annotation.gap_before, true);
+                try self.rubySpans(annotation.spans, false);
+                try self.rubySpans(annotation.fallback_before, false);
+                try self.rubySpans(annotation.fallback_after, false);
+                try self.byte(@intFromBool(annotation.explicit_fallback));
+            }
+        }
+    }
+    fn rubySpans(self: *Encoder, values: anytype, gap: bool) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
+        const previous = self.ruby_gap; self.ruby_gap = gap; defer self.ruby_gap = previous;
+        try self.spans(values);
     }
     fn mapString(self: *Encoder, value: []const u8) !void {
         if (value.len > max_string_bytes or value.len > self.remaining_map_string_bytes) return error.PresentationTooLarge;
@@ -385,7 +477,7 @@ const Encoder = struct {
         }
         if (value.vertical_align) |alignment| try self.enumByte(types.InlineImageVerticalAlign, alignment);
     }
-    fn spans(self: *Encoder, values: anytype) !void {
+    fn spans(self: *Encoder, values: anytype) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         try self.count(values.len);
         for (values) |value| try self.span(value);
     }
@@ -844,7 +936,7 @@ const Encoder = struct {
     }
     fn table(self: *Encoder, value: anytype) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         if (value) |table_value| {
-            if (self.table_depth >= types.max_table_depth) return error.InvalidPresentation;
+            if (self.table_depth >= (if (self.capability_t or self.capability_u) types.max_table_depth else types.legacy_table_depth)) return error.InvalidPresentation;
             self.table_depth += 1;
             defer self.table_depth -= 1;
             const viewport: ?*const types.TableBlockViewport = if (comptime @hasField(@TypeOf(table_value), "block_viewport")) table_value.block_viewport else null;
@@ -998,6 +1090,12 @@ const Encoder = struct {
             },
         }
     }
+    fn headingAnchorReveal(self: *Encoder, value: types.HeadingAnchorReveal) !void {
+        if (!types.validHeadingAnchorReveal(value)) return error.InvalidPresentation;
+        try self.styleLength(value.primary_top);
+        try self.byte(@intFromBool(value.fallback_top != null));
+        if (value.fallback_top) |length| try self.styleLength(length);
+    }
     fn sectionHeadingStyles(self: *Encoder, values: anytype) !void {
         var styled_count: usize = 0;
         for (values) |section| if (sectionHeadingStyle(section) != null) { styled_count += 1; };
@@ -1007,6 +1105,12 @@ const Encoder = struct {
             if (!types.validSectionHeadingStyle(style) or !types.validSectionHeadingCompanion(section)) return error.InvalidPresentation;
             try self.index(index_value); try self.containerStyle(style.box);
             try self.inlineFontSnapshot(style.font); try self.enumByte(types.BidiResolvedDirection, style.direction);
+            if (style.title_wrap != null or style.anchor_reveal != null) if (!self.text_flow) return error.InvalidPresentation;
+            if (self.text_flow) {
+                try self.byte(@as(u8, @intFromBool(style.title_wrap != null)) | (@as(u8, @intFromBool(style.anchor_reveal != null)) << 1));
+                if (style.title_wrap) |wrap| try self.enumByte(types.TextWrap, wrap);
+                if (style.anchor_reveal) |reveal| try self.headingAnchorReveal(reveal);
+            }
         };
     }
     fn containerStyle(self: *Encoder, value: types.ContainerStyle) !void {
@@ -1423,8 +1527,16 @@ const Reader = struct {
     rule_styles: bool = false,
     inline_styles: bool = false,
     capability_p: bool = false,
+    text_flow: bool = false,
     capability_q: bool = false,
     capability_r: bool = false,
+    capability_s: bool = false,
+    capability_t: bool = false,
+    capability_u: bool = false,
+    in_inline_padding_group: bool = false,
+    inline_padding_action: ?types.InlinePaddingGroupAction = null,
+    ruby_depth: usize = 0,
+    ruby_gap: bool = false,
     bytes: []const u8,
     pos: usize = 0,
     metrics: ?*DecodeMetrics = null,
@@ -1531,7 +1643,7 @@ const Reader = struct {
     fn inlineTextStyle(self: *Reader) !types.InlineTextStyle {
         if (!self.inline_styles or self.version != .container_fonts) return error.InvalidPresentation;
         const flags = try self.byte();
-        if (flags == 0 or flags & 0xe0 != 0) return error.InvalidPresentation;
+        if (flags == 0 or flags & (if (self.capability_p) @as(u8, 0xc0) else 0xe0) != 0) return error.InvalidPresentation;
         var value: types.InlineTextStyle = .{ .font_normalized = flags & 8 != 0 };
         if (flags & 1 != 0) {
             value.decoration = .{
@@ -1547,11 +1659,12 @@ const Reader = struct {
         };
         if (flags & 4 != 0) value.baseline_shift = try self.inlineComputedLength();
         if (flags & 16 != 0) value.cursor = try self.enumValue(types.InlineCursor);
+        if (flags & 32 != 0) value.wrap = try self.enumValue(types.TextWrap);
         if (!types.validInlineTextStyle(value)) return error.InvalidPresentation;
         return value;
     }
 
-    fn span(self: *Reader) !types.Span {
+    fn span(self: *Reader) error{ OutOfMemory, InvalidPresentation }!types.Span {
         const kind = try self.enumValue(types.InlineKind);
         const role = try self.enumValue(types.Role);
         const flags = try self.byte();
@@ -1606,10 +1719,86 @@ const Reader = struct {
             result.target_fragment = try self.string();
         }
         if ((self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version)))) and try self.presence()) result.tooltip = try self.string();
+        if (self.inline_padding_action != null and (result.kind != .text or result.target.len != 0)) return error.InvalidPresentation;
+        if (self.capability_s and try self.presence()) result.ruby = try self.ruby();
+        if (self.capability_u and try self.presence()) result.inline_padding_group = try self.inlinePaddingGroup(types.InlinePaddingGroupAction.from(result));
+        if (self.in_inline_padding_group and !types.validRubyBodyChild(result)) return error.InvalidPresentation;
+        if (result.inline_padding_group != null and !types.validInlinePaddingGroupOwner(result)) return error.InvalidPresentation;
+        if (result.ruby == null and result.inline_padding_group == null)
+            if (self.inline_padding_action) |action| try action.check(result);
+        if ((self.ruby_depth != 0 and !(if (self.ruby_gap) types.validRubyChild(result) else types.validRubyBodyChild(result))) or (result.ruby != null and !types.validRubyOwner(result))) return error.InvalidPresentation;
         if (result.image != null and (result.text.len != 0 or result.trail.len != 0 or
             !types.validInlineImageAction(result.kind, result.target))) return error.InvalidPresentation;
+        if (result.image != null and result.link_paint != null and !self.capability_r) return error.InvalidPresentation;
         if (!types.validSpanInlineStyle(result) or !types.validSpanLinkPaint(result)) return error.InvalidPresentation;
         return result;
+    }
+    fn inlinePaddingGroup(self: *Reader, action: ?types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation }!*const types.InlinePaddingGroup(types.Span) {
+        if (self.content_depth >= types.max_content_depth or self.remaining() < 14) return error.InvalidPresentation;
+        const previous_group = self.in_inline_padding_group;
+        const previous_action = self.inline_padding_action;
+        self.in_inline_padding_group = true;
+        self.inline_padding_action = action orelse previous_action;
+        self.content_depth += 1;
+        defer self.content_depth -= 1;
+        defer self.in_inline_padding_group = previous_group;
+        defer self.inline_padding_action = previous_action;
+        const left = try self.styleLength();
+        const right = try self.styleLength();
+        const children = try self.spans();
+        const value: types.InlinePaddingGroup(types.Span) = .{ .left = left, .right = right, .spans = children };
+        if (!types.validInlinePaddingGroup(value)) return error.InvalidPresentation;
+        const result = try self.a.create(types.InlinePaddingGroup(types.Span));
+        result.* = value;
+        return result;
+    }
+    fn rubyOwner(self: *Reader) !types.RubyOwner {
+        if (self.remaining_items == 0 or self.remaining() < 18) return error.InvalidPresentation;
+        self.remaining_items -= 1;
+        if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+        const value: types.RubyOwner = .{
+            .font = try self.inlineFontSnapshot(),
+            .direction = try self.string(),
+            .inline_style = if (try self.presence()) try self.inlineTextStyle() else null,
+            .foreground = if (try self.presence()) try self.string() else null,
+            .background = if (try self.presence()) try self.string() else null,
+        };
+        if (!types.validRubyOwnerContext(value)) return error.InvalidPresentation;
+        if (self.inline_padding_action) |action| try action.checkRubyOwner(value);
+        return value;
+    }
+    fn ruby(self: *Reader) error{ OutOfMemory, InvalidPresentation }!*const types.Ruby(types.Span) {
+        if (self.ruby_depth >= types.max_ruby_depth or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
+        self.ruby_depth += 1; defer self.ruby_depth -= 1;
+        self.content_depth += 1; defer self.content_depth -= 1;
+        const segment_count = try self.count(38);
+        if (segment_count == 0) return error.InvalidPresentation;
+        const segments = try self.a.alloc(types.RubySegment(types.Span), segment_count);
+        for (segments) |*segment| {
+            const gap = try self.rubySpans(true);
+            const base_count = try self.count(26);
+            if (base_count == 0) return error.InvalidPresentation;
+            const bases = try self.a.alloc(types.RubyBase(types.Span), base_count);
+            for (bases) |*base| base.* = .{ .gap_before = try self.rubySpans(true), .owner = try self.rubyOwner(), .spans = try self.rubySpans(false) };
+            const annotation_count = try self.count(47);
+            const annotations = try self.a.alloc(types.RubyAnnotation(types.Span), annotation_count);
+            for (annotations) |*annotation| annotation.* = .{
+                .base_start = try self.readU32(), .base_count = try self.readU32(), .level = try self.readU32(),
+                .owner = try self.rubyOwner(),
+                .gap_before = try self.rubySpans(true), .spans = try self.rubySpans(false),
+                .fallback_before = try self.rubySpans(false), .fallback_after = try self.rubySpans(false),
+                .explicit_fallback = try self.presence(),
+            };
+            segment.* = .{ .gap_before = gap, .bases = bases, .annotations = annotations };
+        }
+        const result = try self.a.create(types.Ruby(types.Span));
+        result.* = .{ .segments = segments };
+        if (!types.validRuby(result.*)) return error.InvalidPresentation;
+        return result;
+    }
+    fn rubySpans(self: *Reader, gap: bool) error{ OutOfMemory, InvalidPresentation }![]const types.Span {
+        const previous = self.ruby_gap; self.ruby_gap = gap; defer self.ruby_gap = previous;
+        return self.spans();
     }
     fn mapString(self: *Reader) ![]const u8 {
         const len: usize = try self.readU32();
@@ -1718,8 +1907,8 @@ const Reader = struct {
         if (!types.validInlineImage(value)) return error.InvalidPresentation;
         return value;
     }
-    fn spans(self: *Reader) ![]const types.Span {
-        const len = try self.count(if ((self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version))))) 37 else if ((self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version))))))) 36 else if (hasReferenceBlockFields(self.version)) 35 else if (hasFontScaleFields(self.version)) 34 else if (hasSpanBackgroundFields(self.version)) 33 else if (hasRgb(self.version)) 32 else if (self.version == .explained) 31 else 27);
+    fn spans(self: *Reader) error{ OutOfMemory, InvalidPresentation }![]const types.Span {
+        const len = try self.count(if (self.capability_u) 39 else if (self.capability_s) 38 else if ((self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version))))) 37 else if ((self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version))))))) 36 else if (hasReferenceBlockFields(self.version)) 35 else if (hasFontScaleFields(self.version)) 34 else if (hasSpanBackgroundFields(self.version)) 33 else if (hasRgb(self.version)) 32 else if (self.version == .explained) 31 else 27);
         const out = try self.a.alloc(types.Span, len);
         for (out) |*value| value.* = try self.span();
         return out;
@@ -2137,7 +2326,7 @@ const Reader = struct {
         const flags = try self.byte();
         if (flags == 0) return null;
         if (flags != 1 and !(self.version == .container_fonts and (flags == 3 or flags == 5 or (self.capability_p and (flags == 7 or flags == 13)) or (self.capability_r and flags == 19)))) return error.InvalidPresentation;
-        if (self.table_depth >= types.max_table_depth) return error.InvalidPresentation;
+        if (self.table_depth >= (if (self.capability_t or self.capability_u) types.max_table_depth else types.legacy_table_depth)) return error.InvalidPresentation;
         self.table_depth += 1;
         defer self.table_depth -= 1;
         const geometry = if (hasNestedFields(self.version)) try self.tableGeometry() else null;
@@ -2266,6 +2455,12 @@ const Reader = struct {
         if (!types.validContainerFontFamily(family)) return error.InvalidPresentation;
         return family;
     }
+    fn headingAnchorReveal(self: *Reader) !types.HeadingAnchorReveal {
+        const value: types.HeadingAnchorReveal = .{ .primary_top = try self.styleLength(),
+            .fallback_top = if (try self.presence()) try self.styleLength() else null };
+        if (!types.validHeadingAnchorReveal(value)) return error.InvalidPresentation;
+        return value;
+    }
     fn sectionHeadingStyles(self: *Reader, sections_value: []const types.Section) !void {
         if (!self.capability_p) return error.InvalidPresentation;
         const styled_count = try self.count(4);
@@ -2275,9 +2470,16 @@ const Reader = struct {
             const index_value = try self.index();
             if (index_value >= sections_value.len or (previous != null and index_value <= previous.?)) return error.InvalidPresentation;
             previous = index_value;
-            const style: types.SectionHeadingStyle = .{ .box = try self.containerStyle(), .font = try self.inlineFontSnapshot(),
+            var style: types.SectionHeadingStyle = .{ .box = try self.containerStyle(), .font = try self.inlineFontSnapshot(),
                 .direction = try self.enumValue(types.BidiResolvedDirection) };
-            if (!types.validSectionHeadingStyle(style) or !types.validSectionHeadingCompanion(sections_value[index_value])) return error.InvalidPresentation;
+            if (self.text_flow) {
+                const extension = try self.byte();
+                if (extension & 0xfc != 0) return error.InvalidPresentation;
+                if (extension & 1 != 0) style.title_wrap = try self.enumValue(types.TextWrap);
+                if (extension & 2 != 0) style.anchor_reveal = try self.headingAnchorReveal();
+            }
+            var candidate = sections_value[index_value]; candidate.heading_style = style;
+            if (!types.validSectionHeadingStyle(style) or !types.validSectionHeadingCompanion(candidate)) return error.InvalidPresentation;
             @constCast(sections_value)[index_value].heading_style = style;
         }
     }
@@ -2514,6 +2716,16 @@ fn hasImageDarkModeFilters(display: anytype, sections: anytype, preamble: anytyp
     for (sections) |section| if (blocksHaveFeature(section.blocks, .image_dark_mode_filters, 0)) return true;
     for (references) |reference| if (spansHaveImageDarkModeFilters(reference.spans)) return true;
     return referenceBlocksHaveFeature(references, .image_dark_mode_filters);
+}
+fn spansHaveImageLinkPaint(values: anytype) bool {
+    for (values) |value| if (spanImage(value) != null and spanLinkPaint(value) != null) return true;
+    return false;
+}
+fn hasImageLinkPaint(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+    if (spansHaveImageLinkPaint(display) or spansHaveImageLinkPaint(preamble)) return true;
+    for (sections) |section| if (blocksHaveFeature(section.blocks, .image_link_paint, 0)) return true;
+    for (references) |reference| if (spansHaveImageLinkPaint(reference.spans)) return true;
+    return referenceBlocksHaveFeature(references, .image_link_paint);
 }
 fn spansHaveImageAlignments(values: anytype) bool {
     for (values) |value| if (spanImage(value)) |image| if (image.vertical_align != null) return true;
@@ -2777,10 +2989,71 @@ fn hasAnchors(sections: anytype, references: anytype) bool {
     return referenceBlocksHaveFeature(references, .anchors);
 }
 
-const TreeFeature = enum { rule_clear, intrinsic_tables, cell_owner_fonts, image_alignments, table_corners, responsive_table_scroll, responsive_table_clear, extended_font_families, inline_styles, rule_styles, m_span_fonts, css_pixel_fonts, static_posters, cell_min_width, container_fonts, containers, svg_languages, missing_figures, image_dark_mode_filters, inline_table_media, inline_table_style, table_box_style, rich_content, figures, image_maps, block_geometry, tooltips, explicit_targets, explanation, color, background, scale, body_scale, anchors, nested_tables, cell_blocks, styles, images, image_borders, block_layout };
+const TreeFeature = enum { deep_tables, ruby, text_flow, image_link_paint, rule_clear, intrinsic_tables, cell_owner_fonts, image_alignments, table_corners, responsive_table_scroll, responsive_table_clear, extended_font_families, inline_styles, rule_styles, m_span_fonts, css_pixel_fonts, static_posters, cell_min_width, container_fonts, containers, svg_languages, missing_figures, image_dark_mode_filters, inline_table_media, inline_table_style, table_box_style, rich_content, figures, image_maps, block_geometry, tooltips, explicit_targets, explanation, color, background, scale, body_scale, anchors, nested_tables, cell_blocks, styles, images, image_borders, block_layout };
+
+fn rubyOwnerHasFeature(owner: types.RubyOwner, comptime feature: TreeFeature) bool {
+    return switch (feature) {
+        .extended_font_families => owner.font.font_family != null or if (owner.inline_style) |style| if (style.line_height) |height|
+            height == .font_relative and height.font_relative.font.font_family != null else false else false,
+        .text_flow => if (owner.inline_style) |style| style.wrap != null else false,
+        .inline_styles => owner.inline_style != null,
+        .m_span_fonts => owner.font.font_scale_basis == .css_px or owner.font.font_features != null,
+        .css_pixel_fonts => owner.font.font_scale_basis == .css_px,
+        .scale => spanScale(owner.font) != null,
+        .body_scale => spanScale(owner.font) != null and owner.font.font_scale_basis != .context,
+        .color => owner.foreground != null,
+        .background => owner.background != null,
+        else => false,
+    };
+}
 
 fn treeSpansHaveFeature(values: anytype, comptime feature: TreeFeature) bool {
+    var remaining: usize = max_items;
+    return rubySpansHaveFeature(values, feature, 0, &remaining);
+}
+fn rubySpansHaveFeature(values: anytype, comptime feature: TreeFeature, depth: usize, remaining: *usize) bool {
+    // Capability discovery is bounded too; the encoder/reader owns rejection.
+    if (depth > types.max_ruby_depth or values.len > remaining.*) return false;
+    remaining.* -= values.len;
+    if (localSpansHaveFeature(values, feature)) return true;
+    for (values) |value| if (comptime @hasField(@TypeOf(value), "ruby")) if (value.ruby) |ruby| {
+        if (feature == .ruby) return true;
+        if (ruby.segments.len > remaining.*) return false;
+        remaining.* -= ruby.segments.len;
+        for (ruby.segments) |segment| {
+            if (rubySpansHaveFeature(segment.gap_before, feature, depth + 1, remaining)) return true;
+            if (segment.bases.len > remaining.*) return false;
+            remaining.* -= segment.bases.len;
+            for (segment.bases) |base| {
+                if (remaining.* == 0) return false;
+                remaining.* -= 1;
+                if (rubyOwnerHasFeature(base.owner, feature)) return true;
+                if (rubySpansHaveFeature(base.gap_before, feature, depth + 1, remaining) or
+                    rubySpansHaveFeature(base.spans, feature, depth + 1, remaining)) return true;
+            }
+            if (segment.annotations.len > remaining.*) return false;
+            remaining.* -= segment.annotations.len;
+            for (segment.annotations) |annotation| {
+                if (remaining.* == 0) return false;
+                remaining.* -= 1;
+                if (rubyOwnerHasFeature(annotation.owner, feature)) return true;
+                inline for (.{ "gap_before", "spans", "fallback_before", "fallback_after" }) |field|
+                    if (rubySpansHaveFeature(@field(annotation, field), feature, depth + 1, remaining)) return true;
+            }
+        }
+    };
+    return false;
+}
+fn hasRuby(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+    if (treeSpansHaveFeature(display, .ruby) or treeSpansHaveFeature(preamble, .ruby)) return true;
+    for (sections) |section| if (blocksHaveFeature(section.blocks, .ruby, 0)) return true;
+    for (references) |reference| if (treeSpansHaveFeature(reference.spans, .ruby)) return true;
+    return referenceBlocksHaveFeature(references, .ruby);
+}
+
+fn localSpansHaveFeature(values: anytype, comptime feature: TreeFeature) bool {
     return switch (feature) {
+        .image_link_paint => spansHaveImageLinkPaint(values),
         .image_alignments => spansHaveImageAlignments(values),
         .extended_font_families => spansHaveExplicitFontFamily(values),
         .static_posters => spansHaveStaticPosters(values),
@@ -2796,6 +3069,7 @@ fn treeSpansHaveFeature(values: anytype, comptime feature: TreeFeature) bool {
         .body_scale => spansHaveBodyScale(values),
         .css_pixel_fonts => spansHaveCssPixelFonts(values),
         .m_span_fonts => spansRequireMFontFields(values),
+        .text_flow => spansHaveTextFlow(values),
         .inline_styles => spansHaveInlineStyles(values),
         .images => spansHaveImages(values),
         .image_borders => spansHaveImageBorders(values),
@@ -2862,6 +3136,7 @@ fn contentBlocksHaveFeature(values: anytype, comptime feature: TreeFeature, tabl
 
 fn contentTableHasFeature(value: anytype, comptime feature: TreeFeature, table_depth: usize, content_depth: usize) bool {
     if (content_depth > types.max_content_depth) return false;
+    if (feature == .deep_tables and table_depth > types.legacy_table_depth) return true;
     if (table_depth > types.max_table_depth) return false;
     if (feature == .intrinsic_tables) {
         if (comptime @hasField(@TypeOf(value), "block_viewport")) if (value.block_viewport) |viewport|
@@ -3226,12 +3501,12 @@ fn stackFontFamily(style: types.ContainerStyle) bool {
     return if (style.font_family) |family| family == .stack else false;
 }
 pub fn hasExtendedFontFamilies(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
-    if (spansHaveExplicitFontFamily(display) or spansHaveExplicitFontFamily(preamble)) return true;
+    if (treeSpansHaveFeature(display, .extended_font_families) or treeSpansHaveFeature(preamble, .extended_font_families)) return true;
     for (sections) |section| {
         if (sectionHeadingStyle(section)) |heading| if (stackFontFamily(heading.box) or heading.font.font_family != null) return true;
         if (blocksHaveFeature(section.blocks, .extended_font_families, 0)) return true;
     }
-    for (references) |reference| if (spansHaveExplicitFontFamily(reference.spans)) return true;
+    for (references) |reference| if (treeSpansHaveFeature(reference.spans, .extended_font_families)) return true;
     return referenceBlocksHaveFeature(references, .extended_font_families);
 }
 fn hasResponsiveTableClear(sections: anytype, references: anytype) bool {
@@ -3264,11 +3539,25 @@ fn hasTableCorners(display: anytype, sections: anytype, preamble: anytype, refer
     for (references) |reference| if (treeSpansHaveFeature(reference.spans, .table_corners)) return true;
     return referenceBlocksHaveFeature(references, .table_corners);
 }
+fn spansHaveTextFlow(values: anytype) bool {
+    for (values) |value| if (spanInlineStyle(value)) |style| if (style.wrap != null) return true;
+    return false;
+}
+fn hasTextFlow(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+    if (treeSpansHaveFeature(display, .text_flow) or treeSpansHaveFeature(preamble, .text_flow)) return true;
+    for (sections) |section| {
+        if (sectionHeadingStyle(section)) |style| if (style.title_wrap != null or style.anchor_reveal != null) return true;
+        if (blocksHaveFeature(section.blocks, .text_flow, 0)) return true;
+    }
+    for (references) |reference| if (treeSpansHaveFeature(reference.spans, .text_flow)) return true;
+    return referenceBlocksHaveFeature(references, .text_flow);
+}
 fn pendingBodyFeatures(display: anytype, sections: anytype, preamble: anytype, references: anytype, body: ?types.BodyAdjoiningPolicy) u8 {
     return (if (body != null) @as(u8, 1) else 0) |
         (if (hasSectionHeadingStyles(sections)) @as(u8, 2) else 0) |
         (if (hasExtendedFontFamilies(display, sections, preamble, references)) @as(u8, 4) else 0) |
         (if (hasResponsiveTableClear(sections, references)) @as(u8, 8) else 0) |
+        (if (hasTextFlow(display, sections, preamble, references)) @as(u8, 16) else 0) |
         (if (hasResponsiveTableScroll(sections, references)) @as(u8, 32) else 0) |
         (if (hasCellOwnerFonts(sections, references)) @as(u8, 128) else 0);
 }
@@ -3299,31 +3588,50 @@ fn versionMagic(version: Version) []const u8 {
     };
 }
 
+// T is selected only for a graph that crosses the historical table boundary.
+// Discovery stops at that first crossing, before any wider feature walk.
+fn hasDeepTables(sections: anytype, references: anytype) bool {
+    for (sections) |section| if (blocksHaveFeature(section.blocks, .deep_tables, 0)) return true;
+    return referenceBlocksHaveFeature(references, .deep_tables);
+}
+
+const DeepTableWork = types.DeepTableWork;
+fn inlineGroupPendingFeatures(work: DeepTableWork) u8 {
+    return (if (work.inline_group_font_family) @as(u8, 4) else 0) |
+        (if (work.inline_group_text_flow) @as(u8, 16) else 0);
+}
+
 pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     if (!std.mem.eql(u8, stored.schema, types.schema)) return error.InvalidPresentation;
+    const u_required = DeepTableWork.hasInlinePaddingGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const t_required = !u_required and hasDeepTables(stored.entry.sections, stored.entry.references);
+    var work: DeepTableWork = .{};
+    if (u_required or t_required) try work.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     if (layoutHasPaths(stored.entry.organization) and !buildLayoutPathsValid(stored.entry.organization, stored.entry.sections)) return error.InvalidPresentation;
+    const s_required = u_required or t_required or hasRuby(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const images = hasInlineImages(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     if (images) try validateImages(a, stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references, stored.entry.media);
     const r_required = hasIntrinsicTables(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references) or
-        hasRuleClearStyles(stored.entry.sections, stored.entry.references);
+        hasRuleClearStyles(stored.entry.sections, stored.entry.references) or
+        hasImageLinkPaint(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const q_required = hasTableCorners(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references) or hasImageAlignments(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
-    const pending_features = pendingBodyFeatures(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references, stored.entry.body_adjoining);
-    const inline_styles = r_required or q_required or pending_features != 0 or hasInlineStyles(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const pending_features = pendingBodyFeatures(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references, stored.entry.body_adjoining) | (if (u_required) inlineGroupPendingFeatures(work) else 0);
+    const inline_styles = s_required or r_required or q_required or pending_features != 0 or hasInlineStyles(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const rule_styles = inline_styles or hasRuleStyles(stored.entry.sections, stored.entry.references);
     const version: Version = if (rule_styles or hasMSpanFonts(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references) or hasMFields(stored.entry.sections, stored.entry.references) or hasStaticPosters(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .container_fonts else if (hasContainers(stored.entry.sections, stored.entry.references) or layoutHasPaths(stored.entry.organization)) .block_containers else if (hasSvgLanguages(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references) or hasMissingFigures(stored.entry.sections, stored.entry.references) or hasInlineTableStyle(stored.entry.sections, stored.entry.references) or hasImageDarkModeFilters(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .inline_table_styles else if (hasTableBoxStyle(stored.entry.sections, stored.entry.references) or hasRichContent(stored.entry.sections, stored.entry.references) or hasFigures(stored.entry.sections, stored.entry.references) or hasImageMaps(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .image_maps else if (hasBlockGeometry(stored.entry.sections, stored.entry.references)) .block_geometry else if (hasTooltips(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .tooltips else if (images and stored.entry.media.len > types.legacy_extended_image_assets) .dynamic_catalog else if (hasExplicitTargets(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explicit_targets else if (stored.entry.media.len > types.legacy_inline_image_assets or hasBlockLayout(stored.entry.sections, stored.entry.references)) .block_layout else if (hasImageBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .image_border else if (images or hasReferenceBlocks(stored.entry.references) or hasStyles(stored.entry.sections, stored.entry.references)) .reference_blocks else if (hasBodyFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale_basis else if (hasFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale else if (hasReferenceFragments(stored.entry.references)) .reference_items else if (hasCellBlocks(stored.entry.sections, stored.entry.references)) .cell_blocks else if (hasNestedTables(stored.entry.sections, stored.entry.references)) .nested_tables else if (hasSpanBackground(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .span_background else if (hasAnchors(stored.entry.sections, stored.entry.references)) .anchored else if (hasColor(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .colored else if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
     if (hasInlineTableMedia(stored.entry.sections, stored.entry.references)) inline_catalog = try types.ImageCatalogIndex.init(a, stored.entry.media);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = r_required or q_required or pending_features != 0, .capability_q = r_required or q_required, .capability_r = r_required, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
-    try encoder.out.appendSlice(a, if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
+    try encoder.out.appendSlice(a, if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
     try encoder.spans(stored.entry.display_title);
     try encoder.sections(stored.entry.sections);
     try encoder.spans(stored.entry.preamble_spans);
     try encoder.layout(stored.entry.organization);
     try encoder.references(stored.entry.references);
     try encoder.media(stored.entry.media);
-    if (r_required or q_required or pending_features != 0) {
+    if (s_required or r_required or q_required or pending_features != 0) {
         try encoder.byte(pending_features);
         if (pending_features & 2 != 0) try encoder.sectionHeadingStyles(stored.entry.sections);
     }
@@ -3351,29 +3659,35 @@ pub fn encodeBuildWithBodyAdjoiningAlloc(
     media_value: anytype,
     body_adjoining: ?types.BodyAdjoiningPolicy,
 ) ![]u8 {
+    const u_required = DeepTableWork.hasInlinePaddingGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const t_required = !u_required and hasDeepTables(sections, references_value);
+    var work: DeepTableWork = .{};
+    if (u_required or t_required) try work.entry(display_title, sections, @as([]const types.Span, &.{}), references_value);
     if (layoutHasPaths(layout_value) and !buildLayoutPathsValid(layout_value, sections)) return error.InvalidPresentation;
+    const s_required = u_required or t_required or hasRuby(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const images = hasInlineImages(display_title, sections, @as([]const types.Span, &.{}), references_value);
     if (images) try validateImages(a, display_title, sections, @as([]const types.Span, &.{}), references_value, media_value);
     const r_required = hasIntrinsicTables(display_title, sections, @as([]const types.Span, &.{}), references_value) or
-        hasRuleClearStyles(sections, references_value);
+        hasRuleClearStyles(sections, references_value) or
+        hasImageLinkPaint(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const q_required = hasTableCorners(display_title, sections, @as([]const types.Span, &.{}), references_value) or hasImageAlignments(display_title, sections, @as([]const types.Span, &.{}), references_value);
-    const pending_features = pendingBodyFeatures(display_title, sections, @as([]const types.Span, &.{}), references_value, body_adjoining);
-    const inline_styles = r_required or q_required or pending_features != 0 or hasInlineStyles(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const pending_features = pendingBodyFeatures(display_title, sections, @as([]const types.Span, &.{}), references_value, body_adjoining) | (if (u_required) inlineGroupPendingFeatures(work) else 0);
+    const inline_styles = s_required or r_required or q_required or pending_features != 0 or hasInlineStyles(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const rule_styles = inline_styles or hasRuleStyles(sections, references_value);
     const version: Version = if (rule_styles or hasMSpanFonts(display_title, sections, @as([]const types.Span, &.{}), references_value) or hasMFields(sections, references_value) or hasStaticPosters(display_title, sections, @as([]const types.Span, &.{}), references_value)) .container_fonts else if (hasContainers(sections, references_value) or layoutHasPaths(layout_value)) .block_containers else if (hasSvgLanguages(display_title, sections, @as([]const types.Span, &.{}), references_value) or hasMissingFigures(sections, references_value) or hasInlineTableStyle(sections, references_value) or hasImageDarkModeFilters(display_title, sections, @as([]const types.Span, &.{}), references_value)) .inline_table_styles else if (hasTableBoxStyle(sections, references_value) or hasRichContent(sections, references_value) or hasFigures(sections, references_value) or hasImageMaps(display_title, sections, @as([]const types.Span, &.{}), references_value)) .image_maps else if (hasBlockGeometry(sections, references_value)) .block_geometry else if (hasTooltips(display_title, sections, @as([]const types.Span, &.{}), references_value)) .tooltips else if (images and media_value.len > types.legacy_extended_image_assets) .dynamic_catalog else if (hasExplicitTargets(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explicit_targets else if (media_value.len > types.legacy_inline_image_assets or hasBlockLayout(sections, references_value)) .block_layout else if (hasImageBorders(display_title, sections, @as([]const types.Span, &.{}), references_value)) .image_border else if (images or hasReferenceBlocks(references_value) or hasStyles(sections, references_value)) .reference_blocks else if (hasBodyFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale_basis else if (hasFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale else if (hasReferenceFragments(references_value)) .reference_items else if (hasCellBlocks(sections, references_value)) .cell_blocks else if (hasNestedTables(sections, references_value)) .nested_tables else if (hasSpanBackground(display_title, sections, @as([]const types.Span, &.{}), references_value)) .span_background else if (hasAnchors(sections, references_value)) .anchored else if (hasColor(display_title, sections, @as([]const types.Span, &.{}), references_value)) .colored else if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
     if (hasInlineTableMedia(sections, references_value)) inline_catalog = try types.ImageCatalogIndex.init(a, media_value);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = r_required or q_required or pending_features != 0, .capability_q = r_required or q_required, .capability_r = r_required, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
-    try encoder.out.appendSlice(a, if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
+    try encoder.out.appendSlice(a, if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
     try encoder.spans(display_title);
     try encoder.sections(sections);
     try encoder.count(0); // no preamble is emitted by the bundle compiler
     try encoder.layout(layout_value);
     try encoder.references(references_value);
     try encoder.media(media_value);
-    if (r_required or q_required or pending_features != 0) {
+    if (s_required or r_required or q_required or pending_features != 0) {
         try encoder.byte(pending_features);
         if (pending_features & 2 != 0) try encoder.sectionHeadingStyles(sections);
     }
@@ -3416,9 +3730,12 @@ fn decodeImpl(
     metrics: ?*DecodeMetrics,
 ) !types.Stored {
     if (payload.len < magic.len) return error.InvalidPresentation;
+    const inline_groups_header = std.mem.eql(u8, payload[0..magic.len], inline_padding_groups_magic);
+    const deep_tables_header = std.mem.eql(u8, payload[0..magic.len], deep_tables_magic);
+    const ruby_header = inline_groups_header or deep_tables_header or std.mem.eql(u8, payload[0..magic.len], ruby_magic);
     const intrinsic_header = std.mem.eql(u8, payload[0..magic.len], intrinsic_table_magic);
     const table_corners_header = std.mem.eql(u8, payload[0..magic.len], table_corners_magic);
-    const body_adjoining_header = intrinsic_header or table_corners_header or std.mem.eql(u8, payload[0..magic.len], body_adjoining_magic);
+    const body_adjoining_header = ruby_header or intrinsic_header or table_corners_header or std.mem.eql(u8, payload[0..magic.len], body_adjoining_magic);
     const inline_styles = body_adjoining_header or std.mem.eql(u8, payload[0..magic.len], inline_styles_magic);
     const rule_styles = inline_styles or std.mem.eql(u8, payload[0..magic.len], rule_styles_magic);
     const version: Version = if (rule_styles) .container_fonts else if (std.mem.eql(u8, payload[0..magic.len], magic)) .plain else if (std.mem.eql(u8, payload[0..explained_magic.len], explained_magic)) .explained else if (std.mem.eql(u8, payload[0..color_magic.len], color_magic)) .colored else if (std.mem.eql(u8, payload[0..anchor_magic.len], anchor_magic)) .anchored else if (std.mem.eql(u8, payload[0..background_magic.len], background_magic)) .span_background else if (std.mem.eql(u8, payload[0..nested_magic.len], nested_magic)) .nested_tables else if (std.mem.eql(u8, payload[0..cell_blocks_magic.len], cell_blocks_magic)) .cell_blocks else if (std.mem.eql(u8, payload[0..reference_items_magic.len], reference_items_magic)) .reference_items else if (std.mem.eql(u8, payload[0..font_scale_magic.len], font_scale_magic)) .font_scale else if (std.mem.eql(u8, payload[0..font_scale_basis_magic.len], font_scale_basis_magic)) .font_scale_basis else if (std.mem.eql(u8, payload[0..reference_blocks_magic.len], reference_blocks_magic)) .reference_blocks else if (std.mem.eql(u8, payload[0..image_border_magic.len], image_border_magic)) .image_border else if (std.mem.eql(u8, payload[0..block_layout_magic.len], block_layout_magic)) .block_layout else if (std.mem.eql(u8, payload[0..explicit_targets_magic.len], explicit_targets_magic)) .explicit_targets else if (std.mem.eql(u8, payload[0..dynamic_catalog_magic.len], dynamic_catalog_magic)) .dynamic_catalog else if (std.mem.eql(u8, payload[0..tooltips_magic.len], tooltips_magic)) .tooltips else if (std.mem.eql(u8, payload[0..block_geometry_magic.len], block_geometry_magic)) .block_geometry else if (std.mem.eql(u8, payload[0..image_maps_magic.len], image_maps_magic)) .image_maps else if (std.mem.eql(u8, payload[0..inline_table_styles_magic.len], inline_table_styles_magic)) .inline_table_styles else if (std.mem.eql(u8, payload[0..block_containers_magic.len], block_containers_magic)) .block_containers else if (std.mem.eql(u8, payload[0..container_fonts_magic.len], container_fonts_magic)) .container_fonts else {
@@ -3427,7 +3744,7 @@ fn decodeImpl(
         if (std.mem.eql(u8, payload[0..3], "DPR")) return error.UnsupportedPresentationVersion;
         return error.InvalidPresentation;
     };
-    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = intrinsic_header or table_corners_header, .capability_r = intrinsic_header, .bytes = payload, .pos = magic.len, .metrics = metrics };
+    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .bytes = payload, .pos = magic.len, .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
     const preamble = try reader.spans();
@@ -3435,14 +3752,23 @@ fn decodeImpl(
     const references = try reader.references();
     const media = try reader.media();
     const pending_features: u8 = if (body_adjoining_header) try reader.byte() else 0;
-    if (body_adjoining_header and ((!intrinsic_header and !table_corners_header and pending_features == 0) or pending_features & ~@as(u8, 175) != 0)) return error.InvalidPresentation;
+    if (body_adjoining_header and ((!ruby_header and !intrinsic_header and !table_corners_header and pending_features == 0) or pending_features & ~@as(u8, 191) != 0)) return error.InvalidPresentation;
+    reader.text_flow = pending_features & 16 != 0;
     if (pending_features & 2 != 0) try reader.sectionHeadingStyles(sections);
     const body_adjoining: ?types.BodyAdjoiningPolicy = if (pending_features & 1 != 0) .ordinary else null;
-    if (body_adjoining_header and pending_features != pendingBodyFeatures(display_title, sections, preamble, references, body_adjoining)) return error.InvalidPresentation;
-    if (!intrinsic_header and table_corners_header != (hasTableCorners(display_title, sections, preamble, references) or
+    var inline_work: DeepTableWork = .{};
+    if (inline_groups_header) {
+        inline_work.entry(display_title, sections, preamble, references) catch return error.InvalidPresentation;
+        if (!inline_work.inline_group_found) return error.InvalidPresentation;
+    }
+    const additional_inline_features: u8 = if (inline_groups_header) inlineGroupPendingFeatures(inline_work) else 0;
+    if (body_adjoining_header and pending_features != (pendingBodyFeatures(display_title, sections, preamble, references, body_adjoining) | additional_inline_features)) return error.InvalidPresentation;
+    if (!ruby_header and !intrinsic_header and table_corners_header != (hasTableCorners(display_title, sections, preamble, references) or
         hasImageAlignments(display_title, sections, preamble, references))) return error.InvalidPresentation;
-    if (intrinsic_header != (hasIntrinsicTables(display_title, sections, preamble, references) or
-        hasRuleClearStyles(sections, references))) return error.InvalidPresentation;
+    if (!ruby_header and intrinsic_header != (hasIntrinsicTables(display_title, sections, preamble, references) or
+        hasRuleClearStyles(sections, references) or hasImageLinkPaint(display_title, sections, preamble, references))) return error.InvalidPresentation;
+    if (!inline_groups_header and !deep_tables_header and ruby_header != hasRuby(display_title, sections, preamble, references)) return error.InvalidPresentation;
+    if (!inline_groups_header and deep_tables_header != hasDeepTables(sections, references)) return error.InvalidPresentation;
     if (reader.pos != payload.len) return error.InvalidPresentation;
 
     const title = expected_title;
@@ -4144,7 +4470,11 @@ test "DPR7 rejects mixed nested spans invalid geometry and excess table depth" {
     const sixteen = try encodeAlloc(a, stored);
     _ = try decodeAlloc(a, sixteen, "depth", .language, .{ .code = "", .heading = "U" });
     blocks[0].table = tables[0];
-    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
+    const deeper = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(deep_tables_magic, deeper[0..4]);
+    var legacy_depth: Encoder = .{ .a = a, .version = .nested_tables };
+    defer legacy_depth.deinit();
+    try std.testing.expectError(error.InvalidPresentation, legacy_depth.table(@as(?types.Table, tables[0])));
     blocks[0].table = .{ .geometry = .{ .width = .{ .unit = .percent, .value = 101 } } };
     try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
     const mixed_cells = [_]types.Cell{.{ .spans = &.{.{ .text = "must not disappear" }}, .nested_table = .{} }};
@@ -4293,8 +4623,12 @@ test "DPR8 cell block tables retain depth and shared collection limits" {
     nested_reader = .{ .a = a, .version = .cell_blocks, .bytes = nested_encoder.out.items, .table_depth = 15 };
     try std.testing.expectError(error.InvalidPresentation, nested_reader.table());
     blocks[0].table = tables[0];
-    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
-    try std.testing.expectError(error.InvalidPresentation, types.validateStored(std.testing.allocator, stored, "depth", .supplemental, null));
+    const deeper = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(deep_tables_magic, deeper[0..4]);
+    var legacy_depth: Encoder = .{ .a = a, .version = .cell_blocks };
+    defer legacy_depth.deinit();
+    try std.testing.expectError(error.InvalidPresentation, legacy_depth.table(@as(?types.Table, tables[0])));
+    try types.validateStored(std.testing.allocator, stored, "depth", .supplemental, null);
     var encoder: Encoder = .{ .a = a, .version = .cell_blocks, .remaining_items = 1 };
     defer encoder.deinit();
     try encoder.cell(types.Cell{ .blocks = &.{.{ .kind = .paragraph }} });
@@ -4813,9 +5147,9 @@ test "DPRC shares table depth and aggregate item budget across reference blocks"
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var cells: [types.max_table_depth + 1][1]types.Cell = undefined;
-    var rows: [types.max_table_depth + 1][1]types.Row = undefined;
-    var tables: [types.max_table_depth + 1]types.Table = undefined;
+    var cells: [types.legacy_table_depth + 1][1]types.Cell = undefined;
+    var rows: [types.legacy_table_depth + 1][1]types.Row = undefined;
+    var tables: [types.legacy_table_depth + 1]types.Table = undefined;
     var i: usize = tables.len;
     while (i != 0) {
         i -= 1;
@@ -4829,15 +5163,17 @@ test "DPRC shares table depth and aggregate item budget across reference blocks"
     const valid = try encodeAlloc(a, stored);
     var metrics: DecodeMetrics = .{};
     _ = try decodeWithMetricsAlloc(a, valid, "depth", .supplemental, null, &metrics);
-    try std.testing.expectEqual(types.max_table_depth, metrics.tables);
+    try std.testing.expectEqual(types.legacy_table_depth, metrics.tables);
     var encoder: Encoder = .{ .a = a, .version = .reference_blocks };
     defer encoder.deinit();
     try encoder.references(&refs);
     var reader: Reader = .{ .a = a, .version = .reference_blocks, .bytes = encoder.out.items, .table_depth = 1 };
     try std.testing.expectError(error.InvalidPresentation, reader.references());
     contents[0].table = tables[0];
-    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
-    try std.testing.expectError(error.InvalidPresentation, types.validateStored(std.testing.allocator, stored, "depth", .supplemental, null));
+    const deeper = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(deep_tables_magic, deeper[0..4]);
+    try types.validateStored(std.testing.allocator, stored, "depth", .supplemental, null);
+    try std.testing.expectError(error.InvalidPresentation, encoder.references(&refs));
     const small = [_]types.Reference{.{ .number = 2, .group_number = 1, .blocks = &.{.{ .kind = .paragraph }} }};
     var small_encoder: Encoder = .{ .a = a, .version = .reference_blocks, .remaining_items = 2 };
     defer small_encoder.deinit();
@@ -5096,9 +5432,9 @@ test "DPRC styled reference tables preserve shared depth and aggregate budgets" 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var cells: [types.max_table_depth + 1][1]types.Cell = undefined;
-    var rows: [types.max_table_depth + 1][1]types.Row = undefined;
-    var tables: [types.max_table_depth + 1]types.Table = undefined;
+    var cells: [types.legacy_table_depth + 1][1]types.Cell = undefined;
+    var rows: [types.legacy_table_depth + 1][1]types.Row = undefined;
+    var tables: [types.legacy_table_depth + 1]types.Table = undefined;
     var i: usize = tables.len;
     while (i != 0) {
         i -= 1;
@@ -5112,15 +5448,17 @@ test "DPRC styled reference tables preserve shared depth and aggregate budgets" 
     const valid = try encodeAlloc(a, stored);
     var metrics: DecodeMetrics = .{};
     _ = try decodeWithMetricsAlloc(a, valid, "depth", .supplemental, null, &metrics);
-    try std.testing.expectEqual(types.max_table_depth, metrics.tables);
+    try std.testing.expectEqual(types.legacy_table_depth, metrics.tables);
     var encoder: Encoder = .{ .a = a, .version = .reference_blocks };
     defer encoder.deinit();
     try encoder.references(&refs);
     var reader: Reader = .{ .a = a, .version = .reference_blocks, .bytes = encoder.out.items, .table_depth = 1 };
     try std.testing.expectError(error.InvalidPresentation, reader.references());
     contents[0].table = tables[0];
-    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, stored));
-    try std.testing.expectError(error.InvalidPresentation, types.validateStored(std.testing.allocator, stored, "depth", .supplemental, null));
+    const deeper = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(deep_tables_magic, deeper[0..4]);
+    try types.validateStored(std.testing.allocator, stored, "depth", .supplemental, null);
+    try std.testing.expectError(error.InvalidPresentation, encoder.references(&refs));
     contents[0].table = tables[tables.len - 1];
     var exact: Encoder = .{ .a = a, .version = .reference_blocks, .remaining_items = 4 };
     defer exact.deinit();
@@ -10706,7 +11044,7 @@ test "DPRN Rule capability recursively follows existing body caption reference a
 test "complete unknown DPR capability differs from malformed known and truncated framing" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
     const a = arena.allocator();
-    for ([_][]const u8{ "DPRQ", "DPRZ", "DPR0", "DPRQpayload" }) |bytes| {
+    for ([_][]const u8{ "DPRV", "DPRZ", "DPR0", "DPRVpayload" }) |bytes| {
         var metrics: DecodeMetrics = .{ .total_items = 99, .largest_string_bytes = 77 };
         try std.testing.expectError(error.UnsupportedPresentationVersion, decodeWithMetricsAlloc(a, bytes, "x", .supplemental, null, &metrics));
         try std.testing.expectEqual(@as(u64, 99), metrics.total_items);
@@ -10717,7 +11055,8 @@ test "complete unknown DPR capability differs from malformed known and truncated
     for ([_][]const u8{ magic, explained_magic, color_magic, anchor_magic, background_magic, nested_magic,
         cell_blocks_magic, reference_items_magic, font_scale_magic, font_scale_basis_magic, reference_blocks_magic,
         image_border_magic, block_layout_magic, explicit_targets_magic, dynamic_catalog_magic, tooltips_magic,
-        block_geometry_magic, image_maps_magic, inline_table_styles_magic, block_containers_magic, container_fonts_magic, rule_styles_magic, inline_styles_magic }) |header|
+        block_geometry_magic, image_maps_magic, inline_table_styles_magic, block_containers_magic, container_fonts_magic, rule_styles_magic, inline_styles_magic,
+        body_adjoining_magic, table_corners_magic, intrinsic_table_magic, ruby_magic, deep_tables_magic, inline_padding_groups_magic }) |header|
         try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, header, "x", .supplemental, null));
     const bytes = try encodeAlloc(a, types.Stored{ .entry = .{ .title = "x", .kind = .supplemental,
         .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{RuleCodecTest.block()} }} } });
@@ -10940,7 +11279,7 @@ test "DPRP null keeps exact prior headers payloads and mandatory capability reje
     try std.testing.expect((try decodeAlloc(a, bytes, "body", .citations, null)).entry.body_adjoining == null);
     for ([_][]const u8{ "DPRP", "DPRPpayload" }) |bad|
         try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, "body", .citations, null));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRS", "body", .citations, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRV", "body", .citations, null));
 }
 
 const StyledSectionCodecTest = struct {
@@ -11681,7 +12020,7 @@ test "DPRQ rejects old header corner flags missing owner census and truncated pa
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, absent, "corners", .citations, null));
     for (0..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation,
         decodeAlloc(a, bytes[0..end], "corners", .citations, null));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRS", "corners", .citations, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRV", "corners", .citations, null));
 }
 
 test "Table corner tail has strict old reader masks units flags and exact legacy null bytes" {
@@ -12115,7 +12454,7 @@ test "DPRR local tag nineteen rejects old headers malformed direction missing fo
     const invented = try a.dupe(u8, old_q); @memcpy(invented[0..4], intrinsic_table_magic);
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, invented, "corners", .citations, null));
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, intrinsic_table_magic, "intrinsic", .supplemental, null));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRS", "intrinsic", .supplemental, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRV", "intrinsic", .supplemental, null));
 }
 
 test "DPRR combines Q and P cell owner families without adding a P feature or weakening Q census" {
@@ -12225,4 +12564,1161 @@ test "DPRR Rule marker two requires an explicit clear tail and retains every nul
     try invented.appendSlice(a, old_bytes); @memcpy(invented.items[0..4], intrinsic_table_magic);
     try invented.append(a, 0);
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, invented.items, "clear", .supplemental, null));
+}
+
+
+const ImageLinkPaintCodecTesting = struct {
+    fn span(outlined: bool) types.Span {
+        var paint = OrdinaryLinkPaintCodecTesting.paint();
+        paint.focus_outline = if (outlined) .{ .width = .{ .unit = .px, .value = 2 },
+            .color = .{ .kind = .rgb, .value = "#3366cc" }, .radius = .{ .unit = .px, .value = 0 },
+            .offset = .{ .unit = .px, .value = 1 } } else null;
+        return .{ .kind = .link, .target = "File:Arrow.png", .image = .{ .file = "Arrow.png", .width_px = 30 },
+            .foreground = paint.normal.foreground, .underline = paint.normal.underline, .link_paint = paint };
+    }
+    const media = [_]types.Media{.{ .kind = .image, .file = "Arrow.png", .caption = "" }};
+};
+
+test "R image action paint recursively preserves all focus states body actions and Stored build JSON" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_]bool{ false, true }) |outlined| {
+        const image = ImageLinkPaintCodecTesting.span(outlined);
+        const spans = [_]types.Span{ image, .{ .kind = .link, .text = "kept", .target = "Other", .target_fragment = "part" },
+            .{ .kind = .external_link, .text = "tail", .target = "https://example.test/full" } };
+        const body = [_]types.Block{.{ .kind = .paragraph, .spans = &spans }};
+        const table: types.Table = .{ .caption = &spans, .rows = &.{.{ .cells = &.{.{ .spans = &spans }, .{ .blocks = &body }} }} };
+        var figure = FigureLinkPaintCodecTest.missing();
+        figure.table_caption_layout = null; figure.content.missing.link_paint = null; figure.caption = &spans;
+        const image_figure = FigureCodecFixture.make(image);
+        const entries = [_]types.Entry{
+            .{ .title = "image paint", .kind = .supplemental, .display_title = &spans },
+            .{ .title = "image paint", .kind = .supplemental, .preamble_spans = &spans },
+            .{ .title = "image paint", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "body", .blocks = &body }} },
+            .{ .title = "image paint", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "table", .blocks = &.{.{ .kind = .table, .table = table }} }} },
+            .{ .title = "image paint", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "nested", .blocks = &.{.{ .kind = .table, .table = .{ .caption_blocks = &body, .rows = &.{.{ .cells = &.{.{ .nested_table = table }} }} } }} }} },
+            .{ .title = "image paint", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "container", .blocks = &.{.{ .kind = .container, .container = .{ .blocks = &body } }} }} },
+            .{ .title = "image paint", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "figure", .blocks = &.{.{ .kind = .paragraph, .figure = figure }} }} },
+            .{ .title = "image paint", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "image figure", .blocks = &.{.{ .kind = .paragraph, .figure = image_figure }} }} },
+            .{ .title = "image paint", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "flow", .blocks = &.{.{ .kind = .paragraph, .flow = &.{.{ .kind = .scope, .scope = .{ .mode = .isolate, .resolved_direction = .rtl, .parts = &.{.{ .kind = .@"inline", .spans = &spans }} } }} }} }} },
+            .{ .title = "image paint", .kind = .supplemental, .references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .spans = &spans }} },
+            .{ .title = "image paint", .kind = .supplemental, .references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .blocks = &body }} },
+        };
+        for (entries) |original| {
+            var entry = original; entry.media = &ImageLinkPaintCodecTesting.media;
+            const stored: types.Stored = .{ .entry = entry };
+            try types.validateStored(a, stored, entry.title, entry.kind, null);
+            const bytes = try encodeAlloc(a, stored);
+            try std.testing.expectEqualStrings(intrinsic_table_magic, bytes[0..4]);
+            try std.testing.expectEqual(@as(u8, 0), bytes[bytes.len - 1]);
+            const decoded = try decodeAlloc(a, bytes, entry.title, entry.kind, null);
+            try std.testing.expectEqualDeep(stored, decoded);
+            try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+            const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+            try std.testing.expectEqualDeep(stored, try std.json.parseFromSliceLeaky(types.Stored, a, json, .{}));
+            var build_entry = entry; build_entry.preamble_spans = &.{};
+            try std.testing.expectEqualSlices(u8, try encodeAlloc(a, .{ .entry = build_entry }),
+                try encodeBuildAlloc(a, entry.display_title, entry.sections, entry.organization, entry.references, entry.media));
+            for ([_][]const u8{ container_fonts_magic, rule_styles_magic, inline_styles_magic, body_adjoining_magic, table_corners_magic }) |header| {
+                const old = try a.dupe(u8, bytes); @memcpy(old[0..4], header);
+                try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, old, entry.title, entry.kind, null));
+            }
+            const unknown = try a.dupe(u8, bytes); unknown[unknown.len - 1] |= 16;
+            try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, unknown, entry.title, entry.kind, null));
+        }
+    }
+}
+
+test "R image action paint reuses exact span payload and rejects legacy capability without changing null bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_]bool{ false, true }) |outlined| {
+        const span = ImageLinkPaintCodecTesting.span(outlined);
+        var encoder: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true }; defer encoder.deinit();
+        try encoder.span(span);
+        var reader: Reader = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true, .bytes = encoder.out.items };
+        try std.testing.expectEqualDeep(span, try reader.span());
+        try std.testing.expectEqual(encoder.out.items.len, reader.pos);
+        for ([_]bool{ false, true }) |q| {
+            var old: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = q }; defer old.deinit();
+            try std.testing.expectError(error.InvalidPresentation, old.span(span));
+            var old_reader: Reader = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = q, .bytes = encoder.out.items };
+            try std.testing.expectError(error.InvalidPresentation, old_reader.span());
+        }
+        for (0..encoder.out.items.len) |end| {
+            var short: Reader = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true, .bytes = encoder.out.items[0..end] };
+            try std.testing.expectError(error.InvalidPresentation, short.span());
+        }
+        var absent = span; absent.link_paint = null;
+        var prior: Encoder = .{ .a = a, .version = .container_fonts }; defer prior.deinit(); try prior.span(absent);
+        var current: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true }; defer current.deinit(); try current.span(absent);
+        try std.testing.expectEqualSlices(u8, prior.out.items, current.out.items);
+        const text = OrdinaryLinkPaintCodecTesting.span();
+        prior.out.clearRetainingCapacity(); current.out.clearRetainingCapacity();
+        try prior.span(text); try current.span(text);
+        try std.testing.expectEqualSlices(u8, prior.out.items, current.out.items);
+    }
+    var legacy = ImageLinkPaintCodecTesting.span(false); legacy.link_paint = null; legacy.font_features = .normal;
+    const stored: types.Stored = .{ .entry = .{ .title = "legacy image", .kind = .supplemental, .display_title = &.{legacy}, .media = &ImageLinkPaintCodecTesting.media } };
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(container_fonts_magic, bytes[0..4]);
+    var forged: std.ArrayList(u8) = .empty; try forged.appendSlice(a, bytes);
+    @memcpy(forged.items[0..4], intrinsic_table_magic); try forged.append(a, 0);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, forged.items, stored.entry.title, stored.entry.kind, null));
+}
+
+
+test "R Figure rejects competing media and image focus owners in Stored build and forged wire" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const outline = TableCaptionCodecTest.richMedia().focus_outline.?;
+    for ([_]bool{ false, true }) |outlined| for ([_]bool{ false, true }) |in_viewport| {
+        var figure = FigureCodecFixture.make(ImageLinkPaintCodecTesting.span(outlined));
+        figure.table_caption_layout = TableCaptionCodecTest.minimal();
+        var media = figure.table_caption_layout.?.media;
+        if (in_viewport) figure.table_caption_layout.?.viewport_states = &.{.{ .max_width_px = 639, .wrapper = .{}, .media = media }};
+        const before: types.Block = .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "BEFORE", .target = "Before", .target_fragment = "part" }} };
+        const after: types.Block = .{ .kind = .paragraph, .spans = &.{.{ .kind = .external_link, .text = "AFTER", .target = "https://example.test/after" }} };
+        const source: types.Stored = .{ .entry = .{ .title = "one focus owner", .kind = .supplemental,
+            .sections = &.{.{ .level = 0, .title = "", .blocks = &.{before, .{ .kind = .paragraph, .figure = figure }, after} }},
+            .media = &ImageLinkPaintCodecTesting.media } };
+        const bytes = try encodeAlloc(a, source);
+        try std.testing.expectEqualStrings(intrinsic_table_magic, bytes[0..4]);
+        try std.testing.expectEqualDeep(source, try decodeAlloc(a, bytes, source.entry.title, source.entry.kind, null));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, source.entry.display_title,
+            source.entry.sections, source.entry.organization, source.entry.references, source.entry.media));
+        var competing = figure;
+        if (in_viewport) {
+            media.focus_outline = outline;
+            competing.table_caption_layout.?.viewport_states = &.{.{ .max_width_px = 639, .wrapper = .{}, .media = media }};
+        } else competing.table_caption_layout.?.media.focus_outline = outline;
+        var invalid = source;
+        invalid.entry.sections = &.{.{ .level = 0, .title = "", .blocks = &.{before, .{ .kind = .paragraph, .figure = competing }, after} }};
+        try std.testing.expectError(error.InvalidPresentation, types.validateStored(a, invalid, invalid.entry.title, invalid.entry.kind, null));
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, invalid));
+        try std.testing.expectError(error.InvalidPresentation, encodeBuildAlloc(a, invalid.entry.display_title,
+            invalid.entry.sections, invalid.entry.organization, invalid.entry.references, invalid.entry.media));
+        // Both parts are independently well-formed. Replace only the valid
+        // media-layout tail to exercise the decoder's joint owner refusal.
+        var encoded: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true }; defer encoded.deinit();
+        try encoded.figure(@as(?types.Figure, figure));
+        var old_tail: Encoder = .{ .a = a, .version = .container_fonts }; defer old_tail.deinit();
+        try old_tail.tableCaptionLayout(figure.table_caption_layout.?);
+        var new_tail: Encoder = .{ .a = a, .version = .container_fonts }; defer new_tail.deinit();
+        try new_tail.tableCaptionLayout(competing.table_caption_layout.?);
+        const prefix = encoded.out.items.len - old_tail.out.items.len;
+        try std.testing.expectEqualSlices(u8, old_tail.out.items, encoded.out.items[prefix..]);
+        var forged: std.ArrayList(u8) = .empty;
+        try forged.appendSlice(a, encoded.out.items[0..prefix]); try forged.appendSlice(a, new_tail.out.items);
+        var reader: Reader = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true, .bytes = forged.items };
+        try std.testing.expectError(error.InvalidPresentation, reader.figure());
+        // Removing the new image owner restores the exact existing Figure
+        // media policy, including its narrow-state-only outline.
+        competing.content.image.span.link_paint = null;
+        var legacy = source;
+        legacy.entry.sections = &.{.{ .level = 0, .title = "", .blocks = &.{before, .{ .kind = .paragraph, .figure = competing }, after} }};
+        const old_bytes = try encodeAlloc(a, legacy);
+        try std.testing.expectEqualStrings(container_fonts_magic, old_bytes[0..4]);
+        try std.testing.expectEqualDeep(legacy, try decodeAlloc(a, old_bytes, legacy.entry.title, legacy.entry.kind, null));
+        try std.testing.expectEqualSlices(u8, old_bytes, try encodeBuildAlloc(a, legacy.entry.display_title,
+            legacy.entry.sections, legacy.entry.organization, legacy.entry.references, legacy.entry.media));
+    };
+}
+
+test "P text flow finds nested range users and preserves every stored action through roundtrip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const span: types.Span = .{ .kind = .link, .text = "long-unbroken-action", .trail = "suffix", .direction = "rtl", .target = "Kept", .target_fragment = "part",
+        .inline_style = .{ .wrap = .break_word, .cursor = .help } };
+    const deep = [_]types.Section{.{ .level = 0, .title = "", .blocks = &.{.{ .kind = .container, .container = .{
+        .blocks = &.{.{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &.{.{ .kind = .paragraph, .spans = &.{span} }} }} }} } }} } } } }};
+    const reference = [_]types.Reference{.{ .kind = .fragment, .number = 1, .group_number = null,
+        .spans = &.{}, .blocks = &.{.{ .kind = .paragraph, .spans = &.{ .{ .text = "reference" }, span } }} }};
+    const mixed_reference = [_]types.Reference{.{ .kind = .fragment, .number = 1, .group_number = null,
+        .spans = &.{.{ .text = "reference" }}, .blocks = &.{.{ .kind = .paragraph, .spans = &.{span} }} }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, .{ .entry = types.Entry{
+        .title = "flow", .kind = .citations, .references = &mixed_reference } }));
+    for (0..5) |location| {
+        var entry: types.Entry = .{ .title = "flow", .kind = .citations };
+        switch (location) {
+            0 => entry.display_title = &.{span},
+            1 => entry.preamble_spans = &.{span},
+            2 => entry.sections = &deep,
+            3 => entry.references = &reference,
+            4 => entry.references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .spans = &.{span} }},
+            else => unreachable,
+        }
+        const bytes = try encodeAlloc(a, .{ .entry = entry });
+        try std.testing.expectEqualStrings(body_adjoining_magic, bytes[0..4]);
+        const tail = try StyledSectionCodecTest.tail(a, bytes);
+        try std.testing.expectEqual(@as(u8, 16), bytes[tail]);
+        const decoded = try decodeAlloc(a, bytes, entry.title, entry.kind, null);
+        try std.testing.expectEqualDeep(entry, decoded.entry);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        if (location != 1) try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a,
+            entry.display_title, entry.sections, entry.organization, entry.references, entry.media));
+        for ([_]u8{ 0, 1, 2, 4, 8, 32, 64, 128, 255 }) |flags| {
+            const invalid = try a.dupe(u8, bytes); invalid[tail] = flags;
+            try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, invalid, entry.title, entry.kind, null));
+        }
+        for ([_][]const u8{ container_fonts_magic, rule_styles_magic, inline_styles_magic }) |header| {
+            const invalid = try a.dupe(u8, bytes); @memcpy(invalid[0..4], header);
+            try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, invalid, entry.title, entry.kind, null));
+        }
+    }
+}
+
+test "P text flow keeps null O and heading P bytes and rejects spurious extension flags" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const old: types.Entry = .{ .title = "old", .kind = .citations,
+        .display_title = &.{.{ .text = "Help", .inline_style = .{ .cursor = .help } }} };
+    const bytes = try encodeAlloc(a, .{ .entry = old });
+    var independent: Encoder = .{ .a = a, .version = .container_fonts, .rule_styles = true, .inline_styles = true }; defer independent.deinit();
+    try independent.out.appendSlice(a, inline_styles_magic);
+    try independent.spans(old.display_title); try independent.sections(old.sections); try independent.spans(old.preamble_spans);
+    try independent.layout(old.organization); try independent.references(old.references); try independent.media(old.media);
+    try std.testing.expectEqualSlices(u8, independent.out.items, bytes);
+    try std.testing.expectEqualDeep(old, (try decodeAlloc(a, bytes, old.title, old.kind, null)).entry);
+    const heading = StyledSectionCodecTest.entry;
+    const old_p = try encodeAlloc(a, .{ .entry = heading });
+    var p: Encoder = .{ .a = a, .version = .container_fonts, .rule_styles = true, .inline_styles = true, .capability_p = true }; defer p.deinit();
+    try p.out.appendSlice(a, body_adjoining_magic);
+    try p.spans(heading.display_title); try p.sections(heading.sections); try p.spans(heading.preamble_spans);
+    try p.layout(heading.organization); try p.references(heading.references); try p.media(heading.media);
+    try p.byte(6); try p.sectionHeadingStyles(heading.sections);
+    try std.testing.expectEqualSlices(u8, p.out.items, old_p);
+    const forged = try a.dupe(u8, old_p); forged[try StyledSectionCodecTest.tail(a, forged)] |= 16;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, forged, heading.title, heading.kind, null));
+    const no_user: types.Entry = .{ .title = "old", .kind = .citations, .body_adjoining = .ordinary };
+    const no_user_bytes = try encodeAlloc(a, .{ .entry = no_user });
+    const spurious = try a.dupe(u8, no_user_bytes); spurious[spurious.len - 1] |= 16;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, spurious, no_user.title, no_user.kind, null));
+}
+
+test "P mixed heading text flow preserves independent target offsets and initializes absent extensions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var sections = StyledSectionCodecTest.sections;
+    sections[0].heading_style.?.title_wrap = .normal;
+    sections[0].heading_style.?.anchor_reveal = .{ .primary_top = .{ .unit = .px, .value = 75 },
+        .fallback_top = .{ .unit = .px, .value = 0 } };
+    var entry = StyledSectionCodecTest.entry; entry.sections = &sections; entry.body_adjoining = .ordinary;
+    entry.display_title = &.{.{ .text = "display", .inline_style = .{ .wrap = .break_word } }};
+    const bytes = try encodeAlloc(a, .{ .entry = entry });
+    const tail = try StyledSectionCodecTest.tail(a, bytes);
+    try std.testing.expectEqual(@as(u8, 23), bytes[tail]);
+    for ([_]u8{ 0xa5, 0xff }) |fill| {
+        const backing = try a.alloc(u8, 131072); @memset(backing, fill);
+        var fixed = std.heap.FixedBufferAllocator.init(backing);
+        const decoded = try decodeAlloc(fixed.allocator(), bytes, entry.title, entry.kind, null);
+        try std.testing.expectEqualDeep(entry, decoded.entry);
+        try std.testing.expect(decoded.entry.sections[1].heading_style.?.title_wrap == null);
+        try std.testing.expect(decoded.entry.sections[1].heading_style.?.anchor_reveal == null);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    }
+    var no_preamble = entry; no_preamble.preamble_spans = &.{};
+    try std.testing.expectEqualSlices(u8, try encodeAlloc(a, .{ .entry = no_preamble }),
+        try encodeBuildWithBodyAdjoiningAlloc(a, entry.display_title, entry.sections, entry.organization, entry.references, entry.media, .ordinary));
+    for (tail..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation,
+        decodeAlloc(a, bytes[0..end], entry.title, entry.kind, null));
+    // Bit 1 declares the optional body policy; it carries no body payload.
+    const without_body_bytes = try a.dupe(u8, bytes); without_body_bytes[tail] = 22;
+    var without_body = entry; without_body.body_adjoining = null;
+    const without_body_decoded = try decodeAlloc(a, without_body_bytes, entry.title, entry.kind, null);
+    try std.testing.expectEqualDeep(without_body, without_body_decoded.entry);
+    try std.testing.expect(without_body_decoded.entry.body_adjoining == null);
+    try std.testing.expectEqualSlices(u8, without_body_bytes, try encodeAlloc(a, without_body_decoded));
+    try std.testing.expectEqualSlices(u8, without_body_bytes, try encodeAlloc(a, .{ .entry = without_body }));
+    for ([_]u8{ 7, 16, 19, 21, 31, 32, 64, 128, 255 }) |flags| {
+        const bad = try a.dupe(u8, bytes); bad[tail] = flags;
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, entry.title, entry.kind, null));
+    }
+    var reader: Reader = .{ .a = a, .version = .container_fonts, .rule_styles = true, .inline_styles = true,
+        .capability_p = true, .text_flow = true, .bytes = bytes, .pos = tail + 1 };
+    _ = try reader.count(4); _ = try reader.index(); _ = try reader.containerStyle();
+    _ = try reader.inlineFontSnapshot(); _ = try reader.enumValue(types.BidiResolvedDirection);
+    const mask = reader.pos; try std.testing.expectEqual(@as(u8, 3), try reader.byte());
+    const wrap = reader.pos; _ = try reader.enumValue(types.TextWrap);
+    const primary = reader.pos; _ = try reader.styleLength();
+    const presence = reader.pos; try std.testing.expect(try reader.presence());
+    const fallback = reader.pos; _ = try reader.styleLength();
+    for (0..5) |mutation| {
+        const bad = try a.dupe(u8, bytes);
+        switch (mutation) {
+            0 => bad[mask] = 4,
+            1 => bad[wrap] = 2,
+            2 => bad[primary] = @intFromEnum(types.StyleLengthUnit.em),
+            3 => bad[presence] = 2,
+            4 => bad[fallback] = @intFromEnum(types.StyleLengthUnit.em),
+            else => unreachable,
+        }
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, entry.title, entry.kind, null));
+    }
+}
+
+test "P inline text flow refuses unknown enums reserved flags and empty owner payloads" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_]types.TextWrap{ .normal, .break_word }) |policy| {
+        var encoder: Encoder = .{ .a = a, .version = .container_fonts, .inline_styles = true, .capability_p = true, .text_flow = true }; defer encoder.deinit();
+        try encoder.inlineTextStyle(.{ .wrap = policy });
+        try std.testing.expectEqualSlices(u8, &.{ 32, @intFromEnum(policy) }, encoder.out.items);
+        var read: Reader = .{ .a = a, .version = .container_fonts, .inline_styles = true, .capability_p = true, .bytes = encoder.out.items };
+        try std.testing.expectEqualDeep(@as(types.InlineTextStyle, .{ .wrap = policy }), try read.inlineTextStyle());
+        var old: Reader = .{ .a = a, .version = .container_fonts, .inline_styles = true, .bytes = encoder.out.items };
+        try std.testing.expectError(error.InvalidPresentation, old.inlineTextStyle());
+        var old_encoder: Encoder = .{ .a = a, .version = .container_fonts, .inline_styles = true }; defer old_encoder.deinit();
+        try std.testing.expectError(error.InvalidPresentation, old_encoder.inlineTextStyle(.{ .wrap = policy }));
+        try std.testing.expectError(error.InvalidPresentation, encoder.span(types.Span{ .inline_style = .{
+            .wrap = policy, .line_height = .{ .computed = .{ .value = 1, .font_scale_basis = .normal_body } } } }));
+    }
+    for ([_][2]u8{ .{32, 2}, .{32, 255}, .{64, 0}, .{128, 0}, .{0, 0} }) |bytes| {
+        var read: Reader = .{ .a = a, .version = .container_fonts, .inline_styles = true, .capability_p = true, .bytes = &bytes };
+        try std.testing.expectError(error.InvalidPresentation, read.inlineTextStyle());
+    }
+}
+
+test "P16 text flow composes with R image focus Q geometry P128 Cell and P32 scroll without widening reserved flags" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for (0..4) |mode| {
+        const corners = mode & 1 != 0;
+        const aligned = mode & 2 != 0;
+        var box = PairedTableScrollCodecTest.block();
+        if (corners) {
+            box.box_style.border = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = "#bca674" } };
+            box.box_style.corner_radii = TableCornersCodecTest.corners;
+        }
+        var table = PairedTableScrollCodecTest.table(&box);
+        const rows = try a.dupe(types.Row, CellOwnerFontCodecTest.table.rows); table.rows = rows;
+        const cells = try a.dupe(types.Cell, rows[0].cells); rows[0].cells = cells;
+        const spans = try a.dupe(types.Span, cells[0].spans); cells[0].spans = spans;
+        try std.testing.expect(spans.len != 0);
+        spans[0].inline_style = .{ .wrap = .break_word };
+        var image = ImageLinkPaintCodecTesting.span(true);
+        image.target = "File:Owner.png"; image.image.?.file = "Owner.png";
+        image.image.?.vertical_align = if (aligned) .middle else null;
+        const source: types.Stored = .{ .entry = .{ .title = "combined owners", .kind = .citations,
+            .sections = &.{.{ .level = 0, .title = "", .blocks = &.{
+                .{ .kind = .table, .table = table }, .{ .kind = .paragraph, .spans = &.{image} } } }},
+            .media = &.{.{ .file = "Owner.png", .kind = .image, .caption = "" }} } };
+        // The paired float owner remains captionless. Retain the original
+        // invalid caption premise as a negative; keep its image/action in the
+        // valid complete body as a neighboring paragraph for recursive census.
+        var captioned_table = table; captioned_table.caption = &.{image};
+        var invalid_caption = source;
+        invalid_caption.entry.sections = &.{.{ .level = 0, .title = "", .blocks = &.{.{ .kind = .table, .table = captioned_table }} }};
+        try std.testing.expectError(error.InvalidPresentation,
+            types.validateStored(a, invalid_caption, source.entry.title, source.entry.kind, null));
+        try types.validateStored(a, source, source.entry.title, source.entry.kind, null);
+        const bytes = try encodeAlloc(a, source);
+        try std.testing.expectEqualStrings(intrinsic_table_magic, bytes[0..4]);
+        // Owner family, paired responsive Table, and Cell owner have independent bits.
+        try std.testing.expectEqual(@as(u8, 180), bytes[bytes.len - 1]);
+        const decoded = try decodeAlloc(a, bytes, source.entry.title, source.entry.kind, null);
+        try std.testing.expectEqualDeep(source, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, source.entry.display_title,
+            source.entry.sections, source.entry.organization, source.entry.references, source.entry.media));
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        const parsed = try std.json.parseFromSlice(types.Stored, a, json, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualDeep(source, parsed.value);
+        const cell = decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0];
+        try std.testing.expectEqualDeep(CellOwnerFontCodecTest.policy, cell.style.?.line_height.?);
+        try std.testing.expect(cell.style.?.line_height.?.strut.?.owner_font.?.bold);
+        try std.testing.expect(!cell.spans[0].bold and cell.spans[0].italic);
+        try std.testing.expectEqual(@as(?types.TextWrap, .break_word), cell.spans[0].inline_style.?.wrap);
+        try std.testing.expectEqualStrings("Kept", cell.spans[0].target);
+        try std.testing.expectEqualStrings("part", cell.spans[0].target_fragment.?);
+        for ([_]u8{ 0, 4, 16, 32, 128, 132, 160, 164, 172, 196, 228, 255 }) |mask| {
+            const bad = try a.dupe(u8, bytes);
+            bad[bad.len - 1] = mask;
+            try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, source.entry.title, source.entry.kind, null));
+        }
+        const wrong_header = try a.dupe(u8, bytes);
+        @memcpy(wrong_header[0..4], if (corners or aligned) body_adjoining_magic else table_corners_magic);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, wrong_header, source.entry.title, source.entry.kind, null));
+        // Body policy remains independently expressible without changing the owner census.
+        var ordinary = source;
+        ordinary.entry.body_adjoining = .ordinary;
+        const ordinary_bytes = try a.dupe(u8, bytes);
+        ordinary_bytes[ordinary_bytes.len - 1] |= 1;
+        try std.testing.expectEqualDeep(ordinary, try decodeAlloc(a, ordinary_bytes, source.entry.title, source.entry.kind, null));
+        try std.testing.expectEqualSlices(u8, ordinary_bytes, try encodeAlloc(a, ordinary));
+    }
+}
+
+const RubyCodecTest = struct {
+    const leaf: types.Span = .{ .kind = .link, .text = "\xe6\xbc\xa2", .target = "Kanji", .target_fragment = "reading", .bold = true, .tooltip = "base" };
+    const reading: types.Span = .{ .text = "\xe3\x81\x8b\xe3\x82\x93", .language = "ja", .font_scale = 0.5, .font_scale_basis = .normal_body,
+        .font_family = .sans_serif, .inline_style = .{ .wrap = .break_word }, .tooltip = "reading" };
+    const value: types.Ruby(types.Span) = .{ .segments = &.{.{
+        .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{leaf} }},
+        .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0, .spans = &.{reading} }},
+    }} };
+    const owner: types.Span = .{ .ruby = &value, .inline_style = .{ .wrap = .normal } };
+    fn stored(spans: []const types.Span) types.Stored {
+        return .{ .entry = .{ .title = "ruby", .kind = .supplemental, .display_title = spans } };
+    }
+    fn encoder(a: A) Encoder {
+        return .{ .a = a, .version = .container_fonts, .rule_styles = true, .inline_styles = true,
+            .capability_p = true, .capability_q = true, .capability_r = true, .capability_s = true };
+    }
+    fn reader(a: A, bytes: []const u8) Reader {
+        return .{ .a = a, .version = .container_fonts, .rule_styles = true, .inline_styles = true,
+            .capability_p = true, .capability_q = true, .capability_r = true, .capability_s = true, .bytes = bytes };
+    }
+};
+
+test "DPRS Ruby recursive Stored build JSON and fallback preserve rich children and legacy bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const nested: types.Ruby(types.Span) = .{ .segments = &.{.{ .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{RubyCodecTest.owner} }},
+        .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0, .spans = &.{.{ .kind = .external_link, .text = "han", .target = "https://example.test/" }},
+            .explicit_fallback = true, .fallback_before = &.{.{ .text = "[" }}, .fallback_after = &.{.{ .text = "]" }} }} }} };
+    const owner: types.Span = .{ .ruby = &nested };
+    const spans = [_]types.Span{.{ .text = "before " }, owner, .{ .text = " after" }};
+    const original = RubyCodecTest.stored(&spans);
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings(ruby_magic, bytes[0..4]);
+    try std.testing.expectEqual(@as(u8, 20), bytes[bytes.len - 1]); // child family and wrap census
+    const wrong_census = try a.dupe(u8, bytes); wrong_census[wrong_census.len - 1] ^= 4;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, wrong_census, "ruby", .supplemental, null));
+    const old_header = try a.dupe(u8, bytes); @memcpy(old_header[0..4], intrinsic_table_magic);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, old_header, "ruby", .supplemental, null));
+    const decoded = try decodeAlloc(a, bytes, "ruby", .supplemental, null);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, &spans, original.entry.sections, original.entry.organization, original.entry.references, original.entry.media));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    const parsed = try std.json.parseFromSlice(types.Stored, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(decoded, parsed.value);
+    const Plain = struct {
+        out: std.ArrayList(u8) = .empty, a: A,
+        fn emit(self: *@This(), span: types.Span) !void {
+            try self.out.appendSlice(self.a, span.text); try self.out.appendSlice(self.a, span.trail);
+        }
+    };
+    var plain: Plain = .{ .a = a };
+    try types.visitRubyFallback(decoded.entry.display_title, &plain, Plain.emit);
+    try std.testing.expectEqualStrings("before \xe6\xbc\xa2\xef\xbc\x88\xe3\x81\x8b\xe3\x82\x93\xef\xbc\x89[han] after", plain.out.items);
+    const legacy = RubyCodecTest.stored(&.{.{ .text = "legacy" }});
+    const old = try encodeAlloc(a, legacy);
+    try std.testing.expectEqualStrings(magic, old[0..4]);
+    var raw: Encoder = .{ .a = a }; defer raw.deinit();
+    try raw.out.appendSlice(a, magic); try raw.spans(legacy.entry.display_title); try raw.sections(legacy.entry.sections);
+    try raw.spans(legacy.entry.preamble_spans); try raw.layout(legacy.entry.organization); try raw.references(legacy.entry.references); try raw.media(legacy.entry.media);
+    try std.testing.expectEqualSlices(u8, raw.out.items, old);
+    const old_json = try std.json.Stringify.valueAlloc(a, legacy, .{});
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "\"ruby\":") == null);
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRV", "ruby", .supplemental, null));
+}
+
+test "DPRS Ruby discovery covers heading cell caption reference and combined R Q policies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for (0..5) |sink| {
+        var stored = RubyCodecTest.stored(&.{});
+        const spans = [_]types.Span{RubyCodecTest.owner};
+        const blocks = [_]types.Block{if (sink == 0) .{ .kind = .heading, .level = 2, .spans = &spans }
+            else if (sink == 1) .{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &spans }} }} } }
+            else if (sink == 2) .{ .kind = .table, .table = .{ .caption = &spans, .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "cell" }} }} }} } }
+            else .{ .kind = .paragraph, .spans = &spans }};
+        if (sink == 3) stored.entry.references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .spans = &spans }}
+        else if (sink == 4) stored.entry.references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .blocks = &blocks }}
+        else stored.entry.sections = &.{.{ .level = 0, .title = "", .blocks = &blocks }};
+        const bytes = try encodeAlloc(a, stored);
+        try std.testing.expectEqualStrings(ruby_magic, bytes[0..4]);
+        try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, "ruby", .supplemental, null));
+    }
+    const policy = IntrinsicTableCodecTest.policy();
+    var table = IntrinsicTableCodecTest.table(&policy); table.caption = &.{RubyCodecTest.owner};
+    const stored: types.Stored = .{ .entry = .{ .title = "ruby", .kind = .supplemental,
+        .sections = &.{.{ .level = 0, .title = "", .blocks = &.{ .{ .kind = .table, .table = table }, .{ .kind = .table, .table = TableCornersCodecTest.table } } }} } };
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(ruby_magic, bytes[0..4]);
+    try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, "ruby", .supplemental, null));
+}
+
+test "DPRS Ruby local bytes refuse malformed ranges levels gaps booleans and truncation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const simple: types.Ruby(types.Span) = .{ .segments = &.{.{ .bases = &.{.{ .owner = .{ .font = .{} },}},
+        .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0 }} }} };
+    var writer = RubyCodecTest.encoder(a); defer writer.deinit(); try writer.ruby(simple);
+    // count; segment gap; base count; base gap/18-byte owner/body; annotation count; range/level; 18-byte owner/four arrays/bool.
+    try std.testing.expectEqual(@as(usize, 89), writer.out.items.len);
+    for (0..writer.out.items.len) |end| {
+        var short = RubyCodecTest.reader(a, writer.out.items[0..end]);
+        try std.testing.expectError(error.InvalidPresentation, short.ruby());
+    }
+    inline for (.{ @as(usize, 0), 8, 46 }) |offset| {
+        const bad = try a.dupe(u8, writer.out.items); std.mem.writeInt(u32, bad[offset..][0..4], 0, .little);
+        var reader = RubyCodecTest.reader(a, bad); try std.testing.expectError(error.InvalidPresentation, reader.ruby());
+    }
+    inline for (.{ @as(usize, 42), 50 }) |offset| {
+        const bad = try a.dupe(u8, writer.out.items); std.mem.writeInt(u32, bad[offset..][0..4], 1, .little);
+        var reader = RubyCodecTest.reader(a, bad); try std.testing.expectError(error.InvalidPresentation, reader.ruby());
+    }
+    const bad_bool = try a.dupe(u8, writer.out.items); bad_bool[88] = 2;
+    var bool_reader = RubyCodecTest.reader(a, bad_bool); try std.testing.expectError(error.InvalidPresentation, bool_reader.ruby());
+    const huge = try a.dupe(u8, writer.out.items); std.mem.writeInt(u32, huge[0..4], @intCast(max_items + 1), .little);
+    var huge_reader = RubyCodecTest.reader(a, huge); try std.testing.expectError(error.InvalidPresentation, huge_reader.ruby());
+    var budget_reader = RubyCodecTest.reader(a, writer.out.items); budget_reader.remaining_items = 2;
+    try std.testing.expectError(error.InvalidPresentation, budget_reader.ruby());
+    var wrong_owner = RubyCodecTest.owner; wrong_owner.text = "not empty";
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, RubyCodecTest.stored(&.{wrong_owner})));
+    var malformed = simple; malformed.segments = &.{.{ .bases = &.{.{ .owner = .{ .font = .{} },}}, .gap_before = &.{.{ .text = " " }} }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, RubyCodecTest.stored(&.{.{ .ruby = &malformed }})));
+    var no_s: Encoder = .{ .a = a, .version = .container_fonts }; defer no_s.deinit();
+    try std.testing.expectError(error.InvalidPresentation, no_s.span(RubyCodecTest.owner));
+    var missing = RubyCodecTest.encoder(a); defer missing.deinit(); try missing.out.appendSlice(a, ruby_magic);
+    const empty = RubyCodecTest.stored(&.{}); try missing.spans(&.{}); try missing.sections(empty.entry.sections); try missing.spans(&.{});
+    try missing.layout(empty.entry.organization); try missing.references(empty.entry.references); try missing.media(empty.entry.media); try missing.byte(0);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, missing.out.items, "ruby", .supplemental, null));
+}
+
+test "DPRS Ruby rejects unsupported child kinds malformed UTF8 recursion and mixed depth" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_]types.Span{ .{ .kind = .line_break }, .{ .text = "\xff" },
+        .{ .text = "a\nb" }, .{ .text = "a\rb" }, .{ .text = "a\tb" }, .{ .text = "a\x0cb" },
+        .{ .kind = .link, .text = "x" }, .{ .kind = .external_link, .text = "x" }, .{ .text = "x", .target = "illegal" },
+        .{ .image = .{ .file = "File:x.png" } }, .{ .text = "x", .font_scale = -1 },
+        .{ .text = "x", .foreground = "not-rgb" } }) |child| {
+        const value: types.Ruby(types.Span) = .{ .segments = &.{.{ .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{child} }} }} };
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, RubyCodecTest.stored(&.{.{ .ruby = &value }})));
+    }
+    var owners: [17]types.Span = undefined; var values: [17]types.Ruby(types.Span) = undefined;
+    var segments: [17][1]types.RubySegment(types.Span) = undefined; var bases: [17][1]types.RubyBase(types.Span) = undefined;
+    for (0..17) |i| {
+        bases[i] = .{.{ .owner = .{ .font = .{} }, .spans = if (i == 0) &.{.{ .text = "base" }} else owners[i - 1 .. i] }};
+        segments[i] = .{.{ .bases = &bases[i] }}; values[i] = .{ .segments = &segments[i] }; owners[i] = .{ .ruby = &values[i] };
+    }
+    const accepted = RubyCodecTest.stored(owners[15..16]);
+    const bytes = try encodeAlloc(a, accepted);
+    try std.testing.expectEqualDeep(accepted, try decodeAlloc(a, bytes, "ruby", .supplemental, null));
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, RubyCodecTest.stored(owners[16..17])));
+    var mixed = RubyCodecTest.encoder(a); defer mixed.deinit(); mixed.content_depth = 1;
+    try std.testing.expectError(error.InvalidPresentation, mixed.span(owners[15]));
+    // A same-address cycle cannot make capability detection or encoding recurse forever.
+    bases[0][0].spans = owners[0..1];
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, RubyCodecTest.stored(owners[0..1])));
+}
+
+test "DPRS generic build Span and strict presence retain actual recursive child payload" {
+    const BuildSpan = struct {
+        kind: enum { template, text, external_link, link, line_break } = .text,
+        role: types.Role = .normal, text: []const u8 = "", target: []const u8 = "",
+        language: []const u8 = "", classes: []const u8 = "", direction: []const u8 = "", flags: u8 = 0,
+        ruby: ?*const types.Ruby(@This()) = null,
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const build_ruby: types.Ruby(BuildSpan) = .{ .segments = &.{.{ .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{.{ .kind = .link, .text = "base", .target = "kept" }} }},
+        .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0, .spans = &.{.{ .text = "reading" }} }} }} };
+    const stored_ruby: types.Ruby(types.Span) = .{ .segments = &.{.{ .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{.{ .kind = .link, .text = "base", .target = "kept" }} }},
+        .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0, .spans = &.{.{ .text = "reading" }} }} }} };
+    var build = RubyCodecTest.encoder(a); defer build.deinit(); try build.span(BuildSpan{ .ruby = &build_ruby });
+    var stored = RubyCodecTest.encoder(a); defer stored.deinit(); try stored.span(types.Span{ .ruby = &stored_ruby });
+    try std.testing.expectEqualSlices(u8, stored.out.items, build.out.items);
+    var reader = RubyCodecTest.reader(a, build.out.items);
+    try std.testing.expectEqualDeep(types.Span{ .ruby = &stored_ruby }, try reader.span());
+    const bad = try a.dupe(u8, stored.out.items); bad[37] = 2;
+    var bad_reader = RubyCodecTest.reader(a, bad); try std.testing.expectError(error.InvalidPresentation, bad_reader.span());
+    const bad_utf8 = try a.dupe(u8, stored.out.items);
+    const text_at = std.mem.indexOf(u8, bad_utf8, "reading") orelse return error.TestUnexpectedResult;
+    bad_utf8[text_at] = 0xff;
+    var utf8_reader = RubyCodecTest.reader(a, bad_utf8); try std.testing.expectError(error.InvalidPresentation, utf8_reader.span());
+    const bad_break = try a.dupe(u8, stored.out.items); bad_break[text_at] = '\n';
+    var break_reader = RubyCodecTest.reader(a, bad_break); try std.testing.expectError(error.InvalidPresentation, break_reader.span());
+    for (0..stored.out.items.len) |end| {
+        var short = RubyCodecTest.reader(a, stored.out.items[0..end]);
+        try std.testing.expectError(error.InvalidPresentation, short.span());
+    }
+    var limited = RubyCodecTest.encoder(a); defer limited.deinit(); limited.remaining_items = 2;
+    try std.testing.expectError(error.PresentationTooLarge, limited.span(types.Span{ .ruby = &stored_ruby }));
+    const Abort = struct { fn emit(_: void, _: types.Span) error{CallbackFailure}!void { return error.CallbackFailure; } };
+    try std.testing.expectError(error.CallbackFailure, types.visitRubyFallback(&[_]types.Span{.{ .ruby = &stored_ruby }}, {}, Abort.emit));
+}
+
+test "DPRS Ruby multiple segments bases levels and empty reading remain exact typed data" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const value: types.Ruby(types.Span) = .{ .segments = &.{
+        .{ .bases = &.{ .{ .owner = .{ .font = .{} }, .spans = &.{.{ .text = "A" }} }, .{ .owner = .{ .font = .{} }, .gap_before = &.{.{ .text = " " }}, .spans = &.{.{ .text = "B" }} } },
+            .annotations = &.{
+                .{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0, .spans = &.{.{ .text = "A" }} },
+                .{ .owner = .{ .font = .{} }, .base_start = 1, .base_count = 1, .level = 0, .gap_before = &.{.{ .text = " " }}, .spans = &.{.{ .text = "beta" }} },
+                .{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 2, .level = 1, .spans = &.{.{ .text = "AB" }} },
+            } },
+        .{ .gap_before = &.{.{ .text = " " }}, .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{.{ .text = "C" }} }},
+            .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0 }} },
+    } };
+    const stored = RubyCodecTest.stored(&.{.{ .ruby = &value }});
+    const bytes = try encodeAlloc(a, stored);
+    const decoded = try decodeAlloc(a, bytes, "ruby", .supplemental, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.display_title[0].ruby.?.segments[1].annotations[0].spans.len);
+    // Equal graphical reading remains semantic data, and terminal fallback retains it.
+    const Plain = struct {
+        out: std.ArrayList(u8) = .empty, a: A,
+        fn emit(self: *@This(), span: types.Span) !void { try self.out.appendSlice(self.a, span.text); }
+    };
+    var plain: Plain = .{ .a = a };
+    try types.visitRubyFallback(decoded.entry.display_title, &plain, Plain.emit);
+    try std.testing.expectEqualStrings("A B\xef\xbc\x88A\xef\xbc\x89 \xef\xbc\x88beta\xef\xbc\x89\xef\xbc\x88AB\xef\xbc\x89 C", plain.out.items);
+    const gap_segments = try a.dupe(types.RubySegment(types.Span), value.segments);
+    const gap_bases = try a.dupe(types.RubyBase(types.Span), gap_segments[0].bases);
+    gap_bases[1].gap_before = &.{.{ .text = "\t\n\r\x0c" }};
+    gap_segments[0].bases = gap_bases;
+    const gaps: types.Ruby(types.Span) = .{ .segments = gap_segments };
+    const gap_stored = RubyCodecTest.stored(&.{.{ .ruby = &gaps }});
+    const gap_bytes = try encodeAlloc(a, gap_stored);
+    try std.testing.expectEqualDeep(gap_stored, try decodeAlloc(a, gap_bytes, "ruby", .supplemental, null));
+
+}
+
+test "DPRS declaring Ruby owners survive empty and overridden children with exact owner census" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const base_owner: types.RubyOwner = .{ .font = .{ .font_scale = 1.25, .font_scale_basis = .normal_body,
+        .bold = false, .italic = true, .language = "ja", .classes = "Jpan", .font_family = .sans_serif },
+        .direction = "rtl", .foreground = "#112233", .background = "#ffffff", .inline_style = .{ .wrap = .break_word } };
+    const annotation_font: types.InlineFontSnapshot = .{ .font_scale = 0.5, .font_scale_basis = .normal_body,
+        .font_normalized = true, .bold = false, .italic = false, .language = "ja" };
+    const annotation_owner: types.RubyOwner = .{ .font = annotation_font, .direction = "auto",
+        .inline_style = .{ .font_normalized = true, .line_height = .{ .font_relative = .{ .factor = 1.1, .font = annotation_font } } } };
+    const value: types.Ruby(types.Span) = .{ .segments = &.{.{ .bases = &.{.{ .owner = base_owner,
+        .spans = &.{.{ .text = "all child fonts overridden", .font_scale = 3, .font_scale_basis = .normal_body, .bold = true, .italic = false }} }},
+        .annotations = &.{.{ .base_start = 0, .base_count = 1, .level = 0, .owner = annotation_owner }} }} };
+    const stored = RubyCodecTest.stored(&.{.{ .ruby = &value }});
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(ruby_magic, bytes[0..4]);
+    try std.testing.expectEqual(@as(u8, 20), bytes[bytes.len - 1]); // entirely owner-only family + wrap
+    const decoded = try decodeAlloc(a, bytes, "ruby", .supplemental, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    const group = decoded.entry.display_title[0].ruby.?.segments[0];
+    try std.testing.expect(!group.bases[0].owner.font.bold and group.bases[0].spans[0].bold);
+    try std.testing.expectEqual(@as(usize, 0), group.annotations[0].spans.len);
+    try std.testing.expectEqual(@as(?f32, 0.5), group.annotations[0].owner.font.font_scale);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, stored.entry.display_title, stored.entry.sections,
+        stored.entry.organization, stored.entry.references, stored.entry.media));
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    const parsed = try std.json.parseFromSlice(types.Stored, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(decoded, parsed.value);
+    for ([_]u8{ 0, 4, 16, 84, 148 }) |wrong| {
+        const bad = try a.dupe(u8, bytes); bad[bad.len - 1] = wrong;
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, "ruby", .supplemental, null));
+    }
+    try std.testing.expectError(error.MissingField, std.json.parseFromSlice(types.RubyBase(types.Span), a, "{\"spans\":[]}", .{}));
+}
+
+test "DPRS required Ruby owner wire rejects context corruption truncation and exhausted owner budget" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const owner: types.RubyOwner = .{ .font = .{}, .direction = "rtl" };
+    var writer = RubyCodecTest.encoder(a); defer writer.deinit(); try writer.rubyOwner(owner);
+    try std.testing.expectEqual(@as(usize, 21), writer.out.items.len);
+    var metrics: DecodeMetrics = .{};
+    var reader = RubyCodecTest.reader(a, writer.out.items); reader.metrics = &metrics; reader.remaining_items = 1; reader.content_depth = types.max_content_depth;
+    try std.testing.expectEqualDeep(owner, try reader.rubyOwner());
+    try std.testing.expectEqual(@as(usize, 0), reader.remaining_items);
+    try std.testing.expectEqual(@as(u64, 1), metrics.total_items);
+    try std.testing.expectEqual(types.max_content_depth, reader.content_depth);
+    for (0..writer.out.items.len) |end| {
+        var short = RubyCodecTest.reader(a, writer.out.items[0..end]);
+        try std.testing.expectError(error.InvalidPresentation, short.rubyOwner());
+    }
+    inline for (.{ @as(usize, 0), 1, 10, 18, 19, 20 }) |offset| {
+        const bad = try a.dupe(u8, writer.out.items); bad[offset] = 0xff;
+        var wrong = RubyCodecTest.reader(a, bad); try std.testing.expectError(error.InvalidPresentation, wrong.rubyOwner());
+    }
+    const bad_direction = try a.dupe(u8, writer.out.items); bad_direction[15] = 'x';
+    var direction = RubyCodecTest.reader(a, bad_direction); try std.testing.expectError(error.InvalidPresentation, direction.rubyOwner());
+    var exhausted = RubyCodecTest.reader(a, writer.out.items); exhausted.remaining_items = 0;
+    try std.testing.expectError(error.InvalidPresentation, exhausted.rubyOwner());
+    var no_budget = RubyCodecTest.encoder(a); defer no_budget.deinit(); no_budget.remaining_items = 0;
+    try std.testing.expectError(error.PresentationTooLarge, no_budget.rubyOwner(owner));
+    var color_writer = RubyCodecTest.encoder(a); defer color_writer.deinit();
+    try color_writer.rubyOwner(.{ .font = .{}, .foreground = "#112233", .background = "#abcdef" });
+    const bad_color = try a.dupe(u8, color_writer.out.items);
+    const color_at = std.mem.indexOf(u8, bad_color, "#abcdef") orelse return error.TestUnexpectedResult; bad_color[color_at + 1] = 'A';
+    var color = RubyCodecTest.reader(a, bad_color); try std.testing.expectError(error.InvalidPresentation, color.rubyOwner());
+    const styled_font: types.InlineFontSnapshot = .{ .font_scale = 0.5, .font_scale_basis = .normal_body };
+    const styled: types.RubyOwner = .{ .font = styled_font, .inline_style = .{ .line_height = .{ .font_relative = .{ .factor = 1, .font = styled_font } } } };
+    var style_writer = RubyCodecTest.encoder(a); defer style_writer.deinit(); try style_writer.rubyOwner(styled);
+    const bad_style = try a.dupe(u8, style_writer.out.items); bad_style[6] = 1; // declaring bold differs from retained height font
+    var style_reader = RubyCodecTest.reader(a, bad_style); try std.testing.expectError(error.InvalidPresentation, style_reader.rubyOwner());
+    var invalid = owner; invalid.direction = "override";
+    try std.testing.expectError(error.InvalidPresentation, no_budget.rubyOwner(invalid));
+}
+
+const DeepTableCodecTest = struct {
+    fn value(a: A, depth: usize, mixed: bool) !types.Table {
+        std.debug.assert(depth != 0);
+        const cells = try a.alloc([1]types.Cell, depth);
+        const rows = try a.alloc([1]types.Row, depth);
+        const tables = try a.alloc(types.Table, depth);
+        const blocks = try a.alloc([1]types.Block, depth);
+        var i = depth;
+        while (i != 0) {
+            i -= 1;
+            cells[i] = .{.{}};
+            if (i + 1 == depth) {
+                cells[i][0].spans = &.{.{ .kind = .link, .text = "DEEP", .target = "Destination", .target_fragment = "sense", .bold = true, .foreground = "#123456" }};
+            } else if (mixed and i % 2 == 0) {
+                blocks[i] = .{.{ .kind = .table, .table = tables[i + 1] }};
+                cells[i][0].blocks = &blocks[i];
+            } else cells[i][0].nested_table = tables[i + 1];
+            rows[i] = .{.{ .cells = &cells[i] }};
+            tables[i] = .{ .caption = &.{.{ .text = "caption" }}, .rows = &rows[i] };
+        }
+        return tables[0];
+    }
+    fn stored(a: A, depth: usize, mixed: bool, in_reference: bool) !types.Stored {
+        const blocks = try a.alloc(types.Block, 1);
+        blocks[0] = .{ .kind = .table, .table = try value(a, depth, mixed) };
+        var result: types.Stored = .{ .entry = .{ .title = "depth", .kind = .supplemental } };
+        if (in_reference) {
+            const references = try a.alloc(types.Reference, 1);
+            references[0] = .{ .number = 1, .group_number = 1, .blocks = blocks };
+            result.entry.references = references;
+        } else {
+            const sections = try a.alloc(types.Section, 1);
+            sections[0] = .{ .level = 2, .title = "Body", .blocks = blocks };
+            result.entry.sections = sections;
+        }
+        return result;
+    }
+    fn root(stored_value: types.Stored) types.Table {
+        return if (stored_value.entry.references.len != 0) stored_value.entry.references[0].blocks.?[0].table.?
+            else stored_value.entry.sections[0].blocks[0].table.?;
+    }
+    fn leaf(table_value: types.Table) types.Span {
+        var selected = table_value;
+        for (0..types.max_table_depth) |_| {
+            const cell = selected.rows[0].cells[0];
+            if (cell.blocks) |blocks| { selected = blocks[0].table.?; continue; }
+            if (cell.nested_table) |child| { selected = child; continue; }
+            return cell.spans[0];
+        }
+        unreachable;
+    }
+    fn forced(a: A, stored_value: types.Stored, t: bool) ![]u8 {
+        var out: Encoder = .{ .a = a, .version = if (t) .container_fonts else .explicit_targets,
+            .rule_styles = t, .inline_styles = t, .capability_p = t, .capability_q = t,
+            .capability_r = t, .capability_s = t, .capability_t = t };
+        defer out.deinit();
+        try out.out.appendSlice(a, if (t) deep_tables_magic else explicit_targets_magic);
+        try out.spans(stored_value.entry.display_title);
+        try out.sections(stored_value.entry.sections);
+        try out.spans(stored_value.entry.preamble_spans);
+        try out.layout(stored_value.entry.organization);
+        try out.references(stored_value.entry.references);
+        try out.media(stored_value.entry.media);
+        if (t) try out.byte(0);
+        return out.out.toOwnedSlice(a);
+    }
+};
+
+test "DPRT supports exact16 17 20 32 table graphs and preserves shallow legacy bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_]usize{ 16, 17, 20, 32 }) |depth| for ([_]bool{ false, true }) |mixed| for ([_]bool{ false, true }) |in_reference| {
+        const original = try DeepTableCodecTest.stored(a, depth, mixed, in_reference);
+        try types.validateStored(a, original, "depth", .supplemental, null);
+        const bytes = try encodeAlloc(a, original);
+        try std.testing.expectEqualStrings(if (depth > types.legacy_table_depth) deep_tables_magic else explicit_targets_magic, bytes[0..4]);
+        if (depth == 16) try std.testing.expectEqualSlices(u8, try DeepTableCodecTest.forced(a, original, false), bytes);
+        var metrics: DecodeMetrics = .{};
+        const decoded = try decodeWithMetricsAlloc(a, bytes, "depth", .supplemental, null, &metrics);
+        try std.testing.expectEqualDeep(original, decoded);
+        try std.testing.expectEqual(depth, metrics.tables);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title, original.entry.sections,
+            original.entry.organization, original.entry.references, original.entry.media));
+        const action = DeepTableCodecTest.leaf(DeepTableCodecTest.root(decoded));
+        try std.testing.expectEqualStrings("DEEP", action.text);
+        try std.testing.expectEqualStrings("Destination", action.target);
+        try std.testing.expectEqualStrings("sense", action.target_fragment.?);
+        try std.testing.expect(action.bold);
+        try std.testing.expectEqualStrings("#123456", action.foreground.?);
+    };
+}
+
+test "DPRT refuses33 forged shallow and legacy headers and keeps one table counter" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_]bool{ false, true }) |mixed| for ([_]bool{ false, true }) |in_reference| {
+        const too_deep = try DeepTableCodecTest.stored(a, 33, mixed, in_reference);
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, too_deep));
+        try std.testing.expectError(error.InvalidPresentation, types.validateStored(a, too_deep, "depth", .supplemental, null));
+        const shallow = try DeepTableCodecTest.stored(a, 16, mixed, in_reference);
+        const forged_shallow = try DeepTableCodecTest.forced(a, shallow, true);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, forged_shallow, "depth", .supplemental, null));
+        const deep = try DeepTableCodecTest.stored(a, 20, mixed, in_reference);
+        const bytes = try encodeAlloc(a, deep);
+        const forged_old = try a.dupe(u8, bytes); @memcpy(forged_old[0..4], ruby_magic);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, forged_old, "depth", .supplemental, null));
+    };
+    const deepest = try DeepTableCodecTest.value(a, 32, true);
+    var out: Encoder = .{ .a = a, .version = .container_fonts, .rule_styles = true, .inline_styles = true,
+        .capability_p = true, .capability_q = true, .capability_r = true, .capability_s = true, .capability_t = true };
+    defer out.deinit(); try out.table(@as(?types.Table, deepest));
+    var reader: Reader = .{ .a = a, .version = .container_fonts, .rule_styles = true, .inline_styles = true,
+        .capability_p = true, .capability_q = true, .capability_r = true, .capability_s = true, .capability_t = true, .bytes = out.out.items };
+    _ = try reader.table();
+    reader.pos = 0; reader.table_depth = 1;
+    try std.testing.expectError(error.InvalidPresentation, reader.table());
+    out.table_depth = 1;
+    try std.testing.expectError(error.InvalidPresentation, out.table(@as(?types.Table, deepest)));
+}
+
+test "DPRT deep preflight retains aggregate budget cycle and malformed content refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const stored_value = try DeepTableCodecTest.stored(a, 20, true, false);
+    var exact: DeepTableWork = .{};
+    try exact.entry(stored_value.entry.display_title, stored_value.entry.sections, stored_value.entry.preamble_spans, stored_value.entry.references);
+    const used = max_items - exact.remaining;
+    var enough: DeepTableWork = .{ .remaining = used };
+    try enough.entry(stored_value.entry.display_title, stored_value.entry.sections, stored_value.entry.preamble_spans, stored_value.entry.references);
+    try std.testing.expectEqual(@as(usize, 0), enough.remaining);
+    var short: DeepTableWork = .{ .remaining = used - 1 };
+    try std.testing.expectError(error.PresentationTooLarge, short.entry(stored_value.entry.display_title, stored_value.entry.sections, stored_value.entry.preamble_spans, stored_value.entry.references));
+    var cells = [_]types.Cell{ .{}, .{} };
+    const rows = [_]types.Row{.{ .cells = &cells }};
+    const cycle: types.Table = .{ .rows = &rows };
+    cells[0].nested_table = cycle; cells[1].nested_table = cycle;
+    const blocks = [_]types.Block{.{ .kind = .table, .table = cycle }};
+    const sections = [_]types.Section{.{ .level = 2, .title = "Cycle", .blocks = &blocks }};
+    const cyclic: types.Stored = .{ .entry = .{ .title = "cycle", .kind = .supplemental, .sections = &sections } };
+    try std.testing.expect(hasDeepTables(&sections, @as([]const types.Reference, &.{})));
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, cyclic));
+    try std.testing.expectError(error.InvalidPresentation, types.validateStored(a, cyclic, "cycle", .supplemental, null));
+    const invalid = stored_value;
+    const leaf_cells = @constCast(DeepTableCodecTest.root(invalid).rows[0].cells);
+    leaf_cells[0].spans = &.{.{ .text = "must not disappear" }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, invalid));
+    try std.testing.expectError(error.InvalidPresentation, types.validateStored(a, invalid, "depth", .supplemental, null));
+}
+
+test "DPRT preflight charges every widened span Ruby Figure and flow collection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var original = try DeepTableCodecTest.stored(a, 20, true, false);
+    const rich = [_]types.Span{RubyCodecTest.owner};
+    var table_value = DeepTableCodecTest.root(original);
+    table_value.caption = &rich;
+    var selected = table_value;
+    while (true) {
+        const cell = &@constCast(selected.rows[0].cells)[0];
+        if (cell.blocks) |blocks| { selected = blocks[0].table.?; continue; }
+        if (cell.nested_table) |child| { selected = child; continue; }
+        cell.spans = &rich; break;
+    }
+    const paragraph = [_]types.Block{.{ .kind = .paragraph, .spans = &rich }};
+    var figure_value = MissingFigureCodecTest.make(); figure_value.caption = &rich;
+    var rich_figure = MissingFigureCodecTest.make(); rich_figure.caption_blocks = &paragraph;
+    const scope: types.BidiScope = .{ .mode = .isolate, .authored_direction = .rtl, .resolved_direction = .rtl,
+        .parts = &.{.{ .kind = .@"inline", .spans = &rich }} };
+    const body = [_]types.Block{
+        .{ .kind = .table, .table = table_value },
+        paragraph[0],
+        .{ .kind = .container, .container = .{ .blocks = &paragraph } },
+        .{ .kind = .paragraph, .figure = rich_figure },
+        .{ .kind = .paragraph, .flow = &.{ .{ .kind = .@"inline", .spans = &rich },
+            .{ .kind = .scope, .scope = scope }, .{ .kind = .figure, .figure = figure_value } } },
+    };
+    const sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &body }};
+    const references = [_]types.Reference{.{ .number = 1, .group_number = 1, .spans = &rich }};
+    original.entry.sections = &sections; original.entry.references = &references;
+    original.entry.display_title = &rich; original.entry.preamble_spans = &rich;
+    try types.validateStored(a, original, "depth", .supplemental, null);
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings(deep_tables_magic, bytes[0..4]);
+    try std.testing.expectEqualDeep(original, try decodeAlloc(a, bytes, "depth", .supplemental, null));
+    var work: DeepTableWork = .{};
+    try work.entry(&rich, &sections, &rich, &references);
+    var out: Encoder = .{ .a = a, .version = .container_fonts, .rule_styles = true, .inline_styles = true,
+        .capability_p = true, .capability_q = true, .capability_r = true, .capability_s = true,
+        .capability_t = true, .text_flow = true };
+    defer out.deinit();
+    try out.spans(&rich); try out.sections(&sections); try out.spans(&rich); try out.references(&references);
+    try std.testing.expectEqual(out.remaining_items, work.remaining);
+    const used = max_items - work.remaining;
+    var short: DeepTableWork = .{ .remaining = used - 1 };
+    try std.testing.expectError(error.PresentationTooLarge, short.entry(&rich, &sections, &rich, &references));
+    // Nonempty gap and fallback collections are independently wire-charged.
+    const ruby: types.Ruby(types.Span) = .{ .segments = &.{
+        .{ .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{RubyCodecTest.leaf} }} },
+        .{ .gap_before = &.{.{ .text = " " }}, .bases = &.{
+            .{ .owner = .{ .font = .{} }, .spans = &.{RubyCodecTest.leaf} },
+            .{ .owner = .{ .font = .{} }, .gap_before = &.{.{ .text = " " }}, .spans = &.{RubyCodecTest.leaf} },
+        }, .annotations = &.{
+            .{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0, .spans = &.{RubyCodecTest.reading} },
+            .{ .owner = .{ .font = .{} }, .base_start = 1, .base_count = 1, .level = 0,
+                .gap_before = &.{.{ .text = " " }}, .spans = &.{RubyCodecTest.reading},
+                .fallback_before = &.{.{ .text = "(" }}, .fallback_after = &.{.{ .text = ")" }}, .explicit_fallback = true },
+        } },
+    } };
+    try std.testing.expect(types.validRuby(ruby));
+    const all_ruby = [_]types.Span{.{ .ruby = &ruby }};
+    var ruby_work: DeepTableWork = .{};
+    try ruby_work.entry(&all_ruby, @as([]const types.Section, &.{}), @as([]const types.Span, &.{}), @as([]const types.Reference, &.{}));
+    var ruby_out = RubyCodecTest.encoder(a); defer ruby_out.deinit(); ruby_out.text_flow = true;
+    try ruby_out.spans(&all_ruby);
+    try std.testing.expectEqual(ruby_out.remaining_items, ruby_work.remaining);
+    try std.testing.expectEqual(@as(usize, 23), max_items - ruby_work.remaining);
+}
+
+const InlinePaddingCodecTest = struct {
+    const Group = types.InlinePaddingGroup(types.Span);
+    const child: types.Span = .{ .kind = .link, .text = "reading", .target = "Reading", .target_fragment = "sense", .tooltip = "child",
+        .foreground = "#123456", .font_scale = 1.35, .font_scale_basis = .normal_body,
+        .font_family = .sans_serif, .inline_style = .{ .wrap = .break_word } };
+    const group: Group = .{ .left = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .em, .value = 0.25 }, .spans = &.{child} };
+    const owner: types.Span = .{ .inline_padding_group = &group, .font_scale = 1.35, .font_scale_basis = .normal_body };
+    fn encoder(a: A) Encoder {
+        var out = RubyCodecTest.encoder(a); out.capability_u = true; out.text_flow = true; return out;
+    }
+    fn reader(a: A, bytes: []const u8) Reader {
+        var out = RubyCodecTest.reader(a, bytes); out.capability_u = true; out.text_flow = true; return out;
+    }
+    fn stored(spans: []const types.Span) types.Stored {
+        return .{ .entry = .{ .title = "padding", .kind = .supplemental, .display_title = spans } };
+    }
+    fn forced(a: A, value: types.Stored) ![]u8 {
+        var out = encoder(a); defer out.deinit();
+        try out.out.appendSlice(a, inline_padding_groups_magic);
+        try out.spans(value.entry.display_title); try out.sections(value.entry.sections);
+        try out.spans(value.entry.preamble_spans); try out.layout(value.entry.organization);
+        try out.references(value.entry.references); try out.media(value.entry.media);
+        var work: DeepTableWork = .{};
+        try work.entry(value.entry.display_title, value.entry.sections, value.entry.preamble_spans, value.entry.references);
+        try out.byte(pendingBodyFeatures(value.entry.display_title, value.entry.sections, value.entry.preamble_spans, value.entry.references, value.entry.body_adjoining) | inlineGroupPendingFeatures(work));
+        return out.out.toOwnedSlice(a);
+    }
+    fn nested(a: A, count: usize, leaf: types.Span) !types.Span {
+        var value = leaf;
+        for (0..count) |_| {
+            const children = try a.alloc(types.Span, 1); children[0] = value;
+            const payload = try a.create(Group); payload.* = .{ .left = .{ .unit = .px, .value = 1 }, .right = .{ .unit = .px, .value = 0 }, .spans = children };
+            value = .{ .inline_padding_group = payload };
+        }
+        return value;
+    }
+};
+
+test "DPRU preserves inline boundary font child actions full Stored JSON and legacy bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlinePaddingCodecTest;
+    const original = T.stored(&.{.{ .text = "before" }, T.owner, .{ .text = "after" }});
+    try types.validateStored(a, original, "padding", .supplemental, null);
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings(inline_padding_groups_magic, bytes[0..4]);
+    try std.testing.expectEqual(@as(u8, 20), bytes[bytes.len - 1]);
+    var metrics: DecodeMetrics = .{};
+    const decoded = try decodeWithMetricsAlloc(a, bytes, "padding", .supplemental, null, &metrics);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqual(@as(u64, 4), metrics.total_items);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title, original.entry.sections,
+        original.entry.organization, original.entry.references, original.entry.media));
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    const parsed = try std.json.parseFromSlice(types.Stored, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(decoded, parsed.value);
+    const Plain = struct {
+        a: A, text: std.ArrayList(u8) = .empty, actions: usize = 0,
+        fn emit(self: *@This(), span: types.Span) !void {
+            try self.text.appendSlice(self.a, span.text); try self.text.appendSlice(self.a, span.trail);
+            if (span.kind != .text) { self.actions += 1; try std.testing.expectEqualStrings("Reading", span.target); }
+        }
+    };
+    var plain: Plain = .{ .a = a }; try types.visitRubyFallback(decoded.entry.display_title, &plain, Plain.emit);
+    try std.testing.expectEqualStrings("beforereadingafter", plain.text.items);
+    try std.testing.expectEqual(@as(usize, 1), plain.actions);
+    const legacy = T.stored(&.{.{ .text = "legacy" }});
+    const old = try encodeAlloc(a, legacy); try std.testing.expectEqualStrings(magic, old[0..4]);
+    try std.testing.expect(std.mem.indexOf(u8, try std.json.Stringify.valueAlloc(a, legacy, .{}), "inline_padding_group") == null);
+    var old_encoder = RubyCodecTest.encoder(a); defer old_encoder.deinit();
+    try std.testing.expectError(error.InvalidPresentation, old_encoder.span(T.owner));
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, "DPRU", "padding", .supplemental, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRV", "padding", .supplemental, null));
+}
+
+test "DPRU group census covers complete carriers and coexists with exact16 17 20 32 Tables" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlinePaddingCodecTest;
+    const rich = [_]types.Span{T.owner};
+    const paragraph = [_]types.Block{.{ .kind = .paragraph, .spans = &rich }};
+    for (0..14) |sink| {
+        var original = T.stored(&.{});
+        var table_value: types.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "cell" }} }} }} };
+        var figure_value = MissingFigureCodecTest.make();
+        const ruby: types.Ruby(types.Span) = .{ .segments = &.{.{
+            .bases = &.{.{ .owner = .{ .font = .{} }, .spans = if (sink == 10) &rich else &.{RubyCodecTest.leaf} }},
+            .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0,
+                .spans = if (sink == 11) &rich else &.{RubyCodecTest.reading},
+                .fallback_before = if (sink == 12) &rich else &.{}, .explicit_fallback = sink == 12 }},
+        }} };
+        switch (sink) {
+            0 => original.entry.display_title = &rich,
+            1 => original.entry.preamble_spans = &rich,
+            2 => original.entry.sections = &.{.{ .level = 2, .title = "Body", .blocks = &paragraph }},
+            3 => original.entry.references = &.{.{ .number = 1, .group_number = 1, .spans = &rich }},
+            4 => original.entry.references = &.{.{ .number = 1, .group_number = 1, .blocks = &paragraph }},
+            5 => { table_value.caption = &rich; original.entry.sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .table, .table = table_value }} }}; },
+            6 => { table_value.rows = &.{.{ .cells = &.{.{ .spans = &rich }} }}; original.entry.sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .table, .table = table_value }} }}; },
+            7 => { table_value.caption_blocks = &paragraph; original.entry.sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .table, .table = table_value }} }}; },
+            8 => original.entry.sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .container, .container = .{ .blocks = &paragraph } }} }},
+            9 => original.entry.sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .paragraph, .flow = &.{.{ .kind = .@"inline", .spans = &rich }} }} }},
+            10, 11, 12 => original.entry.display_title = &.{.{ .ruby = &ruby }},
+            13 => { figure_value.caption_blocks = &paragraph; original.entry.sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .paragraph, .figure = figure_value }} }}; },
+            else => unreachable,
+        }
+        try types.validateStored(a, original, "padding", .supplemental, null);
+        const bytes = try encodeAlloc(a, original); try std.testing.expectEqualStrings(inline_padding_groups_magic, bytes[0..4]);
+        try std.testing.expectEqualDeep(original, try decodeAlloc(a, bytes, "padding", .supplemental, null));
+    }
+    for ([_]usize{ 16, 17, 20, 32 }) |depth| for ([_]bool{ false, true }) |mixed| for ([_]bool{ false, true }) |in_reference| {
+        var original = try DeepTableCodecTest.stored(a, depth, mixed, in_reference);
+        const before = try encodeAlloc(a, original);
+        if (depth > 16) try std.testing.expectEqualSlices(u8, try DeepTableCodecTest.forced(a, original, true), before);
+        original.entry.display_title = &rich;
+        const bytes = try encodeAlloc(a, original); try std.testing.expectEqualStrings(inline_padding_groups_magic, bytes[0..4]);
+        const decoded = try decodeAlloc(a, bytes, "depth", .supplemental, null);
+        try std.testing.expectEqualDeep(original, decoded);
+        try std.testing.expectEqualStrings("DEEP", DeepTableCodecTest.leaf(DeepTableCodecTest.root(decoded)).text);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    };
+    var too_deep = try DeepTableCodecTest.stored(a, 33, true, false); too_deep.entry.display_title = &rich;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, too_deep));
+}
+
+test "DPRU refuses malformed group wire canonical census truncated allocation and old headers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlinePaddingCodecTest;
+    const group: T.Group = .{ .left = .{ .unit = .px, .value = 1 }, .right = .{ .unit = .em, .value = 2 }, .spans = &.{.{ .text = "x" }} };
+    const owner: types.Span = .{ .inline_padding_group = &group };
+    var out = T.encoder(a); defer out.deinit(); try out.span(owner);
+    try std.testing.expectEqual(@as(usize, 93), out.out.items.len);
+    try std.testing.expectEqual(@as(u8, 1), out.out.items[38]);
+    try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, out.out.items[49..53], .little));
+    var good = T.reader(a, out.out.items); try std.testing.expectEqualDeep(owner, try good.span());
+    for (0..8) |mode| {
+        const bad = try a.dupe(u8, out.out.items);
+        switch (mode) {
+            0 => bad[38] = 2,
+            1 => bad[39] = 255,
+            2 => std.mem.writeInt(u32, bad[40..44], @bitCast(@as(f32, -1)), .little),
+            3 => std.mem.writeInt(u32, bad[40..44], 0x7fc00000, .little),
+            4 => { @memset(bad[40..44], 0); @memset(bad[45..49], 0); },
+            5 => @memset(bad[49..53], 0),
+            6 => std.mem.writeInt(u32, bad[49..53], std.math.maxInt(u32), .little),
+            7 => bad[53] = @intFromEnum(types.InlineKind.line_break),
+            else => unreachable,
+        }
+        var read = T.reader(a, bad); try std.testing.expectError(error.InvalidPresentation, read.span());
+    }
+    for (0..out.out.items.len) |end| {
+        var read = T.reader(a, out.out.items[0..end]); try std.testing.expectError(error.InvalidPresentation, read.span());
+    }
+    const original = T.stored(&.{T.owner}); const bytes = try encodeAlloc(a, original);
+    for ([_][]const u8{ ruby_magic, deep_tables_magic }) |header| {
+        const bad = try a.dupe(u8, bytes); @memcpy(bad[0..4], header);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, "padding", .supplemental, null));
+    }
+    const bad_census = try a.dupe(u8, bytes); bad_census[bad_census.len - 1] ^= 4;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad_census, "padding", .supplemental, null));
+    for ([_]usize{ 1, 20 }) |depth| {
+        const without = try DeepTableCodecTest.stored(a, depth, false, false);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, try T.forced(a, without), "depth", .supplemental, null));
+    }
+}
+
+test "DPRU inherited action rejects duplicate owners and preserves child paint and recursion limits" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlinePaddingCodecTest;
+    const state: types.LinkState = .{ .foreground = "#123456", .underline = false };
+    const paint: types.LinkPaint = .{ .normal = state, .hover = state, .active = state, .hover_active = state,
+        .visited = state, .visited_hover = state, .visited_active = state, .visited_hover_active = state, .underline_on_focus = false };
+    var children = [_]types.Span{.{ .text = "one", .foreground = "#123456" }, .{ .text = "two" }};
+    var group: T.Group = .{ .left = .{ .unit = .px, .value = 1 }, .right = .{ .unit = .px, .value = 0 }, .spans = &children };
+    const owner: types.Span = .{ .kind = .link, .target = "Parent", .target_fragment = "sense", .foreground = "#123456", .link_paint = paint, .inline_padding_group = &group };
+    const original = T.stored(&.{owner}); const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualDeep(original, try decodeAlloc(a, bytes, "padding", .supplemental, null));
+    for (0..4) |mode| {
+        const saved = children[0]; defer children[0] = saved;
+        switch (mode) {
+            0 => { children[0].kind = .link; children[0].target = "Parent"; },
+            1 => { children[0].kind = .external_link; children[0].target = "https://example.test/"; },
+            2 => children[0].foreground = "#abcdef",
+            3 => children[0] = RubyCodecTest.owner, // its base owns a separate action
+            else => unreachable,
+        }
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+    }
+    const independent = T.stored(&.{T.owner}); try std.testing.expectEqualDeep(independent, try decodeAlloc(a, try encodeAlloc(a, independent), "padding", .supplemental, null));
+    for ([_]usize{ 1, 15, 16, 17 }) |depth| {
+        const nested = try T.nested(a, depth, .{ .text = "leaf" });
+        const value = T.stored(&.{nested});
+        if (depth <= 16) try std.testing.expectEqualDeep(value, try decodeAlloc(a, try encodeAlloc(a, value), "padding", .supplemental, null))
+        else try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, value));
+    }
+    const mixed = T.stored(&.{try T.nested(a, 15, RubyCodecTest.owner)});
+    try std.testing.expectEqualDeep(mixed, try decodeAlloc(a, try encodeAlloc(a, mixed), "padding", .supplemental, null));
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{try T.nested(a, 16, RubyCodecTest.owner)})));
+    var cycle_group = group; const cycle: types.Span = .{ .inline_padding_group = &cycle_group }; cycle_group.spans = &.{cycle};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{cycle})));
+    group.spans = &.{.{ .text = "line\nbreak" }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+}
+
+test "DPRU preflight charges each child once shares siblings and includes hidden Ruby feature census" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlinePaddingCodecTest;
+    const simple: T.Group = .{ .left = .{ .unit = .px, .value = 1 }, .right = .{ .unit = .px, .value = 0 }, .spans = &.{.{ .text = "a" }, .{ .text = "b" }} };
+    const owners = [_]types.Span{.{ .inline_padding_group = &simple }, .{ .inline_padding_group = &simple }};
+    var work: DeepTableWork = .{ .remaining = 6 };
+    try work.entry(&owners, @as([]const types.Section, &.{}), @as([]const types.Span, &.{}), @as([]const types.Reference, &.{}));
+    try std.testing.expectEqual(@as(usize, 0), work.remaining);
+    var short: DeepTableWork = .{ .remaining = 5 };
+    try std.testing.expectError(error.PresentationTooLarge, short.entry(&owners, @as([]const types.Section, &.{}), @as([]const types.Span, &.{}), @as([]const types.Reference, &.{})));
+    var out = T.encoder(a); defer out.deinit(); try out.spans(&owners);
+    try std.testing.expectEqual(@as(usize, 6), max_items - out.remaining_items);
+    var stopped: DeepTableWork = .{ .remaining = 0, .discover_inline_group = true };
+    try std.testing.expectError(error.PresentationTooLarge, stopped.entry(&owners, @as([]const types.Section, &.{}), @as([]const types.Span, &.{}), @as([]const types.Reference, &.{})));
+    try std.testing.expect(!stopped.inline_group_found);
+    const ruby_group: T.Group = .{ .left = simple.left, .right = simple.right, .spans = &.{RubyCodecTest.owner} };
+    const ruby_owner: types.Span = .{ .inline_padding_group = &ruby_group };
+    const value = T.stored(&.{ruby_owner});
+    const bytes = try encodeAlloc(a, value); try std.testing.expectEqual(@as(u8, 20), bytes[bytes.len - 1]);
+    try std.testing.expectEqualDeep(value, try decodeAlloc(a, bytes, "padding", .supplemental, null));
+    var complete: DeepTableWork = .{};
+    try complete.entry(value.entry.display_title, value.entry.sections, value.entry.preamble_spans, value.entry.references);
+    var exact = T.encoder(a); defer exact.deinit(); try exact.spans(value.entry.display_title);
+    try std.testing.expectEqual(exact.remaining_items, complete.remaining);
+}
+
+test "DPRU group owner shape and inherited nested Ruby declaring paint stay strict" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlinePaddingCodecTest;
+    for (0..6) |mode| {
+        var group = T.group; var owner = T.owner; owner.inline_padding_group = &group;
+        switch (mode) {
+            0 => owner.text = "duplicate visible text",
+            1 => owner.trail = "trail",
+            2 => owner.ruby = &RubyCodecTest.value,
+            3 => group.left.value = -1,
+            4 => { group.left.value = 0; group.right.value = 0; },
+            5 => group.spans = &.{},
+            else => unreachable,
+        }
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{owner})));
+    }
+    const state: types.LinkState = .{ .foreground = "#123456", .underline = false };
+    const paint: types.LinkPaint = .{ .normal = state, .hover = state, .active = state, .hover_active = state,
+        .visited = state, .visited_hover = state, .visited_active = state, .visited_hover_active = state, .underline_on_focus = false };
+    var bases = [_]types.RubyBase(types.Span){.{ .owner = .{ .font = .{}, .foreground = "#123456" }, .spans = &.{.{ .text = "base" }} }};
+    var annotations = [_]types.RubyAnnotation(types.Span){.{ .owner = .{ .font = .{}, .foreground = "#123456" }, .base_start = 0, .base_count = 1, .level = 0, .spans = &.{.{ .text = "reading" }} }};
+    const ruby: types.Ruby(types.Span) = .{ .segments = &.{.{ .bases = &bases, .annotations = &annotations }} };
+    const group: T.Group = .{ .left = .{ .unit = .em, .value = 0.25 }, .right = .{ .unit = .px, .value = 0 }, .spans = &.{.{ .ruby = &ruby }} };
+    const owner: types.Span = .{ .kind = .link, .target = "Inherited", .foreground = "#123456", .link_paint = paint, .inline_padding_group = &group };
+    const original = T.stored(&.{owner});
+    try std.testing.expectEqualDeep(original, try decodeAlloc(a, try encodeAlloc(a, original), "padding", .supplemental, null));
+    bases[0].owner.foreground = "#abcdef";
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+    bases[0].owner.foreground = "#123456"; annotations[0].owner.foreground = "#abcdef";
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+    annotations[0].owner.foreground = "#123456";
+    const gap_ruby: types.Ruby(types.Span) = .{ .segments = &.{
+        .{ .bases = &bases }, .{ .gap_before = &.{T.owner}, .bases = &bases },
+    }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{.{ .ruby = &gap_ruby }})));
 }

@@ -1,0 +1,12 @@
+{| class="floatright" style="clear: right;margin: 1em 0 1em 1em;border-collapse: collapse;text-align: center"
+|-
+! colspan=2|
+|-
+! style="padding: 0.5em;border: 1px solid var(--border-color-base,#aaa);background: var(--wikt-palette-cyan, #eaffff);color: inherit;font-weight: normal;font-size: smaller;" colspan="2" |[[正體]]/[[繁體]] -{<span style="font-size:140%">(<span lang="zh-Hant" class="Hant"><strong class="selflink">貴社</strong></span>)</span>
+| style="padding: 0.5em; background-color:var(--wikt-palette-white, #ffffff);color: inherit;border-top: 1px solid var(--border-color-base,#aaa);border-bottom: 1px solid #aaa; font-size:x-large" lang="zh-Hant" class="Hant" | [[:貴#漢語|-{貴}-]]
+| style="padding: 0.5em; background-color:var(--wikt-palette-white, #ffffff);color: inherit;border-top: 1px solid var(--border-color-base,#aaa);border-right: 1px solid var(--border-color-base,#aaa);border-bottom: 1px solid var(--border-color-base,#aaa); font-size:x-large" lang="zh-Hant" class="Hant" | [[:社#漢語|-{社}-]]}-
+|-
+! style="padding: 0.5em;border: 1px solid var(--border-color-base,#aaa);background: var(--wikt-palette-cyan, #eaffff);color: inherit;font-weight: normal;font-size: smaller;" colspan="2" |[[簡體]] -{<span style="font-size:140%">(<span lang="zh-Hans" class="Hans">[[:贵社#漢語|-{贵社}-]]</span>)</span>
+| style="padding: 0.5em; background-color:var(--wikt-palette-white, #ffffff);color: inherit;border-top: 1px solid var(--border-color-base,#aaa);border-bottom: 1px solid #aaa; font-size:x-large" lang="zh-Hans" class="Hans" | [[:贵#漢語|-{贵}-]]
+| style="padding: 0.5em; background-color:var(--wikt-palette-white, #ffffff);color: inherit;border-top: 1px solid var(--border-color-base,#aaa);border-right: 1px solid var(--border-color-base,#aaa);border-bottom: 1px solid var(--border-color-base,#aaa); font-size:x-large" lang="zh-Hans" class="Hans" | [[:社#漢語|-{社}-]]}-
+|}

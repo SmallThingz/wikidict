@@ -1,0 +1,134 @@
+==世界語==
+[[Image:Google suggest.png|thumb]]
+
+===詞源===
+源自<i class="Latn mention" lang="eo">-{[[:guglo#世界語|-{guglo}-]]}-</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">Google、谷歌</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span> +&lrm; <i class="Latn mention nowrap" lang="eo">-{[[:-i#世界語|-{-i}-]]}-</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">動詞</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:含有後綴-i的世界語詞|GUGLI]]。
+
+===動詞===
+<span class="headword-line"><strong class="Latn headword" lang="eo">-{gugli}-</strong> (現在-{ <b class="Latn form-of lang-eo pres-form-of" lang="eo">[[:guglas#世界語|-{guglas}-]]</b>}-，過去-{ <b class="Latn form-of lang-eo past-form-of" lang="eo">[[:guglis#世界語|-{guglis}-]]</b>}-，將來-{ <b class="Latn form-of lang-eo futr-form-of" lang="eo">[[:guglos#世界語|-{guglos}-]]</b>}-，條件-{ <b class="Latn form-of lang-eo cond-form-of" lang="eo">[[:guglus#世界語|-{guglus}-]]</b>}-，祈使-{ <b class="Latn form-of lang-eo voli-form-of" lang="eo">[[:guglu#世界語|-{guglu}-]]</b>}-)</span>[[Category:世界語詞元|GUGLI]][[Category:世界語動詞|GUGLI]][[Category:有詞條的頁面|GUGLI]][[Category:有1個詞條的頁面|GUGLI]]
+
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[Appendix:Glossary#及物|及物]][[Category:世界語及物動詞|GUGLI]]<span class="ib-comma label-comma">，</span>[[網路#名詞|網路]][[Category:世界語 網路|GUGLI]]</span><span class="ib-brac label-brac">)</span></span> 在[[Google]]（谷歌）上[[搜尋]]
+#* <div class="citation-whole"><span class="cited-source">'''2006年''' 1月19日，Damir Malkoč，「Re: "Pixel" en Esperanto」，收錄於<cite><kbd>soc.culture.esperanto</kbd></cite>&lrm;<sup>[https://groups.google.com/group/soc.culture.esperanto/msg/d3cdd665bfd6aae9]</sup>（[[w:Usenet|Usenet]]），「message-ID &lt;dqmi88$pep$1@ss405.t-com.hr&gt;」：</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="eo">-{Mi iom '''guglis''' kaj kun surprizo konstatis ke la plej granda kroata prikomputila revuo šajne havas saman preferon&#33;}-</span><dl><dd><span class="e-translation">我'''用谷歌搜索'''了一下，驚訝地發現，克羅地亞最大的電腦雜誌似乎也有類似的偏好！</span></dd></dl></div>[[Category:有引文的世界語詞|GUGLI]]</dd></dl></div>
+#* <div class="citation-whole"><span class="cited-source">'''2008年''' 7月11日，alanopoeto，「KIEL '''GUGLI''' IUN HOW TO GOOGLE SOMEONE」，收錄於<cite>Yahoo Groups: Esperanto Australia</cite>&lrm;<sup>[http://dir.groups.yahoo.com/group/esperantoaustralia/message/4922]</sup>：</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="eo">-{Mi '''guglis''' vin antaux kelkaj tagoj.}-</span><dl><dd><span class="e-translation">幾天前，我'''用谷歌搜索'''了你。</span></dd></dl></div>[[Category:有引文的世界語詞|GUGLI]]</dd></dl></div><sup class="noprint Inline-Template"><span style="white-space: nowrap;">&#91;[[Wikipedia:失效链接|<span title="自2022年11月失效">永久失效連結</span>]]&#93;</span></sup>[[Category:条目有永久失效的外部链接]]
+
+====變位====
+<div class="inflection-table-wrapper inflection-table-green  inflection-table-collapsible inflection-table-collapsed no-vc " style="width: fit-content" data-toggle-category="inflection"><templatestyles src="Template:inflection-table-top/style.css" />
+{| class="inflection-table  "  
+|+ class="inflection-table-title" | <span lang="eo">gugli</span> 的變位
+|-
+|rowspan=2 colspan=2|[[Image:Esperanto star.svg|30px|link=|alt=]]
+! colspan=2 class="outer" |現在時 
+! colspan=2 class="outer" |過去時 
+! colspan=2 class="outer" |未來時
+|-
+! 單數
+! 複數
+! 單數
+! 複數
+! 單數
+! 複數
+|-
+! colspan=2| 式
+| colspan=2|<span class="Latn form-of lang-eo as-form-of" lang="eo">-{[[:guglas#世界語|-{guglas}-]]}-</span>
+| colspan=2|<span class="Latn form-of lang-eo is-form-of" lang="eo">-{[[:guglis#世界語|-{guglis}-]]}-</span>
+| colspan=2|<span class="Latn form-of lang-eo os-form-of" lang="eo">-{[[:guglos#世界語|-{guglos}-]]}-</span>
+|-
+! rowspan=2| 主動分詞
+! class="secondary" |
+| <span class="Latn form-of lang-eo anta-form-of" lang="eo">-{[[:guglanta#世界語|-{guglanta}-]]}-</span>
+| <span class="Latn form-of lang-eo antaj-form-of" lang="eo">-{[[:guglantaj#世界語|-{guglantaj}-]]}-</span>
+| <span class="Latn form-of lang-eo inta-form-of" lang="eo">-{[[:guglinta#世界語|-{guglinta}-]]}-</span>
+| <span class="Latn form-of lang-eo intaj-form-of" lang="eo">-{[[:guglintaj#世界語|-{guglintaj}-]]}-</span>
+| <span class="Latn form-of lang-eo onta-form-of" lang="eo">-{[[:guglonta#世界語|-{guglonta}-]]}-</span>
+| <span class="Latn form-of lang-eo ontaj-form-of" lang="eo">-{[[:guglontaj#世界語|-{guglontaj}-]]}-</span>
+|-
+! class="secondary" | <span title="accusative">賓格</span>
+| <span class="Latn form-of lang-eo antan-form-of" lang="eo">-{[[:guglantan#世界語|-{guglantan}-]]}-</span>
+| <span class="Latn form-of lang-eo antajn-form-of" lang="eo">-{[[:guglantajn#世界語|-{guglantajn}-]]}-</span>
+| <span class="Latn form-of lang-eo intan-form-of" lang="eo">-{[[:guglintan#世界語|-{guglintan}-]]}-</span>
+| <span class="Latn form-of lang-eo intajn-form-of" lang="eo">-{[[:guglintajn#世界語|-{guglintajn}-]]}-</span>
+| <span class="Latn form-of lang-eo ontan-form-of" lang="eo">-{[[:guglontan#世界語|-{guglontan}-]]}-</span>
+| <span class="Latn form-of lang-eo ontajn-form-of" lang="eo">-{[[:guglontajn#世界語|-{guglontajn}-]]}-</span>
+|-
+! rowspan=2| 被動分詞
+! class="secondary" |
+| <span class="Latn form-of lang-eo ata-form-of" lang="eo">-{[[:guglata#世界語|-{guglata}-]]}-</span>
+| <span class="Latn form-of lang-eo ataj-form-of" lang="eo">-{[[:guglataj#世界語|-{guglataj}-]]}-</span>
+| <span class="Latn form-of lang-eo ita-form-of" lang="eo">-{[[:guglita#世界語|-{guglita}-]]}-</span>
+| <span class="Latn form-of lang-eo itaj-form-of" lang="eo">-{[[:guglitaj#世界語|-{guglitaj}-]]}-</span>
+| <span class="Latn form-of lang-eo ota-form-of" lang="eo">-{[[:guglota#世界語|-{guglota}-]]}-</span>
+| <span class="Latn form-of lang-eo otaj-form-of" lang="eo">-{[[:guglotaj#世界語|-{guglotaj}-]]}-</span>
+|-
+! class="secondary" | <span title="accusative">賓格</span>
+| <span class="Latn form-of lang-eo atan-form-of" lang="eo">-{[[:guglatan#世界語|-{guglatan}-]]}-</span>
+| <span class="Latn form-of lang-eo atajn-form-of" lang="eo">-{[[:guglatajn#世界語|-{guglatajn}-]]}-</span>
+| <span class="Latn form-of lang-eo itan-form-of" lang="eo">-{[[:guglitan#世界語|-{guglitan}-]]}-</span>
+| <span class="Latn form-of lang-eo itajn-form-of" lang="eo">-{[[:guglitajn#世界語|-{guglitajn}-]]}-</span>
+| <span class="Latn form-of lang-eo otan-form-of" lang="eo">-{[[:guglotan#世界語|-{guglotan}-]]}-</span>
+| <span class="Latn form-of lang-eo otajn-form-of" lang="eo">-{[[:guglotajn#世界語|-{guglotajn}-]]}-</span>
+|-
+! rowspan=2| 名詞形主動分詞
+! class="secondary" |
+| <span class="Latn form-of lang-eo anto-form-of" lang="eo">-{[[:guglanto#世界語|-{guglanto}-]]}-</span>
+| <span class="Latn form-of lang-eo antoj-form-of" lang="eo">-{[[:guglantoj#世界語|-{guglantoj}-]]}-</span>
+| <span class="Latn form-of lang-eo into-form-of" lang="eo">-{[[:guglinto#世界語|-{guglinto}-]]}-</span>
+| <span class="Latn form-of lang-eo intoj-form-of" lang="eo">-{[[:guglintoj#世界語|-{guglintoj}-]]}-</span>
+| <span class="Latn form-of lang-eo onto-form-of" lang="eo">-{[[:guglonto#世界語|-{guglonto}-]]}-</span>
+| <span class="Latn form-of lang-eo ontoj-form-of" lang="eo">-{[[:guglontoj#世界語|-{guglontoj}-]]}-</span>
+|-
+! class="secondary" | <span title="accusative">賓格</span>
+| <span class="Latn form-of lang-eo anton-form-of" lang="eo">-{[[:guglanton#世界語|-{guglanton}-]]}-</span>
+| <span class="Latn form-of lang-eo antojn-form-of" lang="eo">-{[[:guglantojn#世界語|-{guglantojn}-]]}-</span>
+| <span class="Latn form-of lang-eo inton-form-of" lang="eo">-{[[:guglinton#世界語|-{guglinton}-]]}-</span>
+| <span class="Latn form-of lang-eo intojn-form-of" lang="eo">-{[[:guglintojn#世界語|-{guglintojn}-]]}-</span>
+| <span class="Latn form-of lang-eo onton-form-of" lang="eo">-{[[:guglonton#世界語|-{guglonton}-]]}-</span>
+| <span class="Latn form-of lang-eo ontojn-form-of" lang="eo">-{[[:guglontojn#世界語|-{guglontojn}-]]}-</span>
+|-
+! rowspan=2| 名詞形被動分詞
+! class="secondary" |
+| <span class="Latn form-of lang-eo ato-form-of" lang="eo">-{[[:guglato#世界語|-{guglato}-]]}-</span>
+| <span class="Latn form-of lang-eo atoj-form-of" lang="eo">-{[[:guglatoj#世界語|-{guglatoj}-]]}-</span>
+| <span class="Latn form-of lang-eo ito-form-of" lang="eo">-{[[:guglito#世界語|-{guglito}-]]}-</span>
+| <span class="Latn form-of lang-eo itoj-form-of" lang="eo">-{[[:guglitoj#世界語|-{guglitoj}-]]}-</span>
+| <span class="Latn form-of lang-eo oto-form-of" lang="eo">-{[[:gugloto#世界語|-{gugloto}-]]}-</span>
+| <span class="Latn form-of lang-eo otoj-form-of" lang="eo">-{[[:guglotoj#世界語|-{guglotoj}-]]}-</span>
+|-
+! class="secondary" | <span title="accusative">賓格</span>
+| <span class="Latn form-of lang-eo aton-form-of" lang="eo">-{[[:guglaton#世界語|-{guglaton}-]]}-</span>
+| <span class="Latn form-of lang-eo atojn-form-of" lang="eo">-{[[:guglatojn#世界語|-{guglatojn}-]]}-</span>
+| <span class="Latn form-of lang-eo iton-form-of" lang="eo">-{[[:gugliton#世界語|-{gugliton}-]]}-</span>
+| <span class="Latn form-of lang-eo itojn-form-of" lang="eo">-{[[:guglitojn#世界語|-{guglitojn}-]]}-</span>
+| <span class="Latn form-of lang-eo oton-form-of" lang="eo">-{[[:gugloton#世界語|-{gugloton}-]]}-</span>
+| <span class="Latn form-of lang-eo otojn-form-of" lang="eo">-{[[:guglotojn#世界語|-{guglotojn}-]]}-</span>
+|-
+! colspan=2| 副詞形主動分詞
+| colspan=2|<span class="Latn form-of lang-eo ante-form-of" lang="eo">-{[[:guglante#世界語|-{guglante}-]]}-</span>
+| colspan=2|<span class="Latn form-of lang-eo inte-form-of" lang="eo">-{[[:guglinte#世界語|-{guglinte}-]]}-</span>
+| colspan=2|<span class="Latn form-of lang-eo onte-form-of" lang="eo">-{[[:guglonte#世界語|-{guglonte}-]]}-</span>
+|-
+! colspan=2| 副詞形被動分詞
+| colspan=2|<span class="Latn form-of lang-eo ate-form-of" lang="eo">-{[[:guglate#世界語|-{guglate}-]]}-</span>
+| colspan=2|<span class="Latn form-of lang-eo ite-form-of" lang="eo">-{[[:guglite#世界語|-{guglite}-]]}-</span>
+| colspan=2|<span class="Latn form-of lang-eo ote-form-of" lang="eo">-{[[:guglote#世界語|-{guglote}-]]}-</span> 
+|-
+| colspan="999" class="separator" |
+|- 
+! colspan="2" |
+! 不定式
+| <span lang="eo">'''gugli'''</span>
+! 命令式 
+| <span class="Latn form-of lang-eo u-form-of" lang="eo">-{[[:guglu#世界語|-{guglu}-]]}-</span> 
+! 條件式
+| <span class="Latn form-of lang-eo us-form-of" lang="eo">-{[[:guglus#世界語|-{guglus}-]]}-</span>
+|}
+
+</div>
+
+====派生詞彙====
+* <span class="Latn" lang="eo">-{[[:guglanto#世界語|-{guglanto}-]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">使用谷歌進行搜索的人，[[谷歌人]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Latn" lang="eo">-{[[:guglito#世界語|-{guglito}-]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">被人用谷歌搜索的人</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>
+
+====相關詞彙====
+* <span class="Latn" lang="eo">-{[[:gugla#世界語|-{gugla}-]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">和谷歌相關的</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Latn" lang="eo">-{[[:gugle#世界語|-{gugle}-]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">經由谷歌</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Latn" lang="eo">-{[[:guglo#世界語|-{guglo}-]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">Google、谷歌；[[googol]]、古戈爾</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>

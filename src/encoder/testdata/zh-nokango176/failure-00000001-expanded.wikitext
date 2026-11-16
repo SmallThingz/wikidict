@@ -1,0 +1,51 @@
+==達悟語==
+
+===副詞===
+<span class="headword-line"><strong class="Latn headword" lang="tao">-{nokango}-</strong></span>[[Category:達悟語詞元|NOKANGO]][[Category:達悟語副詞|NOKANGO]][[Category:有詞條的頁面|NOKANGO]][[Category:有1個詞條的頁面|NOKANGO]]
+# [[什麼時候]]、[[何時]]
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="tao">-{'''nokango''' o kapanci ko nia&#63;}-</i><dl><dd><span class="e-translation">我'''什麼時候'''說過？</span></dd></dl></div>[[Category:有使用例的達悟語詞|NOKANGO]]
+
+===相關詞彙===
+{| class="wikitable" style="margin: 1em auto 1em auto;"
+|+ 達悟語時間詞
+! 
+! colspan=2 | 過去
+! colspan=2 | 現在／未來
+! 未來
+|-
+! 疑問
+| colspan=2 | <center><span class="Latn" lang="tao">-{<strong class="selflink">nokango</strong>}-</span> 過去何時</center> || colspan=2 | <center><span class="Latn" lang="tao">-{[[:simango#達悟語|-{simango}-]]}-</span> 現在/未來何時</center> || colspan=2 | <center><span class="Latn" lang="tao">-{[[:nomango#達悟語|-{nomango}-]]}-</span> 未來何時</center>
+|-
+! 通稱
+| <center><span class="Latn" lang="tao">-{[[:nokakoa#達悟語|-{nokakoa}-]]}-</span> 很久以前</center> || <center><span class="Latn" lang="tao">-{[[:nokaikoa#達悟語|-{nokaikoa}-]]}-</span> 不久之前</center> || <center><span class="Latn" lang="tao">-{[[:siciaikoa#達悟語|-{siciaikoa}-]]}-</span> 現在</center> || <center><span class="Latn" lang="tao">-{[[:simaikoa#達悟語|-{simaikoa}-]]}-</span> 不久的未來</center> || <center><span class="Latn" lang="tao">-{[[:nomaikoa#達悟語|-{nomaikoa}-]]}-</span> 很久以後</center>
+|-
+! 通稱
+| || <center><span class="Latn" lang="tao">-{[[:nokacitoai na#達悟語|-{nokacitoai na}-]]}-</span> 剛才</center> || colspan=2 | <center><span class="Latn" lang="tao">-{[[:siciatoai ya#達悟語|-{siciatoai ya}-]]}-</span> 此刻</center> || <center><span class="Latn" lang="tao">-{[[:citoai na#達悟語|-{citoai na}-]]}-</span> 待會兒</center>
+|-
+! 時機
+|  || <center><span class="Latn" lang="tao">-{[[:nokaipisa#達悟語|-{nokaipisa}-]]}-</span> 上次</center> || <center><span class="Latn" lang="tao">-{[[:siciaikoa ya#達悟語|-{siciaikoa ya}-]]}-</span> 這次</center> || <center><span class="Latn" lang="tao">-{[[:sipisa#達悟語|-{sipisa}-]]}-</span> 下次</center> || <center><span class="Latn" lang="tao">-{[[:noipisa#達悟語|-{noipisa}-]]}-</span> 以後有機會時
+|-
+! 日
+|  || <center><span class="Latn" lang="tao">-{[[:nokakoyab#達悟語|-{nokakoyab}-]]}-</span> 昨日</center> || <center><span class="Latn" lang="tao">-{[[:siciaraw ya#達悟語|-{siciaraw ya}-]]}-</span> 今天</center> || <center><span class="Latn" lang="tao">-{[[:simaraw#達悟語|-{simaraw}-]]}-</span> 明天</center> || 
+|-
+! 月
+|  || <center><span class="Latn" lang="tao">-{[[:nokamnasavehan#達悟語|-{nokamnasavehan}-]]}-</span> 上個月</center> || <center><span class="Latn" lang="tao">-{[[:do vehan ya#達悟語|-{do vehan ya}-]]}-</span> 本月</center> || <center><span class="Latn" lang="tao">-{[[:simaksavehan#達悟語|-{simaksavehan}-]]}-</span> 下個月</center> || 
+|-
+! 年
+|  || <center><span class="Latn" lang="tao">-{[[:nokamnasawan#達悟語|-{nokamnasawan}-]]}-</span> 去年</center> || <center><span class="Latn" lang="tao">-{[[:siciawan ya#達悟語|-{siciawan ya}-]]}-</span> 今年</center> || <center><span class="Latn" lang="tao">-{[[:simaksakawan#達悟語|-{simaksakawan}-]]}-</span> 明年</center> || 
+|-
+! 早
+|  || <center><span class="Latn" lang="tao">-{[[:nokapepnezak#達悟語|-{nokapepnezak}-]]}-</span> 早上</center> || <center><span class="Latn" lang="tao">-{[[:siciapnezak ya#達悟語|-{siciapnezak ya}-]]}-</span> 早上</center> || <center><span class="Latn" lang="tao">-{[[:sipnezak#達悟語|-{sipnezak}-]]}-</span> 明天早上</center> || 
+|-
+! 中
+|  || <center><span class="Latn" lang="tao">-{[[:nokamararaw#達悟語|-{nokamararaw}-]]}-</span> 中午</center> || <center><span class="Latn" lang="tao">-{[[:siciamararaw ya#達悟語|-{siciamararaw ya}-]]}-</span> 中午</center> || <center><span class="Latn" lang="tao">-{[[:simararaw#達悟語|-{simararaw}-]]}-</span> 今天中午</center> || 
+|-
+! 暮
+|  || <center><span class="Latn" lang="tao">-{[[:nokamakoyab#達悟語|-{nokamakoyab}-]]}-</span> 下午</center> || <center><span class="Latn" lang="tao">-{[[:siciamakoyab ya#達悟語|-{siciamakoyab ya}-]]}-</span> 下午</center> || <center><span class="Latn" lang="tao">-{[[:simakoyab#達悟語|-{simakoyab}-]]}-</span> 今天下午</center> || 
+|-
+! 晚
+|  || <center><span class="Latn" lang="tao">-{[[:nokamahep#達悟語|-{nokamahep}-]]}-</span> 昨晚</center> || <center><span class="Latn" lang="tao">-{[[:siciamahep ya#達悟語|-{siciamahep ya}-]]}-</span> 今晩</center> || <center><span class="Latn" lang="tao">-{[[:simahep#達悟語|-{simahep}-]]}-</span> 今天晩上</center> || 
+|}
+
+===參考資料===
+*<span class="citation-whole"><span class="cited-source">「[https://e-dictionary.ilrdf.org.tw/singleSearch?tribeId=e68273b9-1f2b-4c42-8d95-f52189ab24b7&keyword=41967.htm nokango]」，收錄於-{<span class="Hant" lang="zh">-{原住民族語言線上辭典}-</span>}-（以官話寫成），臺北：財團法人原住民族語言研究發展基金會，<span class="None" lang="und">-{2014}-</span></span></span>

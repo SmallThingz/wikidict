@@ -1,0 +1,17 @@
+==壯語==
+
+===詞源===
+借自<strong class="error"><span class="scribunto-error">Lua error in Module:Etymology/templates: Wikibase sitelink snapshot missing entity=Q7850 site=zhwiki</span></strong> <span class="Hani" lang="zh">-{[[河南#漢語|河南]]}-</span> (<i><span class="tr Latn" lang="la">-{<span style="font-style: normal">[[w:中古漢語|中古]]</span> ha nom}-</span></i>)。
+
+===發音===
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content"><span class="usage-label-accent">[[w:標準壯語|標準壯語]]</span></span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:國際音標|國際音標]]<sup>([[wikipedia:壯語音系|幫助]])</sup>:&#32;<span class="IPA nowrap">/ho˧˩.naːm˧˩/</span>[[Category:有國際音標的壯語詞|HO2NAM2]]
+* 聲調數字：<span class="Latn" lang="za">-{Ho<sup>2</sup>nam<sup>2</sup>}-</span>
+* 斷字：<span class="Latn" lang="za">-{Hoz‧namz}-</span>[[Category:壯語2音節詞|HO2NAM2]]
+
+===專有名詞===
+<span class="headword-line"><strong class="Latn headword" lang="za">-{Hoznamz}-</strong> (老壯文-{ <b class="Latn" lang="za"><span class="Latn form-of lang-za 1957_spelling-form-of" lang="za">-{[[:Hoƨnamƨ#壯語|-{-{Hoƨnamƨ}-}-]]}-</span></b>}-)</span>[[Category:壯語詞元|HO2NAM2]][[Category:壯語專有名詞|HO2NAM2]][[Category:沒有方塊壯字的壯語詞|HO2NAM2]][[Category:有詞條的頁面|HOZNAMZ]][[Category:有1個詞條的頁面|HOZNAMZ]]
+
+# [[河南]]
+
+====同義詞====
+* <span class="Latn" lang="za">-{[[:Hoznanz#壯語|-{Hoznanz}-]]}-</span>

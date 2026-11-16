@@ -1,0 +1,29 @@
+== Kernowek ==
+[[Restren:Kuss.jpg|right|thumb|Abm yntra priosow noweth.]]
+{{skrifa|FSS-D, KN, KS}}
+=== Leveryans ===
+* {{IPA|/ˈæbm/}}
+
+=== Hanow ===
+'''abm''' ''gorow'' (''liasplek:'' '''[[abmow]]''')
+# Dysqwedhyans kerenja bò dynnargh dre dava an dhywweus dhe radn person aral, rag ensompel dhe'n vogh, dhe'n dhywweus, dhe'n leuv.
+
+==== Treylyansow ====
+{{(}}
+* Almaynek: [[Kuss]] ''g''
+* Frenkek: [[baiser]] ''g''
+* Italek: [[bacio]] ''g''
+{{-}}
+* Kembrek: [[cusan]] ''b'' po ''g''
+* Sowsnek: [[kiss]]
+* Spaynek: [[beso]] ''g''
+{{)}}
+
+==== Lytherenansow erel ====
+* {{skrifa|KUA}}: [[am]]
+* {{skrifa|FSS-Cr, KK}}: [[amm]]
+
+=== Gwelowgh inwedh ===
+* [[abma]]/[[amma]] ''v.''
+
+[[Klass:Henwyn Kernewek]]

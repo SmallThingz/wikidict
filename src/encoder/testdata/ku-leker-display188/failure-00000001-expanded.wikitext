@@ -1,0 +1,337 @@
+== <span class="besazimani" id="ku">[[:Kategorî:Kurmancî|Kurmancî]][[Kategorî:Kurmancî]]</span> ==
+
+=== Bilêvkirin ===
+* [[IPA]]<sup>([[Wîkîferheng:IPA kurmancî|kilîd]])</sup>: <span class="IPA">/-{leːˈkɛɾ}-/</span>[[Kategorî:Bilêvkirina IPAyê bi kurmancî]]
+* <templatestyles src="deng/style.css"/><templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Deng <span class="ib-brac qualifier-brac">(</span><span class="usage-label-accent"><span class="ib-content label-content">Bidlîs</span></span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">&nbsp;<span class="ext-phonos ext-phonos-PhonosButton" lang="ku" data-phonos-audio="LL-Q36163 (kmr)-Key Mîrza-lêker.wav">guhdar bike</span></td><td class="audiometa" style="font-size: 80%;">([[:File:LL-Q36163 (kmr)-Key Mîrza-lêker.wav|file]])</td></tr></table>[[Category:Deng bi kurmancî|LÊKER]][[Category:Dengên kurmancî ji Bidlîsê|LÊKER]]
+* [[kîte#ku|Kîtekirin]]: lê·ker
+
+=== Navdêr 1 ===
+<span class="headword-line"><strong class="Latn headword" lang="ku">lêker</strong>&nbsp;<span class="gender"><abbr title=mê>m</abbr></span></span>[[Category:Lema bi kurmancî|LÊKER]][[Category:Navdêr bi kurmancî|LÊKER]][[Category:Navdêrên mê bi kurmancî|LÊKER]][[Category:Rûpelên bi madeyan|LÊKER]][[Category:Rûpelên bi 1 madeyî|LÊKER]], <i>[[Pêvek:Bilêvkirin/k#k-ya nerm|k-ya nerm]]</i>[[Kategorî:Bilêvkirinên kurmancî bi k-ya nerm]]
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[rêzimanî]][[Category:Rêzimanî bi kurmancî|LÊKER]]</span><span class="ib-brac label-brac">)</span></span> [[peyv|Peyvên]] [[kirin]]ê yan [[bûn]]ê.
+#: <span class="nyms Hevmane"><span class="defdate">Hevmane:</span> <span class="Latn" lang="ku">[[:fîil#Kurmancî|fîil]]</span>, <span class="Latn" lang="ku">[[:pîşk#Kurmancî|pîşk]]</span></span>
+#: <div class="h-usage-example"><i class="Latn mention e-example" lang="ku">Bo nimûne&#58; bûn, kirin, rabûn, çûn, bibêje, nemaye</i></div>[[Category:Nimûne bi kurmancî|LÊKER]]
+#* <div class="citation-whole"><span class="cited-source"><span class="j-pewist"><span class="None" lang="und">-{'''10.04.2013'''}-</span></span>, <span class="j-pewist">Halil Aktuğ</span>, <cite>Gramera Kurdi / Kürtçe Gramer</cite>, <small>[[Special:BookSources/6055279233|→ISBN]]&nbsp;<span class="error" style="font-size:88%">Invalid&nbsp;ISBN</span>[[Category:Pages with ISBN errors]]</small>, rûpel <span class="None" lang="und">-{28}-</span>:[[Category:Jêgirtin bi kurmancî|LÊKER]]</span><dl><dd><div class="h-quotation"><span class="Latn e-quotation cited-passage" lang="ku">'''Lêker'''&#58; Kirin, tevger, rewş û bûyîna heyberan bi kesan û bi demê ve girê dide û dide zanîn.  Lêker bingeha hevokê ye. Di kurdî de lêker&#59; wekî tirkî û farisî her dem ne li dawiya hevokê ye. '''Lêker''' carna li dawiya hevokê ye. Carna jî di nava hevokê de cih digire. Lêker qertafa raderê "in" bistîne dibe navê lêkeran.</span></div>[[Category:Jêgirtin bi kurmancî|LÊKER]]</dd></dl></div>[[Kategorî:Jêgirtinên kitêban bi kurmancî]]
+
+==== Tewandin ====
+<div class="inflection-table-wrapper inflection-table-narrow inflection-table-indigo  inflection-table-collapsible inflection-table-collapsed no-vc " style="width: fit-content" data-toggle-category="Tewandinê"><templatestyles src="Template:tewandin-ser/style.css" />
+{| class="inflection-table "  
+|+ class="inflection-table-title" | Tewandina ''lêker''
+|-
+
+! colspan="3" class="outer" | Zayenda mê ya binavkirî
+|-
+! Rewş
+! Yekjimar
+! Pirjimar
+|-
+! Navkî
+|<strong class="selflink">lêker</strong>
+|<strong class="selflink">lêker</strong>
+|-
+! Îzafe
+|[[:lêkera#Kurmancî|lêker<b>a</b>]]
+|[[:lêkerên#Kurmancî|lêker<b>ên</b>]]
+|-
+! Çemandî
+|[[:lêkerê#Kurmancî|lêker<b>ê</b>]]
+|[[:lêkeran#Kurmancî|lêker<b>an</b>]]
+|-
+! Nîşandera çem.
+|wê [[:lêkerê#Kurmancî|lêker<b>ê</b>]]
+|wan [[:lêkeran#Kurmancî|lêker<b>an</b>]]
+|-
+! Bangkirin
+|[[:lêkerê#Kurmancî|lêker<b>ê</b>]]
+|[[:lêkerino#Kurmancî|lêker<b>ino</b>]]
+|-
+! colspan="3" class="outer" align="center" | Zayenda mê ya nebinavkirî
+|-
+! Rewş
+! Yekjimar
+! Pirjimar
+|-
+! Navkî
+|[[:lêkerek#Kurmancî|lêker<b>ek</b>]]
+|[[:lêkerin#Kurmancî|lêker<b>in</b>]]
+|-
+! Îzafe
+|[[:lêkereke#Kurmancî|lêker<b>eke</b>]]
+|[[:lêkerine#Kurmancî|lêker<b>ine</b>]]
+|-
+! Çemandî
+|[[:lêkerekê#Kurmancî|lêker<b>ekê</b>]]
+|[[:lêkerinan#Kurmancî|lêker<b>inan</b>]]
+|}
+
+</div>
+
+==== Bi alfabeyên din ====
+* -{ku-latn:<span class="Latn" lang="ku">[[:kurdî-erebî#Kurmancî|kurdî-erebî]]</span>: <span class="Arab ku-Arab" lang="ku">[[:لێکەر#Kurmancî|لێکەر]]</span>;ku-arab:[[کوردی-لاتینی]]: lêker}--{T|ku-latn:lêker;ku-arab:لێکەر}-
+
+==== Jê ====
+<templatestyles src="Modul:columns/style.css"/><div class="list-switcher-wrapper"><div class="term-list columns-bg"><ul><li><span class="Latn" lang="ku">[[:lêkerî#Kurmancî|lêkerî]]</span></li></ul></div></div>
+
+==== Etîmolojî ====
+Ji <i class="Latn mention" lang="ku">[[:lê#Kurmancî|lê]]</i> (2) + <i class="Latn mention" lang="ku">[[:kirin#Kurmancî|kirin]]</i>.
+
+==== Bi zaravayên din ====
+* <span class="trad-ckb">Soranî</span>[[Kategorî:Werger bi soranî]]: <span class="Arab ku-Arab" lang="ckb">-{[[:کار#Soranî|کار]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ckb-Latn" class="tr Latn">-{kar}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+
+==== Werger ====
+<templatestyles src="Şablon:werger-ser/style.css"/><div style="background-color: transparent; border-collapse: collapse;">
+<div class="NavFrame werger-content" id="Werger-lêker,_fiil">
+<div class="NavHead"><i>lêker, fiil</i></div>
+<div class="NavContent">
+<div style="column-width: 26em; -webkit-column-width: 26em; -moz-column-width: 26em;  vertical-align: top; text-align: left;"><div class="translations">
+* <span class="trad-af">Afrîkansî</span>[[Kategorî:Werger bi afrîkansî]]: <span class="Latn" lang="af">-{[[:werkwoord#Afrîkansî|werkwoord]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:af:werkwoord|→&nbsp;-{af}-]]</span>
+* <span class="trad-sq">Albanî</span>[[Kategorî:Werger bi albanî]]: <span class="Latn" lang="sq">-{[[:folje#Albanî|folje]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:sq:folje|→&nbsp;-{sq}-]]</span>&nbsp;<span class="gender"><abbr title=mê>m</abbr></span>
+* <span class="trad-de">Almanî</span>[[Kategorî:Werger bi almanî]]: <span class="Latn" lang="de">-{[[:Verb#Almanî|Verb]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:de:Verb|→&nbsp;-{de}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>, <span class="Latn" lang="de">-{[[:Verbum#Almanî|Verbum]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:de:Verbum|→&nbsp;-{de}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>, <span class="Latn" lang="de">-{[[:Zeitwort#Almanî|Zeitwort]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:de:Zeitwort|→&nbsp;-{de}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>, <span class="Latn" lang="de">-{[[:Tätigkeitswort#Almanî|Tätigkeitswort]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:de:Tätigkeitswort|→&nbsp;-{de}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>, <span class="Latn" lang="de">-{[[:Wandelwort#Almanî|Wandelwort]]}-</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>, <span class="Latn" lang="de">-{[[:Tuwort#Almanî|Tuwort]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:de:Tuwort|→&nbsp;-{de}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>/<span class="Latn" lang="de">-{[[:Tunwort#Almanî|Tunwort]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:de:Tunwort|→&nbsp;-{de}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>, <span class="Latn" lang="de">-{[[:Aussagewort#Almanî|Aussagewort]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:de:Aussagewort|→&nbsp;-{de}-]]</span>
+*: <span class="trad-gmh">Almaniya bilind a navîn</span>[[Kategorî:Werger bi almaniya bilind a navîn]]: <span class="Latn" lang="gmh">-{[[:wort#Almaniya&#95;bilind&#95;a&#95;navîn|wort]]}-</span>
+*: <span class="trad-gmh">Almaniya bilind a navîn</span>[[Kategorî:Werger bi almaniya bilind a navîn]]: <span class="Latn" lang="gmh">-{[[:wort#Almaniya&#95;bilind&#95;a&#95;navîn|wort]]}-</span>
+*: <span class="trad-goh">Almaniya bilind a kevn</span>[[Kategorî:Werger bi almaniya bilind a kevn]]: <span class="Latn" lang="goh">-{[[:wort#Almaniya&#95;bilind&#95;a&#95;kevn|wort]]}-</span>
+* <span class="trad-am">Amharî</span>[[Kategorî:Werger bi amharî]]: <span class="Ethi" lang="am">-{[[:ግሥ#Amharî|ግሥ]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:am:ግሥ|→&nbsp;-{am}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="am-Latn" class="tr Latn">-{gəś}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-an">Aragonî</span>[[Kategorî:Werger bi aragonî]]: <span class="Latn" lang="an">-{[[:berbo#Aragonî|berbo]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:an:berbo|→&nbsp;-{an}-]]</span>
+* <span class="trad-arc">Aramî</span>[[Kategorî:Werger bi aramî]]:
+*: Îbranî: <span class="Hebr" lang="arc">-{[[:מלתא#Aramî|מלתא]]}-</span>&nbsp;<span class="gender"><abbr title=mê>m</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="arc-Latn" class="tr Latn">-{miltā’}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+*: Siryanî: <span class="Syrc" lang="arc">-{[[:ܡܠܬܐ#Aramî|ܡܠܬܐ]]}-</span>&nbsp;<span class="gender"><abbr title=mê>m</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="arc-Latn" class="tr Latn">-{miltā’}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-as">Asamî</span>[[Kategorî:Werger bi asamî]]: <span class="Beng as-Beng" lang="as">-{[[:ক্ৰিয়া#Asamî|ক্ৰিয়া]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="as-Latn" class="tr Latn">-{kria}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-ast">Astûrî</span>[[Kategorî:Werger bi astûrî]]: <span class="Latn" lang="ast">-{[[:verbu#Astûrî|verbu]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ast:verbu|→&nbsp;-{ast}-]]</span>
+* <span class="trad-ay">Aymarayî</span>[[Kategorî:Werger bi aymarayî]]: <span class="Latn" lang="ay">-{[[:parliri#Aymarayî|parliri]]}-</span>
+* <span class="trad-az">Azerî</span>[[Kategorî:Werger bi azerî]]: <span class="Latn" lang="az">-{[[:fe'l#Azerî|feʼl]]}-</span>, <span class="Latn" lang="az">-{[[:feil#Azerî|feil]]}-</span>
+* <span class="trad-eu">Baskî</span>[[Kategorî:Werger bi baskî]]: <span class="Latn" lang="eu">-{[[:aditz#Baskî|aditz]]}-</span>
+* <span class="trad-ba">Başkîrî</span>[[Kategorî:Werger bi başkîrî]]: <span class="Cyrl" lang="ba">-{[[:ҡылым#Başkîrî|ҡылым]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ba-Latn" class="tr Latn">-{qïlïm}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-be">Belarusî</span>[[Kategorî:Werger bi belarusî]]: <span class="Cyrl" lang="be">-{[[:дзеяслоў#Belarusî|дзеясло́ў]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:be:дзеяслоў|→&nbsp;-{be}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="be-Latn" class="tr Latn">-{dzjejaslóŭ}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-bn">Bengalî</span>[[Kategorî:Werger bi bengalî]]: <span class="Beng" lang="bn">-{[[:ক্রিয়াপদ#Bengalî|ক্রিয়াপদ]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:bn:ক্রিয়াপদ|→&nbsp;-{bn}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bn-Latn" class="tr Latn">-{kriẏapôd}-</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Beng" lang="bn">-{[[:ক্রিয়া#Bengalî|ক্রিয়া]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:bn:ক্রিয়া|→&nbsp;-{bn}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bn-Latn" class="tr Latn">-{kriẏa}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-bcl">Bîkoliya naverast</span>[[Kategorî:Werger bi bîkoliya naverast]]: <span class="Latn" lang="bcl">-{[[:panhiro#Bîkoliya&#95;naverast|panhiro]]}-</span>
+* <span class="trad-br">Bretonî</span>[[Kategorî:Werger bi bretonî]]: <span class="Latn" lang="br">-{[[:verb#Bretonî|verb]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:br:verb|→&nbsp;-{br}-]]</span>
+* <span class="trad-bg">Bulgarî</span>[[Kategorî:Werger bi bulgarî]]: <span class="Cyrl" lang="bg">-{[[:глагол#Bulgarî|глаго́л]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:bg:глагол|→&nbsp;-{bg}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="bg-Latn" class="tr Latn">-{glagól}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-my">Burmayî</span>[[Kategorî:Werger bi burmayî]]: <span class="Mymr" lang="my">-{[[:ကြိယာ#Burmayî|ကြိယာ]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:my:ကြိယာ|→&nbsp;-{my}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="my-Latn" class="tr Latn">-{kri.ya}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-ce">Çeçenî</span>[[Kategorî:Werger bi çeçenî]]: <span class="Cyrl" lang="ce">-{[[:хандош#Çeçenî|хандош]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ce-Latn" class="tr Latn">-{xandoš}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-cs">Çekî</span>[[Kategorî:Werger bi çekî]]: <span class="Latn" lang="cs">-{[[:sloveso#Çekî|sloveso]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:cs:sloveso|→&nbsp;-{cs}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>
+* <span class="trad-zh">Çînî</span>[[Kategorî:Werger bi çînî]]:
+*: <span class="trad-yue">Kantonî</span>[[Kategorî:Werger bi kantonî]]: <span class="Hant" lang="yue">-{[[:動詞#Kantonî|動詞]]}-</span><span class="Zsym mention" style="font-size:100%;">&nbsp;/ </span><span class="Hans" lang="yue">-{[[:动词#Kantonî|动词]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="yue-Latn" class="tr Latn">-{dung<sup>6</sup> ci<sup>4</sup>}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+*: <span class="trad-cmn">Mandarînî</span>[[Kategorî:Werger bi mandarînî]]: <span class="Hant" lang="cmn">-{[[:動詞#Mandarînî|動詞]]}-</span><span class="Zsym mention" style="font-size:100%;">&nbsp;/ </span><span class="Hans" lang="cmn">-{[[:动词#Mandarînî|动词]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:zh:動詞|→&nbsp;-{zh}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cmn-Latn" class="tr Latn">-{dòngcí}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+*: <span class="trad-nan">Minnanî</span>[[Kategorî:Werger bi minnanî]]: <span class="Hant" lang="nan">-{[[:動詞#Minnanî|動詞]]}-</span><span class="Zsym mention" style="font-size:100%;">&nbsp;/ </span><span class="Hans" lang="nan">-{[[:动词#Minnanî|动词]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:zh-min-nan:動詞|→&nbsp;-{zh-min-nan}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="nan-Latn" class="tr Latn">-{tōng-sû}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-cv">Çuvaşî</span>[[Kategorî:Werger bi çuvaşî]]: <span class="Cyrl" lang="cv">-{[[:глагол#Çuvaşî|глагол]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="cv-Latn" class="tr Latn">-{glagol}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-da">Danmarkî</span>[[Kategorî:Werger bi danmarkî]]: <span class="Latn" lang="da">-{[[:udsagnsord#Danmarkî|udsagnsord]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:da:udsagnsord|→&nbsp;-{da}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>, <span class="Latn" lang="da">-{[[:verbum#Danmarkî|verbum]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:da:verbum|→&nbsp;-{da}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>
+* <span class="trad-dv">Divehî</span>[[Kategorî:Werger bi divehî]]: <span class="Thaa" lang="dv">-{[[:ކއަނ#Divehî|ކއަނ]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="dv-Latn" class="tr Latn">-{kan}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-id">Endonezyayî</span>[[Kategorî:Werger bi endonezyayî]]: <span class="Latn" lang="id">-{[[:kata kerja#Endonezyayî|kata kerja]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:id:kata kerja|→&nbsp;-{id}-]]</span>, <span class="Latn" lang="id">-{[[:verba#Endonezyayî|verba]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:id:verba|→&nbsp;-{id}-]]</span>
+* <span class="trad-ar">Erebî</span>[[Kategorî:Werger bi erebî]]: <span class="Arab" lang="ar">-{[[:فعل#Erebî|فِعْل]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ar:فعل|→&nbsp;-{ar}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ar-Latn" class="tr Latn">-{fiʕl}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+*: <span class="trad-arz">Erebiya misrî</span>[[Kategorî:Werger bi erebiya misrî]]: <span class="Arab" lang="arz">-{[[:فعل#Erebiya&#95;misrî|فعل]]}-</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="arz-Latn" class="tr Latn">-{feʕl}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-hy">Ermenî</span>[[Kategorî:Werger bi ermenî]]: <span class="Armn" lang="hy">-{[[:բայ#Ermenî|բայ]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:hy:բայ|→&nbsp;-{hy}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hy-Latn" class="tr Latn">-{bay}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-myv">Erzayî</span>[[Kategorî:Werger bi erzayî]]: <span class="Cyrl" lang="myv">-{[[:теввал#Erzayî|теввал]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="myv-Latn" class="tr Latn">-{tevval}-</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Cyrl" lang="myv">-{[[:теемавал#Erzayî|теемавал]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="myv-Latn" class="tr Latn">-{tejemaval}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-eo">Esperantoyî</span>[[Kategorî:Werger bi esperantoyî]]: <span class="Latn" lang="eo">-{[[:verbo#Esperantoyî|verbo]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:eo:verbo|→&nbsp;-{eo}-]]</span>
+* <span class="trad-et">Estonî</span>[[Kategorî:Werger bi estonî]]: <span class="Latn" lang="et">-{[[:tegusõna#Estonî|tegusõna]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:et:tegusõna|→&nbsp;-{et}-]]</span>, <span class="Latn" lang="et">-{[[:pöördsõna#Estonî|pöördsõna]]}-</span>, <span class="Latn" lang="et">-{[[:verb#Estonî|verb]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:et:verb|→&nbsp;-{et}-]]</span>
+* <span class="trad-ee">Eweyî</span>[[Kategorî:Werger bi eweyî]]: <span class="Latn" lang="ee">-{[[:dɔwɔnya#Eweyî|dɔwɔnya]]}-</span>
+* <span class="trad-fa">Farisî</span>[[Kategorî:Werger bi farisî]]: <span class="Arab fa-Arab" lang="fa">-{[[:فعل#Farisî|فعل]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fa:فعل|→&nbsp;-{fa}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="fa-Latn" class="tr Latn">-{fe'l}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-fo">Ferî</span>[[Kategorî:Werger bi ferî]]: <span class="Latn" lang="fo">-{[[:sagnorð#Ferî|sagnorð]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fo:sagnorð|→&nbsp;-{fo}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>
+* <span class="trad-fi">Fînî</span>[[Kategorî:Werger bi fînî]]: <span class="Latn" lang="fi">-{[[:verbi#Fînî|verbi]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fi:verbi|→&nbsp;-{fi}-]]</span>, <span class="Latn" lang="fi">-{[[:teonsana#Fînî|teonsana]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fi:teonsana|→&nbsp;-{fi}-]]</span>
+* <span class="trad-fr">Fransî</span>[[Kategorî:Werger bi fransî]]: <span class="Latn" lang="fr">-{[[:verbe#Fransî|verbe]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fr:verbe|→&nbsp;-{fr}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-fy">Frîsî</span>[[Kategorî:Werger bi frîsî]]: <span class="Latn" lang="fy">-{[[:tiidwurd#Frîsî|tiidwurd]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:fy:tiidwurd|→&nbsp;-{fy}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>
+* <span class="trad-gd">Gaelîka skotî</span>[[Kategorî:Werger bi gaelîka skotî]]: <span class="Latn" lang="gd">-{[[:gnìomhair#Gaelîka&#95;skotî|gnìomhair]]}-</span>
+* <span class="trad-gl">Galîsî</span>[[Kategorî:Werger bi galîsî]]: <span class="Latn" lang="gl">-{[[:verbo#Galîsî|verbo]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:gl:verbo|→&nbsp;-{gl}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-gu">Gujaratî</span>[[Kategorî:Werger bi gujaratî]]: <span class="Gujr" lang="gu">-{[[:ક્રિયાપદ#Gujaratî|ક્રિયાપદ]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="gu-Latn" class="tr Latn">-{kriyāpad}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-ka">Gurcî</span>[[Kategorî:Werger bi gurcî]]: <span class="Geor" lang="ka">-{[[:ზმნა#Gurcî|ზმნა]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ka:ზმნა|→&nbsp;-{ka}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ka-Latn" class="tr Latn">-{zmna}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-haw">Hawayî</span>[[Kategorî:Werger bi hawayî]]: <span class="Latn" lang="haw">-{[[:haʻina#Hawayî|haʻina]]}-</span>
+* <span class="trad-ha">Hawsayî</span>[[Kategorî:Werger bi hawsayî]]: <span class="Latn" lang="ha">-{[[:fi'ili#Hawsayî|fi'ili]]}-</span>
+* <span class="trad-hi">Hindî</span>[[Kategorî:Werger bi hindî]]: <span class="Deva" lang="hi">-{[[:क्रिया#Hindî|क्रिया]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:hi:क्रिया|→&nbsp;-{hi}-]]</span>&nbsp;<span class="gender"><abbr title=mê>m</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="hi-Latn" class="tr Latn">-{kriyā}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-nl">Holendî</span>[[Kategorî:Werger bi holendî]]: <span class="Latn" lang="nl">-{[[:werkwoord#Holendî|werkwoord]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:nl:werkwoord|→&nbsp;-{nl}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>
+* <span class="trad-he">Îbranî</span>[[Kategorî:Werger bi îbranî]]: <span class="Hebr" lang="he">-{[[:פועל#Îbranî|פועל &#47; פֹּעַל]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:he:פועל|→&nbsp;-{he}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="he-Latn" class="tr Latn">-{pô'al}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-io">Îdoyî</span>[[Kategorî:Werger bi îdoyî]]: <span class="Latn" lang="io">-{[[:verbo#Îdoyî|verbo]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:io:verbo|→&nbsp;-{io}-]]</span>
+* <span class="trad-ig">Îgboyî</span>[[Kategorî:Werger bi îgboyî]]: <span class="Latn" lang="ig">-{[[:ngwaa#Îgboyî|ngwaa]]}-</span>
+* <span class="trad-ang">Îngilîziya kevn</span>[[Kategorî:Werger bi îngilîziya kevn]]: <span class="Latn" lang="ang">-{[[:word#Îngilîziya&#95;kevn|word]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ang:word|→&nbsp;-{ang}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>
+* <span class="trad-enm">Îngilîziya navîn</span>[[Kategorî:Werger bi îngilîziya navîn]]: <span class="Latn" lang="enm">-{[[:verbe#Îngilîziya&#95;navîn|verbe]]}-</span>
+* <span class="trad-en">Îngilîzî</span>[[Kategorî:Werger bi îngilîzî]]: <span class="Latn" lang="en">-{[[:verb#Îngilîzî|verb]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:en:verb|→&nbsp;-{en}-]]</span>
+* <span class="trad-ia">Înterlîngua</span>[[Kategorî:Werger bi înterlîngua]]: <span class="Latn" lang="ia">-{[[:verbo#Înterlîngua|verbo]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ia:verbo|→&nbsp;-{ia}-]]</span>
+* <span class="trad-ga">Îrlendî</span>[[Kategorî:Werger bi îrlendî]]: <span class="Latn" lang="ga">-{[[:briathar#Îrlendî|briathar]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ga:briathar|→&nbsp;-{ga}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-it">Îtalî</span>[[Kategorî:Werger bi îtalî]]: <span class="Latn" lang="it">-{[[:verbo#Îtalî|verbo]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:it:verbo|→&nbsp;-{it}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-is">Îzlendî</span>[[Kategorî:Werger bi îzlendî]]: <span class="Latn" lang="is">-{[[:sagnorð#Îzlendî|sagnorð]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:is:sagnorð|→&nbsp;-{is}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>, <span class="Latn" lang="is">-{[[:sögn#Îzlendî|sögn]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:is:sögn|→&nbsp;-{is}-]]</span>&nbsp;<span class="gender"><abbr title=mê>m</abbr></span>
+* <span class="trad-ja">Japonî</span>[[Kategorî:Werger bi japonî]]: <span class="Jpan" lang="ja">-{[[:動詞#Japonî|動詞]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ja:動詞|→&nbsp;-{ja}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">-{どうし, dōshi}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-jv">Javayî</span>[[Kategorî:Werger bi javayî]]: <span class="Latn" lang="jv">-{[[:kriyo#Javayî|kriyo]]}-</span>
+* <span class="trad-kl">Kalalîsûtî</span>[[Kategorî:Werger bi kalalîsûtî]]: <span class="Latn" lang="kl">-{[[:oqaluut#Kalalîsûtî|oqaluut]]}-</span>
+* <span class="trad-xal">Kalmîkî</span>[[Kategorî:Werger bi kalmîkî]]: <span class="Cyrl" lang="xal">-{[[:үүлдәгч#Kalmîkî|үүлдәгч]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="xal-Latn" class="tr Latn">-{üüldägç}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-kn">Kannadayî</span>[[Kategorî:Werger bi kannadayî]]: <span class="Knda" lang="kn">-{[[:ಕ್ರಿಯಾಪದ#Kannadayî|ಕ್ರಿಯಾಪದ]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:kn:ಕ್ರಿಯಾಪದ|→&nbsp;-{kn}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kn-Latn" class="tr Latn">-{kriyāpada}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-pam">Kapampanganî</span>[[Kategorî:Werger bi kapampanganî]]: <span class="Latn" lang="pam">-{[[:pangdiwa#Kapampanganî|pangdiwa]]}-</span>
+* <span class="trad-csb">Kaşûbî</span>[[Kategorî:Werger bi kaşûbî]]: <span class="Latn" lang="csb">-{[[:czasnik#Kaşûbî|czasnik]]}-</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-ca">Katalanî</span>[[Kategorî:Werger bi katalanî]]: <span class="Latn" lang="ca">-{[[:verb#Katalanî|verb]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ca:verb|→&nbsp;-{ca}-]]</span>
+* <span class="trad-qu">Keçwayî</span>[[Kategorî:Werger bi keçwayî]]: <span class="Latn" lang="qu">-{[[:ruray rimana#Keçwayî|ruray rimana]]}-</span>
+* <span class="trad-ks">Keşmîrî</span>[[Kategorî:Werger bi keşmîrî]]: <span class="Arab ks-Arab" lang="ks">-{[[:کرٛاوُت#Keşmîrî|کرٛاوُت]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ks-Latn" class="tr Latn">-{krāvut}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-ky">Kirgizî</span>[[Kategorî:Werger bi kirgizî]]: <span class="Cyrl" lang="ky">-{[[:этиш#Kirgizî|этиш]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ky:этиш|→&nbsp;-{ky}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ky-Latn" class="tr Latn">-{etiş}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-si">Kîngalî</span>[[Kategorî:Werger bi kîngalî]]: <span class="Sinh" lang="si">-{[[:ක්රියා පද#Kîngalî|ක්රියා පද]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="si-Latn" class="tr Latn">-{kriyā pada}-</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Sinh" lang="si">-{[[:ක්රියාව#Kîngalî|ක්රියාව]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="si-Latn" class="tr Latn">-{kriyāwa}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-ko">Koreyî</span>[[Kategorî:Werger bi koreyî]]: <span class="Kore" lang="ko">-{[[:동사#Koreyî|동사]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ko:동사|→&nbsp;-{ko}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">-{dongsa}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-la">Latînî</span>[[Kategorî:Werger bi latînî]]: <span class="Latn" lang="la">-{[[:verbum#Latînî|verbum]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:la:verbum|→&nbsp;-{la}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>, <span class="Latn" lang="la">-{[[:verbum temporale#Latînî|verbum temporale]]}-</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>
+* <span class="trad-lv">Latviyayî</span>[[Kategorî:Werger bi latviyayî]]: <span class="Latn" lang="lv">-{[[:darbības vārds#Latviyayî|darbības vārds]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:lv:darbības vārds|→&nbsp;-{lv}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>, <span class="Latn" lang="lv">-{[[:verbs#Latviyayî|verbs]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:lv:verbs|→&nbsp;-{lv}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>, <span class="Latn" lang="lv">-{[[:norisenis#Latviyayî|norisenis]]}-</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-lo">Lawsî</span>[[Kategorî:Werger bi lawsî]]: <span class="Laoo" lang="lo">-{[[:ຄຳກຳມະ#Lawsî|ຄຳກຳມະ]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:lo:ຄຳກຳມະ|→&nbsp;-{lo}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="lo-Latn" class="tr Latn">-{kham kam ma}-</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Laoo" lang="lo">-{[[:ກິລິຍາ#Lawsî|ກິລິຍາ]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="lo-Latn" class="tr Latn">-{ki li nyā}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-ln">Lingalayî</span>[[Kategorî:Werger bi lingalayî]]: <span class="Latn" lang="ln">-{[[:likelelo#Lingalayî|likelelo]]}-</span>
+* <span class="trad-lij">Lîgûrî</span>[[Kategorî:Werger bi lîgûrî]]: <span class="Latn" lang="lij">-{[[:vèrbo#Lîgûrî|vèrbo]]}-</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-li">Lîmbûrgî</span>[[Kategorî:Werger bi lîmbûrgî]]: <span class="Latn" lang="li">-{[[:wèrkwaord#Lîmbûrgî|wèrkwaord]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:li:wèrkwaord|→&nbsp;-{li}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>, <span class="Latn" lang="li">-{[[:vèrb#Lîmbûrgî|vèrb]]}-</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>
+* <span class="trad-lt">Lîtwanî</span>[[Kategorî:Werger bi lîtwanî]]: <span class="Latn" lang="lt">-{[[:veiksmažodis#Lîtwanî|veiksmažodis]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:lt:veiksmažodis|→&nbsp;-{lt}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-mk">Makedonî</span>[[Kategorî:Werger bi makedonî]]: <span class="Cyrl" lang="mk">-{[[:глагол#Makedonî|гла́гол]]}-</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mk-Latn" class="tr Latn">-{glágol}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-ml">Malayalamî</span>[[Kategorî:Werger bi malayalamî]]: <span class="Mlym" lang="ml">-{[[:ക്രിയ#Malayalamî|ക്രിയ]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ml:ക്രിയ|→&nbsp;-{ml}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ml-Latn" class="tr Latn">-{kriya}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-ms">Malezî</span>[[Kategorî:Werger bi malezî]]: <span class="Latn" lang="ms">-{[[:kata kerja#Malezî|kata kerja]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ms:kata kerja|→&nbsp;-{ms}-]]</span>
+* <span class="trad-mt">Maltayî</span>[[Kategorî:Werger bi maltayî]]: <span class="Latn" lang="mt">-{[[:verb#Maltayî|verb]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:mt:verb|→&nbsp;-{mt}-]]</span>
+* <span class="trad-mi">Maorî</span>[[Kategorî:Werger bi maorî]]: <span class="Latn" lang="mi">-{[[:kupumahi#Maorî|kupumahi]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:mi:kupumahi|→&nbsp;-{mi}-]]</span>, <span class="Latn" lang="mi">-{[[:tūmahi#Maorî|tūmahi]]}-</span>
+* <span class="trad-mr">Maratî</span>[[Kategorî:Werger bi maratî]]: <span class="Deva" lang="mr">-{[[:क्रियापद#Maratî|क्रियापद]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mr-Latn" class="tr Latn">-{kriyāpad}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-hu">Mecarî</span>[[Kategorî:Werger bi mecarî]]: <span class="Latn" lang="hu">-{[[:ige#Mecarî|ige]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:hu:ige|→&nbsp;-{hu}-]]</span>
+* <span class="trad-mwl">Mîrandî</span>[[Kategorî:Werger bi mîrandî]]: <span class="Latn" lang="mwl">-{[[:berbo#Mîrandî|berbo]]}-</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-mn">Mongolî</span>[[Kategorî:Werger bi mongolî]]: <span class="Cyrl" lang="mn">-{[[:үйл үг#Mongolî|үйл үг]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:mn:үйл үг|→&nbsp;-{mn}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="mn-Latn" class="tr Latn">-{üjl üg}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-nv">Navajoyî</span>[[Kategorî:Werger bi navajoyî]]: <span class="Latn" lang="nv">-{[[:áhátʼíinii#Navajoyî|áhátʼíinii]]}-</span>
+* <span class="trad-nds">Nedersaksî</span>[[Kategorî:Werger bi nedersaksî]]:
+*: <span class="trad-nds-de">Almaniya jêrîn a almanî</span>[[Kategorî:Werger bi almaniya jêrîn a almanî]]: <span class="Latn" lang="nds-de">-{[[:Doonwoard#Almaniya&#95;jêrîn&#95;a&#95;almanî|Doonwoard]]}-</span>, <span class="Latn" lang="nds-de">-{[[:Verb#Almaniya&#95;jêrîn&#95;a&#95;almanî|Verb]]}-</span>
+* <span class="trad-ne">Nepalî</span>[[Kategorî:Werger bi nepalî]]: <span class="Deva" lang="ne">-{[[:क्रिया#Nepalî|क्रिया]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ne:क्रिया|→&nbsp;-{ne}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ne-Latn" class="tr Latn">-{kriyā}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-new">Newarî</span>[[Kategorî:Werger bi newarî]]: <span class="Deva" lang="new">-{[[:यासु#Newarî|यासु]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="new-Latn" class="tr Latn">-{yāsu}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-nrf">Normandî</span>[[Kategorî:Werger bi normandî]]: <span class="Latn" lang="nrf">-{[[:vèrbe#Normandî|vèrbe]]}-</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-no">Norwecî</span>[[Kategorî:Werger bi norwecî]]:
+*: <span class="trad-nb">Norweciya bokmålî</span>[[Kategorî:Werger bi norweciya bokmålî]]: <span class="Latn" lang="nb">-{[[:verb#Norweciya&#95;bokmålî|verb]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:no:verb|→&nbsp;-{no}-]]</span>
+*: <span class="trad-nn">Norweciya nînorskî</span>[[Kategorî:Werger bi norweciya nînorskî]]: <span class="Latn" lang="nn">-{[[:verb#Norweciya&#95;nînorskî|verb]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:nn:verb|→&nbsp;-{nn}-]]</span>, <span class="Latn" lang="nn">-{[[:gjerningsord#Norweciya&#95;nînorskî|gjerningsord]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:nn:gjerningsord|→&nbsp;-{nn}-]]</span>
+* <span class="trad-oj">Ojibweyî</span>[[Kategorî:Werger bi ojibweyî]]: <span class="Latn" lang="oj">-{[[:doodamowi-ikidowin#Ojibweyî|doodamowi-ikidowin]]}-</span>
+* <span class="trad-oc">Oksîtanî</span>[[Kategorî:Werger bi oksîtanî]]: <span class="Latn" lang="oc">-{[[:vèrb#Oksîtanî|vèrb]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:oc:vèrb|→&nbsp;-{oc}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-ug">Oygurî</span>[[Kategorî:Werger bi oygurî]]: <span class="Arab ug-Arab" lang="ug">-{[[:پېئىل#Oygurî|پېئىل]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ug-Latn" class="tr Latn">-{pë'il}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-uz">Ozbekî</span>[[Kategorî:Werger bi ozbekî]]: <span class="Latn" lang="uz">-{[[:fe'l#Ozbekî|fe'l]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:uz:fe'l|→&nbsp;-{uz}-]]</span>
+* <span class="trad-ps">Peştûyî</span>[[Kategorî:Werger bi peştûyî]]: <span class="Arab ps-Arab" lang="ps">-{[[:فعل#Peştûyî|فعل]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ps:فعل|→&nbsp;-{ps}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ps-Latn" class="tr Latn">-{fe'l}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-pl">Polonî</span>[[Kategorî:Werger bi polonî]]: <span class="Latn" lang="pl">-{[[:czasownik#Polonî|czasownik]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:pl:czasownik|→&nbsp;-{pl}-]]</span>&nbsp;<span class="gender"><abbr title=mê>m</abbr>&nbsp;<abbr title="nezindî">nezindî</abbr></span>
+* <span class="trad-pt">Portugalî</span>[[Kategorî:Werger bi portugalî]]: <span class="Latn" lang="pt">-{[[:verbo#Portugalî|verbo]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:pt:verbo|→&nbsp;-{pt}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-pa">Puncabî</span>[[Kategorî:Werger bi puncabî]]: <span class="Guru" lang="pa">-{[[:ਕਿਰਿਆ#Puncabî|ਕਿਰਿਆ]]}-</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="pa-Latn" class="tr Latn">-{kiriā}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-kk">Qazaxî</span>[[Kategorî:Werger bi qazaxî]]: <span class="Cyrl" lang="kk">-{[[:етістік#Qazaxî|етістік]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="kk-Latn" class="tr Latn">-{etıstık}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-ro">Romanyayî</span>[[Kategorî:Werger bi romanyayî]]: <span class="Latn" lang="ro">-{[[:verb#Romanyayî|verb]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ro:verb|→&nbsp;-{ro}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>
+* <span class="trad-ru">Rusî</span>[[Kategorî:Werger bi rusî]]: <span class="Cyrl" lang="ru">-{[[:глагол#Rusî|глаго́л]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ru:глагол|→&nbsp;-{ru}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ru-Latn" class="tr Latn">-{glagól}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-se">Samiya bakurî</span>[[Kategorî:Werger bi samiya bakurî]]: <span class="Latn" lang="se">-{[[:vearba#Samiya&#95;bakurî|vearba]]}-</span>
+* <span class="trad-sma">Samiya başûr</span>[[Kategorî:Werger bi samiya başûr]]: <span class="Latn" lang="sma">-{[[:darjomebaakoe#Samiya&#95;başûr|darjomebaakoe]]}-</span>, <span class="Latn" lang="sma">-{[[:veerbe#Samiya&#95;başûr|veerbe]]}-</span>
+* <span class="trad-sgs">Samogîtî</span>[[Kategorî:Werger bi samogîtî]]: <span class="Latn" lang="sgs">-{[[:veikruodis#Samogîtî|veikruodis]]}-</span>
+* <span class="trad-sa">Sanskrîtî</span>[[Kategorî:Werger bi sanskrîtî]]: <span class="Deva" lang="sa">-{[[:क्रिया#Sanskrîtî|क्रिया]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:sa:क्रिया|→&nbsp;-{sa}-]]</span>&nbsp;<span class="gender"><abbr title=mê>m</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sa-Latn" class="tr Latn">-{kriyā}-</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Deva" lang="sa">-{[[:क्रियापद#Sanskrîtî|क्रियापद]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:sa:क्रियापद|→&nbsp;-{sa}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="sa-Latn" class="tr Latn">-{kriyāpada}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-scn">Sicîlî</span>[[Kategorî:Werger bi sicîlî]]: <span class="Latn" lang="scn">-{[[:verbu#Sicîlî|verbu]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:scn:verbu|→&nbsp;-{scn}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-sh">Sirboxirwatî</span>[[Kategorî:Werger bi sirboxirwatî]]:
+*: Kirîlî: <span class="Cyrl" lang="sh">-{[[:глагол#Sirboxirwatî|глагол]]}-</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+*: Latînî: <span class="Latn" lang="sh">-{[[:glagol#Sirboxirwatî|glagol]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:sh:glagol|→&nbsp;-{sh}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-sco">Skotî</span>[[Kategorî:Werger bi skotî]]: <span class="Latn" lang="sco">-{[[:verb#Skotî|verb]]}-</span>
+* <span class="trad-sk">Slovakî</span>[[Kategorî:Werger bi slovakî]]: <span class="Latn" lang="sk">-{[[:sloveso#Slovakî|sloveso]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:sk:sloveso|→&nbsp;-{sk}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>
+* <span class="trad-sl">Slovenî</span>[[Kategorî:Werger bi slovenî]]: <span class="Latn" lang="sl">-{[[:glagol#Slovenî|glagol]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:sl:glagol|→&nbsp;-{sl}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-so">Somalî</span>[[Kategorî:Werger bi somalî]]: <span class="Latn" lang="so">-{[[:fal#Somalî|fal]]}-</span>
+* Sorbî:
+*: <span class="trad-dsb">Sorbiya jêrîn</span>[[Kategorî:Werger bi sorbiya jêrîn]]: <span class="Latn" lang="dsb">-{[[:werb#Sorbiya&#95;jêrîn|werb]]}-</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+*: <span class="trad-hsb">Sorbiya jorîn</span>[[Kategorî:Werger bi sorbiya jorîn]]: <span class="Latn" lang="hsb">-{[[:werb#Sorbiya&#95;jorîn|werb]]}-</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>, <span class="Latn" lang="hsb">-{[[:słowjeso#Sorbiya&#95;jorîn|słowjeso]]}-</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>
+* <span class="trad-es">Spanî</span>[[Kategorî:Werger bi spanî]]: <span class="Latn" lang="es">-{[[:verbo#Spanî|verbo]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:es:verbo|→&nbsp;-{es}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-su">Sundanî</span>[[Kategorî:Werger bi sundanî]]: <span class="Latn" lang="su">-{[[:kecap pagawean#Sundanî|kecap pagawean]]}-</span>
+* <span class="trad-sw">Swahîlî</span>[[Kategorî:Werger bi swahîlî]]: <span class="Latn" lang="sw">-{[[:kitenzi#Swahîlî|kitenzi]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:sw:kitenzi|→&nbsp;-{sw}-]]</span>
+* <span class="trad-ss">Swazî</span>[[Kategorî:Werger bi swazî]]: <span class="Latn" lang="ss">-{[[:sento#Swazî|sento]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ss:sento|→&nbsp;-{ss}-]]</span>
+* <span class="trad-sv">Swêdî</span>[[Kategorî:Werger bi swêdî]]: <span class="Latn" lang="sv">-{[[:verb#Swêdî|verb]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:sv:verb|→&nbsp;-{sv}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span>
+* <span class="trad-tg">Tacikî</span>[[Kategorî:Werger bi tacikî]]: <span class="Cyrl" lang="tg">-{[[:феъл#Tacikî|феъл]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:tg:феъл|→&nbsp;-{tg}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tg-Latn" class="tr Latn">-{feʾl}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-tl">Tagalogî</span>[[Kategorî:Werger bi tagalogî]]: <span class="Latn" lang="tl">-{[[:pandiwa#Tagalogî|pandiwa]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:tl:pandiwa|→&nbsp;-{tl}-]]</span>
+* <span class="trad-ta">Tamîlî</span>[[Kategorî:Werger bi tamîlî]]: <span class="Taml" lang="ta">-{[[:வினைச்சொல்#Tamîlî|வினைச்சொல்]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:ta:வினைச்சொல்|→&nbsp;-{ta}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ta-Latn" class="tr Latn">-{viṉaiccol}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-th">Tayî</span>[[Kategorî:Werger bi tayî]]: <span class="Thai" lang="th">-{[[:คำกริยา#Tayî|คำกริยา]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:th:คำกริยา|→&nbsp;-{th}-]]</span>, <span class="Thai" lang="th">-{[[:กริยา#Tayî|กริยา]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:th:กริยา|→&nbsp;-{th}-]]</span>
+* <span class="trad-te">Telûgûyî</span>[[Kategorî:Werger bi telûgûyî]]: <span class="Telu" lang="te">-{[[:క్రియ#Telûgûyî|క్రియ]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:te:క్రియ|→&nbsp;-{te}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="te-Latn" class="tr Latn">-{kriya}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-crh">Teteriya krîmî</span>[[Kategorî:Werger bi teteriya krîmî]]: <span class="Latn" lang="crh">-{[[:fiil#Teteriya&#95;krîmî|fiil]]}-</span>
+* <span class="trad-tt">Teterî</span>[[Kategorî:Werger bi teterî]]: <span class="Cyrl" lang="tt">-{[[:фигыль#Teterî|фигыль]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:tt:фигыль|→&nbsp;-{tt}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="tt-Latn" class="tr Latn">-{figıl’}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-ti">Tigrînî</span>[[Kategorî:Werger bi tigrînî]]: <span class="Ethi" lang="ti">-{[[:ግሲ#Tigrînî|ግሲ]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ti-Latn" class="tr Latn">-{gəsi}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-tr">Tirkî</span>[[Kategorî:Werger bi tirkî]]: <span class="Latn" lang="tr">-{[[:fiil#Tirkî|fiil]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:tr:fiil|→&nbsp;-{tr}-]]</span>, <span class="Latn" lang="tr">-{[[:eylem#Tirkî|eylem]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:tr:eylem|→&nbsp;-{tr}-]]</span>
+* <span class="trad-tk">Tirkmenî</span>[[Kategorî:Werger bi tirkmenî]]: <span class="Latn" lang="tk">-{[[:işlik#Tirkmenî|işlik]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:tk:işlik|→&nbsp;-{tk}-]]</span>
+* <span class="trad-ur">Urdûyî</span>[[Kategorî:Werger bi urdûyî]]: <span class="Arab ur-Arab" lang="ur">-{[[:فعل#Urdûyî|فعل]]}-</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ur-Latn" class="tr Latn">-{fe'l}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-uk">Ûkraynî</span>[[Kategorî:Werger bi ûkraynî]]: <span class="Cyrl" lang="uk">-{[[:дієслово#Ûkraynî|дієсло́во]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:uk:дієслово|→&nbsp;-{uk}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="uk-Latn" class="tr Latn">-{dijeslóvo}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-vi">Viyetnamî</span>[[Kategorî:Werger bi viyetnamî]]: <span class="Latn" lang="vi">-{[[:động từ#Viyetnamî|động từ]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:vi:động từ|→&nbsp;-{vi}-]]</span>
+* <span class="trad-vo">Volapûkî</span>[[Kategorî:Werger bi volapûkî]]: <span class="Latn" lang="vo">-{[[:värb#Volapûkî|värb]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:vo:värb|→&nbsp;-{vo}-]]</span>
+* <span class="trad-wa">Walonî</span>[[Kategorî:Werger bi walonî]]: <span class="Latn" lang="wa">-{[[:viebe#Walonî|viebe]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:wa:viebe|→&nbsp;-{wa}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span>
+* <span class="trad-cy">Weylsî</span>[[Kategorî:Werger bi weylsî]]: <span class="Latn" lang="cy">-{[[:berf#Weylsî|berf]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:cy:berf|→&nbsp;-{cy}-]]</span>&nbsp;<span class="gender"><abbr title=mê>m</abbr></span>
+* <span class="trad-km">Ximêrî</span>[[Kategorî:Werger bi ximêrî]]: <span class="Khmr" lang="km">-{[[:កិរិយាស័ព្ទ#Ximêrî|កិរិយាស័ព្ទ]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="km-Latn" class="tr Latn">-{keriyiəsaptɔɔ}-</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Khmr" lang="km">-{[[:កិរិយា#Ximêrî|កិរិយា]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:km:កិរិយា|→&nbsp;-{km}-]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="km-Latn" class="tr Latn">-{keriyiə}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-yi">Yidîşî</span>[[Kategorî:Werger bi yidîşî]]: <span class="Hebr" lang="yi">-{[[:ווערב#Yidîşî|ווערב]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:yi:ווערב|→&nbsp;-{yi}-]]</span>&nbsp;<span class="gender"><abbr title=nêr>n</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="yi-Latn" class="tr Latn">-{verb}-</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Hebr" lang="yi">-{[[:צײַטוואָרט#Yidîşî|צײַטוואָרט]]}-</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="yi-Latn" class="tr Latn">-{tsaytvort}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-yo">Yorubayî</span>[[Kategorî:Werger bi yorubayî]]: <span class="Latn" lang="yo">-{[[:ọrọ-iṣe#Yorubayî|ọ̀rọ̀-ìṣe]]}-</span>
+* <span class="trad-el">Yûnanî</span>[[Kategorî:Werger bi yûnanî]]: <span class="Grek" lang="el">-{[[:ρήμα#Yûnanî|ρήμα]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:el:ρήμα|→&nbsp;-{el}-]]</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="el-Latn" class="tr Latn">-{ríma}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+*: <span class="trad-grc">Yûnaniya kevn</span>[[Kategorî:Werger bi yûnaniya kevn]]: <span class="Polyt" lang="grc">-{[[:ῥῆμα#Yûnaniya&#95;kevn|ῥῆμα]]}-</span>&nbsp;<span class="gender"><abbr title=nêtar>nt</abbr></span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="grc-Latn" class="tr Latn">-{rhêma}-</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="trad-za">Zhuangî</span>[[Kategorî:Werger bi zhuangî]]: <span class="Latn" lang="za">-{[[:dungswz#Zhuangî|dungswz]]}-</span>
+* <span class="trad-zu">Zuluyî</span>[[Kategorî:Werger bi zuluyî]]: <span class="Latn" lang="zu">-{[[:isenzo#Zuluyî|isenzo]]}-</span><span style="vertical-align:20%; font-size:80%;" class="tpos">&nbsp;[[:zu:isenzo|→&nbsp;-{zu}-]]</span>&nbsp;<span class="gender">sinif <abbr class="noun-class" title="sinifa nav a c7">c7</abbr>/<abbr class="noun-class" title="sinifa nav a c8">c8</abbr></span>
+
+</div>
+</div>
+</div>
+<div style="clear:both"></div>
+</div>
+</div>
+:''Ev qismê Wergerê ji malûmatên naveroka <span class="plainlinks">[http://en.wiktionary.org/w/index.php?title=verb&oldid=75054543 vê versiyona] madeya [[:en:verb|-{verb}-]] a [[:en:Main Page|''Wîkîferhenga îngilîzî'']] pêk tê.''
+
+=== Navdêr 2 ===
+<span class="headword-line"><strong class="Latn headword" lang="ku">lêker</strong>&nbsp;<span class="gender"><abbr title=mê>m</abbr> yan <abbr title=nêr>n</abbr> <abbr title="li gorî cinsê mexsedê">li gorî maneyê</abbr></span></span>[[Category:Lema bi kurmancî|LÊKER]][[Category:Navdêr bi kurmancî|LÊKER]][[Category:Navdêrên mê û nêr li gorî maneyê bi kurmancî|LÊKER]][[Category:Navdêrên mê bi kurmancî|LÊKER]][[Category:Navdêrên nêr bi kurmancî|LÊKER]][[Category:Navdêrên bi çend cinsan bi kurmancî|LÊKER]][[Category:Rûpelên bi madeyan|LÊKER]][[Category:Rûpelên bi 1 madeyî|LÊKER]]
+# Kesa/ê tiştekî li tiştekî dike.
+
+==== Tewandin ====
+<div class="inflection-table-wrapper inflection-table-narrow inflection-table-indigo  inflection-table-collapsible inflection-table-collapsed no-vc " style="width: fit-content" data-toggle-category="Tewandinê"><templatestyles src="Template:tewandin-ser/style.css" />
+{| class="inflection-table "  
+|+ class="inflection-table-title" | Tewandina ''lêker''
+|-
+
+! colspan="4" class="outer" |Zayendên mê û nêr ên binavkirî
+|-
+! Rewş
+! Mê (<span style="cursor:help;" title="yekjimar"><span style="border-bottom: 1px dotted #555555; ">yj.</span></span>)
+! Nêr (<span style="cursor:help;" title="yekjimar"><span style="border-bottom: 1px dotted #555555; ">yj.</span></span>)
+! Mê û nêr (<span style="cursor:help;" title="pirjimar"><span style="border-bottom: 1px dotted #555555; ">pj.</span></span>)
+|-
+! Navkî
+|<strong class="selflink">lêker</strong>
+|<strong class="selflink">lêker</strong>
+|<strong class="selflink">lêker</strong>
+|-
+! Îzafe
+|[[:lêkera#Kurmancî|lêker<b>a</b>]]
+|[[:lêkerê#Kurmancî|lêker<b>ê</b>]]
+|[[:lêkerên#Kurmancî|lêker<b>ên</b>]]
+|-
+! Çemandî
+|[[:lêkerê#Kurmancî|lêker<b>ê</b>]]
+|[[:lêkerî#Kurmancî|lêker<b>î</b>]]
+|[[:lêkeran#Kurmancî|lêker<b>an</b>]]
+|-
+! Nîşandera çem.
+|wê [[:lêkerê#Kurmancî|lêker<b>ê</b>]]
+|wî [[:lêkerî#Kurmancî|lêker<b>î</b>]]
+|wan [[:lêkeran#Kurmancî|lêker<b>an</b>]]
+|-
+! Bangkirin
+|[[:lêkerê#Kurmancî|lêker<b>ê</b>]]
+|[[:lêkero#Kurmancî|lêker<b>o</b>]]
+|[[:lêkerino#Kurmancî|lêker<b>ino</b>]]
+|-
+! colspan="4" class="outer" | Zayendên mê û nêr ên nebinavkirî
+|-
+! Rewş
+! Mê (<span style="cursor:help;" title="yekjimar"><span style="border-bottom: 1px dotted #555555; ">yj.</span></span>)
+! Nêr (<span style="cursor:help;" title="yekjimar"><span style="border-bottom: 1px dotted #555555; ">yj.</span></span>)
+! Mê û nêr (<span style="cursor:help;" title="pirjimar"><span style="border-bottom: 1px dotted #555555; ">pj.</span></span>)
+|-
+! Navkî
+|[[:lêkerek#Kurmancî|lêker<b>ek</b>]]
+|[[:lêkerek#Kurmancî|lêker<b>ek</b>]]
+|[[:lêkerin#Kurmancî|lêker<b>in</b>]]
+|-
+! Îzafe
+|[[:lêkereke#Kurmancî|lêker<b>eke</b>]]
+|[[:lêkerekî#Kurmancî|lêker<b>ekî</b>]]
+|[[:lêkerine#Kurmancî|lêker<b>ine</b>]]
+|-
+! Çemandî
+|[[:lêkerekê#Kurmancî|lêker<b>ekê</b>]]
+|[[:lêkerekî#Kurmancî|lêker<b>ekî</b>]]
+|[[:lêkerinan#Kurmancî|lêker<b>inan</b>]]
+|}
+
+</div>
+
+==== Jê ====
+<templatestyles src="Modul:columns/style.css"/><div class="list-switcher-wrapper"><div class="term-list columns-bg"><ul><li><span class="Latn" lang="ku">[[:lêkerî#Kurmancî|lêkerî]]</span></li></ul></div></div>
+
+==== Etîmolojî ====
+Ji <i class="Latn mention" lang="ku">[[:lê kirin#Kurmancî|lê kirin]]</i>.
+
+==== Bide ber ====
+<templatestyles src="Modul:columns/style.css"/><div class="list-switcher-wrapper"><div class="term-list columns-bg"><ul><li><span class="Latn" lang="ku">[[:jêker#Kurmancî|jêker]]</span></li></ul></div></div>
+
+==== Werger ====
+<templatestyles src="Şablon:werger-ser/style.css"/><div style="background-color: transparent; border-collapse: collapse;">
+<div class="NavFrame werger-content" >
+<div class="NavHead"><i></i></div>
+<div class="NavContent">
+<div style="column-width: 26em; -webkit-column-width: 26em; -moz-column-width: 26em;  vertical-align: top; text-align: left;"><div class="translations">
+</div>
+</div>
+</div>
+<div style="clear:both"></div>
+</div>
+</div>

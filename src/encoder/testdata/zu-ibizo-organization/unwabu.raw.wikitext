@@ -1,0 +1,9 @@
+== IsiZulu ==
+=== Ibizo ===
+(''ubuningi'' '''izinwabu''')
+==== Ukuhunyushwa ====
+* {{en}}: {{t|en|chameleon}}
+* {{tr}}: {{t|tr|bukalemun}}
+
+[[Category:Amabizo esiZulu]]
+[[Category:Isilwane]]
