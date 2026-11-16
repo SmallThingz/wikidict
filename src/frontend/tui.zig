@@ -13,6 +13,41 @@ const Search = @import("search.zig").Task;
 const MediaJob = @import("media_job.zig");
 const Page = enum { saved, history, search, learn, settings, library };
 const Focus = enum { search, matches, entry };
+
+const wideHelp = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "[ ] selects a section; e toggles its fold", "d toggles all details; s saves the word", "r random word; 1 Saved 2 History 3 Search", "4 Learn: Tab game; Space reveal; y/n grade", "Quiz: 6-9 answer; Scramble: type then Enter", "v offline speech; m media in desktop player", "5 Settings: arrows adjust limits and appearance", "t cycles terminal/dark/light; q quits outside Search", "Any key closes this help" };
+const helpScrollHint = "↑↓ scroll PgUp/Dn Home/End Esc close";
+const helpCloseHint = "Any key closes help";
+fn helpLines(columns: usize) []const []const u8 {
+    for (wideHelp) |line| if (term.cellWidth(line) > columns -| 4) return &.{
+        "KEYBOARD",
+        "Type in Search; ↑↓ selects results",
+        "Enter reads; Esc steps back",
+        "/ Search; Tab cycles panes",
+        "Arrows/j/k move; PgUp/PgDn page",
+        "Home/End jump; Ctrl-U clears",
+        "Ctrl-C/D quits",
+        "[ ] section; e folds; d all details",
+        "s saves; r random word",
+        "1 Saved; 2 History; 3 Search",
+        "4 Learn: Tab game; Space reveal",
+        "y/n grade; Quiz: 6-9 answer",
+        "Scramble: type then Enter",
+        "v offline speech",
+        "m media in desktop player",
+        "5 Settings: arrows adjust limits",
+        "and appearance",
+        "t terminal/dark/light theme",
+        "q quits outside Search",
+        "Any key closes this help",
+    };
+    return &wideHelp;
+}
+
+fn readingHints(columns: usize) []const u8 {
+    const wide = "Esc results  / search  ↑↓ scroll  PgUp/PgDn page  [ ] section  e fold  d all  s save  ? help";
+    // Reserve the existing left/right footer margins and measure terminal cells.
+    return if (term.cellWidth(wide) <= columns -| 4) wide else "Esc back ↑↓ e fold d details ? help";
+}
 fn studyMeaning(entry: model.Entry) error{InvalidPresentation}!?model.Block {
     if (entry.organization.lexemes.len != 0) {
         var selected: ?model.Block = null;
@@ -93,6 +128,7 @@ const State = struct {
     color: bool,
     details: bool = false,
     help: bool = false,
+    help_offset: usize = 0,
     notice: []const u8 = "",
     media_index: usize = 0,
     media_job: MediaJob.Job = .{},
@@ -396,7 +432,27 @@ const State = struct {
     fn key(self: *State, event: term.Event) !bool {
         if (event.key == .quit) return false;
         if (self.help) {
-            self.help = false;
+            const maximum = self.helpMaxOffset();
+            self.help_offset = @min(self.help_offset, maximum);
+            // Full-height Help keeps its existing any-key-close behavior.
+            if (maximum != 0) {
+                const step = @max(1, self.helpCapacity() -| 1);
+                switch (event.key) {
+                    .up => self.help_offset -|= 1,
+                    .down => self.help_offset = @min(maximum, self.help_offset +| 1),
+                    .page_up => self.help_offset -|= step,
+                    .page_down => self.help_offset = @min(maximum, self.help_offset +| step),
+                    .home => self.help_offset = 0,
+                    .end => self.help_offset = maximum,
+                    else => {
+                        self.help = false;
+                        self.help_offset = 0;
+                    },
+                }
+            } else {
+                self.help = false;
+                self.help_offset = 0;
+            }
             return true;
         }
         if (self.confirm_clear_history) {
@@ -740,7 +796,10 @@ const State = struct {
                         self.loaded = null;
                         self.scroll = 0;
                     },
-                    '?' => self.help = true,
+                    '?' => {
+                        self.help = true;
+                        self.help_offset = 0;
+                    },
                     'j' => self.page(true, 1),
                     'k' => self.page(false, 1),
                     ' ' => self.page(true, @max(1, self.bodyHeight() -| 1)),
@@ -910,6 +969,30 @@ const State = struct {
         try w.print("\x1b[{d};{d}H{s}{s}", .{ row, col, palette(self.theme, self.color).base, style });
         try w.writeAll(safe.written()[0..term.prefixBytes(safe.written(), cells)]);
     }
+    fn helpCapacity(self: State) usize {
+        return self.screen.rows -| 7;
+    }
+    fn helpMaxOffset(self: State) usize {
+        return helpLines(self.screen.cols).len -| self.helpCapacity();
+    }
+    fn drawHelp(self: *State, w: *std.Io.Writer) !void {
+        const sz = self.screen;
+        const p = palette(self.theme, self.color);
+        const lines = helpLines(sz.cols);
+        const maximum = self.helpMaxOffset();
+        // Resize changes both line count and capacity without a key event.
+        self.help_offset = @min(self.help_offset, maximum);
+        if (sz.rows <= 7) return;
+        for (6..sz.rows - 1) |row| try w.print("\x1b[{d};1H{s}\x1b[2K", .{ row, p.base });
+        for (lines[self.help_offset..], 0..) |line, i| {
+            if (i >= self.helpCapacity()) break;
+            const index = self.help_offset + i;
+            const visible = if (maximum != 0 and index + 1 == lines.len) "Other keys close this help" else line;
+            try self.put(w, 6 + i, 3, sz.cols -| 4, visible, if (index == 0) p.accent else p.base);
+        }
+        try w.print("\x1b[{d};1H{s}\x1b[2K", .{ sz.rows - 1, p.base });
+        try self.put(w, sz.rows - 1, 3, sz.cols -| 4, if (maximum != 0) helpScrollHint else helpCloseHint, p.muted);
+    }
     fn dock(self: State, w: *std.Io.Writer) !void {
         const labels = if (self.screen.cols < 72) [_][]const u8{ "1Save", "2Hist", "3Find", "4Lrn", "5Set", "L Lib" } else [_][]const u8{ "1 Saved", "2 History", "3 Search", "4 Learn", "5 Settings", "L Library" };
         const width = self.screen.cols / labels.len;
@@ -1030,17 +1113,12 @@ const State = struct {
             else switch (self.focus) {
                 .search => if (sz.cols < 81) "type  ↑↓ select  Enter read  ^C quit" else "type to search  ↑↓ results  Enter read  Tab switch  Ctrl-U clear  Ctrl-C quit",
                 .matches => if (self.nav == .history) "Enter read  Del remove  / search  ? help" else "/ search  ↑↓ select  Enter read  PgUp/PgDn page  ? help  q quit",
-                .entry => "Esc results  / search  ↑↓ scroll  PgUp/PgDn page  [ ] section  e fold  d all  s save  ? help",
+                .entry => readingHints(sz.cols),
             };
             try self.put(w, sz.rows - 1, 3, sz.cols - 4, hints, p.muted);
             try self.dock(w);
             if (self.help) {
-                const help = [_][]const u8{ "KEYBOARD", "Type in Search; ↑/↓ moves straight into results", "Enter reads the selected word; Esc steps back", "/ returns to Search from results or reading", "Tab cycles Search → Matches → Reading", "Arrows or j/k move; PgUp/PgDn and Home/End jump", "Ctrl-U clears the query; Ctrl-C/D quits", "[ ] selects a section; e toggles its fold", "d toggles all details; s saves the word", "r random word; 1 Saved 2 History 3 Search", "4 Learn: Tab game; Space reveal; y/n grade", "Quiz: 6-9 answer; Scramble: type then Enter", "v offline speech; m media in desktop player", "5 Settings: arrows adjust limits and appearance", "t cycles terminal/dark/light; q quits outside Search", "Any key closes this help" };
-                for (help, 0..) |line, i| {
-                    if (6 + i >= sz.rows - 1) break;
-                    try w.print("\x1b[{d};1H{s}\x1b[2K", .{ 6 + i, p.base });
-                    try self.put(w, 6 + i, 3, sz.cols - 4, line, if (i == 0) p.accent else p.base);
-                }
+                try self.drawHelp(w);
             } else if (self.focus == .search) try w.print("\x1b[{d};{d}H\x1b[?25h", .{ 4, 13 + query_view.caret_cells });
         }
         try w.writeAll("\x1b[?2026l");
@@ -2150,4 +2228,156 @@ test "terminal Learn scores compiled Greek synonym sense without rewriting the l
     var document = try model.fromRecord(a, record.record); defer document.deinit();
     try std.testing.expectEqualDeep(decoded.entry, document.entry);
     try std.testing.expectEqualSlices(u8, payload, try enc.presentation_codec.encodeAlloc(a, .{ .entry = document.entry }));
+}
+
+
+test "terminal narrow reading footer keeps back scroll fold details and help discoverable" {
+    const a = std.testing.allocator;
+    const compact = "Esc back ↑↓ e fold d details ? help";
+    // The UTF-8 byte count exceeds 40-column capacity, but every display cell fits.
+    try std.testing.expectEqual(@as(usize, 39), compact.len);
+    try std.testing.expectEqual(@as(usize, 35), term.cellWidth(compact));
+    for ([_]usize{ 39, 40, 56, 80 }) |columns| {
+        const hint = readingHints(columns);
+        var safe: std.Io.Writer.Allocating = .init(a);
+        defer safe.deinit();
+        try output.terminalText(&safe.writer, hint);
+        const visible = safe.written()[0..term.prefixBytes(safe.written(), columns - 4)];
+        try std.testing.expectEqualStrings(compact, visible);
+        for ([_][]const u8{ "Esc back", "↑↓", "e fold", "d details", "? help" }) |action|
+            try std.testing.expect(std.mem.indexOf(u8, visible, action) != null);
+        try std.testing.expect(term.cellWidth(visible) <= columns - 4);
+    }
+    const wide = "Esc results  / search  ↑↓ scroll  PgUp/PgDn page  [ ] section  e fold  d all  s save  ? help";
+    const threshold = term.cellWidth(wide) + 4;
+    try std.testing.expectEqualStrings(compact, readingHints(threshold - 1));
+    try std.testing.expectEqualStrings(wide, readingHints(threshold));
+    try std.testing.expectEqualStrings(wide, readingHints(120));
+}
+
+
+test "terminal narrow help preserves bindings and clears the complete reading area" {
+    const a = std.testing.allocator;
+    const compact = helpLines(40);
+    try std.testing.expect(compact.len <= 32 - 7);
+    var text: std.Io.Writer.Allocating = .init(a);
+    defer text.deinit();
+    for (compact) |line| {
+        var safe: std.Io.Writer.Allocating = .init(a);
+        defer safe.deinit();
+        try output.terminalText(&safe.writer, line);
+        try std.testing.expect(term.cellWidth(safe.written()) <= 36);
+        try std.testing.expectEqual(safe.written().len, term.prefixBytes(safe.written(), 36));
+        try text.writer.print("{s}\n", .{line});
+    }
+    for ([_][]const u8{ "↑↓", "Enter", "Esc", "/ Search", "Tab cycles", "Arrows/j/k", "PgUp/PgDn", "Home/End", "Ctrl-U", "Ctrl-C/D", "[ ] section", "e folds", "d all details", "s saves", "r random", "1 Saved", "2 History", "3 Search", "4 Learn", "Tab game", "Space reveal", "y/n", "6-9", "Scramble", "then Enter", "v offline speech", "m media", "5 Settings", "arrows adjust limits", "appearance", "t terminal/dark/light", "q quits outside Search", "Any key closes" }) |binding|
+        try std.testing.expect(std.mem.indexOf(u8, text.written(), binding) != null);
+    const wide = helpLines(120);
+    try std.testing.expectEqualStrings("[ ] selects a section; e toggles its fold", wide[7]);
+    try std.testing.expectEqualStrings("d toggles all details; s saves the word", wide[8]);
+    var threshold: usize = 0;
+    for (wide) |line| threshold = @max(threshold, term.cellWidth(line) + 4);
+    try std.testing.expectEqualDeep(wide, helpLines(threshold));
+    try std.testing.expectEqualDeep(compact, helpLines(threshold - 1));
+    for ([_]usize{ 40, 120 }) |columns| {
+        // This rendering seam uses allocator/theme/screen only, never the Store.
+        var state: State = .{ .a = a, .db = undefined, .label = "", .theme = .terminal, .color = false,
+            .screen = .{ .cols = columns, .rows = 32 } };
+        var rendered: std.Io.Writer.Allocating = .init(a);
+        defer rendered.deinit();
+        try state.drawHelp(&rendered.writer);
+        const title = std.mem.indexOf(u8, rendered.written(), "KEYBOARD").?;
+        for (6..31) |row| {
+            const clear = try std.fmt.allocPrint(a, "\x1b[{d};1H\x1b[0m\x1b[2K", .{row});
+            defer a.free(clear);
+            try std.testing.expect(std.mem.indexOf(u8, rendered.written(), clear).? < title);
+            if (row >= 6 + helpLines(columns).len) {
+                const paint = try std.fmt.allocPrint(a, "\x1b[{d};3H", .{row});
+                defer a.free(paint);
+                try std.testing.expect(std.mem.indexOf(u8, rendered.written(), paint) == null);
+            }
+        }
+        try std.testing.expect(std.mem.indexOf(u8, rendered.written(), "\x1b[31;1H\x1b[0m\x1b[2K") != null);
+        try std.testing.expect(std.mem.indexOf(u8, rendered.written(), helpCloseHint) != null);
+        try std.testing.expect(std.mem.indexOf(u8, rendered.written(), "e fold d details") == null);
+    }
+}
+
+
+test "terminal short help reaches every binding clamps resize and preserves reader state" {
+    const a = std.testing.allocator;
+    var state: State = .{ .a = a, .db = undefined, .label = "", .theme = .terminal, .color = false,
+        .screen = .{ .cols = 40, .rows = 12 }, .help = true, .scroll = 17, .selected = 3, .section = 2,
+        .focus = .entry, .details = true };
+    try std.testing.expectEqual(@as(usize, 5), state.helpCapacity());
+    try std.testing.expectEqual(@as(usize, 15), state.helpMaxOffset());
+    try std.testing.expectEqual(@as(usize, 36), term.cellWidth(helpScrollHint));
+    try std.testing.expectEqual(helpScrollHint.len, term.prefixBytes(helpScrollHint, 36));
+    for ([_]struct { key: term.Key, offset: usize }{
+        .{ .key = .down, .offset = 1 }, .{ .key = .up, .offset = 0 },
+        .{ .key = .page_down, .offset = 4 }, .{ .key = .page_down, .offset = 8 },
+        .{ .key = .end, .offset = 15 }, .{ .key = .down, .offset = 15 },
+        .{ .key = .page_up, .offset = 11 }, .{ .key = .home, .offset = 0 },
+        .{ .key = .up, .offset = 0 },
+    }) |step| {
+        try std.testing.expect(try state.key(.{ .key = step.key }));
+        try std.testing.expect(state.help);
+        try std.testing.expectEqual(step.offset, state.help_offset);
+        try std.testing.expectEqual(@as(usize, 17), state.scroll);
+        try std.testing.expectEqual(@as(usize, 3), state.selected);
+        try std.testing.expectEqual(@as(usize, 2), state.section);
+        try std.testing.expect(state.details and state.focus == .entry);
+    }
+    var seen: [20]bool = @splat(false);
+    try std.testing.expectEqual(seen.len, helpLines(40).len);
+    while (true) {
+        var frame: std.Io.Writer.Allocating = .init(a);
+        defer frame.deinit();
+        try state.drawHelp(&frame.writer);
+        try std.testing.expect(std.mem.indexOf(u8, frame.written(), helpScrollHint) != null);
+        try std.testing.expect(std.mem.indexOf(u8, frame.written(), "\x1b[11;1H\x1b[0m\x1b[2K") != null);
+        for (0..state.helpCapacity()) |row| {
+            const index = state.help_offset + row;
+            const expected = if (index + 1 == seen.len) "Other keys close this help" else helpLines(40)[index];
+            try std.testing.expect(std.mem.indexOf(u8, frame.written(), expected) != null);
+            seen[index] = true;
+        }
+        if (state.help_offset == state.helpMaxOffset()) break;
+        try std.testing.expect(try state.key(.{ .key = .page_down }));
+    }
+    for (seen) |visible| try std.testing.expect(visible);
+    state.screen.cols = 120;
+    var resized: std.Io.Writer.Allocating = .init(a);
+    defer resized.deinit();
+    try state.drawHelp(&resized.writer);
+    try std.testing.expectEqual(@as(usize, 11), state.help_offset);
+    state.screen.rows = 40;
+    var tall: std.Io.Writer.Allocating = .init(a);
+    defer tall.deinit();
+    try state.drawHelp(&tall.writer);
+    try std.testing.expectEqual(@as(usize, 0), state.help_offset);
+    try std.testing.expect(std.mem.indexOf(u8, tall.written(), helpScrollHint) == null);
+    try std.testing.expect(std.mem.indexOf(u8, tall.written(), helpCloseHint) != null);
+    try std.testing.expect(std.mem.indexOf(u8, tall.written(), "Any key closes this help") != null);
+    try std.testing.expect(try state.key(.{ .key = .down }));
+    try std.testing.expect(!state.help); // Original full-height any-key close.
+    state.help = true;
+    state.screen = .{ .cols = 40, .rows = 12 };
+    var short_again: std.Io.Writer.Allocating = .init(a);
+    defer short_again.deinit();
+    try state.drawHelp(&short_again.writer);
+    try std.testing.expectEqual(@as(usize, 0), state.help_offset);
+    for ([_]term.Event{ .{ .key = .escape }, .{ .key = .text, .bytes = .{ 'd', 0, 0, 0 }, .len = 1 } }) |close| {
+        state.help = true;
+        state.help_offset = 9;
+        try std.testing.expect(try state.key(close));
+        try std.testing.expect(!state.help);
+        try std.testing.expectEqual(@as(usize, 0), state.help_offset);
+    }
+    state.help = true;
+    try std.testing.expect(!try state.key(.{ .key = .quit }));
+    try std.testing.expectEqual(@as(usize, 17), state.scroll);
+    try std.testing.expectEqual(@as(usize, 3), state.selected);
+    try std.testing.expectEqual(@as(usize, 2), state.section);
+    try std.testing.expect(state.details and state.focus == .entry);
 }
