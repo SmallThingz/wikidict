@@ -14502,4 +14502,152 @@ class InitialSealedRegistryArgumentRoleTests(unittest.TestCase):
             self.assertFalse((f.destination/'state.json').exists())
 
 
+class CompositeProducerSourceTests(unittest.TestCase):
+
+    def source_fixture(self, root):
+        base = {}; selected = {}; payloads = {}
+        for name in ('build.zig','tools/blob_build.zig','tools/figure_page_observations.zig','src/encoder/root.zig','src/encoder/blob_root.zig','tools/unchanged_helper.zig'):
+            path=root/'base'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('base '+name);path.chmod(0o644)
+            base[name]=dict(bytes=path.stat().st_size,sha256=b.sha256_file(path),mode=0o644)
+        selected=copy.deepcopy(base)
+        for name in base:
+            if name == 'tools/unchanged_helper.zig':continue
+            path=root/'view'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('selected '+name);path.chmod(0o644)
+            payloads[name]=dict(_initial_sealed_reference(path),mode=0o644)
+            selected[name]={k:payloads[name][k]for k in('bytes','sha256','mode')}
+        extra=root/'view/tools/testdata/new.wikitext';extra.parent.mkdir(parents=True,exist_ok=True);extra.write_text('new selected fixture');extra.chmod(0o644);payloads['tools/testdata/new.wikitext']=dict(_initial_sealed_reference(extra),mode=0o644);selected['tools/testdata/new.wikitext']={k:payloads['tools/testdata/new.wikitext'][k]for k in('bytes','sha256','mode')}
+        plan=dict(source_guard_manifest=_initial_sealed_write(root/'base.json',base),source_manifest=_initial_sealed_write(root/'selected.json',selected),source_payload_files=payloads)
+        plan.update(source_root=dict(path=str(root/'base')),source_guard_member_count=len(base),source_member_count=len(selected),commands=[dict(argv=['/qualified/zig','build','prepare-blob-tools','--build-file',payloads['build.zig']['path'],'-Dqualified-source-base='+str(root/'base'),'-Dqualified-writer-root='+payloads['tools/blob_build.zig']['path'],'-Dqualified-encoder-root='+payloads['src/encoder/root.zig']['path'],'-Dqualified-blob-encoder-root='+payloads['src/encoder/blob_root.zig']['path']],cwd=str(root/'base'))])
+        plan['commands'][0]['argv'] += ['-Doptimize=safe','-Dtarget=x86_64-native','-Dcpu=baseline','-Dcaptured-source-fingerprint='+plan['source_manifest']['sha256'],'--summary','all','--prefix',str(root/'install')]
+        return plan,base,selected
+
+
+    def auth_payload(self, descriptor):
+        path=Path(descriptor['path'])
+        self.assertEqual(path.stat().st_size,descriptor['bytes']);self.assertEqual(b.sha256_file(path),descriptor['sha256'])
+
+
+    def test_composite_payload_inventory_preserves_exact_declared_sources(self):
+        with tempfile.TemporaryDirectory()as tmp:
+            plan,base,selected=self.source_fixture(Path(tmp));before=copy.deepcopy((plan,base,selected))
+            b.validate_composite_source_inventory(plan,base,selected,self.auth_payload)
+            self.assertEqual((plan,base,selected),before)
+
+
+    def test_composite_inventory_refuses_unbound_bytes_modes_paths_and_incomplete_authority(self):
+        for change in('unbound','missing-guard','same-guard','mode','duplicate','parent-link'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory()as tmp:
+                root=Path(tmp);plan,base,selected=self.source_fixture(root)
+                if change=='unbound':selected['tools/unchanged_helper.zig']['sha256']='0'*64
+                elif change=='missing-guard':plan.pop('source_guard_manifest')
+                elif change=='same-guard':plan['source_guard_manifest']=plan['source_manifest']
+                elif change=='mode':plan['source_payload_files']['build.zig']['mode']=0o600;selected['build.zig']['mode']=0o600
+                elif change=='duplicate':
+                    plan['source_payload_files']['tools/figure_page_observations.zig']=copy.deepcopy(plan['source_payload_files']['build.zig'])
+                    selected['tools/figure_page_observations.zig']=copy.deepcopy(selected['build.zig'])
+                else:
+                    link=root/'linked';link.symlink_to(root/'view',target_is_directory=True)
+                    plan['source_payload_files']['build.zig']['path']=str(link/'build.zig');plan['commands'][0]['argv'][plan['commands'][0]['argv'].index('--build-file')+1]=str(link/'build.zig')
+                with self.assertRaises((ValueError,AssertionError)):
+                    b.validate_composite_source_inventory(plan,base,selected,self.auth_payload)
+
+
+    def test_composite_payload_same_byte_inode_replacement_during_authentication_refuses(self):
+        with tempfile.TemporaryDirectory()as tmp:
+            root=Path(tmp);plan,base,selected=self.source_fixture(root);mutated=False
+            def replacing(descriptor):
+                nonlocal mutated
+                self.auth_payload(descriptor)
+                if not mutated:
+                    path=Path(descriptor['path']);replacement=root/'replacement';replacement.write_bytes(path.read_bytes());replacement.chmod(descriptor['mode']);os.replace(replacement,path);mutated=True
+            with self.assertRaisesRegex(ValueError,'changed during authorization'):
+                b.validate_composite_source_inventory(plan,base,selected,replacing)
+            self.assertTrue(mutated)
+
+
+    def target_fixture(self, root):
+        helper=InitialSealedWriterOnlyTests();f=helper.fixture(root);row=f.current['dict-blob-build'];state=f.target_rows['dict-blob-build'];source=b.prepared_metadata(row['source'])
+        base={n:dict(bytes=v['bytes'],sha256=v['sha256'],mode=source['modes'][n])for n,v in source['files'].items()};selected=copy.deepcopy(base);payloads={n:dict(v,mode=source['modes'][n])for n,v in row['source_payload_files'].items()}
+        for required in ('build.zig','tools/blob_build.zig','src/encoder/root.zig','src/encoder/blob_root.zig'):
+            if required not in base:
+                leaf=root/'selected-roots'/required;leaf.parent.mkdir(parents=True,exist_ok=True);leaf.write_text('selected '+required);leaf.chmod(0o444);payloads[required]=dict(_initial_sealed_reference(leaf),mode=0o444);base[required]={k:payloads[required][k]for k in('bytes','sha256','mode')};selected[required]=copy.deepcopy(base[required])
+        row['source_paths']=sorted(base)
+        name='tools/bundle_build.zig';self.assertIn(name,base);path=root/'composite-changed-source.zig';path.write_text('actual selected '+name);path.chmod(base[name]['mode']);payloads[name]=dict(_initial_sealed_reference(path),mode=base[name]['mode']);selected[name]={k:payloads[name][k]for k in('bytes','sha256','mode')}
+        guard=_initial_sealed_write(root/'composite-base.json',base);logical=_initial_sealed_write(root/'composite-logical.json',selected);baseline=_initial_sealed_write(root/'composite-baseline.json',dict(head='0'*40,files=source['files'],modes=source['modes']))
+        info=root.stat();identity=dict(device=info.st_dev,inode=info.st_ino,mode=stat.S_IMODE(info.st_mode),uid=info.st_uid)
+        binding=_initial_sealed_write(root/'composite-binding.json',dict(source_path=str(root),source_identity=identity,private_manifest=guard,canonical_source=baseline,canonical_source_changed=False))
+        row.update(source=logical,producer_source=logical['sha256'],compiled_source_authority=logical,source_payload_files=payloads)
+        command=state['result']['commands'][0];command['argv'] += ['--build-file',payloads['build.zig']['path'],'-Dqualified-source-base='+str(root),'-Dqualified-writer-root='+payloads['tools/blob_build.zig']['path'],'-Dqualified-encoder-root='+payloads['src/encoder/root.zig']['path'],'-Dqualified-blob-encoder-root='+payloads['src/encoder/blob_root.zig']['path']]
+        recipe=b.prepared_metadata(row['compilation_recipe']);recipe.update(source_guard_member_count=len(base),source_member_count=len(selected),source_manifest=logical,source_guard_manifest=guard,source_payload_files=payloads,source_head='0'*40,source_root=dict(identity,path=str(root)),private_source_binding=binding,baseline_source_manifest=baseline)
+        row['compilation_recipe']=_initial_sealed_write(root/'composite-recipe.json',recipe)
+        state['closed'].update(source_guard_manifest=guard,source_payload_files=copy.deepcopy(payloads),private_source_binding=binding)
+        helper.republish(f)
+        return helper,f
+
+
+    def test_actual_target_envelope_accepts_composite_and_refuses_projection_or_closure_divergence(self):
+        for mutation in(None,'projection','closed-map','closed-guard','binding','cookie','root-missing','root-duplicate','root-foreign','build-file','base','runtime-args','unknown-option','build-file-equals'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory()as tmp:
+                helper,f=self.target_fixture(Path(tmp));row=f.current['dict-blob-build'];state=f.target_rows['dict-blob-build']
+                if mutation=='projection':row['source_payload_files']=dict(row['source_payload_files']);row['source_payload_files'].pop(next(iter(row['source_payload_files'])))
+                elif mutation=='closed-map':state['closed']['source_payload_files']={};helper.republish(f)
+                elif mutation=='closed-guard':state['closed']['source_guard_manifest']=row['source'];helper.republish(f)
+                elif mutation=='binding':
+                    recipe=b.prepared_metadata(row['compilation_recipe']);binding=b.prepared_metadata(recipe['private_source_binding']);binding['private_manifest']=row['source'];reference=_initial_sealed_write(f.root/'wrong-composite-binding.json',binding);recipe['private_source_binding']=reference;row['compilation_recipe']=_initial_sealed_write(f.root/'wrong-composite-recipe.json',recipe);state['closed']['private_source_binding']=reference;helper.republish(f)
+                elif mutation in('root-missing','root-duplicate','root-foreign','build-file','base','runtime-args','unknown-option','build-file-equals'):
+                    args=state['result']['commands'][0]['argv'];prefix='-Dqualified-writer-root=';chosen=next(x for x in args if x.startswith(prefix))
+                    if mutation=='root-missing':args.remove(chosen)
+                    elif mutation=='root-duplicate':args.append(chosen)
+                    elif mutation=='root-foreign':args[args.index(chosen)]=prefix+str(f.root/'foreign/tools/blob_build.zig')
+                    elif mutation=='build-file':args[args.index('--build-file')+1]=str(f.root/'foreign-build.zig')
+                    elif mutation=='base':args[args.index('-Dqualified-source-base='+str(f.root))]='-Dqualified-source-base=/foreign/base'
+                    elif mutation=='runtime-args':args.insert(3,'--')
+                    elif mutation=='unknown-option':args+=['--build-runner',str(f.root/'foreign-runner.zig')]
+                    else:args.append('--build-file='+str(f.root/'foreign-build.zig'))
+                    helper.republish(f)
+                elif mutation=='cookie':
+                    state['result']['commands'][0]['argv']=[('-Dcaptured-source-fingerprint='+'f'*64)if arg.startswith('-Dcaptured-source-fingerprint=')else arg for arg in state['result']['commands'][0]['argv']]
+                    command=state['result']['commands'][0];recipe=b.prepared_metadata(row['compilation_recipe']);recipe['commands']=[dict(argv=command['argv'],cwd=command['cwd'])];row['compilation_recipe']=_initial_sealed_write(f.root/'wrong-cookie-recipe.json',recipe);state['result']['source_authority']=row['compilation_recipe'];row['actual_emission_result']=_initial_sealed_write(f.root/'wrong-cookie-result.json',state['result']);state['closed'].update(result=row['actual_emission_result'],commands=copy.deepcopy(state['result']['commands']),owner_configuration=_initial_sealed_write(f.root/'wrong-cookie-owner.json',dict(bindings=dict(INPUT_REF=row['compilation_recipe']))));row['qualification_closure']=_initial_sealed_write(f.root/'wrong-cookie-closed.json',state['closed'])
+                if mutation is None:
+                    b.initial_sealed_target_emission(row,f.roles,target='prepare-captured-writer')
+                else:
+                    with self.assertRaises((ValueError,OSError)):
+                        b.initial_sealed_target_emission(row,f.roles,target='prepare-captured-writer')
+
+    def expired_fixture(self, root):
+        helper,f=self.target_fixture(root);row=f.current['dict-blob-build']
+        # Match the original role projection; selected compiler-only roots stay
+        # in the complete recipe inventory without broadening role policy.
+        row['source_paths']=copy.deepcopy(f.original['dict-blob-build']['source_paths'])
+        row['source_payload_files']={name:value for name,value in row['source_payload_files'].items()if name in row['source_paths']}
+        old=Path(row['source_payload_files']['tools/bundle_build.zig']['path']);old.unlink()
+        return helper,f,old
+
+    def test_closed_composite_consumes_immutable_source_facts_after_source_path_expires(self):
+        with tempfile.TemporaryDirectory()as tmp:
+            helper,f,old=self.expired_fixture(Path(tmp));before=copy.deepcopy((f.current,f.target_rows));argv,references=b.initial_sealed_target_emission(f.current['dict-blob-build'],f.roles,target='prepare-captured-writer')
+            self.assertNotIn(str(old),{ref['path']for ref in references});self.assertEqual((f.current,f.target_rows),before)
+            with patch.object(f.roles,'compilation_identity',side_effect=AssertionError('closed source is not an execution input')):
+                b.initial_sealed_blob_successor(f.original,f.roles)
+            self.assertFalse(old.exists())
+
+    def test_closed_composite_refuses_failed_closure_changed_source_projection_or_artifact(self):
+        for mutation in ('closure','closed-map','projection','source','artifact'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory()as tmp:
+                helper,f,old=self.expired_fixture(Path(tmp));row=f.current['dict-blob-build'];state=f.target_rows['dict-blob-build']
+                if mutation=='closure':state['closed']['source_lease_released']=False;helper.republish(f)
+                elif mutation=='closed-map':state['closed']['source_payload_files']={};helper.republish(f)
+                elif mutation=='projection':row['source_payload_files']=copy.deepcopy(row['source_payload_files']);row['source_payload_files']['tools/bundle_build.zig']['sha256']='0'*64
+                elif mutation=='source':Path(row['source']['path']).write_bytes(Path(row['source']['path']).read_bytes()+b' ')
+                else:
+                    path=Path(row['artifact']['path']);path.chmod(0o755);path.write_bytes(path.read_bytes()+b'changed')
+                with self.assertRaises((ValueError,OSError)):
+                    b.initial_sealed_target_emission(row,f.roles,target='prepare-captured-writer')
+
+    def test_compile_guard_still_requires_physical_original_composite_sources(self):
+        with tempfile.TemporaryDirectory()as tmp:
+            helper,f,old=self.expired_fixture(Path(tmp));row=f.current['dict-blob-build'];recipe=b.prepared_metadata(row['compilation_recipe']);base=b.prepared_metadata(recipe['source_guard_manifest']);selected=b.prepared_metadata(row['source'])
+            with self.assertRaises(OSError):b.validate_composite_source_inventory(recipe,base,selected,self.auth_payload)
+
+
 if __name__=='__main__':unittest.main()

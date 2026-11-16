@@ -3718,11 +3718,129 @@ def retained_compilation_source(row, native_roles):
     return compiled
 
 
+def validate_composite_source_inventory(plan, base, selected, auth_payload):
+    """Join a logical compile inventory to the guarded base and exact payloads."""
+    if 'source_guard_manifest' not in plan:
+        if 'source_payload_files' in plan:
+            raise ValueError('Composite source payloads lack their base guard')
+        return
+    payloads = plan.get('source_payload_files')
+    if (plan['source_guard_manifest'] == plan['source_manifest']
+            or not isinstance(base, dict) or not isinstance(selected, dict)
+            or not isinstance(payloads, dict) or not payloads
+            or set(selected) != set(base) | set(payloads)):
+        raise ValueError('Composite source inventory or payload membership differs')
+    if ('source_member_count' in plan and plan['source_member_count'] != len(selected)) or ('source_guard_member_count' in plan and plan['source_guard_member_count'] != len(base)):
+        raise ValueError('Composite source member counts differ')
+    required = ('build.zig','tools/blob_build.zig','src/encoder/root.zig','src/encoder/blob_root.zig')
+    if not set(required) <= set(payloads):
+        raise ValueError('Composite source lacks its actual selected module roots')
+    commands = plan.get('commands')
+    root = plan.get('source_root')
+    if (not isinstance(commands,list) or len(commands) != 1 or not isinstance(commands[0],dict)
+            or not isinstance(root,dict) or not isinstance(root.get('path'),str)):
+        raise ValueError('Composite source lacks its actual normal build command')
+    argv = commands[0].get('argv'); base_path = root['path']
+    if (not isinstance(argv,list) or not all(isinstance(x,str) for x in argv) or len(argv) < 3
+            or argv[1] != 'build' or commands[0].get('cwd') != base_path
+            or not Path(base_path).is_absolute() or Path(base_path).as_posix() != base_path):
+        raise ValueError('Composite source base differs from actual build cwd')
+    stop = next((i for i,x in enumerate(argv[2:],2) if x.startswith('-')),len(argv))
+    if argv[2:stop] not in (['prepare-blob-tools'],['prepare-captured-writer']):
+        raise ValueError('Composite build selected another production target')
+    if argv.count('--build-file') != 1 or argv.index('--build-file')+1 >= len(argv) or argv[argv.index('--build-file')+1] != payloads['build.zig']['path']:
+        raise ValueError('Composite actual build file differs from its payload')
+    expected = ['-Dqualified-source-base='+base_path,
+        '-Dqualified-writer-root='+payloads['tools/blob_build.zig']['path'],
+        '-Dqualified-encoder-root='+payloads['src/encoder/root.zig']['path'],
+        '-Dqualified-blob-encoder-root='+payloads['src/encoder/blob_root.zig']['path']]
+    if sorted(x for x in argv if x.startswith('-Dqualified-')) != sorted(expected):
+        raise ValueError('Composite actual module roots differ from their payloads')
+    required_flags = {'-Doptimize=safe','-Dtarget=x86_64-native','-Dcpu=baseline',
+        '-Dcaptured-source-fingerprint='+plan['source_manifest']['sha256']}
+    seen_flags = set(); index = stop
+    while index < len(argv):
+        value = argv[index]
+        if value in ('--build-file','--summary','--search-prefix','--cache-dir','--global-cache-dir','--prefix'):
+            if value in seen_flags or index+1 >= len(argv):
+                raise ValueError('Duplicate or incomplete composite build option')
+            if value == '--summary' and argv[index+1] != 'all':
+                raise ValueError('Composite build summary differs')
+            seen_flags.add(value); index += 2
+        elif value in required_flags or value in expected or value == '-Dtest-optimize=safe' or (value.startswith('-j') and value[2:].isdigit() and int(value[2:]) > 0):
+            if value in seen_flags:
+                raise ValueError('Duplicate composite native build option')
+            seen_flags.add(value); index += 1
+        else:
+            raise ValueError('Unreviewed composite native build option')
+    if not required_flags | {'--summary','--prefix'} <= seen_flags:
+        raise ValueError('Composite native build flags differ')
+    paths = set()
+    for name in selected:
+        if not isinstance(name, str):
+            raise ValueError('Unsafe composite source member')
+        relative = Path(name)
+        if (relative.is_absolute() or '..' in relative.parts
+                or relative.as_posix() != name):
+            raise ValueError('Unsafe composite source member')
+        original, compiled = base.get(name), selected[name]
+        if (not isinstance(compiled, dict) or set(compiled) != {'bytes', 'sha256', 'mode'}
+                or (original is not None and (not isinstance(original, dict) or set(original) != set(compiled)))):
+            raise ValueError('Composite source requires flat private inventories')
+        if name not in payloads:
+            if original != compiled:
+                raise ValueError('Composite source changed outside its payload map')
+            continue
+        descriptor = payloads[name]
+        if (not isinstance(descriptor, dict) or set(descriptor) != {'path', 'bytes', 'sha256', 'mode'}
+                or any(descriptor[key] != compiled[key] for key in ('bytes', 'sha256', 'mode'))):
+            raise ValueError('Composite source payload does not match compiled bytes')
+        path = Path(descriptor['path'])
+        if (not path.is_absolute() or '..' in path.parts or path.as_posix() != descriptor['path']
+                or descriptor['path'] in paths):
+            raise ValueError('Unsafe or duplicate composite source payload path')
+        paths.add(descriptor['path'])
+        if auth_payload is None:
+            continue
+        if any(p.is_symlink() for p in (path, *path.parents)):
+            raise ValueError('Unsafe composite source payload path')
+        before = path.lstat()
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_uid != os.geteuid()
+                or stat.S_IMODE(before.st_mode) != descriptor['mode']):
+            raise ValueError('Composite source payload mode or ownership differs')
+        auth_payload(descriptor)
+        after = path.lstat()
+        fields = ('st_dev','st_ino','st_mode','st_nlink','st_uid','st_gid','st_size','st_mtime_ns','st_ctime_ns')
+        if any(getattr(before,key) != getattr(after,key) for key in fields):
+            raise ValueError('Composite source payload changed during authorization')
+
+
 def initial_sealed_target_emission(row, native_roles, *, target, full_graph=False):
     """Authenticate one actual successful install target; never promote the graph verdict."""
     references = [row[key] for key in ('compilation_recipe', 'actual_emission_result', 'qualification_closure', 'source')]
     recipe, emitted, closed, source = [prepared_metadata(reference) for reference in references]
     retained_compilation_source(row, native_roles)
+    guard_reference = recipe.get('source_guard_manifest', row['source'])
+    composite = 'source_guard_manifest' in recipe
+    if composite:
+        base_source = prepared_metadata(guard_reference)
+        if (source.get('head') is not None or closed.get('source_guard_manifest') != guard_reference
+                or closed.get('source_payload_files') != recipe.get('source_payload_files')):
+            raise ValueError('Composite source closure differs from its guarded payloads')
+        # A proven closed emission retains immutable source facts. Source paths
+        # are not execution inputs after its complete physical guard closes.
+        validate_composite_source_inventory(recipe, base_source, source, None)
+        projected = {name:value for name,value in recipe['source_payload_files'].items() if name in row['source_paths']}
+        if row.get('source_payload_files', {}) != projected:
+            raise ValueError('Composite role payload projection differs from its actual compilation')
+        if 'source_path_view' in recipe:
+            if closed.get('source_path_view') != recipe['source_path_view']:
+                raise ValueError('Composite closed path-view authority differs')
+            prepared_metadata(recipe['source_path_view'])
+            references.append(recipe['source_path_view'])
+        references.append(guard_reference)
+    elif 'source_payload_files' in recipe or 'source_guard_manifest' in closed:
+        raise ValueError('Incomplete composite source authority')
     source_head = source.get('head')
     if source_head is None:
         binding_reference = recipe.get('private_source_binding')
@@ -3736,7 +3854,7 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
         identity = binding.get('source_identity')
         source_head = baseline.get('head')
         if (closed.get('private_source_binding') != binding_reference
-                or binding.get('private_manifest') != row['source']
+                or binding.get('private_manifest') != guard_reference
                 or binding.get('canonical_source') != baseline_reference
                 or binding.get('source_path') != row['source_root']
                 or binding.get('canonical_source_changed') is not False
@@ -3917,7 +4035,8 @@ def initial_sealed_blob_successor(original, native_roles):
         references.extend([after['previous_role_binding'],*target_references])
         source = prepared_metadata(after['source']); inventory = source.get('files',source)
         for relative in after['source_paths']:
-            identity = native_roles.compilation_identity(after,relative)
+            identity = (dict(inventory[relative], mode=source.get('modes',{}).get(relative,inventory[relative].get('mode',0o644)))
+                        if 'source_guard_manifest' in recipe else native_roles.compilation_identity(after,relative))
             if (any(identity[key] != inventory[relative][key] for key in ('bytes','sha256'))
                     or identity['mode'] != source.get('modes',{}).get(relative,inventory[relative].get('mode',0o644))):
                 raise ValueError('Initial sealed blob successor compiled payload changed')
