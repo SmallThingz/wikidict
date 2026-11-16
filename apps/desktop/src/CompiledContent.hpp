@@ -25,6 +25,21 @@ inline QJsonObject object(const QJsonValue &value) {
     require(value.isObject());
     return value.toObject();
 }
+inline QJsonObject inlineBoxGroup(const QJsonObject &span);
+// A later data-only owner must never disappear into the legacy leaf renderer.
+// Null fields keep the complete legacy path, including legacy unknown metadata.
+inline void requireSupportedFinalYGeometry(const QJsonValue &value) {
+    if (value.isArray()) {
+        for (const auto &child : value.toArray()) requireSupportedFinalYGeometry(child);
+    } else if (value.isObject()) {
+        const auto object = value.toObject();
+        if (present(object.value(QStringLiteral("inline_box_group"))))
+            inlineBoxGroup(object);
+        for (auto it = object.begin(); it != object.end(); ++it)
+            if (it->isArray() || it->isObject()) requireSupportedFinalYGeometry(*it);
+    }
+}
+
 // Current DPRL Container fields only. Later private responsive/overflow fields
 // must not be admitted before the matching native layout protocol exists.
 inline QJsonObject containerObject(const QJsonValue &value, const QStringList &keys,
@@ -52,6 +67,66 @@ inline void containerEdges(const QJsonValue &value) {
     const QStringList keys{QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")};
     const auto edges = containerObject(value, keys, keys);
     for (const auto &key : keys) containerLength(edges.value(key));
+}
+inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
+    // This first native domain keeps ordinary child runs and their actions.
+    // More complex owners are rejected before an empty owner can render away.
+    require(span.value("kind") == QStringLiteral("text")
+        && span.value("text").isString() && span.value("text").toString().isEmpty()
+        && span.value("trail").isString() && span.value("trail").toString().isEmpty()
+        && span.value("target").toString().isEmpty());
+    for (const auto key : {"image", "ruby", "inline_action_group", "inline_padding_group",
+                           "inline_style", "background", "link_paint", "target_fragment"})
+        require(!present(span.value(key)));
+    require(!span.value("superscript").toBool() && !span.value("subscript").toBool()
+        && (!present(span.value("direction")) || span.value("direction").toString().isEmpty()));
+    const auto group = containerObject(span.value("inline_box_group"),
+        {"padding", "border", "overlays", "spans"}, {"padding", "border", "overlays", "spans"});
+    containerEdges(group.value("padding"));
+    require(group.value("overlays").isArray() && group.value("overlays").toArray().isEmpty());
+    const auto border = containerObject(group.value("border"), {"top", "right", "bottom", "left"},
+        {"top", "right", "bottom", "left"});
+    for (const auto key : {"top", "right", "bottom", "left"}) {
+        const auto edge = object(border.value(key)); require(edge.size() == 1);
+        const auto tag = edge.keys().first();
+        require((tag == "none" || tag == "hidden" || tag == "solid") && edge.value(tag).isObject());
+        if (tag == "solid") {
+            const auto solid = containerObject(edge.value(tag), {"width", "color"}, {"width", "color"});
+            containerLength(solid.value("width"));
+            const auto color = object(solid.value("color")); require(color.size() == 1);
+            const auto colorTag = color.keys().first();
+            if (colorTag == "rgb") {
+                const auto rgb = color.value(colorTag); const QString spelling = rgb.toString();
+                require(rgb.isString() && spelling.size() == 7 && spelling.front() == '#');
+                for (QChar c : spelling.mid(1)) require((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+            } else {
+                require((colorTag == "transparent" || colorTag == "current_color")
+                    && color.value(colorTag).isObject() && color.value(colorTag).toObject().isEmpty());
+                if (colorTag == "current_color") require(span.value("foreground").isString());
+            }
+        } else require(edge.value(tag).toObject().isEmpty());
+    }
+    require(group.value("spans").isArray());
+    const auto children = group.value("spans").toArray();
+    require(!children.isEmpty() && children.size() <= (1 << 20));
+    QString source;
+    for (const auto &raw : children) {
+        const auto child = object(raw); const auto kind = child.value("kind").toString();
+        require(kind == "text" || kind == "link" || kind == "external_link");
+        require(child.value("text").isString() && child.value("trail").isString());
+        for (const auto key : {"image", "ruby", "inline_action_group", "inline_padding_group", "inline_box_group",
+                               "inline_style", "background", "link_paint"}) require(!present(child.value(key)));
+        require(!child.value("superscript").toBool() && !child.value("subscript").toBool()
+            && (!present(child.value("direction")) || child.value("direction").toString().isEmpty()));
+        const QString text = child.value("text").toString() + child.value("trail").toString();
+        require(!text.isEmpty() && text.size() <= (1 << 20) - source.size());
+        for (QChar c : text) require(c.unicode() >= 0x20 && c.unicode() <= 0x7e);
+        source += text;
+    }
+    require(children.first().toObject().value("kind") == "text"
+        && children.last().toObject().value("kind") == "text"
+        && !source.front().isSpace() && !source.back().isSpace());
+    return group;
 }
 inline void containerMargins(const QJsonValue &value) {
     const QStringList keys{QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")};
@@ -190,18 +265,102 @@ inline QJsonValue containerFontFamily(const QJsonValue &value) {
     }
     return value;
 }
+inline QJsonObject fontSnapshot(const QJsonValue &value) {
+    const QStringList keys{"font_scale", "font_scale_basis", "small", "superscript", "subscript", "font_normalized",
+        "bold", "italic", "code", "language", "classes", "role", "font_features", "font_family"};
+    auto font = containerObject(value, keys);
+    for (const auto &key : {"font_scale", "font_features", "font_family"}) if (!font.contains(key)) font.insert(key, QJsonValue());
+    if (!font.contains("font_scale_basis")) font.insert("font_scale_basis", "context");
+    for (const auto &key : {"small", "superscript", "subscript", "font_normalized", "bold", "italic", "code"})
+        if (!font.contains(key)) font.insert(key, false);
+    for (const auto &key : {"language", "classes"}) if (!font.contains(key)) font.insert(key, "");
+    if (!font.contains("role")) font.insert("role", "normal");
+    const auto basis = font.value("font_scale_basis");
+    if (basis != QStringLiteral("context") && basis != QStringLiteral("normal_body") && basis != QStringLiteral("css_px"))
+        throw std::runtime_error("invalid inline font snapshot basis");
+    if (present(font.value("font_scale"))) containerNumber(font.value("font_scale"));
+    if (basis != QStringLiteral("context") && !present(font.value("font_scale")))
+        throw std::runtime_error("inline font snapshot missing scale");
+    for (const auto &key : {"small", "superscript", "subscript", "font_normalized", "bold", "italic", "code"})
+        if (!font.value(key).isBool()) throw std::runtime_error("invalid inline font snapshot flag");
+    for (const auto &key : {"language", "classes", "role"})
+        if (!font.value(key).isString() || font.value(key).toString().contains(QChar(0))) throw std::runtime_error("invalid inline font snapshot string");
+    const QStringList roles{"normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference"};
+    if (!roles.contains(font.value("role").toString())) throw std::runtime_error("invalid inline font snapshot role");
+    const auto features = font.value("font_features");
+    require(!present(features) || (features.isString() && (features == QStringLiteral("normal") || features == QStringLiteral("seven_on"))));
+    containerFontFamily(font.value("font_family"));
+    if (font.value("font_normalized").toBool() && basis == QStringLiteral("context"))
+        throw std::runtime_error("normalized inline font snapshot needs explicit basis");
+    if (basis == QStringLiteral("context") && present(font.value("font_scale")) && font.value("font_scale").toDouble() == 1)
+        font.insert("font_scale", QJsonValue());
+    return font;
+}
+inline QJsonObject containerOwnerFont(const QJsonObject &style) {
+    const auto value = style.value(QStringLiteral("owner_font"));
+    if (!present(value)) return {};
+    const auto font = fontSnapshot(value);
+    require(font.value("font_normalized").toBool() && font.value("font_scale").isDouble()
+        && (font.value("font_scale_basis") == QStringLiteral("normal_body")
+            || font.value("font_scale_basis") == QStringLiteral("css_px")));
+    require(!present(style.value("positioning")));
+    if (present(style.value("owner_font_scale")))
+        require(font.value("font_scale_basis") == QStringLiteral("normal_body")
+            && font.value("font_scale") == style.value("owner_font_scale"));
+    if (present(style.value("font_family")))
+        require(present(font.value("font_family")) && font.value("font_family") == style.value("font_family"));
+    return font;
+}
+inline QJsonObject bodyTypography(const QJsonValue &value) {
+    if (!present(value)) return {};
+    const auto body = containerObject(value, {QStringLiteral("owner_font"), QStringLiteral("line_height")},
+        {QStringLiteral("owner_font")});
+    require(present(body.value("owner_font")));
+    containerOwnerFont(QJsonObject{{"owner_font", body.value("owner_font")}});
+    if (present(body.value("line_height"))) containerLineHeight(body.value("line_height"));
+    return body;
+}
+
+// BODY initially admits ordinary root text only. Nearer frame/cell/figure
+// typography and non-text inline owners need a separate ownership bridge.
+inline void requireBodyTextBlock(const QJsonObject &block) {
+    const auto kind = block.value("kind").toString();
+    if (kind == "heading" || kind == "rule" || kind == "blank") return;
+    require(kind == "paragraph" || kind == "definition" || kind == "list_item"
+        || kind == "list_detail" || kind == "indent" || kind == "term"
+        || kind == "example" || kind == "quotation");
+    for (const auto key : {"flow", "figure", "container", "table", "feature", "style"})
+        require(!present(block.value(QLatin1String(key))));
+    require(block.value("spans").isArray());
+    bool text = false;
+    for (const auto &value : block.value("spans").toArray()) {
+        require(value.isObject()); const auto span = value.toObject();
+        const auto spanKind = span.value("kind").toString();
+        require(spanKind == "text" || spanKind == "link" || spanKind == "external_link"
+            || spanKind == "line_break");
+        for (const auto key : {"image", "ruby", "inline_action_group", "inline_padding_group", "inline_box_group"})
+            require(!present(span.value(QLatin1String(key))));
+        // Paragraph-marked poem blocks and owner-specific numeric policies are
+        // not silently assigned to a root BODY strut by this initial domain.
+        require(!span.value("classes").toString().contains("poem"));
+        text |= !span.value("text").toString().isEmpty() || !span.value("trail").toString().isEmpty();
+    }
+    require(text);
+}
+
 inline QJsonObject containerStyle(const QJsonValue &value) {
     if (value.isUndefined()) return {};
     const auto style = containerObject(value, {QStringLiteral("margins"), QStringLiteral("padding"),
         QStringLiteral("width"), QStringLiteral("float_side"), QStringLiteral("clear"), QStringLiteral("max_width"),
         QStringLiteral("box_sizing"), QStringLiteral("layout"), QStringLiteral("align_items"), QStringLiteral("flex_item"),
         QStringLiteral("background"), QStringLiteral("border"), QStringLiteral("line_height"),
-        QStringLiteral("text_align"), QStringLiteral("screen_max_width"), QStringLiteral("owner_font_scale"), QStringLiteral("height"), QStringLiteral("columns"), QStringLiteral("positioning"), QStringLiteral("min_height"), QStringLiteral("margin_values"), QStringLiteral("overflow"), QStringLiteral("font_family")});
+        QStringLiteral("text_align"), QStringLiteral("screen_max_width"), QStringLiteral("owner_font_scale"), QStringLiteral("height"), QStringLiteral("columns"), QStringLiteral("positioning"), QStringLiteral("min_height"), QStringLiteral("margin_values"), QStringLiteral("overflow"), QStringLiteral("font_family"), QStringLiteral("owner_font")});
     const auto enumeration = [](const QJsonObject &owner, const QString &key, const QStringList &choices) {
         const auto field = owner.value(key);
         if (present(field)) require(field.isString() && choices.contains(field.toString()));
     };
     containerFontFamily(style.value(QStringLiteral("font_family")));
+    containerOwnerFont(style);
     if (present(style.value(QStringLiteral("margins")))) containerMargins(style.value(QStringLiteral("margins")));
     if (present(style.value(QStringLiteral("margin_values")))) {
         require(!present(style.value(QStringLiteral("margins"))));
@@ -420,6 +579,12 @@ inline void visitSpanLeaves(const QJsonArray &spans, Context context,
             local.contentDepth = depth;
             if (present(span.value("language"))) require(span.value("language").isString());
             local.language = languageForSpan(span, inherited);
+            if (present(span.value("inline_box_group"))) {
+                require(depth < 16);
+                const auto group = inlineBoxGroup(span);
+                self(self, group.value("spans").toArray(), local, depth + 1, rubyDepth, budget, visitLeaf, text, probing);
+                continue;
+            }
             const bool action = present(span.value("inline_action_group"));
             const bool padding = present(span.value("inline_padding_group"));
             const bool ruby = present(span.value("ruby"));

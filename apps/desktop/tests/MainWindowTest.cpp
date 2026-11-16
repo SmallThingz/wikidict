@@ -5,6 +5,7 @@
 #include "SemanticHtml.hpp"
 #include "CompiledRuby.hpp"
 #include "CompiledInlineAction.hpp"
+#include "CompiledInlineBox.hpp"
 #include "MediaPanel.hpp"
 #include "SemanticFigure.hpp"
 #include "MissingFigurePaint.hpp"
@@ -10644,6 +10645,708 @@ private slots:
             QVERIFY_EXCEPTION_THROWN(window.blockHtml(box(QJsonObject{{"height", malformed}}, QJsonArray{paragraph})), std::exception);
         QVERIFY_EXCEPTION_THROWN(window.blockHtml(box(QJsonObject{{"screen_max_width", QJsonObject{{"max_width_px", 639}, {"height", length(20)}}}}, {})), std::exception);
         QVERIFY_EXCEPTION_THROWN(window.blockHtml(box(QJsonObject{{"max_height", length(20)}}, {})), std::exception);
+    }
+
+    void finalYEmptyOwnerCannotDropItsRichChildrenInReading() {
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+        const QJsonObject first{{"kind", "text"}, {"text", "Alpha "}, {"target", ""}, {"trail", ""}, {"foreground", "#247135"}};
+        const QJsonObject link{{"kind", "link"}, {"text", "linked child"}, {"target", "destination"}, {"trail", ""}, {"underline", true}};
+        const QJsonObject last{{"kind", "text"}, {"text", " omega"}, {"target", ""}, {"trail", ""}, {"strike", true}};
+        const QJsonArray children{first, link, last};
+        const QJsonObject ordinary{{"kind", "paragraph"}, {"spans", children}};
+        const QJsonObject section{{"title", ""}, {"level", 0}, {"blocks", QJsonArray{ordinary}}};
+        const QJsonObject entry{{"title", "owner source"}, {"kind", "language"}, {"language", "English"},
+            {"language_code", "en"}, {"sections", QJsonArray{section}}, {"media", QJsonArray{}}};
+        QVERIFY(composeReadingEntry(window, entry));
+        const QString raw = window.reading_->document()->toRawText();
+        auto action = window.reading_->document()->find("linked child"); QVERIFY(!action.isNull());
+        const QString href = action.charFormat().anchorHref(); QVERIFY(!href.isEmpty());
+        const auto ink = window.reading_->document()->find("Alpha").charFormat().foreground();
+        const QJsonObject unit{{"unit", "px"}, {"value", 2}};
+        const QJsonObject padding{{"top", unit}, {"right", unit}, {"bottom", unit}, {"left", unit}};
+        const QJsonObject none{{"none", QJsonObject{}}};
+        const QJsonObject border{{"top", none}, {"right", none}, {"bottom", none}, {"left", none}};
+        const QJsonObject owner{{"kind", "text"}, {"text", ""}, {"target", ""}, {"trail", ""},
+            {"inline_box_group", QJsonObject{{"padding", padding}, {"border", border},
+                {"overlays", QJsonArray{}}, {"spans", children}}}};
+        auto boxed = entry; auto boxedSection = section;
+        boxedSection.insert("blocks", QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{owner}}}});
+        boxed.insert("sections", QJsonArray{boxedSection});
+        const QByteArray immutable = QJsonDocument(boxed).toJson(QJsonDocument::Compact);
+        // This exact control can be inserted into the current implementation:
+        // accepting an empty owner but dropping its children fails below. A
+        // refusal also does not earn supported-domain acceptance.
+        QVERIFY(composeReadingEntry(window, boxed));
+        auto *document = window.reading_->document();
+        document->documentLayout()->documentSize();
+        const QString frameDir = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+        if (!frameDir.isEmpty()) {
+            QVERIFY(QDir().mkpath(frameDir));
+            QVERIFY(window.grab().save(QDir(frameDir).filePath("final-y-empty-owner.png")));
+        }
+        QCOMPARE(document->toRawText(), raw);
+        QCOMPARE(document->toPlainText().count("Alpha linked child omega"), 1);
+        action = document->find("linked child"); QVERIFY(!action.isNull());
+        QCOMPARE(action.charFormat().anchorHref(), href);
+        QCOMPARE(document->find("Alpha").charFormat().foreground(), ink);
+        QVERIFY(document->find("omega").charFormat().fontStrikeOut());
+        QCOMPARE(QJsonDocument(boxed).toJson(QJsonDocument::Compact), immutable);
+        QVERIFY(owner.value("text").toString().isEmpty());
+        QCOMPARE(owner.value("inline_box_group").toObject().value("spans").toArray(), children);
+    }
+
+    void finalYInlineBoxEmptyOwnerPreservesNaturalChildrenAndActions() {
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+        auto *document = window.reading_->document();
+        QVERIFY(document->documentLayout()->property("_wikidictInlineBoxCapability").toString()
+            == QString::fromLatin1(QCompiledInlineBox::Capability));
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value}, {"target", ""}, {"trail", ""}}; };
+        const QJsonObject link{{"kind", "link"}, {"text", "target"}, {"target", "target"}, {"trail", ""}};
+        const QJsonArray children{text("Alpha ordinary "), link, text(" words preserve natural wrapping and the final edge")};
+        const QString expected = QStringLiteral("Alpha ordinary target words preserve natural wrapping and the final edge");
+        const QJsonObject zero{{"unit", "px"}, {"value", 0}};
+        const QJsonObject padding{{"top", QJsonObject{{"unit", "px"}, {"value", 40}}},
+            {"right", QJsonObject{{"unit", "px"}, {"value", 13.25}}},
+            {"bottom", QJsonObject{{"unit", "px"}, {"value", 45}}},
+            {"left", QJsonObject{{"unit", "px"}, {"value", 17.5}}}};
+        const QJsonObject none{{"none", QJsonObject{}}};
+        const QJsonObject border{{"top", none}, {"right", none}, {"bottom", none}, {"left", none}};
+        const QJsonObject box{{"kind", "text"}, {"text", ""}, {"target", ""}, {"trail", ""},
+            {"inline_box_group", QJsonObject{{"padding", padding}, {"border", border},
+                {"overlays", QJsonArray{}}, {"spans", children}}}};
+        const QByteArray immutable = QJsonDocument(box).toJson(QJsonDocument::Compact);
+        const auto install = [&](const QJsonArray &spans) {
+            document->setLayoutEnabled(false);
+            QTextCursor edit(document); edit.beginEditBlock();
+            // Match the production BODY font context instead of comparing a
+            // bare UI-default import with the Reader-sized marker children.
+            const QString html = QStringLiteral("<style>a{color:%1;text-decoration:none;}</style><body style=\"font-family:'Liberation Mono';font-size:%2pt;color:#315a78\">%3</body>")
+                .arg(window.palette().color(QPalette::Link).name())
+                .arg(window.readingPointSize_).arg(window.spansHtml(spans));
+            SemanticHtml::setHtml(document, html);
+            const auto expansion = CompiledInlineBox::expand(document);
+            CompiledInlineBox::finalize(expansion);
+            edit.endEditBlock(); document->setLayoutEnabled(true);
+            document->documentLayout()->documentSize();
+        };
+        const auto href = [&] {
+            const auto found = document->find(QStringLiteral("target"));
+            return found.isNull() ? QString() : found.charFormat().anchorHref();
+        };
+        install(children); document->setTextWidth(10000);
+        document->documentLayout()->documentSize();
+        QCOMPARE(document->toPlainText(), expected);
+        const QString originalHref = href(); QVERIFY(!originalHref.isEmpty());
+        const qreal ordinaryAdvance = document->begin().layout()->lineAt(0).horizontalAdvance();
+        const qreal ordinaryHeight = document->begin().layout()->lineAt(0).height();
+        const auto ordinaryFormat = document->find("Alpha").charFormat();
+        const QFont ordinaryFont = ordinaryFormat.font().resolve(document->defaultFont());
+        const auto ordinaryLinkFormat = document->find("target").charFormat();
+        QCOMPARE(ordinaryFormat.foreground().color(), QColor("#315a78"));
+        install(QJsonArray{box}); document->setTextWidth(10000);
+        document->documentLayout()->documentSize();
+        QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QCOMPARE(document->toPlainText(), expected); QCOMPARE(href(), originalHref);
+        const auto boxedFormat = document->find("Alpha").charFormat();
+        QCOMPARE(boxedFormat.font().resolve(document->defaultFont()), ordinaryFont);
+        QCOMPARE(boxedFormat.foreground(), ordinaryFormat.foreground());
+        const auto boxedLinkFormat = document->find("target").charFormat();
+        QCOMPARE(boxedLinkFormat.foreground(), ordinaryLinkFormat.foreground());
+        QCOMPARE(boxedLinkFormat.underlineStyle(), ordinaryLinkFormat.underlineStyle());
+        const auto line = document->begin().layout()->lineAt(0);
+        QCOMPARE(line.height(), ordinaryHeight); // Vertical edges never become an object strut.
+        const auto wideSlices = QCompiledInlineBox::slices(document->begin().layout());
+        QCOMPARE(wideSlices.size(), 1);
+        const qreal actualHorizontalEdges = wideSlices.first().geometry.padding.width()
+            - wideSlices.first().geometry.content.width();
+        QVERIFY(actualHorizontalEdges > 0);
+        QVERIFY(qAbs(line.horizontalAdvance() - ordinaryAdvance - actualHorizontalEdges) <= 0.05);
+        for (qreal width : {qreal(220), qreal(150), qreal(220)}) {
+            document->setTextWidth(width); document->documentLayout()->documentSize();
+            QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            auto *layout = document->begin().layout(); QVERIFY(layout->lineCount() > 1);
+            const auto slices = QCompiledInlineBox::slices(layout); QVERIFY(slices.size() > 1);
+            QVERIFY(slices.first().geometry.first && !slices.first().geometry.last);
+            QVERIFY(!slices.last().geometry.first && slices.last().geometry.last);
+            for (qsizetype i = 1; i + 1 < slices.size(); ++i) {
+                QVERIFY(!slices[i].geometry.first && !slices[i].geometry.last);
+                QCOMPARE(slices[i].geometry.padding.width(), slices[i].geometry.content.width());
+            }
+            QCOMPARE(document->toPlainText(), expected); QCOMPARE(href(), originalHref);
+            QTextCursor selection(document); selection.select(QTextCursor::Document);
+            QCOMPARE(selection.selectedText(), expected);
+            const int offset = expected.indexOf(QStringLiteral("target")) + 2;
+            const auto linkLine = layout->lineForTextPosition(offset); QVERIFY(linkLine.isValid());
+            const QPointF point = layout->position() + QPointF(
+                (linkLine.cursorToX(offset) + linkLine.cursorToX(offset + 1)) / 2,
+                linkLine.y() + linkLine.ascent() / 2);
+            QCOMPARE(document->documentLayout()->hitTest(point, Qt::ExactHit), offset);
+            QCOMPARE(document->documentLayout()->anchorAt(point), originalHref);
+            auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+            QVERIFY(accessible && accessible->textInterface()); auto *ax = accessible->textInterface();
+            QCOMPARE(ax->text(offset, offset + 1), expected.mid(offset, 1));
+            QCOMPARE(ax->characterCount(), expected.size());
+            const QRect axRect = ax->characterRect(offset); QVERIFY(!axRect.isEmpty());
+            QCOMPARE(ax->offsetAtPoint(axRect.center()), offset);
+            const auto &firstSlice = slices.first().geometry;
+            const QPointF paddingPoint = layout->position() + QPointF(
+                (firstSlice.padding.left() + firstSlice.content.left()) / 2,
+                firstSlice.content.center().y());
+            QVERIFY(document->documentLayout()->anchorAt(paddingPoint).isEmpty());
+            const QPointF upperPadding = layout->position() + QPointF(
+                firstSlice.padding.center().x(), (firstSlice.padding.top() + firstSlice.content.top()) / 2);
+            QVERIFY(document->documentLayout()->anchorAt(upperPadding).isEmpty());
+            for (auto b = document->begin(); b.isValid(); b = b.next()) for (auto it = b.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment(); if (!fragment.isValid()) continue;
+                QCOMPARE(fragment.charFormat().objectType(), int(QTextFormat::NoObject));
+                QVERIFY(!fragment.text().contains(QChar::ObjectReplacementCharacter));
+            }
+        }
+        QCOMPARE(QJsonDocument(box).toJson(QJsonDocument::Compact), immutable);
+        QVERIFY(box.value("text").toString().isEmpty());
+        QCOMPARE(box.value("inline_box_group").toObject().value("spans").toArray(), children);
+        auto painted = box; auto paintedGroup = box.value("inline_box_group").toObject();
+        const QJsonObject solid{{"solid", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", 2}}},
+            {"color", QJsonObject{{"rgb", "#d012df"}}}}}};
+        paintedGroup.insert("border", QJsonObject{{"top", solid}, {"right", solid}, {"bottom", solid}, {"left", solid}});
+        painted.insert("inline_box_group", paintedGroup);
+        install(QJsonArray{painted}); document->setTextWidth(10000);
+        document->documentLayout()->documentSize();
+        const auto paintedSlices = QCompiledInlineBox::slices(document->begin().layout());
+        QCOMPARE(paintedSlices.size(), 1);
+        const auto geometry = paintedSlices.first().geometry;
+        QImage canvas(1600, 300, QImage::Format_ARGB32_Premultiplied); canvas.fill(Qt::white);
+        QPainter painter(&canvas); painter.translate(40, 100); document->drawContents(&painter); painter.end();
+        const QPointF probe = document->begin().layout()->position() + QPointF(40, 100)
+            + QPointF(geometry.border.center().x(), (geometry.border.top() + geometry.padding.top()) / 2);
+        QVERIFY(canvas.rect().contains(probe.toPoint()));
+        QCOMPARE(canvas.pixelColor(probe.toPoint()), QColor("#d012df"));
+        QCOMPARE(document->toPlainText(), expected); QCOMPARE(href(), originalHref);
+        const QPointF documentProbe = probe - QPointF(40, 100);
+        QVERIFY(document->documentLayout()->anchorAt(documentProbe).isEmpty());
+        QImage clipped(canvas.size(), canvas.format()); clipped.fill(Qt::white);
+        QPainter clipPainter(&clipped); clipPainter.translate(40, 100);
+        QAbstractTextDocumentLayout::PaintContext context;
+        context.clip = QRectF(documentProbe.x() - 2, documentProbe.y() - 1, 4, 2);
+        clipPainter.setClipRect(context.clip);
+        document->documentLayout()->draw(&clipPainter, context); clipPainter.end();
+        QCOMPARE(clipped.pixelColor(probe.toPoint()), QColor("#d012df"));
+        QCOMPARE(clipped.pixelColor(QPoint(0, 0)), QColor(Qt::white));
+        // Both source and metric-format mutations revoke the cached admission.
+        // A new normal import restores it, rather than clearing an error flag.
+        QTextCursor changed(document); changed.setPosition(0); changed.setPosition(1, QTextCursor::KeepAnchor);
+        changed.insertText(QStringLiteral("Z"), changed.charFormat());
+        document->documentLayout()->documentSize();
+        QVERIFY(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt() != 0);
+        QCOMPARE(document->toPlainText(), QStringLiteral("Z") + expected.mid(1));
+        install(QJsonArray{box}); document->documentLayout()->documentSize();
+        QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QCOMPARE(document->toPlainText(), expected); QCOMPARE(href(), originalHref);
+        changed = document->find(QStringLiteral("target")); QVERIFY(!changed.isNull());
+        QTextCharFormat wrongFont;
+        wrongFont.setFontPointSize(changed.charFormat().font().resolve(document->defaultFont()).pointSizeF() + 3);
+        changed.mergeCharFormat(wrongFont); document->documentLayout()->documentSize();
+        QVERIFY(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt() != 0);
+        QCOMPARE(document->toPlainText(), expected);
+        install(QJsonArray{box}); document->documentLayout()->documentSize();
+        QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QCOMPARE(document->toPlainText(), expected); QCOMPARE(href(), originalHref);
+    }
+
+    void finalYInlineBoxUnsupportedGeometryRefusesBeforeEmptyOwnerDrop() {
+        MainWindow window{QString()};
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        auto *document = window.reading_->document();
+        document->setLayoutEnabled(false);
+        const QJsonObject text{{"kind", "text"}, {"text", "visible child"}, {"target", ""}, {"trail", ""}};
+        const QJsonObject zero{{"unit", "px"}, {"value", 0}};
+        const QJsonObject edges{{"top", zero}, {"right", zero}, {"bottom", zero}, {"left", zero}};
+        const QJsonObject none{{"none", QJsonObject{}}};
+        const QJsonObject border{{"top", none}, {"right", none}, {"bottom", none}, {"left", none}};
+        const QJsonObject box{{"kind", "text"}, {"text", ""}, {"target", ""}, {"trail", ""},
+            {"inline_box_group", QJsonObject{{"padding", edges}, {"border", border},
+                {"overlays", QJsonArray{}}, {"spans", QJsonArray{text}}}}};
+        auto unsupported = box; auto payload = box.value("inline_box_group").toObject();
+        payload.insert("overlays", QJsonArray{QJsonObject{{"not_an_admitted_overlay", true}}});
+        unsupported.insert("inline_box_group", payload);
+        QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{unsupported}), std::runtime_error);
+        unsupported = box; unsupported.insert("direction", "rtl");
+        QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{unsupported}), std::runtime_error);
+        // Exercise the missing paired consumer boundary without granting a
+        // capability to a stock implementation.
+        const auto capability = document->documentLayout()->property("_wikidictInlineBoxCapability");
+        QVERIFY(capability.isValid());
+        document->documentLayout()->setProperty("_wikidictInlineBoxCapability", QVariant());
+        QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{box}), std::runtime_error);
+        document->documentLayout()->setProperty("_wikidictInlineBoxCapability", capability);
+        document->setLayoutEnabled(true);
+    }
+
+    void finalYUnsupportedGeometryRefusesWithoutDroppingRichChildren() {
+        MainWindow window{QString()};
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        // Inline boxes require an owned disabled import transaction.
+        QVERIFY(window.reading_->document()->isLayoutEnabled());
+        const QJsonObject text{{"kind", "text"}, {"text", "visible child"}, {"target", ""}, {"trail", ""}};
+        const QJsonObject ordinary{{"kind", "paragraph"}, {"spans", QJsonArray{text}}};
+        const QJsonObject section{{"level", 0}, {"title", ""}, {"blocks", QJsonArray{ordinary}}};
+        const QJsonObject entry{{"title", "source"}, {"sections", QJsonArray{section}}};
+        QVERIFY(composeReadingEntry(window, entry));
+        QVERIFY(window.reading_->document()->toPlainText().contains(QStringLiteral("visible child")));
+        const QString legacy = window.entryHtml(entry);
+        auto nullEntry = entry; nullEntry.insert("body_typography", QJsonValue());
+        QCOMPARE(window.entryHtml(nullEntry), legacy);
+        auto body = entry;
+        body.insert("body_typography", QJsonObject{{"owner_font", QJsonObject{{"font_scale", 1},
+            {"font_scale_basis", "normal_body"}, {"font_normalized", true}}}, {"line_height", QJsonValue()}});
+        auto unsupportedBodySection = section;
+        unsupportedBodySection.insert("blocks", QJsonArray{QJsonObject{{"kind", "preformatted"}, {"spans", QJsonArray{text}}}});
+        body.insert("sections", QJsonArray{unsupportedBodySection});
+        QVERIFY_EXCEPTION_THROWN(window.entryHtml(body), std::runtime_error);
+        const QJsonObject zero{{"unit", "px"}, {"value", 0}};
+        const QJsonObject edges{{"top", zero}, {"right", zero}, {"bottom", zero}, {"left", zero}};
+        const QJsonObject none{{"none", QJsonObject{}}};
+        const QJsonObject border{{"top", none}, {"right", none}, {"bottom", none}, {"left", none}};
+        const QJsonObject box{{"kind", "text"}, {"text", ""}, {"target", ""}, {"trail", ""},
+            {"inline_box_group", QJsonObject{{"padding", edges}, {"border", border},
+                {"overlays", QJsonArray{}}, {"spans", QJsonArray{text}}}}};
+        auto boxed = entry; auto boxedSection = section;
+        boxedSection.insert("blocks", QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{box}}}});
+        boxed.insert("sections", QJsonArray{boxedSection});
+        QVERIFY_EXCEPTION_THROWN(window.entryHtml(boxed), std::runtime_error);
+        // Auxiliary/display-title paths cannot treat the empty owner as a leaf.
+        QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{box}), std::runtime_error);
+        QCOMPARE(window.entryHtml(entry), legacy);
+    }
+
+    void finalYBodyDeclaringFontOwnsRootLinesWithoutOwningHeadings() {
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const qreal dpi = QFontMetricsF(QFont()).fontDpi();
+        window.readingPointSize_ = 20 * 72 / dpi;
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value},
+            {"target", ""}, {"trail", ""}}; };
+        auto child = text(QStringLiteral("Independent child ") + QStringLiteral("wrapping body ").repeated(30));
+        child.insert("font_scale", .5); child.insert("font_scale_basis", "normal_body");
+        child.insert("bold", false); child.insert("italic", false);
+        child.insert("font_family", "sans_serif");
+        auto link = child; link.insert("kind", "external_link"); link.insert("text", "Body action");
+        link.insert("target", "https://example.test/body-owner");
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{child, link}}};
+        auto identity = text(" Identity child"); identity.insert("font_scale", 1.0);
+        identity.insert("font_scale_basis", "context");
+        auto absolute = text(" Raw absolute child"); absolute.insert("font_scale", .5);
+        absolute.insert("font_scale_basis", "normal_body");
+        QJsonArray rawChildren{text("Definition child"), identity, absolute};
+        for (const auto &flag : {QStringLiteral("small"), QStringLiteral("superscript"), QStringLiteral("subscript")})
+            for (const bool explicitIdentity : {false, true}) {
+                auto flagged = text(QStringLiteral(" Raw %1 %2").arg(flag).arg(explicitIdentity));
+                flagged.insert(flag, true);
+                if (explicitIdentity) { flagged.insert("font_scale", 1.0); flagged.insert("font_scale_basis", "context"); }
+                rawChildren.append(flagged);
+            }
+        const QJsonObject definition{{"kind", "definition"}, {"number", "1"}, {"depth", 1},
+            {"spans", rawChildren}};
+        const QJsonObject item{{"kind", "list_item"}, {"depth", 1}, {"spans", QJsonArray{text("List child")}}};
+        const QJsonObject declared{{"font_scale", 1.5}, {"font_scale_basis", "normal_body"},
+            {"font_normalized", true}, {"bold", true}, {"italic", true}, {"small", true},
+            {"superscript", true}, {"font_family", QJsonObject{{"stack", QJsonObject{
+                {"names", QJsonArray{"Liberation Mono"}}, {"fallback", "sans_serif"}}}}}};
+        const QJsonObject section{{"title", "Separate heading"}, {"level", 2},
+            {"blocks", QJsonArray{paragraph, definition, item}}};
+        const QJsonObject reference{{"kind", "note"}, {"number", 1}, {"group_number", 1}, {"group", ""},
+            {"spans", QJsonArray{text("Reference child")}}};
+        const QJsonObject plain{{"title", "BODY source"}, {"kind", "language"}, {"language", "English"},
+            {"language_code", "en"}, {"preamble_spans", QJsonArray{text("Preamble child")}},
+            {"sections", QJsonArray{section}}, {"references", QJsonArray{reference}}, {"media", QJsonArray{}}};
+        QVERIFY(composeReadingEntry(window, plain));
+        const QString original = window.reading_->document()->toRawText();
+        QMap<QString, QFont> excludedFonts;
+        for (const auto &word : {QStringLiteral("Preamble child"), QStringLiteral("Separate heading"), QStringLiteral("Reference child")}) {
+            const auto found = window.reading_->document()->find(word); QVERIFY(!found.isNull());
+            excludedFonts.insert(word, found.charFormat().font());
+        }
+        for (const QString &basis : {QStringLiteral("normal_body"), QStringLiteral("css_px")})
+            for (const bool zero : {false, true}) for (const bool nullHeight : {false, true}) {
+                // CSS pixels follow reader zoom relative to 12pt, then convert
+                // through the default paint-device DPI; normal_body uses the
+                // original reader points directly. Do not reuse the resolver.
+                const qreal ownerPoints = zero ? 0 : basis == QStringLiteral("normal_body")
+                    ? 1.5 * window.readingPointSize_
+                    : 30 * (window.readingPointSize_ / 12.0) * 72 / dpi;
+                const qreal ownerPixels = ownerPoints * dpi / 72;
+                const auto metricContext = [&](const QString &metric, qreal expected, qreal actual) {
+                    return QStringLiteral("basis=%1 zero=%2 nullHeight=%3 metric=%4 expected=%5 actual=%6 reader_pt=%7 dpi=%8")
+                        .arg(basis).arg(zero).arg(nullHeight).arg(metric).arg(expected, 0, 'g', 17)
+                        .arg(actual, 0, 'g', 17).arg(window.readingPointSize_).arg(dpi);
+                };
+                auto font = declared; font.insert("font_scale_basis", basis);
+                font.insert("font_scale", zero ? 0.0 : basis == "normal_body" ? 1.5 : 30.0);
+                auto entry = plain;
+                entry.insert("body_typography", QJsonObject{{"owner_font", font},
+                    {"line_height", nullHeight ? QJsonValue(QJsonValue::Null) : QJsonValue(QJsonObject{{"multiplier", 1.5}})}});
+                QVERIFY2(composeReadingEntry(window, entry),
+                    qPrintable(metricContext(QStringLiteral("compose"), 1, 0)));
+                window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+                auto *document = window.reading_->document(); auto *layout = document->documentLayout();
+                layout->documentSize();
+                if (basis == QStringLiteral("normal_body") && !zero && !nullHeight) {
+                    const QString frames = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                    if (!frames.isEmpty()) {
+                        QVERIFY(QDir().mkpath(frames));
+                        QVERIFY(window.grab().save(frames + QStringLiteral("/final-y-body-declaring-font.png")));
+                    }
+                }
+                QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                QCOMPARE(document->toRawText(), original);
+                QCOMPARE(document->rootFrame()->childFrames().size(), 0);
+                const auto binding = document->rootFrame()->frameFormat().property(QTextFormat::UserProperty + 0x5830).toMap();
+                QCOMPARE(binding.value("capability").toString(), QStringLiteral("wikidict.body-typography/1"));
+                QCOMPARE(binding.value("blocks").toList().size(), 3);
+                for (const auto &word : {QStringLiteral("Independent child"), QStringLiteral("Definition child"), QStringLiteral("List child")}) {
+                    const auto found = document->find(word); QVERIFY(!found.isNull());
+                    const auto policy = found.blockFormat().property(FlowConstruction::containerTypographyProperty).toMap();
+                    QCOMPARE(policy.size(), 4); QCOMPARE(policy.value("font").metaType().id(), QMetaType::QFont);
+                    QVERIFY2(qAbs(policy.value("owner_px").toDouble() - ownerPixels) < .001,
+                        qPrintable(metricContext(word + QStringLiteral(" owner_px"), ownerPixels, policy.value("owner_px").toDouble())));
+                    QCOMPARE(policy.value("kind").toString(), nullHeight ? QStringLiteral("normal") : QStringLiteral("multiplier"));
+                    const QFont owner = policy.value("font").value<QFont>();
+                    QVERIFY(owner.bold()); QVERIFY(owner.italic());
+                    QCOMPARE(found.block().charFormat().font(), owner);
+                    QVERIFY2(!found.blockFormat().boolProperty(SemanticHtml::generatedParentStrutProperty),
+                        qPrintable(metricContext(word + QStringLiteral(" generated_parent_strut"), 0, 1)));
+                }
+                for (const auto &word : {QStringLiteral("Definition child"), QStringLiteral("List child")}) {
+                    const auto found = document->find(word); QVERIFY(!found.isNull());
+                    QTextCursor marker(found.block()); marker.setPosition(found.block().position()+1, QTextCursor::KeepAnchor);
+                    QVERIFY(!marker.selectedText().isEmpty());
+                    if (zero) QVERIFY(marker.charFormat().font().families().contains(SemanticHtml::zeroFontFamilyName));
+                    else QVERIFY2(qAbs(marker.charFormat().fontPointSize() - ownerPoints) < .001,
+                        qPrintable(metricContext(word + QStringLiteral(" marker_pt"), ownerPoints, marker.charFormat().fontPointSize())));
+                    if (zero) QVERIFY(found.charFormat().font().families().contains(SemanticHtml::zeroFontFamilyName));
+                    else QVERIFY2(qAbs(found.charFormat().fontPointSize() - ownerPoints) < .001,
+                        qPrintable(metricContext(word + QStringLiteral(" inherited_child_pt"), ownerPoints, found.charFormat().fontPointSize())));
+                    QCOMPARE(found.charFormat().fontWeight(), int(QFont::Normal));
+                    QVERIFY(!found.charFormat().fontItalic());
+                    if (!zero) QCOMPARE(marker.charFormat().font().families().first(),
+                        found.block().charFormat().font().families().first());
+                }
+                const auto identityChild = document->find("Identity child"); QVERIFY(!identityChild.isNull());
+                if (zero) QVERIFY(identityChild.charFormat().font().families().contains(SemanticHtml::zeroFontFamilyName));
+                else QVERIFY2(qAbs(identityChild.charFormat().fontPointSize() - ownerPoints) < .001,
+                    qPrintable(metricContext(QStringLiteral("identity_child_pt"), ownerPoints, identityChild.charFormat().fontPointSize())));
+                const auto absoluteChild = document->find("Raw absolute child"); QVERIFY(!absoluteChild.isNull());
+                QVERIFY2(qAbs(absoluteChild.charFormat().fontPointSize() - .5 * window.readingPointSize_) < .001,
+                    qPrintable(metricContext(QStringLiteral("raw_absolute_child_pt"), .5 * window.readingPointSize_, absoluteChild.charFormat().fontPointSize())));
+                for (const auto &flag : {QStringLiteral("small"), QStringLiteral("superscript"), QStringLiteral("subscript")}) {
+                    QTextDocument control;
+                    QFont controlFont(QStringLiteral("Liberation Mono"));
+                    if (!zero) controlFont.setPointSizeF(ownerPoints);
+                    control.setDefaultFont(controlFont);
+                    control.documentLayout()->setPaintDevice(layout->paintDevice());
+                    const QString tag = flag == QStringLiteral("small") ? QStringLiteral("small")
+                        : flag == QStringLiteral("superscript") ? QStringLiteral("sup") : QStringLiteral("sub");
+                    control.setHtml(QStringLiteral("<%1>control</%1>").arg(tag));
+                    const auto expected = control.find(QStringLiteral("control")).charFormat();
+                    for (const bool explicitIdentity : {false, true}) {
+                        const QString label = QStringLiteral("Raw %1 %2").arg(flag).arg(explicitIdentity);
+                        const auto found = document->find(label); QVERIFY(!found.isNull());
+                        if (zero) QVERIFY(found.charFormat().font().families().contains(SemanticHtml::zeroFontFamilyName));
+                        else {
+                            QVERIFY2(qAbs(found.charFormat().fontPointSize() - expected.font().pointSizeF()) < .001,
+                                qPrintable(metricContext(label + QStringLiteral(" legacy_pt"), expected.font().pointSizeF(), found.charFormat().fontPointSize())));
+                            QCOMPARE(found.charFormat().verticalAlignment(), expected.verticalAlignment());
+                        }
+                    }
+                }
+                const auto first = document->find("Independent child"); QVERIFY(!first.isNull());
+                QCOMPARE(first.charFormat().fontWeight(), int(QFont::Normal)); QVERIFY(!first.charFormat().fontItalic());
+                QCOMPARE(first.charFormat().verticalAlignment(), QTextCharFormat::AlignNormal);
+                QVERIFY(qAbs(first.charFormat().fontPointSize() - .5 * window.readingPointSize_) < .001);
+                for (auto it = excludedFonts.begin(); it != excludedFonts.end(); ++it) {
+                    const auto found = document->find(it.key()); QVERIFY(!found.isNull());
+                    QCOMPARE(found.charFormat().font(), it.value());
+                    QVERIFY(!found.blockFormat().hasProperty(FlowConstruction::containerTypographyProperty));
+                }
+                const auto action = document->find("Body action"); QVERIFY(!action.isNull());
+                for (const int width : {900, 480, 900}) {
+                    window.resize(width, 700); window.readingPaneAction_->trigger();
+                    QTRY_COMPARE(document->pageSize(), QSizeF(window.reading_->viewport()->width(), -1));
+                    layout->documentSize();
+                    QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                    QCOMPARE(document->toRawText(), original);
+                    const auto mapped = LogicalFlow::position(document, action.selectionStart());
+                    QCOMPARE(mapped.status, LogicalFlow::Status::Handled);
+                    const auto rect = mapped.values.value("characterRect").toRectF(); QVERIFY(!rect.isEmpty());
+                    QCOMPARE(layout->anchorAt(rect.center()), link.value("target").toString());
+                    auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+                    QVERIFY(accessible && accessible->textInterface());
+                    QCOMPARE(accessible->textInterface()->text(action.selectionStart(), action.selectionEnd()), QStringLiteral("Body action"));
+                }
+                QCOMPARE(window.currentEntry_, entry);
+            }
+        // Null policy returns to the exact legacy source/ownership, including
+        // removal of the previous entry's root BODY admission property.
+        auto legacy = plain; legacy.insert("body_typography", QJsonValue(QJsonValue::Null));
+        QVERIFY(composeReadingEntry(window, legacy));
+        QCOMPARE(window.reading_->document()->toRawText(), original);
+        QVERIFY(!window.reading_->document()->rootFrame()->frameFormat().hasProperty(QTextFormat::UserProperty + 0x5830));
+    }
+
+    void finalYBodyRejectsPartialOwnersAndStaleSourceBinding() {
+        MainWindow window{QString()}; window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const QJsonObject font{{"font_scale", 1}, {"font_scale_basis", "normal_body"}, {"font_normalized", true}};
+        const QJsonObject text{{"kind", "text"}, {"text", "Bound BODY text"}};
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{text}}};
+        QJsonObject entry{{"title", "Bound BODY"}, {"kind", "language"}, {"language", "English"}, {"language_code", "en"},
+            {"sections", QJsonArray{QJsonObject{{"title", "English"}, {"level", 2}, {"blocks", QJsonArray{paragraph}}}}},
+            {"media", QJsonArray{}}, {"references", QJsonArray{}},
+            {"body_typography", QJsonObject{{"owner_font", font}, {"line_height", QJsonValue(QJsonValue::Null)}}}};
+        QVERIFY(composeReadingEntry(window, entry));
+        auto *document = window.reading_->document(); auto *layout = document->documentLayout();
+        const QString raw = document->toRawText();
+        auto first = document->find("Bound BODY text"); QVERIFY(!first.isNull());
+        const auto originalFormat = first.blockFormat();
+        auto changed = originalFormat; changed.setTopMargin(originalFormat.topMargin() + 1);
+        QTextCursor cursor(first.block()); cursor.setBlockFormat(changed);
+        document->markContentsDirty(0, document->characterCount()); layout->documentSize();
+        QVERIFY(layout->property("_wikidictParagraphBoxLayoutError").toInt() != 0);
+        QCOMPARE(document->toRawText(), raw);
+        QVERIFY(composeReadingEntry(window, entry));
+        QCOMPARE(window.reading_->document()->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        for (const auto &block : {QJsonObject{{"kind", "table"}, {"table", QJsonObject{{"rows", QJsonArray{}}}}},
+             QJsonObject{{"kind", "container"}, {"container", QJsonObject{{"blocks", QJsonArray{paragraph}}}}},
+             QJsonObject{{"kind", "preformatted"}, {"spans", QJsonArray{text}}},
+             QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{}}}}) {
+            auto bad = entry; auto section = entry.value("sections").toArray().first().toObject();
+            section.insert("blocks", QJsonArray{block}); bad.insert("sections", QJsonArray{section});
+            QVERIFY_EXCEPTION_THROWN(window.entryHtml(bad), std::exception);
+        }
+        const auto capability = window.reading_->document()->documentLayout()->property("_wikidictBodyTypographyCapability");
+        window.reading_->document()->documentLayout()->setProperty("_wikidictBodyTypographyCapability", QVariant());
+        QVERIFY_EXCEPTION_THROWN(window.entryHtml(entry), std::exception);
+        window.reading_->document()->documentLayout()->setProperty("_wikidictBodyTypographyCapability", capability);
+        QCOMPARE(window.currentEntry_, entry);
+    }
+
+    void containerDeclaringFontKeepsIndependentStrutAndChildActions() {
+        MainWindow window{QString()}; window.resize(1180, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const qreal dpi = QFontMetricsF(QFont()).fontDpi(); window.readingPointSize_ = 20 * 72 / dpi;
+        const auto family = [](const QString &name) { return QJsonObject{{"stack", QJsonObject{
+            {"names", QJsonArray{name}}, {"fallback", "sans_serif"}}}}; };
+        const auto paragraph = [](const QJsonArray &spans) { return QJsonObject{{"kind", "paragraph"}, {"spans", spans}}; };
+        const auto box = [](const QJsonObject &style, const QJsonArray &blocks) {
+            return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}},
+                {"container", QJsonObject{{"style", style}, {"blocks", blocks}}}};
+        };
+        const QJsonObject declared{{"font_scale", 1.5}, {"font_scale_basis", "normal_body"}, {"font_normalized", true},
+            {"small", true}, {"superscript", true}, {"bold", true}, {"italic", true},
+            {"font_family", family("Liberation Mono")}, {"font_features", "normal"}, {"language", "ja"}};
+        const QJsonObject action{{"kind", "external_link"}, {"text", "Child action"}, {"target", "https://example.test/declaring-font"},
+            {"font_scale", .5}, {"font_scale_basis", "normal_body"}, {"bold", false}, {"italic", false},
+            {"font_family", family("DejaVu Sans")}};
+        const auto outer = [](QTextDocument *document) -> QTextFrame * {
+            QTextFrame *result = nullptr;
+            for (auto *frame : document->rootFrame()->childFrames())
+                if (frame->frameFormat().hasProperty(FlowConstruction::containerPolicyProperty)) {
+                    if (result) return nullptr; result = frame;
+                }
+            return result;
+        };
+        for (const QString &basis : {QStringLiteral("normal_body"), QStringLiteral("css_px")})
+            for (const bool zero : {false, true}) for (const bool emptyLine : {false, true}) {
+                // CSS pixels follow reader zoom relative to 12pt, then convert
+                // through the default paint-device DPI; normal_body uses the
+                // original reader points directly. Do not reuse the resolver.
+                const qreal ownerPoints = zero ? 0 : basis == QStringLiteral("normal_body")
+                    ? 1.5 * window.readingPointSize_
+                    : 30 * (window.readingPointSize_ / 12.0) * 72 / dpi;
+                const qreal ownerPixels = ownerPoints * dpi / 72;
+                const auto metricContext = [&](const QString &metric, qreal expected, qreal actual) {
+                    return QStringLiteral("basis=%1 zero=%2 emptyLine=%3 metric=%4 expected=%5 actual=%6 reader_pt=%7 dpi=%8")
+                        .arg(basis).arg(zero).arg(emptyLine).arg(metric).arg(expected, 0, 'g', 17)
+                        .arg(actual, 0, 'g', 17).arg(window.readingPointSize_).arg(dpi);
+                };
+                auto owner = declared; owner.insert("font_scale_basis", basis);
+                owner.insert("font_scale", zero ? 0.0 : basis == "normal_body" ? 1.5 : 30.0);
+                const QJsonObject style{{"owner_font", owner}, {"line_height", QJsonObject{{"multiplier", 1.5}}},
+                    {"screen_max_width", QJsonObject{{"max_width_px", 639}, {"line_height", QJsonObject{{"multiplier", 2.0}}}}}};
+                const auto source = box(style, QJsonArray{paragraph(emptyLine ? QJsonArray{} : QJsonArray{action})});
+                QVERIFY(composeReadingBlocks(window, QJsonArray{source})); window.readingPaneAction_->trigger();
+                QTRY_VERIFY(window.reading_->isVisible());
+                auto *document = window.reading_->document(); auto *frame = outer(document); QVERIFY(frame);
+                auto *layout = document->documentLayout(); layout->documentSize();
+                QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                const auto block = frame->firstCursorPosition().block();
+                const auto policy = block.blockFormat().property(FlowConstruction::containerTypographyProperty).toMap();
+                QCOMPARE(policy.size(), 4); QCOMPARE(policy.value("font").metaType().id(), QMetaType::QFont);
+                QVERIFY2(qAbs(policy.value("owner_px").toDouble() - ownerPixels) < .0001,
+                    qPrintable(metricContext(QStringLiteral("owner_px"), ownerPixels, policy.value("owner_px").toDouble())));
+                const QFont metric = policy.value("font").value<QFont>();
+                QVERIFY2(metric.bold(), qPrintable(QStringLiteral("basis %1 zero %2 empty %3")
+                    .arg(basis).arg(zero).arg(emptyLine))); QVERIFY(metric.italic());
+                if (!zero) {
+                    QVERIFY2(qAbs(metric.pointSizeF() - ownerPoints) < .001,
+                        qPrintable(metricContext(QStringLiteral("metric_pt"), ownerPoints, metric.pointSizeF())));
+                    QCOMPARE(metric.families().first(), QStringLiteral("Liberation Mono"));
+                }
+                const qreal expected = zero ? (emptyLine ? 0 : 15) : ownerPixels * 1.5;
+                QVERIFY2(qAbs(layout->frameBoundingRect(frame).height() - expected) < .1,
+                    qPrintable(metricContext(QStringLiteral("frame_height"), expected, layout->frameBoundingRect(frame).height())));
+                QCOMPARE(QJsonDocument::fromJson(frame->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), source);
+                if (emptyLine) continue;
+                const auto linked = document->find("Child action"); QVERIFY(!linked.isNull());
+                QCOMPARE(linked.charFormat().fontWeight(), int(QFont::Normal)); QVERIFY(!linked.charFormat().fontItalic());
+                QVERIFY(qAbs(linked.charFormat().fontPointSize() - .5 * window.readingPointSize_) < .001);
+                QCOMPARE(linked.charFormat().font().families().first(), QStringLiteral("DejaVu Sans"));
+                QCOMPARE(linked.charFormat().verticalAlignment(), QTextCharFormat::AlignNormal);
+                const auto raw = document->toRawText(); const auto properties = linked.charFormat().properties();
+                for (const int width : {1180, 480, 1180}) {
+                    window.resize(width, 700); window.readingPaneAction_->trigger();
+                    QTRY_COMPARE(document->pageSize(), QSizeF(window.reading_->viewport()->width(), -1));
+                    layout->documentSize();
+                    QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                    const qreal factor = width <= 639 ? 2.0 : 1.5;
+                    const auto currentPolicy = linked.blockFormat().property(FlowConstruction::containerTypographyProperty).toMap();
+                    QCOMPARE(currentPolicy.value("value").toDouble(), factor);
+                    QCOMPARE(currentPolicy.value("font").value<QFont>(), metric);
+                    const qreal responsiveHeight = (zero ? 10 : ownerPixels) * factor;
+                    QTRY_VERIFY2(qAbs(layout->frameBoundingRect(frame).height() - responsiveHeight) < .1,
+                        qPrintable(metricContext(QStringLiteral("frame_height_width_%1").arg(width), responsiveHeight, layout->frameBoundingRect(frame).height())));
+                    QCOMPARE(document->find("Child action").charFormat().properties(), properties);
+                    QCOMPARE(document->toRawText(), raw);
+                    const auto mapped = LogicalFlow::position(document, linked.selectionStart());
+                    QCOMPARE(mapped.status, LogicalFlow::Status::Handled);
+                    const auto rect = mapped.values.value("characterRect").toRectF(); QVERIFY(!rect.isEmpty());
+                    QCOMPARE(layout->anchorAt(rect.center()), action.value("target").toString());
+                    auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+                    QVERIFY(accessible && accessible->textInterface());
+                    const QPointF offset = window.reading_->viewport()->mapToGlobal(QPoint())
+                        - QPointF(window.reading_->horizontalScrollBar()->value(), window.reading_->verticalScrollBar()->value());
+                    QCOMPARE(accessible->textInterface()->characterRect(linked.selectionStart()), rect.translated(offset).toAlignedRect());
+                    QCOMPARE(accessible->textInterface()->text(linked.selectionStart(), linked.selectionEnd()), QStringLiteral("Child action"));
+                    QImage pixels(qCeil(document->size().width()) + 2, qCeil(document->size().height()) + 2, QImage::Format_ARGB32_Premultiplied);
+                    pixels.fill(Qt::white); QPainter painter(&pixels); QAbstractTextDocumentLayout::PaintContext paint;
+                    layout->draw(&painter, paint); painter.end();
+                    bool ink = false; const auto scan = rect.toAlignedRect().intersected(pixels.rect());
+                    for (int y = scan.top(); y <= scan.bottom(); ++y) for (int x = scan.left(); x <= scan.right(); ++x)
+                        ink |= pixels.pixelColor(x, y) != QColor(Qt::white);
+                    QVERIFY(ink);
+                }
+            }
+        // Empty Container storage remains hidden; a retained empty paragraph is
+        // a real source line and uses the declaring metric tested above.
+        QVERIFY(composeReadingBlocks(window, QJsonArray{box(QJsonObject{{"owner_font", declared}}, {})}));
+        auto *document = window.reading_->document(); auto *frame = outer(document); QVERIFY(frame);
+        QCOMPARE(document->documentLayout()->frameBoundingRect(frame).height(), 0.0);
+        QVERIFY(!frame->firstCursorPosition().block().isVisible());
+        QCOMPARE(frame->firstCursorPosition().block().layout()->lineCount(), 0);
+        // A null-owner descendant's legacy aliases change only the inherited
+        // metric size/family, retaining its declaring traits independently.
+        const QJsonObject nestedStyle{{"owner_font", QJsonValue()}, {"owner_font_scale", .6}, {"font_family", family("DejaVu Sans")}};
+        auto contextual = action; contextual.remove("font_scale"); contextual.remove("font_scale_basis"); contextual.remove("font_family");
+        const auto nested = box(QJsonObject{{"owner_font", declared}, {"line_height", QJsonObject{{"multiplier", 1.5}}}},
+            QJsonArray{box(nestedStyle, QJsonArray{paragraph(QJsonArray{contextual})})});
+        QVERIFY(composeReadingBlocks(window, QJsonArray{nested})); document = window.reading_->document(); frame = outer(document);
+        QVERIFY(frame); QCOMPARE(frame->childFrames().size(), 1);
+        auto *inner = frame->childFrames().first(); document->documentLayout()->documentSize();
+        const auto policy = inner->firstCursorPosition().block().blockFormat().property(FlowConstruction::containerTypographyProperty).toMap();
+        QVERIFY(qAbs(policy.value("owner_px").toDouble() - 12) < .0001);
+        const auto metric = policy.value("font").value<QFont>(); QVERIFY(metric.bold()); QVERIFY(metric.italic());
+        QCOMPARE(metric.families().first(), QStringLiteral("DejaVu Sans"));
+        const auto child = document->find("Child action"); QVERIFY(!child.isNull());
+        QVERIFY(qAbs(child.charFormat().fontPointSize() - .6 * window.readingPointSize_) < .001);
+        QCOMPARE(child.charFormat().fontWeight(), int(QFont::Normal)); QVERIFY(!child.charFormat().fontItalic());
+        QVERIFY(qAbs(document->documentLayout()->frameBoundingRect(inner).height() - 18) < .1);
+        // A nearer typed Cell replaces the inherited W metric. A new actual
+        // Container inside that Cell can establish its own independent owner.
+        auto plainCell = action; plainCell.insert("text", "Cell paragraph");
+        auto nestedCell = action; nestedCell.insert("text", "Nested declaration");
+        const QJsonObject cellHeight{{"strut", QJsonObject{{"font_scale", .75}, {"font_scale_basis", "normal_body"}}},
+            {"height", QJsonObject{{"multiplier", 1.2}}}};
+        const QJsonObject cell{{"spans", QJsonArray{}}, {"style", QJsonObject{{"line_height", cellHeight}}},
+            {"blocks", QJsonArray{paragraph(QJsonArray{plainCell}),
+                box(QJsonObject{{"owner_font", declared}}, QJsonArray{paragraph(QJsonArray{nestedCell})})}}};
+        const QJsonObject table{{"kind", "table"}, {"spans", QJsonArray{}},
+            {"table", QJsonObject{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell}}}}}}}};
+        QVERIFY(composeReadingBlocks(window, QJsonArray{box(QJsonObject{{"owner_font", declared}}, QJsonArray{table})}));
+        document = window.reading_->document(); document->documentLayout()->documentSize();
+        QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        const auto cellText = document->find("Cell paragraph"); QVERIFY(!cellText.isNull());
+        QVERIFY(SemanticHtml::cellLineHeightOwner(cellText.block()));
+        QVERIFY(!cellText.blockFormat().property(FlowConstruction::containerTypographyProperty).toMap().contains("font"));
+        const auto innerText = document->find("Nested declaration"); QVERIFY(!innerText.isNull());
+        const auto innerPolicy = innerText.blockFormat().property(FlowConstruction::containerTypographyProperty).toMap();
+        QCOMPARE(innerPolicy.value("font").metaType().id(), QMetaType::QFont);
+        QVERIFY(innerPolicy.value("font").value<QFont>().bold());
+        QCOMPARE(innerText.charFormat().fontWeight(), int(QFont::Normal));
+        QVERIFY(!innerText.charFormat().fontItalic());
+        const auto length = [](qreal value, const QString &unit = QStringLiteral("px")) {
+            return QJsonObject{{"unit", unit}, {"value", value}};
+        };
+        const QJsonObject signedMargins{{"top", length(0)}, {"right", length(0)},
+            {"bottom", length(-.5, "em")}, {"left", length(0)}};
+        const auto following = box(QJsonObject{{"height", length(1)}, {"margins", QJsonObject{
+            {"top", length(5)}, {"right", length(0)}, {"bottom", length(0)}, {"left", length(0)}}}}, {});
+        for (const bool zero : {false, true}) {
+            auto metricOwner = declared; if (zero) metricOwner.insert("font_scale", 0.0);
+            const auto signedSource = box(QJsonObject{{"owner_font", metricOwner}, {"height", length(8)},
+                {"margins", signedMargins}}, QJsonArray{paragraph(QJsonArray{action})});
+            QCOMPARE(FlowConstruction::containerInputs(signedSource, 1180, 400, 20, false).margins.bottom(), -10.0);
+            QVERIFY(composeReadingBlocks(window, QJsonArray{signedSource, following}));
+            document = window.reading_->document(); auto *layout = document->documentLayout(); layout->documentSize();
+            QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            QList<QTextFrame *> frames;
+            for (auto *candidate : document->rootFrame()->childFrames())
+                if (candidate->frameFormat().hasProperty(FlowConstruction::containerPolicyProperty)) frames.append(candidate);
+            QCOMPARE(frames.size(), 2);
+            const auto firstBox = layout->frameBoundingRect(frames.at(0));
+            const auto nextBox = layout->frameBoundingRect(frames.at(1));
+            QCOMPARE(firstBox.height(), 8.0);
+            QVERIFY(qAbs(nextBox.top() - firstBox.bottom() + 5) <= 1.0 / 32);
+            QCOMPARE(document->find("Child action").charFormat().anchorHref(), action.value("target").toString());
+            QCOMPARE(QJsonDocument::fromJson(frames.at(0)->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), signedSource);
+        }
+    }
+
+    void containerDeclaringFontRejectsMalformedAliasesAndUnavailableCapability() {
+        const QJsonObject owner{{"font_scale", 1.25}, {"font_scale_basis", "normal_body"}, {"font_normalized", true},
+            {"bold", true}, {"font_family", "sans_serif"}};
+        const QJsonObject style{{"owner_font", owner}, {"owner_font_scale", 1.25}, {"font_family", "sans_serif"}};
+        QCOMPARE(CompiledContent::containerStyle(style), style);
+        for (const QJsonValue value : {QJsonValue(QJsonValue::Null), QJsonValue(QJsonValue::Undefined)}) {
+            auto legacy = style; legacy.insert("owner_font", value);
+            QVERIFY(CompiledContent::containerOwnerFont(legacy).isEmpty());
+        }
+        QList<QJsonObject> invalid;
+        for (const auto &change : {QJsonObject{{"font_scale", -1}}, QJsonObject{{"font_scale", QJsonValue()}},
+             QJsonObject{{"font_scale_basis", "context"}}, QJsonObject{{"font_normalized", false}},
+             QJsonObject{{"bold", "true"}}, QJsonObject{{"font_features", "ignored"}},
+             QJsonObject{{"role", "invented"}}, QJsonObject{{"extra", 1}}}) {
+            auto font = owner; for (auto it = change.begin(); it != change.end(); ++it) font.insert(it.key(), it.value());
+            invalid.append(QJsonObject{{"owner_font", font}});
+        }
+        invalid.append(QJsonObject{{"owner_font", owner}, {"owner_font_scale", 2}});
+        auto pixels = owner; pixels.insert("font_scale_basis", "css_px");
+        invalid.append(QJsonObject{{"owner_font", pixels}, {"owner_font_scale", 1.25}});
+        auto noFamily = owner; noFamily.insert("font_family", QJsonValue());
+        invalid.append(QJsonObject{{"owner_font", noFamily}, {"font_family", "sans_serif"}});
+        invalid.append(QJsonObject{{"owner_font", owner}, {"positioning", "relative_auto"}});
+        for (const auto &bad : invalid) QVERIFY_EXCEPTION_THROWN(CompiledContent::containerStyle(bad), std::exception);
+        MainWindow window{QString()}; window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const QJsonObject source{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{{"style", style},
+            {"blocks", QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Declared"}}}}}}}}}};
+        auto *layout = window.reading_->document()->documentLayout();
+        const auto capability = layout->property("_wikidictContainerOwnerFontCapability");
+        QCOMPARE(capability.toString(), QStringLiteral("wikidict.container-owner-font/1"));
+        layout->setProperty("_wikidictContainerOwnerFontCapability", QVariant());
+        QVERIFY_EXCEPTION_THROWN(window.blockHtml(source), DictApiError);
+        layout->setProperty("_wikidictContainerOwnerFontCapability", capability);
     }
 
     void plainContainerOwnerFontKeepsStrutOverridesAndZeroOwner() {

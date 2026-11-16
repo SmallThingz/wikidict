@@ -2775,34 +2775,7 @@ inline void inlineComputed(const QJsonValue &value, bool signedValue = false) {
         throw std::runtime_error("inline metric requires explicit font basis");
 }
 inline QJsonObject inlineFontSnapshot(const QJsonValue &value) {
-    const QStringList keys{"font_scale", "font_scale_basis", "small", "superscript", "subscript", "font_normalized",
-        "bold", "italic", "code", "language", "classes", "role", "font_features", "font_family"};
-    auto font = inlineObject(value, keys);
-    for (const auto &key : {"font_scale", "font_features", "font_family"}) if (!font.contains(key)) font.insert(key, QJsonValue());
-    if (!font.contains("font_scale_basis")) font.insert("font_scale_basis", "context");
-    for (const auto &key : {"small", "superscript", "subscript", "font_normalized", "bold", "italic", "code"})
-        if (!font.contains(key)) font.insert(key, false);
-    for (const auto &key : {"language", "classes"}) if (!font.contains(key)) font.insert(key, "");
-    if (!font.contains("role")) font.insert("role", "normal");
-    const auto basis = font.value("font_scale_basis");
-    if (basis != QStringLiteral("context") && basis != QStringLiteral("normal_body") && basis != QStringLiteral("css_px"))
-        throw std::runtime_error("invalid inline font snapshot basis");
-    if (present(font.value("font_scale"))) inlineNumber(font.value("font_scale"));
-    if (basis != QStringLiteral("context") && !present(font.value("font_scale")))
-        throw std::runtime_error("inline font snapshot missing scale");
-    for (const auto &key : {"small", "superscript", "subscript", "font_normalized", "bold", "italic", "code"})
-        if (!font.value(key).isBool()) throw std::runtime_error("invalid inline font snapshot flag");
-    for (const auto &key : {"language", "classes", "role"})
-        if (!font.value(key).isString() || font.value(key).toString().contains(QChar(0))) throw std::runtime_error("invalid inline font snapshot string");
-    const QStringList roles{"normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference"};
-    if (!roles.contains(font.value("role").toString())) throw std::runtime_error("invalid inline font snapshot role");
-    fontFeaturePolicy(font.value("font_features"));
-    CompiledContent::containerFontFamily(font.value("font_family"));
-    if (font.value("font_normalized").toBool() && basis == QStringLiteral("context"))
-        throw std::runtime_error("normalized inline font snapshot needs explicit basis");
-    if (basis == QStringLiteral("context") && present(font.value("font_scale")) && font.value("font_scale").toDouble() == 1)
-        font.insert("font_scale", QJsonValue());
-    return font;
+    return CompiledContent::fontSnapshot(value);
 }
 inline QJsonObject inlineTextStyle(const QJsonObject &span) {
     const auto raw = span.value("inline_style");

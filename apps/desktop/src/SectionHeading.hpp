@@ -13,7 +13,7 @@ inline QJsonObject validate(const QJsonObject &section) {
     const auto box = containerStyle(style.value(QStringLiteral("box")));
     for (const auto &key : {"margins", "padding", "border", "owner_font_scale", "line_height", "font_family", "clear"})
         require(present(box.value(QLatin1String(key))));
-    for (const auto &key : {"float_side", "flex_item", "align_items", "columns", "positioning", "screen_max_width", "height", "min_height", "margin_values"})
+    for (const auto &key : {"float_side", "flex_item", "align_items", "columns", "positioning", "screen_max_width", "height", "min_height", "margin_values", "owner_font"})
         require(!present(box.value(QLatin1String(key))));
     require(!present(box.value("width")) || box.value("width").toObject() == QJsonObject{{"auto", QJsonObject{}}});
     require(!present(box.value("max_width")) || box.value("max_width").toObject() == QJsonObject{{"none", QJsonObject{}}});

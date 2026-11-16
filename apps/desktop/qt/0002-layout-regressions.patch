@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,14229 @@
+@@ -3,24 +3,14460 @@
 
 
  #include <QTest>
@@ -8009,6 +8009,237 @@
 +    }
 +
 +
++    void bodyDeclaringFontUsesOriginalRootLinesAndIndependentStrut()
++    {
++        constexpr int typography = QTextFormat::UserProperty + 0x57e4;
++        constexpr int boundary = QTextFormat::UserProperty + 0x5806;
++        constexpr int body = QTextFormat::UserProperty + 0x5830;
++        QFont declaring(QStringLiteral("Liberation Mono")); declaring.setPointSizeF(18);
++        declaring.setBold(true); declaring.setItalic(true);
++        const qreal sourceDpi = QFontMetricsF(declaring).fontDpi();
++        const qreal ownerPixels = declaring.pointSizeF() * sourceDpi / 72;
++        for (const int dpi : {96, 144}) for (const int childPixels : {9, 36})
++            for (const bool zero : {false, true})
++            for (const QString &kind : {QStringLiteral("normal"), QStringLiteral("multiplier")}) {
++                QImage image(900, 360, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
++                image.setDotsPerMeterX(qRound(dpi / .0254)); image.setDotsPerMeterY(qRound(dpi / .0254));
++                const qreal scale = image.logicalDpiY() / sourceDpi;
++                QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(400);
++                QFont defaultFont(QStringLiteral("DejaVu Sans")); defaultFont.setPointSizeF(7 * 72 / sourceDpi);
++                doc.setDefaultFont(defaultFont); doc.documentLayout()->setPaintDevice(&image);
++                QTextCursor cursor(&doc); QTextCharFormat strut; strut.setFont(defaultFont); cursor.setBlockCharFormat(strut);
++                const qreal factor = kind == "normal" ? 0.0 : 1.5;
++                const QVariantMap policy{{"kind", kind}, {"value", factor},
++                    {"owner_px", zero ? 0.0 : ownerPixels}, {"font", declaring}};
++                auto format = cursor.blockFormat(); format.setTopMargin(0); format.setBottomMargin(0);
++                format.setProperty(typography, policy); cursor.setBlockFormat(format);
++                QFont child(defaultFont); child.setPointSizeF(childPixels * 72 / sourceDpi);
++                child.setBold(false); child.setItalic(false);
++                QTextCharFormat childFormat; childFormat.setFont(child); childFormat.setAnchor(true);
++                childFormat.setAnchorHref(QStringLiteral("dict:body-child"));
++                cursor.insertText(QStringLiteral("W\u2028W"), childFormat);
++                const auto block = cursor.block();
++                QTextBlockFormat endFormat; endFormat.setHeadingLevel(2); endFormat.setTopMargin(0); endFormat.setBottomMargin(0);
++                endFormat.setProperty(boundary, QStringLiteral("wikidict.entry-body-end/1"));
++                cursor.insertBlock(endFormat, strut); cursor.insertText(QStringLiteral("Metadata"), strut);
++                const int end = cursor.block().position();
++                auto root = doc.rootFrame()->frameFormat();
++                root.setProperty(boundary, QVariantMap{{"capability", QStringLiteral("wikidict.entry-body-boundary/1")},
++                    {"owner", QVariant::fromValue(static_cast<QObject *>(doc.rootFrame()))}, {"end", end}});
++                root.setProperty(body, QVariantMap{{"capability", QStringLiteral("wikidict.body-typography/1")},
++                    {"owner", QVariant::fromValue(static_cast<QObject *>(doc.rootFrame()))}, {"begin", 0}, {"end", end},
++                    {"blocks", QVariantList{QVariantMap{{"position", block.position()}, {"text", block.text()},
++                        {"format", QVariant::fromValue(QTextFormat(block.blockFormat()))}}}}});
++                doc.rootFrame()->setFrameFormat(root);
++                const auto raw = doc.toRawText(); const auto properties = childFormat.properties();
++                doc.setLayoutEnabled(true);
++                auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++                QCOMPARE(native->property("_wikidictBodyTypographyCapability").toString(), QStringLiteral("wikidict.body-typography/1"));
++                native->documentSize();
++                if (zero) {
++                    // This fixture deliberately retains a positive 18pt font:
++                    // owner_px=0 is invalid, not a zero-metric font. Actual
++                    // supported zero-font acceptance is covered by the App BODY control.
++                    QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++                    QCOMPARE(doc.toRawText(), raw);
++                    QCOMPARE(block.blockFormat().property(typography).toMap(), policy);
++                    continue;
++                }
++                QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                QCOMPARE(doc.rootFrame()->childFrames().size(), 0);
++                QCOMPARE(block.charFormat().font(), defaultFont); // admission does not manufacture a font/text owner
++                QCOMPARE(block.layout()->lineCount(), 2);
++                const auto first = block.layout()->lineAt(0), second = block.layout()->lineAt(1);
++                const QFontMetricsF ownerMetric(declaring, &image), childMetric(child, &image);
++                const qreal ownerHeight = zero ? 0 : kind == "normal"
++                    ? ownerMetric.height() + qMax(qreal(0), ownerMetric.leading()) : ownerPixels * scale * factor;
++                const qreal childHeight = kind == "normal"
++                    ? childMetric.height() + qMax(qreal(0), childMetric.leading()) : childPixels * scale * factor;
++                const qreal ownerAbove = zero ? 0 : (ownerHeight + ownerMetric.ascent() - ownerMetric.descent()) / 2;
++                const qreal ownerBelow = zero ? 0 : (ownerHeight - ownerMetric.ascent() + ownerMetric.descent()) / 2;
++                const qreal above = qMax(ownerAbove, (childHeight + childMetric.ascent() - childMetric.descent()) / 2);
++                const qreal below = qMax(ownerBelow, (childHeight - childMetric.ascent() + childMetric.descent()) / 2);
++                QVERIFY2(qAbs(second.y() - first.y() - above - below) <= 1.0 / 16,
++                    qPrintable(QStringLiteral("dpi %1 child %2 zero %3 kind %4 advance %5 expected %6")
++                        .arg(dpi).arg(childPixels).arg(zero).arg(kind).arg(second.y()-first.y()).arg(above+below)));
++                const QPointF hit(block.layout()->position().x() + (first.cursorToX(0)+first.cursorToX(1))/2,
++                    block.layout()->position().y()+first.y()+first.ascent()-childMetric.ascent()/2);
++                QCOMPARE(native->anchorAt(hit), QStringLiteral("dict:body-child"));
++                QCOMPARE(doc.find(QStringLiteral("W")).charFormat().properties(), properties);
++                const qreal advance = second.y()-first.y();
++                doc.setTextWidth(250); native->documentSize();
++                QCOMPARE(block.layout()->lineCount(), 2);
++                QCOMPARE(block.layout()->lineAt(1).y()-block.layout()->lineAt(0).y(), advance);
++                QCOMPARE(doc.toRawText(), raw);
++                // Source mutation cannot silently retain the root admission.
++                auto invalid = block.blockFormat(); invalid.setLeftMargin(1);
++                QTextCursor(block).setBlockFormat(invalid); native->documentSize();
++                QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++                QCOMPARE(doc.toRawText(), raw);
++            }
++    }
++
++    void plainContainerDeclaringFontUsesIndependentMetricAndDevice()
++    {
++        constexpr int ownerKey = QTextFormat::UserProperty + 0x57e0;
++        constexpr int clearKey = QTextFormat::UserProperty + 0x57e1;
++        constexpr int typography = QTextFormat::UserProperty + 0x57e4;
++        QFont declaring(QStringLiteral("Liberation Mono")); declaring.setPointSizeF(18);
++        declaring.setBold(true); declaring.setItalic(true);
++        const qreal sourceDpi = QFontMetricsF(declaring).fontDpi();
++        const qreal ownerPixels = declaring.pointSizeF() * sourceDpi / 72;
++        for (const int dpi : {96, 144}) for (const int childPixels : {0, 9, 36})
++            for (const bool inlineMetrics : {false, true})
++            for (const QString &kind : {QStringLiteral("normal"), QStringLiteral("multiplier")}) {
++                QImage image(900, 360, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
++                image.setDotsPerMeterX(qRound(dpi / .0254)); image.setDotsPerMeterY(qRound(dpi / .0254));
++                const qreal scale = image.logicalDpiY() / sourceDpi;
++                QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(400);
++                QFont body(QStringLiteral("DejaVu Sans")); body.setPointSizeF(7 * 72 / sourceDpi); doc.setDefaultFont(body);
++                doc.documentLayout()->setPaintDevice(&image);
++                QTextCursor cursor(&doc); QTextFrameFormat f; f.setMargin(0); f.setBorder(0); f.setPadding(0);
++                f.setProperty(ownerKey, QStringLiteral("wikidict.plain-container/1")); f.setProperty(clearKey, 0);
++                auto *frame = cursor.insertFrame(f); QTextCharFormat blockFont; blockFont.setFont(body); cursor.setBlockCharFormat(blockFont);
++                const qreal factor = kind == QStringLiteral("normal") ? 0.0 : 1.5;
++                const QVariantMap policy{{"kind", kind}, {"value", factor}, {"owner_px", ownerPixels}, {"font", declaring}};
++                auto format = cursor.blockFormat(); format.setProperty(typography, policy); cursor.setBlockFormat(format);
++                const auto block = cursor.block(); QFont child = body;
++                if (childPixels) {
++                    child.setPointSizeF(childPixels * 72 / sourceDpi); child.setBold(false); child.setItalic(false);
++                    QTextCharFormat text; text.setFont(child); text.setAnchor(true); text.setAnchorHref(QStringLiteral("dict:declaring-child"));
++                    if (inlineMetrics) text.setProperty(QTextFormat::UserProperty + 0x5804,
++                        QVariantMap{{"policy", QStringLiteral("wikidict.inline-text/1")}, {"normalized", true}, {"shift", 0.0}});
++                    cursor.insertText(QStringLiteral("W"), text);
++                }
++                for (auto storage = doc.begin(); storage.isValid(); storage = storage.next())
++                    if (storage != block && storage.length() == 1) storage.setVisible(false);
++                const auto source = doc.toRawText(); doc.setLayoutEnabled(true);
++                auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++                QCOMPARE(native->property("_wikidictContainerOwnerFontCapability").toString(), QStringLiteral("wikidict.container-owner-font/1"));
++                native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                QCOMPARE(block.charFormat().font().pointSizeF(), body.pointSizeF());
++                QCOMPARE(block.layout()->lineCount(), 1); const auto line = block.layout()->lineAt(0);
++                const QFontMetricsF ownerMetric(declaring, &image);
++                const qreal ownerHeight = kind == "normal" ? ownerMetric.height() + qMax(qreal(0), ownerMetric.leading()) : ownerPixels * scale * factor;
++                qreal above = (ownerHeight + ownerMetric.ascent() - ownerMetric.descent()) / 2;
++                qreal below = (ownerHeight - ownerMetric.ascent() + ownerMetric.descent()) / 2;
++                if (childPixels) {
++                    const QFontMetricsF childMetric(child, &image);
++                    const qreal childHeight = kind == "normal" ? childMetric.height() + qMax(qreal(0), childMetric.leading()) : childPixels * scale * factor;
++                    above = qMax(above, (childHeight + childMetric.ascent() - childMetric.descent()) / 2);
++                    below = qMax(below, (childHeight - childMetric.ascent() + childMetric.descent()) / 2);
++                }
++                const auto rect = native->frameBoundingRect(frame);
++                QVERIFY2(qAbs(rect.height() - above - below) <= 1.0 / 16,
++                    qPrintable(QStringLiteral("dpi %1 child %2 inline %3 kind %4 height %5 expected %6")
++                        .arg(dpi).arg(childPixels).arg(inlineMetrics).arg(kind).arg(rect.height()).arg(above + below)));
++                const qreal baseline = block.layout()->position().y() + line.y() + line.ascent() - rect.top();
++                QVERIFY(qAbs(baseline - above) <= 1.0 / 16);
++                if (childPixels) {
++                    const auto linked = doc.find(QStringLiteral("W")); QVERIFY(!linked.isNull());
++                    QVERIFY(!linked.charFormat().font().bold()); QVERIFY(!linked.charFormat().font().italic());
++                    QCOMPARE(linked.charFormat().font().pointSizeF(), child.pointSizeF());
++                    const QPointF point(block.layout()->position().x() + (line.cursorToX(0) + line.cursorToX(1)) / 2,
++                        block.layout()->position().y() + line.y() + line.ascent() - QFontMetricsF(child, &image).ascent() / 2);
++                    QCOMPARE(native->anchorAt(point), QStringLiteral("dict:declaring-child"));
++                    QTextCursor selected(&doc); selected.setPosition(block.position()); selected.setPosition(block.position() + 1, QTextCursor::KeepAnchor);
++                    QCOMPARE(selected.selectedText(), QStringLiteral("W"));
++                }
++                QPainter painter(&image); QAbstractTextDocumentLayout::PaintContext context; native->draw(&painter, context); painter.end();
++                if (childPixels) {
++                    bool ink = false;
++                    for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) ink |= image.pixelColor(x, y) != QColor(Qt::white);
++                    QVERIFY(ink);
++                }
++                doc.setTextWidth(250); native->documentSize(); QCOMPARE(native->frameBoundingRect(frame).height(), rect.height());
++                QCOMPARE(doc.toRawText(), source);
++                // Change the independent owner in place, then undo. A stale
++                // layout may not retain the earlier font metrics or policy.
++                QFont changed = declaring; changed.setPointSizeF(27);
++                auto changedPolicy = policy; changedPolicy.insert("font", changed);
++                changedPolicy.insert("owner_px", changed.pointSizeF() * sourceDpi / 72);
++                auto changedFormat = block.blockFormat(); changedFormat.setProperty(typography, changedPolicy);
++                QTextCursor(block).setBlockFormat(changedFormat); native->documentSize();
++                QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                QCOMPARE(block.blockFormat().property(typography).toMap(), changedPolicy);
++                const QFontMetricsF changedMetric(changed, &image);
++                const qreal changedHeight = kind == "normal" ? changedMetric.height() + qMax(qreal(0), changedMetric.leading())
++                    : changedPolicy.value("owner_px").toDouble() * scale * factor;
++                qreal changedAbove = (changedHeight + changedMetric.ascent() - changedMetric.descent()) / 2;
++                qreal changedBelow = (changedHeight - changedMetric.ascent() + changedMetric.descent()) / 2;
++                if (childPixels) {
++                    const QFontMetricsF childMetric(child, &image);
++                    const qreal childHeight = kind == "normal" ? childMetric.height() + qMax(qreal(0), childMetric.leading()) : childPixels * scale * factor;
++                    changedAbove = qMax(changedAbove, (childHeight + childMetric.ascent() - childMetric.descent()) / 2);
++                    changedBelow = qMax(changedBelow, (childHeight - childMetric.ascent() + childMetric.descent()) / 2);
++                }
++                QVERIFY(qAbs(native->frameBoundingRect(frame).height() - changedAbove - changedBelow) <= 1.0 / 16);
++                if (childPixels <= 9) QVERIFY(native->frameBoundingRect(frame).height() > rect.height());
++                doc.undo(); native->documentSize(); QCOMPARE(block.blockFormat().property(typography).toMap(), policy);
++                QCOMPARE(native->frameBoundingRect(frame).height(), rect.height()); QCOMPARE(doc.toRawText(), source);
++            }
++    }
++
++    void plainContainerDeclaringFontRejectsMalformedPolicyAndPreservesLegacy()
++    {
++        constexpr int ownerKey = QTextFormat::UserProperty + 0x57e0;
++        constexpr int clearKey = QTextFormat::UserProperty + 0x57e1;
++        constexpr int typography = QTextFormat::UserProperty + 0x57e4;
++        QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(300);
++        QFont font(QStringLiteral("DejaVu Sans")); font.setPointSizeF(18); doc.setDefaultFont(font);
++        const qreal pixels = font.pointSizeF() * QFontMetricsF(font).fontDpi() / 72;
++        QTextCursor cursor(&doc); QTextFrameFormat f; f.setMargin(0); f.setBorder(0); f.setPadding(0);
++        f.setProperty(ownerKey, QStringLiteral("wikidict.plain-container/1")); f.setProperty(clearKey, 0);
++        auto *frame = cursor.insertFrame(f); QTextCharFormat text; text.setFont(font); cursor.setBlockCharFormat(text);
++        const QVariantMap legacy{{"kind", QStringLiteral("normal")}, {"value", 0.0}, {"owner_px", pixels}};
++        auto bf = cursor.blockFormat(); bf.setProperty(typography, legacy); cursor.setBlockFormat(bf); cursor.insertText(QStringLiteral("Legacy"), text);
++        const auto block = cursor.block();
++        for (auto storage = doc.begin(); storage.isValid(); storage = storage.next())
++            if (storage != block && storage.length() == 1) storage.setVisible(false);
++        doc.setLayoutEnabled(true); auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++        native->documentSize(); const auto before = native->frameBoundingRect(frame); const auto source = doc.toRawText();
++        auto typed = legacy; typed.insert("font", font);
++        const auto setPolicy = [&](const QVariantMap &policy) {
++            auto current = block.blockFormat(); current.setProperty(typography, policy);
++            QTextCursor(block).setBlockFormat(current); native->documentSize();
++        };
++        setPolicy(typed); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(native->frameBoundingRect(frame), before);
++        QList<QVariantMap> invalid;
++        auto bad = typed; bad.insert("font", QStringLiteral("DejaVu Sans")); invalid.append(bad);
++        bad = typed; bad.insert("font", QVariant::fromValue(QTextFormat(text))); invalid.append(bad);
++        bad = typed; bad.insert("owner_px", pixels + 1); invalid.append(bad);
++        bad = typed; bad.insert("owner_px", 0.0); invalid.append(bad);
++        bad = typed; bad.insert("extra", true); invalid.append(bad);
++        for (const auto &policy : invalid) {
++            setPolicy(policy); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1); QCOMPARE(doc.toRawText(), source);
++            setPolicy(typed); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(native->frameBoundingRect(frame), before);
++        }
++        // Historical scalar zero remains its original suppression policy; it
++        // does not pretend that an ordinary positive QFont is a typed zero font.
++        auto zeroLegacy = legacy; zeroLegacy.insert("owner_px", 0.0); setPolicy(zeroLegacy);
++        QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(doc.toRawText(), source);
++    }
++
 +    void plainContainerTypographyUsesPaintDeviceAndPrimaryFontMetrics()
 +    {
 +        constexpr int owner = QTextFormat::UserProperty + 0x57e0;
@@ -14252,7 +14483,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +14853,1560 @@
+@@ -648,5 +15084,1560 @@
      }
  }
 

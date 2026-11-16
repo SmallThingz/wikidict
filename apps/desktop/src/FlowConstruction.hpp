@@ -38,7 +38,11 @@ struct RenderContext {
     qreal normalBodyEm = 0;
     qreal legacyVerticalScale = 1;
     bool containerTypography = false;
+    bool bodyTypography = false; // only original BODY role markers inherit these contextual defaults
     ContainerLineInput containerLineHeight;
+    QJsonObject containerOwnerFont;
+    QString containerOwnerHtml;
+    qreal containerOwnerBodyPoints = 0;
     QColor inheritedInk;
     QJsonObject captionLinkPaint;
     bool computedCellTraits = false;
@@ -544,7 +548,10 @@ inline void reflowContainerTypography(QTextFrame *frame, const ContainerLineInpu
         } else {
             const QString kind = inherited.mode == ContainerLineInput::Mode::Normal ? QStringLiteral("normal")
                 : inherited.mode == ContainerLineInput::Mode::Multiplier ? QStringLiteral("multiplier") : QStringLiteral("length");
-            format.setProperty(containerTypographyProperty, QVariantMap{{"kind", kind}, {"value", inherited.value}, {"owner_px", owner}});
+            QVariantMap policy{{"kind", kind}, {"value", inherited.value}, {"owner_px", owner}};
+            const auto base = backup.value("base").toMap();
+            if (base.contains("font")) policy.insert("font", base.value("font"));
+            format.setProperty(containerTypographyProperty, policy);
         }
         QTextCursor(block).setBlockFormat(format);
     }
@@ -668,6 +675,13 @@ inline QString placeholder(const QJsonObject &block, const Rendered &rendered, c
         metadata.insert(QStringLiteral("section_heading"), context.sectionHeading);
         metadata.insert(QStringLiteral("section_index"), context.sectionIndex);
         metadata.insert(QStringLiteral("heading_body_points"), context.headingNormalBodyPoints);
+    }
+    if (!context.containerOwnerFont.isEmpty()) {
+        CompiledContent::require(context.containerTypography && !context.containerOwnerHtml.isEmpty()
+            && context.containerOwnerBodyPoints > 0);
+        metadata.insert(QStringLiteral("declaring_font"), context.containerOwnerFont);
+        metadata.insert(QStringLiteral("declaring_html"), context.containerOwnerHtml);
+        metadata.insert(QStringLiteral("declaring_body_points"), context.containerOwnerBodyPoints);
     }
     if (context.containerTypography) {
         const auto mode = context.containerLineHeight.mode;
@@ -798,6 +812,25 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
             contextFont = SectionHeading::ownerFont(headingSection, contextFont,
                 item.metadata.value(QStringLiteral("heading_body_points")).toDouble());
         } else SemanticHtml::applyFontFamily(contextFont, family);
+        const auto declaringValue = item.metadata.value(QStringLiteral("declaring_font"));
+        const bool declaringOwner = CompiledContent::present(declaringValue);
+        QFont declaringFont;
+        if (declaringOwner) {
+            CompiledContent::require(typedFont && !headingOwner && !cellHeight
+                && item.metadata.value("declaring_html").isString()
+                && item.metadata.value("declaring_body_points").isDouble()
+                && layout->property("_wikidictContainerOwnerFontCapability").toString()
+                    == QStringLiteral("wikidict.container-owner-font/1"));
+            const auto snapshot = CompiledContent::containerOwnerFont(QJsonObject{{"owner_font", declaringValue}});
+            declaringFont = SemanticHtml::inlineSnapshotFormat(document, snapshot,
+                item.metadata.value("declaring_html").toString(), item.metadata.value("declaring_body_points").toDouble()).font();
+            if (zeroOwner) {
+                // The invisible glyph probe normalizes weight; the owner keeps its declaration.
+                declaringFont.setBold(snapshot.value("bold").toBool());
+                declaringFont.setFamilies(QStringList{SemanticHtml::zeroFontFamilyName});
+                declaringFont.setStyleStrategy(QFont::NoFontMerging);
+            }
+        }
         temporary.setDefaultFont(contextFont);
         temporary.setDefaultTextOption(document->defaultTextOption());
         temporary.setDocumentMargin(0);
@@ -827,9 +860,10 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 && object.value(QStringLiteral("owner_px")).isDouble());
             // JSON stores integral numbers as integers internally. The native
             // typography protocol requires explicit Double metrics, including 0.
-            const QVariantMap policy{{QStringLiteral("kind"), object.value(QStringLiteral("kind")).toString()},
+            QVariantMap policy{{QStringLiteral("kind"), object.value(QStringLiteral("kind")).toString()},
                 {QStringLiteral("value"), object.value(QStringLiteral("value")).toDouble()},
                 {QStringLiteral("owner_px"), object.value(QStringLiteral("owner_px")).toDouble()}};
+            if (declaringOwner) policy.insert(QStringLiteral("font"), QVariant::fromValue(declaringFont));
             for (auto block = temporary.begin(); block.isValid(); block = block.next()) {
                 QVector<QPair<QTextCursor, QTextCharFormat>> runs;
                 for (auto it = block.begin(); !it.atEnd(); ++it) {
@@ -840,7 +874,7 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 }
                 for (auto &run : runs) run.first.setCharFormat(run.second);
                 QTextCursor paragraph(block); auto strut = paragraph.blockCharFormat();
-                QFont font = contextFont;
+                QFont font = declaringOwner ? declaringFont : contextFont;
                 if (zeroOwner) { font.setFamilies(QStringList{SemanticHtml::zeroFontFamilyName}); font.setStyleStrategy(QFont::NoFontMerging); }
                 strut.setFont(font); paragraph.setBlockCharFormat(strut);
                 auto format = paragraph.blockFormat();
@@ -898,6 +932,7 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 CompiledContent::require((kind == "normal" || kind == "multiplier" || kind == "length")
                     && std::isfinite(object.value("value").toDouble()) && object.value("value").toDouble() >= 0);
                 base = QVariantMap{{"kind", kind}, {"value", object.value("value").toDouble()}, {"owner_px", owner}};
+                if (declaringOwner) base.insert(QStringLiteral("font"), QVariant::fromValue(declaringFont));
             }
             for (auto block = temporary.begin(); block.isValid(); block = block.next()) {
                 auto format = block.blockFormat();

@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "34cc95f68505d8dbe43fb46010bbdd6942cf82049594d9cecaf25beb179bb8be",
-      "bytes": 992659,
+      "sha256": "0213ac7366b033d900aee9976dff7fc4bdc92afa3405fea8810c2f0d4e921f37",
+      "bytes": 1018149,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "b357df3e3c1812598a9fb82e8b98663c70d28d0f3c8cb8759271920c12a6ec5a",
-          "bytes": 798723
+          "qualified_sha256": "116a8dd14297c78181191be53a93ebf60ac8bd85f9bca9fc4e96f0c0b1219061",
+          "bytes": 807971
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -68,15 +68,15 @@
           "path": "src/gui/text/qtextengine.cpp",
           "new_file": false,
           "upstream_sha256": "e072b6ce45339b39d1f352f12d49294877bd10cc597d87d1163e0b49dc363e56",
-          "qualified_sha256": "e147685ec1f48be6c0e81d1d0a53a85d3813052bfa82e11fadd16ae01b86ef6c",
-          "bytes": 165655
+          "qualified_sha256": "d33d6b385ea36fa2dd4dfa65b5cda07ff4fe51c8c7beb57bb5a38aaef67c1ef2",
+          "bytes": 169882
         },
         {
           "path": "src/gui/text/qtextengine_p.h",
           "new_file": false,
           "upstream_sha256": "a0e5cada6914da634a8ac97c1e357a94b97e39802556266f9b4bc3d50c13d8a3",
-          "qualified_sha256": "58d3dd7cfbbeba3d5095ef6718f9d7ef2063324262ebfc47d7686c82fd600680",
-          "bytes": 26279
+          "qualified_sha256": "a0647e60dbdfd39a8ffcc0845a2fe1fe3007a098540a867aac16c2a5215487ee",
+          "bytes": 26521
         },
         {
           "path": "src/gui/text/qtexthtmlparser.cpp",
@@ -89,8 +89,8 @@
           "path": "src/gui/text/qtextlayout.cpp",
           "new_file": false,
           "upstream_sha256": "a6b8d41c3b4f0d81777edbc84ca53037940ddf3066fa95223fb95cd56ee9c2a8",
-          "qualified_sha256": "4ccd8741afb5da2e695da1842658bba3c547f48530dad057f9feb53b315b8f19",
-          "bytes": 140051
+          "qualified_sha256": "e157310d8c976eb7101c08dd936d07475cbf118b3cefd9f48e10649ebbe5051f",
+          "bytes": 144677
         },
         {
           "path": "src/gui/text/qtextlogicalflow_p.h",
@@ -196,13 +196,20 @@
           "upstream_sha256": null,
           "qualified_sha256": "dcef190a5562124f04df8a205ee30741e148c19dfd62582c21ca866749b80b98",
           "bytes": 5561
+        },
+        {
+          "path": "src/gui/text/qtextinlinebox_p.h",
+          "new_file": true,
+          "upstream_sha256": null,
+          "bytes": 5843,
+          "qualified_sha256": "4bb888c7c61af4652ce95cda968866665ac2bec5c878d09077988215fa9aee5a"
         }
       ]
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "92426506fcda0a15f4eaf9138e10e2d498715226329f28b338795e4433edcf7d",
-      "bytes": 1246772,
+      "sha256": "c39fac3f571e6a761d759ba395369dbc55059e056b261b172193a7c973f3a24c",
+      "bytes": 1266309,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -215,22 +222,22 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "096c12c3a7846748fd815b226ce9e4dde71f72cf23bf5214cf78e651609bd466",
-          "bytes": 1251242
+          "qualified_sha256": "5d9d96ea47484c5a8116896a606a268485ca69f270fe9ab25359db0d13e83d3b",
+          "bytes": 1270548
         }
       ]
     },
     {
       "file": "0003-bounded-gcc-link-policy.patch",
-      "sha256": "fc91120bf5fbb3af4ad8684a95ab8367a745a68aca741a4cfcb39d97a2326645",
-      "bytes": 2306,
+      "sha256": "e26d332f7a6313785a74e384016c7044afc9cfa1f7af153c5ed3e3f4949c5285",
+      "bytes": 2339,
       "files": [
         {
           "path": "src/gui/CMakeLists.txt",
           "new_file": false,
           "upstream_sha256": "c996a751de6dc8db20770bb537f7273a8a1a02740de2a9bfa4834c1c0f29428f",
-          "qualified_sha256": "37e47206ee34dfe7d3f4285e7732840bc2ddbafdcf69ab631fe7f7d18e960ec3",
-          "bytes": 48397
+          "qualified_sha256": "c5772f3841c10b834269a13346cb3d7b33d204187dddb8b91073672b6154d758",
+          "bytes": 48429
         },
         {
           "path": "src/widgets/CMakeLists.txt",
@@ -394,8 +401,8 @@
       "reader": 176,
       "ffi": 177,
       "app": 190,
-      "title": "たびぢ",
-      "language": "日語",
+      "title": "\u305f\u3073\u3062",
+      "language": "\u65e5\u8a9e",
       "wide": [
         900,
         700
@@ -404,7 +411,7 @@
         640,
         600
       ],
-      "internal_missing_target": "旅路#日語",
+      "internal_missing_target": "\u65c5\u8def#\u65e5\u8a9e",
       "successful_destination_record": false,
       "whole_frontend": false
     },
@@ -982,6 +989,606 @@
       "full_frontend_acceptance": false,
       "speedup_measured": false,
       "scope": "Memoize only proved fixed inline image metrics in owned in-flow tables. Preserve stock delegate identity, format and device dependencies, handler/delegate revocation, source content, image objects, hit geometry and ordinary final painting. Unknown or resource-dependent metrics retain the uncached path. Current one native control plus twelve source-exact retained controls compose the native qualification; the original production build policy is independently joined without restamping the failed Test-only run. Three App controls include genuine deferred-commit composition; loaded dictionary commit and navigation are supported by the retained genuine three-owner scene; its failed finish request remains raw failure. The current same-profile restart separately earns normal Quit and persistence."
+    },
+    "final_y_inline_boxes_and_declaring_fonts": {
+      "date": "2026-11-16",
+      "native_application": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application179.json",
+        "bytes": 352182,
+        "sha256": "9cd9bd100aa73d5d3478339f264b2863565a56a5a4f2b10a27296fdeb1f727ab"
+      },
+      "native_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold160/dispatch02/independent-closure01.json",
+        "bytes": 243713,
+        "sha256": "52987a1a834854a456003e2e5e9814ef7d5ada17b60f4f8bd9dfdb1aff5841d8"
+      },
+      "native_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold160/dispatch02/release01.json",
+        "bytes": 559,
+        "sha256": "6e8f89295a784deac8806ded0c60e0aba1fbaf60cc446f5cd29d28bf39bcb0a1"
+      },
+      "native_current_methods": [
+        "bodyDeclaringFontUsesOriginalRootLinesAndIndependentStrut",
+        "plainContainerDeclaringFontUsesIndependentMetricAndDevice",
+        "plainContainerDeclaringFontRejectsMalformedPolicyAndPreservesLegacy",
+        "plainContainerTypographyUsesOwnerStrutAndEachChildFont",
+        "authoredInlineMetricsUseOneBaselineAndPreserveLegacyFont",
+        "projectedRubyUsesResolvedBaseMetricsOnly",
+        "projectedRubyKeepsOnlyAdmittedOrdinaryBoundaries",
+        "projectedRubyMetadataSurvivesUnrelatedFormatAndPreeditClears",
+        "inlineActionDeclaringMetricsKeepChildFontsAndZeroAdvance",
+        "inlineActionRubyPaintUsesBaseAllocationAndActualHitRanges",
+        "logicalCharacterRectKeepsCompleteGraphemeWithinItsLine",
+        "ordinaryLinkOutlineKeepsStockAndProjectedSourceGeometry",
+        "nativeLogicalOwnerKeepsRealCaptionsAndOriginalOffsets",
+        "tableIntrinsicFixedImagesBoundDeepWork",
+        "tableIntrinsicFixedImagesMatchUncachedChanges",
+        "tableIntrinsicFixedImagesRejectUnprovedAndRevokedMetrics"
+      ],
+      "native_method_count": 16,
+      "app_source_application": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application216.json",
+        "bytes": 70887,
+        "sha256": "4e7d5b8d266906452d21e70381f42affe1992ca1e42e501ab737ae1d82261808"
+      },
+      "app_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile219/independent-closure01.json",
+        "bytes": 46297,
+        "sha256": "d8dff2e72ef375284438166999bb6d82ed201a2ea71cb0fa67c20527577f110f"
+      },
+      "app_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile219/release01.json",
+        "bytes": 483,
+        "sha256": "45d42d7345197753a6edb5b4bb75d97dfdb52ea9d8fb4251ab3f81e2b7bccced"
+      },
+      "current_app_methods": [
+        "finalYBodyDeclaringFontOwnsRootLinesWithoutOwningHeadings"
+      ],
+      "retained_app_groups": [
+        {
+          "methods": [
+            "finalYInlineBoxUnsupportedGeometryRefusesBeforeEmptyOwnerDrop",
+            "finalYBodyRejectsPartialOwnersAndStaleSourceBinding",
+            "containerDeclaringFontRejectsMalformedAliasesAndUnavailableCapability",
+            "inlineActionGroupsKeepRichOccurrencesKeyboardAndCopy",
+            "ordinaryImageLinkPaintKeepsAlignedFocusAndBitmapStates",
+            "typedInlineTableImageTopKeepsSvgAudioListAndReflow",
+            "missingFigureKeepsCenteredLabelChildStylesCaptionAndNativeWrap",
+            "figureCaptionAbsentAlignmentKeepsNativeDefaultAndInheritedCenter",
+            "typedBlockAlignmentKeepsCellInheritanceAndOffsets"
+          ],
+          "rows": [
+            {
+              "name": "finalYInlineBoxUnsupportedGeometryRefusesBeforeEmptyOwnerDrop",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "finalYBodyRejectsPartialOwnersAndStaleSourceBinding",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "containerDeclaringFontRejectsMalformedAliasesAndUnavailableCapability",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "inlineActionGroupsKeepRichOccurrencesKeyboardAndCopy",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "ordinaryImageLinkPaintKeepsAlignedFocusAndBitmapStates",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "typedInlineTableImageTopKeepsSvgAudioListAndReflow",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "missingFigureKeepsCenteredLabelChildStylesCaptionAndNativeWrap",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "figureCaptionAbsentAlignmentKeepsNativeDefaultAndInheritedCenter",
+              "incidents": [
+                "pass",
+                "pass",
+                "pass",
+                "pass",
+                "pass",
+                "pass",
+                "pass",
+                "pass",
+                "pass",
+                "pass",
+                "pass",
+                "pass"
+              ],
+              "data_tags": [
+                "ltr-absent",
+                "ltr-null",
+                "ltr-center",
+                "ltr-inherited-center",
+                "ltr-left",
+                "ltr-right",
+                "rtl-absent",
+                "rtl-null",
+                "rtl-center",
+                "rtl-inherited-center",
+                "rtl-left",
+                "rtl-right"
+              ]
+            },
+            {
+              "name": "typedBlockAlignmentKeepsCellInheritanceAndOffsets",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            }
+          ],
+          "bodies": {
+            "finalYInlineBoxUnsupportedGeometryRefusesBeforeEmptyOwnerDrop": {
+              "bytes": 2040,
+              "sha256": "7b3b082542f07af73c5bac2a7fd56d09149a5fceba9447a8ce97d8c8b5e52052"
+            },
+            "finalYBodyRejectsPartialOwnersAndStaleSourceBinding": {
+              "bytes": 2944,
+              "sha256": "a97f5108ed00ce046f24299e7ad6dbc70436f95b01e071f3fc3746126925181a"
+            },
+            "containerDeclaringFontRejectsMalformedAliasesAndUnavailableCapability": {
+              "bytes": 2820,
+              "sha256": "33c0d0a84fbc478941dd26d0a10a48191cba14af2b184b5ac79b32a436b95635"
+            },
+            "inlineActionGroupsKeepRichOccurrencesKeyboardAndCopy": {
+              "bytes": 524,
+              "sha256": "9511e2f44f1c0bfc939ed62df6bc99f7ccac4c777e6f38dcdcef36459814c317"
+            },
+            "ordinaryImageLinkPaintKeepsAlignedFocusAndBitmapStates": {
+              "bytes": 17648,
+              "sha256": "281cfe308f26565d4fb3997b59dffe581695f237d3ef3d386517f8da9c17a8d5"
+            },
+            "typedInlineTableImageTopKeepsSvgAudioListAndReflow": {
+              "bytes": 13695,
+              "sha256": "1c6de5b2e5e3bae41c7a6129417e2407add9604e4aec418aced0d381677e56de"
+            },
+            "missingFigureKeepsCenteredLabelChildStylesCaptionAndNativeWrap": {
+              "bytes": 16367,
+              "sha256": "82f415a74cf024c4f2dfe9a25481b3f6ce7520dd4c57a4913577b6b621ff7e7a"
+            },
+            "figureCaptionAbsentAlignmentKeepsNativeDefaultAndInheritedCenter": {
+              "bytes": 7471,
+              "sha256": "8dc1436e84ca0c83daaf4abeb4ef53d6973c95c1a26d75aeb58d894760784be0"
+            },
+            "typedBlockAlignmentKeepsCellInheritanceAndOffsets": {
+              "bytes": 13120,
+              "sha256": "2717346fffae51e4f0edc5ab8be194b6099a75288a9b179d8fed95dc18093e73"
+            },
+            "figureCaptionAbsentAlignmentKeepsNativeDefaultAndInheritedCenter_data": {
+              "bytes": 563,
+              "sha256": "1d877259c0ffe00c89b6b2e4095e7a8c2e5d34e8c0d5848d9079c17dafce22a5"
+            }
+          },
+          "closure": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile215/dispatch02/independent-closure01.json",
+            "bytes": 51892,
+            "sha256": "162beedfc6b2af7b9637e0469fbd19e4b172a8c23b7abab1ee2c83bb3612d98b"
+          },
+          "release": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile215/dispatch02/release01.json",
+            "bytes": 494,
+            "sha256": "6bbecf5561667d72c0f803fa842d4f358d7d1672b892f554b67c64354b4d0988"
+          }
+        },
+        {
+          "methods": [
+            "finalYEmptyOwnerCannotDropItsRichChildrenInReading",
+            "finalYInlineBoxEmptyOwnerPreservesNaturalChildrenAndActions",
+            "finalYUnsupportedGeometryRefusesWithoutDroppingRichChildren",
+            "sectionHeadingLayoutWhitespaceDoesNotCreateEmptyReadingBlocks"
+          ],
+          "rows": [
+            {
+              "name": "finalYEmptyOwnerCannotDropItsRichChildrenInReading",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "finalYInlineBoxEmptyOwnerPreservesNaturalChildrenAndActions",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "finalYUnsupportedGeometryRefusesWithoutDroppingRichChildren",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "sectionHeadingLayoutWhitespaceDoesNotCreateEmptyReadingBlocks",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            }
+          ],
+          "bodies": {
+            "finalYEmptyOwnerCannotDropItsRichChildrenInReading": {
+              "bytes": 3715,
+              "sha256": "e27dbfcf95c34674d0a82e684de0f558a91152408305134564c2b383d0fa3960"
+            },
+            "finalYInlineBoxEmptyOwnerPreservesNaturalChildrenAndActions": {
+              "bytes": 12199,
+              "sha256": "a2fd7c64a1045aff363de5c76256d5a447ce828bd6608a4176af752d1b30c53f"
+            },
+            "finalYUnsupportedGeometryRefusesWithoutDroppingRichChildren": {
+              "bytes": 2705,
+              "sha256": "a778e44d69d0357980e12983df41d665b8b8db1f39020b3b272e4a8b63fcc67b"
+            },
+            "sectionHeadingLayoutWhitespaceDoesNotCreateEmptyReadingBlocks": {
+              "bytes": 4635,
+              "sha256": "3f7cbe44864e0cb85b5a10e33033eeb42684795d706be41eea160763d254c0ba"
+            }
+          },
+          "closure": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile216/independent-closure01.json",
+            "bytes": 49976,
+            "sha256": "9dce871a551cde3e68eeedd53e5577a8e4c30d522ac0cd457f1f723510ce1299"
+          },
+          "release": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile216/release01.json",
+            "bytes": 484,
+            "sha256": "30e0f43d6ab9a7ea833096ec0ca4d295684950b9c00927ba015c66c035e69805"
+          }
+        },
+        {
+          "methods": [
+            "containerDeclaringFontKeepsIndependentStrutAndChildActions",
+            "cssPixelFontOriginKeepsAbsoluteUnitsAcrossZoomAndZeroContexts",
+            "orderedListItemsKeepNumbersWithoutBecomingDefinitions",
+            "relativeFontScalePreservesContextAndLegacyReductions",
+            "fontScaleBasisKeepsHeadingOriginAndReadingBaseDistinct"
+          ],
+          "rows": [
+            {
+              "name": "containerDeclaringFontKeepsIndependentStrutAndChildActions",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "cssPixelFontOriginKeepsAbsoluteUnitsAcrossZoomAndZeroContexts",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "orderedListItemsKeepNumbersWithoutBecomingDefinitions",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "relativeFontScalePreservesContextAndLegacyReductions",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            },
+            {
+              "name": "fontScaleBasisKeepsHeadingOriginAndReadingBaseDistinct",
+              "incidents": [
+                "pass"
+              ],
+              "data_tags": [
+                ""
+              ]
+            }
+          ],
+          "bodies": {
+            "containerDeclaringFontKeepsIndependentStrutAndChildActions": {
+              "bytes": 15793,
+              "sha256": "e19a8f2eb0c32c11baa05d9d1c6e4fea2151eca7d5409ec506d1507c6335a2f4"
+            },
+            "cssPixelFontOriginKeepsAbsoluteUnitsAcrossZoomAndZeroContexts": {
+              "bytes": 7148,
+              "sha256": "b61ea92ca19758cb96e9012f6ad9837338732a700f2fcdb4efedbfc0688d9b9d"
+            },
+            "orderedListItemsKeepNumbersWithoutBecomingDefinitions": {
+              "bytes": 4248,
+              "sha256": "c45171d72b3b2ac3bc2e9cb4969deaf638775134ff88c35b2d16a146afd43a9c"
+            },
+            "relativeFontScalePreservesContextAndLegacyReductions": {
+              "bytes": 8867,
+              "sha256": "166bc3ef371ce9ed1f19de9aa917322410216316a0203b321dea7b503bf40bc9"
+            },
+            "fontScaleBasisKeepsHeadingOriginAndReadingBaseDistinct": {
+              "bytes": 7923,
+              "sha256": "bce57a781612dac1ae57ccd13f56aed230b1e89bb34473f333226b47fb642ce0"
+            }
+          },
+          "closure": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile217/independent-closure01.json",
+            "bytes": 51244,
+            "sha256": "f3e07a702d745b449574dbfa4d97717a8edafbb18c9bc46fd4aaaf4b4b36ea16"
+          },
+          "release": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile217/release01.json",
+            "bytes": 484,
+            "sha256": "35298bfe6bd1087a79599f62c1facb649c276cef73f9fd500c772a67d0afcff1"
+          }
+        }
+      ],
+      "complete_repair_methods": [
+        "finalYEmptyOwnerCannotDropItsRichChildrenInReading",
+        "finalYInlineBoxEmptyOwnerPreservesNaturalChildrenAndActions",
+        "finalYInlineBoxUnsupportedGeometryRefusesBeforeEmptyOwnerDrop",
+        "finalYUnsupportedGeometryRefusesWithoutDroppingRichChildren",
+        "finalYBodyDeclaringFontOwnsRootLinesWithoutOwningHeadings",
+        "finalYBodyRejectsPartialOwnersAndStaleSourceBinding",
+        "containerDeclaringFontKeepsIndependentStrutAndChildActions",
+        "containerDeclaringFontRejectsMalformedAliasesAndUnavailableCapability",
+        "inlineActionGroupsKeepRichOccurrencesKeyboardAndCopy",
+        "ordinaryImageLinkPaintKeepsAlignedFocusAndBitmapStates",
+        "typedInlineTableImageTopKeepsSvgAudioListAndReflow",
+        "missingFigureKeepsCenteredLabelChildStylesCaptionAndNativeWrap",
+        "figureCaptionAbsentAlignmentKeepsNativeDefaultAndInheritedCenter",
+        "typedBlockAlignmentKeepsCellInheritanceAndOffsets"
+      ],
+      "complete_repair_qualified": true,
+      "distinct_app_method_count": 19,
+      "full_native_suite": false,
+      "full_app_ctest": true,
+      "genuine_final_y_rendered": false,
+      "paired_Y_wire_qualified": false,
+      "full_frontend_acceptance": false,
+      "diagnostic_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/container-owner-font-w01/final-y-consumer01/body-owner-gdb01/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 288001,
+        "sha256": "78a5184020bb6b78fbdb323a96035f26f44080fc08274688865c0a16f5dbf9e5"
+      },
+      "scope": "Controlled finalY inline boxes and independent BODY/container declaring metrics. Sixteen current native controls plus nineteen source-exact App controls composed from one current BODY pass and eighteen retained passes. Original failures and debugger diagnosis remain retained. Genuine finalY producer/Reader/loaded-GUI qualification is not claimed; future Reference direction, positioned media and clipped absolute owners are excluded.",
+      "required_frontend_regression": {
+        "closure": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile220/independent-closure01.json",
+          "bytes": 34201,
+          "sha256": "66de68a6468d9362c2143681050990bbb50d972ba30cc7981e72091583b03a35"
+        },
+        "release": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile220/release01.json",
+          "bytes": 484,
+          "sha256": "3d2d86174ee26f3d95c30af2ac7533b3cb3990dc208745e65afde4b7f9ece21d"
+        },
+        "original_outer_returncode": 1,
+        "original_owner_error": "KeyError('/mnt/downloads/dev/wikidict/.tmp/desktop-monorepo-build01/src/CMakeFiles/dict-library-ui-tests.dir/link.txt')",
+        "worker_passed": true,
+        "independent_source_and_native_verified": true,
+        "ctest_cases": [
+          {
+            "name": "native-install-core-selection",
+            "status": "run",
+            "time": "0.0434339",
+            "failure": false,
+            "skipped": false,
+            "qtest_totals": []
+          },
+          {
+            "name": "native-unified-entry",
+            "status": "run",
+            "time": "10.3797",
+            "failure": false,
+            "skipped": false,
+            "qtest_totals": []
+          },
+          {
+            "name": "native-reader-ux",
+            "status": "run",
+            "time": "120.451",
+            "failure": false,
+            "skipped": false,
+            "qtest_totals": []
+          },
+          {
+            "name": "native-media-ux",
+            "status": "run",
+            "time": "11.4395",
+            "failure": false,
+            "skipped": false,
+            "qtest_totals": []
+          },
+          {
+            "name": "native-library-storage",
+            "status": "run",
+            "time": "9.51642",
+            "failure": false,
+            "skipped": false,
+            "qtest_totals": []
+          },
+          {
+            "name": "native-library-ux",
+            "status": "run",
+            "time": "4.89096",
+            "failure": false,
+            "skipped": false,
+            "qtest_totals": []
+          },
+          {
+            "name": "native-library-catalogue-ux",
+            "status": "run",
+            "time": "0.948696",
+            "failure": false,
+            "skipped": false,
+            "qtest_totals": []
+          }
+        ],
+        "ctest_result": {
+          "name": "frontend-ctest",
+          "returncode": 0,
+          "xml": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile220/commands/frontend-ctest.xml",
+            "bytes": 6003,
+            "sha256": "c4c92fa5af6066f85ffb2a37b0cdc1b191d15f1e26c6dc9938324423cba15dd7"
+          },
+          "log": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile220/commands/frontend-ctest.LastTest.log",
+            "bytes": 1151841,
+            "sha256": "432e57c5dbf4386ed0366af9811c35db1720aca6ae7c20b766f812c7d8a13a60"
+          },
+          "test_names": [
+            "native-install-core-selection",
+            "native-unified-entry",
+            "native-reader-ux",
+            "native-media-ux",
+            "native-library-storage",
+            "native-library-ux",
+            "native-library-catalogue-ux"
+          ],
+          "case_count": 7,
+          "cases": [
+            {
+              "name": "native-install-core-selection",
+              "status": "run",
+              "time": "0.0434339",
+              "failure": false,
+              "skipped": false,
+              "qtest_totals": []
+            },
+            {
+              "name": "native-unified-entry",
+              "status": "run",
+              "time": "10.3797",
+              "failure": false,
+              "skipped": false,
+              "qtest_totals": []
+            },
+            {
+              "name": "native-reader-ux",
+              "status": "run",
+              "time": "120.451",
+              "failure": false,
+              "skipped": false,
+              "qtest_totals": []
+            },
+            {
+              "name": "native-media-ux",
+              "status": "run",
+              "time": "11.4395",
+              "failure": false,
+              "skipped": false,
+              "qtest_totals": []
+            },
+            {
+              "name": "native-library-storage",
+              "status": "run",
+              "time": "9.51642",
+              "failure": false,
+              "skipped": false,
+              "qtest_totals": []
+            },
+            {
+              "name": "native-library-ux",
+              "status": "run",
+              "time": "4.89096",
+              "failure": false,
+              "skipped": false,
+              "qtest_totals": []
+            },
+            {
+              "name": "native-library-catalogue-ux",
+              "status": "run",
+              "time": "0.948696",
+              "failure": false,
+              "skipped": false,
+              "qtest_totals": []
+            }
+          ],
+          "reader": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/desktop-monorepo-build01/src/dict-qt-tests",
+            "bytes": 26098048,
+            "sha256": "fa28b8d761f7518161fb0bf4e5825b277a988ace380a7b0167039fffeb435223"
+          },
+          "exact_registered_suite": true,
+          "selected_function_filter": false,
+          "loader_authority": "Retained current Reader/GUI and authenticated native runtime; CTest uses the registered offscreen and isolated-settings commands.",
+          "passed": true
+        },
+        "qtest_totals": {
+          "reader": {
+            "passed": 386,
+            "failed": 0,
+            "skipped": 2
+          },
+          "media": {
+            "passed": 61,
+            "failed": 0,
+            "skipped": 1
+          }
+        },
+        "existing_skips": [
+          "two retained external Reader diagnostics",
+          "opt-in private audio backend"
+        ],
+        "no_replay": true
+      }
     }
   },
   "packaged_distribution_source_equivalence": false,

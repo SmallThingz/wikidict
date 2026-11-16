@@ -625,6 +625,28 @@ observed unsupported reentrant lifetime; the queued-after-layout control does no
 claim to repair it. No full native/App suite or whole frontend acceptance, and no
 matched speedup measurement, is claimed. See `qualification.fixed_inline_image_memo`.
 
+## Inline boxes and independent declaring fonts
+
+The private native inline-box contract preserves admitted child text, actions,
+paint and geometry while keeping owner decoration separate from child styling.
+BODY and container declaring fonts provide independent line metrics; generated
+zero-glyph fallback struts yield only when a typed BODY owner supplies them.
+Authored unsupported geometry remains refused rather than silently discarded.
+
+Qualification covers sixteen native controls and nineteen distinct App controls
+composed from the current BODY result and source-exact retained results. Original
+failures and the bounded ownership diagnostic remain preserved. These are
+controlled consumer fixtures, not genuine finalY dataset or whole-frontend
+acceptance. Reference direction, positioned media and clipped absolute owners
+remain outside this change. See `qualification.final_y_inline_boxes_and_declaring_fonts`.
+
+All seven registered desktop CTest checks passed with the current renderer and
+Reader. The Reader reported 386 passes and two existing external-fixture skips;
+Media reported 61 passes and one opt-in private-audio skip. Independent closure
+verified the source, libraries and outputs after an owner bookkeeping error;
+the original failed outer result remains recorded separately. No tests were
+replayed to repair that receipt. Genuine finalY dataset acceptance remains open.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,

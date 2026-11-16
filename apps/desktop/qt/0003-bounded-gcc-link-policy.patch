@@ -1,10 +1,11 @@
 --- a/src/gui/CMakeLists.txt
 +++ b/src/gui/CMakeLists.txt
-@@ -260,10 +260,17 @@
+@@ -260,10 +260,18 @@
          text/qtextformat.cpp text/qtextformat.h text/qtextformat_p.h
          text/qtexthtmlparser.cpp text/qtexthtmlparser_p.h
          text/qtextimagehandler.cpp text/qtextimagehandler_p.h
 +        text/qtextinlinestyle_p.h
++        text/qtextinlinebox_p.h
          text/qtextlayout.cpp text/qtextlayout.h
 +        text/qtextlogicalflow_p.h
 +        text/qtextrubygeometry_p.h
@@ -18,7 +19,7 @@
          text/qtexttable.cpp text/qtexttable.h text/qtexttable_p.h
          util/qabstractlayoutstyleinfo.cpp util/qabstractlayoutstyleinfo_p.h
          util/qastchandler.cpp util/qastchandler_p.h
-@@ -316,6 +323,22 @@
+@@ -316,6 +324,22 @@
          QtGui.dynlist.in
  )
 
