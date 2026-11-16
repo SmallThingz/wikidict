@@ -1,5 +1,33 @@
 # Android validation
 
+## Current baseline and qualification — 2026-11-16
+
+The current [build target](../app/build.gradle) is **Android 12+ (minimum API 31),
+target API 37**. Older-platform compatibility paths have been removed; guards
+for APIs introduced after API 31 remain where needed.
+
+Host72 passed all **926 JVM tests** (924 correctness tests and two benchmark
+tests, with no performance claim), compiled the main and instrumentation
+sources, and verified the merged API 31 manifests. The 26 selected device
+controls were compiled only. Package73 then qualified the debug Main/test APK
+pair and lint: zero errors, 36 warnings and five hints.
+
+Package74 validated the [deterministic packaging setting](../gradle.properties)
+with both compilations up to date and no JVM, lint or native rebuild. Its APK
+contents, stable ZIP metadata, signing certificate, assets and four Egyptian
+JNI libraries match Package73; obsolete ZIP space was removed. Host72's tests
+and Package73's lint remain separately earned results on unchanged code inputs.
+The current debug Main/test APK SHA-256 prefixes are `b251232f` / `a19751e6`;
+the packaging change is commit `cccb60ed`.
+
+**Physical-device qualification of this current APK pair is pending.** Earlier
+device results do not establish current rendering, interaction or accessibility
+acceptance. Release and prerelease publication remain on hold until the user
+explicitly approves them; these debug APKs are not a production release.
+
+All evidence below is historical. References to “final source,” older API
+minimums and installed artifacts apply only to their dated qualification.
+
 ## Saved previews and compiled grammar qualification — 2026-10-07
 
 The final source passed all **32 JVM tests** (zero failures, errors or skips),
