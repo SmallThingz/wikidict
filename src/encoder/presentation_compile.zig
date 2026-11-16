@@ -23834,11 +23834,15 @@ pub const Renderer = struct {
         const scan_bytes = "{<[]";
         while (std.mem.indexOfAnyPos(u8, input, scan, scan_bytes)) |at| {
             if (input[at] == '[' or input[at] == ']') {
-                // Real child markup cannot borrow a raw bracket/action domain,
-                // including inside ordinary HTML and in legacy quote mode.
+                // Enter only at the maintained internal/external opener boundary.
+                // A lone prose '[' is not an action. Once an action has started,
+                // nested or unmatched brackets conservatively retain its hold.
                 // Attributes and protected/template bodies are skipped separately.
                 if (at >= template_end) {
-                    if (input[at] == '[') qualified_bracket_depth += 1 else if (qualified_bracket_depth != 0) qualified_bracket_depth -= 1;
+                    if (input[at] == '[') {
+                        if (qualified_bracket_depth != 0 or starts(input[at..], "[[") or
+                            ir.hasExternalProtocol(input[at + 1 ..])) qualified_bracket_depth += 1;
+                    } else if (qualified_bracket_depth != 0) qualified_bracket_depth -= 1;
                 }
                 // A new lexical proof never borrows a raw action/label domain.
                 // Ambiguous unmatched brackets conservatively retain that hold.
@@ -119209,4 +119213,76 @@ test "pinned recursive no-rule sibling frame preserves borrowed source complete 
     const encoded = try codec.encodeAlloc(a, actual);
     try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), encoded);
     try std.testing.expectEqualDeep(actual, try codec.decodeAlloc(a, encoded, "formatting scope", .language, .{ .heading = "English", .code = "en" }));
+}
+
+
+test "qualified prose distinguishes literal brackets from maintained action openers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "[see <xlit:Word <span>x</span>>]",
+        "[see <xlit:Word <span>x</span>>",
+        "<i>[see <xlit:Word <span>x</span>>]</i>",
+        "[see <xlit:Word <span>x</span>>] [[Target|T]] [https://example.test E]",
+    }) |source| {
+        const reference_source = try std.mem.replaceOwned(u8, a, source, "<xlit:", "&lt;xlit:");
+        for ([_]bool{ false, true }) |ordinary| {
+            var preparing: Renderer = .{ .a = a, .context = .{} };
+            const prepared = try preparing.prepareQuoteSource(MissingText.untracked(source), ordinary);
+            try std.testing.expectEqualStrings(reference_source, prepared.source.bytes);
+        }
+        var actual: Renderer = .{ .a = a, .context = .{} };
+        var expected: Renderer = .{ .a = a, .context = .{} };
+        const spans = try actual.parseSpans(source, .{});
+        const reference_spans = try expected.parseSpans(reference_source, .{});
+        try std.testing.expectEqualDeep(reference_spans, spans);
+        var internal_count: usize = 0;
+        var external_count: usize = 0;
+        for (spans) |span| {
+            if (span.kind == .link) {
+                internal_count += 1;
+                try std.testing.expectEqualStrings("Target", span.target);
+                try std.testing.expectEqualStrings("T", span.text);
+            } else if (span.kind == .external_link) {
+                external_count += 1;
+                try std.testing.expectEqualStrings("https://example.test", span.target);
+                try std.testing.expectEqualStrings("E", span.text);
+            } else try std.testing.expect(span.kind == .text and span.target.len == 0);
+        }
+        const has_actions = std.mem.indexOf(u8, source, "[[Target|") != null;
+        try std.testing.expectEqual(@as(usize, if (has_actions) 1 else 0), internal_count);
+        try std.testing.expectEqual(@as(usize, if (has_actions) 1 else 0), external_count);
+        var body: Renderer = .{ .a = a, .context = .{} };
+        var reference: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try body.renderBody(source);
+        const reference_blocks = try reference.renderBody(reference_source);
+        const stored = try FormattingScopeTest.encode(a, &body, blocks);
+        const expected_stored = try FormattingScopeTest.encode(a, &reference, reference_blocks);
+        try std.testing.expectEqualDeep(expected_stored, stored);
+        try std.testing.expectEqualSlices(u8,
+            try @import("blob_encoder").presentation_codec.encodeAlloc(a, expected_stored),
+            try @import("blob_encoder").presentation_codec.encodeAlloc(a, stored));
+        try std.testing.expect(body.fallbacks.literal_markup);
+    }
+    // Actual and malformed action domains keep their refusal. A surrounding
+    // literal bracket must not hide a nested genuine opener from the hold.
+    for ([_][]const u8{
+        "[[Target|<xlit:Word <span>x</span>>]]",
+        "[[Target|<xlit:Word <span>x</span>>",
+        "[https://example.test <xlit:Word <span>x</span>>]",
+        "[https://example.test <xlit:Word <span>x</span>>",
+        "[HTTPS://example.test <xlit:Word <span>x</span>>]",
+        "[//example.test <xlit:Word <span>x</span>>]",
+        "[ftp://example.test <xlit:Word <span>x</span>>]",
+        "[see [[Target|<xlit:Word <span>x</span>>]]]",
+        "[see [https://example.test <xlit:Word <span>x</span>>]]",
+    }) |source| {
+        for ([_]bool{ false, true }) |ordinary| {
+            var preparing: Renderer = .{ .a = a, .context = .{} };
+            try std.testing.expectError(error.UncompiledPresentation,
+                preparing.prepareQuoteSource(MissingText.untracked(source), ordinary));
+        }
+        try std.testing.expectError(error.UncompiledPresentation, requireCompiledText(source));
+    }
 }
