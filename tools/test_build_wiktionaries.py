@@ -14504,6 +14504,29 @@ class InitialSealedRegistryArgumentRoleTests(unittest.TestCase):
 
 class CompositeProducerSourceTests(unittest.TestCase):
 
+    def test_composite_combined_blob_cli_accepts_only_the_exact_normal_target_pair(self):
+        cases = [(['prepare-blob-tools'], True), (['prepare-captured-writer'], True),
+                 (['prepare-blob-tools', 'cli'], True), (['cli'], False),
+                 (['cli', 'prepare-blob-tools'], False),
+                 (['prepare-blob-tools', 'cli', 'ffi'], False),
+                 (['prepare-blob-tools', 'cli', 'cli'], False),
+                 (['prepare-captured-writer', 'cli'], False),
+                 (['prepare-blob-tools', 'foreign'], False)]
+        for targets, accepted in cases:
+            with self.subTest(targets=targets), tempfile.TemporaryDirectory() as tmp:
+                plan, base, selected = self.source_fixture(Path(tmp))
+                argv = plan['commands'][0]['argv']
+                stop = next(i for i, value in enumerate(argv[2:], 2) if value.startswith('-'))
+                plan['commands'][0]['argv'] = argv[:2] + targets + argv[stop:]
+                before = copy.deepcopy((plan, base, selected))
+                if accepted:
+                    b.validate_composite_source_inventory(plan, base, selected, self.auth_payload)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'another production target'):
+                        b.validate_composite_source_inventory(plan, base, selected, self.auth_payload)
+                self.assertEqual((plan, base, selected), before)
+
+
     def source_fixture(self, root):
         base = {}; selected = {}; payloads = {}
         for name in ('build.zig','tools/blob_build.zig','tools/figure_page_observations.zig','src/encoder/root.zig','src/encoder/blob_root.zig','tools/unchanged_helper.zig'):
