@@ -21,3 +21,8 @@
 .compiled-table-float:dir(rtl){--compiled-float-inline-margin:var(--compiled-float-right)}
 
 .compiled-table-flow>footer{clear:both}
+
+/* DPRL owners keep their hierarchy, physical edges and inherited line height. */
+.compiled-container{box-sizing:content-box;font:inherit}
+.compiled-container-root{font-family:Reader,Georgia,serif;font-size:var(--wikidict-normal-body-size);line-height:1.48}
+.compiled-container .block{font-family:inherit;font-size:inherit;line-height:inherit;margin-block:0}

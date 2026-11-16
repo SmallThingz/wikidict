@@ -5,7 +5,8 @@ const contrastInk=background=>{
   const luminance=.2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
   return (luminance+.05)/.05>=1.05/(luminance+.05)?'#000000':'#ffffff';
 };
-import {safeURL,linkTargetParts,bookSourcesURL} from './validate.js';
+import {safeURL,linkTargetParts,bookSourcesURL,validateContainerBlock} from './validate.js';
+import {previewBlocks} from './preview.js';
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text != null) el.textContent = text; if (cls) el.className = cls; return el; };
 let explanationSequence = 0;
 const poemTokens = span => (span.classes || '').split(/[ \t\r\n\v\f]+/).filter(Boolean);
@@ -216,7 +217,7 @@ function destination(el, value, legacy = '') {
 }
 function legacyDestinations(entry) {
   const candidates = [], counts = new Map();
-  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE','DPRF','DPRG','DPRH','DPRI','DPRJ','DPRK'].includes(entry.presentation_version)) return new Map();
+  if (['DPR5','DPR6','DPR7','DPR8','DPR9','DPRA','DPRB','DPRC','DPRD','DPRE','DPRF','DPRG','DPRH','DPRI','DPRJ','DPRK','DPRL'].includes(entry.presentation_version)) return new Map();
   const add = (value, label) => {
     if (value.anchor || value.anchor_fallback) return;
     const id = label.replaceAll(' ','_');
@@ -339,6 +340,7 @@ function validateRichEntry(entry){
     if(depth>16)richError();
     for(const block of array(values)){
       spanList(block.spans);const owner=richListKinds.has(block.kind)||(block.kind==='paragraph'&&!(block.depth||0)&&!block.list_path);
+      if(block.kind==='container'||block.container!=null){validateContainerBlock(block);blocks(block.container.blocks,tableDepth,depth+1,inReference);}
       if(block.flow!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.figure!=null)richError();flow(block.flow,tableDepth,depth+1,inReference);}
       if(block.figure!=null){if(!owner||block.spans?.length||block.table!=null||block.feature!=null||block.style!=null)richError();figure(block.figure,tableDepth,depth,inReference);}
       if(block.style!=null){if(block.kind!=='paragraph'||block.depth||block.list_path||block.table!=null||block.feature!=null)richError();richObject(block.style,['margins','padding']);if(block.style.margins==null&&block.style.padding==null)richError();for(const key of ['margins','padding'])if(block.style[key]!=null)richEdges(block.style[key]);}
@@ -504,7 +506,7 @@ function tableView(value,onLink,explanations,depth=1,inheritedBackground=null){
   return table;
 }
 function visibleBlock(block){
-  return block.kind!=='blank'&&(block.figure||block.flow!=null||block.style||block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
+  return block.kind!=='blank'&&(block.container||block.figure||block.flow!=null||block.style||block.table||block.kind==='rule'||block.spans?.some(s=>s.image||s.text?.trim()||s.trail?.trim())||block.spans?.some(isPoem)||(block.kind==='heading'&&(block.anchor||block.anchor_fallback)));
 }
 function appendBlocks(parent,values,render){
   let lists=[];
@@ -547,11 +549,49 @@ function visitBlocks(values,visit){
   const figure=value=>{if(value.caption_blocks!=null)visitBlocks(value.caption_blocks,visit);};
   const flow=parts=>{for(const part of parts){if(part.figure)figure(part.figure);if(part.scope)flow(part.scope.parts);}};
   const table=value=>{if(value.caption_blocks!=null)visitBlocks(value.caption_blocks,visit);for(const row of value.rows||[])for(const cell of row.cells||[]){if(cell.blocks!=null)visitBlocks(cell.blocks,visit);else if(cell.nested_table)table(cell.nested_table);}};
-  for(const block of values||[]){visit(block);if(block.table)table(block.table);if(block.figure)figure(block.figure);if(block.flow)flow(block.flow);}
+  for(const block of values||[]){visit(block);if(block.table)table(block.table);if(block.figure)figure(block.figure);if(block.flow)flow(block.flow);if(block.container)visitBlocks(block.container.blocks,visit);}
+}
+let containerSequence=0;
+const containerWidthCSS=value=>value.length?(value.length.unit==='percent'?value.length.value+'%':styleLength(value.length)):Object.hasOwn(value,'fit_content')?'fit-content':Object.hasOwn(value,'none')?'none':'auto';
+const containerColorCSS=(value,dark)=>Object.hasOwn(value,'rgb')?value.rgb:value.light_dark?value.light_dark[dark?'dark':'light']:'transparent';
+const containerHeightCSS=value=>Object.hasOwn(value,'multiplier')?String(value.multiplier):value.length?styleLength(value.length):'normal';
+function containerDeclarations(style,dark=false){
+  const css=[];
+  const set=(key,value)=>css.push(key+':'+value);
+  if(style.margins)for(const side of ['top','right','bottom','left']){
+    const value=style.margins[side];set('margin-'+side,value.unit?styleLength(value):value.length?styleLength(value.length):'auto');
+  }
+  if(style.padding)for(const side of ['top','right','bottom','left'])set('padding-'+side,styleLength(style.padding[side]));
+  if(style.width)set('width',containerWidthCSS(style.width));if(style.max_width)set('max-width',containerWidthCSS(style.max_width));
+  if(style.float_side!=null)set('float',style.float_side);if(style.clear!=null)set('clear',style.clear);
+  if(style.box_sizing!=null)set('box-sizing',style.box_sizing.replace('_','-'));
+  if(style.layout!=null)set('display',style.layout==='flex_row'?'flex':'block');
+  if(style.align_items!=null)set('align-items',({start:'flex-start',end:'flex-end'})[style.align_items]??style.align_items);
+  if(style.flex_item!=null)set('flex','none');
+  if(style.background)set('background-color',containerColorCSS(style.background,dark));
+  if(style.border)set('border',style.border.solid?styleLength(style.border.solid.width)+' solid '+containerColorCSS(style.border.solid.color,dark):'none');
+  if(style.line_height)set('line-height',containerHeightCSS(style.line_height));
+  if(style.text_align!=null)set('text-align',style.text_align);
+  if(style.overflow!=null)set('overflow',style.overflow);
+  return css.join(';');
+}
+function containerView(value,onLink,explanations,context){
+  const cls='compiled-container-'+(++containerSequence),el=node('div',null,'compiled-container '+cls),style=node('style');
+  if(!context.container&&!context.tableDepth&&!context.caption)el.classList.add('compiled-container-root');
+  // Only validated typed values enter this stylesheet. Rules remain scoped to
+  // this owner and react to the viewport/theme without a second layout engine.
+  style.textContent='.'+cls+'{'+containerDeclarations(value.style)+'}'+':root[data-theme="dark"] .'+cls+'{'+containerDeclarations(value.style,true)+'}';
+  const screen=value.style.screen_max_width;
+  for(const rule of screen?[screen,...(screen.following_rules??[])]:[])
+    style.textContent+='@media(max-width:'+rule.max_width_px+'px){.'+cls+'{'+containerDeclarations(rule)+'}:root[data-theme="dark"] .'+cls+'{'+containerDeclarations(rule,true)+'}}';
+  el.append(style);
+  if(value.style.overflow==='auto'){el.tabIndex=0;el.setAttribute('aria-label','Scrollable content');}
+  appendBlocks(el,value.blocks,block=>blockView(block,onLink,explanations,'',{...context,container:true}));return el;
 }
 function blockView(block, onLink, explanations, legacy = '', context = {}) {
   if(block.text_align!=null&&!['left','center','right'].includes(block.text_align))throw Error('Invalid block text alignment');
   const margin = `${Math.min(Math.max(block.depth || 0,0),8)*.45}rem`;
+  if(block.kind==='container')return containerView(block.container,onLink,explanations,context);
   if (block.table) {
     const feature = block.feature;
     if (block.kind === 'table' && feature?.kind === 'color_swatch' &&
@@ -646,7 +686,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
     for(const row of table.rows||[])for(const cell of row.cells||[])if(cell.nested_table)inspectTableFloat(cell.nested_table);
   };
   const flowFloat=parts=>parts.some(part=>part.figure?.placement?.startsWith('float_')||(part.scope&&flowFloat(part.scope.parts)));
-  const inspectFloat=block=>{if(block.table)inspectTableFloat(block.table);if(block.figure?.placement?.startsWith('float_')||(block.flow&&flowFloat(block.flow)))hasTableFloat=true;};
+  const inspectFloat=block=>{if(block.table)inspectTableFloat(block.table);if(block.container||block.figure?.placement?.startsWith('float_')||(block.flow&&flowFloat(block.flow)))hasTableFloat=true;};
   for(const section of entry.sections)visitBlocks(section.blocks,inspectFloat);
   for(const ref of entry.references||[])if(Array.isArray(ref.blocks))visitBlocks(ref.blocks,inspectFloat);
   const root=hasTableFloat?node('div',null,'compiled-table-flow'):fragment;
@@ -708,14 +748,15 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   if (entry.preamble_spans?.length) { const preamble=fold('About this entry',entry.kind==='alias'||!settings.collapseOtherSections);preamble.append(spans(entry.preamble_spans,followLink,false,explanations));root.append(preamble); }
   for (const section of entry.sections) {
     if(section===emptyOwner)continue;
-    const meaning=section.blocks.some(b=>b.kind==='definition');
+    const containsDefinition=block=>previewBlocks([block]).some(value=>value.kind==='definition');
+    const meaning=section.blocks.some(containsDefinition);
     const expanded=meaning || (section.title.startsWith('Pronunciation')?!settings.collapsePronunciation:section.title.startsWith('Etymology')?!settings.collapseEtymology:!settings.collapseOtherSections);
     const companion=sectionHeadingCompanion(section);
     const el=fold(section.title===entry.language?'Overview':section.title||'Notes',expanded,companion?.spans,companion?.depth);
     el.classList.toggle('meaning',meaning);destination(el,section,legacy.get(section)||'');
     const main=[],notes=[];
     for (const block of section.blocks.slice(companion?1:0)) {
-      if(meaning&&block.kind!=='definition')notes.push(block);else main.push(block);
+      if(meaning&&!containsDefinition(block))notes.push(block);else main.push(block);
     }
     const view=block=>blockView(block,followLink,explanations,legacy.get(block)||'');
     appendBlocks(el,main,view);
@@ -744,7 +785,7 @@ export function renderEntry(entry, onLink, settings = {}, mediaView = () => null
   const imageFigure=value=>{imageSpans([value.image_span]);if(value.caption_blocks!=null)imageBlocks(value.caption_blocks);else imageSpans(value.caption);};
   const imageFlow=parts=>{for(const part of parts){imageSpans(part.spans);if(part.figure)imageFigure(part.figure);if(part.scope)imageFlow(part.scope.parts);}};
   const imageTable=value=>{if(value.caption_blocks!=null)imageBlocks(value.caption_blocks);else imageSpans(value.caption);for(const row of value.rows||[])for(const cell of row.cells||[]){imageSpans(cell.spans);if(cell.blocks)imageBlocks(cell.blocks);if(cell.nested_table)imageTable(cell.nested_table);}};
-  const imageBlocks=values=>{for(const block of values||[]){imageSpans(block.spans);if(block.table)imageTable(block.table);if(block.figure)imageFigure(block.figure);if(block.flow)imageFlow(block.flow);}};
+  const imageBlocks=values=>{for(const block of values||[]){imageSpans(block.spans);if(block.table)imageTable(block.table);if(block.figure)imageFigure(block.figure);if(block.flow)imageFlow(block.flow);if(block.container)imageBlocks(block.container.blocks);}};
   imageSpans(entry.display_title);imageSpans(entry.preamble_spans);for(const section of entry.sections||[])imageBlocks(section.blocks);for(const ref of entry.references||[]){imageSpans(ref.spans);imageBlocks(ref.blocks);}
   if (entry.media?.length) { const section=fold('Images & sound',!settings.collapseOtherSections);for(const media of entry.media){const view=mediaView(media,canonicalImageFiles.has(media.file));if(view)section.append(view);}root.append(section); }
   if(explanationRows.length){

@@ -1,6 +1,6 @@
 # Binary web reader
 
-The reader strictly accepts compiled DPR2 and DPR3 records. DPR2 spans retain empty explanations; DPR3 preserves authored plain-text explanations across titles, body, table captions/cells, preambles and references. Compact labels and link actions stay separate from the keyboard/touch-accessible **Abbreviations** disclosure. No source markup is interpreted.
+The decoder accepts compiled DPR2 through DPRL records and rejects newer formats. DPR2 spans retain empty explanations; DPR3 and later preserve authored plain-text explanations across titles, body, table captions/cells, preambles and references. Compact labels and link actions stay separate from the keyboard/touch-accessible **Text details** disclosure. No source markup is interpreted.
 
 Run `pnpm install && pnpm build`, then serve `../build/web` over localhost or HTTPS. `pnpm test` covers binary/XZ decoding and malformed inputs; `pnpm test:browser` exercises the real browser with the Android binary fixture. Set `WIKBLB_FIXTURE` to override its path.
 
@@ -15,6 +15,42 @@ Validation: raw and multiblock XZ produce identical decoded entries for the 30-e
 The ordinary test commands read the shared genuine `../tests/fixtures/abbreviation-interop` directory produced by the core's normal `zig build test-bundle` probe: the English blob, `annotated.export.json` and `legacy.export.json`. Set `WIKBLB_ABBREVIATION_ROOT` only to use a different fresh fixture directory. Node checks compare decoded spans with normal CLI JSON; the browser checks visible compact labels and all seven explanations, with reader/disclosure screenshots at 360 and 1440 pixels. Synthetic protocol controls remain separate from native interoperability.
 
 The native fifth span string is `classes`; the web decoder and preview filtering use that canonical field. Rich explained/linked heading companions render once in their section summary, while mismatched/plain headings retain their ordinary body rendering. Explanations on visible trails remain outside link actions.
+
+### Container format boundary
+
+DPRL adds hierarchical block containers, validated lexical child paths, physical
+edges, width/max-width, float/clear, box sizing, flex rows/items, light/dark paint,
+borders, inherited line height/alignment, descending viewport rules and local
+overflow. Container children retain their order and ownership through rendering,
+preview selection, media catalogue checks and link/explanation traversal. Content
+depth and table depth remain independent limits of 16 in this browser consumer.
+
+The existing `typed-content.test.mjs` and `preview.test.mjs` cover the L wire,
+malformed graphs, depth boundaries and nested meanings. The existing
+`table-styles.browser.test.mjs` covers container geometry, theme changes,
+responsive boundaries, local scrolling, selection and keyboard actions. These
+checks can retain wide/light and narrow/dark screenshots by setting
+`WIKIDICT_CONTAINER_REPORT` to a fresh absolute directory under the run's owned output.
+Constructed controls do not establish genuine corpus interoperability; the
+existing `WIKIDICT_WEB_TYPED_CASES` payload/Reader-JSON route supplies that separate
+comparison. The complete Node suite and this focused headless rendering suite
+have passed for L; genuine DPRL corpus interoperability remains unqualified.
+
+Later formats remain unsupported because they add semantic fields, not just new
+version labels:
+
+| Format | Remaining consumer work |
+| --- | --- |
+| M | Container font/height/columns/positioning and signed/auto margins; font families/features and CSS-pixel scales; link paint and expanded cell/figure metrics |
+| N | Authored rule geometry and paint |
+| O | Inline text style, declaring-font metrics and baseline shifts |
+| P | Adjoining block/heading styles, family stacks and cell owner-font metrics |
+| Q | Table corner radii |
+| R | Intrinsic table/image action layout and rule clear semantics |
+| S | Ruby owners, bases/readings, ranges, gaps and fallback content |
+| T | The subsequent table-depth contract, after the intervening semantics are supported |
+
+Native desktop and Android format support is independent of this browser boundary.
 
 ### Color sample regression
 

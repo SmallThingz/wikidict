@@ -227,6 +227,17 @@ if(process.env.WIKBLB_G_CAPACITY_SOURCE)test('controlled LT280 source-first name
  }
 });
 
-test('current F/G consumer rejects future H I J without widening old payloads',async()=>{
- for(const magic of ['DPRH','DPRI','DPRJ']){const bytes=fragmentWire({magic:'DPRG'});Buffer.from(magic).copy(bytes,0);assert.throws(()=>decode(bytes,{}));await assert.rejects(()=>buildIndex(new RawSource(new Blob([dictionaryBlob(7,[['Future',bytes]])]))));}
+test('known H I J headers do not make forged G bodies decodable; unknown M through T remain refused',async()=>{
+  // Non-alias indexing checks framing and the format header, not the body. The
+  // deferred decoder still requires the actual H/I/J fields in every span/sink.
+  for(const magic of ['DPRH','DPRI','DPRJ']){
+    const bytes=fragmentWire({magic:'DPRG'});Buffer.from(magic).copy(bytes,0);assert.throws(()=>decode(bytes,{}));
+    const source=new RawSource(new Blob([dictionaryBlob(7,[['Forged',bytes]])])),index=await buildIndex(source);
+    assert.equal(index.rows.length,1);assert.equal(index.rows[0].title,'Forged');
+    const row=index.rows[0],indexed=await source.read(row.offset,row.length);assert.deepEqual(Buffer.from(indexed),bytes);assert.throws(()=>decode(indexed,index.metadata));
+  }
+  for(const version of ['M','N','O','P','Q','R','S','T']){
+    const bytes=fragmentWire({magic:'DPRG'});Buffer.from('DPR'+version).copy(bytes,0);assert.throws(()=>decode(bytes,{}));
+    await assert.rejects(()=>buildIndex(new RawSource(new Blob([dictionaryBlob(7,[['Future',bytes]])]))));
+  }
 });

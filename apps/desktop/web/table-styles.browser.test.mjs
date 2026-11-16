@@ -1,8 +1,11 @@
-// Proposed control using the existing Playwright/esbuild test stack; unrun.
+// Controlled rendering checks using the existing Playwright/esbuild test stack.
 import {chromium} from 'playwright';
 import {build} from 'esbuild';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile,mkdir} from 'node:fs/promises';
+import path from 'node:path';
+const containerReport=process.env.WIKIDICT_CONTAINER_REPORT;
+if(containerReport){assert.ok(path.isAbsolute(containerReport));await mkdir(containerReport);}
 const bundle=await build({entryPoints:[new URL('./renderer.js',import.meta.url).pathname],bundle:true,format:'iife',globalName:'Renderer',write:false});
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM||'/opt/brave-bin/brave',headless:true,args:['--no-sandbox']});
 try{
@@ -126,4 +129,86 @@ try{
  assert.equal(inline.linkFont,'16px');assert.ok(inline.width<inline.hostWidth);assert.match(inline.text,/Audio licence/);assert.equal(inline.refused,6);
  await page.getByRole('link',{name:'Audio licence',exact:true}).first().focus();await page.keyboard.press('Enter');
  assert.deepEqual(await page.evaluate(()=>inlineActions),['Licence']);
+
+ // DPRL retains real owners and browser layout across responsive/theme changes.
+ await page.setViewportSize({width:900,height:700});
+ await page.setContent('<style>'+css+'</style><main></main>');
+ await page.addScriptTag({content:bundle.outputFiles[0].text});
+ await page.evaluate(()=>{
+  document.documentElement.style.setProperty('--wikidict-normal-body-size','20px');
+  const length=value=>({unit:'px',value}),edges=value=>Object.fromEntries(['top','right','bottom','left'].map(side=>[side,length(value)]));
+  const container=(style,blocks)=>({kind:'container',depth:0,level:0,spans:[],container:{style,blocks}});
+  const text=text=>({kind:'text',text});
+  const first={kind:'definition',spans:[{kind:'link',text:'Nested meaning',target:'Exact title',target_fragment:'Part',tooltip:'Owned tooltip',explanation:'Owned explanation',font_scale:.5,font_scale_basis:'normal_body'}]};
+  const second={kind:'paragraph',spans:[text('Second child')]};
+  const outer=container({width:{length:length(300)},max_width:{length:length(400)},box_sizing:'border_box',padding:edges(10),margins:edges(0),float_side:'right',clear:'both',layout:'flex_row',align_items:'center',line_height:{multiplier:2},text_align:'right',background:{light_dark:{light:'#ddeeff',dark:'#112233'}},border:{solid:{width:length(2),color:{light_dark:{light:'#123456',dark:'#abcdef'}}}},screen_max_width:{max_width_px:719,width:{length:{unit:'percent',value:100}},max_width:{none:{}},float_side:'none',margins:Object.fromEntries(['top','right','bottom','left'].map(side=>[side,['right','left'].includes(side)?{auto:{}}:{length:length(0)}])),following_rules:[{max_width_px:399,width:{auto:{}},line_height:{normal:{}}}]}},[
+   container({width:{length:{unit:'percent',value:50}},flex_item:'none'},[first]),
+   container({width:{length:{unit:'percent',value:50}},flex_item:'none'},[second])
+  ]);
+  const scroll=container({width:{length:length(100)},overflow:'auto',clear:'both',padding:edges(4)},[
+   container({width:{length:length(300)}},[{kind:'paragraph',spans:[text('Local scroll body')]}])
+  ]);
+  const empty=container({padding:edges(4),background:{rgb:'#ccddaa'},border:{none:{}},clear:'both'},[]);
+  window.containerEntry={title:'Container control',presentation_version:'DPRL',sections:[{title:'Meaning',level:2,blocks:[outer,scroll,empty]}],references:[],media:[]};
+  window.containerBefore=JSON.stringify(containerEntry);window.containerActions=[];
+  document.querySelector('main').append(Renderer.renderEntry(containerEntry,(...args)=>containerActions.push(args),{collapseOtherSections:true}));
+  window.containerOwner=document.querySelector('.compiled-container');
+ });
+ const inspectContainers=()=>page.evaluate(()=>{
+  const main=document.querySelector('main'),outer=window.containerOwner,children=[...outer.children].filter(e=>e.classList.contains('compiled-container'));
+  const cs=getComputedStyle(outer),box=outer.getBoundingClientRect(),scroll=document.querySelector('[aria-label="Scrollable content"]');
+  const range=document.createRange();range.selectNodeContents(outer);getSelection().removeAllRanges();getSelection().addRange(range);
+  return {same:document.querySelector('.compiled-container')===outer,unchanged:JSON.stringify(containerEntry)===containerBefore,open:outer.closest('details').open,
+   width:box.width,parent:outer.parentElement.getBoundingClientRect().width,padding:cs.paddingLeft,box:cs.boxSizing,display:cs.display,align:cs.alignItems,float:cs.cssFloat,clear:cs.clear,color:cs.backgroundColor,border:cs.borderTopColor,lineHeight:cs.lineHeight,textAlign:cs.textAlign,
+   children:children.map(child=>({width:child.getBoundingClientRect().width,flex:getComputedStyle(child).flex,line:getComputedStyle(child.querySelector('.block')).lineHeight})),
+   selected:getSelection().toString(),linkFont:getComputedStyle(outer.querySelector('a span')).fontSize,tooltip:outer.querySelector('[title]')?.title,explanation:main.querySelector('.abbreviation-explanations dd')?.textContent,
+   scroll:{width:scroll.clientWidth,extent:scroll.scrollWidth,focusable:scroll.tabIndex,overflow:getComputedStyle(scroll).overflowX},empty:[...main.querySelectorAll('.compiled-container')].at(-1).getBoundingClientRect().height,
+   footer:main.querySelector('.compiled-table-flow>footer').getBoundingClientRect().top,bottom:box.bottom};
+ });
+ const wide=await inspectContainers();
+ assert.ok(wide.same&&wide.unchanged&&wide.open);assert.equal(wide.width,300);assert.equal(wide.padding,'10px');assert.equal(wide.box,'border-box');assert.equal(wide.display,'flex');assert.equal(wide.align,'center');assert.equal(wide.float,'right');assert.equal(wide.clear,'both');
+ assert.equal(wide.color,'rgb(221, 238, 255)');assert.equal(wide.border,'rgb(18, 52, 86)');assert.equal(wide.lineHeight,'40px');assert.equal(wide.textAlign,'right');
+ assert.equal(wide.children.length,2);for(const child of wide.children){assert.equal(child.width,138);assert.equal(child.flex,'0 0 auto');assert.equal(child.line,'40px');}
+ assert.match(wide.selected,/Nested meaning[\s\S]*Second child/);assert.equal(wide.linkFont,'10px');assert.equal(wide.tooltip,'Owned tooltip');assert.equal(wide.explanation,'Owned explanation');
+ assert.equal(wide.scroll.focusable,0);assert.equal(wide.scroll.overflow,'auto');assert.ok(wide.scroll.extent>wide.scroll.width);assert.equal(wide.empty,8);assert.ok(wide.footer>=wide.bottom);
+ await page.getByRole('link',{name:'Nested meaning',exact:true}).focus();
+ if(containerReport)await page.screenshot({path:path.join(containerReport,'container-wide-light.png')});
+ await page.keyboard.press('Enter');
+ assert.deepEqual(await page.evaluate(()=>containerActions),[['Exact title','Part']]);
+ await page.locator('[aria-label="Scrollable content"]').focus();await page.keyboard.press('ArrowRight');
+ await page.waitForFunction(()=>document.querySelector('[aria-label="Scrollable content"]').scrollLeft>0);
+ for(const width of [720,719,399,900]){
+  await page.setViewportSize({width,height:700});
+  const actual=await inspectContainers();assert.ok(actual.same&&actual.unchanged);
+  if(width>719){assert.equal(actual.width,300);assert.equal(actual.float,'right');assert.equal(actual.lineHeight,'40px');}
+  else {assert.equal(actual.float,'none');assert.ok(Math.abs(actual.width-actual.parent)<1);assert.equal(actual.lineHeight,width<=399?'normal':'40px');}
+ }
+ await page.evaluate(()=>document.documentElement.dataset.theme='dark');
+ const dark=await inspectContainers();assert.equal(dark.color,'rgb(17, 34, 51)');assert.equal(dark.border,'rgb(171, 205, 239)');assert.equal(dark.width,300);
+ await page.setViewportSize({width:399,height:700});
+ const darkNarrow=await inspectContainers();assert.equal(darkNarrow.float,'none');assert.ok(Math.abs(darkNarrow.width-darkNarrow.parent)<1);assert.equal(darkNarrow.color,dark.color);
+ assert.equal(darkNarrow.lineHeight,'normal');
+ if(containerReport)await page.screenshot({path:path.join(containerReport,'container-narrow-dark.png')});
+
+ // An L owner has no font override. Caption metrics remain the context for
+ // contextual spans; explicit normal-body scales still use the body basis.
+ await page.setContent('<style>'+css+'</style><main></main>');
+ await page.addScriptTag({content:bundle.outputFiles[0].text});
+ const captionFonts=await page.evaluate(()=>{
+  document.documentElement.style.setProperty('--wikidict-normal-body-size','20px');
+  const length=value=>({unit:'px',value}),edges=Object.fromEntries(['top','right','bottom','left'].map(side=>[side,length(0)]));
+  const owner={kind:'container',spans:[],container:{style:{},blocks:[{kind:'definition',spans:[
+   {kind:'text',text:'Contextual',font_scale:.5,font_scale_basis:'context'},
+   {kind:'text',text:'Body basis',font_scale:.5,font_scale_basis:'normal_body'}
+  ]}]}};
+  const table={kind:'table',spans:[],table:{caption:[],caption_blocks:[owner],rows:[{cells:[{spans:[{kind:'text',text:'Cell'}]}]}]}};
+  const figure={kind:'paragraph',spans:[],figure:{format:'thumbnail',placement:'none',clear:'none',margins:edges,image_insets:edges,caption_padding:edges,caption_font_scale:.6,caption_line_height:length(18),frame_background:{kind:'transparent'},frame_border:{kind:'none'},image_background:{kind:'transparent'},image_border:{kind:'none'},caption_foreground:{kind:'native_theme'},caption_background:{kind:'transparent'},image_span:{kind:'text',text:'',image:{file:'Caption.svg',width_px:120}},caption:[],caption_blocks:[owner],sizing:'requested_fit'}};
+  document.querySelector('main').append(Renderer.renderEntry({title:'Inherited captions',sections:[{title:'S',blocks:[table,figure]}],media:[{file:'Caption.svg',kind:'image'}]},()=>{},{collapseOtherSections:true,collapseDetails:true}));
+  const grid=document.querySelector('table');grid.style.fontFamily='monospace';grid.style.fontSize='13px';grid.style.lineHeight='17px';
+  return [...document.querySelectorAll('.compiled-container')].map(el=>({root:el.classList.contains('compiled-container-root'),meaningOpen:el.closest('details').open&&el.closest('details').classList.contains('meaning'),inNotes:!!el.closest('.sense-notes'),size:getComputedStyle(el).fontSize,family:getComputedStyle(el).fontFamily,line:getComputedStyle(el).lineHeight,blockLine:getComputedStyle(el.querySelector('.block')).lineHeight,spans:[...el.querySelectorAll('.body > span')].map(span=>getComputedStyle(span).fontSize)}));
+ });
+ assert.equal(captionFonts.length,2);assert.ok(captionFonts.every(value=>!value.root));
+ assert.ok(captionFonts.every(value=>value.meaningOpen&&!value.inNotes),'L meanings hosted in table/figure captions stay in the open main section');
+ assert.equal(captionFonts[0].size,'13px');assert.equal(captionFonts[0].family,'monospace');assert.equal(captionFonts[0].line,'17px');assert.equal(captionFonts[0].blockLine,'17px');assert.deepEqual(captionFonts[0].spans,['6.5px','10px']);
+ assert.equal(captionFonts[1].size,'12px');assert.equal(captionFonts[1].line,'18px');assert.equal(captionFonts[1].blockLine,'18px');assert.deepEqual(captionFonts[1].spans,['6px','10px']);
 }finally{await browser.close();}

@@ -80,3 +80,24 @@ test('ordered list numbering remains distinct from a semantic definition',()=>{
   assert.equal(entryClue(value),'Actual dictionary meaning');
   assert.deepEqual(value,original);
 });
+
+test('container clues retain authored order, nested meanings and immutable owner structure',()=>{
+ const container=blocks=>({kind:'container',spans:[],container:{style:{},blocks}});
+ const value=entry(block('paragraph',span('Earlier prose')),container([
+  block('paragraph',span('Inside prose')),container([block('definition',span('Nested meaning','',{kind:'link',target:'Target',trail:'s'}))])
+ ]));
+ const before=structuredClone(value);assert.equal(entryClue(value),'Nested meanings');assert.deepEqual(value,before);
+ assert.equal(entryClue(entry(container([block('paragraph',span('First')),container([block('paragraph',span('Second'))])]))),'First');
+ assert.equal(entryClue(entry(container([]))),'Fallback title');
+});
+
+test('L owners in table cells and rich captions participate without changing opaque legacy previews',()=>{
+ const owner=text=>({kind:'container',spans:[],container:{style:{},blocks:[block('definition',span(text))]}});
+ const table={kind:'table',table:{caption_blocks:[block('definition',span('Opaque caption'))],rows:[{cells:[{blocks:[block('definition',span('Opaque cell')),{kind:'table',table:{rows:[{cells:[{blocks:[owner('Cell meaning')]}]}]}}]}]}]}};
+ const value=entry(block('paragraph',span('Earlier prose')),table);const before=structuredClone(value);
+ assert.equal(entryClue(value),'Cell meaning');assert.deepEqual(value,before);
+ table.table.caption_blocks.push(owner('Caption meaning'));assert.equal(entryClue(value),'Caption meaning');
+ const figure={kind:'paragraph',spans:[],flow:[{kind:'scope',scope:{parts:[{kind:'figure',figure:{caption_blocks:[owner('Figure meaning')]}}]}}]};
+ assert.equal(entryClue(entry(figure,table)),'Figure meaning');
+ assert.equal(entryClue(entry({kind:'table',table:{rows:[{cells:[{blocks:[block('definition',span('Still opaque'))]}]}]}})),'Fallback title');
+});

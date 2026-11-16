@@ -1,13 +1,14 @@
 // WIKBLB08 contains compiled semantic pages or typed DAL1 redirect envelopes.
 // A leading U+FEFF belongs to a compiled title or field, not a file BOM.
+import {validateContainerBlock} from './validate.js';
 const utf8 = new TextDecoder('utf-8', {fatal:true,ignoreBOM:true});
 const kinds = ['language','thesaurus','citations','reconstruction','rhymes','sign_gloss','supplemental','alias'];
-const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table'];
+const blocks = ['paragraph','blank','definition','example','quotation','list_item','list_detail','indent','term','heading','preformatted','rule','table','container'];
 const validInlineImageFile=value=>typeof value==='string'&&value.length>0&&new TextEncoder().encode(value).length<=32*1024*1024&&!value.startsWith(' ')&&!value.endsWith(' ')&&!/[_\[\]{}<>|#\x00-\x1f\x7f-\x9f]/u.test(value);
 const roles = ['normal','label','pronunciation','headword','example','quotation','citation','reference'];
 const require = (ok, message='Invalid compiled dictionary') => { if (!ok) throw Error(message); };
 export function decode(bytes, metadata) {
-  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false, tooltips=false, blockGeometry=false, rich=false, inlineTableStyles=false, contentDepth=0, mapStringBudget=32*1024*1024;
+  let p=0, budget=1000000, explained=false, colored=false, anchored=false, painted=false, nested=false, ordered=false, scaled=false, based=false, referenceItems=false, referenceBlocks=false, imageBorder=false, aligned=false, componentTargets=false, dynamicCatalogue=false, tooltips=false, blockGeometry=false, rich=false, inlineTableStyles=false, containers=false, contentDepth=0, mapStringBudget=32*1024*1024;
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   const take=n=>{require(n>=0 && n<=bytes.length-p);const start=p;p+=n;return bytes.subarray(start,p);};
   const byte=()=>take(1)[0], u16=()=>{const at=p;take(2);return view.getUint16(at,true);}, u32=()=>{const at=p;take(4);return view.getUint32(at,true);};
@@ -48,6 +49,25 @@ export function decode(bytes, metadata) {
   const spans=()=>list(tooltips?37:componentTargets?36:referenceBlocks?35:scaled?34:painted?33:colored?32:explained?31:27,spanValue);
   const styleLength=()=>{const unit=tag(['px','em']),at=p;take(4);const value=view.getFloat32(at,true);require(Number.isFinite(value)&&value>=0,'Invalid style length');return {unit,value};};
   const edges=()=>({top:styleLength(),right:styleLength(),bottom:styleLength(),left:styleLength()});
+  const containerWidth=()=>{const kind=tag(['auto','length','fit_content']);return {[kind]:kind==='length'?{unit:tag(['px','em','percent']),value:f32()}: {}};};
+  const containerMaxWidth=()=>presence()?{length:{unit:tag(['px','em','percent']),value:f32()}}:{none:{}};
+  const containerColor=()=>{const kind=tag(['transparent','rgb','light_dark']);return {[kind]:kind==='rgb'?string():kind==='light_dark'?{light:string(),dark:string()}: {}};};
+  const containerBorder=()=>presence()?{solid:{width:styleLength(),color:containerColor()}}:{none:{}};
+  const containerLineHeight=()=>{const kind=tag(['normal','multiplier','length']);return {[kind]:kind==='multiplier'?f32():kind==='length'?styleLength(): {}};};
+  const containerMargins=()=>Object.fromEntries(['top','right','bottom','left'].map(side=>[side,presence()?{length:styleLength()}:{auto:{}}]));
+  const containerScreen=(following=false)=>{
+    const value={max_width_px:u32()},flags=byte();require(flags&127);require(!following||!(flags&128));
+    if(flags&1)value.width=containerWidth();if(flags&2)value.max_width=containerMaxWidth();
+    if(flags&4)value.box_sizing=tag(['content_box','border_box']);if(flags&8)value.line_height=containerLineHeight();
+    if(flags&16)value.float_side=tag(['none','left','right']);if(flags&32)value.margins=containerMargins();
+    if(flags&64)value.clear=tag(['none','left','right','both']);
+    if(flags&128){const n=count(6);require(n>0&&n<16);value.following_rules=Array.from({length:n},()=>containerScreen(true));}
+    return value;
+  };
+  const containerStyle=()=>{
+    const flags=u16(),style={},fields=[['margins',edges],['padding',edges],['width',containerWidth],['float_side',()=>tag(['left','right'])],['clear',()=>tag(['none','left','right','both'])],['max_width',containerMaxWidth],['box_sizing',()=>tag(['content_box','border_box'])],['layout',()=>tag(['flow','flex_row'])],['align_items',()=>tag(['stretch','start','center','end'])],['flex_item',()=>tag(['none'])],['background',containerColor],['border',containerBorder],['line_height',containerLineHeight],['text_align',()=>tag(['left','center','right'])],['screen_max_width',containerScreen],['overflow',()=>tag(['visible','auto'])]];
+    fields.forEach(([key,read],bit)=>{if(flags&(1<<bit))style[key]=read();});return style;
+  };
   const borderStyle=()=>{const kind=tag(['none','solid']);if(kind==='none')return {none:{}};const width=styleLength(),color=string();require(/^#[0-9a-f]{6}$/.test(color));return {solid:{width,color}};};
   const typedStyle=table=>{
     if(!presence())return null;
@@ -112,7 +132,7 @@ export function decode(bytes, metadata) {
   };
   const flowParts=tableDepth=>list(5,()=>{const kind=tag(['inline','figure','scope']);if(kind==='inline')return {kind,spans:spans(),figure:null,scope:null};if(kind==='figure'){const value=figure(tableDepth);require(value);return {kind,spans:[],figure:value,scope:null};}return {kind,spans:[],figure:null,scope:content(()=>{const mode=tag(['isolate','isolate_override']),authored_direction=tag([null,'ltr','rtl','auto']),resolved_direction=tag(['ltr','rtl']),language=presence()?string():null;require(authored_direction==='ltr'?resolved_direction==='ltr':authored_direction==='rtl'?resolved_direction==='rtl':!(mode==='isolate_override'));return {mode,authored_direction,resolved_direction,language,parts:flowParts(tableDepth)};})};});
   const block=(tableDepth=0)=>{
-    const kind=tag(blocks),depth=byte(),level=byte();const value={kind,depth,level,spans:spans()};
+    const kind=tag(containers?blocks:blocks.slice(0,-1)),depth=byte(),level=byte();const value={kind,depth,level,spans:spans()};
     if(presence()) value.feature={kind:string(),language:string(),data:string(),tail_kind:string(),tail:string()};
     value.path=string();value.number=string();
     const table=tableValue(tableDepth+1);if(table)value.table=table;
@@ -123,16 +143,31 @@ export function decode(bytes, metadata) {
       const img=figure(tableDepth);if(img){require(value.spans.length===0&&!value.table&&!value.feature&&!value.style&&contentContext(value));value.figure=img;}
       if(presence()){require(value.spans.length===0&&!value.table&&!value.feature&&!value.figure&&contentContext(value));value.flow=content(()=>flowParts(tableDepth));}
     }
+    if(kind==='container'){
+      value.container=content(()=>({style:containerStyle(),blocks:list(blockMinimum(),()=>block(tableDepth))}));
+      validateContainerBlock(value);
+    }
     return value;
   };
   const contentContext=value=>['list_item','definition','example','quotation','term','list_detail','indent'].includes(value.kind)||(value.kind==='paragraph'&&value.depth===0&&value.path==='');
   const magic=utf8.decode(take(4));
-  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK','Dictionary contains uncompiled records');
-  inlineTableStyles=magic==='DPRK';rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
+  require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL','Dictionary contains uncompiled records');
+  containers=magic==='DPRL';inlineTableStyles=magic==='DPRK'||containers;rich=magic==='DPRJ'||inlineTableStyles;blockGeometry=magic==='DPRI'||rich;tooltips=magic==='DPRH'||blockGeometry;dynamicCatalogue=magic==='DPRG'||tooltips;componentTargets=magic==='DPRF'||dynamicCatalogue;aligned=magic==='DPRE'||componentTargets;imageBorder=magic==='DPRD'||aligned;referenceBlocks=magic==='DPRC'||imageBorder;based=magic==='DPRB'||referenceBlocks;scaled=magic==='DPRA'||based;referenceItems=magic==='DPR9'||scaled;ordered=magic==='DPR8'||referenceItems;nested=magic==='DPR7'||ordered;if(nested)budget=1<<20;painted=magic==='DPR6'||nested;anchored=magic==='DPR5'||painted;colored=magic==='DPR4'||anchored;explained=magic!=='DPR2';
   const entry={...metadata,presentation_version:magic,display_title:spans(),sections:list(anchored?17:9,()=>({level:byte(),title:string(),anchor:anchored?string():'',anchor_fallback:anchored?string():'',blocks:list(blockMinimum(),()=>block())})),preamble_spans:spans()};
-  list(29,()=>{string();string();const s=index(entry.sections.length);optional(entry.sections.length);const n=entry.sections[s].blocks.length;
-    list(18,(_,sense)=>{index(n);optional(sense);indices(n);indices(n);indices(n);if(presence()){string();string();string();}});
-    indices(n);indices(n);indices(entry.sections.length);
+  const childPath=(values,root)=>{
+    const n=count(4);require(n<=16);let value=values[root];
+    for(let i=0;i<n;i++){require(value.kind==='container'&&value.container);value=value.container.blocks[index(value.container.blocks.length)];}
+    return n;
+  };
+  const childPaths=(values,roots)=>{
+    const n=count(4);require(n===0||n===roots.length);let nonempty=false;
+    for(let i=0;i<n;i++)nonempty=childPath(values,roots[i])>0||nonempty;
+    require(n===0||nonempty);
+  };
+  list(29,()=>{string();string();const s=index(entry.sections.length);optional(entry.sections.length);const values=entry.sections[s].blocks,n=values.length;
+    list(18,(_,sense)=>{const root=index(n);optional(sense);const examples=indices(n),quotations=indices(n),notes=indices(n);if(presence()){string();string();string();}if(containers){childPath(values,root);for(const roots of [examples,quotations,notes])childPaths(values,roots);}});
+    const introduction=indices(n),other=indices(n);indices(entry.sections.length);
+    if(containers){childPaths(values,introduction);childPaths(values,other);}
   });
   indices(entry.sections.length);
   entry.references=list(referenceBlocks?14:referenceItems?13:20,()=>{
@@ -155,7 +190,7 @@ export function decode(bytes, metadata) {
   const inspectTable=value=>{inspect(value.caption);if(value.caption_blocks)inspectBlocks(value.caption_blocks);for(const row of value.rows)for(const cell of row.cells){inspect(cell.spans);if(cell.blocks)inspectBlocks(cell.blocks);if(cell.nested_table)inspectTable(cell.nested_table);}};
   const inspectFigure=value=>{inspect([value.image_span]);inspect(value.caption);if(value.caption_blocks)inspectBlocks(value.caption_blocks);};
   const inspectFlow=parts=>{for(const part of parts){inspect(part.spans);if(part.figure)inspectFigure(part.figure);if(part.scope)inspectFlow(part.scope.parts);}};
-  const inspectBlocks=values=>{for(const value of values){inspect(value.spans);if(value.table)inspectTable(value.table);if(value.figure)inspectFigure(value.figure);if(value.flow)inspectFlow(value.flow);}};
+  const inspectBlocks=values=>{for(const value of values){inspect(value.spans);if(value.table)inspectTable(value.table);if(value.figure)inspectFigure(value.figure);if(value.flow)inspectFlow(value.flow);if(value.container)inspectBlocks(value.container.blocks);}};
   inspect(entry.display_title);inspect(entry.preamble_spans);for(const section of entry.sections)inspectBlocks(section.blocks);for(const ref of entry.references){inspect(ref.spans);if(ref.blocks)inspectBlocks(ref.blocks);}
   if(images.length){
     if(!dynamicCatalogue)require(entry.media.length<=(aligned?256:128));
@@ -220,7 +255,7 @@ export async function buildIndex(source) {
       rows.push({title:alias.source_key,raw_key:title,source_kind:alias.source_kind,source_title:alias.source_title,offset:p,length});
     }else{
       const magic=utf8.decode(await source.read(p,4));
-      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK');
+      require(magic==='DPR2'||magic==='DPR3'||magic==='DPR4'||magic==='DPR5'||magic==='DPR6'||magic==='DPR7'||magic==='DPR8'||magic==='DPR9'||magic==='DPRA'||magic==='DPRB'||magic==='DPRC'||magic==='DPRD'||magic==='DPRE'||magic==='DPRF'||magic==='DPRG'||magic==='DPRH'||magic==='DPRI'||magic==='DPRJ'||magic==='DPRK'||magic==='DPRL');
       rows.push({title,offset:p,length});
     }
     require(rows.length<=10000000);p+=length;

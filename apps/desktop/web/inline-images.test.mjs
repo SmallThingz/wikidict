@@ -41,7 +41,7 @@ test('legacy B span remains unchanged while C adds exactly one absent-image byte
 test('unavailable inline images retain distinct authored alt through consent, loading, error and success',async()=>{
  const saved={document:globalThis.document,MutationObserver:globalThis.MutationObserver,fetch:globalThis.fetch,caches:globalThis.caches};
  const observers=[];let fetches=0;
- const element=()=>({style:{display:'inline'},dataset:{},attributes:{},textContent:'',isConnected:true,hidden:false,listeners:{},siblings:[],setAttribute(k,v){this.attributes[k]=v;},addEventListener(k,v){this.listeners[k]=v;},insertAdjacentElement(_,v){this.siblings.push(v);v.remove=()=>{this.siblings=this.siblings.filter(x=>x!==v);};}});
+  const element=()=>Object.assign(new EventTarget(),{style:{display:'inline'},dataset:{},attributes:{},textContent:'',isConnected:true,hidden:false,siblings:[],setAttribute(k,v){this.attributes[k]=v;},insertAdjacentElement(_,v){this.siblings.push(v);v.remove=()=>{this.siblings=this.siblings.filter(x=>x!==v);};}});
  const tick=()=>new Promise(resolve=>setImmediate(resolve));
  try{
   globalThis.document={body:{},createElement:element};globalThis.MutationObserver=class{constructor(callback){observers.push(callback);}observe(){}disconnect(){}};
@@ -55,7 +55,7 @@ test('unavailable inline images retain distinct authored alt through consent, lo
   assert.deepEqual(pending.map(el=>el.siblings[0].textContent),['איקס','וי']);assert.ok(pending.every(el=>el.siblings[0].dataset.mediaState==='loading'&&el.style.display==='none'));
   rejectors.forEach(reject=>reject(Error('controlled missing asset')));await tick();assert.deepEqual(pending.map(el=>el.siblings[0].textContent),['איקס','וי']);assert.ok(pending.every(el=>el.siblings[0].dataset.mediaState==='error'&&el.style.display==='none'));
   globalThis.caches={open:async()=>({match:async()=>null})};globalThis.fetch=async url=>url.includes('/w/api.php')?new Response(JSON.stringify({query:{pages:[{imageinfo:[{url:'https://upload.wikimedia.org/control.png',width:128,height:214}]}]}})):new Response(new Uint8Array([1]),{headers:{'Content-Type':'image/png'}});
-  const loaded=element();loadInlineImage(loaded,images[0],{allowImages:true,mediaCacheMb:0},'hewiktionary');
+  const loaded=element(),geometry=[];loaded.addEventListener('wikidict-image-geometry',event=>geometry.push(event.detail));loadInlineImage(loaded,images[0],{allowImages:true,mediaCacheMb:0},'hewiktionary');
   const readyDeadline=Date.now()+5000;
   while(typeof loaded.src!=='string'){
    assert.notEqual(loaded.dataset.mediaState,'error','Controlled resource failed before src assignment');
@@ -63,7 +63,9 @@ test('unavailable inline images retain distinct authored alt through consent, lo
    await new Promise(resolve=>setTimeout(resolve,5));
   }
   assert.equal(loaded.siblings[0].textContent,'איקס');assert.ok(loaded.src.startsWith('blob:'));
-  loaded.listeners.load();assert.equal(loaded.siblings.length,0);assert.equal(loaded.hidden,false);assert.equal(loaded.style.display,'inline');assert.equal(loaded.dataset.mediaState,'loaded');assert.equal(loaded.style.width,'15px');assert.equal(loaded.style.height,'25px');
+  assert.deepEqual(geometry,[]);loaded.dispatchEvent(new Event('load'));assert.equal(loaded.siblings.length,0);assert.equal(loaded.hidden,false);assert.equal(loaded.style.display,'inline');assert.equal(loaded.dataset.mediaState,'loaded');assert.equal(loaded.style.width,'15px');assert.equal(loaded.style.height,'25px');
+  assert.deepEqual(geometry,[{original:{width:128,height:214},layout:{width:15,height:25}}]);
+  loaded.dispatchEvent(new Event('load'));assert.equal(geometry.length,1,'load observer is once-only');
   loaded.isConnected=false;observers.forEach(callback=>callback());assert.equal(JSON.stringify(images),before);
  }finally{Object.assign(globalThis,saved);}
 });
