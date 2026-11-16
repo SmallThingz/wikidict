@@ -2587,4 +2587,503 @@ class NativeRubyGeometryDeviceTest {
             assertTrue(failure.message.orEmpty().contains("action", ignoreCase = true))
         }
     }
+
+    @Test fun inlineBoxesKeepNativeEdgeAdvancesSlicePaintAndOriginalActionRanges() {
+        val rootPaint = paint(color = Color.BLUE)
+        val rootPolicy = NativeLineHeightPolicy.Pixels(24f)
+        val callbacks = mutableListOf<Span>()
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val one = StyleLength(StyleLengthUnit.Px, 1f)
+        val none = InlineBoxBorderEdge.None
+        val blue = LinkState("#0000ff", false)
+        val red = LinkState("#ff0000", false)
+        val linkPolicy = LinkPaint(blue, blue, red, red, blue, blue, red, red, underlineOnFocus = true)
+        fun sourceLeaf(value: String, action: Boolean = false, scale: Float = 1f,
+            superscript: Boolean = false, italic: Boolean = false, direction: String = "") =
+            Span(if (action) "link" else "text", value, if (action) "child-source" else "",
+                fontScale = scale, fontScaleBasis = FontScaleBasis.NormalBody, language = "ja",
+                superscript = superscript, italic = italic, direction = direction,
+                foreground = "#0000ff", inlineStyle = InlineTextStyle(fontNormalized = true))
+        val overlay = InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+            bottom = InlineBoxInset(StyleWidthUnit.Percent, 67f), right = InlineBoxInset(StyleWidthUnit.Percent, 0f)),
+            InlineBoxBorderEdges(none, InlineBoxBorderEdge.Solid(one, InlineBoxColor.Rgb("#ff0000")), none, none))
+        fun sourceBox(children: List<Span>, edges: StyleEdges = StyleEdges(one, one, one, one),
+            overlays: List<InlineBoxOverlay> = listOf(overlay), action: Boolean = false,
+            decorate: Boolean = false, scale: Float = 1f,
+            borders: InlineBoxBorderEdges = InlineBoxBorderEdges(
+                InlineBoxBorderEdge.Solid(one, InlineBoxColor.Rgb("#000000")), none, none, none)) =
+            Span(if (action) "link" else "text", "", if (action) "box-source" else "",
+                fontScale = scale, fontScaleBasis = FontScaleBasis.NormalBody, language = "ja",
+                foreground = "#0000ff", background = "#00ff00", linkPaint = if (action) linkPolicy else null,
+                inlineStyle = InlineTextStyle(fontNormalized = true, cursor = InlineCursor.Help,
+                    decoration = if (decorate) InlineUnderline(InlineUnderlineStyle.Solid,
+                        thickness = StyleLength(StyleLengthUnit.Px, 2f)) else null),
+                inlineBoxGroup = InlineBoxGroup(edges, borders, overlays, children))
+        fun sourceAction(child: Span) = Span("link", "", "ancestor-source", foreground = "#0000ff",
+            fontScale = 1f, fontScaleBasis = FontScaleBasis.NormalBody, language = "ja", linkPaint = linkPolicy,
+            inlineStyle = InlineTextStyle(fontNormalized = true), inlineActionGroup = InlineActionGroup(listOf(child)))
+        data class Value(val original: List<Span>, val owner: Span, val range: RubyTextRange,
+            val key: NativeInlineBoxOwner, val projection: RubyTextProjection, val prepared: NativeRubyPreparedSource,
+            val source: Spanned, val formats: Map<String, NativeRubyGroupFormat>, val state: NativeMissingLinkPaint?,
+            val action: Span?, val actionRange: RubyTextRange?, val actionKey: NativeInlineActionOwner?,
+            val callback: () -> Unit, val direction: android.text.TextDirectionHeuristic)
+        fun resolve(span: Span): TextPaint = paint(span.fontScale ?: 1f, Color.BLUE).apply {
+            typeface = Typeface.create(Typeface.MONOSPACE, if (span.italic) Typeface.ITALIC else Typeface.NORMAL)
+            textLocale = Locale.forLanguageTag(span.language.ifEmpty { "ja" })
+            if (span.superscript) baselineShift = scriptShift(this).toInt()
+        }
+        fun make(owner: Span, ancestor: Span? = null, rtl: Boolean = false,
+            before: List<Span> = emptyList(), after: List<Span> = emptyList()): Value {
+            val original = before + (ancestor ?: owner) + after
+            val projection = rubyGraphicalProjection(original)
+            val range = projection.ranges.single { it.role == RubyTextRole.BoxGroup && it.span === owner }
+            val key = NativeInlineBoxOwner(owner, range.path)
+            val action = ancestor ?: owner.takeIf { it.kind == "link" }
+                ?: checkNotNull(owner.inlineBoxGroup).spans.singleOrNull { it.kind == "link" }
+            val actionRange = action?.let { item -> projection.ranges.single { it.span === item &&
+                it.role in setOf(RubyTextRole.ActionGroup, RubyTextRole.BoxGroup, RubyTextRole.Text) } }
+            val actionKey = actionRange?.takeIf { it.role in setOf(RubyTextRole.ActionGroup, RubyTextRole.BoxGroup) }
+                ?.let { NativeInlineActionOwner(checkNotNull(action), it.path) }
+            val state = action?.linkPaint?.let { NativeMissingLinkPaint(it, visited = false) }
+            val direction = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
+            val groups = projection.ranges.filter { it.role in setOf(RubyTextRole.BoxGroup, RubyTextRole.ActionGroup) }
+                .associate { part ->
+                    val span = checkNotNull(part.span)
+                    val declaring = resolve(span).apply { baselineShift = 0; bgColor = span.background?.let(Color::parseColor) ?: 0 }
+                    fun length(value: StyleLength): Float = value.value * if (value.unit == StyleLengthUnit.Px) 1f else declaring.textSize
+                    fun border(value: InlineBoxBorderEdge): NativeInlineBoxBorder {
+                        val width = when (value) {
+                            InlineBoxBorderEdge.None, InlineBoxBorderEdge.Hidden -> 0f
+                            is InlineBoxBorderEdge.Solid -> length(value.width)
+                            is InlineBoxBorderEdge.Dotted -> length(value.width)
+                        }
+                        val color = when (value) {
+                            is InlineBoxBorderEdge.Solid -> value.color
+                            is InlineBoxBorderEdge.Dotted -> value.color
+                            else -> InlineBoxColor.Transparent
+                        }
+                        return NativeInlineBoxBorder(width, when (color) {
+                            InlineBoxColor.CurrentColor -> null
+                            InlineBoxColor.Transparent -> Color.TRANSPARENT
+                            is InlineBoxColor.Rgb -> Color.parseColor(color.value)
+                            is InlineBoxColor.LightDark -> Color.parseColor(color.light)
+                        }, value is InlineBoxBorderEdge.Dotted)
+                    }
+                    fun borders(value: InlineBoxBorderEdges) = NativeInlineBoxBorders(border(value.top), border(value.right),
+                        border(value.bottom), border(value.left))
+                    val group = span.inlineBoxGroup
+                    val box = group?.let { value -> NativeInlineBoxFormat(key,
+                        NativeInlineBoxEdges(length(value.padding.top), length(value.padding.right),
+                            length(value.padding.bottom), length(value.padding.left)), borders(value.border),
+                        value.overlays.map { decoration ->
+                            fun inset(value: InlineBoxInset?): NativeInlineBoxInset? = value?.let {
+                                NativeInlineBoxInset(it.value * if (it.unit == StyleWidthUnit.Em) declaring.textSize else 1f,
+                                    it.unit == StyleWidthUnit.Percent)
+                            }
+                            NativeInlineBoxOverlay(NativeInlineBoxInsets(inset(decoration.insets.top), inset(decoration.insets.right),
+                                inset(decoration.insets.bottom), inset(decoration.insets.left)), borders(decoration.border))
+                        }, currentColorPaint = state) }
+                    part.path to NativeRubyGroupFormat(declaring, direction, rootPolicy, sourceDirection = span.direction,
+                        cursor = span.inlineStyle?.cursor,
+                        underline = span.inlineStyle?.decoration?.let {
+                            NativeAuthoredUnderline(it.style, it.color?.let(Color::parseColor), it.thickness?.let(::length))
+                        }, actionPaint = if (span === action) state else null,
+                        actionOwner = if (span === action) actionKey else null, box = box)
+                }
+            val logical = SpannableString(projection.text)
+            logical.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(rootPaint), rootPolicy, strut = true),
+                0, logical.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            projection.ranges.filter { it.span != null && it.role !in setOf(RubyTextRole.BoxGroup, RubyTextRole.ActionGroup) }
+                .forEach { part ->
+                    val span = checkNotNull(part.span)
+                    val child = resolve(span)
+                    logical.setSpan(object : MetricAffectingSpan(), NativeInlineSafePaintSpan {
+                        override fun updateMeasureState(paint: TextPaint) { paint.set(child) }
+                        override fun updateDrawState(paint: TextPaint) { paint.set(child); state?.let { paint.color = it.appearance().color } }
+                    }, part.start, part.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    logical.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(child), rootPolicy),
+                        part.start, part.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            val prepared = NativeRubyPreparedSource(projection, SpannedString(logical), rootPaint, direction, groups)
+            val source = SpannableString(logical).apply { setSpan(prepared, 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
+            return Value(original, owner, range, key, projection, prepared, SpannedString(source), groups, state,
+                action, actionRange, actionKey, { if (action != null) callbacks += action }, direction)
+        }
+        fun build(value: Value, width: Int): NativeFloatGeometry = NativeFloatGeometry.build(value.source,
+            rootPaint, width, emptyList(), textDirection = value.direction, nodeFactory = nodes@{ geometry ->
+                val action = value.action ?: return@nodes emptyList()
+                val range = checkNotNull(value.actionRange)
+                val bounds = when {
+                    value.actionKey != null -> checkNotNull(geometry.inlineActionGroupRects(value.actionKey, range.start, range.end))
+                    else -> checkNotNull(geometry.inlineBoxChildActionRects(value.key, value.range.start, value.range.end,
+                        range.start, range.end, geometry.rectsForRange(range.start, range.end)))
+                }
+                listOf(FloatInteractionNode(31, FloatInteractionKind.LINK, range.start, range.end, bounds,
+                    value.projection.text.substring(range.start, range.end), null, value.callback, missingLinkPaint = value.state))
+            })
+        fun verify(value: Value, geometry: NativeFloatGeometry): List<RectF> {
+            assertEquals(value.projection.text, geometry.text.toString())
+            assertSame(value.projection, value.prepared.projection)
+            assertSame(value.owner, value.range.span)
+            assertSame(checkNotNull(value.owner.inlineBoxGroup).spans.first(),
+                value.projection.ranges.first { it.role == RubyTextRole.Text && it.path.startsWith(value.range.path + "/") }.span)
+            val boxes = checkNotNull(geometry.inlineBoxGroupRects(value.key, value.range.start, value.range.end))
+            assertNull(geometry.inlineBoxGroupRects(NativeInlineBoxOwner(value.owner, value.key.path), value.range.start, value.range.end))
+            assertTrue(boxes.isNotEmpty())
+            if (value.action != null) {
+                val node = geometry.nodes.single()
+                assertSame(value.callback, node.onClick)
+                if (value.action === value.owner) assertEquals(boxes, node.bounds)
+                assertEquals(value.actionRange!!.start, node.start); assertEquals(value.actionRange.end, node.end)
+                assertEquals(value.projection.text.substring(node.start, node.end), node.label)
+                node.onClick!!.invoke()
+                assertSame(value.action, callbacks.last())
+            }
+            for (offset in geometry.text.indices) {
+                assertEquals(1, geometry.visualLineRanges(offset).count { offset in it.first until it.second })
+                assertTrue(geometry.caretRect(offset).left.isFinite())
+            }
+            return boxes
+        }
+        fun plain(text: String, width: Int, direction: android.text.TextDirectionHeuristic = TextDirectionHeuristics.LTR): NativeFloatGeometry {
+            val source = SpannableString(text).apply { setSpan(NativeRunLineMetrics(
+                NativePrimaryFontMetrics.from(rootPaint), rootPolicy, strut = true), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
+            return NativeFloatGeometry.build(source, rootPaint, width, emptyList(), textDirection = direction)
+        }
+        fun snapshotPixels(geometry: FloatTextGeometry): IntArray {
+            val bitmap = Bitmap.createBitmap(768, 512, Bitmap.Config.ARGB_8888)
+            var primary: Throwable? = null
+            try {
+                val canvas = Canvas(bitmap)
+                canvas.translate(64f, 64f)
+                geometry.paint(canvas)
+                return IntArray(768 * 512).also { bitmap.getPixels(it, 0, 768, 0, 0, 768, 512) }
+            } catch (failure: Throwable) { primary = failure; throw failure }
+            finally { try { bitmap.recycle() } catch (cleanup: Throwable) {
+                if (primary == null) throw cleanup else if (cleanup !== primary) primary.addSuppressed(cleanup)
+            } }
+        }
+        fun changesInside(first: IntArray, second: IntArray, allowed: List<RectF>): Int {
+            var changed = 0
+            first.indices.forEach { index -> if (first[index] != second[index]) {
+                val x = index % 768 - 64; val y = index / 768 - 64
+                assertTrue("Unexpected pixel $x,$y", allowed.any { x + 1 > it.left && x < it.right && y + 1 > it.top && y < it.bottom })
+                changed++
+            } }
+            assertTrue("Expected actual changed native paint", changed > 0)
+            return changed
+        }
+        val body = sourceLeaf("ずれ")
+        val original = sourceBox(listOf(body), action = true)
+        val value = make(original)
+        val wide = build(value, 200)
+        val ownerBox = verify(value, wide).single()
+        val reference = plain(body.text, 200)
+        val primary = NativePrimaryFontMetrics.from(rootPaint)
+        val baseline = wide.nativeRubyLineBaseline(0)
+        val advance = reference.nativeInlineVisibleAdvance(0)
+        sameRect(RectF(0f, baseline + primary.ascent - 2f, advance + 2f,
+            baseline + primary.descent + 1f), ownerBox, 0f)
+        assertEquals(reference.usedLineHeight(0), wide.usedLineHeight(0), 0f)
+        val content = wide.rectsForRange(value.range.start, value.range.end)
+        reference.characterRects(0, body.text.length).zip(wide.characterRects(0, body.text.length)).forEach { (a, b) ->
+            sameRect(RectF(checkNotNull(a)).apply { offset(1f, 0f) }, checkNotNull(b), 0f)
+        }
+        for (offset in 0..body.text.length) sameRect(RectF(reference.caretRect(offset)).apply { offset(1f, 0f) }, wide.caretRect(offset), 0f)
+        assertTrue(wide.nodes.single().contains(.5f, (ownerBox.top + ownerBox.bottom) / 2f))
+        val withoutOverlay = make(original.copy(inlineBoxGroup = checkNotNull(original.inlineBoxGroup).copy(overlays = emptyList())))
+        val plainBox = build(withoutOverlay, 200)
+        val padding = RectF(ownerBox.left, ownerBox.top + 1f, ownerBox.right, ownerBox.bottom)
+        val expectedOverlay = RectF(padding.right - 1f, padding.top, padding.right,
+            padding.top + padding.height() * .33f)
+        changesInside(snapshotPixels(plainBox), snapshotPixels(wide), listOf(expectedOverlay))
+        val blackOverlay = overlay.copy(border = overlay.border.copy(right =
+            InlineBoxBorderEdge.Solid(one, InlineBoxColor.Rgb("#000000"))))
+        val redThenBlack = make(original.copy(inlineBoxGroup = checkNotNull(original.inlineBoxGroup)
+            .copy(overlays = listOf(overlay, blackOverlay))))
+        val blackThenRed = make(original.copy(inlineBoxGroup = checkNotNull(original.inlineBoxGroup)
+            .copy(overlays = listOf(blackOverlay, overlay))))
+        changesInside(snapshotPixels(build(redThenBlack, 200)), snapshotPixels(build(blackThenRed, 200)), listOf(expectedOverlay))
+        assertTrue(wide.scrollableBounds.top <= ownerBox.top)
+        assertTrue(wide.ordinaryPaintBounds.any { it.left <= expectedOverlay.left && it.right >= expectedOverlay.right &&
+            it.top <= expectedOverlay.top && it.bottom >= expectedOverlay.bottom })
+
+        val firstAdvance = plain(body.text.substring(0, 1), 200).nativeInlineVisibleAdvance(0)
+        val narrowWidth = ceil(firstAdvance + 1f).toInt()
+        assertTrue(narrowWidth < advance + 2f)
+        val narrow = build(value, narrowWidth)
+        val sliced = verify(value, narrow)
+        assertEquals(2, sliced.size)
+        assertEquals(2, narrow.shapedLineCount)
+        assertEquals(firstAdvance + 1f, narrow.nativeLineAdvance(0), 0f)
+        val secondAdvance = plain(body.text.substring(1), 200).nativeInlineVisibleAdvance(0)
+        assertEquals(secondAdvance + 1f, narrow.nativeLineAdvance(1), 0f)
+        assertEquals(1f, narrow.characterRects(0, 1).single()!!.left - reference.characterRects(0, 1).single()!!.left, 0f)
+        assertEquals(0f, narrow.characterRects(1, 1).single()!!.left, 0f)
+        val narrowPlain = plain(body.text, narrowWidth)
+        assertEquals(narrowPlain.height, narrow.height)
+        sameRect(ownerBox, verify(value, build(value, 200)).single(), 0f)
+
+        var originalSelectionCrossesEdge = false
+        for (scale in listOf(1f, 1.125f)) {
+            val child = sourceLeaf("thin", action = true, scale = scale)
+            val childValue = make(sourceBox(listOf(child), edges = StyleEdges(zero,
+                StyleLength(StyleLengthUnit.Px, .125f), zero, StyleLength(StyleLengthUnit.Em, .015625f)),
+                overlays = emptyList(), scale = scale))
+            val childGeometry = build(childValue, 200)
+            val childBox = verify(childValue, childGeometry).single()
+            val childNode = childGeometry.nodes.single()
+            val originalRects = childGeometry.rectsForRange(0, child.text.length)
+            val childY = originalRects.first().centerY()
+            val leftPixels = .015625f * bodyPixels * scale
+            val rightMidpoint = childBox.right - .0625f
+            originalSelectionCrossesEdge = originalSelectionCrossesEdge || originalRects.any { it.contains(rightMidpoint, childY) }
+            assertFalse(childNode.contains(childBox.left + leftPixels / 2f, childY))
+            assertFalse(childNode.contains(rightMidpoint, childY))
+            assertTrue(childNode.bounds.all { it.left >= childBox.left + leftPixels && it.right <= childBox.right - .125f })
+            assertTrue(childNode.contains(childBox.centerX(), childY))
+            val wrong = NativeInlineBoxOwner(childValue.owner, childValue.key.path)
+            assertNull(childGeometry.inlineBoxChildActionRects(wrong, 0, child.text.length, 0, child.text.length, childNode.bounds))
+        }
+        assertTrue("The unmodified native selection must actually cross the thin right edge", originalSelectionCrossesEdge)
+
+        val richOwner = sourceBox(listOf(sourceLeaf("ず"), sourceLeaf("れ", scale = .75f, superscript = true, italic = true)),
+            overlays = emptyList())
+        val rich = make(richOwner)
+        val richGeometry = build(rich, 200)
+        val richBox = verify(rich, richGeometry).single()
+        val richBaseline = richGeometry.nativeRubyLineBaseline(0)
+        assertEquals(richBaseline + primary.ascent - 2f, richBox.top, 0f)
+        assertEquals(richBaseline + primary.descent + 1f, richBox.bottom, 0f)
+        assertTrue(richGeometry.characterRects(1, 1).single()!!.top < richGeometry.characterRects(0, 1).single()!!.top)
+        assertEquals(InlineCursor.Help, richGeometry.cursorAt(richBox.left + .5f, richBox.centerY()))
+        val verticalPaddingX = richBox.left + .5f
+        val verticalPaddingY = richBox.top + 1.5f // After the 1px border, inside the original 1px top padding.
+        assertFalse(richGeometry.rectsForRange(0, richGeometry.text.length).any { it.contains(verticalPaddingX, verticalPaddingY) })
+        assertEquals(InlineCursor.Help, richGeometry.cursorAt(verticalPaddingX, verticalPaddingY))
+        assertTrue(richGeometry.containsInteraction(verticalPaddingX, verticalPaddingY))
+
+        val rtlBody = sourceLeaf("אב")
+        val symmetric = make(sourceBox(listOf(rtlBody), overlays = emptyList()))
+        verify(symmetric, build(symmetric, 200))
+        val asymmetricOwner = sourceBox(listOf(rtlBody), edges = StyleEdges(zero, zero, zero, one),
+            overlays = emptyList(), borders = InlineBoxBorderEdges(none, none, none, none))
+        val asymmetric = make(asymmetricOwner)
+        try { build(asymmetric, 200); fail("Asymmetric bidi edge must retain its actual shaping affinity") }
+        catch (failure: UnsupportedFloatLayout) { assertEquals("Inline box edge shaping affinity is unavailable", failure.message) }
+        verify(symmetric, build(symmetric, 200))
+
+        val decorated = sourceBox(listOf(sourceLeaf("ずれ")), overlays = emptyList(), decorate = true,
+            borders = InlineBoxBorderEdges(InlineBoxBorderEdge.Solid(one, InlineBoxColor.CurrentColor), none, none, none))
+        val ancestor = sourceAction(decorated)
+        val styled = make(decorated, ancestor)
+        val styledGeometry = build(styled, 200)
+        val styledBox = verify(styled, styledGeometry).single()
+        val state = checkNotNull(styled.state)
+        val beforeFocus = snapshotPixels(styledGeometry)
+        state.focused = true
+        val afterFocus = snapshotPixels(styledGeometry)
+        val decorationY = styledGeometry.nativeRubyLineBaseline(0) + rootPaint.underlinePosition
+        val ownThickness = 2f
+        val ancestorThickness = rootPaint.underlineThickness
+        val contentUnderline = RectF(styledBox.left + 1f, decorationY, styledBox.right - 1f, decorationY + ownThickness)
+        val noDecorationBox = decorated.copy(inlineStyle = checkNotNull(decorated.inlineStyle).copy(decoration = null))
+        val noDecoration = make(noDecorationBox, sourceAction(noDecorationBox))
+        val noDecorationGeometry = build(noDecoration, 200)
+        val noDecorationPixels = snapshotPixels(noDecorationGeometry)
+        changesInside(noDecorationPixels, beforeFocus, listOf(contentUnderline))
+        assertTrue(beforeFocus.indices.any { Color.blue(beforeFocus[it]) > Color.blue(noDecorationPixels[it]) })
+        val edgeBands = listOf(RectF(styledBox.left, decorationY, styledBox.left + 1f, decorationY + ancestorThickness),
+            RectF(styledBox.right - 1f, decorationY, styledBox.right, decorationY + ancestorThickness))
+        changesInside(beforeFocus, afterFocus, listOf(RectF(styledBox.left, decorationY,
+            styledBox.right, decorationY + maxOf(ownThickness, ancestorThickness))))
+        assertTrue(edgeBands.any { area -> beforeFocus.indices.any { index ->
+            val x = index % 768 - 64; val y = index / 768 - 64
+            x + 1 > area.left && x < area.right && y + 1 > area.top && y < area.bottom && beforeFocus[index] != afterFocus[index]
+        } })
+        state.focused = false
+        assertArrayEquals(beforeFocus, snapshotPixels(styledGeometry))
+        state.active = true
+        val activePixels = snapshotPixels(styledGeometry)
+        assertFalse(beforeFocus.contentEquals(activePixels))
+        checkNotNull(noDecoration.state).active = true
+        val noDecorationActive = snapshotPixels(noDecorationGeometry)
+        changesInside(noDecorationActive, activePixels, listOf(contentUnderline))
+        assertTrue(activePixels.indices.any { Color.red(activePixels[it]) > Color.red(noDecorationActive[it]) })
+        val topBand = RectF(styledBox.left, styledBox.top, styledBox.right, styledBox.top + 1f)
+        assertTrue(beforeFocus.indices.any { index ->
+            val x = index % 768 - 64; val y = index / 768 - 64
+            x + 1 > topBand.left && x < topBand.right && y + 1 > topBand.top && y < topBand.bottom &&
+                Color.red(activePixels[index]) > Color.red(beforeFocus[index])
+        })
+        state.active = false
+        assertArrayEquals(beforeFocus, snapshotPixels(styledGeometry))
+        assertSame(ancestor, styled.action)
+        assertTrue(styledGeometry.nodes.single().contains(styledBox.left + .5f, styledBox.centerY()))
+        assertEquals(content.size, wide.rectsForRange(0, body.text.length).size)
+
+        val solverBorders = NativeInlineBoxBorders(NativeInlineBoxBorder(1f, null), NativeInlineBoxBorder(3f, null),
+            NativeInlineBoxBorder(4f, null), NativeInlineBoxBorder(2f, null))
+        val overconstrained = NativeInlineBoxOverlay(NativeInlineBoxInsets(NativeInlineBoxInset(3f, false),
+            NativeInlineBoxInset(70f, false), NativeInlineBoxInset(40f, false), NativeInlineBoxInset(-4f, false)), solverBorders)
+        val containing = RectF(10f, 20f, 60f, 40f)
+        sameRect(RectF(6f, 23f, 11f, 28f), nativeInlineBoxOverlayRect(overconstrained, containing, false), 0f)
+        sameRect(RectF(-15f, 23f, -10f, 28f), nativeInlineBoxOverlayRect(overconstrained, containing, true), 0f)
+        val definiteEnd = NativeInlineBoxOverlay(NativeInlineBoxInsets(top = null,
+            right = NativeInlineBoxInset(-4f, false), bottom = NativeInlineBoxInset(-3f, false), left = null), solverBorders)
+        sameRect(RectF(59f, 38f, 64f, 43f), nativeInlineBoxOverlayRect(definiteEnd, containing, false), 0f)
+        sameRect(RectF(59f, 38f, 64f, 43f), nativeInlineBoxOverlayRect(definiteEnd, containing, true), 0f)
+
+        val forcedBreakOwner = sourceBox(listOf(sourceLeaf("ず\nれ")), overlays = emptyList())
+        val forcedBreak = make(forcedBreakOwner)
+        assertEquals("ず\nれ", forcedBreak.projection.text)
+        try { build(forcedBreak, 200); fail("An original forced break requires a supported inline box fragmentation path") }
+        catch (failure: UnsupportedFloatLayout) { assertEquals("Inline box forced text breaks are unavailable", failure.message) }
+        assertEquals("ず\nれ", forcedBreak.source.toString())
+        assertSame(forcedBreakOwner, forcedBreak.range.span)
+        assertEquals(3, forcedBreak.range.end - forcedBreak.range.start)
+        verify(value, build(value, 200))
+
+        val zeroFontOwner = sourceBox(listOf(sourceLeaf("ずれ", scale = 0f)), scale = 0f, overlays = emptyList())
+        val zeroFont = make(zeroFontOwner)
+        assertEquals("ずれ", zeroFont.projection.text)
+        try { build(zeroFont, 200); fail("A nonempty zero-advance box needs a proved allocation") }
+        catch (failure: UnsupportedFloatLayout) { assertEquals("Inline box zero-advance fragment allocation is unavailable", failure.message) }
+        assertEquals("ずれ", zeroFont.source.toString())
+        verify(value, build(value, 200))
+        // Capture owns actual native shaping and visible-line coordinates, independently
+        // of the model-backed box fixtures above. No source character is inserted.
+        run {
+            val capArabicText = "سلام"
+            val capArabicCut = 1 // The original sin/lam joining boundary, not a surrogate or grapheme interior.
+            val capArabicPaint = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+                textSize = 32f
+                textLocale = java.util.Locale.forLanguageTag("ar")
+                color = android.graphics.Color.BLUE
+            }
+            fun capBuild(source: android.text.Spanned, paint: android.text.TextPaint, width: Int = 320) = NativeFloatGeometry.build(
+                source, paint, width, emptyList(), textDirection = android.text.TextDirectionHeuristics.RTL,
+                includeFontPadding = false)
+            fun capRecycle(primary: Throwable?, vararg bitmaps: android.graphics.Bitmap?) {
+                var failure = primary
+                for (bitmap in bitmaps) if (bitmap != null) {
+                    try { bitmap.recycle() } catch (cleanup: Throwable) {
+                        val previous = failure
+                        if (previous == null) failure = cleanup
+                        else if (cleanup !== previous) previous.addSuppressed(cleanup)
+                    }
+                }
+                if (primary == null) failure?.let { throw it }
+            }
+            fun capRaster(raw: NativeFloatGeometry, draw: (android.graphics.Canvas) -> Unit): android.graphics.Bitmap {
+                val bitmap = android.graphics.Bitmap.createBitmap(raw.width + 32, raw.height + 32,
+                    android.graphics.Bitmap.Config.ARGB_8888)
+                try {
+                    val canvas = android.graphics.Canvas(bitmap)
+                    canvas.translate(16f, 16f)
+                    draw(canvas)
+                    return bitmap
+                } catch (primary: Throwable) {
+                    capRecycle(primary, bitmap)
+                    throw primary
+                }
+            }
+            fun capAssertReplay(label: String, raw: NativeFloatGeometry, mapped: NativeInlineMappedLine) {
+                val native = capRaster(raw) { raw.paint(it) }
+                var replay: android.graphics.Bitmap? = null
+                var primary: Throwable? = null
+                try {
+                    val captured = capRaster(raw) { mapped.paint(it) }.also { replay = it }
+                    val pixels = IntArray(native.width * native.height)
+                    native.getPixels(pixels, 0, native.width, 0, 0, native.width, native.height)
+                    assertTrue("$label has actual native ink", pixels.any { it ushr 24 != 0 })
+                    assertTrue("$label preserves the actual native raster", native.sameAs(captured))
+                } catch (failure: Throwable) { primary = failure; throw failure }
+                finally { capRecycle(primary, replay, native) }
+            }
+            val capArabicSource = android.text.SpannedString(capArabicText)
+            val capArabicRaw = capBuild(capArabicSource, capArabicPaint)
+            assertEquals(1, capArabicRaw.shapedLineCount)
+            assertEquals(capArabicText, capArabicRaw.text.toString())
+            val capUntouched = nativeInlineLineCapture(capArabicRaw, 0, emptyList()).mapped(emptyList())
+            capAssertReplay("Untouched Arabic capture", capArabicRaw, capUntouched)
+            val capRefusal = try {
+                nativeInlineLineCapture(capArabicRaw, 0, listOf(capArabicCut), setOf(capArabicCut))
+                null
+            } catch (failure: UnsupportedFloatLayout) { failure }
+            assertNotNull("An unbounded Arabic joining run cannot acquire a shaping cut", capRefusal)
+            assertEquals("Inline edge changes required native boundary shaping", capRefusal?.message)
+
+            // Two actual nonempty metric spans establish the cut before native shaping.
+            // Capture must prove and replay that selected source, rather than editing glyphs afterward.
+            val capBoundedSource = android.text.SpannedString(android.text.SpannableString(capArabicText).apply {
+                setSpan(NativeInlineBoxBoundarySpan(), 0, capArabicCut, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(NativeInlineBoxBoundarySpan(), capArabicCut, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            })
+            assertEquals(capArabicText, capBoundedSource.toString())
+            val capBoundedRaw = capBuild(capBoundedSource, capArabicPaint)
+            assertEquals(1, capBoundedRaw.shapedLineCount)
+            val capBoundedCapture = nativeInlineLineCapture(capBoundedRaw, 0,
+                listOf(capArabicCut), setOf(capArabicCut))
+            assertTrue("Native dispatch retains the first bounded run", capBoundedCapture.pieces.any { it.end == capArabicCut })
+            assertTrue("Native dispatch retains the following bounded run", capBoundedCapture.pieces.any { it.start == capArabicCut })
+            capAssertReplay("Pre-bounded Arabic capture", capBoundedRaw, capBoundedCapture.mapped(emptyList()))
+            val capJoinedRaster = capRaster(capArabicRaw) { capArabicRaw.paint(it) }
+            var capBrokenRaster: android.graphics.Bitmap? = null
+            var capRasterFailure: Throwable? = null
+            try {
+                val captured = capRaster(capBoundedRaw) { capBoundedRaw.paint(it) }.also { capBrokenRaster = it }
+                assertEquals(capJoinedRaster.width, captured.width)
+                assertEquals(capJoinedRaster.height, captured.height)
+                assertFalse("The real source boundary changes Arabic joining", capJoinedRaster.sameAs(captured))
+            } catch (failure: Throwable) { capRasterFailure = failure; throw failure }
+            finally { capRecycle(capRasterFailure, capBrokenRaster, capJoinedRaster) }
+
+            // A separate public native Layout supplies the omitted suffix and the
+            // Float visible selection path. Raw whitespace spelling is not its authority.
+            val capRtlSource = android.text.SpannedString("אבג   דהו")
+            val capRtlPaint = android.text.TextPaint(capArabicPaint).apply {
+                textLocale = java.util.Locale.forLanguageTag("he")
+            }
+            val capRtlWidth = kotlin.math.ceil(capRtlPaint.measureText("אבג   ").toDouble()).toInt()
+            assertTrue("Native prefix measurement supplies a positive soft-wrap width", capRtlWidth > 0)
+            val capRtlRaw = capBuild(capRtlSource, capRtlPaint, capRtlWidth)
+            val capReference = android.text.StaticLayout.Builder.obtain(capRtlSource, 0, capRtlSource.length,
+                android.text.TextPaint(capRtlPaint), capRtlWidth)
+                .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                .setTextDirection(android.text.TextDirectionHeuristics.RTL)
+                .setIncludePad(false).setLineSpacing(0f, 1f).setUseLineSpacingFromFallbacks(false)
+                .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                .setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE).build()
+            assertEquals(2, capReference.lineCount)
+            assertEquals(capReference.lineCount, capRtlRaw.shapedLineCount)
+            val capFirst = capReference.getLineStart(0)
+            val capEnd = capReference.getLineEnd(0)
+            val capVisibleEnd = capReference.getLineVisibleEnd(0)
+            assertTrue("Native Layout actually omits a nonempty suffix", capVisibleEnd in (capFirst + 1) until capEnd)
+            assertTrue("The omitted suffix has real native width", capReference.getLineWidth(0) > capReference.getLineMax(0))
+            assertEquals(capFirst to capEnd, capRtlRaw.nativeRangeOfLine(0))
+            assertEquals(capVisibleEnd, capRtlRaw.nativeInlineVisibleEnd(0))
+            val capVisiblePath = android.graphics.Path()
+            capReference.getSelectionPath(capFirst, capVisibleEnd, capVisiblePath)
+            assertFalse("The native visible interval has a real selection path", capVisiblePath.isEmpty)
+            val capVisibleBounds = android.graphics.RectF().also { capVisiblePath.computeBounds(it, true) }
+            val capFullBounds = requireNotNull(capRtlRaw.nativeRubyLineAdvanceBounds(0))
+            assertTrue("RTL trailing space moves the full-selection origin left",
+                capFullBounds.left < capVisibleBounds.left)
+            val capRtlMapped = nativeInlineLineCapture(capRtlRaw, 0, emptyList()).mapped(emptyList())
+            val capMappedAdvance = capRtlMapped.advanceBounds()
+            assertEquals("Visible origin is independent of the full-selection origin",
+                capVisibleBounds.left, capMappedAdvance.left, 0f)
+            assertEquals("Visible right edge remains the native selected edge",
+                capVisibleBounds.right, capMappedAdvance.right, 0f)
+            assertEquals("Omitted source retains its actual selected-line query",
+                capRtlRaw.nativeRubyLineRects(0, capVisibleEnd, capEnd),
+                capRtlMapped.rectsForRange(capVisibleEnd, capEnd))
+            assertEquals("Omitted source retains its selected-line terminal caret",
+                capRtlRaw.nativeRubyLineCaret(0, capEnd),
+                capRtlMapped.caretRect(capEnd, NativeInlineBoundaryAffinity.Following))
+        }
+    }
 }

@@ -76,6 +76,8 @@ internal fun nativeCellTextContext(cell: Cell, inherited: ContainerTextContext?,
     val own = cell.style?.lineHeight
     if (own == null && inherited?.cellText == null) return inherited
     require(inheritedStyle.fontSize.isSp)
+    if (inherited?.containerText != null && own?.strut != null && own.strut.ownerFont == null)
+        throw UnsupportedFloatLayout("A scalar Cell strut cannot replace an inherited Container declaring font.")
     val previous = if (own?.strut?.ownerFont != null) null else
         inherited?.let { nativeContainerTextFormat(it, normalBodySize, inheritedStyle, density) }
     val fontPixels = own?.strut?.let {
@@ -96,5 +98,12 @@ internal fun nativeCellTextContext(cell: Cell, inherited: ContainerTextContext?,
     if (height is NativeLineHeightPolicy.Pixels && height.value > TablePixelLimit)
         throw UnsupportedFloatLayout("Cell line height exceeds the native range")
     val ownerFont = own?.strut?.let { nativeCellOwnerFont(it, fontPixels, density) }
-    return (inherited ?: ContainerTextContext()).copy(cellText = NativeCellTextState(fontPixels, height, ownerFont))
+    val containerText = inherited?.containerText?.takeIf { own?.strut == null }?.copy(lineHeight = height)
+    return (inherited ?: ContainerTextContext()).copy(
+        cellText = if (containerText == null) NativeCellTextState(fontPixels, height, ownerFont) else null,
+        containerText = containerText, resolvedLineHeight = height.takeIf {
+            inherited?.bodyOrigin != null || inherited?.resolvedLineHeight != null },
+        bodyOrigin = inherited?.bodyOrigin?.copy(
+            fontInherited = inherited.bodyOrigin.fontInherited && own?.strut?.ownerFont == null,
+            lineHeightInherited = inherited.bodyOrigin.lineHeightInherited && own == null && tableLineHeightPixels == null))
 }

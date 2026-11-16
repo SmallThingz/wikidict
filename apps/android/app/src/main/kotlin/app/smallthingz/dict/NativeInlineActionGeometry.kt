@@ -54,6 +54,7 @@ internal class NativeInlineActionPaint(
     private val format: NativeRubyGroupFormat,
     private val shift: Float,
     fragments: List<NativeInlineActionFragment>,
+    private val currentColorPaint: NativeMissingLinkPaint? = null,
 ) {
     private val fragments = fragments.toList()
     private val primary = NativePrimaryFontMetrics.from(format.paint)
@@ -67,7 +68,7 @@ internal class NativeInlineActionPaint(
     private fun selected(line: Int?) = if (line == null) fragments else fragments.filter { it.line == line }
     private fun decorations(reserve: Boolean): List<Decoration> {
         val appearance = if (reserve) null else format.actionPaint?.appearance()
-        val color = appearance?.color ?: format.paint.color
+        val color = appearance?.color ?: (if (reserve) null else currentColorPaint?.appearance()?.color) ?: format.paint.color
         return buildList {
             fun addDecoration(position: Float, thickness: Float, color: Int, style: InlineUnderlineStyle) {
                 nativeInlineActionCoordinates(position, thickness)

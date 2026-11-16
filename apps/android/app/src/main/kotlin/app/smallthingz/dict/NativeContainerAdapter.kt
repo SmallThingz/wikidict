@@ -337,7 +337,7 @@ internal data class NativeContainerLeaf(val block: Block, val previous: Block?, 
     val path: String, val gridPath: String, val gap: Float, val rootIndex: Int?,
     val format: NativeContainerTextFormat?, val context: ContainerTextContext?,
     val align: CellTextAlign?, val inContainer: Boolean, val inScrollport: Boolean = false,
-    val ownerWrap: TextWrap? = null)
+    val ownerWrap: TextWrap? = null, val bodyTypographyExcluded: Boolean = false)
 
 private data class NativePositionedParent(val paddingTop: Float)
 
@@ -368,6 +368,9 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
         is ContainerFlowItem.Block -> listOf(item.index)
         is ContainerFlowItem.ListGroup -> item.items.flatMap { listOf(it.index) + it.children.flatMap(::groupIndices) }
     }
+    fun hasTextLeaf(values: List<Block>): Boolean = values.any { block ->
+        block.container?.let { hasTextLeaf(it.blocks) } ?: true
+    }
     @Composable fun visit(values: List<Block>, paths: List<String>, grids: List<String>,
         gaps: List<Float>, context: ContainerTextContext, align: CellTextAlign?, inside: Boolean,
         row: Boolean, roots: List<Int?>, inScrollport: Boolean,
@@ -384,27 +387,36 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                 val resolved = container.style.atViewport(rootViewport)
                 val absolute = resolved.box.positioning as? ContainerPositioning.Absolute
                 val scope = resolved.box.positionedScope
-                val requestedContext = resolved.box.textContext(context)
+                val inheritedContext = if (context.bodyOrigin != null &&
+                    (resolved.box.positioning != null || scope != null))
+                    nativeWithoutBodyTextContext(context, normalBodySize, density) ?: context.bodyOrigin.baseline else context
+                val requestedContext = resolved.box.textContext(inheritedContext)
                 val absoluteFormat = absolute?.let {
-                    nativeAbsoluteContainerTextFormat(it, inheritedStyle, density, context.fontFamily,
+                    nativeAbsoluteContainerTextFormat(it, inheritedStyle, density, inheritedContext.fontFamily,
                         hasLine = container.blocks.any { child -> nativeNoWrapSourceLineStarts(child.spans).isNotEmpty() })
                 }
-                val familyAdmission = if (absoluteFormat == null) nativeContainerFontAdmission(requestedContext.fontFamily,
+                // A tree containing only empty containers has no text font to resolve.
+                // Its real boxes still participate; an actual empty paragraph is a leaf.
+                val unusedContainerFont = requestedContext.containerText != null && !hasTextLeaf(container.blocks)
+                val containerContext = if (absoluteFormat == null && requestedContext.containerText != null && !unusedContainerFont)
+                    nativeContainerOwnerTextContext(requestedContext, inheritedStyle, density) else null
+                val familyAdmission = if (absoluteFormat == null && !unusedContainerFont) nativeContainerFontAdmission(requestedContext.fontFamily,
                     inheritedStyle.fontWeight ?: androidx.compose.ui.text.font.FontWeight.Normal,
                     inheritedStyle.fontStyle ?: androidx.compose.ui.text.font.FontStyle.Normal) else null
                 var textFailure: String? = null
                 val next = try {
                     if (absoluteFormat != null) {
                         val format = absoluteFormat.getOrThrow()
-                        requestedContext.copy(fontFamily = format.sourceFamily, cellText = null)
-                    } else {
+                        requestedContext.copy(fontFamily = format.sourceFamily, cellText = null, containerText = null)
+                    } else if (unusedContainerFont) requestedContext else {
                         checkNotNull(familyAdmission).getOrThrow()
-                        nativeContainerTextFormat(requestedContext, normalBodySize, inheritedStyle, density)
-                        requestedContext
+                        val computedContext = containerContext?.getOrThrow() ?: requestedContext
+                        nativeContainerTextFormat(computedContext, normalBodySize, inheritedStyle, density)
+                        computedContext
                     }
                 } catch (error: UnsupportedFloatLayout) {
                     textFailure = error.message ?: "Container text geometry is unavailable"
-                    context
+                    inheritedContext
                 }
                 val nextAlign = resolved.box.textAlign ?: align
                 val background = when (val value = resolved.box.background) {
@@ -462,11 +474,20 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     // retain every LI/detail's own block edges and marker geometry.
                     val consumed = row && group is ContainerFlowItem.Block
                     val rendered = if (consumed) original.copy(style = null) else original
-                    val format = declaringFormat ?: if (inside) nativeContainerTextFormat(context, normalBodySize, inheritedStyle, density) else null
+                    val excludesBody = original.kind == "heading" && context.bodyOrigin?.let {
+                        it.fontInherited || it.lineHeightInherited } == true
+                    val textContext = if (excludesBody) nativeWithoutBodyTextContext(context, normalBodySize, density) else context
+                    val format = if (excludesBody) textContext?.let {
+                        nativeContainerTextFormat(it, normalBodySize, inheritedStyle, density)
+                    } else declaringFormat ?: if (inside || context.bodyOrigin != null)
+                        nativeContainerTextFormat(context, normalBodySize, inheritedStyle, density) else null
                     val child = NativeContainerLeaf(rendered, if (inside) null else values.getOrNull(index - 1),
                         id(paths[index] + "/leaf"), paths[index], grids[index], if (inside) 0f else gaps[index],
-                        roots[index], format, context.takeIf { inside }, align, inside, inScrollport, ownerWrap)
-                    if (format?.ownerFont == null) children += leaf(child) else {
+                        roots[index], format, textContext.takeIf { inside || context.bodyOrigin != null }, align,
+                        inside, inScrollport, ownerWrap, bodyTypographyExcluded = excludesBody)
+                    if (excludesBody) {
+                        CompositionLocalProvider(LocalNativeContainerTextContext provides textContext) { children += leaf(child) }
+                    } else if (format?.ownerFont == null) children += leaf(child) else {
                         CompositionLocalProvider(LocalCellWeight provides null,
                             LocalTableLineHeightPixels provides null,
                             LocalNativeContainerTextContext provides context.copy(cellText = null, fontFamily = format.sourceFamily)) {

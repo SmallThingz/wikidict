@@ -4,6 +4,15 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.ParagraphStyle
@@ -145,6 +154,692 @@ class NativePreparedRunMetricsDeviceTest {
         } finally {
             compose.activityRule.scenario.onActivity { it.setContent {} }
             compose.waitForIdle()
+        }
+    }
+
+    @Test fun completeContainerFontKeepsIndependentNormalStrutAndOriginalChildFonts() {
+        // Synthetic W owners; these scalars are not a claim about a producer's Mai output.
+        val owner = InlineFontSnapshot(fontScale = 1.8f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontNormalized = true, bold = true, italic = true, small = true,
+            fontFamily = ContainerFontFamily.SansSerif)
+        val root = ContainerStyle(ownerFont = owner, lineHeight = ContainerLineHeight.Normal)
+            .textContext(ContainerTextContext())
+        val scriptOwner = owner.copy(superscript = true)
+        val cssOwner = owner.copy(fontScale = 18f, fontScaleBasis = FontScaleBasis.CssPx)
+        val replacement = owner.copy(fontScale = .6f, bold = false, italic = false, small = false)
+        val contexts = listOf(root,
+            ContainerStyle(ownerFont = scriptOwner).textContext(ContainerTextContext()),
+            ContainerStyle(ownerFontScale = .75f).textContext(root),
+            ContainerStyle(ownerFont = cssOwner).textContext(root),
+            ContainerStyle(ownerFont = owner.copy(fontScale = 0f)).textContext(root),
+            ContainerStyle(ownerFontScale = 1.1f).textContext(ContainerStyle(ownerFont = cssOwner).textContext(root)),
+            ContainerStyle(ownerFont = replacement).textContext(root))
+        val child = Span("link", "M", target = "w-child", foreground = "#0000ff",
+            fontScale = .5f, fontScaleBasis = FontScaleBasis.NormalBody)
+        val cssChild = Span("text", "x", foreground = "#008000", fontScale = 14f,
+            fontScaleBasis = FontScaleBasis.CssPx)
+        val scriptChild = Span("text", "2", foreground = "#ff0000", fontScale = 1f,
+            fontScaleBasis = FontScaleBasis.NormalBody, superscript = true)
+        val spans = listOf(child, cssChild, scriptChild)
+        val contextualChild = Span("text", "n", foreground = "#000000")
+        val actions = mutableListOf<EntryLink>()
+        val prepared = arrayOfNulls<PreparedNativeFloatText>(contexts.size)
+        val contextualPrepared = arrayOfNulls<PreparedNativeFloatText>(contexts.size)
+        val resolved = arrayOfNulls<ContainerTextContext>(contexts.size)
+        val formats = arrayOfNulls<NativeContainerTextFormat>(contexts.size)
+        try {
+            for ((density, cssZoom) in listOf(Density(1f, 1f) to 1f, Density(1.25f, 1.4f) to 1.6f)) {
+                compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                    MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge =
+                        TextStyle(fontSize = 20.sp, fontFamily = FontFamily.SansSerif, letterSpacing = 0.sp))) {
+                        CompositionLocalProvider(LocalDensity provides density, LocalCssPixelTextZoom provides cssZoom) {
+                            contexts.forEachIndexed { index, raw ->
+                                val inherited = TextStyle(fontSize = 99.sp, fontFamily = FontFamily.Monospace,
+                                    letterSpacing = 0.sp)
+                                val context = nativeContainerOwnerTextContext(raw, inherited, LocalDensity.current).getOrThrow()
+                                val format = nativeContainerTextFormat(context, 20.sp, inherited, LocalDensity.current)
+                                CompositionLocalProvider(LocalNativeContainerTextContext provides context) {
+                                    val annotated = styledTextAnnotation(spans, null, format.style) { actions += it }
+                                    val value = prepareNativeFloatText(spans, annotated, emptyList(), format.style,
+                                        MaterialTheme.colorScheme.primary, emptyList(),
+                                        AppSettings(allowImages = false, allowAudio = false), "", { actions += it },
+                                        nativeLineHeight = format.lineHeight, sourceFamily = format.sourceFamily,
+                                        ownerFont = format.ownerFont)
+                                    val defaults = listOf(contextualChild)
+                                    val defaultAnnotation = styledTextAnnotation(defaults, null, format.style) { actions += it }
+                                    val defaultValue = prepareNativeFloatText(defaults, defaultAnnotation, emptyList(), format.style,
+                                        MaterialTheme.colorScheme.primary, emptyList(),
+                                        AppSettings(allowImages = false, allowAudio = false), "", { actions += it },
+                                        nativeLineHeight = format.lineHeight, sourceFamily = format.sourceFamily,
+                                        ownerFont = format.ownerFont)
+                                    SideEffect {
+                                        prepared[index] = value; contextualPrepared[index] = defaultValue
+                                        resolved[index] = context; formats[index] = format
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    val bodyPixels = with(density) { 20.sp.toPx() }
+                    val expectedOwnerPixels = listOf(bodyPixels * 1.8f, bodyPixels * 1.8f,
+                        bodyPixels * .75f, with(density) { (18f * cssZoom).sp.toPx() }, 0f,
+                        bodyPixels * 1.1f, bodyPixels * .6f)
+                    val geometries = mutableListOf<NativeFloatGeometry>()
+                    contexts.forEachIndexed { index, raw ->
+                        val value = checkNotNull(prepared[index])
+                        val context = checkNotNull(resolved[index])
+                        val format = checkNotNull(formats[index])
+                        assertSame(checkNotNull(raw.containerText).snapshot, checkNotNull(context.containerText).snapshot)
+                        assertSame(checkNotNull(context.containerText).resolved, format.ownerFont)
+                        val native = checkNotNull(value.native)
+                        val source = native.source(500)
+                        assertEquals("Mx2", source.toString()); assertEquals("Mx2", value.text.toString())
+                        val runs = source.getSpans(0, source.length, NativeRunLineMetrics::class.java)
+                        val strut = runs.single { it.strut }
+                        assertEquals(NativeLineHeightPolicy.Normal, strut.policy)
+                        assertTrue(strut.includePrimaryInNormal)
+                        assertEquals(expectedOwnerPixels[index], native.paint.textSize, .001f)
+                        assertEquals(expectedOwnerPixels[index], strut.primary.fontSize, .001f)
+                        assertEquals(0f, strut.primary.baselineShift, 0f)
+                        assertEquals(0, native.paint.baselineShift)
+                        val defaultNative = checkNotNull(checkNotNull(contextualPrepared[index]).native)
+                        val defaultSource = defaultNative.source(500)
+                        assertEquals("n", defaultSource.toString())
+                        val defaultPaint = android.text.TextPaint(defaultNative.paint)
+                        defaultSource.getSpans(0, 1, android.text.style.MetricAffectingSpan::class.java)
+                            .forEach { it.updateDrawState(defaultPaint) }
+                        assertEquals(expectedOwnerPixels[index], defaultPaint.textSize, .001f)
+                        assertFalse(defaultPaint.typeface.isBold); assertFalse(defaultPaint.typeface.isItalic)
+                        assertEquals(0, defaultPaint.baselineShift)
+                        assertEquals(android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF,
+                            android.graphics.Typeface.NORMAL), defaultPaint.typeface)
+                        assertNull(contextualChild.fontScale); assertNull(contextualChild.fontFamily)
+                        assertFalse(contextualChild.bold || contextualChild.italic || contextualChild.superscript)
+                        val wantedFace = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF,
+                            if (index == 6) android.graphics.Typeface.NORMAL else android.graphics.Typeface.BOLD_ITALIC)
+                        val ownerProbe = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                            typeface = wantedFace; textSize = expectedOwnerPixels[index]
+                        }
+                        assertEquals(ownerProbe.fontMetrics.ascent, strut.primary.ascent, .001f)
+                        assertEquals(ownerProbe.fontMetrics.descent, strut.primary.descent, .001f)
+                        fun childPaint(offset: Int) = android.text.TextPaint(native.paint).also { paint ->
+                            source.getSpans(offset, offset + 1, android.text.style.MetricAffectingSpan::class.java)
+                                .filter { source.getSpanStart(it) <= offset && source.getSpanEnd(it) > offset }
+                                .forEach { it.updateDrawState(paint) }
+                        }
+                        val plain = childPaint(0); val css = childPaint(1); val sup = childPaint(2)
+                        assertEquals(bodyPixels * .5f, plain.textSize, .001f)
+                        assertEquals(with(density) { (14f * cssZoom).sp.toPx() }, css.textSize, .001f)
+                        assertEquals(bodyPixels * .8f, sup.textSize, .001f)
+                        assertFalse(plain.typeface.isBold); assertFalse(plain.typeface.isItalic)
+                        assertEquals(0, plain.baselineShift)
+                        assertEquals(android.graphics.Color.BLUE, plain.color)
+                        assertEquals(kotlin.math.ceil(sup.ascent() * .5f).toInt(), sup.baselineShift)
+                        assertTrue(sup.baselineShift < 0)
+                        val geometry = checkNotNull(value.geometry).invoke(500, emptyList(), false)
+                        geometries += geometry
+                        // Android supplies the real fallback envelope; the independent owner adds
+                        // its actual primary font even though every painted child overrides size.
+                        val natural = android.text.StaticLayout.Builder.obtain(source, 0, source.length,
+                            android.text.TextPaint(native.paint), 500).setTextDirection(native.direction)
+                            .setIncludePad(true).setUseLineSpacingFromFallbacks(true).setLineSpacing(0f, 1f)
+                            .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                            .setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE).build()
+                        assertEquals(1, natural.lineCount); assertEquals(1, geometry.shapedLineCount)
+                        val baseline = natural.getLineBaseline(0)
+                        val top = minOf((natural.getLineTop(0) - baseline).toFloat(), ownerProbe.ascent())
+                        val bottom = maxOf((natural.getLineBottom(0) - baseline).toFloat(), ownerProbe.descent())
+                        assertEquals(-top, geometry.baselineForOffset(0), .001f)
+                        assertEquals(bottom - top, geometry.usedLineHeight(0), .001f)
+                        assertEquals(bottom - top, geometry.textBottom, .001f)
+                        assertEquals("Mx2", geometry.text.toString())
+                        assertEquals(3, geometry.characterRects(0, 3).count { it != null })
+                        val node = geometry.nodes.single { it.onClick != null }
+                        assertEquals(0, node.start); assertEquals(1, node.end)
+                        assertTrue(node.bounds.any { it.width() > 0f && it.height() > 0f })
+                        node.onClick!!(); assertEquals("w-child", actions.last().target)
+                        val bitmap = android.graphics.Bitmap.createBitmap(640, 240, android.graphics.Bitmap.Config.ARGB_8888)
+                        try {
+                            val canvas = android.graphics.Canvas(bitmap); canvas.translate(24f, 48f); geometry.paint(canvas)
+                            val pixels = IntArray(640 * 240); bitmap.getPixels(pixels, 0, 640, 0, 0, 640, 240)
+                            assertTrue("Positive child paint survives the independent or zero owner",
+                                pixels.count { android.graphics.Color.alpha(it) != 0 } > 10)
+                        } finally { bitmap.recycle() }
+                    }
+                    // Normalized owner SUP changes no placement. The actual child SUP remains shifted.
+                    assertEquals(geometries[0].textBottom, geometries[1].textBottom, 0f)
+                    assertEquals(geometries[0].baselineForOffset(0), geometries[1].baselineForOffset(0), 0f)
+                    assertEquals(geometries[0].characterRects(0, 3), geometries[1].characterRects(0, 3))
+                    assertTrue(geometries[4].textBottom > 0f)
+                    assertSame(child, spans[0]); assertSame(cssChild, spans[1]); assertSame(scriptChild, spans[2])
+                    assertFalse(child.bold || child.italic || child.small || child.code || child.superscript || child.subscript)
+                    assertNull(child.fontFamily); assertEquals(FontScaleBasis.NormalBody, child.fontScaleBasis)
+                    assertSame(owner, checkNotNull(root.containerText).snapshot)
+                }
+            }
+            assertEquals(contexts.size * 2, actions.size)
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent {} }
+            compose.waitForIdle()
+        }
+    }
+
+    @Test fun actualContainerFontAdapterDistinguishesEmptyTreeRetainedEmptyAndBreak() {
+        val snapshot = InlineFontSnapshot(fontScale = 1.8f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontNormalized = true, bold = true, superscript = true, fontFamily = ContainerFontFamily.SansSerif)
+        val owner = ContainerStyle(ownerFont = snapshot, lineHeight = ContainerLineHeight.Multiplier(1.5f))
+        val emptyMetric = Span("text", "", inlineStyle = InlineTextStyle(lineHeight =
+            InlineLineHeight.Computed(InlineComputedLength(0f, FontScaleBasis.CssPx))))
+        val br = Span("line_break", "")
+        val body = Span("link", "Body", target = "w-body", foreground = "#0000ff",
+            fontScale = .5f, fontScaleBasis = FontScaleBasis.NormalBody)
+        fun box(children: List<Block>, style: ContainerStyle = owner) =
+            Block("container", 0, emptyList(), container = Container(children, style))
+        val cases = listOf(box(emptyList()), box(listOf(box(emptyList(), ContainerStyle()))),
+            box(listOf(Block("paragraph", 0, listOf(emptyMetric)))),
+            box(listOf(Block("paragraph", 0, listOf(br)))),
+            box(listOf(Block("paragraph", 0, listOf(body)))))
+        val selected = mutableStateOf(0)
+        val actions = mutableListOf<EntryLink>()
+        val failures = mutableListOf<String>()
+        var geometry: NativeFloatContextGeometry? = null
+        var measuredHeight = -1
+        val declaringProbe = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
+            textSize = 36f
+        }
+        fun halfLeading(paint: android.text.TextPaint, height: Float): Pair<Float, Float> {
+            val fm = paint.fontMetrics
+            val leading = (height - (fm.descent - fm.ascent)) / 2f
+            return (fm.ascent - leading) to (fm.descent + leading)
+        }
+        val declaringBand = halfLeading(declaringProbe, 36f * 1.5f)
+        fun expectedBand(index: Int): Pair<Float, Float> {
+            val childProbe = android.text.TextPaint(declaringProbe).apply {
+                typeface = android.graphics.Typeface.SANS_SERIF
+                textSize = if (index == 4) 10f else 36f
+            }
+            val childBand = halfLeading(childProbe, if (index == 2) 0f else childProbe.textSize * 1.5f)
+            return minOf(declaringBand.first, childBand.first) to maxOf(declaringBand.second, childBand.second)
+        }
+        // The real LF supplies Android's ordinary trailing native row. Font ownership itself supplies no row.
+        val brLines = android.text.StaticLayout.Builder.obtain("\n", 0, 1, declaringProbe, 240)
+            .setIncludePad(true).build().lineCount
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge =
+                    TextStyle(fontSize = 20.sp, fontFamily = FontFamily.SansSerif, letterSpacing = 0.sp))) {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 1f),
+                        LocalNativeFloatContextFailureObserver provides { failures += it }) {
+                        val parent = remember { NativeLayoutInput(Unit) }
+                        val input = remember { NativeContextMeasureInput(invalidateParent = parent::invalidate) }
+                        val density = LocalDensity.current
+                        val environment = NativeFlowEnvironment(density.density, density.fontScale,
+                            LocalLayoutDirection.current, LocalWindowInfo.current.containerSize)
+                        val preparation = Any()
+                        Layout(modifier = Modifier.then(parent.modifier), content = {
+                            CompositionLocalProvider(LocalNativeContextMeasureInput provides input) {
+                                NativeFloatBlockContext(listOf(cases[selected.value]), { actions += it }, "w-empty",
+                                    Modifier, inCell = false, gridPath = "w-empty", gapDp = 0f, trailingGap = false)
+                            }
+                        }) { children, constraints ->
+                            val childConstraints = Constraints(maxWidth = 240, maxHeight = 300)
+                            val request = input.request(constraints, childConstraints, environment,
+                                NativeFlowParentPolicy(preparation, true, null, 0f), emptyList())
+                            val child = children.single().measure(childConstraints)
+                            geometry = input.ready(request); measuredHeight = child.height
+                            layout(constraints.constrainWidth(240), constraints.constrainHeight(300)) { child.place(0, 0) }
+                        }
+                    }
+                }
+            } }
+            for (index in cases.indices + listOf(0, 4)) {
+                compose.runOnIdle {
+                    if (selected.value != index) {
+                        geometry = null; measuredHeight = -1; selected.value = index
+                    }
+                }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertTrue(failures.toString(), failures.isEmpty())
+                    val current = checkNotNull(geometry)
+                    if (index >= 2) {
+                        val band = expectedBand(index)
+                        val count = if (index == 3) brLines else 1
+                        val expectedHeight = (band.second - band.first) * count
+                        assertEquals(expectedHeight, current.usedHeight, .001f)
+                        assertEquals(kotlin.math.ceil(expectedHeight).toInt(), measuredHeight)
+                        val baselines = checkNotNull(current.textBaselines)
+                        assertEquals(-band.first, checkNotNull(baselines.first), .001f)
+                        assertEquals((count - 1) * (band.second - band.first) - band.first,
+                            checkNotNull(baselines.last), .001f)
+                        assertTrue("The 36px owner must dominate the ordinary 20px fallback", expectedHeight >= 54f)
+                    }
+                    when (index) {
+                        0, 1 -> {
+                            assertEquals("", current.text.toString()); assertTrue(current.nodes.isEmpty())
+                            assertEquals(0f, current.usedHeight, 0f); assertEquals(0, measuredHeight)
+                            assertNull(current.textBaselines)
+                            assertTrue(current.characterRects(0, 0).isEmpty())
+                        }
+                        2 -> {
+                            assertEquals("", current.text.toString()); assertTrue(current.nodes.isEmpty())
+                            assertTrue(current.usedHeight > 0f); assertTrue(measuredHeight > 0)
+                            val lines = checkNotNull(current.textBaselines)
+                            assertNotNull(lines.first); assertEquals(lines.first, lines.last)
+                            assertTrue(current.characterRects(0, 0).isEmpty())
+                            assertSame(emptyMetric, cases[2].container!!.blocks.single().spans.single())
+                        }
+                        3 -> {
+                            assertEquals("\n", current.text.toString()); assertTrue(current.nodes.isEmpty())
+                            assertTrue(current.usedHeight > 0f); assertTrue(measuredHeight > 0)
+                            assertNotNull(current.textBaselines)
+                            assertSame(br, cases[3].container!!.blocks.single().spans.single())
+                        }
+                        4 -> {
+                            assertEquals("Body", current.text.toString())
+                            assertTrue(current.usedHeight > 0f)
+                            assertEquals(4, current.characterRects(0, 4).count { it != null })
+                            val node = current.nodes.single { it.onClick != null }
+                            assertEquals(0, node.start); assertEquals(4, node.end)
+                            node.onClick!!(); assertEquals("w-body", actions.last().target)
+                            assertSame(body, cases[4].container!!.blocks.single().spans.single())
+                        }
+                    }
+                    assertSame(snapshot, cases[index].container!!.style.ownerFont)
+                }
+            }
+            assertEquals(listOf("w-body", "w-body"), actions.map { it.target })
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent {} }
+            compose.waitForIdle()
+        }
+    }
+
+    @Test fun bodyTypographyKeepsRootAddressesHeadingDefaultsAndSourceOwnedStruts() {
+        val owner = InlineFontSnapshot(fontScale = 1.8f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontNormalized = true, bold = true, italic = true, fontFamily = ContainerFontFamily.SansSerif)
+        val body = Span("link", "Body", target = "body-owner", foreground = "#0000ff",
+            fontScale = .5f, fontScaleBasis = FontScaleBasis.NormalBody)
+        val heading = Span("text", "Heading")
+        val tail = Span("text", "Tail", fontScale = .5f, fontScaleBasis = FontScaleBasis.NormalBody)
+        val blocks = listOf(Block("paragraph", 0, listOf(body)),
+            Block("heading", 0, listOf(heading), level = 3), Block("paragraph", 0, listOf(tail)))
+        val paths = listOf("body/root/0", "body/root/1", "body/root/2")
+        val gaps = listOf(6f, 2f, 6f)
+        val selected = mutableStateOf(false)
+        val actions = mutableListOf<EntryLink>()
+        var leaves = emptyList<NativeContainerLeaf>()
+        var prepared = emptyList<PreparedNativeFloatText>()
+        var emptyLeaves = -1
+        var resolved: ContainerTextContext? = null
+        val rootStyle = TextStyle(fontSize = 20.sp, lineHeight = 24.sp,
+            fontFamily = FontFamily.SansSerif, letterSpacing = 0.sp)
+        val headingStyle = TextStyle(fontSize = 28.sp, lineHeight = 34.sp,
+            fontFamily = FontFamily.Serif, letterSpacing = 0.sp)
+        val declaring = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF,
+                android.graphics.Typeface.BOLD_ITALIC)
+            textSize = 36f
+        }
+        val childPaint = android.text.TextPaint(declaring).apply {
+            typeface = android.graphics.Typeface.SANS_SERIF; textSize = 10f
+        }
+        fun independentBand(paint: android.text.TextPaint): Pair<Float, Float> {
+            val metrics = paint.fontMetrics
+            val leading = (paint.textSize * 1.5f - (metrics.descent - metrics.ascent)) / 2f
+            return metrics.ascent - leading to metrics.descent + leading
+        }
+        val ownerBand = independentBand(declaring); val childBand = independentBand(childPaint)
+        val bodyTop = minOf(ownerBand.first, childBand.first)
+        val bodyBottom = maxOf(ownerBand.second, childBand.second)
+        var headingBefore: Pair<Float, List<android.graphics.RectF?>>? = null
+        var bodyBefore: Pair<Float, List<android.graphics.RectF?>>? = null
+        var primary: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = rootStyle,
+                    titleMedium = headingStyle)) {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                        val density = LocalDensity.current
+                        val context = if (selected.value) nativeBodyTextContext(owner,
+                            ContainerLineHeight.Multiplier(1.5f), null, 20.sp, rootStyle, density).getOrThrow()
+                            else nativeRootTextContext(rootStyle, 20.sp, density)
+                        val captured = mutableListOf<NativeContainerLeaf>()
+                        val texts = mutableListOf<PreparedNativeFloatText>()
+                        val ids = remember { linkedMapOf<String, Int>() }
+                        prepareNativeContainerTree(blocks, "body", "body-grid", paths, gaps, context,
+                            rootStyle, null, 20.sp, density, 240.0, rtl = false, dark = false,
+                            fixedHeightReachable = false, id = { ids.getOrPut(it) { ids.size + 1 } }) { leaf ->
+                            captured += leaf
+                            val format = leaf.format
+                            val style = if (leaf.block.kind == "heading") headingStyle else format?.style ?: rootStyle
+                            CompositionLocalProvider(LocalNativeContainerTextContext provides leaf.context) {
+                                val annotated = styledTextAnnotation(leaf.block.spans, null, style) { actions += it }
+                                texts += prepareNativeFloatText(leaf.block.spans, annotated, emptyList(), style,
+                                    MaterialTheme.colorScheme.primary, emptyList(),
+                                    AppSettings(allowImages = false, allowAudio = false), "", { actions += it },
+                                    heading = leaf.block.kind == "heading", nativeLineHeight = format?.lineHeight,
+                                    sourceFamily = format?.sourceFamily, ownerFont = format?.ownerFont)
+                            }
+                            emptyList()
+                        }
+                        var emptyCount = 0
+                        val emptyTree = prepareNativeContainerTree(emptyList(), "empty-body", "empty-grid",
+                            emptyList(), emptyList(), context, rootStyle, null, 20.sp, density, 240.0,
+                            rtl = false, dark = false, fixedHeightReachable = false,
+                            id = { ids.getOrPut(it) { ids.size + 1 } }) { emptyCount++; emptyList() }
+                        SideEffect {
+                            leaves = captured.toList(); prepared = texts.toList(); emptyLeaves = emptyCount
+                            resolved = context
+                            check(emptyTree.isEmpty())
+                        }
+                    }
+                }
+            } }
+            for (enabled in listOf(false, true, false)) {
+                compose.runOnIdle { selected.value = enabled }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertEquals(3, leaves.size); assertEquals(3, prepared.size)
+                    assertEquals(0, emptyLeaves)
+                    leaves.forEachIndexed { index, leaf ->
+                        assertSame(blocks[index], leaf.block)
+                        assertEquals(paths[index], leaf.path); assertEquals(index, leaf.rootIndex)
+                        assertEquals(gaps[index], leaf.gap, 0f); assertFalse(leaf.inContainer)
+                        if (index == 0) assertNull(leaf.previous) else assertSame(blocks[index - 1], leaf.previous)
+                    }
+                    val headingLeaf = leaves[1]
+                    assertNull(headingLeaf.format)
+                    assertNull(headingLeaf.context)
+                    assertEquals(enabled, headingLeaf.bodyTypographyExcluded)
+                    val headGeometry = checkNotNull(prepared[1].geometry).invoke(240, emptyList(), false)
+                    assertEquals("Heading", headGeometry.text.toString())
+                    val headState = headGeometry.textBottom to headGeometry.characterRects(0, heading.text.length)
+                    if (headingBefore == null) headingBefore = headState else assertEquals(headingBefore, headState)
+                    val native = checkNotNull(prepared[0].native)
+                    val source = native.source(240)
+                    val runs = source.getSpans(0, source.length, NativeRunLineMetrics::class.java)
+                    assertEquals(if (enabled) 36f else 20f, runs.single { it.strut }.primary.fontSize, .001f)
+                    assertEquals(setOf(10f), runs.filter { !it.strut }.map { it.primary.fontSize }.toSet())
+                    val geometry = checkNotNull(prepared[0].geometry).invoke(240, emptyList(), false)
+                    assertEquals("Body", geometry.text.toString())
+                    assertEquals(4, geometry.characterRects(0, 4).count { it != null })
+                    if (enabled) {
+                        assertSame(owner, checkNotNull(checkNotNull(resolved).containerText).snapshot)
+                        assertEquals(bodyBottom - bodyTop, geometry.textBottom, .001f)
+                        assertEquals(-bodyTop, geometry.baselineForOffset(0), .001f)
+                        assertEquals(54f, geometry.textBottom, .001f)
+                        assertTrue(runs.all { it.policy == NativeLineHeightPolicy.Multiplier(1.5f) })
+                    } else {
+                        assertNull(checkNotNull(resolved).containerText)
+                        val state = geometry.textBottom to geometry.characterRects(0, 4)
+                        if (bodyBefore == null) bodyBefore = state else assertEquals(bodyBefore, state)
+                    }
+                    val action = geometry.nodes.single { it.onClick != null }
+                    assertEquals(0, action.start); assertEquals(4, action.end)
+                    action.onClick!!(); assertEquals("body-owner", actions.last().target)
+                    assertFalse(body.bold || body.italic || body.small || body.superscript || body.subscript)
+                    assertEquals(.5f, body.fontScale); assertEquals(FontScaleBasis.NormalBody, body.fontScaleBasis)
+                }
+            }
+            assertEquals(List(3) { "body-owner" }, actions.map { it.target })
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                compose.activityRule.scenario.onActivity { it.setContent {} }
+                compose.waitForIdle()
+            } catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
+    @Test fun excludedBodyKeepsNearestCellMetricsAndExplicitContainerAliases() {
+        val snapshot = InlineFontSnapshot(fontScale = 1.8f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontNormalized = true, bold = true, italic = true, fontFamily = ContainerFontFamily.SansSerif)
+        val cellFont = InlineFontSnapshot(fontScale = .6f, fontScaleBasis = FontScaleBasis.NormalBody,
+            language = "en", fontFamily = ContainerFontFamily.SansSerif, fontFeatures = FontFeaturePolicy.Normal)
+        val child = Span("link", "M", target = "body-near-owner", foreground = "#0000ff",
+            fontScale = .5f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontFamily = ContainerFontFamily.SansSerif)
+        val plain = Cell(listOf(child), false, 1, 1)
+        val fixed = CellLineHeightValue.Length(CellFixedLineHeight(40f, FontScaleBasis.CssPx))
+        val heightOnly = plain.copy(style = CellStyle(lineHeight = CellLineHeight(fixed)))
+        val fullCell = plain.copy(style = CellStyle(lineHeight = CellLineHeight(fixed,
+            CellTextStrut(.6f, FontScaleBasis.NormalBody, cellFont))))
+        val rootStyle = TextStyle(fontSize = 20.sp, lineHeight = 24.sp,
+            fontFamily = FontFamily.SansSerif, letterSpacing = 0.sp)
+        val aliasFamily = ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif)
+        val contexts = arrayOfNulls<ContainerTextContext>(3)
+        val prepared = arrayOfNulls<PreparedNativeFloatText>(3)
+        val formats = arrayOfNulls<NativeContainerTextFormat>(3)
+        val actions = mutableListOf<EntryLink>()
+        var bodyContext: ContainerTextContext? = null
+        var primary: Throwable? = null
+        fun declaredBand(size: Float, height: Float, family: android.graphics.Typeface): Pair<Float, Float> {
+            val paint = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                textSize = size; typeface = family
+            }
+            val metrics = paint.fontMetrics
+            val leading = (height - (metrics.descent - metrics.ascent)) / 2f
+            return metrics.ascent - leading to metrics.descent + leading
+        }
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = rootStyle)) {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                        val density = LocalDensity.current
+                        val body = nativeBodyTextContext(snapshot, ContainerLineHeight.Multiplier(1.5f),
+                            null, 20.sp, rootStyle, density).getOrThrow()
+                        val bodyFormat = nativeContainerTextFormat(body, 20.sp, rootStyle, density)
+                        val inheritedHeight = nativeCellTextContext(heightOnly, body, bodyFormat.style,
+                            20.sp, density, 1f, null)
+                        val nearerOwner = nativeCellTextContext(fullCell, body, bodyFormat.style,
+                            20.sp, density, 1f, null)
+                        val aliases = ContainerStyle(ownerFontScale = .75f,
+                            fontFamily = aliasFamily).textContext(body)
+                        val excluded = listOf(inheritedHeight, nearerOwner, aliases).map {
+                            checkNotNull(nativeWithoutBodyTextContext(it, 20.sp, density))
+                        }
+                        excluded.forEachIndexed { index, context ->
+                            val format = nativeContainerTextFormat(context, 20.sp, rootStyle, density)
+                            CompositionLocalProvider(LocalNativeContainerTextContext provides context) {
+                                val spans = listOf(child)
+                                val annotated = styledTextAnnotation(spans, null, format.style) { actions += it }
+                                val value = prepareNativeFloatText(spans, annotated, emptyList(), format.style,
+                                    MaterialTheme.colorScheme.primary, emptyList(),
+                                    AppSettings(allowImages = false, allowAudio = false), "", { actions += it },
+                                    nativeLineHeight = format.lineHeight, sourceFamily = format.sourceFamily,
+                                    ownerFont = format.ownerFont)
+                                SideEffect { contexts[index] = context; prepared[index] = value; formats[index] = format }
+                            }
+                        }
+                        SideEffect { bodyContext = body }
+                    }
+                }
+            } }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val original = checkNotNull(bodyContext)
+                assertSame(snapshot, checkNotNull(original.containerText).snapshot)
+                assertNotNull(original.bodyOrigin)
+                val lineOnly = checkNotNull(contexts[0])
+                assertNull(lineOnly.containerText); assertNull(lineOnly.cellText); assertNull(lineOnly.bodyOrigin)
+                assertEquals(NativeLineHeightPolicy.Pixels(40f), checkNotNull(formats[0]).lineHeight)
+                val complete = checkNotNull(contexts[1])
+                assertNull(complete.containerText); assertNull(complete.bodyOrigin)
+                assertSame(cellFont, checkNotNull(checkNotNull(complete.cellText).ownerFont).snapshot)
+                assertEquals(NativeLineHeightPolicy.Pixels(40f), checkNotNull(formats[1]).lineHeight)
+                val aliases = checkNotNull(contexts[2])
+                assertNull(aliases.containerText); assertNull(aliases.cellText); assertNull(aliases.bodyOrigin)
+                assertEquals(.75f, aliases.ownerFontScale, 0f)
+                assertEquals(aliasFamily, aliases.fontFamily)
+                assertEquals(NativeLineHeightPolicy.Pixels(24f), checkNotNull(formats[2]).lineHeight)
+                val sizes = listOf(20f, 12f, 15f)
+                for (index in prepared.indices) {
+                    val value = checkNotNull(prepared[index])
+                    val native = checkNotNull(value.native)
+                    val source = native.source(240)
+                    val runs = source.getSpans(0, source.length, NativeRunLineMetrics::class.java)
+                    assertEquals(sizes[index], runs.single { it.strut }.primary.fontSize, .001f)
+                    assertEquals(setOf(10f), runs.filter { !it.strut }.map { it.primary.fontSize }.toSet())
+                    assertFalse(native.paint.typeface.isBold); assertFalse(native.paint.typeface.isItalic)
+                    val height = if (index == 2) 24f else 40f
+                    val family = if (index == 2) android.graphics.Typeface.SERIF else android.graphics.Typeface.SANS_SERIF
+                    val ownerBand = declaredBand(sizes[index], height, family)
+                    val childBand = declaredBand(10f, height, android.graphics.Typeface.SANS_SERIF)
+                    val top = minOf(ownerBand.first, childBand.first)
+                    val bottom = maxOf(ownerBand.second, childBand.second)
+                    val geometry = checkNotNull(value.geometry).invoke(240, emptyList(), false)
+                    assertEquals(bottom - top, geometry.textBottom, .001f)
+                    assertEquals(-top, geometry.baselineForOffset(0), .001f)
+                    assertEquals("M", geometry.text.toString())
+                    assertNotNull(geometry.characterRects(0, 1).single())
+                    geometry.nodes.single { it.onClick != null }.onClick!!()
+                }
+                val scalar = plain.copy(style = CellStyle(lineHeight = CellLineHeight(fixed,
+                    CellTextStrut(.6f, FontScaleBasis.NormalBody))))
+                val refusal = assertThrows(UnsupportedFloatLayout::class.java) {
+                    nativeCellTextContext(scalar, original, checkNotNull(formats[0]).style,
+                        20.sp, Density(1f, 1f), 1f, null)
+                }
+                assertEquals("A scalar Cell strut cannot replace an inherited Container declaring font.", refusal.message)
+                assertSame(snapshot, checkNotNull(original.containerText).snapshot)
+                assertSame(child, plain.spans.single())
+                assertFalse(child.bold || child.italic || child.superscript || child.subscript)
+                assertEquals(List(3) { "body-near-owner" }, actions.map { it.target })
+            }
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                compose.activityRule.scenario.onActivity { it.setContent {} }
+                compose.waitForIdle()
+            } catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
+    @Test fun actualFigureCaptionsKeepTheirHeightsAboveBodyAndCellDefaults() {
+        fun px(value: Float) = StyleLength(StyleLengthUnit.Px, value)
+        val zero = StyleEdges(px(0f), px(0f), px(0f), px(0f))
+        val caption = listOf(Span("link", "Caption", target = "body-caption", foreground = "#0000ff"))
+        val table = Table(emptyList(), listOf(listOf(Cell(caption, false, 1, 1))),
+            style = TableStyle(border = StyleBorder.None, padding = zero,
+                lineHeight = ComputedLineHeight(1.1f, FontScaleBasis.NormalBody)))
+        val figure = Figure(FigureContent.Missing(Span("text", "media"), px(80f), px(20f)),
+            FigureFormat.Framed, FigurePlacement.None, FigureClear.None, zero, zero, zero,
+            1f, px(24f), FigureColor.Transparent, FigureBorder.None,
+            FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme,
+            FigureColor.Transparent, caption = caption)
+        val figures = listOf(figure,
+            figure.copy(caption = emptyList(), captionBlocks = listOf(Block("paragraph", 0, caption))),
+            figure.copy(caption = emptyList(), captionBlocks = listOf(Block("table", 0, emptyList(), table = table))))
+        val snapshot = InlineFontSnapshot(fontScale = 1.8f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontNormalized = true, bold = true, italic = true, fontFamily = ContainerFontFamily.SansSerif)
+        val cellFont = InlineFontSnapshot(fontScale = .6f, fontScaleBasis = FontScaleBasis.NormalBody,
+            language = "en", fontFamily = ContainerFontFamily.SansSerif, fontFeatures = FontFeaturePolicy.Normal)
+        val cell = Cell(emptyList(), false, 1, 1, style = CellStyle(lineHeight = CellLineHeight(
+            CellLineHeightValue.Length(CellFixedLineHeight(40f, FontScaleBasis.CssPx)),
+            CellTextStrut(.6f, FontScaleBasis.NormalBody, cellFont))))
+        val rootStyle = TextStyle(fontSize = 20.sp, lineHeight = 26.sp,
+            fontFamily = FontFamily.SansSerif, letterSpacing = 0.sp)
+        val selected = mutableStateOf(0 to false)
+        val actions = mutableListOf<EntryLink>()
+        var published: FloatTextGeometry? = null
+        var primary: Throwable? = null
+        data class Observed(val text: String, val height: Int,
+            val characters: List<android.graphics.RectF?>, val bounds: List<android.graphics.RectF>,
+            val start: Int, val end: Int)
+        val baselines = arrayOfNulls<Observed>(figures.size)
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = rootStyle)) {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                        val density = LocalDensity.current
+                        val body = if (selected.value.second) nativeBodyTextContext(snapshot,
+                            ContainerLineHeight.Multiplier(1.5f), null, 20.sp, rootStyle, density).getOrThrow() else null
+                        val inheritedStyle = body?.let { nativeContainerTextFormat(it, 20.sp, rootStyle, density).style }
+                            ?: rootStyle
+                        val context = checkNotNull(nativeCellTextContext(cell, body, inheritedStyle,
+                            20.sp, density, 1f, null))
+                        CompositionLocalProvider(LocalNativeContainerTextContext provides context) {
+                            Layout(content = {
+                                AnonymousBlockView(Block("paragraph", 0, emptyList(),
+                                    figure = figures[selected.value.first]), Modifier, { actions += it }, emptyList(),
+                                    AppSettings(allowImages = false, allowAudio = false), "", style = rootStyle,
+                                    onGeometry = { published = it }, interactionOwner = false)
+                            }) { children, constraints ->
+                                val child = children.single().measure(Constraints(maxWidth = 240, maxHeight = 400))
+                                layout(constraints.constrainWidth(240), constraints.constrainHeight(child.height)) {
+                                    child.place(0, 0)
+                                }
+                            }
+                        }
+                    }
+                }
+            } }
+            for (kind in figures.indices) for (withBody in listOf(false, true, false)) {
+                compose.runOnIdle {
+                    if (selected.value != (kind to withBody)) {
+                        published = null; selected.value = kind to withBody
+                    }
+                }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    val geometry = checkNotNull(published)
+                    val text = geometry.text.toString()
+                    val start = text.indexOf("Caption")
+                    assertTrue(start >= 0)
+                    val action = geometry.nodes.single { it.onClick != null }
+                    assertEquals(start, action.start); assertEquals(start + 7, action.end)
+                    val characters = geometry.characterRects(start, start + 7).map { rect ->
+                        rect?.let { android.graphics.RectF(it) }
+                    }
+                    assertEquals(7, characters.count { it != null })
+                    val current = Observed(text, geometry.height, characters,
+                        action.bounds.map { android.graphics.RectF(it) }, action.start, action.end)
+                    val prior = baselines[kind]
+                    if (prior == null) {
+                        assertFalse(withBody); baselines[kind] = current
+                    } else {
+                        assertEquals("BODY must not replace the nearer Figure or caption-table height", prior, current)
+                    }
+                    action.onClick!!(); assertEquals("body-caption", actions.last().target)
+                    assertSame(caption.single(), figures[0].caption.single())
+                    assertSame(caption.single(), figures[1].captionBlocks!!.single().spans.single())
+                    assertSame(table, figures[2].captionBlocks!!.single().table)
+                    assertEquals(24f, figures[kind].captionLineHeight.value, 0f)
+                    assertEquals(FontScaleBasis.NormalBody, checkNotNull(table.style!!.lineHeight).fontScaleBasis)
+                    assertEquals(22f, table.style!!.lineHeight!!.value * 20f, .001f)
+                    assertEquals(40f, (cell.style!!.lineHeight!!.height as CellLineHeightValue.Length).value.value, 0f)
+                }
+            }
+            assertEquals(List(figures.size * 3) { "body-caption" }, actions.map { it.target })
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                compose.activityRule.scenario.onActivity { it.setContent {} }
+                compose.waitForIdle()
+            } catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
         }
     }
 }

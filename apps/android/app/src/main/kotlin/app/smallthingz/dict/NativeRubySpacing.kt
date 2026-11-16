@@ -190,8 +190,9 @@ internal class NativeRubySpacingMap(val origin: Float, advance: Float, allocatio
 }
 
 private data class RubyRun(val start: Int, val end: Int, val contextStart: Int, val contextEnd: Int,
-    val x: Float, val rtl: Boolean, val paint: TextPaint, val shape: NativeRubyGlyphRun)
-private data class RubyRunPiece(val start: Int, val end: Int, val left: Float, val advance: Float)
+    val x: Float, val rtl: Boolean, val paint: TextPaint, val shape: NativeRubyGlyphRun, val y: Float)
+private data class RubyRunPiece(val start: Int, val end: Int, val left: Float, val advance: Float,
+    val contextStart: Int? = null, val contextEnd: Int? = null)
 private data class RubyRunPlan(val run: RubyRun, val pieces: List<RubyRunPiece>)
 
 private fun rubyShape(text: CharSequence, start: Int, end: Int, contextStart: Int, contextEnd: Int,
@@ -210,7 +211,13 @@ private fun rubyGlyphs(value: PositionedGlyphs): NativeRubyGlyphRun {
 private class RubySpacingCanvas(private val source: CharSequence, private val lineStart: Int,
     private val target: Canvas? = null, private val map: NativeRubyPhysicalMap? = null,
     private val plans: List<RubyRunPlan> = emptyList(), private val top: Float = 0f,
-    private val nested: List<RubyNestedReplay> = emptyList()) : Canvas(), NativeRubyAtomicCanvas {
+    private val nested: List<RubyNestedReplay> = emptyList(),
+    private val strictInlineEdges: Boolean = false, private val exactReplay: Boolean = false) : Canvas(), NativeRubyAtomicCanvas {
+    private var replayOrdinal = 0
+    fun requireCompleteReplay() {
+        if (exactReplay && replayOrdinal != plans.size)
+            throw UnsupportedFloatLayout("Inline replay lost an actual native draw occurrence")
+    }
     private data class State(val x: Float, val y: Float, val targetSave: Int?)
     private val saved = mutableListOf(State(0f, 0f, null))
     val runs = mutableListOf<RubyRun>()
@@ -239,18 +246,41 @@ private class RubySpacingCanvas(private val source: CharSequence, private val li
         return map?.physical(original, after) ?: original
     }
     private fun y(value: Float) = value + saved.last().y - top
-    override fun clipRect(left: Float, top: Float, right: Float, bottom: Float): Boolean =
-        target?.clipRect(x(left), y(top), x(right, false), y(bottom)) ?: true
+    override fun clipRect(left: Float, top: Float, right: Float, bottom: Float): Boolean {
+        if (!strictInlineEdges) return target?.clipRect(x(left), y(top), x(right, false), y(bottom)) ?: true
+        val shift = inlineShift(left, right)
+        val x1 = inlineX(left, shift); val y1 = inlineY(top)
+        val x2 = inlineX(right, shift); val y2 = inlineY(bottom)
+        return target?.clipRect(x1, y1, x2, y2) ?: true
+    }
     override fun clipRect(rect: RectF): Boolean = clipRect(rect.left, rect.top, rect.right, rect.bottom)
     override fun clipRect(rect: Rect): Boolean = clipRect(rect.left.toFloat(), rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat())
+    private fun inlineShift(first: Float, last: Float, point: Boolean = false): Float {
+        val selected = map ?: return 0f
+        if (selected !is NativeInlineIncrementMap)
+            throw UnsupportedFloatLayout("Inline replay lost its source edge map")
+        return selected.constantShift(first + saved.last().x, last + saved.last().x, point)
+    }
+    private fun inlineX(value: Float, shift: Float): Float = inlineCoordinate((value + saved.last().x).toDouble() + shift)
+    private fun inlineY(value: Float): Float = inlineCoordinate((value + saved.last().y).toDouble() - top)
     override fun drawRect(left: Float, top: Float, right: Float, bottom: Float, paint: Paint) {
-        target?.drawRect(x(left), y(top), x(right, false), y(bottom), paint)
+        if (strictInlineEdges) {
+            val shift = inlineShift(left, right)
+            val x1 = inlineX(left, shift); val y1 = inlineY(top)
+            val x2 = inlineX(right, shift); val y2 = inlineY(bottom)
+            target?.drawRect(x1, y1, x2, y2, paint)
+        } else target?.drawRect(x(left), y(top), x(right, false), y(bottom), paint)
     }
     override fun drawRect(rect: RectF, paint: Paint) = drawRect(rect.left, rect.top, rect.right, rect.bottom, paint)
     override fun drawRect(rect: Rect, paint: Paint) = drawRect(rect.left.toFloat(), rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat(), paint)
     override fun drawLine(startX: Float, startY: Float, stopX: Float, stopY: Float, paint: Paint) {
         if (!rubyClose(startY, stopY)) unsupported()
-        target?.drawLine(x(startX), y(startY), x(stopX, false), y(stopY), paint)
+        if (strictInlineEdges) {
+            val shift = inlineShift(startX, stopX, point = true)
+            val x1 = inlineX(startX, shift); val y1 = inlineY(startY)
+            val x2 = inlineX(stopX, shift); val y2 = inlineY(stopY)
+            target?.drawLine(x1, y1, x2, y2, paint)
+        } else target?.drawLine(x(startX), y(startY), x(stopX, false), y(stopY), paint)
     }
     override fun paintRubyAtom(x: Float, y: Float, draw: (Canvas) -> Unit) {
         val output = target ?: return
@@ -271,35 +301,47 @@ private class RubySpacingCanvas(private val source: CharSequence, private val li
         finally { output.restoreToCount(save) }
     }
     private fun run(start: Int, end: Int, contextStart: Int, contextEnd: Int,
-        x: Float, y: Float, rtl: Boolean, paint: Paint, draw: (Int, Int, Float, Float) -> Unit) {
+        x: Float, y: Float, rtl: Boolean, paint: Paint, draw: (Int, Int, Int, Int, Float, Float) -> Unit) {
         if (start == end) return
         if (start < contextStart || end > contextEnd || contextStart < 0 || contextEnd > source.length ||
             paint.textAlign != Paint.Align.LEFT || (paint.startHyphenEdit != 0 || paint.endHyphenEdit != 0))
             unsupported()
         val physicalX = x + saved.last().x
-        if (target == null) {
+        if (target == null && !exactReplay) {
             val copy = TextPaint(paint)
             val shape = rubyShape(source, start, end, contextStart, contextEnd, rtl, copy)
-            runs += RubyRun(start, end, contextStart, contextEnd, physicalX, rtl, copy, shape)
+            runs += RubyRun(start, end, contextStart, contextEnd, physicalX, rtl, copy, shape, y + saved.last().y)
             return
         }
-        val plan = plans.firstOrNull { candidate ->
+        fun matches(candidate: RubyRunPlan): Boolean {
             val value = candidate.run
-            value.start == start && value.end == end && value.contextStart == contextStart && value.contextEnd == contextEnd &&
-                value.rtl == rtl && rubyClose(value.x, physicalX) && value.paint.equalsForTextMeasurement(paint)
-        } ?: throw UnsupportedFloatLayout("Ruby native paint no longer matches its measured spacing")
+            return value.start == start && value.end == end && value.contextStart == contextStart && value.contextEnd == contextEnd &&
+                value.rtl == rtl && rubyClose(value.x, physicalX) && value.paint.equalsForTextMeasurement(paint) &&
+                (!exactReplay || rubyClose(value.y, y + saved.last().y))
+        }
+        val plan = if (exactReplay) plans.getOrNull(replayOrdinal++)?.takeIf(::matches) else plans.firstOrNull(::matches)
+        if (plan == null) throw UnsupportedFloatLayout("Ruby native paint no longer matches its measured spacing")
         plan.pieces.forEach { piece ->
             val left = physicalX + piece.left
-            val shift = checkNotNull(map).shiftAt(left + piece.advance / 2f)
-            draw(piece.start, piece.end, left + shift, this.y(y))
+            val translated = if (strictInlineEdges) {
+                // A certified zero-output control has no glyph primitive to replay.
+                if (piece.advance == 0f) return@forEach
+                val selected = map as? NativeInlineIncrementMap
+                    ?: throw UnsupportedFloatLayout("Inline replay lost its source edge map")
+                val right = inlineCoordinate(left.toDouble() + piece.advance)
+                val shift = selected.constantShift(left, right)
+                inlineCoordinate(left.toDouble() + shift)
+            } else left + checkNotNull(map).shiftAt(left + piece.advance / 2f)
+            draw(piece.start, piece.end, piece.contextStart ?: contextStart, piece.contextEnd ?: contextEnd,
+                translated, if (strictInlineEdges) inlineY(y) else this.y(y))
         }
     }
     override fun drawTextRun(text: CharSequence, start: Int, end: Int, contextStart: Int,
         contextEnd: Int, x: Float, y: Float, isRtl: Boolean, paint: Paint) {
         if (contextStart < 0 || contextEnd > text.length || contextEnd > source.length ||
             (contextStart until contextEnd).any { text[it] != source[it] }) unsupported()
-        run(start, end, contextStart, contextEnd, x, y, isRtl, paint) { a, b, px, py ->
-            target?.drawTextRun(text, a, b, contextStart, contextEnd, px, py, isRtl, paint)
+        run(start, end, contextStart, contextEnd, x, y, isRtl, paint) { a, b, c, d, px, py ->
+            target?.drawTextRun(text, a, b, c, d, px, py, isRtl, paint)
         }
     }
     override fun drawTextRun(text: CharArray, index: Int, count: Int, contextIndex: Int,
@@ -310,8 +352,8 @@ private class RubySpacingCanvas(private val source: CharSequence, private val li
             contextIndex + contextCount + lineStart > source.length ||
             (contextIndex until contextIndex + contextCount).any { text[it] != source[lineStart + it] }) unsupported()
         run(lineStart + index, lineStart + index + count, lineStart + contextIndex,
-            lineStart + contextIndex + contextCount, x, y, isRtl, paint) { a, b, px, py ->
-            target?.drawTextRun(text, a - lineStart, b - a, contextIndex, contextCount, px, py, isRtl, paint)
+            lineStart + contextIndex + contextCount, x, y, isRtl, paint) { a, b, c, d, px, py ->
+            target?.drawTextRun(text, a - lineStart, b - a, c - lineStart, d - c, px, py, isRtl, paint)
         }
     }
     private fun unsupported(): Nothing = throw UnsupportedFloatLayout("Ruby spacing requires owned native run dispatch")
@@ -1044,4 +1086,353 @@ private class NativeRubyHierarchyLine(private val owner: NativeFloatGeometry, pr
         }
     override val extents get() = NativeGeometryExtents(width, height.toFloat(),
         ordinaryPaintBounds.reduceOrNull { a, b -> a.enclosing(b) }, nativeBoundsOf(rectsForRange(0, text.length)))
+}
+
+/** Raw native UTF-16 and paragraph coordinates; ordinals identify actual draw occurrences. */
+internal data class NativeInlineRunPiece(val start: Int, val end: Int, val rtl: Boolean,
+    val left: Float, val right: Float, val ordinal: Int)
+internal enum class NativeInlineBoundaryAffinity { Following, Preceding }
+internal class NativeInlineBoundary internal constructor(internal val authority: Any,
+    val offset: Int, val affinity: NativeInlineBoundaryAffinity, internal val x: Float, internal val rtl: Boolean)
+internal data class NativeInlineBoundaryIncrement(val boundary: NativeInlineBoundary, val pixels: Float)
+internal data class NativeInlinePlacedEdge(val increment: NativeInlineBoundaryIncrement,
+    val left: Float, val right: Float, val ordinal: Int)
+
+private fun inlineCoordinate(value: Double): Float {
+    if (!value.isFinite() || abs(value) > TablePixelLimit)
+        throw UnsupportedFloatLayout("Inline edge exceeds native coordinates")
+    return value.toFloat()
+}
+private fun inlineSilent(source: CharSequence, start: Int, end: Int): Boolean =
+    (start until end).all { android.icu.lang.UCharacter.hasBinaryProperty(source[it].code,
+        android.icu.lang.UProperty.BIDI_CONTROL) }
+
+/** Capture uses the actual native dispatcher. Requested anchors alone never split a
+ * glyph run; only positive increments and source-required context breaks require cuts. */
+internal class NativeInlineLineCapture private constructor(
+    internal val raw: NativeFloatGeometry,
+    val line: Int,
+    private val runs: List<RubyRun>,
+    private val requested: Set<Int>,
+    private val contextBreaks: Set<Int>,
+) {
+    internal val source = raw.nativeRubyShapingSource
+    val start = raw.nativeRangeOfLine(line).first
+    val end = raw.nativeRangeOfLine(line).second
+    val baseline = raw.nativeRubyLineBaseline(line)
+    private val authority = Any()
+    private val anchors: List<NativeInlineBoundary> = requested.flatMap { offset ->
+        NativeInlineBoundaryAffinity.entries.mapNotNull { affinity ->
+            anchor(offset, affinity)?.let { (x, rtl) -> NativeInlineBoundary(authority, offset, affinity, x, rtl) }
+        }
+    }
+    val pieces: List<NativeInlineRunPiece> = runs.mapIndexed { index, run ->
+        val right = inlineCoordinate(run.x.toDouble() + run.shape.advance)
+        if (run.shape.advance > 0f && right <= run.x)
+            throw UnsupportedFloatLayout("Inline run lacks representable native advance")
+        NativeInlineRunPiece(run.start, run.end, run.rtl, run.x, right, index)
+    }
+    private fun runX(run: RubyRun, offset: Int): Float {
+        val advance = run.paint.getRunAdvance(source, run.start, run.end, run.contextStart, run.contextEnd, run.rtl, offset)
+        if (!advance.isFinite() || advance < 0f || advance > run.shape.advance && !rubyClose(advance, run.shape.advance))
+            throw UnsupportedFloatLayout("Inline boundary lost its native run advance")
+        return inlineCoordinate(run.x.toDouble() + if (run.rtl) run.shape.advance - advance else advance)
+    }
+    internal fun slice(ordinal: Int, start: Int, end: Int): NativeInlineRunPiece {
+        val run = runs[ordinal]
+        require(start in run.start..run.end && end in start..run.end)
+        val first = runX(run, start); val last = runX(run, end)
+        return NativeInlineRunPiece(start, end, run.rtl, minOf(first, last), maxOf(first, last), ordinal)
+    }
+    fun piecesForRange(start: Int, end: Int): List<NativeInlineRunPiece> {
+        require(start in 0..source.length && end in start..source.length)
+        return runs.mapIndexedNotNull { ordinal, run ->
+            val first = maxOf(start, run.start); val last = minOf(end, run.end)
+            if (first < last) slice(ordinal, first, last) else null
+        }
+    }
+    private fun anchor(offset: Int, affinity: NativeInlineBoundaryAffinity): Pair<Float, Boolean>? {
+        val following = affinity == NativeInlineBoundaryAffinity.Following
+        val candidates = runs.filter { if (following) offset >= it.start && offset < it.end else offset > it.start && offset <= it.end }
+        if (candidates.isNotEmpty()) {
+            val positions = candidates.map { run ->
+                runX(run, offset) to run.rtl
+            }
+            val first = positions.first()
+            if (positions.any { it.second != first.second || !rubyClose(it.first, first.first) })
+                throw UnsupportedFloatLayout("Inline boundary has ambiguous native draw occurrences")
+            return first
+        }
+        // Layout supplies the omitted suffix and its own selected-line caret. Its
+        // whitespace/newline affinity must not be inferred from raw source spelling.
+        if (raw.nativeInlineVisibleEnd(line) < end && offset >= raw.nativeInlineVisibleEnd(line) && omitted(offset, end)) {
+            val caret = raw.nativeRubyLineCaret(line, offset) ?: return null
+            return caret.left to (raw.nativeRubyLineDirection(line) < 0)
+        }
+        // A source endpoint can use its sole adjacent native run. An omitted bidi
+        // control needs both zero measured advance and the same actual native caret.
+        val adjacent = if (following) runs.filter { it.start >= offset }.minOfOrNull { it.start }
+            else runs.filter { it.end <= offset }.maxOfOrNull { it.end }
+        if (adjacent != null) {
+            val a = minOf(offset, adjacent); val b = maxOf(offset, adjacent)
+            if (silent(a, b)) {
+                val side = anchor(adjacent, affinity) ?: return null
+                val caret = raw.nativeRubyLineCaret(line, offset) ?: return null
+                if (rubyClose(caret.left, side.first)) return side
+                return null
+            }
+        }
+        if (offset == start && !following && runs.any { it.start == start })
+            return anchor(offset, NativeInlineBoundaryAffinity.Following)
+        if (offset == end && following && runs.any { it.end == end })
+            return anchor(offset, NativeInlineBoundaryAffinity.Preceding)
+        if (runs.isEmpty() && silent(start, end)) {
+            val caret = raw.nativeRubyLineCaret(line, offset) ?: return null
+            return caret.left to (raw.nativeRubyLineDirection(line) < 0)
+        }
+        return null
+    }
+    fun boundary(offset: Int, affinity: NativeInlineBoundaryAffinity): NativeInlineBoundary =
+        anchors.singleOrNull { it.offset == offset && it.affinity == affinity }
+            ?: throw UnsupportedFloatLayout("Inline boundary lacks a selected native affinity")
+    internal fun owns(boundary: NativeInlineBoundary): Boolean = boundary.authority === authority && anchors.any { it === boundary }
+    internal fun point(offset: Int, affinity: NativeInlineBoundaryAffinity): Pair<Float, Boolean>? = anchor(offset, affinity)
+    private fun silentCharacters(start: Int, end: Int): Boolean =
+        (start until end).all { at -> inlineSilent(source, at, at + 1) || at == this.end - 1 && raw.isHardLineBreak(at) }
+    internal fun silent(start: Int, end: Int): Boolean = silentCharacters(start, end) &&
+        runs.none { it.start < end && it.end > start } && raw.nativeRubyMeasuredAdvance(start, end) == 0f
+    private fun omitted(start: Int, end: Int): Boolean = start >= raw.nativeInlineVisibleEnd(line) &&
+        end <= this.end && runs.none { it.start < end && it.end > start }
+    internal fun unpainted(start: Int, end: Int): Boolean = silent(start, end) || omitted(start, end)
+    fun mapped(increments: List<NativeInlineBoundaryIncrement>, translationX: Float = 0f): NativeInlineMappedLine =
+        NativeInlineMappedLine(this, increments.toList(), translationX)
+
+    private fun plans(cuts: Set<Int>): List<RubyRunPlan> = runs.map { run ->
+        val edges = (listOf(run.start, run.end) + (cuts + contextBreaks).filter { it > run.start && it < run.end }).distinct().sorted()
+        val assembled = mutableListOf<NativeRubyGlyph>()
+        var total = 0.0
+        val pieces = edges.zipWithNext().map { (a, b) ->
+            val original = rubyShape(source, a, b, run.contextStart, run.contextEnd, run.rtl, run.paint)
+            val contextStart = maxOf(run.contextStart, contextBreaks.filter { it <= a }.maxOrNull() ?: run.contextStart)
+            val contextEnd = minOf(run.contextEnd, contextBreaks.filter { it >= b }.minOrNull() ?: run.contextEnd)
+            val bounded = rubyShape(source, a, b, contextStart, contextEnd, run.rtl, run.paint)
+            if (!rubyClose(original.advance, bounded.advance) || !rubyGlyphsEqual(original.glyphs, bounded.glyphs, original.advance))
+                throw UnsupportedFloatLayout("Inline edge changes required native boundary shaping")
+            if (bounded.advance == 0f && (!silentCharacters(a, b) || bounded.glyphs.isNotEmpty()))
+                throw UnsupportedFloatLayout("Inline edge has an unproved zero-advance source piece")
+            val prefix = if (a == run.start) 0f else rubyShape(source, run.start, a,
+                run.contextStart, run.contextEnd, run.rtl, run.paint).advance
+            val left = if (run.rtl) run.shape.advance - prefix - bounded.advance else prefix
+            assembled += bounded.glyphs.map { it.copy(x = it.x + left) }
+            total += bounded.advance
+            RubyRunPiece(a, b, left, bounded.advance, contextStart, contextEnd)
+        }
+        if (!rubyClose(run.shape.advance, total.toFloat()) || !rubyGlyphsEqual(run.shape.glyphs, assembled, run.shape.advance))
+            throw UnsupportedFloatLayout("Inline edge splits an intact native glyph cluster")
+        RubyRunPlan(run, pieces)
+    }
+    internal fun prepare(cuts: Set<Int>): Pair<List<NativeInlineRunPiece>, (Canvas?, NativeRubyPhysicalMap) -> Unit> {
+        val plans = plans(cuts)
+        val pieces = plans.flatMapIndexed { ordinal, plan -> plan.pieces.map {
+            val left = inlineCoordinate(plan.run.x.toDouble() + it.left)
+            val right = inlineCoordinate(left.toDouble() + it.advance)
+            if (it.advance > 0f && right <= left)
+                throw UnsupportedFloatLayout("Inline piece lacks representable native advance")
+            NativeInlineRunPiece(it.start, it.end, plan.run.rtl, left, right, ordinal)
+        } }
+        val paint: (Canvas?, NativeRubyPhysicalMap) -> Unit = { canvas, map ->
+            val replay = RubySpacingCanvas(source, start, canvas, map, plans, strictInlineEdges = true, exactReplay = true)
+            raw.paintRubyNativeLine(replay, line)
+            replay.requireCompleteReplay()
+        }
+        return pieces to paint
+    }
+    internal fun validateContexts() { plans(emptySet()) }
+    companion object {
+        internal fun capture(raw: NativeFloatGeometry, line: Int, boundaries: List<Int>,
+            requiredContextBreaks: Set<Int>): NativeInlineLineCapture {
+            require(raw.nativeRubyRaw === raw && line in 0 until raw.shapedLineCount)
+            val source = raw.nativeRubyShapingSource
+            val range = raw.nativeRangeOfLine(line)
+            require(boundaries.all { it in range.first..range.second } && requiredContextBreaks.all { it in 0..source.length })
+            if (raw.hasPreciseClips || raw.positionedGroups.isNotEmpty() ||
+                source.getSpans(range.first, range.second, android.text.style.ReplacementSpan::class.java).isNotEmpty())
+                throw UnsupportedFloatLayout("Inline edges require the original ordinary native text line")
+            val breaker = BreakIterator.getCharacterInstance(raw.nativeRubyShapingPaint.textLocale).apply { setText(source.toString()) }
+            if ((boundaries + requiredContextBreaks).any { !breaker.isBoundary(it) })
+                throw UnsupportedFloatLayout("Inline edge crosses a native grapheme boundary")
+            val probe = RubySpacingCanvas(source, range.first, strictInlineEdges = true)
+            raw.paintRubyNativeLine(probe, line)
+            if (probe.atoms.isNotEmpty()) throw UnsupportedFloatLayout("Inline edges acquired a replacement draw")
+            return NativeInlineLineCapture(raw, line, probe.runs.toList(),
+                (boundaries + range.first + range.second + probe.runs.flatMap { listOf(it.start, it.end) }).toSet(),
+                requiredContextBreaks.toSet()).also { it.validateContexts() }
+        }
+    }
+}
+internal fun nativeInlineLineCapture(raw: NativeFloatGeometry, line: Int, boundaries: List<Int>,
+    requiredContextBreaks: Set<Int> = emptySet()): NativeInlineLineCapture =
+    NativeInlineLineCapture.capture(raw, line, boundaries, requiredContextBreaks)
+
+private class NativeInlineIncrementMap(val capture: NativeInlineLineCapture,
+    increments: List<NativeInlineBoundaryIncrement>, val translation: Float) : NativeRubyPhysicalMap {
+    private data class Edge(val placed: NativeInlinePlacedEdge, val x: Float, val before: Float, val after: Float)
+    val placed: List<NativeInlinePlacedEdge>
+    private val physical: List<Edge>
+    override val minimumShift = translation
+    override val maximumShift: Float
+    init {
+        inlineCoordinate(translation.toDouble())
+        if (increments.any { !capture.owns(it.boundary) || !it.pixels.isFinite() || it.pixels < 0f })
+            throw UnsupportedFloatLayout("Inline increment lacks its original boundary")
+        val ordered = increments.withIndex().sortedWith(compareBy({ it.value.boundary.x }, { it.index }))
+        var shift = translation
+        physical = ordered.map { item ->
+            val before = shift
+            shift = inlineCoordinate(before.toDouble() + item.value.pixels)
+            if (item.value.pixels > 0f && shift <= before)
+                throw UnsupportedFloatLayout("Inline increment cannot retain its native translation")
+            val x = item.value.boundary.x
+            val left = inlineCoordinate(x.toDouble() + before)
+            val right = inlineCoordinate(x.toDouble() + shift)
+            if (item.value.pixels > 0f && right <= left)
+                throw UnsupportedFloatLayout("Inline increment is smaller than representable native geometry")
+            Edge(NativeInlinePlacedEdge(item.value, left, right, item.index), x, before, shift)
+        }
+        maximumShift = shift
+        placed = physical.sortedBy { it.placed.ordinal }.map { it.placed }
+    }
+    private fun prefix(x: Float, after: Boolean): Float = physical.lastOrNull {
+        if (after) x >= it.x else x > it.x
+    }?.after ?: translation
+    override fun shiftAt(x: Float): Float = prefix(x, true)
+    override fun physical(x: Float, after: Boolean): Float = inlineCoordinate(x.toDouble() + prefix(x, after))
+    fun constantShift(first: Float, last: Float, point: Boolean = false): Float {
+        val left = minOf(first, last); val right = maxOf(first, last)
+        if (physical.any { it.placed.increment.pixels > 0f &&
+                (it.x > left && it.x < right || point && left == right && it.x == left) })
+            throw UnsupportedFloatLayout("Inline edge crosses an unowned native paint primitive")
+        val result = prefix(left, true)
+        if (left < right && result != prefix(right, false))
+            throw UnsupportedFloatLayout("Inline source interval has no constant translation")
+        return result
+    }
+    fun gapAt(x: Float): NativeInlinePlacedEdge? = physical.firstOrNull { it.placed.left <= x && x < it.placed.right }?.placed
+    fun original(x: Float): Float {
+        var shift = translation
+        for (edge in physical) {
+            if (x < edge.placed.left) break
+            if (x < edge.placed.right) return edge.x
+            shift = edge.after
+        }
+        return inlineCoordinate(x.toDouble() - shift)
+    }
+}
+
+/** Paint and queries share one immutable physical edge map; added space owns no text. */
+internal class NativeInlineMappedLine internal constructor(private val capture: NativeInlineLineCapture,
+    increments: List<NativeInlineBoundaryIncrement>, translationX: Float) {
+    private val map = NativeInlineIncrementMap(capture, increments, translationX)
+    private val cuts = increments.filter { it.pixels > 0f }.map { it.boundary.offset }.toSet()
+    private val prepared = capture.prepare(cuts)
+    private val originalPieces = prepared.first
+    val line get() = capture.line
+    val baseline get() = capture.baseline
+    val placedEdges: List<NativeInlinePlacedEdge> = map.placed
+    private fun shift(piece: NativeInlineRunPiece): Float = if (piece.left == piece.right)
+        map.physical(piece.left, !piece.rtl) - piece.left else map.constantShift(piece.left, piece.right)
+    val pieces: List<NativeInlineRunPiece> = originalPieces.map { piece ->
+        val dx = shift(piece)
+        piece.copy(left = inlineCoordinate(piece.left.toDouble() + dx), right = inlineCoordinate(piece.right.toDouble() + dx))
+    }
+    init {
+        if (originalPieces.any { piece -> increments.any { it.pixels > 0f && it.boundary.x > piece.left &&
+                it.boundary.x < piece.right && !rubyClose(it.boundary.x, piece.left) && !rubyClose(it.boundary.x, piece.right) } })
+            throw UnsupportedFloatLayout("Inline increment crosses a native source allocation")
+        // Run the complete dispatcher before retaining this view. A child rectangle or
+        // decoration crossing an unowned inserted edge is refused instead of stretched.
+        prepared.second(null, map)
+        parts(capture.start, capture.end)
+    }
+    private data class Part(val start: Int, val end: Int, val dx: Float)
+    private fun parts(start: Int, end: Int): List<Part> {
+        require(start in 0..capture.source.length && end in start..capture.source.length)
+        val first = maxOf(start, capture.start); val last = minOf(end, capture.end)
+        if (first >= last) return emptyList()
+        val edges = (listOf(first, last) + originalPieces.flatMap { listOf(it.start, it.end) }
+            .filter { it > first && it < last }).distinct().sorted()
+        return edges.zipWithNext().map { (a, b) ->
+            val owners = originalPieces.filter { it.start <= a && it.end >= b }
+            val shifts = owners.map(::shift)
+            val dx = if (shifts.isNotEmpty()) {
+                if (shifts.any { it != shifts.first() })
+                    throw UnsupportedFloatLayout("Inline query has ambiguous native source occurrences")
+                shifts.first()
+            } else {
+                if (!capture.unpainted(a, b))
+                    throw UnsupportedFloatLayout("Inline query contains unproved unpainted source")
+                val left = capture.raw.nativeRubyLineCaret(line, a)?.left
+                    ?: throw UnsupportedFloatLayout("Inline silent source lacks its native start")
+                val right = capture.raw.nativeRubyLineCaret(line, b)?.left
+                    ?: throw UnsupportedFloatLayout("Inline silent source lacks its native end")
+                val low = minOf(left, right); val high = maxOf(left, right)
+                map.constantShift(low, high)
+            }
+            Part(a, b, dx)
+        }
+    }
+    fun piecesForRange(start: Int, end: Int): List<NativeInlineRunPiece> {
+        require(start in 0..capture.source.length && end in start..capture.source.length)
+        return originalPieces.mapNotNull { piece ->
+            val first = maxOf(start, piece.start); val last = minOf(end, piece.end)
+            if (first >= last) null else {
+                val own = capture.slice(piece.ordinal, first, last)
+                val dx = shift(piece)
+                own.copy(left = inlineCoordinate(own.left.toDouble() + dx), right = inlineCoordinate(own.right.toDouble() + dx))
+            }
+        }
+    }
+    /** The selected native visible advance owns the outer edges; omitted source remains queryable. */
+    fun advanceBounds(): RectF {
+        val raw = capture.raw
+        val first = raw.nativeInlineVisibleBounds(line)?.left
+            ?: raw.nativeRubyLineCaret(line, capture.start)?.left
+            ?: throw UnsupportedFloatLayout("Inline line lost its native advance origin")
+        val last = inlineCoordinate(first.toDouble() + raw.nativeInlineVisibleAdvance(line))
+        if (placedEdges.any { it.increment.boundary.x < first || it.increment.boundary.x > last })
+            throw UnsupportedFloatLayout("Inline edge lies outside its native advance")
+        val metrics = raw.nativeUsedLineMetrics(line)
+        return RectF(map.physical(first, false), inlineCoordinate(baseline.toDouble() + metrics.top),
+            map.physical(last, true), inlineCoordinate(baseline.toDouble() + metrics.bottom))
+    }
+    fun paint(canvas: Canvas) = prepared.second(canvas, map)
+    fun rectsForRange(start: Int, end: Int): List<RectF> = parts(start, end).flatMap { part ->
+        capture.raw.nativeRubyLineRects(line, part.start, part.end).map { RectF(it).apply { offset(part.dx, 0f) } }
+    }
+    fun fragmentsForRange(start: Int, end: Int): List<NativeInlineActionFragment> = parts(start, end).flatMap { part ->
+        capture.raw.nativeInlineActionFragments(part.start, part.end).filter { it.line == line }.map { original ->
+            val path = original.pathForBand(0f, 1f).apply { offset(part.dx, 0f) }
+            NativeInlineActionFragment(line, original.start, original.end, path, original.baseline)
+        }
+    }
+    fun caretRect(offset: Int, affinity: NativeInlineBoundaryAffinity = NativeInlineBoundaryAffinity.Following): RectF? {
+        if (offset !in capture.start..capture.end) return null
+        val original = capture.raw.nativeRubyLineCaret(line, offset) ?: return null
+        val point = capture.point(offset, affinity) ?: return null
+        val after = (affinity == NativeInlineBoundaryAffinity.Following) != point.second
+        val x = map.physical(point.first, after)
+        return RectF(x, original.top, inlineCoordinate(x.toDouble() + original.width()), original.bottom)
+    }
+    fun offsetForPosition(x: Float, y: Float): Int {
+        map.gapAt(x)?.let { return it.increment.boundary.offset }
+        return capture.raw.nativeRubyLineOffsetForPosition(line, map.original(x), y).coerceIn(capture.start, capture.end)
+    }
+    fun cursorAt(x: Float, y: Float): InlineCursor? {
+        if (map.gapAt(x) != null) return null
+        return capture.raw.nativeRubyLineCursorAt(line, map.original(x), y)
+    }
+    val ordinaryPaintBounds: List<NativeFloatBounds> get() = capture.raw.nativeRubyLinePaintBounds(line).map {
+        NativeFloatBounds(inlineCoordinate(it.left.toDouble() + map.minimumShift), it.top,
+            inlineCoordinate(it.right.toDouble() + map.maximumShift), it.bottom)
+    }
 }

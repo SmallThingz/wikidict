@@ -492,4 +492,109 @@ class RubyTextTest {
         assertEquals(projection.text, rubyGraphicalSpans(listOf(group)).joinToString("") { it.text + it.trail })
     }
 
+
+    @Test fun inlineBoxesKeepOriginalRichRangesRepeatedOwnersAndChildFontFields() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val noBorder = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None,
+            InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        val edge = InlineBoxBorderEdge.Solid(StyleLength(StyleLengthUnit.Em, .125f), InlineBoxColor.CurrentColor)
+        val border = noBorder.copy(right = edge)
+        val overlays = listOf(
+            InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+                right = InlineBoxInset(StyleWidthUnit.Em, -.25f), bottom = InlineBoxInset(StyleWidthUnit.Percent, 67f)), border),
+            InlineBoxOverlay(InlineBoxInsets(bottom = InlineBoxInset(StyleWidthUnit.Px, -1f),
+                left = InlineBoxInset(StyleWidthUnit.Percent, 25f)), noBorder.copy(top = edge)))
+        val first = Span("text", "A\ud83d\ude80", trail = "\u0301\u00a0\u2192", italic = true,
+            fontScale = 1.35f, foreground = "#123456", language = "ja")
+        val second = Span("text", "\u05d0", direction = "rtl", fontScale = 1f,
+            fontScaleBasis = FontScaleBasis.NormalBody)
+        val third = Span("text", "!", fontScale = 20f, fontScaleBasis = FontScaleBasis.CssPx)
+        val children = listOf(first, second, third)
+        val payload = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), border, overlays, spans = children)
+        val sourceOwner = Span("link", "", "source-target", targetFragment = "section", bold = true,
+            fontScale = 1.35f, inlineBoxGroup = payload)
+        val source = listOf(sourceOwner, sourceOwner)
+        val projection = rubyGraphicalProjection(source, "entry/pitch")
+        val body = "A\ud83d\ude80\u0301\u00a0\u2192\u05d0!"
+        assertEquals(body + body, projection.text)
+        val owners = projection.ranges.filter { it.role == RubyTextRole.BoxGroup }
+        assertEquals(2, owners.size)
+        assertTrue(owners.all { it.span === sourceOwner })
+        assertEquals(listOf(0 to 8, 8 to 16), owners.map { it.start to it.end })
+        assertEquals(listOf("entry/pitch/spans/0", "entry/pitch/spans/1"), owners.map { it.path })
+        val firstRange = projection.ranges.first { it.span === first }
+        assertEquals(0, firstRange.start); assertEquals(6, firstRange.end)
+        assertEquals("entry/pitch/spans/0/inlineBoxGroup/spans/0", firstRange.path)
+        assertEquals(8, projection.ranges.size)
+        assertEquals(2, projection.ranges.count { it.span?.hasInternalAction() == true })
+        assertEquals(body + body, rubyBaseText(source))
+        assertEquals(body + body, rubyFallbackText(source))
+        for (flat in listOf(rubyGraphicalSpans(source), rubyFallbackSpans(source))) {
+            assertEquals(6, flat.size)
+            assertTrue(flat.all { it.kind == "link" && it.target == "source-target" && it.targetFragment == "section" })
+            assertEquals(listOf(1.35f, 1f, 20f, 1.35f, 1f, 20f), flat.map { it.fontScale })
+            assertEquals(listOf(FontScaleBasis.Context, FontScaleBasis.NormalBody, FontScaleBasis.CssPx),
+                flat.take(3).map { it.fontScaleBasis })
+            assertTrue(flat[0].italic); assertFalse(flat[0].bold)
+            assertEquals(first.foreground, flat[0].foreground)
+            assertEquals(first.language, flat[0].language)
+            assertEquals(first.trail, flat[0].trail)
+            assertEquals(second.direction, flat[1].direction)
+        }
+        assertSame(children, sourceOwner.inlineBoxGroup!!.spans)
+        assertSame(overlays, sourceOwner.inlineBoxGroup!!.overlays)
+        assertSame(overlays[0], sourceOwner.inlineBoxGroup!!.overlays[0])
+        assertEquals(listOf("text", "text", "text"), children.map { it.kind })
+        assertTrue(children.all { it.target.isEmpty() && !it.bold })
+        assertEquals(1.35f, first.fontScale!!, 0f)
+        assertEquals(1.35f, sourceOwner.fontScale!!, 0f)
+    }
+
+    @Test fun inlineBoxFallbackKeepsRubyDelimitersActionCensusAndIndependentChildLinks() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val none = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None,
+            InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        fun box(children: List<Span>) = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), none,
+            overlays = listOf(InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+                left = InlineBoxInset(StyleWidthUnit.Px, 0f)), none)), spans = children)
+        val glyph = text("B"); val reading = text("r")
+        val ruby = owner(RubySegment(emptyList(), listOf(base(glyph)), listOf(annotation(0, 1, 0, listOf(reading)))))
+        val inner = text("!")
+        val nested = Span("text", "", inlineBoxGroup = box(listOf(inner)))
+        val metric = Span("text", "", inlineStyle = InlineTextStyle(lineHeight =
+            InlineLineHeight.Computed(InlineComputedLength(9f, FontScaleBasis.CssPx))))
+        val whole = Span("external_link", "", "https://example.test/pitch#part", tooltip = "source box",
+            underline = true, inlineBoxGroup = box(listOf(ruby, nested, metric)))
+        val projection = rubyGraphicalProjection(listOf(whole))
+        assertEquals("Br!", projection.text)
+        assertEquals(2, projection.ranges.count { it.role == RubyTextRole.BoxGroup })
+        assertEquals(1, projection.ranges.count { it.span?.kind == "external_link" })
+        val flat = rubyFallbackSpans(listOf(whole))
+        assertEquals("B\uff08r\uff09!", flat.joinToString("") { it.text + it.trail })
+        assertTrue(flat.filter { it.text == "\uff08" || it.text == "\uff09" }.all {
+            it.kind == "text" && it.target.isEmpty() && it.linkPaint == null
+        })
+        for (value in listOf("B", "r", "!")) {
+            val leaf = flat.single { it.text == value }
+            assertEquals(whole.target, leaf.target); assertEquals("external_link", leaf.kind)
+            assertEquals("source box", leaf.tooltip)
+        }
+        val flatMetric = flat.single { it.text.isEmpty() && it.trail.isEmpty() }
+        assertSame(metric.inlineStyle, flatMetric.inlineStyle)
+        assertEquals("text", flatMetric.kind); assertTrue(flatMetric.target.isEmpty())
+        assertTrue(flatMetric.underline); assertFalse(metric.underline)
+        assertEquals("text", glyph.kind); assertEquals("text", reading.kind); assertEquals("text", inner.kind)
+        assertSame(ruby, whole.inlineBoxGroup!!.spans[0])
+        assertSame(nested, whole.inlineBoxGroup!!.spans[1])
+        val independent = Span("link", "child", "child-target", targetFragment = "child-section")
+        val textOwner = Span("text", "", inlineBoxGroup = box(listOf(independent)))
+        assertSame(independent, rubyGraphicalSpans(listOf(textOwner)).single())
+        assertSame(independent, rubyFallbackSpans(listOf(textOwner)).single())
+        assertEquals("child", rubyFallbackText(listOf(textOwner)))
+        assertEquals(listOf(independent), rubyGraphicalProjection(listOf(textOwner)).ranges
+            .mapNotNull { it.span }.filter { it.hasInternalAction() })
+        val ordinary = listOf(text("ordinary", "!"))
+        assertSame(ordinary, rubyGraphicalSpans(ordinary))
+        assertSame(ordinary.single(), rubyFallbackSpans(ordinary).single())
+    }
 }

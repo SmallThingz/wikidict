@@ -150,8 +150,22 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
     val height: StyleLength? = null, val columns: ContainerColumns? = null,
     val positioning: ContainerPositioning? = null, val minHeight: StyleLength? = null,
     val marginValues: ContainerMargins? = null, val fontFamily: ContainerFontFamily? = null,
-    val positionedScope: PositionedScope? = null) {
+    val positionedScope: PositionedScope? = null, val ownerFont: InlineFontSnapshot? = null) {
     init {
+        ownerFont?.let { font ->
+            require(font.fontNormalized && font.fontScale != null &&
+                font.fontScaleBasis in listOf(FontScaleBasis.NormalBody, FontScaleBasis.CssPx)) {
+                "Container owner font requires a normalized explicit size"
+            }
+            require(positioning == null && positionedScope == null) {
+                "Container owner font cannot replace a positioned owner"
+            }
+            require(ownerFontScale == null || font.fontScaleBasis == FontScaleBasis.NormalBody &&
+                ownerFontScale == font.fontScale) { "Container owner font scale alias disagrees" }
+            require(fontFamily == null || font.fontFamily == fontFamily) {
+                "Container owner font family alias disagrees"
+            }
+        }
         if (positioning is ContainerPositioning.Absolute) {
             require(positionedScope == null && floatSide == null && columns == null && screenMaxWidth == null &&
                 marginValues == null && overflow == null && layout != ContainerLayout.FlexRow && flexItem == null &&
@@ -174,6 +188,27 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
     }
 
     internal fun textContext(inherited: ContainerTextContext): ContainerTextContext {
+        if (ownerFont != null || inherited.containerText != null) {
+            val previous = inherited.containerText
+            val snapshot = ownerFont ?: checkNotNull(previous).snapshot.let { font ->
+                font.copy(fontScale = ownerFontScale ?: font.fontScale,
+                    fontScaleBasis = if (ownerFontScale == null) font.fontScaleBasis else FontScaleBasis.NormalBody,
+                    fontFamily = fontFamily ?: font.fontFamily)
+            }
+            val state = NativeContainerTextState(snapshot,
+                resolved = previous?.resolved.takeIf { ownerFont == null && previous?.snapshot == snapshot },
+                lineHeight = if (lineHeight != null) null else previous?.lineHeight ?: inherited.cellText?.lineHeight)
+            return ContainerTextContext(ownerFontScale ?: snapshot.fontScale.takeIf {
+                snapshot.fontScaleBasis == FontScaleBasis.NormalBody
+            } ?: inherited.ownerFontScale, lineHeight ?: inherited.lineHeight, cellText = null,
+                fontFamily = snapshot.fontFamily ?: fontFamily ?: inherited.fontFamily, containerText = state,
+                bodyOrigin = inherited.bodyOrigin?.copy(
+                    fontInherited = inherited.bodyOrigin.fontInherited && ownerFont == null,
+                    lineHeightInherited = inherited.bodyOrigin.lineHeightInherited && lineHeight == null,
+                    sizeInherited = inherited.bodyOrigin.sizeInherited && ownerFontScale == null,
+                    familyInherited = inherited.bodyOrigin.familyInherited && fontFamily == null),
+                resolvedLineHeight = inherited.resolvedLineHeight.takeIf { lineHeight == null })
+        }
         val previous = inherited.cellText
         val metricFont = previous?.ownerFont?.snapshot
         val sameScale = ownerFontScale == null || metricFont != null &&
@@ -185,7 +220,11 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
                 // Preserve the original Cell contribution; an incomplete descendant font
                 // change cannot issue a new metric owner or silently revert to a default.
                 ownerFontInvalidated = previous.ownerFontInvalidated || metricFont != null && (!sameScale || !sameFamily)),
-            fontFamily ?: inherited.fontFamily)
+            fontFamily ?: inherited.fontFamily, bodyOrigin = inherited.bodyOrigin?.copy(
+                lineHeightInherited = inherited.bodyOrigin.lineHeightInherited && lineHeight == null,
+                sizeInherited = inherited.bodyOrigin.sizeInherited && ownerFontScale == null,
+                familyInherited = inherited.bodyOrigin.familyInherited && fontFamily == null),
+            resolvedLineHeight = inherited.resolvedLineHeight.takeIf { lineHeight == null })
     }
 
     /** Call with the reader viewport, never a nested cell's or container's width. */
@@ -215,7 +254,10 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
  * Holding this context does not create a line box in an empty Container. */
 internal data class ContainerTextContext(val ownerFontScale: Float = 1f,
     val lineHeight: ContainerLineHeight = ContainerLineHeight.Normal,
-    val cellText: NativeCellTextState? = null, val fontFamily: ContainerFontFamily? = null) {
+    val cellText: NativeCellTextState? = null, val fontFamily: ContainerFontFamily? = null,
+    val containerText: NativeContainerTextState? = null,
+    val bodyOrigin: NativeBodyTextOrigin? = null,
+    val resolvedLineHeight: NativeLineHeightPolicy? = null) {
     init { require(ownerFontScale.isFinite() && ownerFontScale >= 0f) }
 }
 

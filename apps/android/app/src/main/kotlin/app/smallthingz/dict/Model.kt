@@ -33,20 +33,28 @@ data class Span(
     val ruby: Ruby? = null,
     val inlinePaddingGroup: InlinePaddingGroup? = null,
     val inlineActionGroup: InlineActionGroup? = null,
+    val inlineBoxGroup: InlineBoxGroup? = null,
 ) {
     init {
         require(ruby == null || kind == "text" && text.isEmpty() && target.isEmpty() && trail.isEmpty() &&
-            targetFragment == null && image == null && inlinePaddingGroup == null && inlineActionGroup == null) { "Ruby requires a sole ordinary text owner" }
+            targetFragment == null && image == null && inlinePaddingGroup == null && inlineActionGroup == null && inlineBoxGroup == null) { "Ruby requires a sole ordinary text owner" }
         require(ruby == null || validRubyChild(this)) { "Invalid ruby owner" }
         inlinePaddingGroup?.let {
-            require(text.isEmpty() && trail.isEmpty() && image == null && ruby == null && inlineActionGroup == null &&
+            require(text.isEmpty() && trail.isEmpty() && image == null && ruby == null && inlineActionGroup == null && inlineBoxGroup == null &&
                 validRubyBodyChild(this)) { "Invalid inline padding owner" }
             PresentationSpanVisitor { _, _ -> }.spans(listOf(this))
         }
         inlineActionGroup?.let {
             require(kind in setOf("link", "external_link") && target.isNotEmpty() && text.isEmpty() &&
-                trail.isEmpty() && image == null && ruby == null && inlinePaddingGroup == null &&
+                trail.isEmpty() && image == null && ruby == null && inlinePaddingGroup == null && inlineBoxGroup == null &&
                 validRubyBodyChild(this)) { "Invalid inline action owner" }
+            PresentationSpanVisitor { _, _ -> }.spans(listOf(this))
+        }
+        inlineBoxGroup?.let {
+            require(text.isEmpty() && trail.isEmpty() && image == null && ruby == null &&
+                inlinePaddingGroup == null && inlineActionGroup == null && validRubyChild(this)) {
+                "Invalid inline box owner"
+            }
             PresentationSpanVisitor { _, _ -> }.spans(listOf(this))
         }
         require(tooltip == null || validPresentationString(tooltip)) { "Invalid span tooltip" }
@@ -76,12 +84,12 @@ data class Span(
         require(image == null || (text.isEmpty() && trail.isEmpty())) { "Inline image occurrences cannot also contain text" }
         inlineStyle?.let { policy ->
             require(image == null && when (kind) {
-                "text" -> target.isEmpty() && (text.isNotEmpty() || policy.lineHeight != null || ruby != null || inlinePaddingGroup != null)
-                "link", "external_link" -> target.isNotEmpty() && (text.isNotEmpty() || inlinePaddingGroup != null || inlineActionGroup != null)
+                "text" -> target.isEmpty() && (text.isNotEmpty() || policy.lineHeight != null || ruby != null || inlinePaddingGroup != null || inlineBoxGroup != null)
+                "link", "external_link" -> target.isNotEmpty() && (text.isNotEmpty() || inlinePaddingGroup != null || inlineActionGroup != null || inlineBoxGroup != null)
                 else -> false
             }) { "Inline effects require an ordinary text owner or an empty line-height strut" }
-            require(policy.cursor == null || text.isNotEmpty() || ruby != null || inlinePaddingGroup != null || inlineActionGroup != null) { "Empty inline struts cannot own a cursor" }
-            require(policy.wrap == null || text.isNotEmpty() || ruby != null || inlinePaddingGroup != null || inlineActionGroup != null) { "Empty inline struts cannot own wrapping" }
+            require(policy.cursor == null || text.isNotEmpty() || ruby != null || inlinePaddingGroup != null || inlineActionGroup != null || inlineBoxGroup != null) { "Empty inline struts cannot own a cursor" }
+            require(policy.wrap == null || text.isNotEmpty() || ruby != null || inlinePaddingGroup != null || inlineActionGroup != null || inlineBoxGroup != null) { "Empty inline struts cannot own wrapping" }
             require(fontScale == null || fontScale.isFinite() && fontScale >= 0f) { "Invalid inline owner font scale" }
             require(!policy.fontNormalized || fontScale != null && fontScaleBasis != FontScaleBasis.Context) {
                 "Normalized inline font requires an explicit non-context scale"
@@ -91,6 +99,48 @@ data class Span(
                     "Shifted inline line-height owner differs from the run font"
                 }
         }
+    }
+}
+
+/** A paint value at the declaring inline boundary; current color remains dynamic. */
+sealed interface InlineBoxColor {
+    data object CurrentColor : InlineBoxColor
+    data object Transparent : InlineBoxColor
+    data class Rgb(val value: String) : InlineBoxColor {
+        init { require(Regex("#[0-9a-f]{6}").matches(value)) { "Invalid inline box RGB" } }
+    }
+    data class LightDark(val light: String, val dark: String) : InlineBoxColor {
+        init { require(listOf(light, dark).all { Regex("#[0-9a-f]{6}").matches(it) }) { "Invalid inline box theme RGB" } }
+    }
+}
+sealed interface InlineBoxBorderEdge {
+    data object None : InlineBoxBorderEdge
+    data object Hidden : InlineBoxBorderEdge
+    data class Solid(val width: StyleLength, val color: InlineBoxColor) : InlineBoxBorderEdge
+    data class Dotted(val width: StyleLength, val color: InlineBoxColor) : InlineBoxBorderEdge
+}
+data class InlineBoxBorderEdges(val top: InlineBoxBorderEdge, val right: InlineBoxBorderEdge,
+    val bottom: InlineBoxBorderEdge, val left: InlineBoxBorderEdge)
+/** Offsets are signed. A missing inset is auto, never a stored zero. */
+data class InlineBoxInset(val unit: StyleWidthUnit, val value: Float) {
+    init { require(value.isFinite()) { "Invalid inline box inset" } }
+}
+data class InlineBoxInsets(val top: InlineBoxInset? = null, val right: InlineBoxInset? = null,
+    val bottom: InlineBoxInset? = null, val left: InlineBoxInset? = null)
+/** Empty absolute decoration with auto sizes and no text, advance, or action. */
+data class InlineBoxOverlay(val insets: InlineBoxInsets, val border: InlineBoxBorderEdges) {
+    init {
+        require((insets.left != null || insets.right != null) && (insets.top != null || insets.bottom != null)) {
+            "Inline box overlay requires an explicit inset on each axis"
+        }
+    }
+}
+/** Only original children contribute text. Overlay order is authored paint order. */
+data class InlineBoxGroup(val padding: StyleEdges, val border: InlineBoxBorderEdges,
+    val overlays: List<InlineBoxOverlay> = emptyList(), val spans: List<Span>) {
+    init {
+        require(spans.isNotEmpty()) { "Inline box requires a child" }
+        PresentationSpanVisitor { _, _ -> }.inlineBoxGroup(this)
     }
 }
 
@@ -944,30 +994,37 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     var onFigure: (Figure) -> Unit = {}
     var visitFigureContent: ((FigureContent) -> Unit)? = null
     private var remaining = 1 shl 20
+    private var actualTextLeaves = 0
     private fun charge(count: Int) { require(count <= remaining) { "Presentation item budget exceeded" }; remaining -= count }
     private fun descend(depth: Int): Int { require(depth < MaxContentDepth) { "Content nesting is too deep" }; return depth + 1 }
     fun spans(value: List<Span>, preformatted: Boolean = false, contentDepth: Int = 0) {
         spanList(value, preformatted, contentDepth, display = true, rubyChild = false)
     }
     private fun spanList(value: List<Span>, preformatted: Boolean, contentDepth: Int,
-        display: Boolean, rubyChild: Boolean, gap: Boolean = false, actionOwner: Span? = null) {
+        display: Boolean, rubyChild: Boolean, gap: Boolean = false, actionOwner: Span? = null, boxChild: Boolean = false) {
         charge(value.size)
         for (span in value) {
             if (rubyChild) require(if (gap) validRubyChild(span) else validRubyBodyChild(span)) {
                 "Invalid ruby child for its body or gap context"
             }
+            if (boxChild) require(validRubyChild(span)) { "Invalid inline box child" }
             if (gap) require(span.kind == "text" && span.target.isEmpty() && span.targetFragment == null &&
-                span.image == null && span.ruby == null && span.inlinePaddingGroup == null && span.inlineActionGroup == null && span.trail.isEmpty() && span.text.all {
+                span.image == null && span.ruby == null && span.inlinePaddingGroup == null && span.inlineActionGroup == null && span.inlineBoxGroup == null && span.trail.isEmpty() && span.text.all {
                     it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == '\u000c'
                 }) { "Ruby gaps require CSS whitespace text without actions" }
             require(actionOwner == null || span.kind == "text") { "Inline padding action repeats a descendant action" }
             requirePaddingActionColor(actionOwner, span.foreground)
             onSpan(span)
+            if (span.text.isNotEmpty() || span.trail.isNotEmpty()) actualTextLeaves++
             span.ruby?.let { ruby(it, contentDepth, actionOwner) }
             span.inlinePaddingGroup?.let {
                 inlinePaddingGroup(it, contentDepth, actionOwner ?: span.takeIf { it.kind in setOf("link", "external_link") })
             }
             span.inlineActionGroup?.let { inlineActionGroup(it, contentDepth, actionOwner ?: span) }
+            span.inlineBoxGroup?.let {
+                inlineBoxGroup(it, contentDepth, actionOwner ?: span.takeIf { it.kind in setOf("link", "external_link") },
+                    strictBody = rubyChild)
+            }
         }
         if (display) visit(value, preformatted)
     }
@@ -977,6 +1034,16 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         require(foreground == null || foreground == (source.foreground ?: paint.normal.foreground)) {
             "Inline padding action conflicts with descendant foreground"
         }
+    }
+    fun bodyTypography(value: BodyTypography?) { if (value != null) charge(1) }
+    fun inlineBoxGroup(value: InlineBoxGroup, contentDepth: Int = 0, actionOwner: Span? = null,
+        strictBody: Boolean = false) {
+        val depth = descend(contentDepth)
+        charge(value.overlays.size)
+        val before = actualTextLeaves
+        spanList(value.spans, false, depth, display = false, rubyChild = strictBody, boxChild = true,
+            actionOwner = actionOwner)
+        require(actualTextLeaves != before) { "Inline box requires actual child text or trail" }
     }
     fun inlinePaddingGroup(value: InlinePaddingGroup, contentDepth: Int = 0, actionOwner: Span? = null) {
         spanList(value.spans, false, descend(contentDepth), display = false, rubyChild = true,
@@ -1014,6 +1081,7 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     fun block(value: Block, tableDepth: Int = 0, contentDepth: Int = 0) {
         when {
             value.container != null -> {
+                if (value.container.style.ownerFont != null) charge(1)
                 onContainer(value.container)
                 blocks(value.container.blocks, tableDepth, descend(contentDepth))
             }
@@ -1037,6 +1105,9 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
                 inlinePaddingGroup(it, contentDepth, value.content.span.takeIf { it.kind in setOf("link", "external_link") })
             }
             value.content.span.inlineActionGroup?.let { inlineActionGroup(it, contentDepth, value.content.span) }
+            value.content.span.inlineBoxGroup?.let {
+                inlineBoxGroup(it, contentDepth, value.content.span.takeIf { it.kind in setOf("link", "external_link") })
+            }
             contentVisitor(value.content)
         }
         val rich = value.captionBlocks
@@ -1132,7 +1203,7 @@ data class SectionHeadingStyle(val box: ContainerStyle, val font: InlineFontSnap
             (box.overflow == null || box.overflow == ContainerOverflow.Visible) &&
             box.floatSide == null && box.flexItem == null && box.alignItems == null && box.columns == null &&
             box.positioning == null && box.screenMaxWidth == null && box.height == null &&
-            box.minHeight == null && box.marginValues == null) { "Unsupported heading box" }
+            box.minHeight == null && box.marginValues == null && box.ownerFont == null) { "Unsupported heading box" }
         require(font.fontScale != null && font.fontScaleBasis == FontScaleBasis.NormalBody &&
             font.fontScale == box.ownerFontScale && font.language.isNotEmpty() &&
             font.language.toByteArray(Charsets.UTF_8).size <= 1024 && font.role == "normal" &&
@@ -1157,9 +1228,9 @@ data class Section(val level: Int, val title: String, val blocks: List<Block>, v
                 companion.table == null && companion.flow == null && companion.container == null &&
                 companion.figure == null && companion.style == null && companion.ruleStyle == null &&
                 companion.textAlign == null && companion.spans.isNotEmpty() && companion.spans.all {
-                    it.kind in setOf("text", "link", "external_link") && (it.text.isNotEmpty() || it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null) &&
-                        it.trail.isEmpty() && (it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.direction.isEmpty())
-                } && (if (companion.spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null }) rubyFallbackText(companion.spans)
+                    it.kind in setOf("text", "link", "external_link") && (it.text.isNotEmpty() || it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null) &&
+                        it.trail.isEmpty() && (it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null || it.direction.isEmpty())
+                } && (if (companion.spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null }) rubyFallbackText(companion.spans)
                     else companion.spans.joinToString("") { it.text }) == title) { "Invalid authored heading companion" }
         }
     }
@@ -1185,6 +1256,16 @@ internal fun Reference.visitSpanRuns(visit: (List<Span>, Boolean) -> Unit) {
 /** Applies to the complete semantic Section body, before References and Media. */
 enum class BodyAdjoiningPolicy { Ordinary }
 
+/** Independent declaring metrics for section body lines; no hierarchy or source text. */
+data class BodyTypography(val ownerFont: InlineFontSnapshot, val lineHeight: ContainerLineHeight? = null) {
+    init {
+        require(ownerFont.fontNormalized && ownerFont.fontScale != null &&
+            ownerFont.fontScaleBasis in listOf(FontScaleBasis.NormalBody, FontScaleBasis.CssPx)) {
+            "Body typography requires a normalized explicit size"
+        }
+    }
+}
+
 data class Entry(
     val title: String,
     val displayTitle: List<Span>,
@@ -1205,6 +1286,7 @@ data class Entry(
     val etymologySections: Set<Int> = emptySet(),
     val organization: PresentationOrganization? = null,
     val bodyAdjoining: BodyAdjoiningPolicy? = null,
+    val bodyTypography: BodyTypography? = null,
 ) {
     internal val rasterImages: List<RasterImageOccurrence> = rasterImageOccurrences(this)
     internal val inlineImages: List<InlineImage> = rasterImages.map { it.image }
@@ -1348,6 +1430,7 @@ internal fun rasterImageOccurrences(entry: Entry): List<RasterImageOccurrence> =
             } }
         }
     }
+    visitor.bodyTypography(entry.bodyTypography)
     visitor.spans(entry.displayTitle); visitor.spans(entry.preamble)
     entry.sections.forEach { visitor.blocks(it.blocks) }
     inReference = true
@@ -1366,7 +1449,7 @@ internal fun Entry.isInstalled(installed: (String) -> Boolean): Boolean =
 private val previewClassWhitespace = Regex("\\s+")
 
 fun textOf(spans: List<Span>): String =
-    (if (spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null }) rubyFallbackText(spans) else spans.joinToString("") { it.text + it.trail })
+    (if (spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null }) rubyFallbackText(spans) else spans.joinToString("") { it.text + it.trail })
         .replace(Regex("\\s+"), " ").trim()
 
 

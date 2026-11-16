@@ -63,6 +63,12 @@ internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Floa
         if (minimum > maximum) throw UnsupportedFloatLayout("Ruby minimum exceeds its unbroken native width")
         return NativeWidthRange(minimum, maximum)
     }
+    if (source.getSpans(0, source.length, NativeInlineBoxSpan::class.java).isNotEmpty()) {
+        val bounded = nativeInlineBoxBoundedSource(source) { at ->
+            nativeInlineBoxParagraphRtl(source, rubyDirection, at)
+        }
+        return NativeInlineBoxWidths(bounded, paint, rubyDirection).intrinsic(inset, breakWordMinimum)
+    }
     val replacements = source.getSpans(0, source.length, ReplacementSpan::class.java)
     val wrapPlan = NativeTextWrapPlan.create(source, paint)
     wrapPlan?.noWrap?.let { plan ->

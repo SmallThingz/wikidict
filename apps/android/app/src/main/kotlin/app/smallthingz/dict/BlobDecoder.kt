@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRV decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRV and DPRY decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table", "container")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,12 +13,19 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..86) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..86) 57 else magicVersion
-        r.fontScales = magicVersion in 65..86
-        r.fontScaleBases = magicVersion in 66..86
-        r.tableStyles = magicVersion in 67..86
-        r.inlineImages = magicVersion in 67..86
+        require(magicVersion in 50..57 || magicVersion in 65..86 || magicVersion == 89) { "Unsupported presentation format" }
+        val ownerGeometry = magicVersion == 89
+        val ownerGeometryFlags = if (ownerGeometry) r.byte().also {
+            require(it in 1..7) { "Invalid owner geometry feature flags" }
+        } else 0
+        r.ownerGeometry = ownerGeometry
+        r.containerOwnerFonts = ownerGeometryFlags and 1 != 0
+        r.inlineBoxGroups = ownerGeometryFlags and 4 != 0
+        val version = if (magicVersion in 65..86 || ownerGeometry) 57 else magicVersion
+        r.fontScales = magicVersion in 65..86 || ownerGeometry
+        r.fontScaleBases = magicVersion in 66..86 || ownerGeometry
+        r.tableStyles = magicVersion in 67..86 || ownerGeometry
+        r.inlineImages = magicVersion in 67..86 || ownerGeometry
         r.imageBorders = magicVersion >= 68
         r.blockLayouts = magicVersion >= 69
         r.targetFragments = magicVersion >= 70
@@ -121,6 +128,7 @@ object BlobDecoder {
             }
             result
         } else sections
+        val bodyTypography = if (ownerGeometryFlags and 2 != 0) r.bodyTypography() else null
         require((features and 4 != 0) == r.hasFontFamilyFeature) { "Font family feature does not match payload" }
         require((features and 8 != 0) == r.hasTableFloatClearFeature) { "Table float clear feature does not match payload" }
         require((features and 16 != 0) == r.hasTextFlowFeature) { "Text flow feature does not match payload" }
@@ -137,12 +145,14 @@ object BlobDecoder {
         require(magicVersion >= 85 || (magicVersion == 84) == (r.maximumTableDepth > LegacyMaxTableDepth)) {
             "T version does not match deep table payload"
         }
-        require(magicVersion == 86 || r.inlinePaddingGroups == r.hasInlinePaddingGroup) { "U version does not match inline padding payload" }
-        require(r.inlineActionGroups == r.hasInlineActionGroup) { "V version does not match inline action payload" }
+        require(ownerGeometry || magicVersion == 86 || r.inlinePaddingGroups == r.hasInlinePaddingGroup) { "U version does not match inline padding payload" }
+        require(ownerGeometry || r.inlineActionGroups == r.hasInlineActionGroup) { "V version does not match inline action payload" }
+        require(r.containerOwnerFonts == r.hasContainerOwnerFont && r.inlineBoxGroups == r.hasInlineBoxGroup &&
+            (ownerGeometryFlags and 2 != 0) == (bodyTypography != null)) { "Y features do not match owner geometry payload" }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, styledSections, references, preamble, media,
             etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
-            bodyAdjoining = bodyAdjoining)
+            bodyAdjoining = bodyAdjoining, bodyTypography = bodyTypography)
         // G uses the shared count/byte budget; C/D and E/F retain their wire limits.
         // Historical media-only entries do not acquire a typed-image catalog limit.
         require(magicVersion >= 71 || entry.inlineImages.isEmpty() || media.size <= (if (magicVersion >= 69) 256 else 128)) {
@@ -161,6 +171,11 @@ object BlobDecoder {
         var hasInlinePaddingGroup = false
         var inlineActionGroups = false
         var hasInlineActionGroup = false
+        var ownerGeometry = false
+        var containerOwnerFonts = false
+        var hasContainerOwnerFont = false
+        var inlineBoxGroups = false
+        var hasInlineBoxGroup = false
         var explanations = false
         var colors = false
         var anchors = false
@@ -241,7 +256,7 @@ object BlobDecoder {
             return List(size) { index(Int.MAX_VALUE) }
         }
         fun blockPaths(): List<List<Int>> = List(count(4)) { blockPath() }
-        fun spans(): List<Span> = List(count(if (inlineActionGroups) 40 else if (inlinePaddingGroups) 39 else if (rubySpans) 38 else if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) { span() }
+        fun spans(): List<Span> = List(count(if (inlineBoxGroups) 41 else if (inlineActionGroups) 40 else if (inlinePaddingGroups) 39 else if (rubySpans) 38 else if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) { span() }
         private fun span(): Span {
             val kind = enum(inline); val role = enum(roles); val f = byte()
             val text = string(); val target = string(); val trail = string()
@@ -303,13 +318,54 @@ object BlobDecoder {
             val ruby = if (rubySpans && presence()) ruby() else null
             val inlinePaddingGroup = if (inlinePaddingGroups && presence()) inlinePaddingGroup() else null
             val inlineActionGroup = if (inlineActionGroups && presence()) inlineActionGroup() else null
+            val inlineBoxGroup = if (inlineBoxGroups && presence()) inlineBoxGroup() else null
             if (image != null && linkPaint != null) {
                 require(imageLinkPaints) { "Image link paint requires R" }
                 hasImageLinkPaintFeature = true
             }
             return Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint, inlineStyle=inlineStyle, fontFamily=fontFamily, ruby=ruby, inlinePaddingGroup=inlinePaddingGroup, inlineActionGroup=inlineActionGroup)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint, inlineStyle=inlineStyle, fontFamily=fontFamily, ruby=ruby, inlinePaddingGroup=inlinePaddingGroup, inlineActionGroup=inlineActionGroup, inlineBoxGroup=inlineBoxGroup)
+        }
+        private fun inlineBoxColor(): InlineBoxColor = when (byte()) {
+            0 -> InlineBoxColor.CurrentColor
+            1 -> InlineBoxColor.Transparent
+            2 -> InlineBoxColor.Rgb(styleRgb())
+            3 -> InlineBoxColor.LightDark(styleRgb(), styleRgb())
+            else -> error("Unknown inline box color")
+        }
+        private fun inlineBoxBorderEdge(): InlineBoxBorderEdge = when (byte()) {
+            0 -> InlineBoxBorderEdge.None
+            1 -> InlineBoxBorderEdge.Hidden
+            2 -> InlineBoxBorderEdge.Solid(styleLength(), inlineBoxColor())
+            3 -> InlineBoxBorderEdge.Dotted(styleLength(), inlineBoxColor())
+            else -> error("Unknown inline box border")
+        }
+        private fun inlineBoxBorders() = InlineBoxBorderEdges(inlineBoxBorderEdge(), inlineBoxBorderEdge(),
+            inlineBoxBorderEdge(), inlineBoxBorderEdge())
+        private fun inlineBoxInset(): InlineBoxInset = InlineBoxInset(
+            StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown inline box inset unit"), buffer.float)
+        private fun inlineBoxGroup(): InlineBoxGroup = content {
+            require(buffer.remaining() >= 32) { "Truncated inline box group" }
+            val padding = styleEdges()
+            val border = inlineBoxBorders()
+            val overlays = List(count(15)) {
+                val flags = byte()
+                require(flags and 0xf0 == 0 && flags and 5 != 0 && flags and 10 != 0) {
+                    "Inline box overlay requires two positioned axes"
+                }
+                InlineBoxOverlay(InlineBoxInsets(
+                    if (flags and 1 != 0) inlineBoxInset() else null,
+                    if (flags and 2 != 0) inlineBoxInset() else null,
+                    if (flags and 4 != 0) inlineBoxInset() else null,
+                    if (flags and 8 != 0) inlineBoxInset() else null), inlineBoxBorders())
+            }
+            InlineBoxGroup(padding, border, overlays, spans()).also { hasInlineBoxGroup = true }
+        }
+        fun bodyTypography(): BodyTypography {
+            require(remainingItems > 0) { "Body typography exceeds the presentation budget" }
+            remainingItems--
+            return BodyTypography(inlineFontSnapshot(), if (presence()) containerLineHeight() else null)
         }
         private fun inlinePaddingGroup(): InlinePaddingGroup = content {
             require(buffer.remaining() >= 14) { "Truncated inline padding group" }
@@ -692,9 +748,16 @@ object BlobDecoder {
             positionedParent = false
             return try { read() } finally { positionedParent = previous }
         }
+        private fun containerOwnerFont(): InlineFontSnapshot {
+            require(containerOwnerFonts && remainingItems > 0) { "Container owner font exceeds the presentation budget" }
+            remainingItems--
+            return inlineFontSnapshot().also { hasContainerOwnerFont = true }
+        }
         private fun containerStyle(): ContainerStyle {
             val flags = if (containerFonts) u32().also {
-                require(it and (if (absoluteText) 0xff000000L else 0xff800000L) == 0L) { "Unknown container style field" }
+                require(it and (if (ownerGeometry) {
+                    if (containerOwnerFonts) 0xfe800000L else 0xff800000L
+                } else if (absoluteText) 0xff000000L else 0xff800000L) == 0L) { "Unknown container style field" }
             }.toInt() else u16()
             return ContainerStyle(if (flags and 1 != 0) containerMarginEdges() else null,
                 if (flags and 2 != 0) styleEdges() else null,
@@ -720,7 +783,8 @@ object BlobDecoder {
                 if (flags and 1048576 != 0) styleLength() else null,
                 if (flags and 2097152 != 0) containerMargins() else null,
                 if (flags and 4194304 != 0) containerFontFamily() else null,
-                if (flags and 8388608 != 0) positionedScope() else null)
+                if (flags and 8388608 != 0) positionedScope() else null,
+                if (flags and 16777216 != 0) containerOwnerFont() else null)
         }
         private fun container(tableDepth: Int): Container = content {
             val style = containerStyle()

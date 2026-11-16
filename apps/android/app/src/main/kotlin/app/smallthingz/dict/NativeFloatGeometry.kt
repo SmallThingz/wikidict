@@ -75,6 +75,7 @@ internal class NativeFloatGeometry private constructor(
     private val decorationBounds: (NativeFloatGeometry) -> NativeFloatBounds?,
     private val lineOrigins: FloatArray? = null,
     private val ruby: NativeRubyPlacedProjection? = null,
+    private val inlineBox: NativeInlineBoxGeometry? = null,
 ) : FloatTextGeometry {
     val floats: List<PlacedNativeFloat> get() = ruby?.floats ?: flow.floats
     /** Includes inherited margin boxes; only [floats] belong to this segment's paint/nodes. */
@@ -132,6 +133,7 @@ internal class NativeFloatGeometry private constructor(
     }
     private val selectableFragments by lazy {
         if (ruby != null) ruby.rects(0, text.length)
+        else if (inlineBox != null) inlineBox.rectsForRange(0, text.length)
         else if (authoredBaselines.isNotEmpty()) rectsForRange(0, text.length)
         else selectableLineBounds.flatMapIndexed { line, bounds ->
             if (hasAlignedImage(line)) authoredRangeRects(layout.getLineStart(line), layout.getLineEnd(line))
@@ -143,6 +145,7 @@ internal class NativeFloatGeometry private constructor(
      * or the taller font/selection ink. Floated replacements contribute their real margin boxes. */
     val scrollableBounds: NativeFloatBounds by lazy {
         ruby?.let { return@lazy it.scrollableBounds }
+        inlineBox?.let { return@lazy it.scrollableBounds }
         if (flow.sourceLinePresent?.none { it } == true) return@lazy NativeFloatBounds(0f, 0f, 0f, 0f)
         var bounds = NativeFloatBounds(0f, 0f, width.toFloat(), textBottom)
         selectableLineBounds.forEachIndexed { line, rect ->
@@ -156,28 +159,31 @@ internal class NativeFloatGeometry private constructor(
 
     override val ordinaryPaintBounds: List<NativeFloatBounds> by lazy {
         ruby?.let { return@lazy it.ordinaryPaintBounds + listOfNotNull(decorationBounds(this)) }
+        inlineBox?.let { return@lazy it.ordinaryPaintBounds + listOfNotNull(decorationBounds(this)) }
         listOfNotNull(nativeTextInkBounds(layout, paintedLinePositions),
             nativeBoundsOf(floats.map { it.content }), if (paintedLinePositions.isNotEmpty()) decorationBounds(this) else null)
     }
     override val extents: NativeGeometryExtents by lazy {
         val ink = ordinaryPaintBounds.fold(nativeFocusInk(nodes), ::enclosingBounds)
         val interaction = nativeBoundsOf(selectableFragments +
-            nodes.flatMap { it.bounds } + listOf(caretRect(0), caretRect(text.length)))
+            nodes.flatMap { it.bounds } + nativeInlineBoxCursorBounds + listOf(caretRect(0), caretRect(text.length)))
         NativeGeometryExtents(width, height.toFloat(), ink, interaction)
     }
 
     override fun containsInteraction(x: Float, y: Float): Boolean =
-        selectableFragments.any { it.contains(x, y) } ||
+        selectableFragments.any { it.contains(x, y) } || nativeInlineBoxCursorBounds.any { it.contains(x, y) } ||
             nodes.any { node -> node.bounds.any { it.contains(x, y) } }
 
     override fun paint(canvas: Canvas) {
         ruby?.let {
             it.paintGapBackgrounds(canvas)
-            it.raw.paint(canvas)
+            it.raw.paintInlineBoxContent(canvas)
             it.paintGapDecorations(canvas)
+            it.raw.paintInlineBoxOverlays(canvas)
             decoration(canvas, this)
             return
         }
+        inlineBox?.let { it.paint(canvas); decoration(canvas, this); return }
         // Paint the complete shaped flow in one batch. A zero containing width or a short
         // line box must not clip its glyphs, and all native backgrounds precede the text.
         if (paintedLinePositions.isEmpty()) return
@@ -186,8 +192,21 @@ internal class NativeFloatGeometry private constructor(
         decoration(canvas, this)
     }
 
+    private fun paintInlineBoxContent(canvas: Canvas) {
+        val box = inlineBox
+        if (box == null) paint(canvas) else box.paint(canvas, includeOverlays = false)
+    }
+    private fun paintInlineBoxOverlays(canvas: Canvas, line: Int? = null) {
+        inlineBox?.paintOverlays(canvas, line)
+    }
+    private fun paintInlineBoxLineContent(canvas: Canvas, line: Int) {
+        val box = inlineBox
+        if (box == null) paintRubyNativeLine(canvas, line) else box.paintLine(canvas, line, includeOverlays = false)
+    }
+
     override fun offsetForPosition(x: Float, y: Float): Int {
         ruby?.let { return it.offset(x, y) }
+        inlineBox?.let { return it.offsetForPosition(x, y) }
         floats.lastOrNull { it.content.contains(x, y) }?.let { return it.occurrence.offset }
         val line = lineForPosition(x, y)
         return layout.getOffsetForHorizontal(line, x - originX(line)).coerceIn(0, text.length)
@@ -202,6 +221,7 @@ internal class NativeFloatGeometry private constructor(
 
     override fun caretRect(offset: Int): RectF {
         ruby?.let { return it.caret(offset) }
+        inlineBox?.let { return it.caretRect(offset) }
         require(offset in 0..text.length)
         val line = layout.getLineForOffset(offset)
         val x = layout.getPrimaryHorizontal(offset) + originX(line)
@@ -244,6 +264,26 @@ internal class NativeFloatGeometry private constructor(
         return ruby?.paddingRects(owner, start, end)
     }
 
+    override fun inlineBoxGroupRects(owner: NativeInlineBoxOwner, start: Int, end: Int): List<RectF>? {
+        require(start in 0..text.length && end in start..text.length)
+        return ruby?.boxRects(owner, start, end) ?: inlineBox?.boxRects(owner, start, end)
+    }
+    override fun inlineBoxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
+        childStart: Int, childEnd: Int, fragments: List<RectF>): List<RectF>? {
+        require(start in 0..text.length && end in start..text.length && childStart in start..end && childEnd in childStart..end)
+        return ruby?.boxChildActionRects(owner, start, end, childStart, childEnd, fragments)
+            ?: inlineBox?.childActionRects(owner, start, end, childStart, childEnd, fragments)
+    }
+    internal fun nativeInlineBoxRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
+        line: Int? = null): List<RectF>? = inlineBox?.boxRects(owner, start, end, line)
+    internal fun nativeInlineBoxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
+        childStart: Int, childEnd: Int, fragments: List<RectF>): List<RectF>? =
+        inlineBox?.childActionRects(owner, start, end, childStart, childEnd, fragments)
+    private val nativeInlineBoxCursorBounds: List<RectF> get() = ruby?.raw?.nativeInlineBoxCursorBounds
+        ?: inlineBox?.cursorBounds.orEmpty()
+    internal fun nativeInlineBoxCursorAt(x: Float, y: Float, line: Int? = null): InlineCursor? =
+        inlineBox?.let { if (line == null) it.cursorAt(x, y) else it.cursorOnLine(line, x, y) }
+
     override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? {
         require(start in 0..text.length && end in start..text.length)
         return ruby?.actionRects(owner, start, end)
@@ -256,6 +296,7 @@ internal class NativeFloatGeometry private constructor(
     /** Exact native float contours, before selection regions are rasterized to integer rectangles. */
     internal fun nativeInlineActionFragments(start: Int, end: Int): List<NativeInlineActionFragment> {
         require(ruby == null && start in 0..text.length && end in start..text.length)
+        inlineBox?.let { return it.actionFragments(start, end, includeBoxes = true) }
         if (start == end) return emptyList()
         return buildList {
             for (line in layout.getLineForOffset(start)..layout.getLineForOffset(end - 1)) {
@@ -281,6 +322,7 @@ internal class NativeFloatGeometry private constructor(
 
     override fun rectsForRange(start: Int, end: Int): List<RectF> {
         ruby?.let { return it.rects(start, end) }
+        inlineBox?.let { return it.rectsForRange(start, end) }
         require(start in 0..text.length && end in start..text.length)
         if (start == end) return emptyList()
         if (authoredBaselines.any { it.start < end && it.end > start } ||
@@ -391,6 +433,7 @@ internal class NativeFloatGeometry private constructor(
 
     override fun cursorAt(x: Float, y: Float): InlineCursor? {
         ruby?.let { return it.cursor(x, y) }
+        inlineBox?.let { return it.cursorAt(x, y) }
         if (authoredCursors.isEmpty() || floats.any { it.content.contains(x, y) }) return null
         val line = exactSelectableLineAt(x, y) ?: return null
         val start = layout.getLineStart(line)
@@ -448,6 +491,7 @@ internal class NativeFloatGeometry private constructor(
      * consumer, including the node factory and marker painter, observes this same map. */
     internal fun inColumns(origins: List<Pair<Float, Float>>): NativeFloatGeometry {
         ruby?.let { return it.raw.inColumns(origins).withRubyProjection(it.compiled, nodeFactory, decoration, decorationBounds) }
+        if (inlineBox != null) throw UnsupportedFloatLayout("Inline box column redistribution is unavailable")
         require(origins.size == layout.lineCount)
         if (floats.isNotEmpty() || exclusions.isNotEmpty() || lineOrigins != null)
             throw UnsupportedFloatLayout("Column fragments require an unfragmented text owner without floats")
@@ -480,12 +524,14 @@ internal class NativeFloatGeometry private constructor(
     internal val nativeRubyParagraphDirection: Int get() = layout.getParagraphDirection(0)
     internal fun nativeRubyRawOffset(publicOffset: Int): Int = ruby?.compiled?.nativeOffset(publicOffset) ?: publicOffset
     internal fun nativeRubyLineSourceStart(line: Int): Int = layout.getLineStart(line)
-    internal fun nativeRubyLineAdvanceBounds(line: Int): RectF? = selectableLineBounds[line]?.let(::RectF)
+    internal fun nativeRubyLineAdvanceBounds(line: Int): RectF? = ruby?.raw?.nativeRubyLineAdvanceBounds(line)
+        ?: inlineBox?.lineAdvanceBounds(line) ?: selectableLineBounds[line]?.let(::RectF)
     internal fun nativeRubyLineBaseline(line: Int): Float = flow.baselines[line]
     internal fun nativeRubyLineTop(line: Int): Float = flow.tops[line]
     internal fun nativeRubyLineDirection(line: Int): Int = layout.getParagraphDirection(line)
     internal fun nativeRubyLinePaintBounds(line: Int): List<NativeFloatBounds> {
         ruby?.let { return it.raw.nativeRubyLinePaintBounds(line) + it.gapPaintBounds(line) }
+        inlineBox?.let { return it.linePaintBounds(line) }
         return if (linePresent(line)) listOfNotNull(nativeTextInkBounds(layout, listOf(linePaintPositions[line]))) else emptyList()
     }
     /** Horizontal allocation comes from this actual shaped line, before integer region rounding. */
@@ -506,6 +552,7 @@ internal class NativeFloatGeometry private constructor(
     }
     internal fun nativeRubyLineCaret(line: Int, publicOffset: Int): RectF? {
         ruby?.let { return it.caretOnLine(line, publicOffset) }
+        inlineBox?.let { return it.caretOnLine(line, publicOffset) }
         if (publicOffset !in layout.getLineStart(line)..layout.getLineEnd(line)) return null
         val x = linePainter.caretHorizontalOnLine(line, publicOffset, linePaintPositions[line])
         if (!linePresent(line)) return RectF(x, flow.tops[line], x, flow.tops[line])
@@ -518,10 +565,12 @@ internal class NativeFloatGeometry private constructor(
         ?: (text[offset] == '\n')
     internal fun nativeRubyLineOffsetForPosition(line: Int, x: Float, y: Float): Int {
         ruby?.let { return it.offsetOnLine(line, x, y) }
+        inlineBox?.let { return it.offsetOnLine(line, x, y) }
         return layout.getOffsetForHorizontal(line, x - originX(line)).coerceIn(0, text.length)
     }
     internal fun nativeRubyLineCursorAt(line: Int, x: Float, y: Float): InlineCursor? {
         ruby?.let { return it.cursorOnLine(line, x, y) }
+        inlineBox?.let { return it.cursorOnLine(line, x, y) }
         return authoredCursors.lastOrNull { owner ->
             nativeRubyLineRects(line, owner.start, owner.end).any { it.contains(x, y) }
         }?.value?.cursor
@@ -621,6 +670,7 @@ internal class NativeFloatGeometry private constructor(
     }
     internal fun nativeRubyLineRects(line: Int, start: Int, end: Int): List<RectF> {
         ruby?.let { return it.rectsOnLine(line, start, end) }
+        inlineBox?.let { return it.rectsOnLine(line, start, end) }
         require(start in 0..text.length && end in start..text.length)
         if (!linePresent(line)) return emptyList()
         val first = maxOf(start, layout.getLineStart(line))
@@ -657,22 +707,39 @@ internal class NativeFloatGeometry private constructor(
     internal fun paintRubyNativeLine(canvas: Canvas, line: Int) {
         ruby?.let {
             it.paintGapBackgrounds(canvas, line)
-            it.raw.paintRubyNativeLine(canvas, line)
+            it.raw.paintInlineBoxLineContent(canvas, line)
             it.paintGapDecorations(canvas, line)
+            it.raw.paintInlineBoxOverlays(canvas, line)
             return
         }
+        inlineBox?.let { it.paintLine(canvas, line); return }
         require(floats.isEmpty() && exclusions.isEmpty())
         if (linePresent(line)) linePainter.paint(canvas, listOf(linePaintPositions[line]))
     }
-    internal val nativeRubyAdvanceBounds: RectF? get() = selectableLineBounds.firstOrNull()?.let(::RectF)
+    internal val nativeRubyAdvanceBounds: RectF? get() = ruby?.raw?.nativeRubyAdvanceBounds
+        ?: inlineBox?.lineAdvanceBounds(0) ?: selectableLineBounds.firstOrNull()?.let(::RectF)
     internal fun nativeLineAt(offset: Int): Int = layout.getLineForOffset(offset)
     internal fun nativeRangeOfLine(line: Int): Pair<Int, Int> = layout.getLineStart(line) to layout.getLineEnd(line)
+    internal fun nativeInlineVisibleEnd(line: Int): Int = layout.getLineVisibleEnd(line)
+    internal fun nativeInlineVisibleAdvance(line: Int): Float = layout.getLineMax(line)
+    internal fun nativeInlineVisibleBounds(line: Int): RectF? {
+        val first = layout.getLineStart(line); val last = layout.getLineVisibleEnd(line)
+        if (first >= last) return null
+        val path = linePainter.selectionPathForRange(line, first, last)
+        if (path.isEmpty) return null
+        return RectF().also { bounds ->
+            path.computeBounds(bounds, true)
+            bounds.offset(linePainter.horizontalShift(linePaintPositions[line]),
+                flow.baselines[line] - layout.getLineBaseline(line))
+        }
+    }
     internal fun nativeLineAvailableWidth(line: Int): Float = width - flow.left[line].toFloat() - flow.right[line]
     internal fun nativeSingleLineAdvance(): Float {
         check(layout.lineCount == 1)
         return nativeLineAdvance(0)
     }
-    internal fun nativeLineAdvance(line: Int): Float = layout.getLineWidth(line)
+    internal fun nativeLineAdvance(line: Int): Float = ruby?.raw?.nativeLineAdvance(line)
+        ?: inlineBox?.lineAdvance(line) ?: layout.getLineWidth(line)
     internal fun nativeUsedLineMetrics(line: Int): NativeUsedLineMetrics =
         NativeUsedLineMetrics(flow.tops[line] - flow.baselines[line], flow.bottoms[line] - flow.baselines[line])
     internal fun nativeContentLineMetrics(line: Int): NativeUsedLineMetrics {
@@ -715,6 +782,7 @@ internal class NativeFloatGeometry private constructor(
             decorationBounds: (NativeFloatGeometry) -> NativeFloatBounds? = { null },
             includeFontPadding: Boolean = true,
             rubyProbe: Boolean = false,
+            inlineBoxProbe: Boolean = false,
         ): NativeFloatGeometry {
             require(width >= 0 && width <= Int.MAX_VALUE / 4)
             require(lineSpacingExtra.isFinite() && lineSpacingExtra >= 0f)
@@ -756,6 +824,37 @@ internal class NativeFloatGeometry private constructor(
                     bands = NativeRubyBands(available, bands.observed + observed)
                 }
                 throw UnsupportedFloatLayout("Ruby fragments did not converge with native float bands")
+            }
+            if (!inlineBoxProbe && source.getSpans(0, source.length, NativeInlineBoxSpan::class.java).isNotEmpty()) {
+                if (occurrences.isNotEmpty() || carriedExclusions.isNotEmpty())
+                    throw UnsupportedFloatLayout("Inline box float exclusions are unavailable")
+                if (usedLineMetrics != null)
+                    throw UnsupportedFloatLayout("Inline box needs its declared source metrics")
+                val bounded = nativeInlineBoxBoundedSource(source) { at ->
+                    nativeInlineBoxParagraphRtl(source, textDirection, at)
+                }
+                val widths = NativeInlineBoxWidths(bounded, paint, textDirection)
+                val left = ceil((insets.left + insets.extraLeft).toDouble()).toFloat()
+                val right = width - ceil((insets.right + insets.extraRight).toDouble()).toFloat()
+                val spans = nativeInlineRanges(bounded, NativeInlineBoxSpan::class.java)
+                val allocated = spans.any { it.value.box.leftAdvance > 0f || it.value.box.rightAdvance > 0f }
+                val fit = if (allocated) widths.fit((right - left).coerceAtLeast(0f)) else null
+                val fitting = SpannableString(bounded)
+                if (fit != null) {
+                    fitting.getSpans(0, fitting.length, NativeRubyLinePlan::class.java).forEach(fitting::removeSpan)
+                    fitting.setSpan(NativeRubyLinePlan(fit.ends, fit.advances, allowEmptyTerminal = source.last() == '\n'),
+                        0, fitting.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+                val raw = build(fitting, paint, width, emptyList(), alignment, textDirection,
+                    lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, emptyList(),
+                    insets = insets, includeFontPadding = includeFontPadding, rubyProbe = rubyProbe, inlineBoxProbe = true)
+                NativeTextWrapPlan.create(bounded, paint)?.validateResult(raw.layout)
+                val overflow = fit?.overflowingStarts ?: (0 until raw.shapedLineCount).filter {
+                    raw.nativeInlineVisibleAdvance(it) > (right - left).coerceAtLeast(0f)
+                }.map { raw.nativeRangeOfLine(it).first }.toSet()
+                val box = NativeInlineBoxGeometry(raw, spans, alignment, left, right, overflow)
+                return NativeFloatGeometry(raw.text, width, raw.layout, raw.flow, nodeFactory, decoration,
+                    decorationBounds, inlineBox = box)
             }
             validateNativeInlineStyle(source, paint)
             val original = SpannedString(source)

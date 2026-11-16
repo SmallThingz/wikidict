@@ -90,7 +90,8 @@ private data class TextCacheKey(val weight: FontWeight?, val direction: LayoutDi
     val foreground: Int? = null, val cellLetterSpacingPixels: Float? = null, val cssPixelTextZoom: Float = 1f,
     val computedCellTraits: Boolean = false, val cellBodyFamily: FontFamily? = null,
     val compiledTableDirection: TableContainingDirection? = null, val compiledTableLanguage: String? = null,
-    val inheritedFamily: ContainerFontFamily? = null, val authoredPreformatted: Boolean = false)
+    val inheritedFamily: ContainerFontFamily? = null, val authoredPreformatted: Boolean = false,
+    val computedContainerTraits: Boolean = false)
 private class TextCache(val link: State<(EntryLink) -> Unit>) {
     val values = java.util.IdentityHashMap<List<Span>, MutableMap<TextCacheKey, AnnotatedString>>()
 }
@@ -110,7 +111,7 @@ internal val LocalNativeContainerTextContext = staticCompositionLocalOf<Containe
 internal val LocalNativePreformattedText = staticCompositionLocalOf { false }
 
 @Composable
-internal fun inheritedContainerFormat(): NativeContainerTextFormat? = LocalNativeContainerTextContext.current?.let {
+internal fun inheritedContainerFormat(context: ContainerTextContext? = LocalNativeContainerTextContext.current): NativeContainerTextFormat? = context?.let {
     nativeContainerTextFormat(it, MaterialTheme.typography.bodyLarge.fontSize,
         compiledTableOwnerTextStyle(MaterialTheme.typography.bodyLarge).let { style -> if (it.cellText == null) style else
             style.copy(fontWeight = LocalCellWeight.current ?: style.fontWeight) }, LocalDensity.current)
@@ -159,11 +160,15 @@ private fun CellHeading(block: Block, path: String?, onLink: (EntryLink) -> Unit
             }
         }
     }
-    StyledText(if (LocalNativeContainerTextContext.current?.fontFamily is ContainerFontFamily.Stack) block.spans
+    val textContext = nativeWithoutBodyTextContext(LocalNativeContainerTextContext.current,
+        MaterialTheme.typography.bodyLarge.fontSize, LocalDensity.current)
+    CompositionLocalProvider(LocalNativeContainerTextContext provides textContext) {
+    StyledText(if (textContext?.fontFamily is ContainerFontFamily.Stack) block.spans
         else ordinaryInlineDisplaySpans(block), Modifier.fillMaxWidth()
         .padding(start = blockIndentDp(block).dp).bringIntoViewRequester(bringIntoView)
         .then(if (path == null) Modifier else Modifier.testTag("cell-heading-$path"))
         .semantics { heading() }, style = MaterialTheme.typography.titleMedium, onLink = onLink)
+    }
 }
 
 @Composable
@@ -319,6 +324,10 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 if (cellHeadingRequest?.externalRequest !== it) onAnchorConsumed(it)
             }
         }
+        val bodyText = entry.bodyTypography?.let { typography -> nativeBodyTextContext(
+            typography.ownerFont, typography.lineHeight, LocalNativeContainerTextContext.current,
+            MaterialTheme.typography.bodyLarge.fontSize, compiledTableOwnerTextStyle(MaterialTheme.typography.bodyLarge),
+            LocalDensity.current) }
         val currentLink = rememberUpdatedState(readerLink)
         val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
         val typedImages = entry.inlineImages
@@ -447,12 +456,14 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         listOf(Span("text", sectionHeadingLabel(item.heading!!, entry.language, null))), level = item.heading!!.level) }
                     val sectionRows = rows.mapIndexedNotNull { index, item -> if (item.heading == null) null else index to item }.toMap()
                     val actions = sectionRows.mapValues { (_, item) -> actionsForSection(item) }
+                    bodyText?.exceptionOrNull()?.let { ReaderLayoutUnavailable(it.message ?: NativeContainerOwnerFontUnavailable) }
                     NativeFloatBlockContext(blocks, readerLink, row.sectionKey, Modifier,
                         inCell = false, gridPath = "root", gapDp = 6f, trailingGap = true,
                         containAtEnd = true, blockPaths = rows.map { it.key }, gapsDp = rows.map { if (it.compact) 2f else 6f },
                         sectionRows = sectionRows, sectionActions = actions, sectionKeys = rows.map { it.sectionKey },
                         documentSurface = entry.bodyAdjoining == BodyAdjoiningPolicy.Ordinary || blocks.any { it.needsContainerDocumentExtent() || it.needsFigureDocumentExtent() },
-                        positionedPaintRoot = true, bodyAdjoining = entry.bodyAdjoining)
+                        positionedPaintRoot = true, bodyAdjoining = entry.bodyAdjoining,
+                        bodyTextContext = bodyText?.getOrNull())
                 } else if (rowIndex !in floatCovered) {
                     row.heading?.let { section ->
                         if (sectionHeadingVisible(section, entry.language)) {
@@ -481,9 +492,16 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         }
                     }
                     row.block?.let { block ->
-                        BlockView(block, readerLink, path = row.key,
-                            outsideGapDp = if (row.compact) 2f else 6f,
-                            previousBlock = visibleRows.getOrNull(rowIndex - 1)?.takeIf { it.sectionKey == row.sectionKey }?.block)
+                        val content: @Composable () -> Unit = {
+                            BlockView(block, readerLink, path = row.key,
+                                outsideGapDp = if (row.compact) 2f else 6f,
+                                previousBlock = visibleRows.getOrNull(rowIndex - 1)?.takeIf { it.sectionKey == row.sectionKey }?.block)
+                        }
+                        if (bodyText == null || block.kind == "heading") content() else {
+                            bodyText.exceptionOrNull()?.let { ReaderLayoutUnavailable(it.message ?: NativeContainerOwnerFontUnavailable) }
+                            CompositionLocalProvider(LocalNativeContainerTextContext provides
+                                (bodyText.getOrNull() ?: LocalNativeContainerTextContext.current), content = content)
+                        }
                     }
                 }
                 }
@@ -617,9 +635,13 @@ private fun BlockContent(block: Block, onLink: (EntryLink) -> Unit, path: String
                 val prefix = blockPrefix(block)
                 if (prefix.isNotEmpty()) Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp),
                     color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                val sourceFormat = if (LocalNativeContainerTextContext.current?.containerText != null)
+                    inheritedContainerFormat() else null
                 AnonymousBlockView(block, Modifier.weight(1f), onLink,
                     LocalEntryMedia.current, LocalReaderSettings.current, LocalEntryEdition.current,
-                    inheritedAlign = figureInheritedAlign(LocalCellTextAlign.current, LocalLayoutDirection.current))
+                    inheritedAlign = figureInheritedAlign(LocalCellTextAlign.current, LocalLayoutDirection.current),
+                    style = sourceFormat?.style ?: MaterialTheme.typography.bodyLarge,
+                    nativeLineHeight = sourceFormat?.lineHeight, ownerFont = sourceFormat?.ownerFont)
             }
         }
         block.table?.style?.isInline == true -> InlineTableLine(block, onLink, path, inCell, gridPath)
@@ -868,9 +890,11 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
             right = margin.right.toDp(), bottom = margin.bottom.toDp())
     }
     Column((if (inline) Modifier else Modifier.fillMaxWidth()).then(marginModifier), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        WithoutBodyTypography {
         if (table.captionBlocks != null) FloatBlockSequence(table.captionBlocks, onLink, "$semanticPath/caption",
             gapDp = 6f, trailingGap = false)
         else if (table.caption.isNotEmpty()) StyledText(table.caption, onLink = onLink)
+        }
         if (nested || LocalNativeContainerScrollport.current) BoxWithConstraints(if (inline) Modifier else Modifier.fillMaxWidth()) {
             TableGridView(table, onLink, path, constraints.maxWidth.takeIf { constraints.hasBoundedWidth }, semanticPath,
                 natural, decorationProjection, { decorationProjection = 0.0 })
@@ -926,9 +950,11 @@ private fun BlockViewportTableView(table: Table, policy: TableBlockViewport,
         LocalTableLineHeightPixels provides lineHeight) {
         TableBlockViewportBox(table, policy, captionMinimum, hasCaption, 0) {
             if (hasCaption) TableContentColumn(Modifier, 0.dp) {
+                WithoutBodyTypography {
                 if (table.captionBlocks != null) FloatBlockSequence(table.captionBlocks, onLink, "$semanticPath/caption",
                     gapDp = 6f, trailingGap = false)
                 else StyledText(table.caption, onLink = onLink)
+                }
             }
             TableGridView(table, onLink, path, null, semanticPath, natural, 1.0, { },
                 contentWidths = true, captionMinimumWidth = captionMinimum, anonymousGridStyle = policy.gridStyle)
@@ -1004,9 +1030,11 @@ private fun AutoMarginTableView(table: Table, onLink: (EntryLink) -> Unit, path:
     CompositionLocalProvider(LocalTableContentWidths provides true, LocalTableLineHeightPixels provides lineHeight) {
         TableMarginBorderBox(table, captionMinimum, hasCaption, with(density) { 6.dp.roundToPx() }, scrolling, fixed) {
             if (hasCaption) TableContentColumn(Modifier, 0.dp) {
+                WithoutBodyTypography {
                 if (table.captionBlocks != null) FloatBlockSequence(table.captionBlocks, onLink, "$semanticPath/caption",
                     gapDp = 6f, trailingGap = false)
                 else StyledText(table.caption, onLink = onLink)
+                }
             }
             TableGridView(table, onLink, path, null, semanticPath, natural, 1.0, { },
                 contentWidths = true, captionMinimumWidth = captionMinimum)
@@ -1038,9 +1066,11 @@ private fun ContentSizedTableView(table: Table, onLink: (EntryLink) -> Unit, pat
     }
     CompositionLocalProvider(LocalTableContentWidths provides true, LocalTableLineHeightPixels provides lineHeight) {
         TableContentColumn(marginModifier, 6.dp) {
+            WithoutBodyTypography {
             if (table.captionBlocks != null) FloatBlockSequence(table.captionBlocks, onLink, "$semanticPath/caption",
                 gapDp = 6f, trailingGap = false)
             else if (table.caption.isNotEmpty()) StyledText(table.caption, onLink = onLink)
+            }
             TableContentViewport(scrolling = !nested && !LocalNativeContainerScrollport.current) {
                 TableGridView(table, onLink, path, null, semanticPath, natural, 1.0, { }, contentWidths = true)
             }
@@ -1121,7 +1151,7 @@ private fun UnavailableAnonymousGrid(table: Table, onLink: (EntryLink) -> Unit, 
 
 /** These actual cell owners expose synchronous height intrinsics; richer surfaces fail closed. */
 internal fun pairedTableCellHasIntrinsicHeight(cell: Cell): Boolean = cell.blocks == null && cell.nestedTable == null &&
-    cell.spans.all { it.ruby == null && it.inlinePaddingGroup == null && it.inlineActionGroup == null && it.image == null && !it.hasClassToken("wikidict-media") &&
+    cell.spans.all { it.ruby == null && it.inlinePaddingGroup == null && it.inlineActionGroup == null && it.inlineBoxGroup == null && it.image == null && !it.hasClassToken("wikidict-media") &&
         it.kind in setOf("text", "link", "external_link", "line_break") } && egyptianTextRuns(cell.spans).isEmpty()
 
 /** One unchanged centered paragraph has the same real text height as a spans-only cell. */
@@ -1129,7 +1159,7 @@ internal fun intrinsicTableSingleParagraph(cell: Cell): Block? {
     if (cell.spans.isNotEmpty() || cell.nestedTable != null) return null
     val block = cell.blocks?.singleOrNull() ?: return null
     if (block != Block("paragraph", 0, block.spans, textAlign = CellTextAlign.Center) ||
-        !block.spans.hasCompiledInlineContent() || block.spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.image != null ||
+        !block.spans.hasCompiledInlineContent() || block.spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null || it.image != null ||
             it.hasClassToken("wikidict-media") || it.kind !in setOf("text", "link", "external_link", "line_break") } ||
         egyptianTextRuns(block.spans).isNotEmpty()) return null
     return block
@@ -1670,7 +1700,10 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val lineHeightPixels = LocalTableLineHeightPixels.current
     val density = LocalDensity.current
     val inheritedStyle = inheritedCellTextStyle(style)
-    val renderedStyle = if (lineHeightPixels == null) inheritedStyle else inheritedStyle.copy(lineHeight = with(density) { lineHeightPixels.toSp() })
+    val childStyle = LocalNativeContainerTextContext.current?.takeIf { it.containerText != null }?.let {
+        nativeContainerTextFormat(it, MaterialTheme.typography.bodyLarge.fontSize, inheritedStyle, density).style
+    } ?: inheritedStyle
+    val renderedStyle = if (lineHeightPixels == null) childStyle else childStyle.copy(lineHeight = with(density) { lineHeightPixels.toSp() })
     val sourceFamily = LocalNativeContainerTextContext.current?.fontFamily
     val sourceFontStack = sourceFamily is ContainerFontFamily.Stack
     val authoredFamily = sourceFontStack || source.hasAuthoredFontFamily()
@@ -1703,7 +1736,7 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val sourceRuby = spans.hasNativeInlineGroups()
     val sourceInlineFamily = spans.hasAuthoredFontFamily()
     val nativeInlineStyle = LocalAuthoredInlineNative.current
-    if (sourceLinkPaint && nativeLinkPaint && ordinaryLinkPaintUnavailable(spans.filter { it.inlinePaddingGroup == null && it.inlineActionGroup == null }) != null) {
+    if (sourceLinkPaint && nativeLinkPaint && ordinaryLinkPaintUnavailable(spans.filter { it.inlinePaddingGroup == null && it.inlineActionGroup == null && it.inlineBoxGroup == null }) != null) {
         Column(modifier) {
             Text(NativeOrdinaryLinkPaintUnavailable)
             CompositionLocalProvider(LocalOrdinaryLinkPaintNative provides false,
@@ -1719,7 +1752,7 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
             renderedStyle.copy(textDirection = compiledDirection, textAlign = cellTextAlign ?: style.textAlign),
             linkColor, availableMedia, LocalReaderSettings.current, LocalEntryEdition.current, onLink,
             nativeLineHeight = lineHeightPixels?.let { NativeLineHeightPolicy.Pixels(it) } ?: containerFormat?.lineHeight,
-            sourceFamily = sourceFamily, rubyWeight = weight)
+            sourceFamily = sourceFamily, ownerFont = containerFormat?.ownerFont, rubyWeight = weight)
         val nativeModifier = if (LocalNativePreformattedText.current) modifier.width(IntrinsicSize.Max) else modifier
         NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(native, 0f)), nativeModifier, linkColor) { _, _ ->
             error("Native inline text has no delegated child")
@@ -1771,10 +1804,12 @@ private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?,
     val inheritedStack = LocalNativeContainerTextContext.current?.fontFamily?.takeIf { it is ContainerFontFamily.Stack }
     val authoredPreformatted = LocalNativePreformattedText.current && (inheritedStack != null || spans.hasAuthoredFontFamily())
     val inheritedFamily = inheritedStack.takeUnless { authoredPreformatted }
-    val computedCellTraits = LocalNativeContainerTextContext.current?.cellText != null
-    val bodyFamily = MaterialTheme.typography.bodyLarge.fontFamily ?: FontFamily.Default
-    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily.takeIf { computedCellTraits }, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted)
-    val annotated = remember(spans, directionControls, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted) {
+    val computedContainerTraits = LocalNativeContainerTextContext.current?.containerText != null
+    val computedCellTraits = LocalNativeContainerTextContext.current?.cellText != null || computedContainerTraits
+    val bodyFamily = (if (computedContainerTraits) LocalTextStyle.current.merge(style).fontFamily
+        else MaterialTheme.typography.bodyLarge.fontFamily) ?: FontFamily.Default
+    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily.takeIf { computedCellTraits }, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, computedContainerTraits)
+    val annotated = remember(spans, directionControls, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, computedContainerTraits, bodyFamily, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted) {
         cache?.values?.get(spans)?.get(cacheKey) ?: buildAnnotatedString {
             val appendedSpans = ArrayList<Pair<Span, IntRange>>(spans.size)
             spans.forEachIndexed { index, span ->
@@ -1821,7 +1856,8 @@ private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?,
                         letterSpacing = cellLetterSpacing?.let { with(textDensity) { it.toSp() } }
                             ?: if (fontFamily == EgyptianFontFamily) 0.sp else TextUnit.Unspecified,
                         fontSize = renderedSpanFontSize(span, contextSize, normalBodySize, textDensity, cssPixelTextZoom),
-                        baselineShift = when { span.superscript -> BaselineShift.Superscript; span.subscript -> BaselineShift.Subscript; else -> null },
+                        baselineShift = when { span.superscript -> BaselineShift.Superscript; span.subscript -> BaselineShift.Subscript;
+                            computedContainerTraits -> BaselineShift.None; else -> null },
                         background = if (background == null && span.code) codeColor else Color.Unspecified,
                         textDecoration = when {
                             span.strike && span.underline -> TextDecoration.combine(listOf(TextDecoration.LineThrough, TextDecoration.Underline))
@@ -1918,13 +1954,16 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     sectionRows: Map<Int, ReadingRow> = emptyMap(), sectionActions: Map<Int, List<NativeHeadingAction>> = emptyMap(),
     sectionKeys: List<String>? = null, documentSurface: Boolean = false,
     fixedHeightReachable: Boolean = false, positionedPaintRoot: Boolean = false,
-    bodyAdjoining: BodyAdjoiningPolicy? = null) {
+    bodyAdjoining: BodyAdjoiningPolicy? = null, bodyTextContext: ContainerTextContext? = null) {
     val density = LocalDensity.current
     val contentWidths = LocalTableContentWidths.current
     val inheritedAlign = LocalCellTextAlign.current
     val inheritedLineHeight = LocalTableLineHeightPixels.current
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-    val inheritedContainer = inheritedContainerFormat()
+    val normalBodySize = MaterialTheme.typography.bodyLarge.fontSize
+    val localContext = LocalNativeContainerTextContext.current
+    val excludedContext = nativeWithoutBodyTextContext(localContext, normalBodySize, density)
+    val inheritedContainer = inheritedContainerFormat(excludedContext)
     val baseStyle = inheritedCellTextStyle(inheritedContainer?.style ?: MaterialTheme.typography.bodyLarge).let { style ->
         if (inheritedLineHeight == null) style else style.copy(lineHeight = with(density) { inheritedLineHeight.toSp() })
     }
@@ -1936,7 +1975,6 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     val mediaOwners = LocalEntryMediaOwners.current
     val settings = LocalReaderSettings.current
     val edition = LocalEntryEdition.current
-    val normalBodySize = MaterialTheme.typography.bodyLarge.fontSize
     val normalBodyPixels = with(density) { normalBodySize.toPx() }
     val rootLineHeight = when {
         baseStyle.lineHeight.isSp -> ContainerLineHeight.Length(StyleLength(StyleLengthUnit.Px,
@@ -1944,9 +1982,12 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
         baseStyle.lineHeight.isEm -> ContainerLineHeight.Multiplier(baseStyle.lineHeight.value)
         else -> ContainerLineHeight.Normal
     }
-    val rootContext = LocalNativeContainerTextContext.current?.let { context ->
+    val rootContext = (bodyTextContext ?: localContext)?.let { context ->
         if (inheritedLineHeight == null) context else context.copy(lineHeight = rootLineHeight,
-            cellText = context.cellText?.copy(lineHeight = NativeLineHeightPolicy.Pixels(inheritedLineHeight)))
+            cellText = context.cellText?.copy(lineHeight = NativeLineHeightPolicy.Pixels(inheritedLineHeight)),
+            containerText = context.containerText?.copy(lineHeight = NativeLineHeightPolicy.Pixels(inheritedLineHeight)),
+            resolvedLineHeight = NativeLineHeightPolicy.Pixels(inheritedLineHeight),
+            bodyOrigin = context.bodyOrigin?.copy(lineHeightInherited = false))
     } ?: ContainerTextContext(if (normalBodySize.value == 0f) 1f else
         baseStyle.fontSize.value / normalBodySize.value, rootLineHeight)
     val sourceIds = remember { linkedMapOf<String, Int>() }
@@ -2006,13 +2047,13 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             leaf.rootIndex == null || sectionKeys == null || leaf.rootIndex == 0 ||
                 sectionKeys[leaf.rootIndex] == sectionKeys[leaf.rootIndex - 1]
         }
-        val format = leaf.format ?: inheritedContainer
+        val format = leaf.format ?: inheritedContainer.takeUnless { leaf.bodyTypographyExcluded }
         val preserveCompiledText = leaf.ownerWrap == TextWrap.NoWrap || format?.ownerFont != null ||
             format?.sourceFamily is ContainerFontFamily.Stack
         var paragraphFailure: String? = null
         val box = try {
             paragraphBox(block, previous, gap, density.density,
-                if (leaf.inContainer) normalBodyPixels else fontPixels,
+                if (leaf.inContainer || leaf.bodyTypographyExcluded && block.kind == "heading") normalBodyPixels else fontPixels,
                 preserveCompiledText = preserveCompiledText)
         } catch (error: UnsupportedFloatLayout) {
             paragraphFailure = error.message ?: "Paragraph layout unavailable at this size"
@@ -2044,7 +2085,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                     inheritedAlign = figureInheritedAlign(style.textAlign, LocalLayoutDirection.current), style = style, interactionOwner = false,
                     carriedExclusions = carried, onFlowGeometry = published,
                     prefix = prefix, indentPixels = blockIndentDp(block) * density.density,
-                    nativeLineHeight = format?.lineHeight)
+                    nativeLineHeight = format?.lineHeight, ownerFont = format?.ownerFont)
             })
         } else if (block.kind in nativeTextKinds && block.table == null && block.feature == null) {
             val displayed = if (preserveCompiledText) block.spans else paragraphDisplaySpans(block)
@@ -2194,7 +2235,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
         CompositionLocalProvider(LocalFloatTableWidthReference provides originalWidth,
             LocalFloatMarginsConsumed provides nativeTableConsumesMargins(leaf.block.table,
                 leaf.block.table?.takeIf { it.blockViewport != null }?.blockViewportAt(documentViewport)),
-            LocalNativeContainerTextContext provides (leaf.context ?: LocalNativeContainerTextContext.current),
+            LocalNativeContainerTextContext provides (if (leaf.bodyTypographyExcluded) leaf.context
+                else leaf.context ?: LocalNativeContainerTextContext.current),
             LocalCellTextAlign provides (leaf.block.textAlign?.composeAlign() ?: leaf.align?.composeAlign() ?: inheritedAlign)) {
             BlockView(leaf.block, onLink, leaf.path, inCell, leaf.gridPath)
         }
@@ -2274,7 +2316,10 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
     val tableStyle = if (lineHeightPixels == null) inheritedStyle else inheritedStyle.copy(lineHeight = with(density) { lineHeightPixels.toSp() })
     val inheritedCellContext = LocalNativeContainerTextContext.current
     val tableCellContext = if (lineHeightPixels == null) inheritedCellContext else inheritedCellContext?.let {
-        it.copy(cellText = it.cellText?.copy(lineHeight = NativeLineHeightPolicy.Pixels(lineHeightPixels)))
+        it.copy(cellText = it.cellText?.copy(lineHeight = NativeLineHeightPolicy.Pixels(lineHeightPixels)),
+            resolvedLineHeight = NativeLineHeightPolicy.Pixels(lineHeightPixels).takeIf { _ ->
+                it.bodyOrigin != null || it.resolvedLineHeight != null },
+            bodyOrigin = it.bodyOrigin?.copy(lineHeightInherited = false))
     }
     val grid = remember(table) { tableGrid(table) }
     val cells = grid.cells.map { placed -> CaptionCellSlot { cellSink ->
@@ -2314,6 +2359,7 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
         if (placementFailure != null || blockViewport != null || marginValues != null) {
             val caption: (@Composable (SelectionGeometrySink) -> Unit)? =
                 if (table.captionBlocks?.isNotEmpty() == true || table.caption.isNotEmpty()) ({ captionSink ->
+                  WithoutBodyTypography {
                     if (table.captionBlocks != null) FigureCaptionBlocks(table.captionBlocks, tableContext, tableStyle, reader, captionSink)
                     else AnonymousBlockView(Block("paragraph", 0, table.caption), Modifier, reader.onLink,
                         reader.media, reader.settings, reader.edition, inherited = tableContext, style = tableStyle,
@@ -2321,6 +2367,7 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
                         nativeLineHeight = tableCellContext?.takeIf { it.cellText != null }?.let {
                             nativeContainerTextFormat(it, MaterialTheme.typography.bodyLarge.fontSize, tableStyle, density).lineHeight
                         })
+                  }
                 }) else null
             CompositionLocalProvider(LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
                 if (placementFailure != null) {
@@ -2362,6 +2409,7 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
             context.direction, sink) { insideSink ->
             val parts = mutableListOf<@Composable (SelectionGeometrySink) -> Unit>()
             if (table.captionBlocks?.isNotEmpty() == true || table.caption.isNotEmpty()) parts += { captionSink ->
+              WithoutBodyTypography {
                 SelectionInsetsBox(0, 0, 0, with(density) { 6.dp.roundToPx() }, context.direction, captionSink) { textSink ->
                     if (table.captionBlocks != null) FigureCaptionBlocks(table.captionBlocks, context, tableStyle, reader, textSink)
                     else AnonymousBlockView(Block("paragraph", 0, table.caption), Modifier, reader.onLink,
@@ -2371,6 +2419,7 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
                             nativeContainerTextFormat(it, MaterialTheme.typography.bodyLarge.fontSize, tableStyle, density).lineHeight
                         })
                 }
+              }
             }
             parts += { gridSink ->
                 SelectionGridBox(context.direction, gridSink) { available, tableSink ->

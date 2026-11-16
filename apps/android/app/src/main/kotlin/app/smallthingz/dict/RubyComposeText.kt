@@ -84,7 +84,7 @@ private fun rubySpanTextStyle(span: Span, weight: FontWeight?, enclosingStyle: T
         kind = if (declaringAction) span.kind else "text", text = " ",
         target = if (declaringAction) span.target else "", trail = "",
         targetFragment = span.targetFragment.takeIf { declaringAction }, image = null, ruby = null,
-        inlinePaddingGroup = null, inlineActionGroup = null, linkPaint = span.linkPaint.takeIf { declaringAction })) }
+        inlinePaddingGroup = null, inlineActionGroup = null, inlineBoxGroup = null, linkPaint = span.linkPaint.takeIf { declaringAction })) }
     val annotation = styledTextAnnotationWithoutDirectionControls(probe, weight, enclosingStyle) { }
     val plain = annotation.spanStyles.fold(enclosingStyle.toSpanStyle()) { value, range -> value.merge(range.item) }
     val resolved = if (!declaringAction) plain else annotation.getLinkAnnotations(0, annotation.length)
@@ -133,13 +133,13 @@ internal fun rubyStyledTextContexts(spans: List<Span>, weight: FontWeight?, styl
         val inheritedFace = familyOwner?.style?.fontFamily ?: rootStyle.fontFamily
         val owner = range.base?.owner ?: range.annotation?.owner
         if (range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup ||
-            range.role == RubyTextRole.ActionGroup || owner != null) {
+            range.role == RubyTextRole.ActionGroup || range.role == RubyTextRole.BoxGroup || owner != null) {
             val source = range.span ?: inlineFontSnapshotSpan(checkNotNull(owner).font)
             val ownLegacy = source.legacyFontFamily()
             val family = source.fontFamily ?: inheritedFamily.takeIf { ownLegacy == null }
             val legacy = if (source.fontFamily != null) null else ownLegacy ?: inheritedLegacy
             val inheritsRootTraits = parent == null && owner == null && range.role != RubyTextRole.PaddingGroup &&
-                range.role != RubyTextRole.ActionGroup
+                range.role != RubyTextRole.ActionGroup && range.role != RubyTextRole.BoxGroup
             val fontSeed = if (inheritsRootTraits) enclosing else enclosing.copy(
                 fontSize = rootStyle.fontSize, fontWeight = FontWeight.Normal, fontStyle = FontStyle.Normal,
                 baselineShift = BaselineShift.None,
@@ -152,7 +152,8 @@ internal fun rubyStyledTextContexts(spans: List<Span>, weight: FontWeight?, styl
                 LocalFigureCaptionForeground provides (enclosing.color.takeIf { it != Color.Unspecified }?.toArgb()
                     ?: inheritedForeground)) {
                 resolved = if (owner == null) rubySpanTextStyle(source, effectiveWeight.takeIf { inheritsRootTraits }, fontSeed,
-                    declaringAction = range.role == RubyTextRole.PaddingGroup || range.role == RubyTextRole.ActionGroup)
+                    declaringAction = range.role == RubyTextRole.PaddingGroup || range.role == RubyTextRole.ActionGroup ||
+                        range.role == RubyTextRole.BoxGroup)
                     else rubyFontSnapshotStyle(owner.font, fontSeed, rootStyle)
             }
             if (owner != null) resolved = resolved.copy(
@@ -202,7 +203,7 @@ internal fun rubyStyledTextAnnotation(contexts: RubyStyledTextContexts, weight: 
     // The declaring action owns one interval. Its normal paint already entered the
     // inherited context; these annotations must not overwrite explicit child paints.
     contexts.groups.values.filter { it.range.role == RubyTextRole.PaddingGroup ||
-        it.range.role == RubyTextRole.ActionGroup }.forEach { group ->
+        it.range.role == RubyTextRole.ActionGroup || it.range.role == RubyTextRole.BoxGroup }.forEach { group ->
         val range = group.range
         val span = checkNotNull(range.span)
         if (range.start < range.end) {

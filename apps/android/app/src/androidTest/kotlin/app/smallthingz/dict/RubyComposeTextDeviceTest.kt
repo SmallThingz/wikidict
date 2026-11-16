@@ -1614,4 +1614,233 @@ class RubyComposeTextDeviceTest {
         }
     }
 
+
+    @Test fun inlineBoxLoweringKeepsOriginalFontBasisAndDeclaringCurrentColorState() = control {
+        // Direct typed consumer controls. The first issuer currently refuses an action
+        // ancestor around a box; this synthetic V contrast does not claim source acceptance.
+        fun policy(normal: String, active: String) = LinkPaint(
+            normal = LinkState(normal, false), hover = LinkState(normal, false),
+            active = LinkState(active, false), hoverActive = LinkState(active, false),
+            visited = LinkState(normal, false), visitedHover = LinkState(normal, false),
+            visitedActive = LinkState(active, false), visitedHoverActive = LinkState(active, false),
+            underlineOnFocus = false, focusOutline = null)
+        val ancestorPolicy = policy("#2255aa", "#ee3300")
+        val childPolicy = policy("#008833", "#aa00dd")
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val none = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None,
+            InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        val line = InlineBoxBorderEdge.Solid(StyleLength(StyleLengthUnit.Px, 1f), InlineBoxColor.CurrentColor)
+        val overlays = listOf(InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+            right = InlineBoxInset(StyleWidthUnit.Em, -.5f), bottom = InlineBoxInset(StyleWidthUnit.Percent, 67f)),
+            none.copy(right = line)))
+        val small = Span("text", "i", fontScale = .5f, fontScaleBasis = FontScaleBasis.NormalBody,
+            foreground = ancestorPolicy.normal.foreground)
+        val cumulative = Span("text", "M", fontScale = 1.35f, foreground = ancestorPolicy.normal.foreground)
+        val inheritedBox = Span("text", "", fontScale = 1.35f, bold = true,
+            inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, StyleLength(StyleLengthUnit.Em, .25f), zero,
+                StyleLength(StyleLengthUnit.Em, .25f)), none.copy(right = line), overlays,
+                spans = listOf(small, cumulative)))
+        val ancestor = Span("link", "", "typed-box-ancestor", foreground = ancestorPolicy.normal.foreground,
+            linkPaint = ancestorPolicy, inlineActionGroup = InlineActionGroup(listOf(inheritedBox)))
+        val child = Span("link", "J", "typed-box-child", fontScale = 1.35f,
+            foreground = childPolicy.normal.foreground, linkPaint = childPolicy)
+        val independentBox = Span("text", "", fontScale = .9f, foreground = "#884400",
+            inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, StyleLength(StyleLengthUnit.Em, .25f), zero,
+                StyleLength(StyleLengthUnit.Em, .25f)), none.copy(right = line), overlays,
+                spans = listOf(child)))
+        val source = listOf(ancestor, Span("text", " "), independentBox)
+        val expected = "iM J"
+        val zoom = mutableStateOf(1f)
+        val callbacks = mutableListOf<EntryLink>()
+        val onLink: (EntryLink) -> Unit = { callbacks += it }
+        val visits = MissingLinkVisits()
+        val focusDestination = androidx.compose.ui.focus.FocusRequester()
+        var prepared: PreparedNativeFloatText? = null
+        var committedZoom = 0f
+        var failure: String? = null
+        val observer: (String) -> Unit = { failure = it }
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge =
+                TextStyle(fontSize = 20.sp, fontFamily = FontFamily.Monospace, letterSpacing = 0.sp))) {
+                val currentZoom = zoom.value
+                val density = Density(1f, currentZoom)
+                CompositionLocalProvider(LocalDensity provides density, LocalLayoutDirection provides LayoutDirection.Ltr,
+                    LocalNativeFloatContextFailureObserver provides observer, LocalMissingLinkVisits provides visits) {
+                    val style = TextStyle(fontSize = 20.sp, lineHeight = 40.sp, fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Normal, fontStyle = FontStyle.Normal, letterSpacing = 0.sp,
+                        textDirection = TextDirection.Ltr)
+                    val annotated = styledTextAnnotation(source, null, style, onLink)
+                    val value = prepareNativeFloatText(source, annotated, egyptianTextRuns(source), style,
+                        MaterialTheme.colorScheme.primary, emptyList(), AppSettings(allowImages = false, allowAudio = false),
+                        "", onLink, nativeLineHeight = NativeLineHeightPolicy.Pixels(with(density) { 40.sp.toPx() }))
+                    SideEffect { prepared = value; committedZoom = currentZoom }
+                    Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding().padding(16.dp)
+                        .testTag("inline-box-focus-destination").focusRequester(focusDestination).focusable()) {
+                        NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(value, 0f)),
+                            Modifier.width(260.dp), MaterialTheme.colorScheme.primary) { _, _ ->
+                            error("The inline box fixture has no delegated child")
+                        }
+                    }
+                }
+            }
+        } }
+        fun views(view: android.view.View): List<NativeFloatTextView> = buildList {
+            if (view is NativeFloatTextView) add(view)
+            if (view is android.view.ViewGroup) for (index in 0 until view.childCount) addAll(views(view.getChildAt(index)))
+        }
+        fun sameRect(a: android.graphics.RectF, b: android.graphics.RectF) {
+            assertEquals(a.left, b.left, .01f); assertEquals(a.top, b.top, .01f)
+            assertEquals(a.right, b.right, .01f); assertEquals(a.bottom, b.bottom, .01f)
+        }
+        var stableView: NativeFloatTextView? = null
+        var originalIds: List<Int>? = null
+        var originalBoxWidth = 0f
+        for (currentZoom in listOf(1f, 1.25f, 1f)) {
+            compose.runOnIdle { failure = null; zoom.value = currentZoom }
+            compose.waitForIdle()
+            var movedFocus = false
+            compose.runOnIdle {
+                val view = views(compose.activityRule.activity().window.decorView).single()
+                if (view.hasFocus()) {
+                    assertTrue(focusDestination.requestFocus(androidx.compose.ui.focus.FocusDirection.Enter))
+                    movedFocus = true
+                }
+            }
+            if (movedFocus) compose.onNodeWithTag("inline-box-focus-destination").assertIsFocused()
+            compose.runOnIdle {
+                assertEquals(currentZoom, committedZoom, 0f); assertNull(failure)
+                val value = checkNotNull(prepared); assertNull(value.stateDescription)
+                val view = views(compose.activityRule.activity().window.decorView).single()
+                if (stableView == null) stableView = view else assertSame(stableView, view)
+                val actual = checkNotNull(view.currentMeasuredGeometry)
+                val raw = checkNotNull(value.geometry).invoke(260, emptyList(), false)
+                assertEquals(expected, value.text.toString()); assertEquals(expected, raw.text.toString())
+                assertEquals(expected, view.logicalText.toString()); assertEquals(expected, actual.text.toString())
+                assertEquals(listOf(0 to 2, 3 to 4), actual.nodes.map { it.start to it.end })
+                assertTrue(actual.nodes.all { it.kind == FloatInteractionKind.LINK })
+                if (originalIds == null) originalIds = actual.nodes.map { it.id }
+                else assertEquals(originalIds, actual.nodes.map { it.id })
+                val native = checkNotNull(value.native)
+                val nativeSource = native.source(260)
+                val marker = nativeSource.getSpans(0, nativeSource.length, NativeRubyPreparedSource::class.java).single()
+                assertEquals(expected, marker.projection.text)
+                val ancestorRange = marker.projection.ranges.single { it.role == RubyTextRole.ActionGroup }
+                val firstRange = marker.projection.ranges.single { it.role == RubyTextRole.BoxGroup && it.span === inheritedBox }
+                val secondRange = marker.projection.ranges.single { it.role == RubyTextRole.BoxGroup && it.span === independentBox }
+                assertSame(ancestor, ancestorRange.span)
+                assertTrue(firstRange.path.startsWith(ancestorRange.path + "/inlineActionGroup/spans/"))
+                assertEquals(0 to 2, firstRange.start to firstRange.end)
+                assertEquals(3 to 4, secondRange.start to secondRange.end)
+                for (leaf in listOf(small, cumulative, child)) {
+                    assertSame(leaf, marker.projection.ranges.single { it.span === leaf }.span)
+                }
+                assertEquals(2, marker.projection.ranges.count { it.span?.hasInternalAction() == true })
+                val parentFormat = marker.groups.getValue(ancestorRange.path)
+                val firstFormat = marker.groups.getValue(firstRange.path)
+                val secondFormat = marker.groups.getValue(secondRange.path)
+                val firstBox = checkNotNull(firstFormat.box); val secondBox = checkNotNull(secondFormat.box)
+                val ancestorPaint = checkNotNull(parentFormat.actionPaint)
+                val childPaintState = checkNotNull(actual.nodes[1].missingLinkPaint)
+                assertSame(ancestorPaint, actual.nodes[0].missingLinkPaint)
+                assertSame(ancestorPaint, firstBox.currentColorPaint)
+                assertSame(ancestorPolicy, ancestorPaint.ordinaryPolicy)
+                assertSame(childPolicy, childPaintState.ordinaryPolicy)
+                assertNull(firstFormat.actionOwner); assertNull(secondFormat.actionOwner)
+                assertNull(secondBox.currentColorPaint)
+                assertEquals(0xff884400.toInt(), secondFormat.paint.color)
+                val bodyPixels = with(Density(1f, currentZoom)) { 20.sp.toPx() }
+                assertEquals(bodyPixels * 1.35f, firstFormat.paint.textSize, .01f)
+                assertEquals(bodyPixels * .9f, secondFormat.paint.textSize, .01f)
+                assertTrue(firstFormat.paint.typeface.isBold)
+                fun paintAt(offset: Int) = TextPaint(native.paint).also { paint ->
+                    nativeSource.getSpans(offset, offset + 1, MetricAffectingSpan::class.java)
+                        .filter { nativeSource.getSpanStart(it) <= offset && nativeSource.getSpanEnd(it) > offset }
+                        .forEach { it.updateMeasureState(paint) }
+                }
+                val smallPaint = paintAt(0); val cumulativePaint = paintAt(1); val independentPaint = paintAt(3)
+                assertEquals(bodyPixels * .5f, smallPaint.textSize, .01f)
+                assertEquals(bodyPixels * 1.35f, cumulativePaint.textSize, .01f)
+                assertEquals(bodyPixels * 1.35f, independentPaint.textSize, .01f)
+                assertFalse(smallPaint.typeface.isBold); assertFalse(cumulativePaint.typeface.isBold)
+                val firstEdge = bodyPixels * 1.35f * .25f
+                assertEquals(firstEdge, firstBox.padding.left, .01f)
+                assertEquals(firstEdge, firstBox.padding.right, .01f)
+                assertEquals(bodyPixels * .9f * .25f, secondBox.padding.left, .01f)
+                val firstBorder = checkNotNull(raw.inlineBoxGroupRects(firstBox.owner, firstRange.start, firstRange.end)).single()
+                val secondBorder = checkNotNull(raw.inlineBoxGroupRects(secondBox.owner, secondRange.start, secondRange.end)).single()
+                // Mixed child fonts shape separately. Neither edge uses the first leaf's font.
+                assertEquals(smallPaint.measureText("i") + cumulativePaint.measureText("M") + 2f * firstEdge + 1f,
+                    firstBorder.width(), .05f)
+                if (originalBoxWidth == 0f) originalBoxWidth = firstBorder.width()
+                else if (currentZoom == 1f) assertEquals(originalBoxWidth, firstBorder.width(), .01f)
+                val rawCharacters = raw.characterRects(0, expected.length)
+                val actualCharacters = actual.characterRects(0, expected.length)
+                assertEquals(expected.length, rawCharacters.size); assertEquals(expected.length, actualCharacters.size)
+                val firstRaw = checkNotNull(rawCharacters[0]); val firstActual = checkNotNull(actualCharacters[0])
+                val dx = firstActual.left - firstRaw.left; val dy = firstActual.top - firstRaw.top
+                rawCharacters.zip(actualCharacters).forEach { (a, b) ->
+                    sameRect(android.graphics.RectF(checkNotNull(a)).apply { offset(dx, dy) }, checkNotNull(b))
+                }
+                val firstBoxActual = android.graphics.RectF(firstBorder).apply { offset(dx, dy) }
+                val secondBoxActual = android.graphics.RectF(secondBorder).apply { offset(dx, dy) }
+                val ancestorEdgePoint = (firstBoxActual.left + firstEdge / 2f) to firstBoxActual.centerY()
+                assertEquals(actual.nodes[0].id,
+                    checkNotNull(actual.interactionNodeAt(ancestorEdgePoint.first, ancestorEdgePoint.second)).id)
+                val childEdgePoint = (secondBoxActual.left + secondBox.padding.left / 2f) to secondBoxActual.centerY()
+                assertTrue(actual.nodes[1].bounds.none { it.contains(childEdgePoint.first, childEdgePoint.second) })
+                assertNull(actual.interactionNodeAt(childEdgePoint.first, childEdgePoint.second))
+                val provider = checkNotNull(view.accessibilityNodeProvider)
+                val hostId = android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID
+                val host = checkNotNull(provider.createAccessibilityNodeInfo(hostId))
+                try { assertEquals(expected, host.text.toString()); assertEquals(2, host.childCount) }
+                finally { host.recycle() }
+                actual.nodes.forEach { node ->
+                    val info = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+                    try { assertEquals(expected.substring(node.start, node.end), info.text.toString()); assertTrue(info.isClickable) }
+                    finally { info.recycle() }
+                }
+                assertTrue(provider.performAction(actual.nodes[0].id,
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS, null))
+                assertTrue(view.hasFocus()); assertTrue(ancestorPaint.focused)
+                assertEquals(0xff2255aa.toInt(), checkNotNull(firstBox.currentColorPaint).appearance().color)
+                val beforeAncestor = callbacks.size
+                assertTrue(view.onKeyDown(android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                assertTrue(ancestorPaint.active)
+                assertEquals(0xffee3300.toInt(), checkNotNull(firstBox.currentColorPaint).appearance().color)
+                assertEquals(beforeAncestor, callbacks.size)
+                assertSame(actual, view.currentMeasuredGeometry)
+                assertTrue(view.onKeyUp(android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER)))
+                assertFalse(ancestorPaint.active)
+                assertEquals(beforeAncestor + 1, callbacks.size); assertEquals("typed-box-ancestor", callbacks.last().target)
+                assertTrue(provider.performAction(actual.nodes[1].id,
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS, null))
+                val beforeChild = callbacks.size
+                assertTrue(view.onKeyDown(android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                assertTrue(childPaintState.active); assertEquals(0xffaa00dd.toInt(), childPaintState.appearance().color)
+                assertNull(secondBox.currentColorPaint); assertEquals(0xff884400.toInt(), secondFormat.paint.color)
+                assertEquals(beforeChild, callbacks.size)
+                assertTrue(view.onKeyUp(android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER)))
+                assertEquals(beforeChild + 1, callbacks.size); assertEquals("typed-box-child", callbacks.last().target)
+                val selection = android.os.Bundle().apply {
+                    putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                    putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, expected.length)
+                }
+                assertTrue(provider.performAction(hostId, android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION, selection))
+                assertEquals(expected, view.selectedTextForCopy())
+                assertSame(inheritedBox, ancestor.inlineActionGroup!!.spans.single())
+                assertSame(small, inheritedBox.inlineBoxGroup!!.spans[0]); assertSame(cumulative, inheritedBox.inlineBoxGroup!!.spans[1])
+                assertSame(overlays, inheritedBox.inlineBoxGroup!!.overlays)
+                assertSame(child, independentBox.inlineBoxGroup!!.spans.single())
+                assertEquals(1.35f, inheritedBox.fontScale!!, 0f); assertEquals(1.35f, cumulative.fontScale!!, 0f)
+                assertEquals("text", inheritedBox.kind); assertEquals("text", independentBox.kind)
+            }
+        }
+        compose.runOnIdle { assertTrue(focusDestination.requestFocus(androidx.compose.ui.focus.FocusDirection.Enter)) }
+        compose.onNodeWithTag("inline-box-focus-destination").assertIsFocused()
+        assertEquals(List(3) { listOf("typed-box-ancestor", "typed-box-child") }.flatten(), callbacks.map { it.target })
+    }
 }

@@ -147,6 +147,11 @@ internal class NativeAnonymousFlowGeometry private constructor(
         native.inlinePaddingGroupRects(owner, start, end)
     internal fun nativeInlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? =
         native.inlineActionGroupRects(owner, start, end)
+    internal fun nativeInlineBoxGroupRects(owner: NativeInlineBoxOwner, start: Int, end: Int): List<RectF>? =
+        native.inlineBoxGroupRects(owner, start, end)
+    internal fun nativeInlineBoxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
+        childStart: Int, childEnd: Int, fragments: List<RectF>): List<RectF>? =
+        native.inlineBoxChildActionRects(owner, start, end, childStart, childEnd, fragments)
     override fun interactionNodeAt(x: Float, y: Float): FloatInteractionNode? {
         positionedGroups.lastOrNull { it.contains(x, y) }?.let { group ->
             return nodes.lastOrNull { it.id in group.nodeIds && it.contains(x, y) }
@@ -337,6 +342,59 @@ internal class NativeAnonymousFlowGeometry private constructor(
         return native.inlinePaddingGroupRects(owner,
             begin.authored.nativeOffset(begin.authored.logicalStart + start - begin.start),
             last.authored.nativeOffset(last.authored.logicalStart + end - last.start))
+    }
+
+    override fun inlineBoxGroupRects(owner: NativeInlineBoxOwner, start: Int, end: Int): List<RectF>? {
+        require(start in 0..text.length && end in start..text.length)
+        if (start == end) return null
+        val covered = selection.segments.filter { start < it.end && end > it.start }
+        val first = covered.firstOrNull() ?: return null
+        if (first is AnonymousSelectionSegment.Figure) {
+            if (covered.size != 1) return null
+            val placed = figureById.getValue(first.anchor.event.id)
+            return placed.measured.geometry.inlineBoxGroupRects(owner, start - first.start, end - first.start)
+                ?.map { RectF(it).apply { offset(placed.bounds.left, placed.bounds.top) } }
+        }
+        if (covered.any { it !is AnonymousSelectionSegment.Inline }) return null
+        val inline = covered.filterIsInstance<AnonymousSelectionSegment.Inline>()
+        if (inline.any { it.authored.replacement } || inline.zipWithNext().any { (a, b) ->
+                a.end != b.start || a.nativeEnd != b.nativeStart
+            }) return null
+        val begin = inline.first()
+        val last = inline.last()
+        return native.inlineBoxGroupRects(owner,
+            begin.authored.nativeOffset(begin.authored.logicalStart + start - begin.start),
+            last.authored.nativeOffset(last.authored.logicalStart + end - last.start))
+    }
+
+    override fun inlineBoxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
+        childStart: Int, childEnd: Int, fragments: List<RectF>): List<RectF>? {
+        require(start in 0..text.length && end in start..text.length && childStart in start..end && childEnd in childStart..end)
+        if (start == end) return null
+        val covered = selection.segments.filter { start < it.end && end > it.start }
+        val first = covered.firstOrNull() ?: return null
+        if (first is AnonymousSelectionSegment.Figure) {
+            if (covered.size != 1) return null
+            val placed = figureById.getValue(first.anchor.event.id)
+            val dx = placed.bounds.left; val dy = placed.bounds.top
+            return placed.measured.geometry.inlineBoxChildActionRects(owner, start - first.start, end - first.start,
+                childStart - first.start, childEnd - first.start,
+                fragments.map { RectF(it).apply { offset(-dx, -dy) } })
+                ?.map { RectF(it).apply { offset(dx, dy) } }
+        }
+        if (covered.any { it !is AnonymousSelectionSegment.Inline }) return null
+        val inline = covered.filterIsInstance<AnonymousSelectionSegment.Inline>()
+        if (inline.any { it.authored.replacement } || inline.zipWithNext().any { (a, b) ->
+                a.end != b.start || a.nativeEnd != b.nativeStart
+            }) return null
+        fun mapped(offset: Int, endAffinity: Boolean): Int {
+            val segment = (if (endAffinity) inline.lastOrNull { offset > it.start && offset <= it.end }
+                else inline.firstOrNull { offset >= it.start && offset < it.end })
+                ?: if (offset == end) inline.last() else inline.first()
+            return segment.authored.nativeOffset(segment.authored.logicalStart + offset - segment.start)
+        }
+        return native.inlineBoxChildActionRects(owner, mapped(start, false), mapped(end, true),
+            mapped(childStart, false), mapped(childEnd, true), fragments)
     }
 
     override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? {

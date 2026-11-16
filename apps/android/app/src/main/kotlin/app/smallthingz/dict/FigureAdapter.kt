@@ -56,14 +56,15 @@ private fun scopeTextStyle(style: TextStyle, context: AnonymousFlowContext): Tex
 private fun prepareAnonymousInline(event: AnonymousFlowEvent.Inline, style: TextStyle,
     reader: FigureReaderContext, imageOwner: InlineImageViewOwner? = null,
     missingLinkPaint: NativeMissingLinkPaint? = null, onMissingLinkActivated: () -> Unit = {},
-    nativeLineHeight: NativeLineHeightPolicy? = null, figureImageActions: Boolean = false): PreparedNativeFloatText {
+    nativeLineHeight: NativeLineHeightPolicy? = null, figureImageActions: Boolean = false,
+    ownerFont: NativeDeclaringFont? = null): PreparedNativeFloatText {
     val scoped = scopeTextStyle(inheritedCellTextStyle(style), event.context)
     val spans = event.layoutSpans
     val annotated = styledTextAnnotation(spans, null, scoped, reader.onLink)
     return prepareNativeFloatText(spans, annotated, egyptianTextRuns(spans), scoped,
         MaterialTheme.colorScheme.primary, reader.media, reader.settings, reader.edition, reader.onLink,
         imageOwnerOverride = imageOwner, missingLinkPaint = missingLinkPaint, onMissingLinkActivated = onMissingLinkActivated,
-        nativeLineHeight = nativeLineHeight, figureImageActions = figureImageActions)
+        nativeLineHeight = nativeLineHeight, figureImageActions = figureImageActions, ownerFont = ownerFont)
 }
 
 /** Existing media owner, typed actions and native text preparation feed the one anonymous owner. */
@@ -77,6 +78,7 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
     onFlowGeometry: (NativeAnonymousFlowGeometry) -> Unit = {},
     prefix: String = "", indentPixels: Float = 0f,
     nativeLineHeight: NativeLineHeightPolicy? = null,
+    ownerFont: NativeDeclaringFont? = null,
 ) {
     val preserveCompiledText = LocalNativeContainerTextContext.current?.fontFamily is ContainerFontFamily.Stack
     val context = inherited ?: AnonymousFlowContext(
@@ -119,14 +121,15 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
     }
     val prepared = IdentityHashMap<AnonymousFlowEvent.Inline, PreparedNativeFloatText>()
     content.events.filterIsInstance<AnonymousFlowEvent.Inline>().forEach { event ->
-        prepared[event] = prepareAnonymousInline(event, style, reader, nativeLineHeight = nativeLineHeight)
+        prepared[event] = prepareAnonymousInline(event, style, reader, nativeLineHeight = nativeLineHeight,
+            ownerFont = ownerFont)
     }
     val figures = linkedMapOf<Int, PreparedFigure>()
     content.events.filterIsInstance<AnonymousFlowEvent.FigureObject>().forEach { event ->
-        figures[event.id] = prepareFigure(event, reader)
+        WithoutBodyTypography { figures[event.id] = prepareFigure(event, reader) }
     }
     val base = prepareAnonymousInline(AnonymousFlowEvent.Inline(emptyList(), content.context), style, reader,
-        nativeLineHeight = nativeLineHeight)
+        nativeLineHeight = nativeLineHeight, ownerFont = ownerFont)
     if (delegated != null) {
         // Keep this existing resource preparation alive while the one content slot uses
         // its complete fallback. A loading/error/ready or font transition can then retry
@@ -321,6 +324,12 @@ private class AnonymousInlineNodeGeometry(private val owner: NativeAnonymousFlow
         this.owner.nativeInlinePaddingGroupRects(owner, source.start + start, source.start + end)
     override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? =
         this.owner.nativeInlineActionGroupRects(owner, source.start + start, source.start + end)
+    override fun inlineBoxGroupRects(owner: NativeInlineBoxOwner, start: Int, end: Int): List<RectF>? =
+        this.owner.nativeInlineBoxGroupRects(owner, source.start + start, source.start + end)
+    override fun inlineBoxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
+        childStart: Int, childEnd: Int, fragments: List<RectF>): List<RectF>? =
+        this.owner.nativeInlineBoxChildActionRects(owner, source.start + start, source.start + end,
+            source.start + childStart, source.start + childEnd, fragments)
 }
 
 internal data class PreparedFigure(val metrics: FigureBoxMetrics?, val unavailable: String?, val sourceRevision: Any,
@@ -516,10 +525,13 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
             (available - natural.margins.left - natural.margins.right).coerceAtLeast(0f))).also(selectedMetrics::update)
     }, content = { sink ->
         val natural = checkNotNull(metrics); val style = checkNotNull(captionStyle)
-        val inheritedCellContext = LocalNativeContainerTextContext.current
+        val inheritedCellContext = nativeWithoutBodyTextContext(LocalNativeContainerTextContext.current,
+            MaterialTheme.typography.bodyLarge.fontSize, density)
         val captionCellContext = inheritedCellContext?.takeIf { it.cellText != null }?.copy(
             cellText = NativeCellTextState(with(density) { style.fontSize.toPx() },
-                NativeLineHeightPolicy.Pixels(checkNotNull(captionHeight)))) ?: inheritedCellContext
+                NativeLineHeightPolicy.Pixels(checkNotNull(captionHeight))),
+            resolvedLineHeight = NativeLineHeightPolicy.Pixels(checkNotNull(captionHeight)).takeIf {
+                inheritedCellContext.resolvedLineHeight != null }) ?: inheritedCellContext
         FigureChildLayout(natural, sink, metricsInput = selectedMetrics, tableMetrics = tablePrepared.getOrThrow(), caption = { captionSink ->
           CompositionLocalProvider(LocalFigureCaptionForeground provides captionColor,
               LocalNativeContainerTextContext provides captionCellContext,

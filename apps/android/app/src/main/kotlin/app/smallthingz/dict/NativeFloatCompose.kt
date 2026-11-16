@@ -281,7 +281,16 @@ internal fun prepareNativeFloatText(
     val paddingActions = paddingRanges.filter { range -> checkNotNull(range.span).let {
         it.hasInternalAction() || externalLinkUrl(it) != null
     } }
-    val actionGroupRanges = ruby?.projection?.ranges.orEmpty().filter { it.role == RubyTextRole.ActionGroup }
+    val boxRanges = ruby?.projection?.ranges.orEmpty().filter { it.role == RubyTextRole.BoxGroup }
+    val boxOwners = boxRanges.associate { range ->
+        range.path to remember(NativeActionGroupIdentity(range)) { NativeInlineBoxOwner(checkNotNull(range.span), range.path) }
+    }
+    val actionGroupRanges = ruby?.projection?.ranges.orEmpty().filter { range ->
+        range.role == RubyTextRole.ActionGroup || range.role == RubyTextRole.BoxGroup && checkNotNull(range.span).let {
+            // Keep declared ownership even when the existing native target check must refuse it.
+            it.kind == "link" || it.kind == "external_link"
+        }
+    }
     val actionGroupOwners = actionGroupRanges.associate { range ->
         range.path to remember(NativeActionGroupIdentity(range)) { NativeInlineActionOwner(checkNotNull(range.span), range.path) }
     }
@@ -323,7 +332,7 @@ internal fun prepareNativeFloatText(
         else (ruby?.let {
             paintedSourceRanges.mapIndexedNotNull { index, range ->
                 val span = checkNotNull(range.span)
-                if ((range.start < range.end || range.role == RubyTextRole.ActionGroup) && span.image == null &&
+                if ((range.start < range.end || range.path in actionGroupOwners) && span.image == null &&
                     (span.hasInternalAction() || externalLinkUrl(span) != null))
                     NativeCaptionLinkRange(index, span, range.start, range.end) else null
             }
@@ -351,13 +360,13 @@ internal fun prepareNativeFloatText(
     }
     val linkPaints = paintedStates.associate { (range, state) -> (range.start to range.end) to state }
     val actionGroupPaints = paintedStates.mapNotNull { (range, state) ->
-        paintedSourceRanges.getOrNull(range.index)?.takeIf { it.role == RubyTextRole.ActionGroup }?.let { it.path to state }
+        paintedSourceRanges.getOrNull(range.index)?.takeIf { it.path in actionGroupOwners }?.let { it.path to state }
     }.toMap()
     val ordinaryPaintRevision = paintedStates.filter { it.first.span.linkPaint != null }
         .map { it.second }.takeIf { it.isNotEmpty() }
     fun linkPaintAt(start: Int, end: Int): NativeMissingLinkPaint? = missingLinkPaint ?: linkPaints.entries
         .firstOrNull { (range, _) -> range.first <= start && range.second >= end }?.value
-    fun groupPaintAt(range: RubyTextRange): NativeMissingLinkPaint? = if (range.role == RubyTextRole.ActionGroup)
+    fun groupPaintAt(range: RubyTextRange): NativeMissingLinkPaint? = if (range.path in actionGroupOwners)
         missingLinkPaint ?: actionGroupPaints[range.path] else linkPaintAt(range.start, range.end)
     val actionGroupCallbacks = linkedMapOf<String, () -> Unit>()
     for (range in actionGroupRanges) {
@@ -403,7 +412,9 @@ internal fun prepareNativeFloatText(
         prefix.isEmpty() && !heading && headingActions.isEmpty() else
         (hasInlineFamily || sourceFamily is ContainerFontFamily.Stack) &&
             !visibleSpans.hasCompiledInlineContent() && prefix.isEmpty() && !heading && headingActions.isEmpty())
-    val preformattedOwner = ownerFont == null && LocalNativePreformattedText.current
+    val containerOwner = ownerFont?.takeIf { it.kind == NativeDeclaringFontKind.Container }
+    val absoluteOwner = ownerFont?.takeIf { it.kind == NativeDeclaringFontKind.Absolute }
+    val preformattedOwner = absoluteOwner == null && LocalNativePreformattedText.current
     val inheritedFamily = sourceFamily.takeUnless { emptyInlineOwner ||
         preformattedOwner && sourceFamily is ContainerFontFamily.Stack }
     val legacyOwnerFamily = effective.fontFamily.takeIf {
@@ -451,13 +462,13 @@ internal fun prepareNativeFloatText(
         legacyOwnerFamily, sourceLineStarts.takeIf { ruby == null })
     styles.forEach { familyPaint(it) }
     val basePaint = if (noSourceLines) TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 0f }
-        else if (ownerFont == null) familyPaint(nativeStyleRanges(AnnotatedString(" "), effective, linkColor,
+        else if (absoluteOwner == null) familyPaint(nativeStyleRanges(AnnotatedString(" "), effective, linkColor,
         sourceFamily = inheritedFamily, legacyOwnerFamily = legacyOwnerFamily).single()) else {
-        val snapshot = ownerFont.snapshot
+        val snapshot = absoluteOwner.snapshot
         if (snapshot.language.isNotEmpty() && nativeTableOwnerLanguageTag(snapshot.language) == null)
             familyFailure = NativeAbsoluteOwnerFontUnavailable
-        if (ownerFont.style == null) familyFailure = "An unused declaring font cannot supply a source line."
-        familyPaint(nativeStyleRanges(AnnotatedString(" "), ownerFont.style ?: effective, linkColor,
+        if (absoluteOwner.style == null) familyFailure = "An unused declaring font cannot supply a source line."
+        familyPaint(nativeStyleRanges(AnnotatedString(" "), absoluteOwner.style ?: effective, linkColor,
             sourceFamily = sourceFamily, familyRanges = listOf(NativeSourceFamilyRange(0, 1,
                 snapshot.fontFamily, inlineFontSnapshotSpan(snapshot).legacyFontFamily()))).single())
     }
@@ -484,17 +495,27 @@ internal fun prepareNativeFloatText(
             }
         }
     }
-    val layoutPaint = cellOwnerPaint ?: basePaint
+    val containerOwnerPaint = containerOwner?.takeUnless { noSourceLines || emptyInlineOwner }?.let { declaring ->
+        if (declaring.style == null || declaring.snapshot.language.isNotEmpty() &&
+            nativeTableOwnerLanguageTag(declaring.snapshot.language) == null) {
+            familyFailure = NativeContainerOwnerFontUnavailable
+            null
+        } else familyPaint(nativeStyleRanges(AnnotatedString(" "), declaring.style, linkColor,
+            sourceFamily = sourceFamily, familyRanges = listOf(NativeSourceFamilyRange(0, 1,
+                declaring.snapshot.fontFamily, inlineFontSnapshotSpan(declaring.snapshot).legacyFontFamily()))).single())
+            .apply { textSize = checkNotNull(declaring.fontPixels); baselineShift = 0 }
+    }
+    val layoutPaint = containerOwnerPaint ?: cellOwnerPaint ?: basePaint
     val cellMetricRevision = cellOwner?.let {
         listOf(cellState, cellOwnerPaint?.typeface, cellOwnerPaint?.textSize)
     }
     val normalBodySize = MaterialTheme.typography.bodyLarge.fontSize
     val cssPixelTextZoom = LocalCssPixelTextZoom.current
     var inlineFailure: String? = when {
-        ownerFont != null && ownerWrap != TextWrap.NoWrap -> "Absolute declaring font requires its complete no-wrap owner."
+        absoluteOwner != null && ownerWrap != TextWrap.NoWrap -> "Absolute declaring font requires its complete no-wrap owner."
         sourceLineStarts != null && (prefix.isNotEmpty() || heading || headingActions.isNotEmpty()) ->
             "No-wrap marker or heading line ownership is unavailable."
-        ownerFont != null && nativeLineHeight !is NativeLineHeightPolicy.Pixels ->
+        absoluteOwner != null && nativeLineHeight !is NativeLineHeightPolicy.Pixels ->
             "Absolute declaring line height is unavailable."
         visibleSpans.withIndex().any { (index, span) ->
             val role = ruby?.leaves?.get(index)?.range?.role
@@ -515,6 +536,7 @@ internal fun prepareNativeFloatText(
         return if (value.value < 0f) -magnitude else magnitude
     }
     val rubyTableTextDirection = LocalCompiledTableTextDirection.current
+    val boxDarkTheme = LocalReaderDarkTheme.current
     val rubyFormats = linkedMapOf<String, NativeRubyGroupFormat>()
     ruby?.groups?.forEach { (path, group) ->
         val range = group.range
@@ -589,10 +611,43 @@ internal fun prepareNativeFloatText(
                     throw UnsupportedFloatLayout("Inline padding exceeds native geometry")
                 NativeInlinePaddingEdges(left, right)
             }
+            val box = range.span?.inlineBoxGroup?.let { model ->
+                fun length(value: StyleLength): Float = nativeInlineBoxCoordinate(value.value.toDouble() *
+                    if (value.unit == StyleLengthUnit.Px) density.density else paint.textSize)
+                fun color(value: InlineBoxColor): Int? = when (value) {
+                    InlineBoxColor.CurrentColor -> null
+                    InlineBoxColor.Transparent -> 0
+                    is InlineBoxColor.Rgb -> checkNotNull(canonicalColorArgb(value.value)).toInt()
+                    is InlineBoxColor.LightDark -> checkNotNull(canonicalColorArgb(
+                        if (boxDarkTheme) value.dark else value.light)).toInt()
+                }
+                fun border(value: InlineBoxBorderEdge): NativeInlineBoxBorder = when (value) {
+                    InlineBoxBorderEdge.None, InlineBoxBorderEdge.Hidden -> NativeInlineBoxBorder(0f, 0)
+                    is InlineBoxBorderEdge.Solid -> NativeInlineBoxBorder(length(value.width), color(value.color))
+                    is InlineBoxBorderEdge.Dotted -> NativeInlineBoxBorder(length(value.width), color(value.color), dotted = true)
+                }
+                fun borders(value: InlineBoxBorderEdges) = NativeInlineBoxBorders(
+                    border(value.top), border(value.right), border(value.bottom), border(value.left))
+                fun inset(value: InlineBoxInset?): NativeInlineBoxInset? = value?.let {
+                    if (it.unit == StyleWidthUnit.Percent) NativeInlineBoxInset(it.value, percentage = true)
+                    else NativeInlineBoxInset(nativeInlineBoxCoordinate(it.value.toDouble() *
+                        if (it.unit == StyleWidthUnit.Px) density.density else paint.textSize), percentage = false)
+                }
+                // CurrentColor belongs to this owner or its actual stored action ancestor,
+                // never to a child link which merely occupies the same logical interval.
+                val action = actionGroupRanges.lastOrNull { it.path == path || path.startsWith(it.path + "/") }
+                NativeInlineBoxFormat(boxOwners.getValue(path), NativeInlineBoxEdges(
+                    length(model.padding.top), length(model.padding.right),
+                    length(model.padding.bottom), length(model.padding.left)), borders(model.border),
+                    model.overlays.map { overlay -> NativeInlineBoxOverlay(NativeInlineBoxInsets(
+                        inset(overlay.insets.top), inset(overlay.insets.right),
+                        inset(overlay.insets.bottom), inset(overlay.insets.left)), borders(overlay.border)) },
+                    currentColorPaint = action?.let(::groupPaintAt))
+            }
             rubyFormats[path] = NativeRubyGroupFormat(paint, groupDirection, height, shift,
                 authored?.wrap, underline, authored?.cursor, sourceDirection, localBaselineShift = localShift,
                 padding = padding, actionPaint = if (range in groupActions) groupPaintAt(range) else null,
-                actionOwner = actionGroupOwners[path])
+                actionOwner = actionGroupOwners[path], box = box)
         } catch (failure: UnsupportedFloatLayout) {
             inlineFailure = failure.message ?: "Ruby declaring geometry is unavailable"
         }
@@ -744,9 +799,10 @@ internal fun prepareNativeFloatText(
             paint.letterSpacing, paint.textScaleX, paint.textSkewX, paint.color, paint.bgColor,
             paint.isUnderlineText, paint.isStrikeThruText, group.direction, group.lineHeight,
             group.baselineShift, group.localBaselineShift, group.wrap, group.underline, group.cursor, group.sourceDirection,
-            group.padding, group.actionPaint, group.actionOwner)
+            group.padding, group.actionPaint, group.actionOwner,
+            group.box?.let { listOf(it.owner, it.padding, it.border, it.overlays, it.currentColorPaint) })
     }
-    val shapeKey = listOf(annotated, runs, effective, ruby, actionGroupOwners, rubyMetricRevision, density.density, density.fontScale, inlineRevision, familyFailure, sourceFamily, familyRanges, legacyOwnerFamily, ownerFont, cellMetricRevision, sourceLineStarts,
+    val shapeKey = listOf(annotated, runs, effective, ruby, actionGroupOwners, boxOwners, rubyMetricRevision, density.density, density.fontScale, inlineRevision, familyFailure, sourceFamily, familyRanges, legacyOwnerFamily, ownerFont, cellMetricRevision, sourceLineStarts,
         paintedLinks.filter { it.span.linkPaint != null }.map { it.start to it.end },
         styles.map { listOf(it.start, it.end, it.paint.typeface, it.paint.textSize, it.paint.color, it.paint.bgColor, it.paint.baselineShift) })
     val shaped by produceState<Pair<Any, Map<Int, NativeEgyptianSpanPreparation>>?>(null, shapeKey) {
@@ -831,8 +887,8 @@ internal fun prepareNativeFloatText(
                         }
                         inlineParentPolicies += Triple(start, end, policy)
                         native.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(layoutPaint), policy,
-                            strut = true, includePrimaryInNormal = cellOwnerPaint != null),
-                            start, end, if (start == end && (inlineSources.isNotEmpty() || cellOwnerPaint != null))
+                            strut = true, includePrimaryInNormal = cellOwnerPaint != null || containerOwnerPaint != null),
+                            start, end, if (start == end && (inlineSources.isNotEmpty() || cellOwnerPaint != null || containerOwnerPaint != null))
                                 Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                         styles.forEach { run ->
                             val first = max(start, run.start)
@@ -940,8 +996,9 @@ internal fun prepareNativeFloatText(
                          nativeLinks.forEachIndexed { index, range ->
                             val actionGroup = range.group
                             val state = if (actionGroup == null) linkPaintAt(range.start, range.end) else groupPaintAt(actionGroup)
-                            val paddingOwner = paddingActions.singleOrNull { it.start == range.start && it.end == range.end }?.span
-                            val childRange = if (paddingOwner != null || paddingRanges.isEmpty()) null else actionGroup ?:
+                            val paddingAction = paddingActions.singleOrNull { it.start == range.start && it.end == range.end }
+                            val paddingOwner = paddingAction?.span
+                            val childRange = if (boxRanges.isEmpty() && (paddingOwner != null || paddingRanges.isEmpty())) null else actionGroup ?: paddingAction ?:
                                 ruby?.leaves?.singleOrNull { leaf ->
                                     val span = checkNotNull(leaf.range.span)
                                     leaf.range.start == range.start && leaf.range.end == range.end && when (val link = range.item) {
@@ -949,7 +1006,8 @@ internal fun prepareNativeFloatText(
                                         is LinkAnnotation.Url -> externalLinkUrl(span) == link.url
                                         else -> false
                                     }
-                                }?.range ?: throw UnsupportedFloatLayout("Inline padding child action lost its source owner")
+                                }?.range ?: throw UnsupportedFloatLayout(if (boxRanges.isEmpty())
+                                    "Inline padding child action lost its source owner" else "Inline group child action lost its source owner")
                             val ancestor = childRange?.let { child ->
                                 paddingRanges.lastOrNull { child.path.startsWith(it.path + "/") }
                             }
@@ -960,12 +1018,21 @@ internal fun prepareNativeFloatText(
                                     ?: throw UnsupportedFloatLayout("Inline padding action geometry is unavailable")
                                 else -> geometry.rectsForRange(range.start, range.end)
                             }
-                            val fragments = if (ancestor == null) rawFragments else {
+                            val paddingFragments = if (ancestor == null) rawFragments else {
                                 val edges = rubyFormats[ancestor.path]?.padding
                                     ?: throw UnsupportedFloatLayout("Inline padding action geometry is unavailable")
                                 // Query the original group's full interval; clip only this child's action fragments.
                                 nativeInlinePaddingChildActionRects(geometry, checkNotNull(ancestor.span),
                                     ancestor.start, ancestor.end, edges, rawFragments)
+                            }
+                            val fragments = boxRanges.filter { box ->
+                                childRange?.path?.startsWith(box.path + "/") == true
+                            }.fold(paddingFragments) { childFragments, box ->
+                                // Full source owner interval and original action fragments retain
+                                // occurrence identity; only action/focus/AX bounds are clipped.
+                                geometry.inlineBoxChildActionRects(boxOwners.getValue(box.path), box.start, box.end,
+                                    range.start, range.end, childFragments)
+                                    ?: throw UnsupportedFloatLayout("Inline box child action geometry is unavailable")
                             }
                             val ordinary = if (actionGroup == null) ordinaryPolicies[range.start to range.end] else actionGroup.span?.linkPaint
                             val focus = if (ordinary != null) ordinaryLinkFocusPaint(ordinary,
@@ -1111,7 +1178,7 @@ internal fun prepareNativeFloatText(
         insets.left + insets.right + insets.extraLeft + insets.extraRight, breakWordMinimum = authoredHeading && ownerWrap == null) }, fallback = {
         // The normal float owner already holds this image state. Failure UI reuses it.
         CompositionLocalProvider(LocalInlineImageOwner provides owner, LocalOrdinaryLinkPaintNative provides false,
-            LocalAuthoredInlineNative provides false, LocalRubyNative provides (ruby == null)) {
+            LocalAuthoredInlineNative provides false, LocalRubyNative provides (ruby == null && containerOwner == null)) {
             Column(Modifier.padding(start = with(density) { indentPixels.toDp() })) {
                 Row {
                     if (prefix.isNotEmpty()) Text(prefix, Modifier.width(with(density) { prefixWidth.toDp() }), style = prefixStyle ?: effective)

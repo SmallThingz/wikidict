@@ -30,11 +30,12 @@ class RubyModelCodecTest {
         FigureCaption, FigureRichCaption, FlowInline, FlowFigure, ScopeInline, ScopeFigure }
 
     /** Independent little-endian fixture writer, deliberately not the production encoder. */
-    private class Wire(private val version: Char = 'S') {
+    private class Wire(private val version: Char = 'S', private val yFlags: Int = 0) {
         private val out = ByteArrayOutputStream()
         val at = linkedMapOf<String, Int>()
         var rootOverride: ((String) -> Unit)? = null
         var paragraphOverride: (() -> Unit)? = null
+        var containerStyleOverride: ((String) -> Unit)? = null
         private var selected = emptyList<Span>()
         private fun mark(name: String) { check(at.put(name, out.size()) == null) }
         private fun byte(value: Int) { out.write(value) }
@@ -88,11 +89,11 @@ class RubyModelCodecTest {
             }
             byte(if (value.targetFragment == null) 0 else 1); value.targetFragment?.let { string(it) }
             mark("$label.tooltip"); byte(if (value.tooltip == null) 0 else 1); value.tooltip?.let { string(it) }
-            if (version == 'S' || version == 'T' || version == 'U' || version == 'V') {
+            if (version == 'S' || version == 'T' || version == 'U' || version == 'V' || version == 'Y') {
                 mark("$label.ruby"); byte(if (value.ruby == null) 0 else 1)
                 value.ruby?.let { ruby(it, label) }
             } else require(value.ruby == null)
-            if (version == 'U' || version == 'V') {
+            if (version == 'U' || version == 'V' || version == 'Y') {
                 mark("$label.padding"); byte(if (value.inlinePaddingGroup == null) 0 else 1)
                 value.inlinePaddingGroup?.let { group ->
                     mark("$label.padding.left"); byte(group.left.unit.ordinal); f32(group.left.value)
@@ -101,11 +102,89 @@ class RubyModelCodecTest {
                 }
             } else require(value.inlinePaddingGroup == null)
             mark("$label.padding.end")
-            if (version == 'V') {
+            if (version == 'V' || version == 'Y') {
                 mark("$label.action"); byte(if (value.inlineActionGroup == null) 0 else 1)
                 value.inlineActionGroup?.let { spans(it.spans, "$label.action.body") }
             } else require(value.inlineActionGroup == null)
+            if (version == 'Y' && yFlags and 4 != 0) {
+                mark("$label.box"); byte(if (value.inlineBoxGroup == null) 0 else 1)
+                value.inlineBoxGroup?.let { inlineBox(it, "$label.box") }
+            } else require(value.inlineBoxGroup == null)
             mark("$label.end")
+        }
+        private fun boxLength(value: StyleLength, label: String) {
+            mark(label); byte(value.unit.ordinal); f32(value.value)
+        }
+        private fun boxColor(value: InlineBoxColor, label: String) {
+            mark(label)
+            when (value) {
+                InlineBoxColor.CurrentColor -> byte(0)
+                InlineBoxColor.Transparent -> byte(1)
+                is InlineBoxColor.Rgb -> { byte(2); string(value.value, "$label.rgb") }
+                is InlineBoxColor.LightDark -> { byte(3); string(value.light, "$label.light"); string(value.dark, "$label.dark") }
+            }
+        }
+        private fun boxBorder(value: InlineBoxBorderEdges, label: String) {
+            listOf(value.top, value.right, value.bottom, value.left).forEachIndexed { index, edge ->
+                val name = "$label.$index"; mark(name)
+                when (edge) {
+                    InlineBoxBorderEdge.None -> byte(0)
+                    InlineBoxBorderEdge.Hidden -> byte(1)
+                    is InlineBoxBorderEdge.Solid -> { byte(2); boxLength(edge.width, "$name.width"); boxColor(edge.color, "$name.color") }
+                    is InlineBoxBorderEdge.Dotted -> { byte(3); boxLength(edge.width, "$name.width"); boxColor(edge.color, "$name.color") }
+                }
+            }
+        }
+        private fun boxOverlay(value: InlineBoxOverlay, label: String) {
+            val sides = listOf(value.insets.top, value.insets.right, value.insets.bottom, value.insets.left)
+            mark("$label.flags"); byte(sides.withIndex().sumOf { (index, inset) -> if (inset == null) 0 else 1 shl index })
+            sides.forEachIndexed { index, inset -> if (inset != null) {
+                mark("$label.inset$index"); byte(inset.unit.ordinal); f32(inset.value)
+            } }
+            boxBorder(value.border, "$label.border")
+        }
+        private fun inlineBox(value: InlineBoxGroup, label: String) {
+            listOf(value.padding.top, value.padding.right, value.padding.bottom, value.padding.left)
+                .forEachIndexed { index, edge -> boxLength(edge, "$label.padding$index") }
+            boxBorder(value.border, "$label.border")
+            mark("$label.overlays"); u32(value.overlays.size.toLong())
+            value.overlays.forEachIndexed { index, overlay -> boxOverlay(overlay, "$label.overlay$index") }
+            spans(value.spans, "$label.body")
+        }
+        private fun bodyTypography(value: BodyTypography) {
+            mark("body.start"); fontSnapshot(value.ownerFont, "body.font")
+            mark("body.lineHeight"); byte(if (value.lineHeight == null) 0 else 1)
+            when (val height = value.lineHeight) {
+                null -> Unit
+                ContainerLineHeight.Normal -> byte(0)
+                is ContainerLineHeight.Multiplier -> { byte(1); f32(height.value) }
+                is ContainerLineHeight.Length -> { byte(2); boxLength(height.value, "body.length") }
+            }
+            mark("body.end")
+        }
+        /** Raw Y owners exercise depth beyond constructor admission without a second codec. */
+        fun boxChain(depth: Int, label: String) {
+            require(version == 'Y' && yFlags and 4 != 0)
+            mark("$label.count"); u32(1)
+            fun nested(left: Int, name: String) {
+                if (left == 0) { span(Span("text", "leaf"), name); return }
+                out.write(Wire('V').isolatedSpan(Span("text", ""))); byte(1)
+                repeat(4) { length() }; repeat(4) { byte(0) }; u32(0); u32(1)
+                nested(left - 1, "$name.child")
+            }
+            nested(depth, "$label.0")
+        }
+        /** Reuses one literal overlay record, without a million test-only offset keys. */
+        fun boxBudget(count: Int, label: String) {
+            require(version == 'Y' && yFlags and 4 != 0)
+            mark("$label.count"); u32(1)
+            out.write(Wire('V').isolatedSpan(Span("text", ""))); byte(1)
+            repeat(4) { length() }; repeat(4) { byte(0) }; u32(count.toLong())
+            val record = Wire('Y', yFlags).apply {
+                byte(3); byte(0); f32(0f); byte(0); f32(0f); repeat(4) { byte(0) }
+            }.out.toByteArray()
+            repeat(count) { out.write(record) }
+            spans(listOf(Span("text", "x")), "$label.0.box.body")
         }
         private fun linkPaint(value: LinkPaint) {
             require(value.focusOutline == null)
@@ -116,6 +195,30 @@ class RubyModelCodecTest {
             byte(mask); byte(0)
             string(value.hoverActive.foreground); string(value.visitedHoverActive.foreground)
             byte((if (value.hoverActive.underline) 1 else 0) or (if (value.visitedHoverActive.underline) 2 else 0))
+        }
+        private fun fontFamily(value: ContainerFontFamily) = when (value) {
+            ContainerFontFamily.SansSerif -> byte(0)
+            is ContainerFontFamily.Stack -> {
+                byte(1); u32(value.names.size.toLong()); value.names.forEach { string(it) }; byte(value.fallback.ordinal)
+            }
+        }
+        fun containerOwnerStyle(owner: InlineFontSnapshot, scale: Float? = null,
+            family: ContainerFontFamily? = null, label: String = "owned") {
+            mark("$label.style")
+            u32((0x1000000 or (if (scale != null) 0x10000 else 0) or (if (family != null) 0x400000 else 0)).toLong())
+            scale?.let(::f32); family?.let(::fontFamily)
+            fontSnapshot(owner, "$label.owner")
+        }
+        fun ownedParagraph(owner: InlineFontSnapshot, empty: Boolean = false) {
+            prefix(13); byte(0); tail(); containerOwnerStyle(owner)
+            u32(if (empty) 0 else 1)
+            if (!empty) { prefix(0, true); byte(0); tail() }
+        }
+        /** Repeated records share no test offset map; the wire still contains each real owner. */
+        fun ownerBudget(count: Int, owner: InlineFontSnapshot) {
+            prefix(13); byte(0); tail(); u32(0); u32(count.toLong())
+            val record = Wire(version, yFlags).apply { ownedParagraph(owner, empty = true) }.out.toByteArray()
+            repeat(count) { out.write(record) }
         }
         private fun fontSnapshot(value: InlineFontSnapshot, label: String) {
             mark("$label.flags")
@@ -129,7 +232,7 @@ class RubyModelCodecTest {
             byte(listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
                 .indexOf(value.role).also { require(it >= 0) })
             value.fontFeatures?.let { byte(it.ordinal) }
-            value.fontFamily?.let { require(it == ContainerFontFamily.SansSerif); byte(0) }
+            value.fontFamily?.let(::fontFamily)
         }
         private fun inlineStyle(value: InlineTextStyle, label: String) {
             require(value.decoration == null)
@@ -229,7 +332,12 @@ class RubyModelCodecTest {
                 Sink.Body, Sink.ReferenceBlocks -> paragraph()
                 Sink.Heading -> { prefix(9, true, 2); byte(0); tail(true) }
                 Sink.Container -> {
-                    repeat(containers) { prefix(13); byte(0); tail(); u32(0); u32(1) }
+                    repeat(containers) { index ->
+                        prefix(13); byte(0); tail()
+                        val style = containerStyleOverride
+                        if (style == null) u32(0) else style("container$index")
+                        u32(1)
+                    }
                     paragraph()
                 }
                 Sink.FigureCaption, Sink.FigureRichCaption -> {
@@ -257,9 +365,10 @@ class RubyModelCodecTest {
         }
         fun document(values: List<Span>, sink: Sink = Sink.Display, features: Int = 0,
             alignment: Boolean = false, clear: Boolean = false, containers: Int = 1,
-            headingTitle: String = "漢（かん）"): ByteArray {
+            headingTitle: String = "漢（かん）", bodyTypography: BodyTypography? = null): ByteArray {
             selected = values
             out.write("DPR$version".encodeToByteArray())
+            if (version == 'Y') { mark("yFeatures"); byte(yFlags) }
             if (sink == Sink.Display) root("root") else spans(emptyList(), "display")
             val bodyOwner = sink !in listOf(Sink.Display, Sink.Preamble, Sink.Reference, Sink.ReferenceBlocks)
             val section = bodyOwner || alignment || clear
@@ -290,6 +399,7 @@ class RubyModelCodecTest {
                 mark("features"); val flags = features or (if (sink == Sink.Heading) 2 else 0); byte(flags)
                 if (sink == Sink.Heading) { u32(1); u32(0); headingStyle(flags and 16 != 0) }
             }
+            bodyTypography?.let { this.bodyTypography(it) }
             return out.toByteArray()
         }
         /** Raw table edges do not consume content depth; a rich caption does. */
@@ -1481,5 +1591,403 @@ class RubyModelCodecTest {
         invalid("Sibling owner cannot reset V aggregate budget") { PresentationSpanVisitor { _, _ -> }.spans(listOf(exactly, source)) }
         val over = InlineActionGroup(java.util.Collections.nCopies(1 shl 20, empty))
         invalid("V owner is charged once, beyond full child budget") { Span("link", "", "Owner", inlineActionGroup = over) }
+    }
+
+    @Test fun containerOwnerFontsRetainIndependentSnapshotsAliasesAndOriginalChildrenAcrossYContainers() {
+        val family = ContainerFontFamily.Stack(listOf("Source Serif", "Source Sans"), GenericFontFamily.Serif)
+        val font = InlineFontSnapshot(.75f, FontScaleBasis.NormalBody, small = true, superscript = true,
+            subscript = true, fontNormalized = true, bold = true, italic = true, code = true,
+            language = "ja", classes = "source-owner", role = "headword",
+            fontFeatures = FontFeaturePolicy.SevenOn, fontFamily = family)
+        val child = Span("link", "child\ud83d\ude00", "Original target", trail = "!", targetFragment = "part",
+            tooltip = "Original tooltip", explanation = "Original explanation", fontScale = 2f,
+            fontScaleBasis = FontScaleBasis.NormalBody)
+        val source = Container(listOf(Block("paragraph", 0, listOf(child))),
+            ContainerStyle(ownerFontScale = .75f, fontFamily = family.copy(names = family.names.toList()), ownerFont = font))
+        assertSame(font, source.style.ownerFont); assertSame(child, source.blocks.single().spans.single())
+        assertFalse(child.bold); assertFalse(child.italic); assertFalse(child.code)
+        assertEquals(2f, child.fontScale); assertEquals("child\ud83d\ude00!", textOf(listOf(child)))
+        val wire = Wire('Y', 1).apply { containerStyleOverride = { containerOwnerStyle(font, .75f, family, it) } }
+        val entry = read(wire.document(listOf(child), Sink.Container, features = 4))
+        val decoded = entry.sections.single().blocks.single().container!!
+        assertEquals(source, decoded)
+        assertEquals(listOf(Abbreviation("child\ud83d\ude00!", "Original explanation", "Body: child\ud83d\ude00!")), entryAbbreviations(entry))
+        val raw = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = raw::add }.blocks(entry.sections.single().blocks)
+        assertEquals(listOf(child), raw)
+        for (basis in listOf(FontScaleBasis.NormalBody, FontScaleBasis.CssPx)) for (size in listOf(0f, 23.5f)) {
+            val exact = InlineFontSnapshot(size, basis, fontNormalized = true)
+            val value = Wire('Y', 1).apply { containerStyleOverride = { containerOwnerStyle(exact, label = it) } }
+            val result = read(value.document(listOf(child), Sink.Container)).sections.single().blocks.single().container!!
+            assertEquals(exact, result.style.ownerFont); assertNull(result.style.ownerFontScale)
+            assertNull(result.style.fontFamily); assertEquals(child, result.blocks.single().spans.single())
+            val empty = Wire('Y', 1).apply { paragraphOverride = { ownedParagraph(exact, empty = true) } }
+            val noLine = read(empty.document(emptyList(), Sink.Body)).sections.single().blocks.single().container!!
+            assertTrue(noLine.blocks.isEmpty()); assertEquals(exact, noLine.style.ownerFont)
+            assertTrue(mutableListOf<Span>().also { spans ->
+                PresentationSpanVisitor { runs, _ -> spans.addAll(runs) }.block(Block("container", 0, emptyList(), container = noLine))
+            }.isEmpty())
+        }
+        for (sink in listOf(Sink.Body, Sink.CellBlocks, Sink.TableRichCaption, Sink.ReferenceBlocks,
+            Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure)) {
+            val nested = Wire('Y', 1).apply { paragraphOverride = { ownedParagraph(font) } }
+            val restored = read(nested.document(listOf(child), sink, features = 4))
+            val containers = mutableListOf<Container>(); val leaves = mutableListOf<Span>()
+            val visitor = PresentationSpanVisitor { _, _ -> }.apply { onContainer = containers::add; onSpan = leaves::add }
+            restored.sections.forEach { visitor.blocks(it.blocks) }
+            restored.references.forEach { visitor.blocks(it.blocks.orEmpty()) }
+            assertEquals("$sink declaring source", listOf(font), containers.map { it.style.ownerFont })
+            assertEquals("$sink original child", listOf(child), leaves.filter { it.target == child.target })
+            assertEquals("$sink fallback", "child\ud83d\ude00!", textOf(containers.single().blocks.single().spans))
+        }
+        val ruby = simple()
+        val padding = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(
+            StyleLength(StyleLengthUnit.Px, 1f), StyleLength(StyleLengthUnit.Em, .25f), listOf(text("p"))))
+        val action = Span("link", "", "Grouped target", inlineActionGroup = InlineActionGroup(listOf(text("a"))))
+        val combined = Wire('Y', 1).apply { containerStyleOverride = { containerOwnerStyle(font, label = it) } }
+        assertEquals(listOf(ruby, padding, action), read(combined.document(listOf(ruby, padding, action),
+            Sink.Container, features = 4)).sections.single().blocks.single().container!!.blocks.single().spans)
+    }
+
+    @Test fun containerOwnerFontsRejectAliasConflictsSpecialOwnersAndMalformedYWithExactLegacyCensus() {
+        val font = InlineFontSnapshot(1f, FontScaleBasis.NormalBody, fontNormalized = true)
+        fun bytes(owner: InlineFontSnapshot = font, scale: Float? = null, family: ContainerFontFamily? = null,
+            features: Int = 0): Pair<Wire, ByteArray> {
+            val wire = Wire('Y', 1).apply { containerStyleOverride = { containerOwnerStyle(owner, scale, family, it) } }
+            return wire to wire.document(listOf(text("unchanged")), Sink.Container, features = features)
+        }
+        for (bad in listOf(InlineFontSnapshot(), font.copy(fontNormalized = false),
+            InlineFontSnapshot(1f, FontScaleBasis.Context))) {
+            invalid("Noncomputed Container metric font") { ContainerStyle(ownerFont = bad) }
+            reject("Literal noncomputed Container metric font", bytes(bad).second)
+        }
+        for (scale in listOf(Float.NaN, Float.POSITIVE_INFINITY, -1f))
+            invalid("Invalid owner size") { font.copy(fontScale = scale) }
+        val family = ContainerFontFamily.Stack(listOf("Source Serif", "Source Sans"), GenericFontFamily.Serif)
+        val complete = font.copy(fontFamily = family)
+        for ((owner, alias) in listOf(complete to 2f, complete.copy(fontScaleBasis = FontScaleBasis.CssPx) to 1f)) {
+            invalid("Conflicting scalar alias") { ContainerStyle(ownerFont = owner, ownerFontScale = alias) }
+            reject("Literal scalar alias", bytes(owner, scale = alias, features = 4).second)
+        }
+        for (alias in listOf(ContainerFontFamily.SansSerif, family.copy(names = family.names.reversed()),
+            family.copy(fallback = GenericFontFamily.SansSerif))) {
+            invalid("Conflicting family alias") { ContainerStyle(ownerFont = complete, fontFamily = alias) }
+            reject("Literal family alias", bytes(complete, family = alias, features = 4).second)
+        }
+        invalid("Family alias cannot fill an absent snapshot request") { ContainerStyle(ownerFont = font, fontFamily = family) }
+        reject("Literal absent snapshot family", bytes(font, family = family, features = 4).second)
+        invalid("RelativeAuto is a distinct owner") { ContainerStyle(ownerFont = font, positioning = ContainerPositioning.RelativeAuto) }
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val absolute = ContainerPositioning.Absolute(zero, zero, font, InlineComputedLength(0f, FontScaleBasis.CssPx), TextWrap.NoWrap)
+        invalid("Absolute is a distinct owner") { ContainerStyle(ownerFont = font, positioning = absolute,
+            width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Percent, 100f)), height = zero) }
+        invalid("Positioned scope is a distinct owner") { ContainerStyle(ownerFont = font,
+            positioning = ContainerPositioning.RelativeAuto,
+            positionedScope = PositionedScope(TextWrap.NoWrap, PositionedOverflowX.Hidden, PositionedOverflowY.Auto)) }
+        val heading = read(Wire().document(listOf(simple()), Sink.Heading)).sections.single().headingStyle!!
+        invalid("Heading already has its own metric font") { heading.copy(box = heading.box.copy(ownerFont = font.copy(fontFamily = ContainerFontFamily.SansSerif))) }
+        assertFalse(validFigureViewportWrapper(ContainerStyle(ownerFont = font)))
+        val before = ContainerStyle(width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, 10f)),
+            height = zero, floatSide = TableFloatSide.Left)
+        assertTrue(validFigureCaptionBefore(before)); assertFalse(validFigureCaptionBefore(before.copy(ownerFont = font)))
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val media = FigureMediaLayout(FigureMediaStrut(1f, direction = BidiResolvedDirection.Ltr), InlineBoxVerticalAlign.Middle)
+        val wrapper = ContainerStyle(margins = edges, width = ContainerWidth.Auto, lineHeight = ContainerLineHeight.Normal,
+            textAlign = CellTextAlign.Left, ownerFontScale = 1f)
+        assertNotNull(FigureBlockMediaState(639, wrapper, media))
+        invalid("Figure block wrapper has independent strut") { FigureBlockMediaState(639, wrapper.copy(ownerFont = font), media) }
+        val (wire, good) = bytes()
+        val key = "container0.owner"
+        for (bad in listOf(0, 1, 0x31, 0xff)) reject("Snapshot flags$bad", changed(good, wire.at.getValue("$key.flags"), bad))
+        for (bad in listOf(0, 3, 255)) reject("Snapshot basis$bad", changed(good, wire.at.getValue("$key.scale") + 4, bad))
+        for (bad in listOf(Float.NaN, Float.POSITIVE_INFINITY, -1f))
+            reject("Raw owner scale$bad", changed32(good, wire.at.getValue("$key.scale"), bad.toRawBits().toLong()))
+        reject("Unknown face flag", changed(good, wire.at.getValue("$key.face"), 0x20))
+        val (languageWire, languageBytes) = bytes(font.copy(language = "ja"))
+        reject("Malformed owner UTF8", changed(languageBytes, languageWire.at.getValue("$key.language.bytes"), 0xff))
+        for (flags in listOf(0x800000L, 0x1800000L, 0x2000000L))
+            reject("Reserved or unknown Y style bit", changed32(good, wire.at.getValue("container0.style"), flags))
+        reject("Y with no owner", Wire('Y', 1).document(listOf(text("legacy"))))
+        for (old in listOf('M', 'P', 'Q', 'R', 'S', 'T', 'U', 'V')) {
+            val legacyEnvelope = changed(replace(good, 4, 5, byteArrayOf()), 3, old.code)
+            assertEquals("Owner field under$old", "Unknown container style field",
+                runCatching { read(legacyEnvelope) }.exceptionOrNull()?.message)
+        }
+        for (size in good.indices) reject("Truncated Y$size", good.copyOf(size))
+        reject("Trailing Y byte", good + byteArrayOf(0))
+        for (owner in listOf(font.copy(fontFamily = ContainerFontFamily.SansSerif), complete)) {
+            val (familyWire, accepted) = bytes(owner, features = 4)
+            assertEquals(owner, read(accepted).sections.single().blocks.single().container!!.style.ownerFont)
+            reject("Owner-only family census missing", changed(accepted, familyWire.at.getValue("features"), 0))
+        }
+        reject("False family census", changed(good, wire.at.getValue("features"), 4))
+        val legacy = Span("link", "", "Old action", inlineActionGroup = InlineActionGroup(listOf(text("legacy"))))
+        assertArrayEquals("Y has no new Span tail", Wire('V').isolatedSpan(legacy), Wire('Y', 1).isolatedSpan(legacy))
+        val old = Wire('V').document(listOf(legacy), Sink.Container)
+        assertNull(read(old).sections.single().blocks.single().container!!.style.ownerFont)
+        reject("Changing only header cannot create Y owner", changed(old, 3, 'Y'.code))
+        val unsupported = runCatching { read(changed(good, 3, 'X'.code)) }.exceptionOrNull()
+        assertEquals("Unsupported presentation format", unsupported!!.message)
+    }
+
+    @Test fun containerOwnerFontsChargeOneItemWithoutAddingContentDepthOrResettingExistingBudgets() {
+        val font = InlineFontSnapshot(0f, FontScaleBasis.CssPx, fontNormalized = true)
+        for (depth in listOf(1, 16)) {
+            val wire = Wire('Y', 1).apply { containerStyleOverride = { containerOwnerStyle(font, label = it) } }
+            val value = read(wire.document(listOf(text("deep")), Sink.Container, containers = depth))
+            val containers = mutableListOf<Container>()
+            PresentationSpanVisitor { _, _ -> }.apply { onContainer = containers::add }.blocks(value.sections.single().blocks)
+            assertEquals(depth, containers.size); assertTrue(containers.all { it.style.ownerFont == font })
+            assertEquals("deep", textOf(containers.last().blocks.single().spans))
+        }
+        val excess = Wire('Y', 1).apply { containerStyleOverride = { containerOwnerStyle(font, label = it) } }
+        reject("Owner font does not waive content17", excess.document(listOf(text("deep")), Sink.Container, containers = 17))
+        val nested = Wire('Y', 1).apply {
+            containerStyleOverride = { containerOwnerStyle(font, label = it) }
+            paragraphOverride = { tableChain(32, mixed = true) }
+        }
+        val deep = read(nested.document(listOf(text("table")), Sink.Container))
+        val depths = mutableListOf<Int>()
+        PresentationSpanVisitor { _, _ -> }.apply { onTable = { _, depth, _ -> depths.add(depth) } }.blocks(deep.sections.single().blocks)
+        assertEquals((1..32).toList(), depths)
+        val tooDeep = Wire('Y', 1).apply {
+            containerStyleOverride = { containerOwnerStyle(font, label = it) }
+            paragraphOverride = { tableChain(33, mixed = true) }
+        }
+        reject("Y still rejects table33", tooDeep.document(listOf(text("table")), Sink.Container))
+        val empty = Block("container", 0, emptyList(), container = Container(emptyList(), ContainerStyle(ownerFont = font)))
+        val exact = java.util.Collections.nCopies(1 shl 19, empty)
+        var visited = 0
+        PresentationSpanVisitor { _, _ -> }.apply { onContainer = { visited++ } }.blocks(exact)
+        assertEquals(1 shl 19, visited)
+        invalid("Every owner consumes one additional item") { PresentationSpanVisitor { _, _ -> }.blocks(exact + empty) }
+        val rawExact = Wire('Y', 1).apply { paragraphOverride = { ownerBudget((1 shl 19) - 1, font) } }
+        val accepted = read(rawExact.document(emptyList(), Sink.Body))
+        assertEquals((1 shl 19) - 1, accepted.sections.single().blocks.single().container!!.blocks.size)
+        val rawExcess = Wire('Y', 1).apply { paragraphOverride = { ownerBudget(1 shl 19, font) } }
+        reject("Raw owner item budget is shared", rawExcess.document(emptyList(), Sink.Body))
+    }
+
+    @Test fun combinedYFlagsRetainBodyBoxContainerAndOriginalActionsAcrossEverySpanSink() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val one = StyleLength(StyleLengthUnit.Px, 1f)
+        val none = InlineBoxBorderEdge.None
+        val borders = InlineBoxBorderEdges(InlineBoxBorderEdge.Solid(one, InlineBoxColor.CurrentColor),
+            InlineBoxBorderEdge.Dotted(StyleLength(StyleLengthUnit.Em, .125f), InlineBoxColor.LightDark("#112233", "#ddeeff")),
+            InlineBoxBorderEdge.Hidden, InlineBoxBorderEdge.Solid(zero, InlineBoxColor.Transparent))
+        val overlay = InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+            right = InlineBoxInset(StyleWidthUnit.Percent, 0f), bottom = InlineBoxInset(StyleWidthUnit.Percent, 67f)),
+            InlineBoxBorderEdges(none, InlineBoxBorderEdge.Solid(one, InlineBoxColor.Rgb("#102030")), none, none))
+        val behind = overlay.copy(insets = InlineBoxInsets(left = InlineBoxInset(StyleWidthUnit.Em, -1.25f),
+            bottom = InlineBoxInset(StyleWidthUnit.Px, -2.5f)))
+        val child = Span("link", "ずれ", "Original target", trail = "!", targetFragment = "part", tooltip = "Child tip",
+            explanation = "Child explanation", fontScale = 1.35f, fontScaleBasis = FontScaleBasis.Context)
+        val plain = Span("text", "tail", italic = true)
+        val group = InlineBoxGroup(StyleEdges(one, StyleLength(StyleLengthUnit.Em, .25f), zero, one), borders,
+            listOf(overlay, behind), listOf(child, plain))
+        val box = Span("text", "", fontScale = 1.35f, fontScaleBasis = FontScaleBasis.Context, inlineBoxGroup = group)
+        assertSame(group, box.inlineBoxGroup); assertSame(child, group.spans.first()); assertSame(overlay, group.overlays.first())
+        assertEquals(1.35f, box.fontScale); assertEquals(1.35f, child.fontScale)
+        assertEquals(27f, spanFontPixels(box, 20f, 40f), 0f)
+        assertEquals(27f, spanFontPixels(child, 20f, 40f), 0f)
+        assertEquals("ずれ!tail", rubyFallbackText(listOf(box))); assertEquals("ずれ!tail", textOf(listOf(box)))
+        val font = InlineFontSnapshot(1.25f, FontScaleBasis.NormalBody, fontNormalized = true, bold = true,
+            language = "ja", fontFamily = ContainerFontFamily.SansSerif)
+        val body = BodyTypography(font, ContainerLineHeight.Multiplier(1.4f))
+        for (flags in 1..7) {
+            val source = if (flags and 4 != 0) box else text("ordinary")
+            val wire = Wire('Y', flags).apply {
+                if (flags and 1 != 0) containerStyleOverride = { containerOwnerStyle(font, label = it) }
+            }
+            val sink = if (flags and 1 != 0) Sink.Container else Sink.Display
+            val typography = body.takeIf { flags and 2 != 0 }
+            val result = read(wire.document(listOf(source), sink, features = if (flags and 3 != 0) 4 else 0,
+                bodyTypography = typography))
+            assertEquals("Y flags$flags body", typography, result.bodyTypography)
+            assertEquals("Y flags$flags source", source, selected(result, sink))
+            if (flags and 1 != 0) assertEquals(font, result.sections.single().blocks.single().container!!.style.ownerFont)
+        }
+        for (sink in Sink.entries) {
+            val restored = read(Wire('Y', 6).document(listOf(box), sink, features = 4,
+                headingTitle = "ずれ!tail", bodyTypography = body))
+            val actual = selected(restored, sink)
+            assertEquals("$sink complete owner and ordered overlays", box, actual)
+            assertEquals("$sink body", body, restored.bodyTypography)
+            assertEquals("$sink terminal", "ずれ!tail", rubyFallbackText(listOf(actual)))
+            assertEquals("$sink action", EntryLink("Original target", "part"), actual.inlineBoxGroup!!.spans.first().entryLink())
+            assertEquals("Child tip", actual.inlineBoxGroup!!.spans.first().tooltip)
+            val raw = mutableListOf<Span>()
+            PresentationSpanVisitor { _, _ -> }.apply { onSpan = raw::add }.spans(listOf(actual))
+            assertEquals(listOf(actual, child, plain), raw)
+            if (sink == Sink.Heading) {
+                assertEquals("ずれ!tail", restored.sections.single().title)
+                assertEquals("ruby-heading", restored.sections.single().anchor)
+            }
+        }
+        for (basis in listOf(FontScaleBasis.NormalBody, FontScaleBasis.CssPx))
+            for (height in listOf(null, ContainerLineHeight.Normal, ContainerLineHeight.Multiplier(0f),
+                ContainerLineHeight.Length(zero), ContainerLineHeight.Length(StyleLength(StyleLengthUnit.Em, 1.5f)))) {
+                val value = BodyTypography(InlineFontSnapshot(0f, basis, fontNormalized = true), height)
+                val restored = read(Wire('Y', 2).document(emptyList(), bodyTypography = value))
+                assertEquals(value, restored.bodyTypography); assertTrue(restored.displayTitle.isEmpty())
+                assertTrue(restored.sections.isEmpty()); assertTrue(restored.rasterImages.isEmpty())
+            }
+        val innerBox = box.copy(inlineBoxGroup = group.copy(spans = listOf(text("b"))))
+        val padding = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(one, zero, listOf(text("u"))))
+        val nestedAction = Span("link", "", "Nested V", inlineActionGroup = InlineActionGroup(listOf(text("v"))))
+        val nestedChildren = listOf(simple(), padding, nestedAction, innerBox)
+        val recursive = box.copy(inlineBoxGroup = group.copy(spans = nestedChildren))
+        nestedChildren.forEachIndexed { index, span -> assertSame(span, recursive.inlineBoxGroup!!.spans[index]) }
+        val recursiveEntry = read(Wire('Y', 6).document(listOf(recursive), features = 4, bodyTypography = body))
+        assertEquals(recursive, recursiveEntry.displayTitle.single())
+        assertEquals("漢（かん）uvb", rubyFallbackText(recursiveEntry.displayTitle))
+        val outerOwners = listOf(owner(listOf(base(innerBox))),
+            Span("text", "", inlinePaddingGroup = InlinePaddingGroup(one, zero, listOf(innerBox))),
+            Span("link", "", "Outer V", inlineActionGroup = InlineActionGroup(listOf(innerBox))))
+        for (source in outerOwners) {
+            val restored = read(Wire('Y', 4).document(listOf(source))).displayTitle.single()
+            assertEquals(source, restored); assertEquals("b", rubyFallbackText(listOf(restored)))
+        }
+        val action = box.copy(kind = "external_link", target = "https://example.test/original",
+            inlineBoxGroup = group.copy(spans = listOf(text("ずれ"))))
+        val restoredAction = read(Wire('Y', 4).document(listOf(action))).displayTitle.single()
+        assertEquals(action, restoredAction)
+        assertEquals(listOf("https://example.test/original"), rubyFallbackSpans(listOf(restoredAction)).map { it.target })
+    }
+
+    @Test fun inlineBoxRejectsMalformedGeometryEmptyBodiesAndDuplicateActionsWithoutNarrowingSharedWhitespace() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val none = InlineBoxBorderEdge.None
+        val borders = InlineBoxBorderEdges(none, none, none, none)
+        fun group(children: List<Span>) = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), borders, spans = children)
+        fun boxed(vararg children: Span) = Span("text", "", inlineBoxGroup = group(children.toList()))
+        val ordinary = boxed(text("x"))
+        for (children in listOf(emptyList(), listOf(text("")), listOf(owner(listOf(base()), listOf(annotation())))))
+            invalid("No original child text or trail") { group(children) }
+        assertNotNull(boxed(Span("text", "", trail = "!")))
+        for (raw in listOf(" ", "\t", "\n", "\r", "\u000c")) {
+            val value = boxed(text(raw))
+            assertEquals(value, read(Wire('Y', 4).document(listOf(value))).displayTitle.single())
+            assertEquals(raw, rubyFallbackText(listOf(value)))
+            if (raw != " ") {
+                invalid("Ruby body keeps its stricter raw domain") { owner(listOf(base(value))) }
+                invalid("U body keeps its stricter raw domain") { Span("text", "", inlinePaddingGroup =
+                    InlinePaddingGroup(StyleLength(StyleLengthUnit.Px, 1f), zero, listOf(value))) }
+            }
+        }
+        for (child in listOf(Span("line_break", ""), Span("text", "", image = InlineImage("Probe.svg")),
+            text("media").copy(classes = "wikidict-media"), text("media").copy(classes = "wikidict-media-file-Probe")))
+            invalid("Explicit non-inline child") { boxed(child) }
+        for (change in listOf<() -> Span>({ ordinary.copy(text = "owner") }, { ordinary.copy(trail = "!") },
+            { ordinary.copy(image = InlineImage("Probe.svg")) }, { ordinary.copy(ruby = simple().ruby) },
+            { ordinary.copy(inlinePaddingGroup = InlinePaddingGroup(StyleLength(StyleLengthUnit.Px, 1f), zero, listOf(text("u")))) },
+            { ordinary.copy(kind = "link", target = "A", inlineActionGroup = InlineActionGroup(listOf(text("v")))) }))
+            invalid("Exclusive offset-free Box owner", change)
+        val linked = ordinary.copy(kind = "link", target = "A")
+        invalid("Equal descendant action is still duplicate") { linked.copy(inlineBoxGroup = group(listOf(Span("link", "x", "A")))) }
+        invalid("Hidden Ruby reading action remains duplicate") { linked.copy(inlineBoxGroup = group(listOf(
+            owner(listOf(base(text("x"))), listOf(annotation(Span("link", "x", "A"))))))) }
+        invalid("Box cannot be a Ruby gap") { owner(listOf(base(text("a")), RubyBase(RubyOwner(InlineFontSnapshot()),
+            listOf(boxed(text(" "))), listOf(text("b"))))) }
+        val state = LinkState("#112233", false)
+        val policy = LinkPaint(normal = state, hover = state, active = state, hoverActive = state,
+            visited = state, visitedHover = state, visitedActive = state, visitedHoverActive = state, underlineOnFocus = false)
+        val painted = linked.copy(foreground = "#112233", linkPaint = policy)
+        invalid("Action paint cannot overwrite child source color") { painted.copy(inlineBoxGroup = group(listOf(text("x").copy(foreground = "#334455")))) }
+        invalid("Action paint cannot overwrite Ruby declaring color") { painted.copy(inlineBoxGroup = group(listOf(owner(listOf(
+            base(text("x"), context = RubyOwner(InlineFontSnapshot(), foreground = "#334455"))))))) }
+        for (insets in listOf(InlineBoxInsets(), InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f)),
+            InlineBoxInsets(left = InlineBoxInset(StyleWidthUnit.Percent, 0f))))
+            invalid("Each absolute axis needs a source anchor") { InlineBoxOverlay(insets, borders) }
+        for (bad in listOf(Float.NaN, Float.POSITIVE_INFINITY)) invalid("Finite signed inset") { InlineBoxInset(StyleWidthUnit.Px, bad) }
+        for (bad in listOf("red", "#ABCDEF", "#fff", "#11223344")) {
+            invalid("Canonical RGB") { InlineBoxColor.Rgb(bad) }; invalid("Canonical theme pair") { InlineBoxColor.LightDark("#112233", bad) }
+        }
+        val overlay = InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, -2f),
+            right = InlineBoxInset(StyleWidthUnit.Percent, 0f)), borders)
+        val rich = ordinary.copy(inlineBoxGroup = group(listOf(text("x"))).copy(overlays = listOf(overlay),
+            border = borders.copy(top = InlineBoxBorderEdge.Solid(StyleLength(StyleLengthUnit.Em, .5f), InlineBoxColor.Rgb("#123456")))))
+        val wire = Wire('Y', 4); val bytes = wire.document(listOf(rich))
+        assertEquals(rich, read(bytes).displayTitle.single())
+        for (bad in listOf(2, 255)) reject("Box presence", changed(bytes, wire.at.getValue("root.0.box"), bad))
+        for (bad in listOf(0, 1, 2, 4, 8, 16, 255)) reject("Overlay axis mask", changed(bytes, wire.at.getValue("root.0.box.overlay0.flags"), bad))
+        reject("Inset unit", changed(bytes, wire.at.getValue("root.0.box.overlay0.inset0"), 3))
+        reject("Inset NaN", changed32(bytes, wire.at.getValue("root.0.box.overlay0.inset0") + 1, Float.NaN.toRawBits().toLong()))
+        reject("Negative padding", changed32(bytes, wire.at.getValue("root.0.box.padding0") + 1, (-1f).toRawBits().toLong()))
+        reject("Unknown border", changed(bytes, wire.at.getValue("root.0.box.border.0"), 4))
+        reject("Unknown paint", changed(bytes, wire.at.getValue("root.0.box.border.0.color"), 4))
+        reject("Noncanonical RGB", changed(bytes, wire.at.getValue("root.0.box.border.0.color.rgb.bytes") + 1, 'A'.code))
+        reject("Huge overlay count", changed32(bytes, wire.at.getValue("root.0.box.overlays"), 0xffff_ffffL))
+        reject("Empty child array", changed32(bytes, wire.at.getValue("root.0.box.body.count"), 0))
+        val childStart = wire.at.getValue("root.0.box.body.0.start"); val childEnd = wire.at.getValue("root.0.box.body.0.end")
+        reject("Literal metric-only body", replace(bytes, childStart, childEnd, Wire('Y', 4).isolatedSpan(text(""))))
+        reject("Literal explicit BR", replace(bytes, childStart, childEnd, Wire('Y', 4).isolatedSpan(Span("line_break", ""))))
+        val actionWire = Wire('Y', 4); val actionBytes = actionWire.document(listOf(linked))
+        reject("Literal equal descendant action", replace(actionBytes, actionWire.at.getValue("root.0.box.body.0.start"),
+            actionWire.at.getValue("root.0.box.body.0.end"), Wire('Y', 4).isolatedSpan(Span("link", "x", "A"))))
+        for (size in bytes.indices) reject("Truncated Box$size", bytes.copyOf(size))
+    }
+
+    @Test fun combinedYCensusBodyTrailerAndBoxBudgetsDoNotRelaxOlderHeadersOrDepth() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val none = InlineBoxBorderEdge.None
+        val borders = InlineBoxBorderEdges(none, none, none, none)
+        val font = InlineFontSnapshot(0f, FontScaleBasis.CssPx, fontNormalized = true)
+        val body = BodyTypography(font)
+        val box = Span("text", "", inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), borders, spans = listOf(text("x"))))
+        val wire = Wire('Y', 6); val good = wire.document(listOf(box), bodyTypography = body)
+        for (flags in listOf(0, 1, 2, 3, 4, 5, 7, 8, 255)) reject("Exact Y flags$flags", changed(good, wire.at.getValue("yFeatures"), flags))
+        reject("Flag4 debt", Wire('Y', 4).document(listOf(text("ordinary"))))
+        reject("Flag2 debt", Wire('Y', 2).document(emptyList()))
+        reject("Unflagged BODY tail", Wire('Y', 4).document(listOf(box), bodyTypography = body))
+        for (bad in listOf('W', 'X', 'Z')) assertEquals("Unsupported presentation format",
+            runCatching { read(changed(good, 3, bad.code)) }.exceptionOrNull()!!.message)
+        val noBox = Span("link", "", "Legacy", inlineActionGroup = InlineActionGroup(listOf(text("v"))))
+        assertArrayEquals(Wire('V').isolatedSpan(noBox), Wire('Y', 2).isolatedSpan(noBox))
+        val old = Wire('V').document(listOf(noBox))
+        assertEquals(noBox, read(old).displayTitle.single()); assertNull(read(old).bodyTypography)
+        reject("No header-only Y upgrade", changed(old, 3, 'Y'.code))
+        val p = Wire('Y', 2); val pBytes = p.document(emptyList(), features = 4,
+            bodyTypography = body.copy(ownerFont = font.copy(fontFamily = ContainerFontFamily.SansSerif)))
+        assertEquals(ContainerFontFamily.SansSerif, read(pBytes).bodyTypography!!.ownerFont.fontFamily)
+        reject("BODY-only P census", changed(pBytes, p.at.getValue("features"), 0))
+        reject("False P census", changed(good, wire.at.getValue("features"), 4))
+        for (invalidFont in listOf(InlineFontSnapshot(), font.copy(fontNormalized = false),
+            InlineFontSnapshot(1f, FontScaleBasis.Context))) invalid("Computed BODY snapshot") { BodyTypography(invalidFont) }
+        for (bad in listOf(0, 1, 0x31, 255)) reject("Raw BODY snapshot flags", changed(good, wire.at.getValue("body.font.flags"), bad))
+        reject("Raw BODY context basis", changed(good, wire.at.getValue("body.font.scale") + 4, 0))
+        reject("Raw BODY negative size", changed32(good, wire.at.getValue("body.font.scale"), (-1f).toRawBits().toLong()))
+        reject("BODY line-height presence", changed(good, wire.at.getValue("body.lineHeight"), 2))
+        for (size in wire.at.getValue("body.start") until good.size) reject("Truncated BODY$size", good.copyOf(size))
+        reject("Y trailing byte", good + byteArrayOf(0))
+        for (depth in listOf(1, 16)) {
+            val deep = Wire('Y', 6).apply { rootOverride = { boxChain(depth, it) } }
+            assertEquals("leaf", rubyFallbackText(read(deep.document(emptyList(), bodyTypography = body)).displayTitle))
+        }
+        val tooDeep = Wire('Y', 6).apply { rootOverride = { boxChain(17, it) } }
+        reject("Box shares content17 refusal", tooDeep.document(emptyList(), bodyTypography = body))
+        for (depth in listOf(17, 32, 33)) {
+            val tables = Wire('Y', 6).apply { paragraphOverride = { tableChain(depth, mixed = true) } }
+            val bytes = tables.document(listOf(box), Sink.Body, bodyTypography = body)
+            if (depth == 33) reject("Y table33", bytes) else {
+                val depths = mutableListOf<Int>()
+                PresentationSpanVisitor { _, _ -> }.apply { onTable = { _, level, _ -> depths.add(level) } }.blocks(read(bytes).sections.single().blocks)
+                assertEquals((1..depth).toList(), depths)
+            }
+        }
+        val overlay = InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+            right = InlineBoxInset(StyleWidthUnit.Px, 0f)), borders)
+        val maximum = (1 shl 20) - 3
+        fun budgetOwner(count: Int) = box.copy(inlineBoxGroup = box.inlineBoxGroup!!.copy(overlays = java.util.Collections.nCopies(count, overlay)))
+        fun budgetEntry(value: Span) = Entry("Budget", listOf(value), "language", "Japanese", "ja", emptyList(), emptyList(), bodyTypography = body)
+        assertEquals(maximum, budgetEntry(budgetOwner(maximum)).displayTitle.single().inlineBoxGroup!!.overlays.size)
+        val exceedsOnlyWithBody = budgetOwner(maximum + 1)
+        invalid("BODY and overlays share one model item budget") { budgetEntry(exceedsOnlyWithBody) }
+        for (count in listOf(maximum, maximum + 1)) {
+            val raw = Wire('Y', 6).apply { rootOverride = { boxBudget(count, it) } }
+            val bytes = raw.document(emptyList(), bodyTypography = body)
+            if (count == maximum) assertEquals(count, read(bytes).displayTitle.single().inlineBoxGroup!!.overlays.size)
+            else reject("BODY and complete overlay records share decoder budget", bytes)
+        }
     }
 }

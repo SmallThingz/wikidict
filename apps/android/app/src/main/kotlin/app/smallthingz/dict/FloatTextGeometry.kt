@@ -271,6 +271,10 @@ internal interface FloatTextGeometry {
     fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? = null
     /** A known original action owner may project a subset across several native fragments. */
     fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? = null
+    /** In-flow fragments only; positioned border overlays never become action/selection geometry. */
+    fun inlineBoxGroupRects(owner: NativeInlineBoxOwner, start: Int, end: Int): List<RectF>? = null
+    fun inlineBoxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
+        childStart: Int, childEnd: Int, fragments: List<RectF>): List<RectF>? = null
     /** Exactly [length] entries, including null for a character without visible bounds. */
     fun characterRects(start: Int, length: Int): List<RectF?>
     fun caretRect(offset: Int): RectF
