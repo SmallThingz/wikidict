@@ -100,7 +100,8 @@ internal class NativeNoWrapPlan private constructor(val paragraphs: List<NativeN
             paragraphs += NativeNoWrapParagraph(start, source.length, source.length)
             val declared = owner.value.sourceLineStarts
             if (declared != null && (declared.zipWithNext().any { (a, b) -> a >= b } ||
-                    declared.any { at -> paragraphs.none { it.start == at && it.start < it.end } } ||
+                    declared.any { at -> paragraphs.none { it.start == at &&
+                        (it.start < it.end || at == 0 && nativeInlineActionEmptyLine(source)) } } ||
                     paragraphs.any { it.end > it.measuredEnd && it.start !in declared }))
                 throw UnsupportedFloatLayout("No-wrap source line presence disagrees with its hard-line map")
             return NativeNoWrapPlan(paragraphs, declared?.toSet())

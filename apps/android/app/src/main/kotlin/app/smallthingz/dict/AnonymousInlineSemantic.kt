@@ -8,7 +8,7 @@ internal fun anonymousInlineSemantic(spans: List<Span>, nativeText: String): Lis
         return buildList {
             projection.ranges.forEach { range ->
                 val span = range.span ?: return@forEach
-                if (range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup) return@forEach
+                if (range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup || range.role == RubyTextRole.ActionGroup) return@forEach
                 val image = span.image
                 if (image != null) {
                     // An ordinary image sibling keeps its existing semantic alt policy.

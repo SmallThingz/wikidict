@@ -2,7 +2,7 @@ package app.smallthingz.dict
 
 /** A graphical source range, before the native shaper adds any layout-only bidi controls. */
 internal enum class RubyTextRole {
-    Text, Owner, Segment, SegmentGap, Base, BaseGap, BaseText, Annotation, AnnotationGap, AnnotationText, PaddingGroup,
+    Text, Owner, Segment, SegmentGap, Base, BaseGap, BaseText, Annotation, AnnotationGap, AnnotationText, PaddingGroup, ActionGroup,
 }
 
 internal data class RubyTextRange(
@@ -24,7 +24,9 @@ internal fun rubyBaseText(spans: List<Span>): String = buildString {
         source.forEach { span ->
             val ruby = span.ruby
             val padding = span.inlinePaddingGroup
-            if (padding != null) appendBase(padding.spans)
+            val action = span.inlineActionGroup
+            if (action != null) appendBase(action.spans)
+            else if (padding != null) appendBase(padding.spans)
             else if (ruby == null) append(span.text).append(span.trail) else ruby.segments.forEach { segment ->
                 appendBase(segment.gapBefore)
                 segment.bases.forEach { base -> appendBase(base.gapBefore); appendBase(base.spans) }
@@ -63,9 +65,11 @@ internal fun rubyGraphicalSpans(spans: List<Span>): List<Span> {
     if (!spans.hasNativeInlineGroups()) return spans
     val ranges = rubyGraphicalProjection(spans).ranges
     return ranges.mapNotNull { range ->
-        if (range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup) null
+        if (range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup ||
+            range.role == RubyTextRole.ActionGroup) null
         else range.span?.rubyFallbackAction(ranges.lastOrNull { ancestor ->
-            ancestor.role == RubyTextRole.PaddingGroup && range.path.startsWith(ancestor.path + "/") &&
+            (ancestor.role == RubyTextRole.PaddingGroup || ancestor.role == RubyTextRole.ActionGroup) &&
+                range.path.startsWith(ancestor.path + "/") &&
                 ancestor.span?.kind in setOf("link", "external_link")
         }?.span)
     }
@@ -93,7 +97,10 @@ private class RubyGraphicalTextBuilder {
             val start = text.length
             val ruby = span.ruby
             val padding = span.inlinePaddingGroup
-            if (padding != null) group(RubyTextRange(RubyTextRole.PaddingGroup, childPath, start, start, span = span)) {
+            val action = span.inlineActionGroup
+            if (action != null) group(RubyTextRange(RubyTextRole.ActionGroup, childPath, start, start, span = span)) {
+                appendSpans(action.spans, "$childPath/inlineActionGroup/spans", role)
+            } else if (padding != null) group(RubyTextRange(RubyTextRole.PaddingGroup, childPath, start, start, span = span)) {
                 appendSpans(padding.spans, "$childPath/inlinePaddingGroup/spans", role)
             } else if (ruby == null) {
                 when {
@@ -177,7 +184,9 @@ internal fun rubyFallbackSpans(spans: List<Span>): List<Span> = buildList {
         source.forEach { span ->
             val ruby = span.ruby
             val padding = span.inlinePaddingGroup
-            if (padding != null) appendFallback(padding.spans, inheritedUnderline || span.underline, inheritedStrike || span.strike,
+            val action = span.inlineActionGroup
+            if (action != null) appendFallback(action.spans, inheritedUnderline || span.underline, inheritedStrike || span.strike, span)
+            else if (padding != null) appendFallback(padding.spans, inheritedUnderline || span.underline, inheritedStrike || span.strike,
                 span.takeIf { it.kind == "link" || it.kind == "external_link" } ?: inheritedAction)
             else if (ruby == null) add(span.rubyFallbackAction(inheritedAction)
                 .rubyFallbackDecoration(inheritedUnderline, inheritedStrike)) else ruby.segments.forEach { segment ->

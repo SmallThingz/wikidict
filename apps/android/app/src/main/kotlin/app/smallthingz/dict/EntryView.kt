@@ -1121,7 +1121,7 @@ private fun UnavailableAnonymousGrid(table: Table, onLink: (EntryLink) -> Unit, 
 
 /** These actual cell owners expose synchronous height intrinsics; richer surfaces fail closed. */
 internal fun pairedTableCellHasIntrinsicHeight(cell: Cell): Boolean = cell.blocks == null && cell.nestedTable == null &&
-    cell.spans.all { it.ruby == null && it.inlinePaddingGroup == null && it.image == null && !it.hasClassToken("wikidict-media") &&
+    cell.spans.all { it.ruby == null && it.inlinePaddingGroup == null && it.inlineActionGroup == null && it.image == null && !it.hasClassToken("wikidict-media") &&
         it.kind in setOf("text", "link", "external_link", "line_break") } && egyptianTextRuns(cell.spans).isEmpty()
 
 /** One unchanged centered paragraph has the same real text height as a spans-only cell. */
@@ -1129,7 +1129,7 @@ internal fun intrinsicTableSingleParagraph(cell: Cell): Block? {
     if (cell.spans.isNotEmpty() || cell.nestedTable != null) return null
     val block = cell.blocks?.singleOrNull() ?: return null
     if (block != Block("paragraph", 0, block.spans, textAlign = CellTextAlign.Center) ||
-        !block.spans.hasCompiledInlineContent() || block.spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.image != null ||
+        !block.spans.hasCompiledInlineContent() || block.spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.image != null ||
             it.hasClassToken("wikidict-media") || it.kind !in setOf("text", "link", "external_link", "line_break") } ||
         egyptianTextRuns(block.spans).isNotEmpty()) return null
     return block
@@ -1703,7 +1703,7 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val sourceRuby = spans.hasNativeInlineGroups()
     val sourceInlineFamily = spans.hasAuthoredFontFamily()
     val nativeInlineStyle = LocalAuthoredInlineNative.current
-    if (sourceLinkPaint && nativeLinkPaint && ordinaryLinkPaintUnavailable(spans.filter { it.inlinePaddingGroup == null }) != null) {
+    if (sourceLinkPaint && nativeLinkPaint && ordinaryLinkPaintUnavailable(spans.filter { it.inlinePaddingGroup == null && it.inlineActionGroup == null }) != null) {
         Column(modifier) {
             Text(NativeOrdinaryLinkPaintUnavailable)
             CompositionLocalProvider(LocalOrdinaryLinkPaintNative provides false,

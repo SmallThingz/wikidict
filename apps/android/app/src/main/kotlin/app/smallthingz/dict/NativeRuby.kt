@@ -37,6 +37,7 @@ internal class NativeRubyGroupFormat(
     val localBaselineShift: Float? = null,
     val padding: NativeInlinePaddingEdges? = null,
     val actionPaint: NativeMissingLinkPaint? = null,
+    val actionOwner: NativeInlineActionOwner? = null,
 ) {
     val paint = TextPaint(paint)
     init {
@@ -120,7 +121,7 @@ internal class NativeRubyPreparedSource(
         require(projection.ranges.all { it.start >= 0 && it.end >= it.start && it.end <= source.length })
         require(projection.ranges.map { it.path }.distinct().size == projection.ranges.size)
         require(projection.ranges.filter { it.role in setOf(RubyTextRole.Owner, RubyTextRole.Base,
-            RubyTextRole.Annotation, RubyTextRole.PaddingGroup) }.all { it.path in groups }) { "Ruby declaring group context is missing" }
+            RubyTextRole.Annotation, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup) }.all { it.path in groups }) { "Ruby declaring group context is missing" }
         require(this.source.getSpans(0, this.source.length, NativeRubyPreparedSource::class.java).isEmpty()) {
             "A Ruby preparation cannot contain itself"
         }
@@ -159,7 +160,8 @@ private fun nativeRubyGapOmissions(prepared: NativeRubyPreparedSource, owner: Ru
         (range.start until range.end).toList().also { gapOffsets.addAll(it) }
     }
     fun body(range: RubyTextRange): List<Int> = projection.ranges.filter { leaf ->
-        leaf.span != null && leaf.role != RubyTextRole.Owner && leaf.path.startsWith(range.path + "/") &&
+        leaf.span != null && leaf.role !in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup,
+            RubyTextRole.ActionGroup) && leaf.path.startsWith(range.path + "/") &&
             !leaf.path.removePrefix(range.path).contains("/annotations/")
     }.flatMap { (it.start until it.end).toList() }
     fun collapse(sequence: List<Int>) {
@@ -566,10 +568,32 @@ internal sealed interface NativeRubyPiece {
     }
 }
 
+/** Original action occurrence and its private native interval. These are geometry
+ * coordinates, not new logical text or an independently allocated action owner. */
+internal data class NativeRubyActionPadding(val owner: Span, val start: Int, val end: Int)
+internal data class NativeRubyActionScope(
+    val owner: NativeInlineActionOwner, val start: Int, val end: Int,
+    val nativeStart: Int, val nativeEnd: Int, val point: Int,
+    val format: NativeRubyGroupFormat, val shift: Float,
+    val paddings: List<NativeRubyActionPadding>,
+)
+
+/** The actual declaring metric point is the authority for an empty no-wrap line. */
+internal class NativeInlineActionPoint(val owner: NativeInlineActionOwner,
+    val metrics: NativeAuthoredInlineMetrics)
+
+internal fun nativeInlineActionEmptyLine(source: CharSequence): Boolean {
+    if (source.isNotEmpty() || source !is Spanned) return false
+    return source.getSpans(0, 0, NativeInlineActionPoint::class.java).any { point ->
+        source.getSpanStart(point) == 0 && source.getSpanEnd(point) == 0 &&
+            source.getSpanStart(point.metrics) == 0 && source.getSpanEnd(point.metrics) == 0
+    }
+}
+
 /** Immutable original-source / visual-buffer relation. Public callers never see tokens,
  * generated isolates, or an envelope spanning unrelated logical ranges on another row. */
 internal class NativeRubyLayout(val source: Spanned, val native: Spanned,
-    val pieces: List<NativeRubyPiece>) {
+    val pieces: List<NativeRubyPiece>, val actionScopes: List<NativeRubyActionScope> = emptyList()) {
     fun nativeOffset(offset: Int, endAffinity: Boolean = false): Int {
         require(offset in 0..source.length)
         val texts = pieces.filterIsInstance<NativeRubyPiece.Text>()
@@ -681,7 +705,7 @@ internal class NativeRubyLayout(val source: Spanned, val native: Spanned,
                     piece.copy(column = checkNotNull(trimmedColumns[piece.nativeStart]))
                 else -> piece
             }
-        })
+        }, actionScopes)
     }
 
     fun replacingColumns(replacements: Map<Int, List<NativeRubyColumn>>): NativeRubyLayout {
@@ -709,7 +733,9 @@ internal class NativeRubyLayout(val source: Spanned, val native: Spanned,
         val breaks = oldBreaks.map(::mapped) + projected.filterIsInstance<NativeRubyPiece.Column>()
             .filter { it.column.continues }.map { it.nativeEnd }
         target.setSpan(NativeRubyBreaks(breaks.distinct().sorted()), 0, target.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        return NativeRubyLayout(source, SpannedString(target), projected)
+        return NativeRubyLayout(source, SpannedString(target), projected, actionScopes.map {
+            it.copy(nativeStart = mapped(it.nativeStart), nativeEnd = mapped(it.nativeEnd), point = mapped(it.point))
+        })
     }
 
     fun observedBands(raw: NativeFloatGeometry): Map<NativeRubyFragmentKey, Float> {
@@ -763,6 +789,10 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
             Gap(allocation.line, checkNotNull(box), piece.groupPaint?.format?.cursor, backgrounds, decorations)
         }
     }
+    private val actionPaints = if (isolatedColumn) emptyList() else compiled.actionScopes.map { scope ->
+        NativeInlineActionPaint(scope.format, scope.shift,
+            raw.nativeInlineActionFragments(scope.nativeStart, scope.nativeEnd))
+    }
     private val length get() = compiled.source.length
 
     fun isHardLineBreak(offset: Int): Boolean {
@@ -774,16 +804,18 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         placed.copy(occurrence = placed.occurrence.copy(offset = sourceOffset(placed.occurrence.offset)))
     }
     val ordinaryPaintBounds: List<NativeFloatBounds> get() = raw.ordinaryPaintBounds + gapPaintBounds()
-    fun gapPaintBounds(line: Int? = null): List<NativeFloatBounds> = gaps.filter { line == null || it.line == line }.flatMap { gap ->
+    fun gapPaintBounds(line: Int? = null): List<NativeFloatBounds> = actionPaints.flatMap { it.bounds(line) } + gaps.filter { line == null || it.line == line }.flatMap { gap ->
         gap.backgrounds.filter { it.second ushr 24 != 0 }.map { it.first } + gap.decorations.map { it.bounds }
     }
     fun paintGapBackgrounds(canvas: Canvas, line: Int? = null) {
+        actionPaints.forEach { it.paintBackgrounds(canvas, line) }
         gaps.filter { line == null || it.line == line }.forEach { gap -> gap.backgrounds.forEach { (box, color) ->
             if (color ushr 24 != 0) canvas.drawRect(box.left, box.top, box.right, box.bottom, Paint().apply { this.color = color })
         } }
     }
     fun paintGapDecorations(canvas: Canvas, line: Int? = null) {
         gaps.filter { line == null || it.line == line }.forEach { gap -> gap.decorations.forEach { it.paint(canvas) } }
+        actionPaints.forEach { it.paintDecorations(canvas, line) }
     }
     val scrollableBounds: NativeFloatBounds get() {
         val childrenBounds = children.fold(raw.scrollableBounds) { bounds, child ->
@@ -796,7 +828,9 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
             bounds.enclosing(NativeFloatBounds(x, baseline + piece.column.container.top,
                 x + piece.column.advance, baseline + piece.column.container.bottom))
         }
-        return gaps.fold(columns) { bounds, gap -> bounds.enclosing(gap.box) }
+        return gapPaintBounds().fold(gaps.fold(columns) { bounds, gap -> bounds.enclosing(gap.box) }) {
+            bounds, own -> bounds.enclosing(own)
+        }
     }
 
     fun rects(start: Int, end: Int): List<RectF> {
@@ -819,9 +853,10 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         }
     }
 
-    fun paddingRects(owner: Span, start: Int, end: Int): List<RectF>? {
+    fun paddingRects(owner: Span, start: Int, end: Int, line: Int? = null): List<RectF>? {
         require(start in 0..length && end in start..length)
         val found = children.mapNotNull { child ->
+            if (line != null && child.line != line) return@mapNotNull null
             if (start < child.start || end > child.end) return@mapNotNull null
             child.geometry.inlinePaddingGroupRects(owner, start - child.start, end - child.start)?.map {
                 RectF(it).apply { offset(child.x, child.y) }
@@ -830,6 +865,51 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         if (found.isEmpty()) return null
         if (found.size != 1) throw UnsupportedFloatLayout("Inline padding group lost its unique native occurrence")
         return found.single()
+    }
+
+    fun actionRects(owner: NativeInlineActionOwner, start: Int, end: Int,
+        line: Int? = null): List<RectF>? {
+        require(start in 0..length && end in start..length)
+        val scope = compiled.actionScopes.singleOrNull { it.owner === owner }
+        if (scope == null) {
+            val found = children.mapNotNull { child ->
+                if (line != null && child.line != line) return@mapNotNull null
+                if (start < child.start || end > child.end) return@mapNotNull null
+                child.geometry.inlineActionGroupRects(owner, start - child.start, end - child.start)?.map {
+                    RectF(it).apply { offset(child.x, child.y) }
+                }
+            }
+            return if (found.isEmpty()) null else found.flatten()
+        }
+        if (start < scope.start || end > scope.end) return null
+        if (scope.start == scope.end) {
+            if (start != scope.start || end != scope.end) return null
+            val ownLine = raw.nativeLineAt(scope.point)
+            if (line != null && line != ownLine) return emptyList()
+            val primary = NativePrimaryFontMetrics.from(scope.format.paint).copy(baselineShift = scope.shift)
+            val band = primary.authored(scope.format.lineHeight) ?: NativeUsedLineMetrics(
+                primary.ascent + scope.shift, primary.descent + scope.shift)
+            val caret = raw.caretRect(scope.point)
+            val baseline = raw.nativeRubyLineBaseline(ownLine)
+            return listOf(RectF(caret.left, baseline + band.top, caret.left, baseline + band.bottom))
+        }
+        if (start == end) return emptyList()
+        val padding = scope.paddings.filter { it.start >= start && it.end <= end }.sortedBy { it.start }
+        return buildList {
+            fun text(first: Int, last: Int) {
+                if (first < last) addAll(if (line == null) rects(first, last) else rectsOnLine(line, first, last))
+            }
+            var cursor = start
+            padding.forEach { group ->
+                text(cursor, group.start)
+                val boxes = paddingRects(group.owner, group.start, group.end, line)
+                if (boxes != null) addAll(boxes)
+                else if (line == null && !isolatedColumn)
+                    throw UnsupportedFloatLayout("Inline action lost its contained padding geometry")
+                cursor = group.end
+            }
+            text(cursor, end)
+        }
     }
 
     fun rectsOnLine(line: Int, start: Int, end: Int): List<RectF> = buildList {
@@ -966,8 +1046,9 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         sourceCursors.lastOrNull { owner ->
             rectsOnLine(line, owner.start, owner.end).any { it.contains(x, y) }
         }?.let { return it.value.cursor }
-        return gaps.lastOrNull { it.line == line && x >= it.box.left && x < it.box.right &&
-            y >= it.box.top && y < it.box.bottom }?.cursor
+        gaps.lastOrNull { it.line == line && x >= it.box.left && x < it.box.right &&
+            y >= it.box.top && y < it.box.bottom }?.cursor?.let { return it }
+        return actionCursor(x, y, line)
     }
 
     private fun sourceOffset(native: Int): Int {
@@ -1096,21 +1177,28 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         }
         cursors.lastOrNull { x >= it.bounds.left && x < it.bounds.right &&
             y >= it.bounds.top && y < it.bounds.bottom }?.let { return it.cursor }
-        if (isolatedColumn) return null
+        if (isolatedColumn) return actionCursor(x, y)
         sourceCursors.lastOrNull { owner -> rects(owner.start, owner.end).any { it.contains(x, y) } }
             ?.let { return it.value.cursor }
-        return gaps.lastOrNull { x >= it.box.left && x < it.box.right &&
-            y >= it.box.top && y < it.box.bottom }?.cursor
+        gaps.lastOrNull { x >= it.box.left && x < it.box.right &&
+            y >= it.box.top && y < it.box.bottom }?.cursor?.let { return it }
+        return actionCursor(x, y)
     }
+
+    private fun actionCursor(x: Float, y: Float, line: Int? = null): InlineCursor? =
+        compiled.actionScopes.asReversed().firstOrNull { scope -> scope.format.cursor != null &&
+            actionRects(scope.owner, scope.start, scope.end, line)?.any { it.contains(x, y) } == true
+        }?.format?.cursor
 }
 
 /** A read-only view of one retained occurrence, using the same child/source mapper.
  * Coordinates are column-local with baseline zero; unrelated old-position siblings
  * cannot win a query while a parent distributes additional hierarchical width. */
 internal class NativeRubyColumnView(source: Spanned, nativeStart: Int,
-    private val column: NativeRubyColumn, raw: NativeFloatGeometry) : FloatTextGeometry {
+    private val column: NativeRubyColumn, raw: NativeFloatGeometry,
+    actionScopes: List<NativeRubyActionScope> = emptyList()) : FloatTextGeometry {
     private val projection = NativeRubyPlacedProjection(NativeRubyLayout(source, raw.nativeRubyShapingSource,
-        listOf(NativeRubyPiece.Column(nativeStart, column))), raw, isolatedColumn = true)
+        listOf(NativeRubyPiece.Column(nativeStart, column)), actionScopes), raw, isolatedColumn = true)
     private val origin = raw.nativeReplacementOrigin(nativeStart)
     private val line = raw.nativeLineAt(nativeStart)
     private val ranges = column.children.flatMap { it.ranges }.filter { it.first < it.second }.sortedBy { it.first }
@@ -1129,6 +1217,8 @@ internal class NativeRubyColumnView(source: Spanned, nativeStart: Int,
     override fun rectsForRange(start: Int, end: Int) = projection.rectsOnLine(line, start, end).map(::local)
     override fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? =
         projection.paddingRects(owner, start, end)?.map(::local)
+    override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? =
+        projection.actionRects(owner, start, end, line)?.map(::local)
     override fun characterRects(start: Int, length: Int): List<RectF?> {
         require(start in 0..text.length && length >= 0 && length <= text.length - start)
         return (start until start + length).map { offset ->
@@ -1586,12 +1676,15 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
     private val collapsedSpaces = mutableSetOf<Int>()
     private val protectedSpaces = mutableSetOf<Int>()
     private val ownerWraps = mutableListOf<NativeInlineRange<NativeAuthoredTextWrap>>()
+    private val actionScopes = mutableListOf<NativeRubyActionScope>()
+    private data class ActionContext(val range: RubyTextRange, val format: NativeRubyGroupFormat,
+        val script: NativeRubyScriptState, val shift: Float, val rtl: Boolean, val styled: Spanned)
 
     fun text(start: Int, end: Int, collapsed: Boolean = false, styled: Spanned? = null,
         collapsedText: String = " ",
-        groupPaint: NativeRubyGapPaint? = null) {
+        groupPaint: NativeRubyGapPaint? = null, preservePoint: Boolean = false) {
         require(start in 0..original.length && end in start..original.length)
-        if (start == end) return
+        if (start == end && !preservePoint) return
         if (!collapsed && (start until end).any { it in omitted || it in collapsedSpaces }) {
             var first = start
             while (first < end) {
@@ -1599,7 +1692,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                 val space = first in collapsedSpaces
                 var last = first + 1
                 while (last < end && (last in omitted) == discarded && (last in collapsedSpaces) == space) last++
-                text(first, last, collapsed = discarded || space, collapsedText = if (discarded) "" else " ")
+                text(first, last, collapsed = discarded || space, collapsedText = if (discarded) "" else " ",
+                    styled = styled?.subSequence(first - start, last - start) as? Spanned, groupPaint = groupPaint)
                 first = last
             }
             return
@@ -1633,32 +1727,98 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         prepared.visualOmissions.forEach { (first, last) -> for (offset in first until last) omitted += sourceStart + offset }
         prepared.visualSpaces.forEach { collapsedSpaces += sourceStart + it }
         prepared.protectedSpaces.forEach { protectedSpaces += sourceStart + it }
-        val ranges = prepared.projection.ranges
-        val owners = ranges.filter { it.role == RubyTextRole.Owner }.filter { candidate ->
-            ranges.none { it.role == RubyTextRole.Owner && candidate.path.startsWith(it.path + "/") }
-        }
+        emitPrepared(prepared, sourceStart, null)
+    }
+
+    private fun emitPrepared(prepared: NativeRubyPreparedSource, sourceStart: Int, context: ActionContext?) {
+        val ranges = prepared.projection.ranges.filter { context == null || it.path.startsWith(context.range.path + "/") }
+        val structural = ranges.filter { it.role in setOf(RubyTextRole.Owner, RubyTextRole.ActionGroup) }
+        val owners = structural.filter { candidate -> structural.none { candidate.path.startsWith(it.path + "/") } }
         if (ranges.any { it.role == RubyTextRole.PaddingGroup &&
                 owners.none { owner -> it.path.startsWith(owner.path + "/") } })
             throw UnsupportedFloatLayout("Inline padding group requires a complete ruby annotation")
-        val leaves = ranges.filter { it.span != null && it.role != RubyTextRole.Owner &&
-            it.role != RubyTextRole.PaddingGroup && owners.none { owner -> it.path.startsWith(owner.path + "/") } }
-        val events = (owners + leaves).sortedWith(compareBy({ it.start }, { if (it.role == RubyTextRole.Owner) 0 else 1 }))
+        val leaves = ranges.filter { it.span != null && it.role !in setOf(RubyTextRole.Owner,
+            RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup) &&
+            owners.none { owner -> it.path.startsWith(owner.path + "/") } }
+        val events = (owners + leaves).sortedWith(compareBy({ it.start }, {
+            if (it.role in setOf(RubyTextRole.Owner, RubyTextRole.ActionGroup)) 0 else 1 }))
         val rootText = buildString {
             events.forEach { range ->
                 if (range.role == RubyTextRole.Owner || range.span?.usesInlineDirectionIsolate() == true) append('\ufffc')
+                else if (range.role == RubyTextRole.ActionGroup) append(directText(prepared, range))
                 else append(prepared.projection.text, range.start, range.end)
             }
         }
-        val fallbackRtl = direction.isRtl(rootText, 0, rootText.length)
-        events.forEach { range ->
-            if (range.role == RubyTextRole.Owner) owner(prepared, range, sourceStart, fallbackRtl)
-            else {
+        val fallbackRtl = context?.rtl ?: direction.isRtl(rootText, 0, rootText.length)
+        events.forEach { range -> when (range.role) {
+            RubyTextRole.Owner -> owner(prepared, range, sourceStart, fallbackRtl,
+                context?.script, context?.shift ?: 0f)
+            RubyTextRole.ActionGroup -> action(prepared, range, sourceStart, context, fallbackRtl)
+            else -> {
                 val span = checkNotNull(range.span)
-                val emit = { text(sourceStart + range.start, sourceStart + range.end) }
+                val emit = { text(sourceStart + range.start, sourceStart + range.end,
+                    styled = context?.styled?.subSequence(range.start - context.range.start,
+                        range.end - context.range.start) as? Spanned, preservePoint = context != null) }
                 if (span.usesInlineDirectionIsolate()) isolate(resolveDirection(span.direction,
                     prepared.projection.text.substring(range.start, range.end), fallbackRtl), emit)
                 else emit()
             }
+        } }
+    }
+
+    private fun action(prepared: NativeRubyPreparedSource, range: RubyTextRange, sourceStart: Int,
+        parent: ActionContext?, enclosingRtl: Boolean) {
+        val format = checkNotNull(prepared.groups[range.path])
+        val key = checkNotNull(format.actionOwner)
+        require(key.span === range.span && key.path == range.path)
+        val placement = nativeRubyBaselinePlacement(nativeRubyScriptMode(range), format.baselineShift,
+            format.localBaselineShift, parent?.script ?: prepared.parentScript)
+        val shift = (parent?.shift ?: 0f) + placement.local
+        if (!shift.isFinite() || kotlin.math.abs(shift) > TablePixelLimit)
+            throw UnsupportedFloatLayout("Inline action baseline exceeds native coordinates")
+        val rtl = resolveDirection(format.sourceDirection, directText(prepared, range), enclosingRtl)
+        val absolute = SpannedString(prepared.source.subSequence(range.start, range.end))
+        val styled = nativeRubyLocalSource(absolute, format.paint, placement.state, format.lineHeight, shift) { offset ->
+            prepared.projection.ranges.lastOrNull { it.span != null &&
+                it.role !in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup) &&
+                (range.start + offset >= it.start && range.start + offset < it.end ||
+                    it.start == it.end && range.start + offset == it.start) }?.let(::nativeRubyScriptMode)
+                ?: placement.state.mode
+        }
+        // Every ordinary descendant keeps its original complete paint, while its
+        // inherited run policy is measured in this declaring group's placement.
+        styled.getSpans(0, styled.length, NativeRunLineMetrics::class.java).forEach(styled::removeSpan)
+        val cuts = (listOf(0, styled.length) + styled.getSpans(0, styled.length, MetricAffectingSpan::class.java)
+            .flatMap { listOf(styled.getSpanStart(it), styled.getSpanEnd(it)) }).distinct().sorted()
+        cuts.zipWithNext().forEach { (first, last) ->
+            if (first < last && styled.getSpans(first, last, NativeAuthoredInlineMetrics::class.java).none {
+                    styled.getSpanStart(it) <= first && styled.getSpanEnd(it) >= last
+                }) {
+                val measured = TextPaint(format.paint)
+                styled.getSpans(first, last, MetricAffectingSpan::class.java).forEach { it.updateMeasureState(measured) }
+                styled.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(measured), format.lineHeight),
+                    first, last, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
+        val first = native.length
+        var point = first
+        val emit = {
+            point = native.length
+            emitPrepared(prepared, sourceStart, ActionContext(range, format, placement.state, shift, rtl, styled))
+        }
+        if (checkNotNull(range.span).usesInlineDirectionIsolate()) isolate(rtl, emit) else emit()
+        val padding = prepared.projection.ranges.filter { it.role == RubyTextRole.PaddingGroup &&
+            it.path.startsWith(range.path + "/") }.map {
+            NativeRubyActionPadding(checkNotNull(it.span), sourceStart + it.start, sourceStart + it.end)
+        }
+        actionScopes += NativeRubyActionScope(key, sourceStart + range.start, sourceStart + range.end,
+            first, native.length, point, format, shift, padding)
+        format.wrap?.let { wrap ->
+            // Empty inline boxes have no wrapping text. Only an entirely empty
+            // no-wrap paragraph needs the separately authenticated source line.
+            if (range.start < range.end || original.isEmpty() && wrap == TextWrap.NoWrap)
+                ownerWraps += NativeInlineRange(first, native.length, NativeAuthoredTextWrap(wrap,
+                    inheritedOwner = true, sourceLineStarts = if (wrap == TextWrap.NoWrap) listOf(first) else null))
         }
     }
 
@@ -1687,6 +1847,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
     private fun row(prepared: NativeRubyPreparedSource, range: RubyTextRange,
         sourceStart: Int, enclosingRtl: Boolean, annotation: Boolean, parentScript: NativeRubyScriptState,
         inheritedWrap: TextWrap? = null): NativeRubyRow {
+        if (prepared.projection.ranges.any { it.role == RubyTextRole.ActionGroup && it.path.startsWith(range.path + "/") })
+            throw UnsupportedFloatLayout("Inline action inside a ruby child needs native fragment paint")
         val format = checkNotNull(prepared.groups[range.path])
         val placement = nativeRubyBaselinePlacement(nativeRubyScriptMode(range), format.baselineShift,
             format.localBaselineShift, parentScript)
@@ -1734,7 +1896,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         val absolute = SpannableString(prepared.source.subSequence(range.start, range.end))
         absolute.getSpans(0, absolute.length, NativeRubyPreparedSource::class.java).forEach(absolute::removeSpan)
         val slice = nativeRubyLocalSource(absolute, format.paint, placement.state, format.lineHeight) { offset ->
-            prepared.projection.ranges.lastOrNull { it.span != null && it.role != RubyTextRole.Owner &&
+            prepared.projection.ranges.lastOrNull { it.span != null && it.role !in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup) &&
                 (range.start + offset >= it.start && range.start + offset < it.end ||
                     it.start == it.end && range.start + offset == it.start) }?.let(::nativeRubyScriptMode)
                 ?: placement.state.mode
@@ -1848,7 +2010,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         val source = SpannedString(prepared.source.subSequence(range.first, range.second))
         val local = nativeRubyLocalSource(source, format.paint, owner.state, format.lineHeight,
             placement = owner.local) { offset ->
-            prepared.projection.ranges.lastOrNull { it.span != null && it.role != RubyTextRole.Owner &&
+            prepared.projection.ranges.lastOrNull { it.span != null && it.role !in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup) &&
                 range.first + offset >= it.start && range.first + offset < it.end }?.let(::nativeRubyScriptMode)
                 ?: owner.state.mode
         }
@@ -1877,7 +2039,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         val policy = if (annotation) NativeLineHeightPolicy.Pixels(actualPrimary.descent - actualPrimary.ascent)
             else format.lineHeight
         val local = nativeRubyLocalSource(source, format.paint, parentScript, policy) { offset ->
-            prepared.projection.ranges.lastOrNull { it.span != null && it.role != RubyTextRole.Owner &&
+            prepared.projection.ranges.lastOrNull { it.span != null && it.role !in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup) &&
                 (range.first + offset >= it.start && range.first + offset < it.end ||
                     it.start == it.end && range.first + offset == it.start) }?.let(::nativeRubyScriptMode)
                 ?: parentScript.mode
@@ -1943,7 +2105,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
     }
 
     private fun owner(originalPrepared: NativeRubyPreparedSource, owner: RubyTextRange,
-        sourceStart: Int, enclosingRtl: Boolean) {
+        sourceStart: Int, enclosingRtl: Boolean, parentScript: NativeRubyScriptState? = null,
+        ancestorShift: Float = 0f) {
         val projection = nativeRubyGapOmissions(originalPrepared, owner)
         val omissions = projection.omissions
         val prepared = if (omissions == originalPrepared.visualOmissions && projection.spaces == originalPrepared.visualSpaces &&
@@ -1956,7 +2119,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         projection.spaces.forEach { collapsedSpaces += sourceStart + it }
         val format = checkNotNull(prepared.groups[owner.path])
         val ownerPlacement = nativeRubyBaselinePlacement(nativeRubyScriptMode(owner), format.baselineShift,
-            format.localBaselineShift, prepared.parentScript)
+            format.localBaselineShift, parentScript ?: prepared.parentScript)
+        val externalPlacement = ownerPlacement.copy(local = ownerPlacement.local + ancestorShift)
         val ownerRtl = resolveDirection(format.sourceDirection, directText(prepared, owner), enclosingRtl)
         val noWrap = format.wrap == TextWrap.NoWrap || prepared.source.getSpans(owner.start, owner.end,
             NativeAuthoredTextWrap::class.java).any { it.wrap == TextWrap.NoWrap &&
@@ -2145,7 +2309,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                                 if (ownerRtl) right - gapWidth else left, baseline)
                         }
                     }
-                    val ownerShift = ownerPlacement.local
+                    val ownerShift = externalPlacement.local
                     val shiftedChildren = children.map { it.copy(y = it.y + ownerShift) }
                     val shiftedDecorations = decorations.map { it.copy(bounds = it.bounds.translated(0f, ownerShift)) }.toMutableList()
                     val shiftedBackgrounds = backgrounds.map { it.first.translated(0f, ownerShift) to it.second }.toMutableList()
@@ -2215,9 +2379,9 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                     val first = fragment.first
                     val column = makeColumn(fragment)
                     if (fragmentIndex == 0) externalGap(prepared, segmentGap, sourceStart, format,
-                        ownerPlacement, column.ownerContent)
+                        externalPlacement, column.ownerContent)
                     if (fragment.key?.offset == 0) externalGap(prepared, baseGaps[first], sourceStart, format,
-                        ownerPlacement, column.ownerContent)
+                        externalPlacement, column.ownerContent)
                     val nativeStart = native.length
                     native.append('\ufffc')
                     pieces += NativeRubyPiece.Column(nativeStart, column)
@@ -2235,7 +2399,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
     }
 
     fun finish(): NativeRubyLayout {
-        val result = NativeRubyLayout(SpannedString(original), SpannableString(native), pieces.toList())
+        val result = NativeRubyLayout(SpannedString(original), SpannableString(native), pieces.toList(), actionScopes.toList())
         val target = SpannableString(native)
         val inheritedWraps = mutableListOf<NativeInlineRange<NativeAuthoredTextWrap>>()
         fun ranges(piece: NativeRubyPiece): List<Pair<Int, Int>> = when (piece) {
@@ -2248,7 +2412,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             // An entirely empty source still has one enclosing paragraph strut.
             // Its point belongs to the generated empty owners, not an adjacent source range.
             val emptyRootStrut = original.isEmpty() && start == 0 && end == 0 &&
-                span is NativeRunLineMetrics && span.strut
+                (span is NativeRunLineMetrics && span.strut || actionScopes.isNotEmpty() &&
+                    span is NativeAuthoredTextWrap && span.inheritedOwner)
             val covered = pieces.filter { piece -> ranges(piece).any { (a, b) ->
                 a < end && b > start || emptyRootStrut && a == 0 && b == 0
             } }
@@ -2260,7 +2425,13 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                         span.copy(sourceLineStarts = span.sourceLineStarts.map { start ->
                             val mapped = result.nativeOffset(start)
                             native.toString().lastIndexOf('\n', mapped - 1) + 1
-                        }.distinct()) else nativeRubySpanCopy(span)
+                        }.distinct()) else if (span is NativeRunLineMetrics && span.strut &&
+                            span.policy == NativeLineHeightPolicy.Normal && actionScopes.any { scope ->
+                                if (scope.start == scope.end) nativeInlinePointInRange(original, scope.start, start, end)
+                                else scope.start < end && scope.end > start
+                            }) NativeRunLineMetrics(span.primary, span.policy, strut = true,
+                                includePrimaryInNormal = span.includePrimaryInNormal, independentNormalStrut = true)
+                        else nativeRubySpanCopy(span)
                     val a = if (start == 0) 0 else first
                     val b = if (end == original.length) target.length else last
                     if (copy is NativeAuthoredTextWrap) inheritedWraps += NativeInlineRange(a, b, copy)
@@ -2277,12 +2448,26 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             }
         }
         pieces.filterIsInstance<NativeRubyPiece.Text>().forEach { piece ->
-            if (piece.nativeStart == piece.nativeEnd) return@forEach
             val styled = piece.styled ?: return@forEach
+            if (piece.collapsed && piece.nativeStart == piece.nativeEnd) return@forEach
             styled.getSpans(0, styled.length, Any::class.java).filter(::nativeRubyLocalEffect).forEach { span ->
-                if (span is NativeAuthoredUnderline) return@forEach
-                if (styled.getSpanStart(span) <= 0 && styled.getSpanEnd(span) > 0)
-                    target.setSpan(nativeRubySpanCopy(span), piece.nativeStart, piece.nativeEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                val first = styled.getSpanStart(span); val last = styled.getSpanEnd(span)
+                if (piece.collapsed) {
+                    if (span !is NativeAuthoredUnderline && first <= 0 && last > 0)
+                        target.setSpan(nativeRubySpanCopy(span), piece.nativeStart, piece.nativeEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                } else target.setSpan(nativeRubySpanCopy(span), piece.nativeStart + first, piece.nativeStart + last,
+                    if (first == last) Spanned.SPAN_MARK_MARK else styled.getSpanFlags(span))
+            }
+        }
+        actionScopes.forEach { scope ->
+            val primary = NativePrimaryFontMetrics.from(scope.format.paint).copy(baselineShift = scope.shift)
+            val flags = if (scope.nativeStart == scope.nativeEnd) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            target.setSpan(NativeRunLineMetrics(primary, scope.format.lineHeight, strut = true,
+                includePrimaryInNormal = true, independentNormalStrut = true), scope.nativeStart, scope.nativeEnd, flags)
+            if (scope.start == scope.end) {
+                val metrics = NativeAuthoredInlineMetrics(primary, scope.format.lineHeight, primary)
+                target.setSpan(metrics, scope.point, scope.point, Spanned.SPAN_MARK_MARK)
+                target.setSpan(NativeInlineActionPoint(scope.owner, metrics), scope.point, scope.point, Spanned.SPAN_MARK_MARK)
             }
         }
         pieces.filterIsInstance<NativeRubyPiece.Text>().filter { it.collapsed && it.nativeStart < it.nativeEnd }.forEach { piece ->
@@ -2294,6 +2479,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         // Leaf wrap belongs to its actual child row. Only the declaring Ruby
         // owner contributes compound policy to this private parent buffer.
         inheritedWraps.forEach { inherited ->
+            if (target.isEmpty() && nativeInlineActionEmptyLine(target) && inherited.value.wrap != TextWrap.NoWrap)
+                return@forEach
             if (inherited.value.wrap == TextWrap.NoWrap && ownerWraps.any {
                     it.start < inherited.end && it.end > inherited.start && it.value.wrap != TextWrap.NoWrap
                 }) throw UnsupportedFloatLayout("Ruby wrap cannot override inherited no-wrap")
@@ -2307,11 +2494,19 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                 }
             }
             fragments.forEach { (first, last) ->
-                target.setSpan(inherited.value.copy(), first, last, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                target.setSpan(inherited.value.copy(), first, last,
+                    if (target.isEmpty() && nativeInlineActionEmptyLine(target)) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
         }
         ownerWraps.forEach { owner ->
-            target.setSpan(owner.value, owner.start, owner.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (target.isEmpty() && nativeInlineActionEmptyLine(target)) {
+                val inherited = target.getSpans(0, 0, NativeAuthoredTextWrap::class.java)
+                if (inherited.any { it.wrap == TextWrap.NoWrap && owner.value.wrap != TextWrap.NoWrap })
+                    throw UnsupportedFloatLayout("Ruby wrap cannot override inherited no-wrap")
+                inherited.forEach(target::removeSpan)
+            }
+            target.setSpan(owner.value, owner.start, owner.end,
+                if (target.isEmpty() && nativeInlineActionEmptyLine(target)) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         val breaks = BreakIterator.getLineInstance(paint.textLocale).apply { setText(breakText.toString()) }
         val boundaries = mutableListOf(0)
@@ -2324,7 +2519,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         boundaries += pieces.filterIsInstance<NativeRubyPiece.Column>().filter { it.column.continues }.map { it.nativeEnd }
         target.setSpan(NativeRubyBreaks(boundaries.distinct().sorted()), 0, target.length,
             if (target.isEmpty()) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        return NativeRubyLayout(result.source, SpannedString(target), pieces.toList())
+        return NativeRubyLayout(result.source, SpannedString(target), pieces.toList(), actionScopes.toList())
     }
 }
 
@@ -2360,7 +2555,8 @@ private fun validateCollapsedGap(source: Spanned, start: Int, end: Int, base: Te
 }
 
 private fun nativeRubySpanCopy(span: Any): Any = when (span) {
-    is NativeRunLineMetrics -> NativeRunLineMetrics(span.primary, span.policy, span.strut, span.includePrimaryInNormal)
+    is NativeRunLineMetrics -> NativeRunLineMetrics(span.primary, span.policy, span.strut,
+        span.includePrimaryInNormal, span.independentNormalStrut)
     is ReplacementSpan -> span
     is MetricAffectingSpan -> if (span is NativeInlineSafePaintSpan) NativeRubyMetricCopy(span)
         else CharacterStyle.wrap(span)

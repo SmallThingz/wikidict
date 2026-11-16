@@ -133,4 +133,81 @@ class RubyReadingLayoutTest {
         assertNull(sectionHeadingCompanion(section.copy(title = " reading")))
     }
 
+
+    @Test fun actionOwnersRetainEmptyMetricContentAndOriginalNeighbours() {
+        val metric = Span("text", "", inlineStyle = InlineTextStyle(lineHeight = InlineLineHeight.Computed(
+            InlineComputedLength(12f, FontScaleBasis.CssPx))))
+        for (child in listOf(Span("text", ""), metric, Span("text", "  "))) {
+            val action = Span("link", "", "original", inlineActionGroup = InlineActionGroup(listOf(child)))
+            val source = listOf(Span("text", " "), action, Span("text", " "))
+            val block = Block("paragraph", 0, source)
+            assertFalse(source.hasRuby())
+            assertTrue(source.hasNativeInlineGroups())
+            assertTrue(source.hasCompiledInlineContent())
+            assertTrue(paragraphHasContent(block))
+            assertSame(source, compactSpans(source))
+            assertSame(source, ordinaryInlineDisplaySpans(block))
+            assertSame(source, paragraphDisplaySpans(block))
+            assertEquals(" ${child.text} ", rubyGraphicalText(source))
+            assertEquals(child.text.length + 2, source.nativeLogicalLength())
+            assertFalse(action.isEmptyInlineMetricOwner())
+            assertFalse(action.isUnsupportedAuthoredWhitespaceOwner())
+            val probe = inlineMetricOwnerSpan(action)
+            assertNull(probe.inlineActionGroup)
+            assertNull(probe.inlinePaddingGroup)
+            assertNull(probe.ruby)
+            assertEquals("text", probe.kind)
+            assertEquals("", probe.target)
+            assertEquals(" ", probe.text)
+            assertSame(child, action.inlineActionGroup!!.spans.single())
+            val dense = block.copy(spans = source + List(90) { Span("line_break", "") })
+            val rows = readingRows(listOf(Section(2, "section", listOf(dense)))).filter { it.block != null }
+            assertSame(dense, rows.single().block)
+        }
+        assertFalse(paragraphHasContent(Block("paragraph", 0, listOf(Span("text", "  ")))))
+    }
+
+    @Test fun actionProjectionKeepsNestedRubyPaddingImageAltAndEgyptianOffsets() {
+        val sign = "\ud80c\udc00"
+        val padding = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(
+            StyleLength(StyleLengthUnit.Em, .25f), StyleLength(StyleLengthUnit.Px, 1f),
+            listOf(Span("text", sign, classes = "Egyp"))))
+        val children = listOf(Span("text", "x"), ruby(listOf(Span("text", "B")), listOf(Span("text", "r"))), padding)
+        val action = Span("link", "", "owner", inlineActionGroup = InlineActionGroup(children))
+        val image = Span("text", "", image = InlineImage("File:example.png", alt = "source alt"))
+        val source = listOf(Span("text", "q"), action, image)
+        val logical = "qxBr$sign\ufffc"
+        assertEquals(logical, rubyGraphicalText(source))
+        assertEquals(7, source.nativeLogicalLength())
+        val parts = anonymousInlineSemantic(source, logical)
+        assertEquals("qxBr${sign}source alt", parts.joinToString("") { it.text })
+        assertEquals(listOf(0 to 1, 1 to 2, 2 to 3, 3 to 4, 4 to 6, 6 to 7), parts.map { it.start to it.end })
+        assertTrue(parts.last().replacement)
+        val run = egyptianTextRuns(source).single()
+        assertEquals(4, run.start)
+        assertEquals(6, run.end)
+        assertEquals(sign, run.text)
+        assertSame(children, action.inlineActionGroup!!.spans)
+        assertEquals(listOf("text", "text", "text"), children.map { it.kind })
+    }
+
+    @Test fun actionHeadingKeepsWholeSourceOwnersWithDistinctEqualTargets() {
+        val firstChildren = listOf(Span("text", "d", italic = true), Span("text", "a", superscript = true))
+        val first = Span("link", "", "same-target", inlineActionGroup = InlineActionGroup(firstChildren))
+        val second = Span("link", "", "same-target", inlineActionGroup = InlineActionGroup(listOf(Span("text", "x"))))
+        val source = listOf(first, second)
+        val block = Block("heading", 2, source, level = 2)
+        val section = Section(2, "dax", listOf(block))
+        assertSame(block, sectionHeadingCompanion(section))
+        assertEquals("dax", rubyGraphicalText(source))
+        val owners = rubyGraphicalProjection(source).ranges.filter { it.role == RubyTextRole.ActionGroup }
+        assertEquals(listOf(0 to 2, 2 to 3), owners.map { it.start to it.end })
+        assertSame(first, owners[0].span)
+        assertSame(second, owners[1].span)
+        assertNotEquals(owners[0].path, owners[1].path)
+        assertEquals(listOf("same-target", "same-target", "same-target"), rubyGraphicalSpans(source).map { it.target })
+        assertSame(firstChildren, first.inlineActionGroup!!.spans)
+        assertNull(sectionHeadingCompanion(section.copy(title = "d a x")))
+    }
+
 }

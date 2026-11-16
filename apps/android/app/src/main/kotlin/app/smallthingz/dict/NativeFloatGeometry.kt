@@ -1,6 +1,7 @@
 package app.smallthingz.dict
 
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
@@ -241,6 +242,41 @@ internal class NativeFloatGeometry private constructor(
     override fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? {
         require(start in 0..text.length && end in start..text.length)
         return ruby?.paddingRects(owner, start, end)
+    }
+
+    override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? {
+        require(start in 0..text.length && end in start..text.length)
+        return ruby?.actionRects(owner, start, end)
+    }
+    internal fun nativeInlineActionRectsOnLine(owner: NativeInlineActionOwner, line: Int,
+        start: Int, end: Int): List<RectF>? {
+        require(start in 0..text.length && end in start..text.length && line in 0 until layout.lineCount)
+        return ruby?.actionRects(owner, start, end, line)
+    }
+    /** Exact native float contours, before selection regions are rasterized to integer rectangles. */
+    internal fun nativeInlineActionFragments(start: Int, end: Int): List<NativeInlineActionFragment> {
+        require(ruby == null && start in 0..text.length && end in start..text.length)
+        if (start == end) return emptyList()
+        return buildList {
+            for (line in layout.getLineForOffset(start)..layout.getLineForOffset(end - 1)) {
+                if (!linePresent(line)) continue
+                val first = maxOf(start, layout.getLineStart(line))
+                val last = minOf(end, layout.getLineEnd(line))
+                if (first >= last) continue
+                val path = linePainter.selectionPathForRange(line, first, last)
+                val bounds = RectF().also { path.computeBounds(it, true) }
+                if (bounds.width() <= 0f) continue
+                if (!bounds.height().isFinite() || bounds.height() <= 0f)
+                    throw UnsupportedFloatLayout("Inline action selection has positive width without a native height")
+                // A node factory can query during construction, before linePaintPositions exists.
+                val position = NativeLinePaintPlacement(line, flow.baselines[line], flow.left[line], flow.right[line], originX(line))
+                val shift = linePainter.horizontalShift(position)
+                val scale = 1f / bounds.height()
+                path.transform(Matrix().apply { setValues(floatArrayOf(
+                    1f, 0f, shift, 0f, scale, -bounds.top * scale, 0f, 0f, 1f)) })
+                add(NativeInlineActionFragment(line, first, last, path, flow.baselines[line]))
+            }
+        }
     }
 
     override fun rectsForRange(start: Int, end: Int): List<RectF> {
@@ -541,7 +577,8 @@ internal class NativeFloatGeometry private constructor(
         val projection = ruby ?: throw UnsupportedFloatLayout("Ruby column lost its source projection")
         if (projection.compiled.pieces.filterIsInstance<NativeRubyPiece.Column>().none { it.nativeStart == nativeStart })
             throw UnsupportedFloatLayout("Ruby column lost its native occurrence")
-        return NativeRubyColumnView(projection.compiled.source, nativeStart, column, projection.raw)
+        return NativeRubyColumnView(projection.compiled.source, nativeStart, column, projection.raw,
+            projection.compiled.actionScopes)
     }
     internal fun nativeRubyReflowColumns(replacements: Map<Int, List<NativeRubyColumn>>,
         ends: List<Int>, advances: List<Float>): NativeFloatGeometry {

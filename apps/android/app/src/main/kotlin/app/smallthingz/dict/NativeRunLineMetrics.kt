@@ -46,8 +46,9 @@ internal data class NativePrimaryFontMetrics(val ascent: Float, val descent: Flo
 /** A paragraph strut or styled text run; these spans never mutate native font/paint metrics. */
 internal class NativeRunLineMetrics(val primary: NativePrimaryFontMetrics,
     val policy: NativeLineHeightPolicy, val strut: Boolean = false,
-    val includePrimaryInNormal: Boolean = false) {
-    init { require(!includePrimaryInNormal || strut) }
+    val includePrimaryInNormal: Boolean = false,
+    val independentNormalStrut: Boolean = false) {
+    init { require(!(includePrimaryInNormal || independentNormalStrut) || strut) }
 }
 
 /** Real replaced boxes keep their own aligned margin box independently of text line-height. */
@@ -84,14 +85,34 @@ internal fun nativeRunLineMetrics(source: Spanned, start: Int, end: Int,
         else first < end && last > start
     }
     if (runs.isEmpty() && authored.isEmpty()) return null
-    if (authored.any { it.policy != NativeLineHeightPolicy.Normal &&
-        source.getSpanStart(it) < source.getSpanEnd(it) } &&
-        (runs.any { it.policy == NativeLineHeightPolicy.Normal } ||
-            authored.any { it.policy == NativeLineHeightPolicy.Normal }))
+    val explicitHeight = runs.any { it.policy != NativeLineHeightPolicy.Normal } ||
+        authored.any { it.policy != NativeLineHeightPolicy.Normal }
+    val independentPoints = if (!explicitHeight) emptyList() else authored.filter { run ->
+        val offset = source.getSpanStart(run)
+        run.policy == NativeLineHeightPolicy.Normal && offset == source.getSpanEnd(run) &&
+            source.getSpans(offset, offset, NativeInlineActionPoint::class.java).any { point ->
+                point.metrics === run && source.getSpanStart(point) == offset && source.getSpanEnd(point) == offset
+            }
+    }
+    fun independentPoint(run: NativeAuthoredInlineMetrics): Boolean = independentPoints.any { it === run }
+    // A V strut has no painted fallback text. Its primary font is independent of
+    // explicit descendants; a Normal text run still needs the native fallback envelope.
+    // All-Normal lines retain their existing native-envelope path.
+    val independentNormal = explicitHeight && (runs.any { it.independentNormalStrut } || independentPoints.isNotEmpty())
+    val consumesNatural = runs.any { it.policy == NativeLineHeightPolicy.Normal &&
+        !(independentNormal && it.independentNormalStrut) } || authored.any {
+        it.policy == NativeLineHeightPolicy.Normal && !independentPoint(it)
+    }
+    if ((independentNormal || authored.any { it.policy != NativeLineHeightPolicy.Normal &&
+            source.getSpanStart(it) < source.getSpanEnd(it) }) && consumesNatural)
         throw UnsupportedFloatLayout("Authored inline height with mixed native normal owners is unavailable")
+    fun primaryBounds(primary: NativePrimaryFontMetrics) = NativeUsedLineMetrics(
+        primary.ascent + primary.baselineShift, primary.descent + primary.baselineShift)
     var used: NativeUsedLineMetrics? = null
     for (run in runs) {
-        val bounds = run.primary.authored(run.policy) ?: if (run.includePrimaryInNormal) {
+        val bounds = run.primary.authored(run.policy) ?: if (independentNormal && run.independentNormalStrut) {
+            primaryBounds(run.primary)
+        } else if (run.includePrimaryInNormal) {
             // A source Cell owner participates independently of the painted descendants.
             // Keep Android's real fallback envelope as well as that owner's primary font.
             natural.including(NativeUsedLineMetrics(run.primary.ascent + run.primary.baselineShift,
@@ -102,7 +123,7 @@ internal fun nativeRunLineMetrics(source: Spanned, start: Int, end: Int,
     for (run in authored) {
         // Normal keeps the platform's fallback-aware envelope. A fractional explicit
         // shift with Normal is refused before shaping; no paragraph envelope is shifted.
-        val own = run.primary.authored(run.policy) ?: natural
+        val own = run.primary.authored(run.policy) ?: if (independentPoint(run)) primaryBounds(run.primary) else natural
         used = used?.including(own) ?: own
         run.declaringPrimary?.let { declaring ->
             val owner = declaring.authored(run.policy) ?: NativeUsedLineMetrics(
@@ -113,9 +134,9 @@ internal fun nativeRunLineMetrics(source: Spanned, start: Int, end: Int,
     source.getSpans(start, end, NativeAtomicInlineMetrics::class.java).filter(::intersects).forEach {
         used = used!!.including(it.nativeUsedMetrics)
     }
-    // Native normal metrics already contain these legacy control and paragraph-gap spans.
-    if (runs.none { it.policy == NativeLineHeightPolicy.Normal } &&
-        authored.none { it.policy == NativeLineHeightPolicy.Normal }) {
+    // These controls are already contained only when the native envelope was consumed.
+    // An independent Normal strut supplies its own font, so the controls still apply once.
+    if (!consumesNatural) {
         source.getSpans(start, end, NativeLineMinimum::class.java).filter(::intersects).forEach {
             used = used!!.including(it.primary.authored(NativeLineHeightPolicy.Pixels(it.pixels))!!)
         }

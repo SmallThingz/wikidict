@@ -510,6 +510,20 @@ private class NativeRubyDistributedLine(private val owner: NativeFloatGeometry, 
             throw UnsupportedFloatLayout("Inline padding group crosses a Ruby spacing fragment")
         return bounds.map { translated(it, fragment.third) }
     }
+    override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? {
+        require(start in 0..text.length && end in start..text.length)
+        val authority = this.owner.nativeInlineActionRectsOnLine(owner, line, start, end) ?: return null
+        if (start == end) return authority.map { translated(it, map.shiftAt(it.left)) }
+        var recognized = true
+        val result = mutableListOf<RectF>()
+        parts(start, end).forEach { (first, last, dx) ->
+            this.owner.nativeInlineActionRectsOnLine(owner, line, first, last)?.let { boxes ->
+                recognized = true
+                result.addAll(boxes.map { translated(it, dx) })
+            }
+        }
+        return result.takeIf { recognized }
+    }
     override fun characterRects(start: Int, length: Int): List<RectF?> {
         require(start in 0..text.length && length >= 0 && length <= text.length - start)
         return (start until start + length).map { offset ->
@@ -855,6 +869,33 @@ private class NativeRubyHierarchyLine(private val owner: NativeFloatGeometry, pr
             }
         }
         return null
+    }
+    override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? {
+        require(start in 0..text.length && end in start..text.length)
+        this.owner.nativeInlineActionRectsOnLine(owner, line, start, end) ?: return null
+        var recognized = true
+        val result = mutableListOf<RectF>()
+        nested.forEach { own ->
+            own.ranges.forEach { range ->
+                val first = maxOf(start, range.first); val last = minOf(end, range.second)
+                if (first < last || start == end && start in range.first..range.second) {
+                    own.view.inlineActionGroupRects(owner, first, last)?.let { boxes ->
+                        recognized = true
+                        result.addAll(boxes.map { shifted(it, own.x, own.y) })
+                    }
+                }
+            }
+        }
+        ordinary.forEach { (slot, dx) ->
+            val first = maxOf(start, slot.start); val last = minOf(end, slot.end)
+            if (first < last || start == end && start in slot.start..slot.end) {
+                this.owner.nativeInlineActionRectsOnLine(owner, line, first, last)?.let { boxes ->
+                    recognized = true
+                    result.addAll(boxes.map { shifted(it, dx, -top) })
+                }
+            }
+        }
+        return result.takeIf { recognized }
     }
     override fun characterRects(start: Int, length: Int): List<RectF?> {
         require(start in 0..text.length && length >= 0 && length <= text.length - start)

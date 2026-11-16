@@ -87,6 +87,8 @@ internal class NativeInlinePaddingGeometry(
         if (owner === this.owner && start == 0 && end == text.length) return listOf(boxRect())
         return inner.inlinePaddingGroupRects(owner, start, end)?.map(::translated)
     }
+    override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? =
+        inner.inlineActionGroupRects(owner, start, end)?.map(::translated)
     override fun rectsForRange(start: Int, end: Int): List<RectF> = inner.rectsForRange(start, end).map(::translated)
     override fun characterRects(start: Int, length: Int): List<RectF?> =
         inner.characterRects(start, length).map { it?.let(::translated) }

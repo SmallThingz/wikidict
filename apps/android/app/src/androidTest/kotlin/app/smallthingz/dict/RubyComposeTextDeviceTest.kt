@@ -1202,4 +1202,416 @@ class RubyComposeTextDeviceTest {
         }
     }
 
+
+    @Test fun inlineActionGroupsKeepOneRichOwnerAcrossWrapBidiAndEmptyMetadata() = control {
+        // Synthetic DPRV ownership controls, not a compiled Mai/KU source or font-scalar acceptance.
+        // The same complete eight-state fixture used by OrdinaryLinkPaintDeviceTest.
+        val paintColors = listOf("#3366cc", "#228844", "#cc5500", "#aa22cc", "#6a60b0", "#008080", "#993333", "#667700")
+        val paintUnderlines = listOf(true, false, false, true, false, true, true, false)
+        val paintStates = paintColors.mapIndexed { index, color -> FigureLinkState(color, paintUnderlines[index]) }
+        val richPolicy = LinkPaint(normal = paintStates[0], hover = paintStates[1], active = paintStates[2],
+            hoverActive = paintStates[3], visited = paintStates[4], visitedHover = paintStates[5],
+            visitedActive = paintStates[6], visitedHoverActive = paintStates[7], underlineOnFocus = true,
+            focusOutline = FigureFocusOutline(StyleLength(StyleLengthUnit.Em, .125f), FigureColor.Rgb("#ff0000"),
+                StyleLength(StyleLengthUnit.Em, .125f), SignedContainerMargin(StyleLengthUnit.Em, -.125f)))
+        val visits = MissingLinkVisits()
+        val supSnapshot = InlineFontSnapshot(superscript = true)
+        val supLineHeight = InlineLineHeight.FontRelative(1f, supSnapshot)
+        val supLeaf = Span("text", "2", superscript = true, inlineStyle = InlineTextStyle(lineHeight = supLineHeight))
+        val richLeaves = listOf(Span("text", "M"), supLeaf,
+            Span("text", "I", italic = true), Span("text", "\u00a0\u2192\u00a0"),
+            Span("text", "\u05d0\u05d1\u05d2\u05d3", direction = "rtl"),
+            Span("text", " plain alpha beta gamma delta"))
+        fun action(target: String, children: List<Span>, fragment: String? = null) =
+            Span("link", "", target, targetFragment = fragment, inlineActionGroup = InlineActionGroup(children))
+        val rich = action("mai-rich-owner", richLeaves, "source-section").copy(
+            foreground = richPolicy.normal.foreground, underline = richPolicy.normal.underline, linkPaint = richPolicy)
+        val firstSame = action("same-target", listOf(Span("text", "d")))
+        val secondSame = action("same-target", listOf(Span("text", "a")))
+        val readingLeaf = Span("text", "nhân", fontScale = .75f, language = "vi")
+        val padding = Span("text", "", fontScale = .75f, language = "vi", direction = "ltr",
+            inlinePaddingGroup = InlinePaddingGroup(StyleLength(StyleLengthUnit.Em, .25f),
+                StyleLength(StyleLengthUnit.Em, .25f), listOf(readingLeaf)))
+        val baseLeaf = Span("text", "字")
+        val nestedRuby = ruby(listOf(baseLeaf), listOf(padding))
+        val rubyAction = action("ruby-owner", listOf(nestedRuby))
+        val emptyLeaf = Span("text", "")
+        val emptyAction = action("empty-owner", listOf(emptyLeaf)).copy(fontScale = .75f,
+            tooltip = "Synthetic empty action owner")
+        val owners = listOf(rich, firstSame, secondSame, rubyAction, emptyAction, emptyAction)
+        val source = listOf(rich, Span("text", " "), firstSame, secondSame, Span("text", " "), rubyAction,
+            emptyAction, emptyAction)
+        val richText = "M2I\u00a0\u2192\u00a0\u05d0\u05d1\u05d2\u05d3 plain alpha beta gamma delta"
+        val expected = richText + " da 字nhân"
+        val firstSameStart = richText.length + 1
+        val rubyStart = firstSameStart + 3
+        val ranges = listOf(0 to richText.length, firstSameStart to firstSameStart + 1,
+            firstSameStart + 1 to firstSameStart + 2, rubyStart to expected.length,
+            expected.length to expected.length, expected.length to expected.length)
+        val targets = listOf(EntryLink("mai-rich-owner", "source-section"), EntryLink("same-target"),
+            EntryLink("same-target"), EntryLink("ruby-owner"), EntryLink("empty-owner"), EntryLink("empty-owner"))
+        data class Phase(val name: String, val width: Int, val rtl: Boolean = false, val fontScale: Float = 1f)
+        val phases = listOf(Phase("wide", 320), Phase("wrapped", 180), Phase("wrapped-rtl", 180, true),
+            Phase("zoom", 180, true, 1.25f), Phase("recovery", 320))
+        val current = mutableStateOf(phases.first())
+        val callbacks = mutableListOf<EntryLink>()
+        val onLink: (EntryLink) -> Unit = { callbacks += it }
+        val focusDestination = androidx.compose.ui.focus.FocusRequester()
+        var prepared: PreparedNativeFloatText? = null
+        var annotation = AnnotatedString("")
+        var committed: Phase? = null
+        var failureReason: String? = null
+        val onFailure: (String) -> Unit = { failureReason = it }
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme {
+                val phase = current.value
+                val density = Density(1f, phase.fontScale)
+                CompositionLocalProvider(LocalDensity provides density,
+                    LocalLayoutDirection provides if (phase.rtl) LayoutDirection.Rtl else LayoutDirection.Ltr,
+                    LocalNativeFloatContextFailureObserver provides onFailure,
+                    LocalMissingLinkVisits provides visits) {
+                    val style = TextStyle(fontSize = 20.sp, lineHeight = 24.sp, letterSpacing = 0.sp,
+                        fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Normal, fontStyle = FontStyle.Normal,
+                        textDirection = if (phase.rtl) TextDirection.Rtl else TextDirection.Ltr)
+                    val annotated = styledTextAnnotation(source, null, style, onLink)
+                    val value = prepareNativeFloatText(source, annotated, egyptianTextRuns(source), style,
+                        MaterialTheme.colorScheme.primary, emptyList(), AppSettings(), "", onLink,
+                        nativeLineHeight = NativeLineHeightPolicy.Pixels(with(density) { 24.sp.toPx() }))
+                    SideEffect { prepared = value; annotation = annotated; committed = phase }
+                    Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding().padding(16.dp)
+                        .testTag("inline-action-focus-destination").focusRequester(focusDestination).focusable()) {
+                        NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(value, 0f)),
+                            Modifier.width(phase.width.dp), MaterialTheme.colorScheme.primary) { _, _ ->
+                            error("The inline action fixture has no delegated child")
+                        }
+                    }
+                }
+            }
+        } }
+        fun views(view: android.view.View): List<NativeFloatTextView> = buildList {
+            if (view is NativeFloatTextView) add(view)
+            if (view is android.view.ViewGroup) for (index in 0 until view.childCount) addAll(views(view.getChildAt(index)))
+        }
+        fun sameRect(a: android.graphics.RectF, b: android.graphics.RectF) {
+            assertEquals(a.left, b.left, .01f); assertEquals(a.top, b.top, .01f)
+            assertEquals(a.right, b.right, .01f); assertEquals(a.bottom, b.bottom, .01f)
+        }
+        fun sameRects(a: List<android.graphics.RectF>, b: List<android.graphics.RectF>) {
+            assertEquals(a.size, b.size); a.zip(b).forEach { (first, second) -> sameRect(first, second) }
+        }
+        fun union(rectangles: List<android.graphics.RectF>): android.graphics.RectF {
+            assertTrue(rectangles.isNotEmpty())
+            return android.graphics.RectF(rectangles.first()).also { result -> rectangles.drop(1).forEach(result::union) }
+        }
+        var originalView: NativeFloatTextView? = null
+        var originalIds: List<Int>? = null
+        var originalNullCallbacks: List<Any?>? = null
+        var originalBounds: List<List<android.graphics.RectF>>? = null
+        var wideRows = 0
+        for ((phaseIndex, phase) in phases.withIndex()) try {
+            compose.runOnIdle { failureReason = null; current.value = phase }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertEquals(phase, committed); assertNull(failureReason)
+                val value = checkNotNull(prepared)
+                assertNull(value.stateDescription)
+                assertEquals(expected, value.text.toString()); assertEquals(expected, annotation.text)
+                // Empty owner identity is native metadata, never a fake nonempty LinkAnnotation.
+                assertEquals(ranges.dropLast(2), annotation.getLinkAnnotations(0, expected.length).map { it.start to it.end })
+                val view = views(compose.activityRule.activity().window.decorView).single()
+                val actual = checkNotNull(view.currentMeasuredGeometry)
+                assertEquals(expected, view.logicalText.toString()); assertEquals(expected, actual.text.toString())
+                assertEquals(ranges, actual.nodes.map { it.start to it.end })
+                assertEquals(owners.size, actual.nodes.size)
+                assertTrue(actual.nodes.all { it.kind == FloatInteractionKind.LINK })
+                assertEquals(owners.size, actual.nodes.map { it.id }.distinct().size)
+                val provider = view.accessibilityNodeProvider
+                val hostId = android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID
+                if (phaseIndex == 0) {
+                    originalView = view; originalIds = actual.nodes.map { it.id }
+                    originalNullCallbacks = actual.nodes.drop(1).map { it.onClick }
+                } else {
+                    assertSame(originalView, view)
+                    assertEquals(originalIds, actual.nodes.map { it.id })
+                    checkNotNull(originalNullCallbacks).zip(actual.nodes.drop(1)).forEach { (before, node) ->
+                        assertSame(before, node.onClick)
+                    }
+                    assertTrue(view.hasFocus())
+                    assertEquals(1, view.selectionStart); assertEquals(richText.length, view.selectionEnd)
+                    assertEquals(expected.substring(1, richText.length), view.selectedTextForCopy())
+                    actual.nodes.forEachIndexed { index, node ->
+                        val info = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+                        try { assertEquals(index == 0, info.isFocused) } finally { info.recycle() }
+                    }
+                }
+                val raw = checkNotNull(value.geometry)(phase.width, emptyList(), false)
+                val actualCharacters = actual.characterRects(0, expected.length)
+                val rawCharacters = raw.characterRects(0, expected.length)
+                assertEquals(expected.length, actualCharacters.size); assertEquals(expected.length, rawCharacters.size)
+                val dx = checkNotNull(actualCharacters[0]).left - checkNotNull(rawCharacters[0]).left
+                val dy = checkNotNull(actualCharacters[0]).top - checkNotNull(rawCharacters[0]).top
+                rawCharacters.zip(actualCharacters).forEach { (a, b) ->
+                    if (a == null) assertNull(b)
+                    else sameRect(android.graphics.RectF(a).apply { offset(dx, dy) }, checkNotNull(b))
+                }
+                val native = checkNotNull(value.native)
+                val nativeSource = native.source(phase.width)
+                val marker = nativeSource.getSpans(0, nativeSource.length, NativeRubyPreparedSource::class.java).single()
+                assertEquals(expected, marker.source.toString()); assertEquals(expected, marker.projection.text)
+                val ownerRanges = marker.projection.ranges.filter { it.role == RubyTextRole.ActionGroup }
+                assertEquals(owners.size, ownerRanges.size)
+                owners.zip(ownerRanges).forEach { (owner, range) -> assertSame(owner, range.span) }
+                assertEquals(ranges, ownerRanges.map { it.start to it.end })
+                assertEquals(owners.size, ownerRanges.map { it.path }.distinct().size)
+                val actionOwners = ownerRanges.map { checkNotNull(marker.groups.getValue(it.path).actionOwner) }
+                assertNotSame(actionOwners[4], actionOwners[5])
+                val richPaint = checkNotNull(actual.nodes.first().missingLinkPaint)
+                assertSame(richPolicy, richPaint.ordinaryPolicy)
+                assertSame(richPaint, marker.groups.getValue(ownerRanges.first().path).actionPaint)
+                assertEquals(phaseIndex > 0, richPaint.visited)
+                assertTrue(actual.nodes.drop(1).all { it.missingLinkPaint == null })
+                ownerRanges.drop(1).forEach { assertNull(marker.groups.getValue(it.path).actionPaint) }
+                (richLeaves + listOf(baseLeaf, readingLeaf)).forEach { leaf ->
+                    assertSame(leaf, marker.projection.ranges.single { it.span === leaf }.span)
+                    assertFalse(leaf.hasInternalAction())
+                }
+                val emptyLeaves = marker.projection.ranges.filter { it.span === emptyLeaf }
+                assertEquals(2, emptyLeaves.size)
+                assertTrue(emptyLeaves.all { it.start == expected.length && it.end == expected.length })
+                assertFalse(emptyLeaf.hasInternalAction())
+                val bodyPixels = with(Density(1f, phase.fontScale)) { 20.sp.toPx() }
+                fun leafPaint(leaf: Span): TextPaint {
+                    val range = marker.projection.ranges.single { it.span === leaf }
+                    return TextPaint(marker.paint).also { paint ->
+                        nativeSource.getSpans(range.start, range.end, MetricAffectingSpan::class.java)
+                            .filter { nativeSource.getSpanStart(it) <= range.start && nativeSource.getSpanEnd(it) >= range.end }
+                            .forEach { it.updateMeasureState(paint) }
+                    }
+                }
+                assertEquals(bodyPixels, leafPaint(richLeaves[0]).textSize, .01f)
+                assertEquals(bodyPixels * .8f, leafPaint(richLeaves[1]).textSize, .01f)
+                val supRange = marker.projection.ranges.single { it.span === supLeaf }
+                assertEquals(1 to 2, supRange.start to supRange.end)
+                assertSame(supLineHeight, supLeaf.inlineStyle!!.lineHeight)
+                assertSame(supSnapshot, supLineHeight.font)
+                assertNull(supLeaf.inlineStyle!!.baselineShift)
+                val supPaint = leafPaint(supLeaf)
+                val supMetrics = nativeSource.getSpans(supRange.start, supRange.end, NativeAuthoredInlineMetrics::class.java)
+                    .filter { nativeSource.getSpanStart(it) == supRange.start && nativeSource.getSpanEnd(it) == supRange.end }
+                    .single()
+                val declaring = checkNotNull(supMetrics.declaringPrimary)
+                assertEquals(supPaint.textSize, supMetrics.primary.fontSize, .01f)
+                assertEquals(supPaint.textSize, declaring.fontSize, .01f)
+                assertEquals(supPaint.fontMetrics.ascent, declaring.ascent, .01f)
+                assertEquals(supPaint.fontMetrics.descent, declaring.descent, .01f)
+                assertEquals(supPaint.textSize * supLineHeight.factor,
+                    (supMetrics.policy as NativeLineHeightPolicy.Pixels).value, .01f)
+                assertTrue(supPaint.baselineShift < 0)
+                assertEquals(supPaint.baselineShift.toFloat(), supMetrics.primary.baselineShift, 0f)
+                assertEquals(supPaint.baselineShift.toFloat(), declaring.baselineShift, 0f)
+                assertTrue(nativeSource.getSpans(supRange.start, supRange.end, NativeAuthoredBaselineShift::class.java).isEmpty())
+                assertTrue(leafPaint(richLeaves[2]).typeface.isItalic)
+                assertEquals(bodyPixels * .75f, marker.groups.getValue(ownerRanges.last().path).paint.textSize, .01f)
+                assertTrue(checkNotNull(actualCharacters[1]).centerY() < checkNotNull(actualCharacters[0]).centerY())
+                val hebrewStart = richText.indexOf('\u05d0')
+                assertTrue(checkNotNull(actualCharacters[hebrewStart]).centerX() >
+                    checkNotNull(actualCharacters[hebrewStart + 3]).centerX())
+                val richRows = (0 until richText.length).map(actual::visualLineRanges).distinct().size
+                if (phaseIndex == 0) wideRows = richRows
+                if (phase.name == "wrapped" || phase.name == "wrapped-rtl") assertTrue(richRows > wideRows)
+                assertNotEquals(actual.visualLineRanges(0), actual.visualLineRanges(richText.lastIndex))
+                owners.indices.forEach { index ->
+                    val range = ranges[index]
+                    val rawQueried = checkNotNull(raw.inlineActionGroupRects(actionOwners[index], range.first, range.second))
+                    if (index < 3) sameRects(raw.rectsForRange(range.first, range.second), rawQueried)
+                    val queried = rawQueried
+                        .map { android.graphics.RectF(it).apply { offset(dx, dy) } }
+                    sameRects(queried, actual.nodes[index].bounds)
+                    if (index < 4) {
+                        assertTrue(queried.isNotEmpty() && queried.all { it.width() > 0f && it.height() > 0f })
+                        queried.forEach { rectangle -> assertEquals(actual.nodes[index].id,
+                            checkNotNull(actual.interactionNodeAt(rectangle.centerX(), rectangle.centerY())).id) }
+                    } else {
+                        assertEquals(1, queried.size)
+                        assertEquals(0f, queried.single().width(), 0f)
+                        assertTrue(queried.single().height() > 0f)
+                        assertNotEquals(actual.nodes[index].id,
+                            actual.interactionNodeAt(queried.single().centerX(), queried.single().centerY())?.id)
+                    }
+                }
+                for ((ownerIndex, offset) in listOf(0 to 0, 0 to 1, 0 to 2, 0 to hebrewStart,
+                    1 to firstSameStart, 2 to firstSameStart + 1, 3 to rubyStart, 3 to rubyStart + 1)) {
+                    val rectangle = checkNotNull(actualCharacters[offset])
+                    assertEquals(actual.nodes[ownerIndex].id,
+                        checkNotNull(actual.interactionNodeAt(rectangle.centerX(), rectangle.centerY())).id)
+                }
+                val paddingRange = marker.projection.ranges.single { it.role == RubyTextRole.PaddingGroup && it.span === padding }
+                val paddingBounds = union(checkNotNull(raw.inlinePaddingGroupRects(padding, paddingRange.start, paddingRange.end)))
+                    .apply { offset(dx, dy) }
+                val right = .25f * bodyPixels * .75f
+                val paddingPoint = (paddingBounds.right - right / 2f) to paddingBounds.centerY()
+                assertTrue(actual.rectsForRange(paddingRange.start, paddingRange.end)
+                    .none { it.contains(paddingPoint.first, paddingPoint.second) })
+                assertEquals(actual.nodes[3].id,
+                    checkNotNull(actual.interactionNodeAt(paddingPoint.first, paddingPoint.second)).id)
+                val host = checkNotNull(provider.createAccessibilityNodeInfo(hostId))
+                try { assertEquals(expected, host.text.toString()); assertEquals(owners.size, host.childCount) }
+                finally { host.recycle() }
+                val beforeActions = callbacks.size
+                actual.nodes.forEachIndexed { index, node ->
+                    val info = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+                    try {
+                        assertEquals(expected.substring(node.start, node.end), info.text.toString())
+                        assertTrue(info.isClickable)
+                        if (index < 4) assertTrue(info.isVisibleToUser)
+                        val expectedBounds = android.graphics.Rect().also(union(node.bounds)::roundOut).apply {
+                            offset(view.paddingLeft, view.paddingTop)
+                        }
+                        assertEquals(expectedBounds, android.graphics.Rect().also(info::getBoundsInParent))
+                    } finally { info.recycle() }
+                    assertTrue(provider.performAction(node.id, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                    assertEquals(targets[index], callbacks.last())
+                }
+                assertEquals(targets, callbacks.drop(beforeActions))
+                // One virtual focus stop per source owner, including equal-target neighbors and the empty owner.
+                assertTrue(provider.performAction(actual.nodes.first().id,
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS, null))
+                assertTrue(view.hasFocus())
+                fun assertRichPaint(active: Boolean) {
+                    assertTrue(richPaint.focused); assertFalse(richPaint.hovered); assertEquals(active, richPaint.active)
+                    val state = paintStates[(if (richPaint.visited) 4 else 0) + (if (active) 2 else 0)]
+                    assertEquals(0xff000000.toInt() or state.foreground.substring(1).toInt(16), richPaint.appearance().color)
+                    assertEquals(state.underline || richPolicy.underlineOnFocus, richPaint.appearance().underline)
+                }
+                assertRichPaint(false)
+                val beforeRichKey = callbacks.size
+                assertTrue(view.onKeyDown(android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                assertRichPaint(true)
+                assertEquals(beforeRichKey, callbacks.size)
+                assertTrue(view.onKeyUp(android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER)))
+                assertRichPaint(false)
+                assertEquals(beforeRichKey + 1, callbacks.size); assertEquals(targets.first(), callbacks.last())
+                for (index in 1 until owners.size) {
+                    assertTrue(view.onKeyDown(android.view.KeyEvent.KEYCODE_TAB,
+                        android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_TAB)))
+                    actual.nodes.forEachIndexed { candidate, node ->
+                        val info = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+                        try { assertEquals(candidate == index, info.isFocused) } finally { info.recycle() }
+                    }
+                    val beforeKey = callbacks.size
+                    assertTrue(view.onKeyDown(android.view.KeyEvent.KEYCODE_ENTER,
+                        android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                    view.onKeyUp(android.view.KeyEvent.KEYCODE_ENTER,
+                        android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER))
+                    assertEquals(beforeKey + 1, callbacks.size); assertEquals(targets[index], callbacks.last())
+                }
+                val beforeTap = callbacks.size
+                val now = android.os.SystemClock.uptimeMillis()
+                for (actionCode in listOf(android.view.MotionEvent.ACTION_CANCEL, android.view.MotionEvent.ACTION_DOWN,
+                    android.view.MotionEvent.ACTION_UP)) {
+                    val event = android.view.MotionEvent.obtain(now,
+                        now + if (actionCode == android.view.MotionEvent.ACTION_UP) 1 else 0, actionCode,
+                        paddingPoint.first + view.paddingLeft, paddingPoint.second + view.paddingTop, 0)
+                    try { val consumed = view.onTouchEvent(event)
+                        if (actionCode != android.view.MotionEvent.ACTION_CANCEL) assertTrue(consumed)
+                    } finally { event.recycle() }
+                }
+                assertEquals(beforeTap + 1, callbacks.size); assertEquals(targets[3], callbacks.last())
+                fun select(first: Int, last: Int) {
+                    val arguments = android.os.Bundle().apply {
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, first)
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, last)
+                    }
+                    assertTrue(provider.performAction(hostId, android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION, arguments))
+                    assertEquals(expected.substring(first, last), view.selectedTextForCopy())
+                }
+                select(0, expected.length)
+                select(1, richText.length)
+                assertTrue(provider.performAction(actual.nodes.first().id,
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS, null))
+                if (phaseIndex == 0) originalBounds = actual.nodes.map { node -> node.bounds.map { android.graphics.RectF(it) } }
+                if (phase.name == "recovery") checkNotNull(originalBounds).zip(actual.nodes).forEach { (before, node) ->
+                    sameRects(before, node.bounds)
+                }
+            }
+        } catch (failure: Throwable) {
+            val detail = AssertionError("Inline action Compose phase=${phase.name}, width=${phase.width}, rtl=${phase.rtl}, fontScale=${phase.fontScale}")
+            if (failure !== detail) failure.addSuppressed(detail)
+            throw failure
+        }
+        compose.runOnIdle { assertTrue(focusDestination.requestFocus(androidx.compose.ui.focus.FocusDirection.Enter)) }
+        compose.onNodeWithTag("inline-action-focus-destination").assertIsFocused()
+
+        // A real zero-width host retains empty-owner metadata; it does not acquire input focus or hit width.
+        val zeroPointAction = emptyAction.copy(inlineStyle = InlineTextStyle(lineHeight =
+            InlineLineHeight.Computed(InlineComputedLength(0f, FontScaleBasis.CssPx))))
+        val zeroCurrent = mutableStateOf(emptyAction, referentialEqualityPolicy())
+        var zeroPrepared: PreparedNativeFloatText? = null
+        var zeroFailure: String? = null
+        val zeroObserver: (String) -> Unit = { zeroFailure = it }
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(LocalDensity provides Density(1f), LocalLayoutDirection provides LayoutDirection.Ltr,
+                    LocalNativeFloatContextFailureObserver provides zeroObserver) {
+                    val zeroSource = listOf(zeroCurrent.value)
+                    val style = TextStyle(fontSize = 20.sp, lineHeight = 24.sp, letterSpacing = 0.sp,
+                        fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Normal, fontStyle = FontStyle.Normal,
+                        textDirection = TextDirection.Ltr)
+                    val annotated = styledTextAnnotation(zeroSource, null, style, onLink)
+                    val value = prepareNativeFloatText(zeroSource, annotated, egyptianTextRuns(zeroSource), style,
+                        MaterialTheme.colorScheme.primary, emptyList(), AppSettings(), "", onLink,
+                        nativeLineHeight = NativeLineHeightPolicy.Pixels(24f))
+                    SideEffect { zeroPrepared = value }
+                    Box(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp)) {
+                        NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(value, 0f)),
+                            Modifier.width(0.dp), MaterialTheme.colorScheme.primary) { _, _ ->
+                            error("The empty inline action fixture has no delegated child")
+                        }
+                    }
+                }
+            }
+        } }
+        for (zeroOwner in listOf(emptyAction, zeroPointAction)) {
+            compose.runOnIdle { zeroFailure = null; zeroCurrent.value = zeroOwner }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertNull(zeroFailure)
+                val value = checkNotNull(zeroPrepared)
+                assertNull(value.stateDescription); assertEquals("", value.text.toString())
+                val view = views(compose.activityRule.activity().window.decorView).single()
+                assertEquals(0, view.width)
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                assertEquals(0, geometry.width); assertEquals("", geometry.text.toString())
+                assertTrue(geometry.characterRects(0, 0).isEmpty())
+                assertTrue(geometry.rectsForRange(0, 0).isEmpty())
+                val node = geometry.nodes.single()
+                assertEquals(0 to 0, node.start to node.end)
+                val band = node.bounds.single()
+                assertEquals(0f, band.width(), 0f)
+                if (zeroOwner === emptyAction) assertTrue(band.height() > 0f)
+                else assertEquals(0f, band.height(), 0f)
+                assertNull(geometry.interactionNodeAt(band.centerX(), band.centerY()))
+                val nativeSource = checkNotNull(value.native).source(0)
+                val marker = nativeSource.getSpans(0, 0, NativeRubyPreparedSource::class.java).single()
+                val range = marker.projection.ranges.single { it.role == RubyTextRole.ActionGroup }
+                assertSame(zeroOwner, range.span)
+                assertNotNull(marker.groups.getValue(range.path).actionOwner)
+                assertEquals(15f, marker.groups.getValue(range.path).paint.textSize, .01f)
+                val provider = view.accessibilityNodeProvider
+                val host = checkNotNull(provider.createAccessibilityNodeInfo(android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID))
+                try { assertEquals("", host.text.toString()); assertEquals(1, host.childCount) } finally { host.recycle() }
+                val info = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+                try {
+                    assertEquals("", info.text.toString()); assertTrue(info.isClickable)
+                    val parentBand = android.graphics.Rect().also(band::roundOut).apply { offset(view.paddingLeft, view.paddingTop) }
+                    assertEquals(parentBand, android.graphics.Rect().also(info::getBoundsInParent))
+                    if (zeroOwner === zeroPointAction) assertFalse(info.isVisibleToUser)
+                    // Visibility may be false for a zero-area host; the node is still real metadata.
+                } finally { info.recycle() }
+            }
+        }
+    }
+
 }

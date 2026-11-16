@@ -138,4 +138,93 @@ class NativeRunLineMetricsDeviceTest {
             assertSame(image, source.getSpans(0, 1, ReplacementSpan::class.java).single())
         } finally { bitmap.recycle() }
     }
+    @Test fun independentNormalStrutUsesItsActualFontBesideExplicitHeightAndSuperscript() {
+        val face = InstrumentationRegistry.getInstrumentation().targetContext.resources.getFont(R.font.newsreader)
+        val root = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { typeface = face; textSize = 20f }
+        val declaring = TextPaint(root).apply { textSize = 60f }
+        val superscript = TextPaint(root).apply { textSize = 12f; baselineShift = -7 }
+        val policy = NativeLineHeightPolicy.Pixels(12f)
+        val rootPrimary = NativePrimaryFontMetrics.from(root)
+        val rootStrut = NativeRunLineMetrics(rootPrimary, NativeLineHeightPolicy.Normal,
+            strut = true, independentNormalStrut = true)
+        val source = SpannableString("A2")
+        fun put(span: Any, start: Int = 0, end: Int = source.length) = source.setSpan(span, start, end,
+            if (start == end) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        put(rootStrut)
+        val bodyPaint = ExactPaint(declaring); val scriptPaint = ExactPaint(superscript)
+        put(bodyPaint, 0, 1); put(scriptPaint, 1, 2)
+        put(NativeRunLineMetrics(NativePrimaryFontMetrics.from(declaring), policy, strut = true))
+        // The child policy is an already resolved factor-one declaring font size.
+        // Its original snapshot/scale resolution belongs to the Compose/core controls.
+        put(NativeAuthoredInlineMetrics(NativePrimaryFontMetrics.from(superscript),
+            NativeLineHeightPolicy.Pixels(superscript.textSize), NativePrimaryFontMetrics.from(superscript)), 1, 2)
+        put(NativeAuthoredBaselineShift(superscript.baselineShift.toFloat()), 1, 2)
+        val native = StaticLayout.Builder.obtain(source, 0, source.length, TextPaint(root), 400)
+            .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR).setIncludePad(true)
+            .setUseLineSpacingFromFallbacks(true).setLineSpacing(0f, 1f)
+            .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+            .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE).build()
+        assertEquals(1, native.lineCount)
+        val natural = NativeUsedLineMetrics((native.getLineTop(0) - native.getLineBaseline(0)).toFloat(),
+            (native.getLineBottom(0) - native.getLineBaseline(0)).toFloat())
+        fun bounds(paint: TextPaint, height: Float? = null): Pair<Float, Float> {
+            val font = paint.fontMetrics
+            val leading = height?.let { (it - (font.descent - font.ascent)) / 2f } ?: 0f
+            return font.ascent - leading + paint.baselineShift to font.descent + leading + paint.baselineShift
+        }
+        val expected = listOf(bounds(root), bounds(declaring, 12f), bounds(superscript, superscript.textSize))
+        val top = expected.minOf { it.first }; val bottom = expected.maxOf { it.second }
+        assertTrue("The whole native line contains the tall explicit descendant", natural.bottom - natural.top > bottom - top)
+        val geometry = NativeFloatGeometry.build(source, root, 400, emptyList())
+        assertEquals(bottom - top, geometry.textBottom, .001f)
+        assertEquals(-top, geometry.baselineForOffset(0), .001f)
+        assertEquals(native.getLineWidth(0), geometry.nativeLineAdvance(0), 0f)
+        for (offset in 0..source.length) assertEquals(native.getPrimaryHorizontal(offset), geometry.caretRect(offset).left, 0f)
+        assertEquals("A2", geometry.text.toString())
+        assertSame(bodyPaint, source.getSpans(0, 1, ExactPaint::class.java).single())
+        assertSame(scriptPaint, source.getSpans(1, 2, ExactPaint::class.java).single())
+        assertSame(rootStrut, nativeInlineStyleSpanCopy(rootStrut))
+        assertTrue((nativeInlineStyleSpanCopy(rootStrut) as NativeRunLineMetrics).independentNormalStrut)
+        assertFalse(NativeRunLineMetrics(rootPrimary, NativeLineHeightPolicy.Normal, strut = true).independentNormalStrut)
+
+        fun refused() {
+            try { nativeRunLineMetrics(source, 0, source.length, natural); fail("Unresolved Normal owner must refuse") }
+            catch (failure: UnsupportedFloatLayout) {
+                assertEquals("Authored inline height with mixed native normal owners is unavailable", failure.message)
+            }
+        }
+        source.removeSpan(rootStrut)
+        val legacy = NativeRunLineMetrics(rootPrimary, NativeLineHeightPolicy.Normal, strut = true)
+        put(legacy); refused(); source.removeSpan(legacy); put(rootStrut)
+        val paintedNormal = NativeRunLineMetrics(NativePrimaryFontMetrics.from(declaring), NativeLineHeightPolicy.Normal)
+        put(paintedNormal, 0, 1); refused(); source.removeSpan(paintedNormal)
+        val pointMetric = NativeAuthoredInlineMetrics(rootPrimary, NativeLineHeightPolicy.Normal, rootPrimary)
+        put(pointMetric, 1, 1); refused()
+        val emptyOwner = NativeInlineActionOwner(Span("link", "", "empty-owner",
+            inlineActionGroup = InlineActionGroup(listOf(Span("text", "")))), "test/empty")
+        val wrongMetric = NativeInlineActionPoint(emptyOwner, pointMetric.copy())
+        put(wrongMetric, 1, 1); refused(); source.removeSpan(wrongMetric)
+        val point = NativeInlineActionPoint(emptyOwner, pointMetric)
+        put(point, 0, 0); refused(); source.removeSpan(point)
+        put(point, 1, 1)
+        val withPoint = checkNotNull(nativeRunLineMetrics(source, 0, source.length, natural))
+        assertEquals(top, withPoint.top, .001f); assertEquals(bottom, withPoint.bottom, .001f)
+        source.removeSpan(point); source.removeSpan(pointMetric)
+
+        val minimum = NativeLineMinimum(rootPrimary, 96f); val gap = NativeLineGap(3.25f)
+        put(minimum); put(gap)
+        val controlBounds = bounds(root, 96f)
+        val withControls = checkNotNull(nativeRunLineMetrics(source, 0, source.length, natural))
+        assertEquals(minOf(top, controlBounds.first), withControls.top, .001f)
+        assertEquals(maxOf(bottom, controlBounds.second) + 3.25f, withControls.bottom, .001f)
+        val normalOnly = SpannableString("A").apply {
+            setSpan(NativeRunLineMetrics(rootPrimary, NativeLineHeightPolicy.Normal,
+                strut = true, independentNormalStrut = true), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(minimum, 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(gap, 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val alreadyIncludesControls = NativeUsedLineMetrics(-100f, 20f)
+        assertEquals(alreadyIncludesControls, nativeRunLineMetrics(normalOnly, 0, 1, alreadyIncludesControls))
+    }
+
 }

@@ -145,6 +145,8 @@ internal class NativeAnonymousFlowGeometry private constructor(
     internal fun nativeRectsForRange(start: Int, end: Int): List<RectF> = native.rectsForRange(start, end)
     internal fun nativeInlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? =
         native.inlinePaddingGroupRects(owner, start, end)
+    internal fun nativeInlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? =
+        native.inlineActionGroupRects(owner, start, end)
     override fun interactionNodeAt(x: Float, y: Float): FloatInteractionNode? {
         positionedGroups.lastOrNull { it.contains(x, y) }?.let { group ->
             return nodes.lastOrNull { it.id in group.nodeIds && it.contains(x, y) }
@@ -333,6 +335,49 @@ internal class NativeAnonymousFlowGeometry private constructor(
         val begin = inline.first()
         val last = inline.last()
         return native.inlinePaddingGroupRects(owner,
+            begin.authored.nativeOffset(begin.authored.logicalStart + start - begin.start),
+            last.authored.nativeOffset(last.authored.logicalStart + end - last.start))
+    }
+
+    override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? {
+        require(start in 0..text.length && end in start..text.length)
+        if (start == end) {
+            var recognized = false
+            val result = mutableListOf<RectF>()
+            val nativeQueries = mutableSetOf<Int>()
+            selection.segments.filter { start in it.start..it.end }.forEach { segment ->
+                val boxes = when (segment) {
+                    is AnonymousSelectionSegment.Inline -> if (segment.authored.replacement) null else {
+                        val at = segment.authored.nativeOffset(segment.authored.logicalStart + start - segment.start)
+                        if (nativeQueries.add(at)) native.inlineActionGroupRects(owner, at, at) else null
+                    }
+                    is AnonymousSelectionSegment.Figure -> {
+                        val placed = figureById.getValue(segment.anchor.event.id)
+                        placed.measured.geometry.inlineActionGroupRects(owner, start - segment.start, start - segment.start)
+                            ?.map { RectF(it).apply { offset(placed.bounds.left, placed.bounds.top) } }
+                    }
+                }
+                if (boxes != null) { recognized = true; result.addAll(boxes) }
+            }
+            return result.takeIf { recognized }
+        }
+        // Validate the complete requested interval before any projection. An overlap
+        // with an owner is not authority for source outside that owner.
+        val covered = selection.segments.filter { start < it.end && end > it.start }
+        val first = covered.firstOrNull() ?: return null
+        if (first is AnonymousSelectionSegment.Figure) {
+            if (covered.size != 1) return null
+            val placed = figureById.getValue(first.anchor.event.id)
+            return placed.measured.geometry.inlineActionGroupRects(owner, start - first.start, end - first.start)
+                ?.map { RectF(it).apply { offset(placed.bounds.left, placed.bounds.top) } }
+        }
+        if (covered.any { it !is AnonymousSelectionSegment.Inline }) return null
+        val inline = covered.filterIsInstance<AnonymousSelectionSegment.Inline>()
+        if (inline.any { it.authored.replacement } || inline.zipWithNext().any { (a, b) ->
+                a.end != b.start || a.nativeEnd != b.nativeStart
+            }) return null
+        val begin = inline.first(); val last = inline.last()
+        return native.inlineActionGroupRects(owner,
             begin.authored.nativeOffset(begin.authored.logicalStart + start - begin.start),
             last.authored.nativeOffset(last.authored.logicalStart + end - last.start))
     }

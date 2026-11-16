@@ -319,6 +319,8 @@ private class AnonymousInlineNodeGeometry(private val owner: NativeAnonymousFlow
     override fun rectsForRange(start: Int, end: Int): List<RectF> = owner.nativeRectsForRange(source.start + start, source.start + end)
     override fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? =
         this.owner.nativeInlinePaddingGroupRects(owner, source.start + start, source.start + end)
+    override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? =
+        this.owner.nativeInlineActionGroupRects(owner, source.start + start, source.start + end)
 }
 
 internal data class PreparedFigure(val metrics: FigureBoxMetrics?, val unavailable: String?, val sourceRevision: Any,

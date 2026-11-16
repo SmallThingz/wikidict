@@ -378,4 +378,118 @@ class RubyTextTest {
         assertSame(group, projection.ranges.single { it.role == RubyTextRole.PaddingGroup }.span)
         assertEquals(1, projection.ranges.count { it.span?.kind == "link" })
     }
+    @Test fun actionGroupsRetainOriginalOwnersAcrossRichChildrenAndEqualTargets() {
+        fun action(children: List<Span>) = Span("link", "", "d", targetFragment = "entry",
+            tooltip = "one source A", bold = true, fontScale = 1.25f,
+            fontScaleBasis = FontScaleBasis.NormalBody, inlineActionGroup = InlineActionGroup(children))
+        val first = text("d")
+        val suffix = Span("text", "a", italic = true, superscript = true, fontScale = .8f,
+            fontScaleBasis = FontScaleBasis.NormalBody, trail = "\u00a0\u2192")
+        val whole = action(listOf(first, suffix))
+        val projection = rubyGraphicalProjection(listOf(whole), "entry/form")
+        assertEquals("da\u00a0\u2192", projection.text)
+        val ownerRange = projection.ranges.single { it.role == RubyTextRole.ActionGroup }
+        assertSame(whole, ownerRange.span)
+        assertEquals(0, ownerRange.start); assertEquals(4, ownerRange.end)
+        assertEquals("entry/form/spans/0", ownerRange.path)
+        assertEquals(listOf(whole), projection.ranges.mapNotNull { it.span }.filter { it.kind == "link" })
+        assertSame(first, projection.ranges.single { it.span === first }.span)
+        val suffixRange = projection.ranges.single { it.span === suffix }
+        assertEquals(1, suffixRange.start); assertEquals(4, suffixRange.end)
+        assertEquals("entry/form/spans/0/inlineActionGroup/spans/1", suffixRange.path)
+        assertEquals(projection.text, rubyBaseText(listOf(whole)))
+        assertEquals(projection.text, rubyFallbackText(listOf(whole)))
+        val flat = rubyGraphicalSpans(listOf(whole))
+        assertEquals(listOf("d", "a"), flat.map { it.text })
+        assertTrue(flat.all { it.kind == "link" && it.target == "d" && it.targetFragment == "entry" })
+        assertTrue(flat[1].italic); assertTrue(flat[1].superscript); assertFalse(flat[1].bold)
+        assertEquals(.8f, flat[1].fontScale!!, 0f); assertEquals("\u00a0\u2192", flat[1].trail)
+        assertEquals("text", first.kind); assertEquals("text", suffix.kind)
+
+        val left = action(listOf(text("d"))); val right = action(listOf(text("d")))
+        assertEquals(left, right); assertNotSame(left, right)
+        val adjacent = rubyGraphicalProjection(listOf(left, right))
+        val owners = adjacent.ranges.filter { it.role == RubyTextRole.ActionGroup }
+        assertEquals("dd", adjacent.text); assertEquals(2, owners.size)
+        assertSame(left, owners[0].span); assertSame(right, owners[1].span)
+        assertEquals(listOf(0 to 1, 1 to 2), owners.map { it.start to it.end })
+        assertNotEquals(owners[0].path, owners[1].path)
+        assertEquals(adjacent.text, rubyGraphicalText(listOf(action(listOf(text("dd"))))))
+        assertEquals(1, rubyGraphicalProjection(listOf(action(listOf(text("dd"))))).ranges.count {
+            it.role == RubyTextRole.ActionGroup })
+        val metric = Span("text", "", inlineStyle = InlineTextStyle(lineHeight =
+            InlineLineHeight.Computed(InlineComputedLength(12f, FontScaleBasis.CssPx))))
+        val emptyOwner = action(listOf(metric))
+        val empty = rubyGraphicalProjection(listOf(emptyOwner))
+        assertEquals("", empty.text); assertTrue(empty.ranges.all { it.start == 0 && it.end == 0 })
+        assertSame(emptyOwner, empty.ranges.first().span)
+        val repeatedEmpty = rubyGraphicalProjection(listOf(emptyOwner, emptyOwner)).ranges.filter {
+            it.role == RubyTextRole.ActionGroup }
+        assertEquals(2, repeatedEmpty.size)
+        assertTrue(repeatedEmpty.all { it.span === emptyOwner && it.start == 0 && it.end == 0 })
+        assertNotEquals(repeatedEmpty[0].path, repeatedEmpty[1].path)
+        assertSame(metric, rubyGraphicalSpans(listOf(emptyOwner)).single())
+        assertSame(metric, rubyFallbackSpans(listOf(emptyOwner)).single())
+        val ordinary = listOf(text("unchanged", "!"))
+        assertSame(ordinary, rubyGraphicalSpans(ordinary)); assertEquals("unchanged!", rubyGraphicalText(ordinary))
+    }
+
+    @Test fun actionFallbackKeepsRubyPaddingUtf16AndOnlyRealDescendantsActionable() {
+        val policy = LinkPaint(normal = LinkState("#112233", false), hover = LinkState("#223344", true),
+            active = LinkState("#334455", false), hoverActive = LinkState("#445566", true),
+            visited = LinkState("#556677", false), visitedHover = LinkState("#667788", true),
+            visitedActive = LinkState("#778899", false), visitedHoverActive = LinkState("#8899aa", true),
+            underlineOnFocus = false, focusOutline = null)
+        fun states(value: LinkPaint) = listOf(value.normal, value.hover, value.active, value.hoverActive,
+            value.visited, value.visitedHover, value.visitedActive, value.visitedHoverActive)
+        val originalStates = states(policy)
+        val glyph = text("A\ud83d\ude80", "\u0301").copy(underline = true, italic = true)
+        val reading = text("read"); val before = text("["); val explicit = text("reading"); val after = text("]")
+        val ruby = owner(RubySegment(emptyList(), listOf(base(glyph)), listOf(
+            annotation(0, 1, 0, listOf(reading)), annotation(0, 1, 1, listOf(explicit),
+                before = listOf(before), after = listOf(after), explicit = true))))
+        val paddingLeaf = text("P", "!")
+        val padding = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(
+            StyleLength(StyleLengthUnit.Em, .25f), StyleLength(StyleLengthUnit.Em, .25f), listOf(paddingLeaf)))
+        val metric = Span("text", "", inlineStyle = InlineTextStyle(lineHeight =
+            InlineLineHeight.Computed(InlineComputedLength(9f, FontScaleBasis.CssPx))))
+        val trail = metric.copy(trail = ":")
+        val group = Span("external_link", "", "https://example.test/source?q=a%20b#part",
+            tooltip = "source tooltip", explanation = "source explanation", linkPaint = policy,
+            inlineActionGroup = InlineActionGroup(listOf(ruby, padding, metric, trail)))
+        val projection = rubyGraphicalProjection(listOf(group))
+        assertEquals("A\ud83d\ude80\u0301readreadingP!:", projection.text)
+        assertEquals("A\ud83d\ude80\u0301P!:", rubyBaseText(listOf(group)))
+        assertEquals("A\ud83d\ude80\u0301（read）[reading]P!:", rubyFallbackText(listOf(group)))
+        val root = projection.ranges.single { it.role == RubyTextRole.ActionGroup }
+        assertSame(group, root.span); assertSame(padding, projection.ranges.single { it.role == RubyTextRole.PaddingGroup }.span)
+        assertEquals(0, root.start); assertEquals(projection.text.length, root.end)
+        val glyphRange = projection.ranges.single { it.span === glyph }
+        assertEquals(0, glyphRange.start); assertEquals(4, glyphRange.end)
+        assertEquals("A\ud83d\ude80\u0301", projection.text.substring(glyphRange.start, glyphRange.end))
+        assertSame(paddingLeaf, projection.ranges.single { it.span === paddingLeaf }.span)
+        assertEquals(1, projection.ranges.count { it.span?.kind == "external_link" })
+        val fallback = rubyFallbackSpans(listOf(group))
+        val generated = fallback.filter { it.text == "（" || it.text == "）" }
+        assertEquals(2, generated.size)
+        assertTrue(generated.all { it.kind == "text" && it.target.isEmpty() && it.linkPaint == null })
+        for (value in listOf("[", "reading", "]", "P", "read")) {
+            val projected = fallback.single { it.text == value }
+            assertEquals("external_link", projected.kind); assertEquals(group.target, projected.target)
+            assertSame(policy, projected.linkPaint); assertEquals("source tooltip", projected.tooltip)
+        }
+        val decorated = fallback.single { it.text == glyph.text }
+        assertTrue(states(decorated.linkPaint!!).all { it.underline })
+        assertEquals(originalStates.map { it.foreground }, states(decorated.linkPaint!!).map { it.foreground })
+        assertTrue(decorated.italic); assertEquals(glyph.trail, decorated.trail)
+        assertSame(metric, fallback.single { it.text.isEmpty() && it.trail.isEmpty() })
+        val projectedTrail = fallback.single { it.text == ":" }
+        assertEquals("", projectedTrail.trail); assertEquals(group.target, projectedTrail.target)
+        assertSame(trail.inlineStyle, projectedTrail.inlineStyle)
+        assertEquals("", trail.text); assertEquals(":", trail.trail)
+        assertEquals("text", glyph.kind); assertEquals("text", paddingLeaf.kind)
+        assertSame(policy, group.linkPaint); assertEquals(originalStates, states(policy))
+        assertEquals(projection.text, rubyGraphicalSpans(listOf(group)).joinToString("") { it.text + it.trail })
+    }
+
 }

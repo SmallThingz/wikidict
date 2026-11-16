@@ -32,15 +32,22 @@ internal class NativeTableViewportGeometry(
             NativeFloatBounds(rect.left, rect.top, rect.right, rect.bottom)
         }
     }
-    private fun reveal(rect: RectF?, currentPlacement: NativeTableBlockPlacement?, complete: () -> Unit) {
-        if (rect == null || rect.isEmpty || currentPlacement == null) complete()
+    private fun emptyBand(rect: RectF): Boolean = rect.left == rect.right && rect.top <= rect.bottom &&
+        listOf(rect.left, rect.top, rect.right, rect.bottom).all(Float::isFinite)
+    private fun reveal(rect: RectF?, currentPlacement: NativeTableBlockPlacement?, complete: () -> Unit,
+        allowEmptyBand: Boolean = false) {
+        if (rect == null || rect.isEmpty && !(allowEmptyBand && emptyBand(rect)) || currentPlacement == null) complete()
         else currentPlacement.revealContentRect(RectF(rect), complete)
     }
     override val nodes: List<FloatInteractionNode> = content.nodes.map { node ->
         val shifted = node.translated(x, y)
         val ownClip = shifted.preciseClip?.intersected(clip)?.let { if (precise == null) it else it.intersected(precise) } ?: precise
-        shifted.copy(bounds = if (ownClip == null) node.bounds.mapNotNull(::clipped)
-            else shifted.bounds.mapNotNull(ownClip::bounds), preciseClip = ownClip,
+        // Keep authenticated empty declaring bands/points raw for identity/reveal. Visibility is
+        // still governed by the same clips; zero-width rectangles never gain pointer area.
+        val emptyBands = if (node.kind == FloatInteractionKind.LINK && node.start == node.end)
+            shifted.bounds.filter(::emptyBand).map(::RectF) else emptyList()
+        shifted.copy(bounds = (if (ownClip == null) node.bounds.mapNotNull(::clipped)
+            else shifted.bounds.mapNotNull(ownClip::bounds)) + emptyBands, preciseClip = ownClip,
             clipBounds = shifted.clipBounds?.let(::intersected) ?: RectF(clip),
             onReveal = { complete ->
                 content.revealNode(node.id) {
@@ -48,7 +55,9 @@ internal class NativeTableViewportGeometry(
                         val fresh = current?.takeIf { it.text.toString() == text.toString() }?.nodes
                             ?.firstOrNull { it.id == node.id && it.kind == node.kind &&
                                 it.start == node.start && it.end == node.end }
-                        reveal(fresh?.bounds?.firstOrNull { !it.isEmpty }, currentPlacement, complete)
+                        val emptyOwner = fresh?.let { it.kind == FloatInteractionKind.LINK && it.start == it.end } == true
+                        reveal(fresh?.bounds?.firstOrNull { !it.isEmpty || emptyOwner && emptyBand(it) },
+                            currentPlacement, complete, allowEmptyBand = emptyOwner)
                     }
                 }
             })

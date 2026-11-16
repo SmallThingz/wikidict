@@ -2057,4 +2057,534 @@ class NativeRubyGeometryDeviceTest {
         assertSame(emergency.group, emergency.prepared.projection.ranges.single { it.role == RubyTextRole.PaddingGroup }.span)
     }
 
+
+    @Test fun inlineActionOwnersKeepNativeFragmentsDeclaringPaintAndEmptyPoints() {
+        val normal = LinkState("#0000ff", false)
+        val pressed = LinkState("#ff0000", true)
+        val policy = LinkPaint(normal, normal, pressed, pressed, normal, normal, pressed, pressed,
+            underlineOnFocus = true, focusOutline = FigureFocusOutline(
+                StyleLength(StyleLengthUnit.Px, 1f), FigureColor.Rgb("#ff00ff"),
+                StyleLength(StyleLengthUnit.Px, 0f), SignedContainerMargin(StyleLengthUnit.Px, 0f)))
+        val callbacks = mutableListOf<Span>()
+        fun sourceLeaf(text: String, scale: Float = 1f, superscript: Boolean = false,
+            italic: Boolean = false, direction: String = "") = Span("text", text,
+            fontScale = scale, fontScaleBasis = FontScaleBasis.NormalBody, language = "ja",
+            superscript = superscript, italic = italic, direction = direction, foreground = "#0000ff",
+            inlineStyle = InlineTextStyle(fontNormalized = true))
+        fun action(children: List<Span>, height: Float = 48f, paintPolicy: LinkPaint? = policy,
+            stack: Boolean = false) = Span("link", "", "original-action", targetFragment = "source-fragment",
+            fontScale = 1f, fontScaleBasis = FontScaleBasis.NormalBody, language = "ja",
+            foreground = "#0000ff", background = "#00ff00", linkPaint = paintPolicy,
+            fontFamily = if (stack) ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif) else null,
+            inlineStyle = InlineTextStyle(fontNormalized = true,
+                lineHeight = InlineLineHeight.Computed(InlineComputedLength(height, FontScaleBasis.CssPx)), cursor = InlineCursor.Help),
+            inlineActionGroup = InlineActionGroup(children))
+        data class Case(val original: List<Span>, val action: Span, val projection: RubyTextProjection,
+            val range: RubyTextRange, val key: NativeInlineActionOwner, val state: NativeMissingLinkPaint?,
+            val prepared: NativeRubyPreparedSource, val source: Spanned, val root: TextPaint,
+            val declaring: TextPaint, val callback: () -> Unit, val rtl: Boolean)
+        fun resolve(font: InlineFontSnapshot, color: Int): TextPaint = paint(font.fontScale ?: 1f, color).apply {
+            val family = if ((font.fontFamily as? ContainerFontFamily.Stack)?.fallback == GenericFontFamily.Serif)
+                Typeface.SERIF else Typeface.MONOSPACE
+            typeface = Typeface.create(family,
+                (if (font.bold) Typeface.BOLD else 0) or (if (font.italic) Typeface.ITALIC else 0))
+            textLocale = Locale.forLanguageTag(font.language.ifEmpty { "ja" })
+            if (font.superscript) baselineShift = scriptShift(this).toInt()
+        }
+        fun sourcePolicy(style: InlineTextStyle?, fallback: NativeLineHeightPolicy): NativeLineHeightPolicy =
+            when (val height = style?.lineHeight) {
+                null -> fallback
+                is InlineLineHeight.Computed -> NativeLineHeightPolicy.Pixels(height.value.value *
+                    if (height.value.fontScaleBasis == FontScaleBasis.CssPx) 1f else bodyPixels)
+                is InlineLineHeight.FontRelative -> NativeLineHeightPolicy.Pixels(
+                    (resolve(height.font, Color.BLUE).textSize.toDouble() * height.factor).toFloat())
+            }
+        fun make(owner: Span, rtl: Boolean = false, outside: Boolean = false, noWrap: Boolean = false,
+            rootSpans: List<Span>? = null, rootPolicy: NativeLineHeightPolicy = NativeLineHeightPolicy.Pixels(24f)): Case {
+            val original = rootSpans ?: if (outside) listOf(sourceLeaf("OUT ").copy(foreground = "#000000"), owner,
+                sourceLeaf(" END").copy(foreground = "#000000")) else listOf(owner)
+            val projection = rubyGraphicalProjection(original)
+            val range = projection.ranges.single { it.role == RubyTextRole.ActionGroup && it.span === owner }
+            val key = NativeInlineActionOwner(owner, range.path)
+            val state = owner.linkPaint?.let { NativeMissingLinkPaint(it, visited = false,
+                actionIdentity = MissingLinkActionIdentity(original, missingLinkTarget(owner, "ja"),
+                    NativeLinkOccurrenceIdentity(original, 0, range.start, range.end, owner))) }
+            val root = paint(color = Color.BLACK)
+            val declaring = resolve(snapshot(owner), Color.BLUE).apply { bgColor = Color.GREEN }
+            val direction = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
+            val groupRoles = setOf(RubyTextRole.Owner, RubyTextRole.Base, RubyTextRole.Annotation,
+                RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup)
+            val declaringRanges = projection.ranges.filter { it.role in groupRoles }
+            fun declaringOwner(part: RubyTextRange): RubyOwner = when (part.role) {
+                RubyTextRole.Base -> checkNotNull(part.base).owner
+                RubyTextRole.Annotation -> checkNotNull(part.annotation).owner
+                else -> checkNotNull(part.span).let {
+                    RubyOwner(snapshot(it), it.direction, it.inlineStyle, it.foreground, it.background)
+                }
+            }
+            fun inheritedPolicy(part: RubyTextRange): NativeLineHeightPolicy = declaringRanges
+                .filter { part.path.startsWith(it.path + "/") }.sortedBy { it.path.length }
+                .fold(rootPolicy) { inherited, ancestor -> sourcePolicy(declaringOwner(ancestor).inlineStyle, inherited) }
+            val groups = declaringRanges.associate { part ->
+                val declared = declaringOwner(part)
+                val value = resolve(declared.font, declared.foreground?.let(Color::parseColor) ?: Color.BLUE).apply {
+                    bgColor = declared.background?.let(Color::parseColor) ?: Color.TRANSPARENT
+                }
+                val padding = part.span?.inlinePaddingGroup
+                fun edge(length: StyleLength) = length.value * if (length.unit == StyleLengthUnit.Px) 1f else value.textSize
+                part.path to NativeRubyGroupFormat(value,
+                    if (declared.direction == "rtl") TextDirectionHeuristics.RTL else direction,
+                    sourcePolicy(declared.inlineStyle, inheritedPolicy(part)),
+                    baselineShift = value.baselineShift.toFloat(),
+                    sourceDirection = declared.direction, cursor = declared.inlineStyle?.cursor,
+                    wrap = if (noWrap && part.role == RubyTextRole.ActionGroup) TextWrap.NoWrap else null,
+                    padding = padding?.let { NativeInlinePaddingEdges(edge(it.left), edge(it.right)) },
+                    actionPaint = if (part.role == RubyTextRole.ActionGroup) state else null,
+                    actionOwner = if (part.role == RubyTextRole.ActionGroup) key else null)
+            }
+            val logical = SpannableString(projection.text)
+            val flags = if (logical.isEmpty()) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            logical.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(root), rootPolicy,
+                strut = true), 0, logical.length, flags)
+            projection.ranges.filter { it.span != null && it.role !in groupRoles }.forEach { part ->
+                val span = checkNotNull(part.span)
+                val value = resolve(snapshot(span), span.foreground?.let(Color::parseColor) ?: Color.BLUE)
+                val shared = state.takeIf { part.path.startsWith(range.path + "/") }
+                logical.setSpan(object : MetricAffectingSpan(), NativeInlineSafePaintSpan {
+                    override fun updateMeasureState(paint: TextPaint) { paint.set(value) }
+                    override fun updateDrawState(paint: TextPaint) {
+                        paint.set(value)
+                        shared?.appearance()?.let { paint.color = it.color }
+                    }
+                }, part.start, part.end, if (part.start == part.end) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                val leafPolicy = sourcePolicy(span.inlineStyle, inheritedPolicy(part))
+                val leafFlags = if (part.start == part.end) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                logical.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(value), leafPolicy),
+                    part.start, part.end, leafFlags)
+                val numeric = span.inlineStyle?.baselineShift
+                val nativeShift = numeric?.let { -it.value } ?: value.baselineShift.toFloat()
+                if (span.inlineStyle?.lineHeight != null || numeric != null) {
+                    val relative = (span.inlineStyle?.lineHeight as? InlineLineHeight.FontRelative)?.let {
+                        NativePrimaryFontMetrics.from(resolve(it.font, Color.BLUE)).let { metrics ->
+                            if (numeric != null) metrics.copy(baselineShift = nativeShift) else metrics
+                        }
+                    }
+                    val parent = declaringRanges.filter { part.path.startsWith(it.path + "/") }.maxByOrNull { it.path.length }
+                    val declaringPrimary = relative ?: if (numeric != null) parent?.let {
+                        NativePrimaryFontMetrics.from(checkNotNull(groups[it.path]).paint).copy(baselineShift = nativeShift)
+                    } else null
+                    logical.setSpan(NativeAuthoredInlineMetrics(NativePrimaryFontMetrics.from(value)
+                        .copy(baselineShift = nativeShift), leafPolicy, declaringPrimary), part.start, part.end, leafFlags)
+                }
+                if (numeric != null) logical.setSpan(NativeAuthoredBaselineShift(nativeShift), part.start, part.end, leafFlags)
+            }
+            if (noWrap) logical.setSpan(NativeAuthoredTextWrap(TextWrap.NoWrap, inheritedOwner = true,
+                sourceLineStarts = listOf(0)), 0, logical.length, flags)
+            val prepared = NativeRubyPreparedSource(projection, SpannedString(logical), root, direction, groups)
+            val source = SpannableString(logical).apply { setSpan(prepared, 0, length, flags) }
+            return Case(original, owner, projection, range, key, state, prepared, SpannedString(source),
+                root, declaring, { callbacks += owner }, rtl)
+        }
+        fun build(value: Case, width: Int): NativeFloatGeometry = NativeFloatGeometry.build(value.source, value.root,
+            width, emptyList(), textDirection = if (value.rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+            nodeFactory = { geometry ->
+                val boxes = checkNotNull(geometry.inlineActionGroupRects(value.key, value.range.start, value.range.end))
+                listOf(FloatInteractionNode(19, FloatInteractionKind.LINK, value.range.start, value.range.end,
+                    boxes, value.projection.text.substring(value.range.start, value.range.end), null, value.callback,
+                    missingLinkPaint = value.state,
+                    focusPaint = value.action.linkPaint?.let { ordinaryLinkFocusPaint(it, boxes, 1f, bodyPixels) }))
+            })
+        fun verify(value: Case, geometry: NativeFloatGeometry): List<RectF> {
+            assertEquals(value.projection.text, geometry.text.toString())
+            assertSame(value.action, value.range.span)
+            assertSame(value.projection, value.prepared.projection)
+            assertEquals("", value.action.text)
+            assertEquals("", value.action.trail)
+            assertSame(value.action, value.key.span)
+            val node = geometry.nodes.single()
+            assertEquals(19, node.id)
+            assertEquals(value.range.start, node.start); assertEquals(value.range.end, node.end)
+            assertSame(value.callback, node.onClick); assertSame(value.state, node.missingLinkPaint)
+            assertEquals(value.projection.text.substring(node.start, node.end), node.label.toString())
+            assertNull(geometry.inlineActionGroupRects(NativeInlineActionOwner(value.action, value.key.path), node.start, node.end))
+            if (node.start > 0) assertNull(geometry.inlineActionGroupRects(value.key, node.start - 1, node.end))
+            if (node.end < geometry.text.length) assertNull(geometry.inlineActionGroupRects(value.key, node.start, node.end + 1))
+            val result = checkNotNull(geometry.inlineActionGroupRects(value.key, node.start, node.end))
+            assertEquals(result, node.bounds)
+            value.projection.ranges.filter { it.span != null && it.role !in setOf(RubyTextRole.Owner,
+                RubyTextRole.ActionGroup, RubyTextRole.PaddingGroup) && it.start < it.end }.forEach { part ->
+                assertEquals(checkNotNull(part.span).text + checkNotNull(part.span).trail,
+                    geometry.text.subSequence(part.start, part.end).toString())
+                for (offset in part.start until part.end) if (!geometry.text[offset].isWhitespace())
+                    assertNotNull(geometry.characterRects(offset, 1).single())
+            }
+            node.onClick!!.invoke()
+            assertSame(value.action, callbacks.last())
+            return result
+        }
+        fun image(geometry: NativeFloatGeometry, focus: Boolean = false): Bitmap {
+            val ink = geometry.extents.ink
+            val top = kotlin.math.floor(minOf(0f, ink?.top ?: 0f)).toInt() - 8
+            val left = kotlin.math.floor(minOf(0f, ink?.left ?: 0f)).toInt() - 8
+            val right = ceil(maxOf(geometry.width.toFloat(), ink?.right ?: 0f).toDouble()).toInt() + 8
+            val bottom = ceil(maxOf(geometry.height.toFloat(), ink?.bottom ?: 0f).toDouble()).toInt() + 8
+            return Bitmap.createBitmap(right - left, bottom - top, Bitmap.Config.ARGB_8888).also { bitmap ->
+                val canvas = Canvas(bitmap)
+                canvas.translate(-left.toFloat(), -top.toFloat())
+                geometry.paint(canvas)
+                if (focus) geometry.nodes.single().focusPaint?.let { paintNativeFocus(canvas, it) }
+            }
+        }
+        fun owned(bitmap: Bitmap, red: Boolean = false, blue: Boolean = false, green: Boolean = false,
+            magenta: Boolean = false): Int = (0 until bitmap.height).sumOf { y -> (0 until bitmap.width).count { x ->
+                val color = bitmap.getPixel(x, y)
+                Color.alpha(color) > 0 && when {
+                    red -> Color.red(color) > 0 && Color.green(color) == 0 && Color.blue(color) == 0
+                    blue -> Color.blue(color) > 0 && Color.green(color) == 0 && Color.red(color) == 0
+                    green -> Color.green(color) > 0 && Color.red(color) == 0 && Color.blue(color) == 0
+                    magenta -> Color.red(color) > 0 && Color.blue(color) > 0 && Color.green(color) == 0
+                    else -> false
+                }
+            } }
+
+        fun assertDeclaringUnderlineChanged(value: Case, geometry: NativeFloatGeometry,
+            before: Bitmap, focused: Bitmap) {
+            assertEquals(before.width, focused.width); assertEquals(before.height, focused.height)
+            val ink = geometry.extents.ink
+            val imageLeft = kotlin.math.floor(minOf(0f, ink?.left ?: 0f)).toInt() - 8
+            val imageTop = kotlin.math.floor(minOf(0f, ink?.top ?: 0f)).toInt() - 8
+            assertTrue(value.declaring.underlineThickness.isFinite() && value.declaring.underlineThickness > 0f)
+            var changedBackground = 0
+            // Authored interior spaces give glyph-free native X allocations. The Y band
+            // comes independently from the declaring font; these captures omit the outline.
+            for (offset in value.range.start until value.range.end) {
+                if (geometry.text[offset] != ' ' || offset <= value.range.start || offset + 1 >= value.range.end) continue
+                fun asciiWord(char: Char) = char in 'a'..'z' || char in 'A'..'Z' || char in '0'..'9'
+                if (!asciiWord(geometry.text[offset - 1]) || !asciiWord(geometry.text[offset + 1])) continue
+                val line = (0 until geometry.shapedLineCount).singleOrNull { row ->
+                    geometry.nativeRubyLineRanges(row).any { offset >= it.first && offset + 1 <= it.second }
+                } ?: continue
+                val first = geometry.nativeRubyLineCaret(line, offset)?.left ?: continue
+                val last = geometry.nativeRubyLineCaret(line, offset + 1)?.left ?: continue
+                val left = ceil(minOf(first, last).toDouble()).toInt() - imageLeft
+                val right = kotlin.math.floor(maxOf(first, last).toDouble()).toInt() - imageLeft
+                if (left >= right) continue
+                val underlineTop = geometry.nativeRubyRaw.nativeRubyLineBaseline(line) + value.declaring.underlinePosition
+                val top = kotlin.math.floor(underlineTop.toDouble()).toInt() - imageTop
+                val bottom = ceil((underlineTop + value.declaring.underlineThickness).toDouble()).toInt() - imageTop
+                for (y in top.coerceAtLeast(0) until bottom.coerceAtMost(before.height))
+                    for (x in left.coerceAtLeast(0) until right.coerceAtMost(before.width)) {
+                        val original = before.getPixel(x, y)
+                        val after = focused.getPixel(x, y)
+                        if (Color.alpha(original) > 0 && Color.red(original) == 0 && Color.blue(original) == 0 &&
+                            Color.green(original) > 0 && Color.blue(after) > Color.blue(original) &&
+                            Color.green(after) < Color.green(original)) changedBackground++
+                    }
+            }
+            assertTrue("Focus must add declaring-font underline ink over an authored space", changedBackground > 0)
+        }
+
+        val sup = sourceLeaf("2", .5f, superscript = true)
+        val italic = sourceLeaf("I", italic = true)
+        val letters = sourceLeaf("owner ", .5f)
+        val metricSup = sourceLeaf("2", .25f, superscript = true)
+        val metricItalic = sourceLeaf("I", .5f, italic = true)
+        val metricChildren = listOf(letters, metricSup, metricItalic)
+        val metricOwner = action(metricChildren)
+        // The compiler authenticates the paragraph strut without treating a painted
+        // Normal sibling as an independent declaring owner.
+        val mixed = make(metricOwner, rootPolicy = NativeLineHeightPolicy.Normal)
+        assertSame(metricOwner, mixed.original.single())
+        assertEquals(NativeLineHeightPolicy.Normal,
+            mixed.prepared.source.getSpans(0, mixed.prepared.source.length, NativeRunLineMetrics::class.java)
+                .single { it.strut }.policy)
+        assertFalse(mixed.prepared.source.getSpans(0, mixed.prepared.source.length, NativeRunLineMetrics::class.java)
+            .single { it.strut }.independentNormalStrut)
+        val mixedGeometry = build(mixed, 400)
+        verify(mixed, mixedGeometry)
+        val metric = make(metricOwner)
+        assertSame(metricOwner, metric.original.single())
+        assertEquals(mixed.projection.text, metric.projection.text)
+        assertEquals(NativeLineHeightPolicy.Pixels(24f),
+            metric.prepared.source.getSpans(0, metric.prepared.source.length, NativeRunLineMetrics::class.java)
+                .single { it.strut }.policy)
+        val direct = build(metric, 400)
+        verify(metric, direct)
+        assertEquals(1, direct.shapedLineCount)
+        val fm = metric.declaring.fontMetrics
+        val middle = (fm.ascent + fm.descent) / 2f
+        // The owner and every scripted child retain their own primary font. Inherited
+        // Pixels48 contributes at each actual child baseline; compare their full union.
+        val childBands = metricChildren.map { span ->
+            val value = resolve(snapshot(span), Color.BLUE)
+            val metrics = value.fontMetrics
+            val center = (metrics.ascent + metrics.descent) / 2f + value.baselineShift
+            center - 24f to center + 24f
+        }
+        assertTrue(middle - 24f < childBands.minOf { it.first })
+        val rootPrimary = mixed.root.fontMetrics
+        val mixedUsed = mixedGeometry.nativeRubyRaw.nativeUsedLineMetrics(0)
+        assertEquals(minOf(rootPrimary.ascent, middle - 24f, childBands.minOf { it.first }), mixedUsed.top, .01f)
+        assertEquals(maxOf(rootPrimary.descent, middle + 24f, childBands.maxOf { it.second }), mixedUsed.bottom, .01f)
+        assertEquals(verify(mixed, mixedGeometry), verify(mixed, build(mixed, 400)))
+        val paintedNormal = make(metricOwner, outside = true, rootPolicy = NativeLineHeightPolicy.Normal)
+        assertTrue(paintedNormal.prepared.source.getSpans(0, paintedNormal.prepared.source.length,
+            NativeRunLineMetrics::class.java).any { !it.strut && it.policy == NativeLineHeightPolicy.Normal &&
+            paintedNormal.prepared.source.getSpanEnd(it) <= paintedNormal.range.start })
+        try { build(paintedNormal, 400); fail("A painted Normal sibling must retain its fallback-aware refusal") }
+        catch (failure: UnsupportedFloatLayout) { assertTrue(failure.message.orEmpty().contains("normal", ignoreCase = true)) }
+        val paintedRecovery = make(metricOwner, outside = true)
+        assertEquals(paintedNormal.projection.text, paintedRecovery.projection.text)
+        verify(paintedRecovery, build(paintedRecovery, 400))
+        val natural = NativeFloatGeometry.build(metric.prepared.source, metric.root, 400, emptyList(),
+            textDirection = TextDirectionHeuristics.LTR).nativeUsedLineMetrics(0)
+        val expectedTop = minOf(middle - 24f, natural.top, childBands.minOf { it.first })
+        val expectedBottom = maxOf(middle + 24f, natural.bottom, childBands.maxOf { it.second })
+        val used = direct.nativeRubyRaw.nativeUsedLineMetrics(0)
+        assertEquals(expectedTop, used.top, .01f)
+        assertEquals(expectedBottom, used.bottom, .01f)
+        val supRange = metric.projection.ranges.single { it.span === metricSup }
+        val italicRange = metric.projection.ranges.single { it.span === metricItalic }
+        assertTrue(direct.baselineForOffset(supRange.start) < direct.baselineForOffset(italicRange.start))
+        val ordinaryBox = direct.rectsForRange(metric.range.start, metric.range.start + 1).single()
+        assertEquals(InlineCursor.Help, direct.cursorAt(ordinaryBox.centerX(), ordinaryBox.centerY()))
+        val normalImage = image(direct)
+        val interaction = checkNotNull(metric.state)
+        interaction.focused = true
+        val focusedTextImage = image(direct)
+        val focusImage = image(direct, focus = true)
+        interaction.active = true
+        val activeImage = image(direct, focus = true)
+        interaction.active = false; interaction.focused = false
+        val recoveredImage = image(direct)
+        try {
+            assertTrue(owned(normalImage, blue = true) > 0)
+            assertTrue(owned(normalImage, green = true) > 0)
+            assertEquals(0, owned(normalImage, red = true))
+            assertDeclaringUnderlineChanged(metric, direct, normalImage, focusedTextImage)
+            assertTrue(owned(focusImage, magenta = true) > 0)
+            assertTrue(owned(activeImage, red = true) > 0)
+            assertEquals(0, owned(activeImage, blue = true))
+            assertTrue(owned(activeImage, magenta = true) > 0)
+            assertEquals(normalImage.width, recoveredImage.width); assertEquals(normalImage.height, recoveredImage.height)
+            for (y in 0 until normalImage.height) for (x in 0 until normalImage.width)
+                assertEquals(normalImage.getPixel(x, y), recoveredImage.getPixel(x, y))
+            val outlines = checkNotNull(direct.nodes.single().focusPaint).outlines()
+            assertEquals(direct.nodes.single().bounds.size, outlines.size)
+            outlines.zip(direct.nodes.single().bounds).forEach { (outline, box) ->
+                sameRect(box, outline.bounds, 0f); assertEquals(1f, outline.width, 0f); assertEquals(Color.MAGENTA, outline.color)
+            }
+        } finally {
+            normalImage.recycle(); focusedTextImage.recycle(); focusImage.recycle(); activeImage.recycle(); recoveredImage.recycle()
+        }
+
+        // A complete normalized SUP snapshot resolves its own 1em height once. Zero
+        // root/owner heights leave that actual child band observable without a UA ratio.
+        val relativeSource = sourceLeaf("2", .5f, superscript = true).copy(
+            fontFamily = ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif))
+        val relativeFont = snapshot(relativeSource)
+        val relativeChild = relativeSource.copy(inlineStyle = InlineTextStyle(fontNormalized = true,
+            lineHeight = InlineLineHeight.FontRelative(1f, relativeFont)))
+        val relativeOwner = action(listOf(relativeChild), height = 0f, paintPolicy = null)
+        val relativeCase = make(relativeOwner, rootPolicy = NativeLineHeightPolicy.Pixels(0f))
+        val relativeGeometry = build(relativeCase, 400)
+        verify(relativeCase, relativeGeometry)
+        assertSame(relativeFont, (checkNotNull(relativeChild.inlineStyle).lineHeight as InlineLineHeight.FontRelative).font)
+        assertEquals(.5, checkNotNull(relativeFont.fontScale).toDouble(), 0.0)
+        assertEquals(FontScaleBasis.NormalBody, relativeFont.fontScaleBasis)
+        assertTrue(relativeFont.fontNormalized); assertTrue(relativeFont.superscript)
+        assertEquals(ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif), relativeFont.fontFamily)
+        val relativePaint = resolve(relativeFont, Color.BLUE)
+        assertEquals(bodyPixels * .5f, relativePaint.textSize, 0f)
+        val relativeFm = relativePaint.fontMetrics
+        val relativeCenter = (relativeFm.ascent + relativeFm.descent) / 2f + relativePaint.baselineShift
+        val relativeHeight = relativePaint.textSize
+        val relativeRoot = relativeCase.root.fontMetrics.let { (it.ascent + it.descent) / 2f }
+        val relativeDeclaring = relativeCase.declaring.fontMetrics.let { (it.ascent + it.descent) / 2f }
+        val relativeUsed = relativeGeometry.nativeRubyRaw.nativeUsedLineMetrics(0)
+        assertEquals(minOf(relativeRoot, relativeDeclaring, relativeCenter - relativeHeight / 2f), relativeUsed.top, .01f)
+        assertEquals(maxOf(relativeRoot, relativeDeclaring, relativeCenter + relativeHeight / 2f), relativeUsed.bottom, .01f)
+        val relativeRange = relativeCase.projection.ranges.single { it.span === relativeChild }
+        assertEquals(relativeGeometry.nativeRubyRaw.nativeRubyLineBaseline(0) + relativePaint.baselineShift,
+            relativeGeometry.baselineForOffset(relativeRange.start), .01f)
+        val relativeMetrics = relativeCase.prepared.source.getSpans(relativeRange.start, relativeRange.end,
+            NativeAuthoredInlineMetrics::class.java).single()
+        assertEquals(NativeLineHeightPolicy.Pixels(relativeHeight), relativeMetrics.policy)
+        assertEquals(relativePaint.baselineShift.toFloat(), relativeMetrics.primary.baselineShift, 0f)
+        assertTrue(relativeGeometry.characterRects(relativeRange.start, 1).single() != null)
+        val relativeImage = image(relativeGeometry)
+        try { assertTrue(owned(relativeImage, blue = true) > 0) } finally { relativeImage.recycle() }
+
+        val paddingText = sourceLeaf("nhân", .75f).copy(language = "vi")
+        val padding = sourceLeaf("", .75f).copy(language = "vi", direction = "ltr",
+            inlinePaddingGroup = InlinePaddingGroup(StyleLength(StyleLengthUnit.Em, .25f),
+                StyleLength(StyleLengthUnit.Px, .125f), listOf(paddingText)))
+        val baseText = sourceLeaf("漢")
+        val nested = ruby(listOf(base(listOf(baseText))), listOf(reading(listOf(padding))))
+        val bidi = sourceLeaf("אבגד", direction = "rtl")
+        val richOwner = action(listOf(sourceLeaf("alpha beta "), sup, italic, sourceLeaf(" "), bidi,
+            sourceLeaf(" gamma "), nested, sourceLeaf(" delta epsilon zeta")))
+        val narrowWidth = ceil(paint().measureText("alpha beta ").toDouble()).toInt()
+        assertTrue(narrowWidth > 0)
+        for (rtl in listOf(false, true)) {
+            val value = make(richOwner, rtl = rtl, outside = true)
+            val wide = build(value, 1200)
+            val narrow = build(value, narrowWidth)
+            val recovered = build(value, 1200)
+            val wideBoxes = verify(value, wide)
+            val boxes = verify(value, narrow)
+            assertTrue(narrow.shapedLineCount > wide.shapedLineCount)
+            assertTrue(boxes.map { it.top to it.bottom }.distinct().size > 1)
+            assertEquals(wideBoxes, verify(value, recovered))
+            val paddingRange = value.projection.ranges.single { it.role == RubyTextRole.PaddingGroup && it.span === padding }
+            val paddingBox = checkNotNull(narrow.inlinePaddingGroupRects(padding, paddingRange.start, paddingRange.end)).single()
+            val included = checkNotNull(narrow.inlineActionGroupRects(value.key, paddingRange.start, paddingRange.end))
+            assertEquals(listOf(paddingBox), included)
+            assertTrue(boxes.any { it == paddingBox })
+            val plainReading = NativeFloatGeometry.build(SpannableString(paddingText.text), resolve(snapshot(paddingText), Color.BLUE),
+                1000, emptyList(), textDirection = TextDirectionHeuristics.LTR, includeFontPadding = false)
+            val expectedWidth = plainReading.nativeSingleLineAdvance() + bodyPixels * .75f * .25f + .125f
+            assertEquals(expectedWidth, paddingBox.width(), .01f)
+            assertEquals(InlineCursor.Help, narrow.cursorAt(paddingBox.left + bodyPixels * .75f * .125f,
+                paddingBox.centerY()))
+            val readingRange = value.projection.ranges.single { it.span === paddingText }
+            val readingRects = narrow.rectsForRange(readingRange.start, readingRange.end)
+            assertTrue(readingRects.isNotEmpty())
+            assertTrue(readingRects.all { child -> boxes.any { it.contains(child.centerX(), child.centerY()) } })
+            if (!rtl) {
+                // Focus underlines this declaring base line; the independently placed
+                // reading remains unchanged. Pressed foreground still reaches that reading.
+                val baseRange = value.projection.ranges.single { it.span === baseText }
+                val underlineTop = narrow.baselineForOffset(baseRange.start) + value.declaring.underlinePosition
+                assertTrue(readingRects.all { it.bottom <= underlineTop })
+                val before = image(narrow)
+                val shared = checkNotNull(value.state)
+                shared.focused = true
+                val focused = image(narrow)
+                shared.active = true
+                val active = image(narrow)
+                shared.active = false; shared.focused = false
+                try {
+                    assertDeclaringUnderlineChanged(value, narrow, before, focused)
+                    assertEquals(0, owned(active, blue = true))
+                    val ink = narrow.extents.ink
+                    val imageLeft = kotlin.math.floor(minOf(0f, ink?.left ?: 0f)).toInt() - 8
+                    val imageTop = kotlin.math.floor(minOf(0f, ink?.top ?: 0f)).toInt() - 8
+                    var readingRed = 0
+                    readingRects.forEach { rect ->
+                        val left = kotlin.math.floor(rect.left.toDouble()).toInt() - imageLeft
+                        val top = kotlin.math.floor(rect.top.toDouble()).toInt() - imageTop
+                        val right = ceil(rect.right.toDouble()).toInt() - imageLeft
+                        val bottom = ceil(rect.bottom.toDouble()).toInt() - imageTop
+                        for (y in top.coerceAtLeast(0) until bottom.coerceAtMost(before.height))
+                            for (x in left.coerceAtLeast(0) until right.coerceAtMost(before.width)) {
+                                assertEquals(before.getPixel(x, y), focused.getPixel(x, y))
+                                val pixel = active.getPixel(x, y)
+                                if (Color.alpha(pixel) > 0 && Color.red(pixel) > 0 && Color.green(pixel) == 0 && Color.blue(pixel) == 0)
+                                    readingRed++
+                            }
+                    }
+                    assertTrue(readingRed > 0)
+                } finally { before.recycle(); focused.recycle(); active.recycle() }
+            }
+            val glyphRange = value.projection.ranges.single { it.span === bidi }
+            for (offset in glyphRange.start until glyphRange.end) {
+                val character = checkNotNull(narrow.characterRects(offset, 1).single())
+                assertTrue(boxes.any { it.contains(character.centerX(), character.centerY()) })
+            }
+            assertTrue(narrow.caretRect(glyphRange.start).left > narrow.caretRect(glyphRange.start + 1).left)
+            // An empty subset of a nonempty owner cannot acquire the declaring point box.
+            assertTrue(checkNotNull(narrow.inlineActionGroupRects(value.key, value.range.start, value.range.start)).isEmpty())
+        }
+
+        for (height in listOf(48f, 0f)) for (noWrap in listOf(false, true)) {
+            val emptyLeaf = sourceLeaf("").copy(fontFamily = ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif))
+            val owner = action(listOf(emptyLeaf), height, paintPolicy = null, stack = true)
+            val value = make(owner, noWrap = noWrap)
+            val geometry = build(value, 80)
+            val bands = verify(value, geometry)
+            assertEquals("", geometry.text.toString())
+            assertEquals(1, geometry.shapedLineCount)
+            assertSame(emptyLeaf, checkNotNull(owner.inlineActionGroup).spans.single())
+            assertEquals(ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif), owner.fontFamily)
+            val band = bands.single()
+            assertEquals(band.left, band.right, 0f)
+            val baseline = checkNotNull(checkNotNull(geometry.textBaselines).first)
+            val ownMetrics = value.declaring.fontMetrics
+            val ownMiddle = (ownMetrics.ascent + ownMetrics.descent) / 2f
+            assertEquals(baseline + ownMiddle - height / 2f, band.top, .01f)
+            assertEquals(baseline + ownMiddle + height / 2f, band.bottom, .01f)
+            assertEquals(height, band.height(), .01f)
+            assertFalse(geometry.nodes.single().contains(band.left, band.centerY()))
+            assertNull(geometry.cursorAt(band.left, band.centerY()))
+            assertTrue(geometry.rectsForRange(0, 0).isEmpty())
+            assertTrue(geometry.characterRects(0, 0).isEmpty())
+            assertEquals(Spanned.SPAN_MARK_MARK, value.source.getSpanFlags(
+                value.source.getSpans(0, 0, NativeRubyPreparedSource::class.java).single()))
+            val bitmap = image(geometry)
+            try { assertEquals(0, owned(bitmap, blue = true)); assertEquals(0, owned(bitmap, green = true)) }
+            finally { bitmap.recycle() }
+        }
+
+        // An empty child's numeric baseline affects its own point metrics, never the
+        // declaring action band's origin. The old raw.baselineForOffset(point) path
+        // incorrectly added this child shift to the owner a second time.
+        val emptyChild = sourceLeaf("")
+        val shiftedChild = emptyChild.copy(inlineStyle = checkNotNull(emptyChild.inlineStyle).copy(
+            baselineShift = InlineComputedLength(-64f, FontScaleBasis.CssPx)))
+        val unshiftedOwner = action(listOf(emptyChild), paintPolicy = null)
+        val shiftedOwner = unshiftedOwner.copy(inlineActionGroup = InlineActionGroup(listOf(shiftedChild)))
+        val unshiftedCase = make(unshiftedOwner)
+        val shiftedCase = make(shiftedOwner)
+        val unshifted = build(unshiftedCase, 80)
+        val shifted = build(shiftedCase, 80)
+        val firstBand = verify(unshiftedCase, unshifted).single()
+        val shiftedBand = verify(shiftedCase, shifted).single()
+        val firstBaseline = unshifted.nativeRubyRaw.nativeRubyLineBaseline(0)
+        val shiftedBaseline = shifted.nativeRubyRaw.nativeRubyLineBaseline(0)
+        val own = shiftedCase.declaring.fontMetrics
+        val ownCenter = (own.ascent + own.descent) / 2f
+        assertEquals(firstBand.top - firstBaseline, shiftedBand.top - shiftedBaseline, .01f)
+        assertEquals(firstBand.bottom - firstBaseline, shiftedBand.bottom - shiftedBaseline, .01f)
+        assertEquals(shiftedBaseline + ownCenter - 24f, shiftedBand.top, .01f)
+        assertEquals(shiftedBaseline + ownCenter + 24f, shiftedBand.bottom, .01f)
+        assertEquals(48f, shiftedBand.height(), .01f)
+        val firstUsed = unshifted.nativeRubyRaw.nativeUsedLineMetrics(0)
+        val shiftedUsed = shifted.nativeRubyRaw.nativeUsedLineMetrics(0)
+        assertEquals(firstUsed.top, shiftedUsed.top, .01f)
+        assertEquals(firstUsed.bottom + 64f, shiftedUsed.bottom, .01f)
+        assertEquals(shiftedBaseline + 64f, shifted.nativeRubyRaw.baselineForOffset(0), .01f)
+        val childMetric = shiftedCase.prepared.source.getSpans(0, 0, NativeAuthoredInlineMetrics::class.java).single()
+        assertEquals(NativeLineHeightPolicy.Pixels(48f), childMetric.policy)
+        assertEquals(64f, childMetric.primary.baselineShift, 0f)
+        assertEquals(Spanned.SPAN_MARK_MARK, shiftedCase.prepared.source.getSpanFlags(childMetric))
+        val childShift = shiftedCase.prepared.source.getSpans(0, 0, NativeAuthoredBaselineShift::class.java).single()
+        assertEquals(64f, childShift.shift, 0f)
+        assertEquals(Spanned.SPAN_MARK_MARK, shiftedCase.prepared.source.getSpanFlags(childShift))
+        assertSame(shiftedChild, checkNotNull(shiftedOwner.inlineActionGroup).spans.single())
+        assertEquals(-64f, checkNotNull(checkNotNull(shiftedChild.inlineStyle).baselineShift).value, 0f)
+        assertEquals("", shifted.text.toString())
+        assertTrue(shifted.characterRects(0, 0).isEmpty())
+        assertTrue(shifted.rectsForRange(0, 0).isEmpty())
+        assertFalse(shifted.nodes.single().contains(shiftedBand.left, shiftedBand.centerY()))
+        val emptyPaint = image(shifted)
+        try {
+            for (y in 0 until emptyPaint.height) for (x in 0 until emptyPaint.width)
+                assertEquals(0, Color.alpha(emptyPaint.getPixel(x, y)))
+        } finally { emptyPaint.recycle() }
+
+        fun refused(owner: Span, reason: String) {
+            try { build(make(owner), 1200); fail("Expected explicit native refusal: $reason") }
+            catch (failure: UnsupportedFloatLayout) { assertTrue(failure.message.orEmpty().contains(reason)) }
+        }
+        refused(action(listOf(padding)), "annotation")
+        val inside = action(listOf(sourceLeaf("inner")))
+        val enclosing = ruby(listOf(base(listOf(inside))), emptyList())
+        try {
+            build(make(inside, rootSpans = listOf(enclosing)), 1200)
+            fail("An action inside a native Ruby row must retain its explicit paint-capability refusal")
+        } catch (failure: UnsupportedFloatLayout) {
+            assertTrue(failure.message.orEmpty().contains("action", ignoreCase = true))
+        }
+    }
 }

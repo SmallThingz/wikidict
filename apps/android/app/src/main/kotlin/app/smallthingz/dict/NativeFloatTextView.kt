@@ -188,7 +188,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
             pending.ownerNodes.zip(layout.nodes).any { (before, after) -> !sameInputNode(before, after) }) return null
         if (pending.node != null) {
             val node = layout.nodes.firstOrNull { sameInputNode(pending.node, it) } ?: return null
-            return RevealLocation(RectF(node.bounds.firstOrNull { !it.isEmpty } ?: layout.caretRect(node.start)),
+            return RevealLocation(RectF(nodeRevealBounds(node) ?: layout.caretRect(node.start)),
                 node.clipBounds?.let(::RectF), node.preciseClip)
         }
         return RevealLocation(RectF(layout.caretRect(pending.offset)), layout.clipForOffset(pending.offset)?.let(::RectF),
@@ -216,10 +216,16 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         if (!originalOwnerAvailable()) { pendingViewportReveal = null; return }
         val layout = geometry ?: return
         val current = revealLocation(layout, pending) ?: run { pendingViewportReveal = null; return }
-        val visible = RectF(current.rect)
-        current.clip?.let { if (!visible.intersect(it)) visible.setEmpty() }
-        current.precise?.let { visible.set(it.bounds(visible) ?: RectF()) }
-        if (visible.isEmpty || pending.node != null && layout.nodes.firstOrNull { it.id == pending.node.id }?.bounds?.none { !it.isEmpty } == true) {
+        val emptyOwner = pending.node?.let { saved ->
+            layout.nodes.firstOrNull { it.id == saved.id }?.let(::emptyLinkBands)
+        } != null
+        val visible = if (emptyOwner) clippedEmptyBand(current.rect, current.clip, current.precise)
+        else RectF(current.rect).apply {
+            current.clip?.let { if (!intersect(it)) setEmpty() }
+            current.precise?.let { set(it.bounds(this) ?: RectF()) }
+        }
+        if (visible == null || !emptyOwner && (visible.isEmpty ||
+            pending.node != null && layout.nodes.firstOrNull { it.id == pending.node.id }?.bounds?.none { !it.isEmpty } == true)) {
             pendingViewportReveal = null
             return
         }
@@ -770,12 +776,16 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         val character = if (node != null && target.offset < node.end)
             layout.characterRects(target.offset, 1).firstOrNull() else null
         val fragment = node?.bounds?.firstOrNull { character != null && RectF.intersects(it, character) }
-            ?: node?.bounds?.firstOrNull { !it.isEmpty }
+            ?: node?.let(::nodeRevealBounds)
         // Focus parents consume this on later passes too; resolve against the current geometry.
         val rectangle = RectF(fragment ?: layout.caretRect(target.offset))
-        (node?.clipBounds ?: layout.clipForOffset(target.offset))?.let { if (!rectangle.intersect(it)) rectangle.setEmpty() }
         // This is an ancestor reveal target, not a currently visible AX rectangle.
-        (node?.preciseClip ?: layout.preciseClipForOffset(target.offset))?.let { rectangle.set(it.bounds(rectangle) ?: RectF()) }
+        if (node != null && emptyLinkBands(node) != null)
+            rectangle.set(clippedEmptyBand(rectangle, node.clipBounds, node.preciseClip) ?: RectF())
+        else {
+            (node?.clipBounds ?: layout.clipForOffset(target.offset))?.let { if (!rectangle.intersect(it)) rectangle.setEmpty() }
+            (node?.preciseClip ?: layout.preciseClipForOffset(target.offset))?.let { rectangle.set(it.bounds(rectangle) ?: RectF()) }
+        }
         rectangle.roundOut(outRect)
         outRect.offset(paddingLeft, paddingTop)
     }
@@ -867,11 +877,11 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         return if (next == BreakIterator.DONE) (if (forward) logicalText.length else 0) else next
     }
 
-    /** Reveal the first painted fragment without changing selection or invoking its action. */
+    /** Reveal the first fragment or declaring band without changing selection or invoking its action. */
     private fun revealVirtualNode(node: FloatInteractionNode) {
         if (node.clipBounds == null) {
             pendingViewportReveal = null
-            val bounds = node.bounds.firstOrNull { !it.isEmpty } ?: return
+            val bounds = nodeRevealBounds(node) ?: return
             val visible = Rect()
             bounds.roundOut(visible)
             visible.offset(paddingLeft, paddingTop)
@@ -1161,6 +1171,10 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
                 }
                 addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
                 addAction(if (isFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_FOCUS else AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
+                emptyLinkBands(node)?.let { bands ->
+                    setEmptyLinkAccessibilityBounds(this, node, bands)
+                    return@apply
+                }
                 val bounds = RectF()
                 node.bounds.forEach { bounds.union(it) }
                 val local = Rect()
@@ -1279,6 +1293,146 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
             check(rectangles.size == length)
             info.extras.putParcelableArray(extraDataKey, rectangles)
         }
+    }
+
+    /** A zero-text link owns its declaring band/point, never another owner's caret at the same offset. */
+    private fun isEmptyLinkBand(rect: RectF): Boolean = rect.left.isFinite() && rect.top.isFinite() &&
+        rect.right.isFinite() && rect.bottom.isFinite() && rect.left == rect.right && rect.height().isFinite() && rect.top <= rect.bottom
+
+    private fun emptyLinkBands(node: FloatInteractionNode): List<RectF>? = node.bounds.takeIf {
+        node.kind == FloatInteractionKind.LINK && node.start == node.end && it.isNotEmpty() && it.all(::isEmptyLinkBand)
+    }
+
+    private fun nodeRevealBounds(node: FloatInteractionNode): RectF? =
+        node.bounds.firstOrNull { !it.isEmpty } ?: emptyLinkBands(node)?.firstOrNull()
+
+    private fun clippedEmptyBand(band: RectF, rectangle: RectF?, precise: NativeTextClip?): RectF? = projectEmptyLinkBand {
+        if (!isEmptyLinkBand(band)) null else {
+            val clip = rectangle?.let { precise?.intersected(it) ?: NativeTextClip.rectangle(it) } ?: precise
+            if (clip == null) RectF(band) else emptyLinkClipBounds(clip, band)
+        }
+    }
+
+    private fun emptyLinkClipBounds(clip: NativeTextClip, band: RectF): RectF? =
+        if (band.top == band.bottom) {
+            if (clip.contains(band.left, band.top)) RectF(band) else null
+        } else clip.segmentBounds(band.left, band.top, band.right, band.bottom)
+
+    private fun <T> projectEmptyLinkBand(block: () -> T): T? {
+        val attemptedFactory = geometryFactory
+        val attemptedGeometry = geometry
+        val attemptedGeneration = bindGeneration
+        val attemptedScrollClip = scrollClip
+        val attemptedCoordinateOwner = tableCoordinateOwner
+        val attemptedCoordinates = tableCoordinates
+        return try { block() } catch (failure: UnsupportedFloatLayout) {
+            // AX/focus queries run after measure. Reuse the owner's deferred failure UI,
+            // and never deliver an old query's refusal to a replacement source/clip owner.
+            post {
+                if (geometryFactory === attemptedFactory && geometry === attemptedGeometry &&
+                    bindGeneration == attemptedGeneration && scrollClip === attemptedScrollClip &&
+                    tableCoordinateOwner === attemptedCoordinateOwner && tableCoordinates === attemptedCoordinates)
+                    unsupportedCallback(failure)
+            }
+            null
+        }
+    }
+
+    private fun setEmptyLinkAccessibilityBounds(info: AccessibilityNodeInfo, node: FloatInteractionNode,
+        bands: List<RectF>) {
+        if (projectEmptyLinkBand { projectEmptyLinkAccessibilityBounds(info, node, bands); true } != true) {
+            info.setBoundsInParent(Rect())
+            info.setBoundsInScreen(Rect())
+            info.isVisibleToUser = false
+        }
+    }
+
+    private fun projectEmptyLinkAccessibilityBounds(info: AccessibilityNodeInfo, node: FloatInteractionNode,
+        bands: List<RectF>) {
+        // Declaring metadata remains located even in a zero-width host. Only the actual
+        // node/ancestor clips restrict these bounds; host visibility is checked separately.
+        var clip = node.preciseClip
+        node.clipBounds?.let { clip = clip?.intersected(it) ?: NativeTextClip.rectangle(it) }
+        scrollClip?.preciseInView(this)?.translated(-paddingLeft.toFloat(), -paddingTop.toFloat())?.let {
+            clip = clip?.intersected(it) ?: it
+        }
+        scrollClip?.inView(this)?.let {
+            it.offset(-paddingLeft.toFloat(), -paddingTop.toFloat())
+            clip = clip?.intersected(it) ?: NativeTextClip.rectangle(it)
+        }
+        val fragments = bands.mapNotNull { band ->
+            val exact = clip
+            if (exact == null) RectF(band) else emptyLinkClipBounds(exact, band)
+        }
+        fun envelope(rectangles: List<RectF>): RectF? = rectangles.firstOrNull()?.let { first ->
+            RectF(first).apply {
+                rectangles.drop(1).forEach {
+                    left = min(left, it.left); top = min(top, it.top)
+                    right = max(right, it.right); bottom = max(bottom, it.bottom)
+                }
+            }
+        }
+        val parent = envelope(fragments)?.apply { offset(paddingLeft.toFloat(), paddingTop.toFloat()) }
+        info.setBoundsInParent(Rect().also { parent?.roundOut(it) })
+        val screen = envelope(fragments.mapNotNull(::emptyBandScreenBounds))
+        info.setBoundsInScreen(Rect().also { screen?.roundOut(it) })
+        val host = if (tableCoordinateOwner != null) {
+            tableScreenToLocal(NativeTextClip.rectangle(tableVisibleScreenBounds() ?: RectF()))
+                ?.translated(-paddingLeft.toFloat(), -paddingTop.toFloat())
+                ?: NativeTextClip.rectangle(RectF())
+        } else {
+            val visible = Rect()
+            if (!getLocalVisibleRect(visible)) visible.setEmpty()
+            NativeTextClip.rectangle(RectF(visible).apply { offset(-paddingLeft.toFloat(), -paddingTop.toFloat()) })
+        }
+        val visibleClip = clip?.intersected(host) ?: host
+        info.isVisibleToUser = isShown && bands.any { band ->
+            band.top < band.bottom &&
+                visibleClip.segmentBounds(band.left, band.top, band.right, band.bottom)?.let(::emptyBandScreenBounds) != null
+        }
+    }
+
+    /** Transform the actual segment endpoints; a rotated envelope is not the source segment. */
+    private fun emptyBandScreenBounds(band: RectF): RectF? {
+        if (!isEmptyLinkBand(band)) return null
+        val isPoint = band.top == band.bottom
+        val points = floatArrayOf(band.left + paddingLeft - scrollX, band.top + paddingTop - scrollY,
+            band.right + paddingLeft - scrollX, band.bottom + paddingTop - scrollY)
+        if (tableCoordinateOwner != null) {
+            val coordinates = liveTableCoordinates() ?: return null
+            val first = coordinates.localToScreen(Offset(points[0], points[1]))
+            val last = coordinates.localToScreen(Offset(points[2], points[3]))
+            points[0] = first.x; points[1] = first.y; points[2] = last.x; points[3] = last.y
+        } else {
+            val transform = Matrix()
+            var current: View? = this
+            while (current != null) {
+                transform.postConcat(current.matrix)
+                val parent = current.parent as? View
+                transform.postTranslate(current.left.toFloat() - (parent?.scrollX ?: 0),
+                    current.top.toFloat() - (parent?.scrollY ?: 0))
+                current = parent
+            }
+            val values = FloatArray(9); transform.getValues(values)
+            if (values.any { !it.isFinite() } || values[6] != 0f || values[7] != 0f || values[8] != 1f) return null
+            val origin = floatArrayOf(0f, 0f)
+            transform.mapPoints(origin)
+            val location = IntArray(2); getLocationOnScreen(location)
+            transform.mapPoints(points)
+            for (index in 0..2 step 2) {
+                points[index] += location[0] - origin[0]
+                points[index + 1] += location[1] - origin[1]
+            }
+        }
+        if (points.any { !it.isFinite() } || !isPoint && points[0] == points[2] && points[1] == points[3]) return null
+        var clip: NativeTextClip? = null
+        scrollClip?.inScreen()?.let { clip = clip?.intersected(it) ?: NativeTextClip.rectangle(it) }
+        scrollClip?.preciseInScreen()?.let { clip = clip?.intersected(it) ?: it }
+        if (isPoint) return if (clip?.contains(points[0], points[1]) != false)
+            RectF(points[0], points[1], points[0], points[1]) else null
+        return clip?.segmentBounds(points[0], points[1], points[2], points[3])
+            ?: if (clip != null) null else RectF(min(points[0], points[2]), min(points[1], points[3]),
+                max(points[0], points[2]), max(points[1], points[3]))
     }
 
     /** Join shapes before bounding; bounding an inner arc first can resurrect its removed

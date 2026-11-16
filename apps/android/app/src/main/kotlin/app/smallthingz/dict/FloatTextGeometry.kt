@@ -37,12 +37,137 @@ internal interface NativeHorizontalScrollTarget {
     fun cancel()
 }
 
+/** Parameter intervals stay on the original segment through every clip and transform. */
+private data class NativeClipInterval(val first: Double, val last: Double) {
+    fun intersected(other: NativeClipInterval): NativeClipInterval? =
+        nativeClipInterval(maxOf(first, other.first), minOf(last, other.last))
+}
+private fun nativeClipInterval(first: Double, last: Double): NativeClipInterval? =
+    if (first < last) NativeClipInterval(first, last) else null
+
+private data class NativeClipSegment(val x: Double, val y: Double, val dx: Double, val dy: Double) {
+    init {
+        if (!listOf(x, y, dx, dy).all(Double::isFinite) || dx == 0.0 && dy == 0.0)
+            throw UnsupportedFloatLayout("Text clip segment is unavailable")
+    }
+    fun xAt(t: Double): Double = x + dx * t
+    fun yAt(t: Double): Double = y + dy * t
+    fun affine(values: FloatArray): NativeClipSegment {
+        if (values[6] != 0f || values[7] != 0f || values[8] == 0f || !values.all(Float::isFinite))
+            throw UnsupportedFloatLayout("Perspective text clip segments are unavailable")
+        val w = values[8].toDouble()
+        return NativeClipSegment((values[0] * x + values[1] * y + values[2]) / w,
+            (values[3] * x + values[4] * y + values[5]) / w,
+            (values[0] * dx + values[1] * dy) / w, (values[3] * dx + values[4] * dy) / w)
+    }
+}
+
+private fun nativeRectangleClipInterval(rect: RectF, line: NativeClipSegment): NativeClipInterval? {
+    if (!listOf(rect.left, rect.top, rect.right, rect.bottom).all(Float::isFinite))
+        throw UnsupportedFloatLayout("Text clip rectangle is unavailable")
+    if (rect.isEmpty) return null
+    var result = NativeClipInterval(0.0, 1.0)
+    fun axis(origin: Double, delta: Double, low: Float, high: Float): Boolean {
+        // A whole segment on the excluded right/bottom edge has no visible interval.
+        if (delta == 0.0) return origin >= low && origin < high
+        val first = (low - origin) / delta
+        val last = (high - origin) / delta
+        result = result.intersected(NativeClipInterval(minOf(first, last), maxOf(first, last))) ?: return false
+        return true
+    }
+    return if (axis(line.x, line.dx, rect.left, rect.right) &&
+        axis(line.y, line.dy, rect.top, rect.bottom)) result else null
+}
+
+private fun nativeCircleClipInterval(line: NativeClipSegment, cx: Double, cy: Double,
+    radius: Double): NativeClipInterval? {
+    val ox = line.x - cx
+    val oy = line.y - cy
+    val scale = maxOf(kotlin.math.abs(ox), kotlin.math.abs(oy), kotlin.math.abs(line.dx),
+        kotlin.math.abs(line.dy), radius)
+    val x = ox / scale
+    val y = oy / scale
+    val dx = line.dx / scale
+    val dy = line.dy / scale
+    val r = radius / scale
+    val a = dx * dx + dy * dy
+    val b = x * dx + y * dy
+    val c = x * x + y * y - r * r
+    val discriminant = b * b - a * c
+    if (!a.isFinite() || a == 0.0 || !discriminant.isFinite())
+        throw UnsupportedFloatLayout("Text clip circle intersection is unavailable")
+    if (discriminant < 0.0) return null
+    if (discriminant == 0.0) {
+        // Tangency can trim one excluded corner endpoint while the straight edge beyond
+        // it survives. Only the final rounded-box interval must have positive length.
+        val tangent = -b / a
+        if (!tangent.isFinite())
+            throw UnsupportedFloatLayout("Text clip circle intersection is unavailable")
+        return NativeClipInterval(tangent, tangent)
+    }
+    val root = kotlin.math.sqrt(discriminant)
+    val q = -b - if (b >= 0.0) root else -root
+    val first = q / a
+    val last = c / q
+    if (!first.isFinite() || !last.isFinite())
+        throw UnsupportedFloatLayout("Text clip circle intersection is unavailable")
+    return nativeClipInterval(minOf(first, last), maxOf(first, last))
+}
+
+private fun nativeTableClipInterval(shape: NativeTableCornerShape,
+    line: NativeClipSegment): NativeClipInterval? {
+    val box = shape.paddingBox ?: return null
+    var result = nativeRectangleClipInterval(RectF(box.left, box.top, box.right, box.bottom), line) ?: return null
+    shape.innerRadii.clockwise.forEachIndexed { index, radius ->
+        if (radius > 0.0) {
+            val (cx, cy) = shape.center(index)
+            fun outside(t: Double): Boolean {
+                val x = line.xAt(t)
+                val y = line.yAt(t)
+                val outwardX = if (index == 0 || index == 3) x < cx else x > cx
+                val outwardY = if (index < 2) y < cy else y > cy
+                val dx = x - cx
+                val dy = y - cy
+                return outwardX && outwardY && dx * dx + dy * dy > radius * radius
+            }
+            // Each retained rounded box is convex. An excluded endpoint enters/leaves at
+            // the analytic circle root; endpoints already inside need no corner cut.
+            val cutFirst = outside(result.first)
+            val cutLast = outside(result.last)
+            if (cutFirst || cutLast) {
+                val circle = nativeCircleClipInterval(line, cx, cy, radius) ?: return null
+                result = nativeClipInterval(if (cutFirst) maxOf(result.first, circle.first) else result.first,
+                    if (cutLast) minOf(result.last, circle.last) else result.last) ?: return null
+            }
+        }
+    }
+    return result
+}
+
 /** Immutable precise clipping accompanies the existing rectangular bounds. Only explicit
  * rounded Table overflow creates one; path bounds are for rectangular platform APIs. */
 internal class NativeTextClip private constructor(private val path: Path, private val envelope: RectF,
+    private val segmentInterval: (NativeClipSegment) -> NativeClipInterval?,
     private val point: (Float, Float) -> Boolean) {
     fun contains(x: Float, y: Float): Boolean = point(x, y)
     fun clip(canvas: Canvas) { canvas.clipPath(path) }
+    /** A segment is not an area. Keep its positive-length survivor, including a zero-width
+     * envelope; isolated tangency and segments on excluded right/bottom edges are absent. */
+    fun segmentBounds(startX: Float, startY: Float, endX: Float, endY: Float): RectF? {
+        if (!listOf(startX, startY, endX, endY).all(Float::isFinite))
+            throw UnsupportedFloatLayout("Text clip segment is unavailable")
+        if (startX == endX && startY == endY) return null
+        val line = NativeClipSegment(startX.toDouble(), startY.toDouble(),
+            endX.toDouble() - startX, endY.toDouble() - startY)
+        val interval = segmentInterval(line) ?: return null
+        val x0 = line.xAt(interval.first).toFloat()
+        val y0 = line.yAt(interval.first).toFloat()
+        val x1 = line.xAt(interval.last).toFloat()
+        val y1 = line.yAt(interval.last).toFloat()
+        if (!listOf(x0, y0, x1, y1).all(Float::isFinite) || x0 == x1 && y0 == y1)
+            throw UnsupportedFloatLayout("Text clip segment cannot be represented in native coordinates")
+        return RectF(minOf(x0, x1), minOf(y0, y1), maxOf(x0, x1), maxOf(y0, y1))
+    }
     fun bounds(rectangle: RectF): RectF? {
         if (rectangle.isEmpty) return null
         val result = Path(path)
@@ -60,16 +185,21 @@ internal class NativeTextClip private constructor(private val path: Path, privat
         if (!result.op(other.path, Path.Op.INTERSECT))
             throw UnsupportedFloatLayout("Rounded text clip intersection is unavailable")
         val bounds = RectF(envelope).apply { if (!intersect(other.envelope)) setEmpty() }
-        return NativeTextClip(result, bounds) { x, y -> contains(x, y) && other.contains(x, y) }
+        return NativeTextClip(result, bounds, { line ->
+            segmentInterval(line)?.let { first -> other.segmentInterval(line)?.let(first::intersected) }
+        }) { x, y -> contains(x, y) && other.contains(x, y) }
     }
     fun intersected(rectangle: RectF): NativeTextClip = intersected(NativeTextClip.rectangle(rectangle))
-    fun translated(x: Float, y: Float): NativeTextClip = NativeTextClip(Path(path).apply { offset(x, y) }, RectF(envelope).apply { offset(x, y) }) {
-        px, py -> contains(px - x, py - y)
-    }
+    fun translated(x: Float, y: Float): NativeTextClip = NativeTextClip(Path(path).apply { offset(x, y) },
+        RectF(envelope).apply { offset(x, y) }, { line ->
+            segmentInterval(line.copy(x = line.x - x, y = line.y - y))
+        }) { px, py -> contains(px - x, py - y) }
     fun transformed(matrix: Matrix): NativeTextClip {
         val inverse = Matrix()
         if (!matrix.invert(inverse)) return rectangle(RectF())
-        return NativeTextClip(Path(path).apply { transform(matrix) }, RectF(envelope).apply { matrix.mapRect(this) }) { x, y ->
+        val values = FloatArray(9).also(inverse::getValues)
+        return NativeTextClip(Path(path).apply { transform(matrix) }, RectF(envelope).apply { matrix.mapRect(this) },
+            { line -> segmentInterval(line.affine(values)) }) { x, y ->
             val point = floatArrayOf(x, y); inverse.mapPoints(point)
             point.all(Float::isFinite) && contains(point[0], point[1])
         }
@@ -77,12 +207,15 @@ internal class NativeTextClip private constructor(private val path: Path, privat
     companion object {
         fun rectangle(value: RectF): NativeTextClip {
             val copy = RectF(value)
-            return NativeTextClip(Path().apply { if (!copy.isEmpty) addRect(copy, Path.Direction.CW) }, copy) { x, y -> copy.contains(x, y) }
+            return NativeTextClip(Path().apply { if (!copy.isEmpty) addRect(copy, Path.Direction.CW) }, copy,
+                { line -> nativeRectangleClipInterval(copy, line) }) { x, y -> copy.contains(x, y) }
         }
         internal fun table(shape: NativeTableCornerShape, content: RectF): NativeTextClip =
             NativeTextClip(nativeTableCornerPath(shape, padding = true), shape.paddingBox?.let {
                 RectF(it.left, it.top, it.right, it.bottom)
-            } ?: RectF()) { x, y -> shape.contains(x, y, padding = true) }.intersected(content)
+            } ?: RectF(), { line -> nativeTableClipInterval(shape, line) }) { x, y ->
+                shape.contains(x, y, padding = true)
+            }.intersected(content)
     }
 }
 internal fun nativeTableContentClip(shape: NativeTableCornerShape, contentRect: RectF): NativeTextClip =
@@ -136,6 +269,8 @@ internal interface FloatTextGeometry {
     fun rectsForRange(start: Int, end: Int): List<RectF>
     /** Exact natural box of one original inline-padding owner; null grants no group authority. */
     fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? = null
+    /** A known original action owner may project a subset across several native fragments. */
+    fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? = null
     /** Exactly [length] entries, including null for a character without visible bounds. */
     fun characterRects(start: Int, length: Int): List<RectF?>
     fun caretRect(offset: Int): RectF
