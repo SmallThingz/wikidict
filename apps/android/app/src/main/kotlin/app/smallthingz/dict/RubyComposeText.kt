@@ -4,10 +4,14 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -73,12 +77,18 @@ internal fun rubyFontSnapshotStyle(snapshot: InlineFontSnapshot, enclosingStyle:
 }
 
 @Composable
-private fun rubySpanTextStyle(span: Span, weight: FontWeight?, enclosingStyle: TextStyle): TextStyle {
+private fun rubySpanTextStyle(span: Span, weight: FontWeight?, enclosingStyle: TextStyle,
+    declaringAction: Boolean = false): TextStyle {
     val density = LocalDensity.current
-    val probe = remember(span) { listOf(span.copy(kind = "text", text = " ", target = "", trail = "",
-        targetFragment = null, image = null, ruby = null, linkPaint = null)) }
+    val probe = remember(span, declaringAction) { listOf(span.copy(
+        kind = if (declaringAction) span.kind else "text", text = " ",
+        target = if (declaringAction) span.target else "", trail = "",
+        targetFragment = span.targetFragment.takeIf { declaringAction }, image = null, ruby = null,
+        inlinePaddingGroup = null, linkPaint = span.linkPaint.takeIf { declaringAction })) }
     val annotation = styledTextAnnotationWithoutDirectionControls(probe, weight, enclosingStyle) { }
-    val resolved = annotation.spanStyles.fold(enclosingStyle.toSpanStyle()) { value, range -> value.merge(range.item) }
+    val plain = annotation.spanStyles.fold(enclosingStyle.toSpanStyle()) { value, range -> value.merge(range.item) }
+    val resolved = if (!declaringAction) plain else annotation.getLinkAnnotations(0, annotation.length)
+        .fold(plain) { value, range -> value.merge(range.item.styles?.style ?: SpanStyle()) }
     val size = if (resolved.fontSize.isEm) with(density) {
         (enclosingStyle.fontSize.toPx() * resolved.fontSize.value).toSp()
     } else resolved.fontSize
@@ -92,7 +102,7 @@ private fun rubySpanTextStyle(span: Span, weight: FontWeight?, enclosingStyle: T
 
 @Composable
 internal fun rubyStyledTextContexts(spans: List<Span>, weight: FontWeight?, style: TextStyle): RubyStyledTextContexts? {
-    if (!spans.hasRuby()) return null
+    if (!spans.hasNativeInlineGroups()) return null
     val sourceIdentity = RubySourceIdentity(spans)
     val projection = remember(sourceIdentity) { rubyGraphicalProjection(spans) }
     val inheritedContext = LocalNativeContainerTextContext.current
@@ -122,23 +132,25 @@ internal fun rubyStyledTextContexts(spans: List<Span>, weight: FontWeight?, styl
         val inheritedLegacy = if (familyOwner == null) rootLegacy else familyOwner.legacyFamily
         val inheritedFace = familyOwner?.style?.fontFamily ?: rootStyle.fontFamily
         val owner = range.base?.owner ?: range.annotation?.owner
-        if (range.role == RubyTextRole.Owner || owner != null) {
+        if (range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup || owner != null) {
             val source = range.span ?: inlineFontSnapshotSpan(checkNotNull(owner).font)
             val ownLegacy = source.legacyFontFamily()
             val family = source.fontFamily ?: inheritedFamily.takeIf { ownLegacy == null }
             val legacy = if (source.fontFamily != null) null else ownLegacy ?: inheritedLegacy
-            val fontSeed = if (parent == null && owner == null) enclosing else enclosing.copy(
+            val inheritsRootTraits = parent == null && owner == null && range.role != RubyTextRole.PaddingGroup
+            val fontSeed = if (inheritsRootTraits) enclosing else enclosing.copy(
                 fontSize = rootStyle.fontSize, fontWeight = FontWeight.Normal, fontStyle = FontStyle.Normal,
                 baselineShift = BaselineShift.None,
                 fontFamily = family?.let(::nativeTerminalFontFamily) ?: inheritedFace)
             var resolved = fontSeed
             CompositionLocalProvider(LocalTextStyle provides fontSeed,
-                LocalCellWeight provides (effectiveWeight.takeIf { parent == null && owner == null }),
-                LocalNativeContainerTextContext provides (if (parent == null && owner == null)
+                LocalCellWeight provides (effectiveWeight.takeIf { inheritsRootTraits }),
+                LocalNativeContainerTextContext provides (if (inheritsRootTraits)
                     inheritedContext else ContainerTextContext(fontFamily = family.takeIf { legacy == null })),
                 LocalFigureCaptionForeground provides (enclosing.color.takeIf { it != Color.Unspecified }?.toArgb()
                     ?: inheritedForeground)) {
-                resolved = if (owner == null) rubySpanTextStyle(source, effectiveWeight.takeIf { parent == null }, fontSeed)
+                resolved = if (owner == null) rubySpanTextStyle(source, effectiveWeight.takeIf { inheritsRootTraits }, fontSeed,
+                    declaringAction = range.role == RubyTextRole.PaddingGroup)
                     else rubyFontSnapshotStyle(owner.font, fontSeed, rootStyle)
             }
             if (owner != null) resolved = resolved.copy(
@@ -164,6 +176,7 @@ internal fun rubyStyledTextContexts(spans: List<Span>, weight: FontWeight?, styl
 internal fun rubyStyledTextAnnotation(contexts: RubyStyledTextContexts, weight: FontWeight?,
     onLink: (EntryLink) -> Unit): AnnotatedString {
     val builder = AnnotatedString.Builder()
+    val currentLink = rememberUpdatedState(onLink)
     val inheritedContext = LocalNativeContainerTextContext.current
     val cellWeight = LocalCellWeight.current
     val inheritedForeground = LocalFigureCaptionForeground.current
@@ -183,6 +196,19 @@ internal fun rubyStyledTextAnnotation(contexts: RubyStyledTextContexts, weight: 
         builder.pushStyle(leaf.enclosingStyle.toSpanStyle())
         builder.append(annotation)
         builder.pop()
+    }
+    // The declaring action owns one interval. Its normal paint already entered the
+    // inherited context; these annotations must not overwrite explicit child paints.
+    contexts.groups.values.filter { it.range.role == RubyTextRole.PaddingGroup }.forEach { group ->
+        val range = group.range
+        val span = checkNotNull(range.span)
+        if (range.start < range.end) {
+            val styles = TextLinkStyles(style = SpanStyle())
+            if (span.hasInternalAction()) builder.addLink(LinkAnnotation.Clickable(span.target, styles) {
+                currentLink.value(span.entryLink())
+            }, range.start, range.end)
+            else externalLinkUrl(span)?.let { builder.addLink(LinkAnnotation.Url(it, styles), range.start, range.end) }
+        }
     }
     return builder.toAnnotatedString().also { check(it.text == contexts.projection.text) }
 }

@@ -132,7 +132,9 @@ class TypedCellBlockTest {
         assertEquals(chain(16), decodedTable(Wire().entry(chain(16))))
         assertThrows(Exception::class.java) { decodedTable(Wire().entry(chain(17))) }
         assertNotNull(tableRenderMetrics(chain(16), 1, 0, 1, 1f))
-        assertNull(tableRenderMetrics(chain(17), 1, 0, 1, 1f))
+        assertNotNull(tableRenderMetrics(chain(17), 1, 0, 1, 1f))
+        assertNotNull(tableRenderMetrics(chain(32), 1, 0, 1, 1f))
+        assertNull(tableRenderMetrics(chain(33), 1, 0, 1, 1f))
     }
 
     @Test fun headingNavigationKeepsAuthoredPathsAmbiguityAndCompiledReferencePrecedence() {

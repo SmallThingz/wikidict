@@ -134,6 +134,8 @@ internal interface FloatTextGeometry {
     fun paintOrdinary(canvas: Canvas) = paint(canvas)
     fun offsetForPosition(x: Float, y: Float): Int
     fun rectsForRange(start: Int, end: Int): List<RectF>
+    /** Exact natural box of one original inline-padding owner; null grants no group authority. */
+    fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? = null
     /** Exactly [length] entries, including null for a character without visible bounds. */
     fun characterRects(start: Int, length: Int): List<RectF?>
     fun caretRect(offset: Int): RectF

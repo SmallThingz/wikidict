@@ -505,6 +505,15 @@ private class NativeRubyDistributedLine(private val owner: NativeFloatGeometry, 
     override fun rectsForRange(start: Int, end: Int): List<RectF> = parts(start, end).flatMap { (a, b, shift) ->
         owner.nativeRubyLineRects(line, a, b).map { translated(it, shift) }
     }
+    override fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? {
+        val fragments = parts(start, end)
+        if (fragments.isEmpty()) return null
+        val bounds = this.owner.inlinePaddingGroupRects(owner, start, end) ?: return null
+        val fragment = fragments.singleOrNull()
+        if (fragment == null || fragment.first != start || fragment.second != end)
+            throw UnsupportedFloatLayout("Inline padding group crosses a Ruby spacing fragment")
+        return bounds.map { translated(it, fragment.third) }
+    }
     override fun characterRects(start: Int, length: Int): List<RectF?> {
         require(start in 0..text.length && length >= 0 && length <= text.length - start)
         return (start until start + length).map { offset ->
@@ -831,6 +840,25 @@ private class NativeRubyHierarchyLine(private val owner: NativeFloatGeometry, pr
             val first = maxOf(start, slot.start); val last = minOf(end, slot.end)
             if (first < last) owner.nativeRubyLineRects(line, first, last).map { shifted(it, dx, -top) } else emptyList()
         } + nested.flatMap { own -> own.view.rectsForRange(start, end).map { shifted(it, own.x, own.y) } }
+    }
+    override fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? {
+        require(start in 0..text.length && end in start..text.length)
+        if (start == end) return null
+        nested.forEach { own ->
+            if (own.ranges.any { start >= it.first && end <= it.second }) {
+                own.view.inlinePaddingGroupRects(owner, start, end)?.let { bounds ->
+                    return bounds.map { shifted(it, own.x, own.y) }
+                }
+            }
+        }
+        ordinary.forEach { (slot, dx) ->
+            if (start >= slot.start && end <= slot.end) {
+                this.owner.inlinePaddingGroupRects(owner, start, end)?.let { bounds ->
+                    return bounds.map { shifted(it, dx, -top) }
+                }
+            }
+        }
+        return null
     }
     override fun characterRects(start: Int, length: Int): List<RectF?> {
         require(start in 0..text.length && length >= 0 && length <= text.length - start)

@@ -3,7 +3,7 @@ package app.smallthingz.dict
 /** Ordinary visual spacing only. Stored spans, exports and literal blocks remain intact. */
 internal fun ordinaryInlineDisplaySpans(block: Block): List<Span> {
     val source = block.spans
-    if (source.hasAuthoredFontFamily() || source.hasRuby()) return source
+    if (source.hasAuthoredFontFamily() || source.hasNativeInlineGroups()) return source
     if (block.kind !in setOf("paragraph", "definition") || block.table != null ||
         source.any { it.hasClassToken("wikidict-poem") }) return source
     var inAsciiSpace = false

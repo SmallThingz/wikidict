@@ -69,12 +69,12 @@ class RubyModelCodecTest {
             string(value.language); string(value.classes); string(value.direction); string(value.explanation)
             byte(if (value.foreground == null) 0 else 1); value.foreground?.let { string(it) }
             byte(if (value.background == null) 0 else 1); value.background?.let { string(it) }
-            require(value.linkPaint == null)
             val fields = (if (value.fontScale != null) 1 else 0) or (if (value.fontFeatures != null) 2 else 0) or
-                (if (value.inlineStyle != null) 8 else 0) or (if (value.fontFamily != null) 16 else 0)
+                (if (value.linkPaint != null) 4 else 0) or (if (value.inlineStyle != null) 8 else 0) or (if (value.fontFamily != null) 16 else 0)
             byte(fields)
             value.fontScale?.let { f32(it); byte(value.fontScaleBasis.ordinal) }
             value.fontFeatures?.let { byte(it.ordinal) }
+            value.linkPaint?.let { byte(1); linkPaint(it) }
             value.inlineStyle?.let { inlineStyle(it, "$label.style") }
             value.fontFamily?.let { require(it == ContainerFontFamily.SansSerif); byte(0) }
             mark("$label.image")
@@ -88,11 +88,29 @@ class RubyModelCodecTest {
             }
             byte(if (value.targetFragment == null) 0 else 1); value.targetFragment?.let { string(it) }
             mark("$label.tooltip"); byte(if (value.tooltip == null) 0 else 1); value.tooltip?.let { string(it) }
-            if (version == 'S' || version == 'T') {
+            if (version == 'S' || version == 'T' || version == 'U') {
                 mark("$label.ruby"); byte(if (value.ruby == null) 0 else 1)
                 value.ruby?.let { ruby(it, label) }
             } else require(value.ruby == null)
+            if (version == 'U') {
+                mark("$label.padding"); byte(if (value.inlinePaddingGroup == null) 0 else 1)
+                value.inlinePaddingGroup?.let { group ->
+                    mark("$label.padding.left"); byte(group.left.unit.ordinal); f32(group.left.value)
+                    mark("$label.padding.right"); byte(group.right.unit.ordinal); f32(group.right.value)
+                    spans(group.spans, "$label.padding.body")
+                }
+            } else require(value.inlinePaddingGroup == null)
             mark("$label.end")
+        }
+        private fun linkPaint(value: LinkPaint) {
+            require(value.focusOutline == null)
+            val prefix = listOf(value.normal, value.hover, value.active, value.visited, value.visitedHover, value.visitedActive)
+            prefix.forEach { string(it.foreground) }
+            var mask = if (value.underlineOnFocus) 64 else 0
+            prefix.forEachIndexed { index, state -> if (state.underline) mask = mask or (1 shl index) }
+            byte(mask); byte(0)
+            string(value.hoverActive.foreground); string(value.visitedHoverActive.foreground)
+            byte((if (value.hoverActive.underline) 1 else 0) or (if (value.visitedHoverActive.underline) 2 else 0))
         }
         private fun fontSnapshot(value: InlineFontSnapshot, label: String) {
             mark("$label.flags")
@@ -295,6 +313,23 @@ class RubyModelCodecTest {
             emit(1, true)
         }
 
+        /** Raw group/Ruby depth, including invalid depth, without typed-constructor prevalidation. */
+        fun paddingChain(depth: Int, mixed: Boolean, label: String) {
+            require(version == 'U')
+            mark("$label.count"); u32(1)
+            fun nested(remaining: Int, name: String) {
+                if (remaining == 0) { span(Span("text", "leaf"), name); return }
+                out.write(Wire('R').isolatedSpan(Span("text", "")))
+                if (mixed && remaining % 2 == 0) {
+                    byte(1); u32(1); u32(0); u32(1); u32(0); out.write(ByteArray(18)); u32(1)
+                    nested(remaining - 1, "$name.child"); u32(0); byte(0)
+                } else {
+                    byte(0); byte(1); length(1f); length(1f); u32(1)
+                    nested(remaining - 1, "$name.child")
+                }
+            }
+            nested(depth, "$label.0")
+        }
         /** Produces invalid depth without first asking the typed constructor to accept it. */
         fun chain(depth: Int, label: String) {
             mark("$label.count"); u32(1)
@@ -674,7 +709,7 @@ class RubyModelCodecTest {
         for (size in 0 until bytes.size) reject("Truncation at $size", bytes.copyOf(size))
         reject("Trailing byte", bytes + byteArrayOf(0))
         for (version in listOf('Q', 'R')) reject("Old header cannot carry S tails", changed(bytes, 3, version.code))
-        val unknown = runCatching { read(changed(bytes, 3, 'U'.code)) }.exceptionOrNull()
+        val unknown = runCatching { read(changed(bytes, 3, 'V'.code)) }.exceptionOrNull()
         assertEquals("Unsupported presentation format", unknown!!.message)
     }
 
@@ -981,5 +1016,230 @@ class RubyModelCodecTest {
         val cycleFailure = runCatching { PresentationSpanVisitor { _, _ -> }.table(cycle) }.exceptionOrNull()
         assertTrue(cycleFailure is IllegalArgumentException)
         assertEquals("Table nesting is too deep", cycleFailure!!.message)
+    }
+
+    @Test fun literalUGroupTailPreservesDeclaringContextActionsAndEveryExistingSpanSink() {
+        val child = Span("link", "du😀", "Reading", trail = "!", targetFragment = "part",
+            language = "vi", foreground = "#123456", tooltip = "Child tip", explanation = "Child explanation")
+        val group = InlinePaddingGroup(StyleLength(StyleLengthUnit.Px, 0f),
+            StyleLength(StyleLengthUnit.Em, .25f), listOf(child))
+        val source = Span("text", "", language = "vi", direction = "ltr", bold = false,
+            fontScale = 1.35f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontFamily = ContainerFontFamily.SansSerif, tooltip = "Owner tip", explanation = "Owner explanation",
+            inlineStyle = InlineTextStyle(cursor = InlineCursor.Help, wrap = TextWrap.BreakWord), inlinePaddingGroup = group)
+        assertSame(child, source.inlinePaddingGroup!!.spans.single())
+        assertEquals("du😀!", textOf(listOf(source)))
+        for (sink in Sink.entries) {
+            val wire = Wire('U')
+            val bytes = wire.document(listOf(source), sink, features = 20, headingTitle = "du😀!")
+            val decoded = read(bytes)
+            assertEquals("Entire owner at $sink", source, selected(decoded, sink))
+            assertEquals("No padding characters at $sink", "du😀!", textOf(listOf(selected(decoded, sink))))
+            val raw = mutableListOf<Span>()
+            PresentationSpanVisitor { _, _ -> }.apply { onSpan = raw::add }.spans(listOf(selected(decoded, sink)))
+            assertEquals(listOf(source, child), raw)
+            assertEquals(listOf(child), raw.filter { it.kind == "link" })
+            assertEquals(0, bytes[wire.at.getValue("root.0.ruby")].toInt())
+            assertEquals(wire.at.getValue("root.0.ruby") + 1, wire.at.getValue("root.0.padding"))
+            for (bit in listOf(4, 8, 16, 32, 64, 128)) {
+                val flags = bytes[wire.at.getValue("features")].toInt() and 255
+                reject("Exact recursive P census $sink/$bit", changed(bytes, wire.at.getValue("features"), flags xor bit))
+            }
+        }
+        val inherited = Span("link", "", "Fanqie", targetFragment = "kept", tooltip = "Owned action",
+            inlineStyle = InlineTextStyle(cursor = InlineCursor.Help, wrap = TextWrap.Normal),
+            inlinePaddingGroup = group.copy(spans = listOf(text("反"), text("切"))))
+        val inheritedEntry = read(Wire('U').document(listOf(inherited), features = 16))
+        assertEquals(inherited, inheritedEntry.displayTitle.single())
+        val actions = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { if (it.kind == "link") actions.add(it) } }
+            .spans(inheritedEntry.displayTitle)
+        assertEquals(listOf(inherited), actions)
+        assertEquals("反切", textOf(inheritedEntry.displayTitle))
+        val ruby = owner(listOf(base(text("字"))), listOf(annotation(source)))
+        val nested = inherited.copy(kind = "text", target = "", targetFragment = null,
+            inlinePaddingGroup = group.copy(spans = listOf(ruby)))
+        assertEquals(nested, read(Wire('U').document(listOf(nested), features = 20)).displayTitle.single())
+        assertEquals("字（du😀!）", textOf(listOf(nested)))
+        for (alignment in listOf(false, true)) for (clear in listOf(false, true)) {
+            val entry = read(Wire('U').document(listOf(inherited), features = 16, alignment = alignment, clear = clear))
+            assertEquals(inherited, entry.displayTitle.single())
+            assertEquals(alignment, entry.inlineImages.isNotEmpty())
+            assertEquals(clear, entry.sections.flatMap { it.blocks }.any { it.ruleStyle?.clear == FigureClear.None })
+        }
+        val plain = text("unchanged")
+        assertEquals(1, Wire('U').isolatedSpan(plain).size - Wire('S').isolatedSpan(plain).size)
+        assertArrayEquals(Wire('S').isolatedSpan(plain), Wire('U').isolatedSpan(plain).dropLast(1).toByteArray())
+        assertEquals(39, Wire('U').isolatedSpan(text("")).size)
+        reject("U requires an actual group", Wire('U').document(listOf(simple())))
+        reject("U without Ruby still requires a group", Wire('U').document(listOf(plain)))
+        val old = Wire('S').document(listOf(simple()))
+        assertEquals(simple(), read(old).displayTitle.single())
+        reject("S bytes cannot be relabelled U", changed(old, 3, 'U'.code))
+        val unknown = runCatching { read(changed(old, 3, 'V'.code)) }.exceptionOrNull()
+        assertEquals("Unsupported presentation format", unknown!!.message)
+    }
+
+    @Test fun inlinePaddingRejectsMalformedOwnersChildrenActionsAndLiteralTailsWithoutRelaxingLegacy() {
+        val px0 = StyleLength(StyleLengthUnit.Px, 0f)
+        val edge = StyleLength(StyleLengthUnit.Em, .25f)
+        fun padded(vararg spans: Span) = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(px0, edge, spans.toList()))
+        val valid = padded(text("x"))
+        invalid("Both edges zero") { InlinePaddingGroup(px0, px0, listOf(text("x"))) }
+        invalid("Empty child array") { InlinePaddingGroup(px0, edge, emptyList()) }
+        for (number in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY)) invalid("Invalid edge $number") {
+            InlinePaddingGroup(px0, StyleLength(StyleLengthUnit.Px, number), listOf(text("x")))
+        }
+        for (empty in listOf("", " ", "\u00a0")) {
+            val child = text(empty)
+            assertSame(child, padded(child).inlinePaddingGroup!!.spans.single())
+            assertEquals(empty, read(Wire('U').document(listOf(padded(child))))
+                .displayTitle.single().inlinePaddingGroup!!.spans.single().text)
+        }
+        for (kind in listOf("link", "external_link")) invalid("Missing owner target") { valid.copy(kind = kind) }
+        invalid("Owner text") { valid.copy(text = "x") }
+        invalid("Owner trail") { valid.copy(trail = "x") }
+        invalid("Owner image") { valid.copy(image = InlineImage("Probe.svg")) }
+        invalid("Owner Ruby") { valid.copy(ruby = simple().ruby) }
+        invalid("Text owner target") { valid.copy(target = "Target") }
+        for (child in listOf(Span("line_break", ""), Span("text", "", image = InlineImage("Probe.svg")),
+            Span("text", "x", "Target"), Span("link", "x"), Span("external_link", "x"),
+            text("x").copy(classes = "wikidict-media"), text("x").copy(classes = "wikidict-media-file-Probe.svg"),
+            text("x").copy(fontScale = Float.NaN))) {
+            invalid("Invalid group child $child") { padded(child) }
+            val wire = Wire('U'); val bytes = wire.document(listOf(valid)); val key = "root.0.padding.body.0"
+            reject("Literal child must refuse", replace(bytes, wire.at.getValue("$key.start"), wire.at.getValue("$key.end"),
+                Wire('U').isolatedSpan(child)))
+        }
+        for (control in listOf('\t', '\n', '\r', '\u000c')) for (trail in listOf(false, true)) {
+            val bad = if (trail) text("x").copy(trail = control.toString()) else text(control.toString())
+            invalid("Raw body control") { padded(bad) }
+            val wire = Wire('U'); val bytes = wire.document(listOf(valid)); val key = "root.0.padding.body.0"
+            reject("Literal raw body control", replace(bytes, wire.at.getValue("$key.start"), wire.at.getValue("$key.end"),
+                Wire('U').isolatedSpan(bad)))
+        }
+        invalid("Legacy empty cursor remains invalid") { Span("text", "", inlineStyle = InlineTextStyle(cursor = InlineCursor.Help)) }
+        invalid("Legacy empty link style remains invalid") { Span("link", "", "A", inlineStyle = InlineTextStyle(wrap = TextWrap.Normal)) }
+        val action = Span("link", "x", "Same")
+        val hidden = owner(listOf(base(text("x"))), listOf(annotation(action)))
+        val rp = owner(listOf(base(text("x"))), listOf(annotation(text("y"), before = listOf(action), explicit = true)))
+        for (child in listOf(action, padded(action), hidden, rp)) {
+            val textOwner = padded(child)
+            invalid("Inherited owner rejects every descendant action, even identical") { textOwner.copy(kind = "link", target = "Same") }
+            val wire = Wire('U'); val bytes = wire.document(listOf(textOwner))
+            val prefixOwner = valid.copy(kind = "link", target = "Same")
+            val prefixWire = Wire('U'); val prefix = prefixWire.isolatedSpan(prefixOwner)
+            val forged = prefix.copyOfRange(0, prefixWire.at.getValue("isolated.padding")) +
+                bytes.copyOfRange(wire.at.getValue("root.0.padding"), bytes.size)
+            reject("Literal inherited descendant action", bytes.copyOfRange(0, wire.at.getValue("root.0.start")) + forged)
+        }
+        val states = listOf("#123456", "#234567", "#345678", "#456789", "#56789a", "#6789ab", "#789abc", "#89abcd")
+            .mapIndexed { index, color -> LinkState(color, index % 2 == 1) }
+        val paint = LinkPaint(states[0], states[1], states[2], states[3], states[4], states[5], states[6], states[7], true)
+        fun painted(child: Span, foreground: String? = "#123456") = padded(child).copy(
+            kind = "link", target = "Painted owner", targetFragment = "paint", foreground = foreground, linkPaint = paint)
+        for (child in listOf(text("child"), text("child").copy(foreground = "#123456", underline = true),
+            owner(listOf(base(text("base"), context = RubyOwner(InlineFontSnapshot(), foreground = "#123456"))),
+                listOf(annotation(text("reading"), context = RubyOwner(InlineFontSnapshot(), foreground = "#123456")))))) {
+            for (foreground in listOf("#123456", null)) {
+                val source = painted(child, foreground)
+                assertSame(child, source.inlinePaddingGroup!!.spans.single())
+                assertEquals(source, read(Wire('U').document(listOf(source))).displayTitle.single())
+            }
+        }
+        assertEquals(painted(text("child"), null), read(Wire('U').document(listOf(painted(text("child"), null)))).displayTitle.single())
+        for ((child, foreground) in listOf(
+            text("child").copy(foreground = "#654321") to "#123456",
+            text("child").copy(foreground = "#654321") to null,
+            owner(listOf(base(text("base"), context = RubyOwner(InlineFontSnapshot(), foreground = "#654321")))) to "#123456",
+            owner(listOf(base(text("same"))), listOf(annotation(text("same"),
+                context = RubyOwner(InlineFontSnapshot(), foreground = "#654321")))) to "#123456",
+            owner(listOf(base(context = RubyOwner(InlineFontSnapshot(), foreground = "#654321")))) to "#123456"
+        )) {
+            invalid("Inherited LinkPaint cannot erase leaf or declaring Ruby color") { painted(child, foreground) }
+            val textWire = Wire('U'); val bytes = textWire.document(listOf(padded(child)))
+            val ownerWire = Wire('U'); val prefix = ownerWire.isolatedSpan(painted(text("x"), foreground))
+            val forged = prefix.copyOfRange(0, ownerWire.at.getValue("isolated.padding")) +
+                bytes.copyOfRange(textWire.at.getValue("root.0.padding"), bytes.size)
+            reject("Literal inherited LinkPaint color conflict", bytes.copyOfRange(0, textWire.at.getValue("root.0.start")) + forged)
+        }
+        val gapRuby = owner(listOf(base(text("a")), RubyBase(RubyOwner(InlineFontSnapshot()), listOf(text(" ")), listOf(text("b")))))
+        invalid("Group forbidden in Ruby gap") {
+            gapRuby.copy(ruby = Ruby(listOf(gapRuby.ruby!!.segments.single().copy(bases = listOf(base(text("a")),
+                RubyBase(RubyOwner(InlineFontSnapshot()), listOf(padded(text(" "))), listOf(text("b"))))))))
+        }
+        val gapWire = Wire('U'); val gapBytes = gapWire.document(listOf(padded(gapRuby)))
+        val gapKey = "root.0.padding.body.0.segment0.base1.gap.0"
+        reject("Literal group in Ruby gap", replace(gapBytes, gapWire.at.getValue("$gapKey.start"), gapWire.at.getValue("$gapKey.end"),
+            Wire('U').isolatedSpan(padded(text(" ")))))
+        val wire = Wire('U'); val bytes = wire.document(listOf(valid))
+        for (bad in listOf(text("x"), text("").copy(trail = "x"), simple(),
+            Span("text", "", image = InlineImage("Probe.svg")))) {
+            val ownerWire = Wire('U'); val ownerBytes = ownerWire.isolatedSpan(bad)
+            val forged = ownerBytes.copyOfRange(0, ownerWire.at.getValue("isolated.padding")) +
+                bytes.copyOfRange(wire.at.getValue("root.0.padding"), bytes.size)
+            reject("Literal owner conflicts with group", bytes.copyOfRange(0, wire.at.getValue("root.0.start")) + forged)
+        }
+        for (value in listOf(2, 255)) reject("Strict group presence", changed(bytes, wire.at.getValue("root.0.padding"), value))
+        for (side in listOf("left", "right")) {
+            reject("Unknown length unit", changed(bytes, wire.at.getValue("root.0.padding.$side"), 2))
+            for (value in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY)) reject("Nonfinite/negative literal edge", changed32(bytes,
+                wire.at.getValue("root.0.padding.$side") + 1, value.toRawBits().toLong() and 0xffff_ffffL))
+        }
+        reject("Zero literal edges", changed32(bytes, wire.at.getValue("root.0.padding.right") + 1, 0))
+        for (count in listOf(0L, 0xffff_ffffL, 1000L)) reject("Invalid/truncated group children$count",
+            changed32(bytes, wire.at.getValue("root.0.padding.body.count"), count))
+        for (size in 0 until bytes.size) reject("U truncation$size", bytes.copyOf(size))
+        reject("U trailing byte", bytes + byteArrayOf(0))
+        for (header in listOf('R', 'S', 'T')) reject("Older header cannot carry U", changed(bytes, 3, header.code))
+    }
+
+    @Test fun inlinePaddingSharesContentAndItemBudgetsWhileUAllowsShallowAndDeepTables() {
+        val edge = StyleLength(StyleLengthUnit.Px, 1f)
+        fun padded(span: Span) = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(edge, edge, listOf(span)))
+        for (mixed in listOf(false, true)) {
+            var source = text("leaf")
+            repeat(16) { index -> source = if (mixed && index % 2 == 1) owner(listOf(base(source))) else padded(source) }
+            assertEquals("leaf", textOf(listOf(source)))
+            assertEquals(source, read(Wire('U').document(listOf(source))).displayTitle.single())
+            invalid("Seventeenth shared content level") { padded(source) }
+            val wire = Wire('U').apply { rootOverride = { paddingChain(17, mixed, it) } }
+            reject("Literal mixed group/Ruby depth17", wire.document(emptyList()))
+            val wrapped = Wire('U').apply { rootOverride = { paddingChain(16, mixed, it) } }
+            reject("Container contributes to same content budget", wrapped.document(emptyList(), Sink.Container))
+            val allowed = Wire('U').apply { rootOverride = { paddingChain(15, mixed, it) } }
+            assertEquals("leaf", textOf(listOf(selected(read(allowed.document(emptyList(), Sink.Container)), Sink.Container))))
+        }
+        val action = Span("link", "深😀", "Deep target", targetFragment = "part")
+        val source = padded(action)
+        for (depth in listOf(1, 16, 17, 20, 32)) {
+            val wire = Wire('U').apply { paragraphOverride = { tableChain(depth, mixed = true) } }
+            val entry = read(wire.document(listOf(source), Sink.Body))
+            val tables = mutableListOf<Int>(); val raw = mutableListOf<Span>()
+            PresentationSpanVisitor { _, _ -> }.apply { onTable = { _, level, _ -> tables.add(level) }; onSpan = raw::add }
+                .blocks(entry.sections.single().blocks)
+            assertEquals((1..depth).toList(), tables)
+            assertEquals(listOf(source, action), raw)
+            assertEquals("深😀", textOf(listOf(raw.first())))
+        }
+        val deep = Wire('U').apply { paragraphOverride = { tableChain(33, mixed = true) } }
+        reject("U still limits table depth32", deep.document(listOf(source), Sink.Body))
+        val noGroup = Wire('U').apply { paragraphOverride = { tableChain(20) } }
+        reject("Deep U still requires group", noGroup.document(listOf(simple()), Sink.Body))
+        val missingGroup = Wire('T').apply { paragraphOverride = { tableChain(20) } }
+        assertEquals(1, read(missingGroup.document(listOf(action), Sink.Body)).sections.size)
+        val cyclic = mutableListOf(text("leaf"))
+        val cyclicOwner = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(edge, edge, cyclic))
+        cyclic[0] = cyclicOwner
+        invalid("A mutable group cycle shares the finite content guard") { PresentationSpanVisitor { _, _ -> }.spans(listOf(cyclicOwner)) }
+        val leaf = text("")
+        val payload = InlinePaddingGroup(edge, edge, java.util.Collections.nCopies((1 shl 20) - 1, leaf))
+        assertEquals(1 shl 20, payload.spans.size + 1)
+        val exactly = Span("text", "", inlinePaddingGroup = payload)
+        var count = 0
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { count++ } }.spans(listOf(exactly))
+        assertEquals(1 shl 20, count)
+        val over = InlinePaddingGroup(edge, edge, java.util.Collections.nCopies(1 shl 20, leaf))
+        invalid("Containing Span owner consumes its one item") { Span("text", "", inlinePaddingGroup = over) }
     }
 }

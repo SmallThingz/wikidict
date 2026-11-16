@@ -6,6 +6,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -910,4 +913,293 @@ class RubyComposeTextDeviceTest {
             }
         }
     }
+
+    @Test fun inlinePaddingKeepsSourceActionOwnersAndExactFontEdgesAcrossSplitAndZoom() = control {
+        // Source-shaped synthetic U data, not producer/Reader interoperability evidence.
+        // SR207 expanded150723/c042ac05 has 人/nhân and 質/chất child links to
+        // #Вијетнамски, followed by the outer [[fanqie|...切...thiết...]] occurrence.
+        // Its three Ruby slices are dfda29a4/2b9034b4/31a58283 (diagnosis01.json).
+        // Actual first-two source scopes contain TWO 135% declarations. These chosen
+        // complete 1.35/1.0 scales test the native owner basis; they assert no emitted
+        // source scalar or whole-anchor census across the base and reading.
+        data class Model(val spans: List<Span>, val groups: List<Span>, val children: List<List<Span>>,
+            val baseLinks: List<Span>)
+        fun model(split: Boolean = false, asymmetric: Boolean = false): Model {
+            val words = listOf("nhân", "chất", "thiết")
+            val bases = listOf("人", "質", "切")
+            val groups = mutableListOf<Span>()
+            val children = mutableListOf<List<Span>>()
+            val baseLinks = mutableListOf<Span>()
+            val source = words.mapIndexed { index, word ->
+                val scale = if (index < 2) 1.35f else 1f
+                val parts = if (split && index == 2) listOf("thi", "ết") else listOf(word)
+                val content = parts.map { text -> Span(if (index < 2) "link" else "text", text,
+                    if (index < 2) word else "", fontScale = scale, language = "vi",
+                    targetFragment = "Вијетнамски".takeIf { index < 2 }, foreground = "#0000ff") }
+                val group = Span(if (index < 2) "text" else "link", "", if (index == 2) "fanqie" else "",
+                    fontScale = scale, language = "vi", direction = "ltr", foreground = "#0000ff",
+                    inlinePaddingGroup = InlinePaddingGroup(
+                        StyleLength(StyleLengthUnit.Em, if (asymmetric && index == 2) .125f else .25f),
+                        StyleLength(StyleLengthUnit.Em, if (asymmetric && index == 2) .375f else .25f), content))
+                groups += group; children += content
+                val base = Span("link", bases[index], if (index == 2) "fanqie" else bases[index],
+                    targetFragment = "Вијетнамски".takeIf { index < 2 }, foreground = "#000000")
+                baseLinks += base
+                ruby(listOf(base), listOf(group))
+            }
+            return Model(source, groups, children, baseLinks)
+        }
+        val original = model()
+        val outsideAnnotation = original.copy(spans = original.groups.indices.flatMap { index ->
+            listOf(original.baseLinks[index], original.groups[index])
+        })
+        data class Phase(val name: String, val model: Model, val fontScale: Float = 1f, val width: Int = 300)
+        val phases = listOf(Phase("original", original), Phase("two-children", model(split = true)),
+            Phase("font-zoom", original, 1.25f), Phase("asymmetric", model(asymmetric = true)),
+            Phase("whole-group-wrap", original, width = 160),
+            Phase("outside-annotation", outsideAnnotation),
+            Phase("recovery", original))
+        val current = mutableStateOf(phases.first())
+        val callbacks = mutableListOf<EntryLink>()
+        val onLink: (EntryLink) -> Unit = { callbacks += it }
+        val focusDestination = androidx.compose.ui.focus.FocusRequester()
+        var prepared: PreparedNativeFloatText? = null
+        var committed: Phase? = null
+        var failureReason: String? = null
+        val failureObserver: (String) -> Unit = { failureReason = it }
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            MaterialTheme {
+                val phase = current.value
+                val density = Density(1f, phase.fontScale)
+                CompositionLocalProvider(LocalDensity provides density, LocalLayoutDirection provides LayoutDirection.Ltr,
+                    LocalNativeFloatContextFailureObserver provides failureObserver) {
+                    val style = TextStyle(fontSize = 20.sp, lineHeight = 24.sp,
+                        fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Normal,
+                        fontStyle = FontStyle.Normal, letterSpacing = 0.sp, textDirection = TextDirection.Ltr)
+                    val annotated = styledTextAnnotation(phase.model.spans, null, style, onLink)
+                    val value = prepareNativeFloatText(phase.model.spans, annotated, egyptianTextRuns(phase.model.spans),
+                        style, MaterialTheme.colorScheme.primary, emptyList(), AppSettings(), "", onLink,
+                        nativeLineHeight = NativeLineHeightPolicy.Pixels(with(density) { 24.sp.toPx() }))
+                    SideEffect { prepared = value; committed = phase }
+                    Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding().padding(16.dp)
+                        .testTag("inline-padding-focus-destination").focusRequester(focusDestination).focusable()) {
+                        NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(value, 0f)),
+                            Modifier.width(phase.width.dp), MaterialTheme.colorScheme.primary) { _, _ ->
+                            error("The inline padding fixture has no delegated child")
+                        }
+                    }
+                }
+            }
+        } }
+        fun views(view: android.view.View): List<NativeFloatTextView> = buildList {
+            if (view is NativeFloatTextView) add(view)
+            if (view is android.view.ViewGroup) for (index in 0 until view.childCount) addAll(views(view.getChildAt(index)))
+        }
+        fun union(rectangles: List<android.graphics.RectF>) = android.graphics.RectF().also { result ->
+            assertTrue(rectangles.isNotEmpty()); rectangles.forEach(result::union)
+        }
+        fun sameRect(a: android.graphics.RectF, b: android.graphics.RectF) {
+            assertEquals(a.left, b.left, .01f); assertEquals(a.top, b.top, .01f)
+            assertEquals(a.right, b.right, .01f); assertEquals(a.bottom, b.bottom, .01f)
+        }
+        val expected = "人nhân質chất切thiết"
+        val ranges = listOf(0 to 1, 1 to 5, 5 to 6, 6 to 10, 10 to 11, 11 to 16)
+        val targets = listOf(EntryLink("人", "Вијетнамски"), EntryLink("nhân", "Вијетнамски"),
+            EntryLink("質", "Вијетнамски"), EntryLink("chất", "Вијетнамски"), EntryLink("fanqie"), EntryLink("fanqie"))
+        var originalGroupWidths: List<Float>? = null
+        var originalPaddingWidths: List<Float>? = null
+        var originalTextInsets: List<Float>? = null
+        var originalIds: List<Int>? = null
+        for (phase in phases) try {
+            compose.runOnIdle { failureReason = null; current.value = phase }
+            compose.waitForIdle()
+            if (phase.name == "outside-annotation") {
+                compose.runOnIdle {
+                    assertEquals(phase, committed)
+                    assertEquals("Inline padding group requires a complete ruby annotation", failureReason)
+                    assertEquals(expected, checkNotNull(prepared).text.toString())
+                    phase.model.groups.indices.forEach { index ->
+                        assertSame(original.groups[index], phase.model.spans[index * 2 + 1])
+                        assertSame(original.baseLinks[index], phase.model.spans[index * 2])
+                    }
+                }
+                val retained = compose.onNodeWithText(expected).assertIsDisplayed()
+                val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                retained.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                val fallbackText = layouts.single().layoutInput.text
+                assertEquals(expected, fallbackText.text)
+                assertEquals(ranges, fallbackText.getLinkAnnotations(0, expected.length).map { it.start to it.end })
+                val before = callbacks.size
+                ranges.forEachIndexed { index, range ->
+                    retained.performTouchInput { click(layouts.single().getBoundingBox(range.first).center) }
+                    compose.runOnIdle { assertEquals(targets[index], callbacks.last()) }
+                }
+                compose.runOnIdle { assertEquals(targets, callbacks.drop(before)) }
+                continue
+            }
+            var movedFocus = false
+            compose.runOnIdle {
+                val view = views(compose.activityRule.activity().window.decorView).single()
+                if (view.hasFocus()) {
+                    assertTrue(focusDestination.requestFocus(androidx.compose.ui.focus.FocusDirection.Enter))
+                    movedFocus = true
+                }
+            }
+            if (movedFocus) compose.onNodeWithTag("inline-padding-focus-destination").assertIsFocused()
+            compose.runOnIdle {
+                assertEquals(phase, committed)
+                assertNull(failureReason)
+                val value = checkNotNull(prepared)
+                assertNull(value.stateDescription)
+                val view = views(compose.activityRule.activity().window.decorView).single()
+                val actual = checkNotNull(view.currentMeasuredGeometry)
+                assertEquals(expected, view.logicalText.toString()); assertEquals(expected, actual.text.toString())
+                assertEquals(ranges, actual.nodes.map { it.start to it.end })
+                assertEquals(6, actual.nodes.size)
+                assertTrue(actual.nodes.all { it.kind == FloatInteractionKind.LINK })
+                if (originalIds == null) originalIds = actual.nodes.map { it.id }
+                else assertEquals(originalIds, actual.nodes.map { it.id })
+                val raw = checkNotNull(value.geometry)(phase.width, emptyList(), false)
+                assertEquals(expected, raw.text.toString())
+                val rawCharacters = raw.characterRects(0, expected.length)
+                val actualCharacters = actual.characterRects(0, expected.length)
+                assertEquals(expected.length, rawCharacters.size)
+                assertEquals(expected.length, actualCharacters.size)
+                val firstRaw = checkNotNull(rawCharacters.first())
+                val firstActual = checkNotNull(actualCharacters.first())
+                val dx = firstActual.left - firstRaw.left; val dy = firstActual.top - firstRaw.top
+                // The real root may translate the paragraph to contain its Ruby overflow.
+                // Authenticate that single translation for every original character first.
+                rawCharacters.zip(actualCharacters).forEach { (a, b) ->
+                    sameRect(android.graphics.RectF(checkNotNull(a)).apply { offset(dx, dy) }, checkNotNull(b))
+                }
+                val source = checkNotNull(value.native).source(phase.width)
+                val marker = source.getSpans(0, source.length, NativeRubyPreparedSource::class.java).single()
+                assertEquals(expected, marker.projection.text)
+                val groupWidths = mutableListOf<Float>()
+                val paddingWidths = mutableListOf<Float>()
+                val textInsets = mutableListOf<Float>()
+                val rightPaddingPoints = mutableListOf<Pair<Float, Float>>()
+                for (index in phase.model.groups.indices) {
+                    val group = phase.model.groups[index]
+                    val range = marker.projection.ranges.single { it.role == RubyTextRole.PaddingGroup && it.span === group }
+                    assertEquals(ranges[index * 2 + 1], range.start to range.end)
+                    val children = phase.model.children[index]
+                    children.forEach { child -> assertSame(child, marker.projection.ranges.single { it.span === child }.span) }
+                    if (index < 2) { assertFalse(group.hasInternalAction()); assertTrue(children.single().hasInternalAction()) }
+                    else { assertTrue(group.hasInternalAction()); assertTrue(children.none { it.hasInternalAction() }) }
+                    val pixels = with(Density(1f, phase.fontScale)) { (20f * (if (index < 2) 1.35f else 1f)).sp.toPx() }
+                    assertEquals(pixels, marker.groups.getValue(range.path).paint.textSize, .01f)
+                    val probe = TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        typeface = android.graphics.Typeface.MONOSPACE; textSize = pixels
+                        textLocale = java.util.Locale.forLanguageTag("vi")
+                    }
+                    val content = expected.substring(range.start, range.end)
+                    val edges = checkNotNull(group.inlinePaddingGroup)
+                    assertEquals(StyleLengthUnit.Em, edges.left.unit)
+                    assertEquals(StyleLengthUnit.Em, edges.right.unit)
+                    val left = edges.left.value * pixels
+                    val right = edges.right.value * pixels
+                    paddingWidths += left + right
+                    val rawGroup = union(checkNotNull(raw.inlinePaddingGroupRects(group, range.start, range.end)))
+                    assertEquals(probe.measureText(content) + left + right, rawGroup.width(), .02f)
+                    val bounds = android.graphics.RectF(rawGroup).apply { offset(dx, dy) }
+                    groupWidths += bounds.width()
+                    textInsets += checkNotNull(actualCharacters[range.start]).left - bounds.left
+                    val point = (bounds.right - right / 2f) to bounds.centerY()
+                    assertTrue(right > 2f)
+                    assertTrue(actual.rectsForRange(range.start, range.end).none { it.contains(point.first, point.second) })
+                    val node = actual.nodes[index * 2 + 1]
+                    if (index < 2) {
+                        // Selection Regions may round outward; only the child's action area
+                        // is restricted to the exact content interval inside the authored edges.
+                        val contentLeft = bounds.left + left
+                        val contentRight = bounds.right - right
+                        val expectedChild = actual.rectsForRange(range.start, range.end).mapNotNull { rectangle ->
+                            val clipped = android.graphics.RectF(rectangle).apply {
+                                this.left = kotlin.math.max(this.left, contentLeft)
+                                this.right = kotlin.math.min(this.right, contentRight)
+                            }
+                            clipped.takeIf { it.left < it.right && it.top < it.bottom }
+                        }
+                        assertEquals(expectedChild.size, node.bounds.size)
+                        expectedChild.zip(node.bounds).forEach { (expectedBound, actualBound) ->
+                            sameRect(expectedBound, actualBound)
+                        }
+                        assertNull(actual.interactionNodeAt(point.first, point.second))
+                    } else {
+                        sameRect(bounds, union(node.bounds))
+                        assertEquals(node.id, checkNotNull(actual.interactionNodeAt(point.first, point.second)).id)
+                    }
+                    rightPaddingPoints += point
+                }
+                if (phase.name == "original") {
+                    originalGroupWidths = groupWidths
+                    originalPaddingWidths = paddingWidths
+                    originalTextInsets = textInsets
+                }
+                if (phase.name in listOf("two-children", "asymmetric", "whole-group-wrap", "recovery"))
+                    checkNotNull(originalGroupWidths).zip(groupWidths).forEach { (a, b) -> assertEquals(a, b, .02f) }
+                if (phase.name == "font-zoom") checkNotNull(originalPaddingWidths).zip(paddingWidths)
+                    .forEach { (a, b) -> assertEquals(a * phase.fontScale, b, .04f) }
+                if (phase.name in listOf("two-children", "whole-group-wrap", "recovery"))
+                    checkNotNull(originalTextInsets).zip(textInsets).forEach { (a, b) -> assertEquals(a, b, .02f) }
+                if (phase.name == "asymmetric") {
+                    // The sum stays fixed, while the actual child moves by the changed left edge once.
+                    assertEquals(checkNotNull(originalTextInsets).last() + (.125f - .25f) * 20f,
+                        textInsets.last(), .02f)
+                }
+                if (phase.name == "whole-group-wrap")
+                    assertNotEquals(actual.visualLineRanges(0), actual.visualLineRanges(10))
+                val provider = view.accessibilityNodeProvider
+                val hostId = android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID
+                val host = checkNotNull(provider.createAccessibilityNodeInfo(hostId))
+                try { assertEquals(expected, host.text.toString()); assertEquals(6, host.childCount) }
+                finally { host.recycle() }
+                val beforeActions = callbacks.size
+                actual.nodes.forEachIndexed { index, node ->
+                    val info = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+                    try {
+                        assertEquals(expected.substring(node.start, node.end), info.text.toString())
+                        assertTrue(info.isClickable && info.isVisibleToUser)
+                        val bounds = android.graphics.Rect().also(union(node.bounds)::roundOut).apply {
+                            offset(view.paddingLeft, view.paddingTop)
+                        }
+                        assertEquals(bounds, android.graphics.Rect().also(info::getBoundsInParent))
+                    } finally { info.recycle() }
+                    assertTrue(provider.performAction(node.id, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                    assertEquals(targets[index], callbacks.last())
+                }
+                assertEquals(targets, callbacks.drop(beforeActions))
+                val arguments = android.os.Bundle().apply {
+                    putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                    putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, expected.length)
+                }
+                assertTrue(provider.performAction(hostId, android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION, arguments))
+                assertEquals(expected, view.selectedTextForCopy())
+                assertTrue(provider.performAction(hostId, android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION, null))
+                assertNull(view.selectedTextForCopy())
+                // Use the actual View input path for the inherited action's padding.
+                // Cancel only this fixture's previous pointer sequence; no touch-mode change.
+                val point = rightPaddingPoints.last()
+                val now = android.os.SystemClock.uptimeMillis()
+                val beforeTap = callbacks.size
+                for (action in listOf(android.view.MotionEvent.ACTION_CANCEL, android.view.MotionEvent.ACTION_DOWN,
+                    android.view.MotionEvent.ACTION_UP)) {
+                    val event = android.view.MotionEvent.obtain(now, now + if (action == android.view.MotionEvent.ACTION_UP) 1 else 0,
+                        action, point.first + view.paddingLeft, point.second + view.paddingTop, 0)
+                    try {
+                        val consumed = view.onTouchEvent(event)
+                        if (action != android.view.MotionEvent.ACTION_CANCEL) assertTrue(consumed)
+                    } finally { event.recycle() }
+                }
+                assertEquals(beforeTap + 1, callbacks.size); assertEquals(EntryLink("fanqie"), callbacks.last())
+            }
+        } catch (failure: Throwable) {
+            val detail = AssertionError("Inline padding Compose phase=${phase.name} fontScale=${phase.fontScale}")
+            if (failure !== detail) failure.addSuppressed(detail)
+            throw failure
+        }
+    }
+
 }

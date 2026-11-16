@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRT decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRU decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table", "container")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,12 +13,12 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..84) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..84) 57 else magicVersion
-        r.fontScales = magicVersion in 65..84
-        r.fontScaleBases = magicVersion in 66..84
-        r.tableStyles = magicVersion in 67..84
-        r.inlineImages = magicVersion in 67..84
+        require(magicVersion in 50..57 || magicVersion in 65..85) { "Unsupported presentation format" }
+        val version = if (magicVersion in 65..85) 57 else magicVersion
+        r.fontScales = magicVersion in 65..85
+        r.fontScaleBases = magicVersion in 66..85
+        r.tableStyles = magicVersion in 67..85
+        r.inlineImages = magicVersion in 67..85
         r.imageBorders = magicVersion >= 68
         r.blockLayouts = magicVersion >= 69
         r.targetFragments = magicVersion >= 70
@@ -31,7 +31,8 @@ object BlobDecoder {
         r.containerFonts = magicVersion >= 77
         r.ruleStyles = magicVersion >= 78
         r.rubySpans = magicVersion >= 83
-        r.tableDepthLimit = if (magicVersion == 84) MaxTableDepth else LegacyMaxTableDepth
+        r.inlinePaddingGroups = magicVersion >= 85
+        r.tableDepthLimit = if (magicVersion >= 84) MaxTableDepth else LegacyMaxTableDepth
         r.ruleClears = magicVersion >= 82
         r.imageLinkPaints = magicVersion >= 82
         r.inlineStyles = magicVersion >= 79
@@ -131,10 +132,11 @@ object BlobDecoder {
         require(r.rubySpans || r.tableIntrinsicViewports == (r.hasTableIntrinsicViewport || r.hasRuleClearFeature || r.hasImageLinkPaintFeature)) {
             "R version does not match intrinsic table viewport, rule clear, or image link paint payload"
         }
-        require(magicVersion == 84 || r.rubySpans == r.hasRuby) { "S version does not match ruby payload" }
-        require((magicVersion == 84) == (r.maximumTableDepth > LegacyMaxTableDepth)) {
+        require(magicVersion >= 84 || r.rubySpans == r.hasRuby) { "S version does not match ruby payload" }
+        require(magicVersion == 85 || (magicVersion == 84) == (r.maximumTableDepth > LegacyMaxTableDepth)) {
             "T version does not match deep table payload"
         }
+        require(r.inlinePaddingGroups == r.hasInlinePaddingGroup) { "U version does not match inline padding payload" }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, styledSections, references, preamble, media,
             etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
@@ -153,6 +155,8 @@ object BlobDecoder {
         var remainingItems = 1_000_000
         var rubySpans = false
         var hasRuby = false
+        var inlinePaddingGroups = false
+        var hasInlinePaddingGroup = false
         var explanations = false
         var colors = false
         var anchors = false
@@ -233,7 +237,7 @@ object BlobDecoder {
             return List(size) { index(Int.MAX_VALUE) }
         }
         fun blockPaths(): List<List<Int>> = List(count(4)) { blockPath() }
-        fun spans(): List<Span> = List(count(if (rubySpans) 38 else if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) { span() }
+        fun spans(): List<Span> = List(count(if (inlinePaddingGroups) 39 else if (rubySpans) 38 else if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) { span() }
         private fun span(): Span {
             val kind = enum(inline); val role = enum(roles); val f = byte()
             val text = string(); val target = string(); val trail = string()
@@ -293,13 +297,18 @@ object BlobDecoder {
             val targetFragment = if (targetFragments && presence()) string() else null
             val tooltip = if (tooltips && presence()) string() else null
             val ruby = if (rubySpans && presence()) ruby() else null
+            val inlinePaddingGroup = if (inlinePaddingGroups && presence()) inlinePaddingGroup() else null
             if (image != null && linkPaint != null) {
                 require(imageLinkPaints) { "Image link paint requires R" }
                 hasImageLinkPaintFeature = true
             }
             return Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint, inlineStyle=inlineStyle, fontFamily=fontFamily, ruby=ruby)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint, inlineStyle=inlineStyle, fontFamily=fontFamily, ruby=ruby, inlinePaddingGroup=inlinePaddingGroup)
+        }
+        private fun inlinePaddingGroup(): InlinePaddingGroup = content {
+            require(buffer.remaining() >= 14) { "Truncated inline padding group" }
+            InlinePaddingGroup(styleLength(), styleLength(), spans()).also { hasInlinePaddingGroup = true }
         }
         private fun ruby(): Ruby = content {
             val segments = List(count(38)) {

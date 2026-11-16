@@ -1,6 +1,6 @@
 package app.smallthingz.dict
 
-internal fun List<Span>.nativeLogicalLength(): Int = if (hasRuby()) rubyGraphicalText(this).length else sumOf { span ->
+internal fun List<Span>.nativeLogicalLength(): Int = if (hasNativeInlineGroups()) rubyGraphicalText(this).length else sumOf { span ->
     (if (span.image != null || span.kind == "line_break") 1 else span.text.length) + span.trail.length +
         if (span.usesInlineDirectionIsolate()) 2 else 0
 }

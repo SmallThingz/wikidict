@@ -2,7 +2,7 @@ package app.smallthingz.dict
 
 /** A graphical source range, before the native shaper adds any layout-only bidi controls. */
 internal enum class RubyTextRole {
-    Text, Owner, Segment, SegmentGap, Base, BaseGap, BaseText, Annotation, AnnotationGap, AnnotationText,
+    Text, Owner, Segment, SegmentGap, Base, BaseGap, BaseText, Annotation, AnnotationGap, AnnotationText, PaddingGroup,
 }
 
 internal data class RubyTextRange(
@@ -23,7 +23,9 @@ internal fun rubyBaseText(spans: List<Span>): String = buildString {
     fun appendBase(source: List<Span>) {
         source.forEach { span ->
             val ruby = span.ruby
-            if (ruby == null) append(span.text).append(span.trail) else ruby.segments.forEach { segment ->
+            val padding = span.inlinePaddingGroup
+            if (padding != null) appendBase(padding.spans)
+            else if (ruby == null) append(span.text).append(span.trail) else ruby.segments.forEach { segment ->
                 appendBase(segment.gapBefore)
                 segment.bases.forEach { base -> appendBase(base.gapBefore); appendBase(base.spans) }
             }
@@ -55,11 +57,19 @@ internal fun rubyGraphicalProjection(spans: List<Span>, sourcePath: String = "ru
 
 internal fun rubyGraphicalText(spans: List<Span>): String = rubyGraphicalProjection(spans).text
 
-/** Metadata consumers use visible original leaves; they must not replace the typed layout body. */
-internal fun rubyGraphicalSpans(spans: List<Span>): List<Span> =
-    if (spans.none { it.ruby != null }) spans else rubyGraphicalProjection(spans).ranges.mapNotNull {
-        if (it.role == RubyTextRole.Owner) null else it.span
+/** Flattened semantic leaves inherit only their nearest stored group action. The
+ * original occurrences remain in the projection and still own native layout/actions. */
+internal fun rubyGraphicalSpans(spans: List<Span>): List<Span> {
+    if (!spans.hasNativeInlineGroups()) return spans
+    val ranges = rubyGraphicalProjection(spans).ranges
+    return ranges.mapNotNull { range ->
+        if (range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup) null
+        else range.span?.rubyFallbackAction(ranges.lastOrNull { ancestor ->
+            ancestor.role == RubyTextRole.PaddingGroup && range.path.startsWith(ancestor.path + "/") &&
+                ancestor.span?.kind in setOf("link", "external_link")
+        }?.span)
     }
+}
 
 private class RubyGraphicalTextBuilder {
     private val text = StringBuilder()
@@ -82,7 +92,10 @@ private class RubyGraphicalTextBuilder {
             val childPath = "$path/$index"
             val start = text.length
             val ruby = span.ruby
-            if (ruby == null) {
+            val padding = span.inlinePaddingGroup
+            if (padding != null) group(RubyTextRange(RubyTextRole.PaddingGroup, childPath, start, start, span = span)) {
+                appendSpans(padding.spans, "$childPath/inlinePaddingGroup/spans", role)
+            } else if (ruby == null) {
                 when {
                     span.image != null -> text.append('\ufffc')
                     span.kind == "line_break" -> text.append('\n')
@@ -139,32 +152,57 @@ private fun Span.rubyFallbackDecoration(underline: Boolean, strike: Boolean): Sp
         copy(underline = this.underline || underline, strike = this.strike || strike, linkPaint = painted)
 }
 
+/** This transient semantic projection never changes the stored action census. */
+private fun Span.rubyFallbackAction(owner: Span?): Span {
+    if (owner == null) return this
+    require(kind == "text" && target.isEmpty())
+    val policy = owner.linkPaint
+    val ownerForeground = owner.foreground ?: policy?.normal?.foreground
+    require(policy == null || foreground == null || foreground == ownerForeground)
+    if (text.isEmpty() && trail.isEmpty()) return this
+    val underline = this.underline || owner.underline
+    val projected = copy(kind = owner.kind, target = owner.target, targetFragment = owner.targetFragment,
+        text = if (text.isEmpty()) trail else text, trail = if (text.isEmpty()) "" else trail,
+        tooltip = tooltip ?: owner.tooltip, explanation = explanation.ifEmpty { owner.explanation },
+        foreground = if (policy == null) foreground ?: owner.foreground else ownerForeground, linkPaint = policy,
+        underline = policy?.normal?.underline ?: underline)
+    return projected.rubyFallbackDecoration(underline, false)
+}
+
 /** Terminal projection retains all readings, including graphically auto-hidden ones.
  * Inherited base decoration is transient; reading/RP boundaries reset it. */
 internal fun rubyFallbackSpans(spans: List<Span>): List<Span> = buildList {
-    fun appendFallback(source: List<Span>, inheritedUnderline: Boolean = false, inheritedStrike: Boolean = false) {
+    fun appendFallback(source: List<Span>, inheritedUnderline: Boolean = false, inheritedStrike: Boolean = false,
+        inheritedAction: Span? = null) {
         source.forEach { span ->
             val ruby = span.ruby
-            if (ruby == null) add(span.rubyFallbackDecoration(inheritedUnderline, inheritedStrike)) else ruby.segments.forEach { segment ->
+            val padding = span.inlinePaddingGroup
+            if (padding != null) appendFallback(padding.spans, inheritedUnderline || span.underline, inheritedStrike || span.strike,
+                span.takeIf { it.kind == "link" || it.kind == "external_link" } ?: inheritedAction)
+            else if (ruby == null) add(span.rubyFallbackAction(inheritedAction)
+                .rubyFallbackDecoration(inheritedUnderline, inheritedStrike)) else ruby.segments.forEach { segment ->
                 val underline = inheritedUnderline || span.underline
                 val strike = inheritedStrike || span.strike
-                appendFallback(segment.gapBefore, underline, strike)
+                appendFallback(segment.gapBefore, underline, strike, inheritedAction)
                 segment.bases.forEach { base ->
-                    appendFallback(base.gapBefore, underline, strike)
-                    appendFallback(base.spans, underline, strike)
+                    appendFallback(base.gapBefore, underline, strike, inheritedAction)
+                    appendFallback(base.spans, underline, strike, inheritedAction)
                 }
                 segment.annotations.forEach { annotation ->
-                    appendFallback(annotation.gapBefore)
+                    appendFallback(annotation.gapBefore, inheritedAction = inheritedAction)
                     if (annotation.explicitFallback) {
-                        appendFallback(annotation.fallbackBefore)
-                        appendFallback(annotation.spans)
-                        appendFallback(annotation.fallbackAfter)
+                        appendFallback(annotation.fallbackBefore, inheritedAction = inheritedAction)
+                        appendFallback(annotation.spans, inheritedAction = inheritedAction)
+                        appendFallback(annotation.fallbackAfter, inheritedAction = inheritedAction)
                     } else {
-                        val reading = rubyFallbackSpans(annotation.spans)
-                        val nonempty = reading.any { it.text.isNotEmpty() || it.trail.isNotEmpty() }
-                        if (nonempty) add(Span("text", "\uff08"))
-                        addAll(reading)
-                        if (nonempty) add(Span("text", "\uff09"))
+                        val firstReading = size
+                        appendFallback(annotation.spans, inheritedAction = inheritedAction)
+                        val nonempty = subList(firstReading, size).any { it.text.isNotEmpty() || it.trail.isNotEmpty() }
+                        if (nonempty) {
+                            // Generated punctuation has no stored action owner.
+                            add(firstReading, Span("text", "\uff08"))
+                            add(Span("text", "\uff09"))
+                        }
                     }
                 }
             }

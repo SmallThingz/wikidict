@@ -35,6 +35,8 @@ internal class NativeRubyGroupFormat(
     val cursor: InlineCursor? = null,
     val sourceDirection: String = "",
     val localBaselineShift: Float? = null,
+    val padding: NativeInlinePaddingEdges? = null,
+    val actionPaint: NativeMissingLinkPaint? = null,
 ) {
     val paint = TextPaint(paint)
     init {
@@ -42,6 +44,16 @@ internal class NativeRubyGroupFormat(
         require(this.paint.baselineShift == 0) { "Ruby compound displacement must be applied once" }
         require(sourceDirection in setOf("", "ltr", "rtl", "auto"))
         require(localBaselineShift == null || localBaselineShift.isFinite() && kotlin.math.abs(localBaselineShift) <= TablePixelLimit)
+    }
+}
+
+/** Physical edges keep the declaring font's fractional em resolution. A zero-size
+ * font may resolve a positive authored em edge to zero without losing the owner. */
+internal data class NativeInlinePaddingEdges(val left: Float, val right: Float) {
+    init {
+        require(left.isFinite() && right.isFinite() && left >= 0f && right >= 0f)
+        if (left.toDouble() + right > TablePixelLimit)
+            throw UnsupportedFloatLayout("Inline padding exceeds native coordinates")
     }
 }
 
@@ -108,7 +120,7 @@ internal class NativeRubyPreparedSource(
         require(projection.ranges.all { it.start >= 0 && it.end >= it.start && it.end <= source.length })
         require(projection.ranges.map { it.path }.distinct().size == projection.ranges.size)
         require(projection.ranges.filter { it.role in setOf(RubyTextRole.Owner, RubyTextRole.Base,
-            RubyTextRole.Annotation) }.all { it.path in groups }) { "Ruby declaring group context is missing" }
+            RubyTextRole.Annotation, RubyTextRole.PaddingGroup) }.all { it.path in groups }) { "Ruby declaring group context is missing" }
         require(this.source.getSpans(0, this.source.length, NativeRubyPreparedSource::class.java).isEmpty()) {
             "A Ruby preparation cannot contain itself"
         }
@@ -807,6 +819,19 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         }
     }
 
+    fun paddingRects(owner: Span, start: Int, end: Int): List<RectF>? {
+        require(start in 0..length && end in start..length)
+        val found = children.mapNotNull { child ->
+            if (start < child.start || end > child.end) return@mapNotNull null
+            child.geometry.inlinePaddingGroupRects(owner, start - child.start, end - child.start)?.map {
+                RectF(it).apply { offset(child.x, child.y) }
+            }
+        }
+        if (found.isEmpty()) return null
+        if (found.size != 1) throw UnsupportedFloatLayout("Inline padding group lost its unique native occurrence")
+        return found.single()
+    }
+
     fun rectsOnLine(line: Int, start: Int, end: Int): List<RectF> = buildList {
         require(start in 0..length && end in start..length)
         texts.forEach { piece ->
@@ -1102,6 +1127,8 @@ internal class NativeRubyColumnView(source: Spanned, nativeStart: Int,
         nativeBoundsOf(rectsForRange(0, text.length)))
     override fun paint(canvas: Canvas) = column.paintContents(canvas)
     override fun rectsForRange(start: Int, end: Int) = projection.rectsOnLine(line, start, end).map(::local)
+    override fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? =
+        projection.paddingRects(owner, start, end)?.map(::local)
     override fun characterRects(start: Int, length: Int): List<RectF?> {
         require(start in 0..text.length && length >= 0 && length <= text.length - start)
         return (start until start + length).map { offset ->
@@ -1155,15 +1182,20 @@ private class NativeRubyEmptyGeometry(override val text: CharSequence = "") : Fl
     }
 }
 
+internal data class NativeRubyRowPadding(val owner: Span, val format: NativeRubyGroupFormat,
+    val content: NativeUsedLineMetrics, val localShift: Float, val innerAdvance: Float)
+
 internal data class NativeRubyRow(val start: Int, val end: Int, val geometry: FloatTextGeometry,
     val advance: Float, val baseline: Float, val used: NativeUsedLineMetrics,
     val content: NativeUsedLineMetrics, val format: NativeRubyGroupFormat,
     val script: NativeRubyScriptState, val localShift: Float,
-    val line: Int = 0, val ranges: List<Pair<Int, Int>> = listOf(start to end)) {
+    val line: Int = 0, val ranges: List<Pair<Int, Int>> = listOf(start to end),
+    val padding: NativeRubyRowPadding? = null) {
     fun withoutSpaces(offsets: Set<Int>): NativeRubyRow {
         val selected = offsets.filter { at -> ranges.any { at >= it.first && at < it.second } }.map { it - start }.toSet()
         val native = geometry as? NativeFloatGeometry ?: return this
         if (selected.isEmpty()) return this
+        if (padding != null) throw UnsupportedFloatLayout("Inline padding group requires native whitespace fragmentation")
         val shaped = native.nativeRubyTrimSourceSpaces(selected)
         if (shaped === native) return this
         val primary = NativePrimaryFontMetrics.from(format.paint)
@@ -1173,7 +1205,15 @@ internal data class NativeRubyRow(val start: Int, val end: Int, val geometry: Fl
     }
     fun child(allocation: Float, x: Float, baseline: Float,
         parentIncrement: NativeRubySpacingIncrement? = null): NativeRubyChild {
-        val spaced = if (geometry is NativeFloatGeometry)
+        val spaced = if (padding != null) {
+            if (parentIncrement != null && !parentIncrement.isZero)
+                throw UnsupportedFloatLayout("Inline padding group requires native spacing distribution")
+            val edges = checkNotNull(padding.format.padding)
+            val inner = nativeRubyDistribute(geometry as NativeFloatGeometry,
+                padding.innerAdvance, padding.innerAdvance, line)
+            NativeInlinePaddingGeometry(inner, padding.owner, padding.innerAdvance,
+                edges.left, edges.right, allocation, padding.format, padding.content, padding.localShift)
+        } else if (geometry is NativeFloatGeometry)
             nativeRubyDistribute(geometry, advance, allocation, line, parentIncrement) else geometry
         val center = if (geometry !is NativeFloatGeometry) (allocation - advance) / 2f +
             (parentIncrement?.left ?: 0f) else 0f
@@ -1184,8 +1224,13 @@ internal data class NativeRubyRow(val start: Int, val end: Int, val geometry: Fl
     val nativeLength: Int get() = (geometry as? NativeFloatGeometry)?.nativeRubyShapingSource?.length ?: 0
     fun baseText(): String = (geometry as? NativeFloatGeometry)?.nativeRubyLineBaseText(line).orEmpty()
 
-    fun advance(from: Int, to: Int): Float = if (from == to) 0f else
-        (geometry as NativeFloatGeometry).nativeRubyMeasuredAdvance(from, to)
+    fun advance(from: Int, to: Int): Float {
+        if (from == to) return 0f
+        val edges = padding?.format?.padding
+        return (geometry as NativeFloatGeometry).nativeRubyMeasuredAdvance(from, to) +
+            (if (from == 0) edges?.left ?: 0f else 0f) +
+            (if (to == nativeLength) edges?.right ?: 0f else 0f)
+    }
 
     fun opportunities(): List<NativeRubyReadingCut> {
         val native = (geometry as? NativeFloatGeometry)?.nativeRubyShapingSource
@@ -1278,7 +1323,7 @@ internal class NativeRubyRowPlan(val row: NativeRubyRow) {
         { if (it.nested == null) -1 else it.nested.baseIndex }, { it.nested?.offset ?: -1 }))
     val length: Int get() = cuts.lastIndex
     val opportunities: List<NativeRubyReadingCut> = cuts.mapIndexed { index, cut ->
-        val prefix = if (cut.native == 0) 0f else checkNotNull(geometry).nativeRubyMeasuredAdvance(0, cut.native)
+        val prefix = row.advance(0, cut.native)
         val part = cut.nested?.let { nested ->
             val column = checkNotNull(columns[cut.native]).column
             val owner = checkNotNull(column.association)
@@ -1307,8 +1352,7 @@ internal class NativeRubyRowPlan(val row: NativeRubyRow) {
         val included = columns.values.filter { it.nativeStart >= begin.native && it.nativeEnd <= nativeEnd }
             .sortedBy { it.nativeStart }
         val selected = linkedMapOf<Int, NativeRubyColumnSelection>()
-        val originalAdvance = if (begin.native == nativeEnd) 0f else
-            checkNotNull(geometry).nativeRubyMeasuredAdvance(begin.native, nativeEnd)
+        val originalAdvance = row.advance(begin.native, nativeEnd)
         fun choose(index: Int): NativeRubyBreakCandidate<T>? {
             if (index == included.size) {
                 val replaced = selected.keys.sumOf { at ->
@@ -1473,6 +1517,12 @@ private class NativeRubyMaterializer(selections: List<NativeRubyColumnSelection>
         val parts = checkNotNull(byPlan[plan]).sortedBy { it.from }
         require(parts.first().from == 0 && parts.last().to == plan.length &&
             parts.zipWithNext().all { (a, b) -> a.to == b.from })
+        if (plan.row.padding != null) {
+            if (parts.size != 1 || parts.single().from != 0 || parts.single().to != plan.length)
+                throw UnsupportedFloatLayout("Inline padding group requires native fragmentation")
+            rows[parts.single()] = plan.row
+            return checkNotNull(rows[slice])
+        }
         if (plan.length == 0) {
             require(parts.size == 1)
             rows[parts.single()] = plan.row
@@ -1587,8 +1637,11 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         val owners = ranges.filter { it.role == RubyTextRole.Owner }.filter { candidate ->
             ranges.none { it.role == RubyTextRole.Owner && candidate.path.startsWith(it.path + "/") }
         }
+        if (ranges.any { it.role == RubyTextRole.PaddingGroup &&
+                owners.none { owner -> it.path.startsWith(owner.path + "/") } })
+            throw UnsupportedFloatLayout("Inline padding group requires a complete ruby annotation")
         val leaves = ranges.filter { it.span != null && it.role != RubyTextRole.Owner &&
-            owners.none { owner -> it.path.startsWith(owner.path + "/") } }
+            it.role != RubyTextRole.PaddingGroup && owners.none { owner -> it.path.startsWith(owner.path + "/") } }
         val events = (owners + leaves).sortedWith(compareBy({ it.start }, { if (it.role == RubyTextRole.Owner) 0 else 1 }))
         val rootText = buildString {
             events.forEach { range ->
@@ -1632,7 +1685,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
     }
 
     private fun row(prepared: NativeRubyPreparedSource, range: RubyTextRange,
-        sourceStart: Int, enclosingRtl: Boolean, annotation: Boolean, parentScript: NativeRubyScriptState): NativeRubyRow {
+        sourceStart: Int, enclosingRtl: Boolean, annotation: Boolean, parentScript: NativeRubyScriptState,
+        inheritedWrap: TextWrap? = null): NativeRubyRow {
         val format = checkNotNull(prepared.groups[range.path])
         val placement = nativeRubyBaselinePlacement(nativeRubyScriptMode(range), format.baselineShift,
             format.localBaselineShift, parentScript)
@@ -1640,6 +1694,41 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         val primary = NativePrimaryFontMetrics.from(format.paint)
         val natural = NativeUsedLineMetrics(primary.ascent, primary.descent)
         val declaring = if (annotation) natural else primary.authored(format.lineHeight) ?: natural
+        val nestedOwners = prepared.projection.ranges.filter { it.role == RubyTextRole.Owner &&
+            it.path.startsWith(range.path + "/") }
+        val paddingGroups = prepared.projection.ranges.filter { candidate -> candidate.role == RubyTextRole.PaddingGroup &&
+            candidate.path.startsWith(range.path + "/") &&
+            nestedOwners.none { candidate.path.startsWith(it.path + "/") } }
+        if (paddingGroups.isNotEmpty()) {
+            val group = paddingGroups.singleOrNull()
+                ?: throw UnsupportedFloatLayout("Inline padding group requires a complete ruby annotation")
+            if (!annotation || group.start != range.start || group.end != range.end ||
+                range.annotation?.spans?.singleOrNull() !== group.span)
+                throw UnsupportedFloatLayout("Inline padding group requires a complete ruby annotation")
+            val owner = checkNotNull(group.span)
+            val groupFormat = checkNotNull(prepared.groups[group.path])
+            if (rtl || resolveDirection(groupFormat.sourceDirection, directText(prepared, group), rtl))
+                throw UnsupportedFloatLayout("Inline padding group requires a left-to-right annotation")
+            val text = prepared.projection.text.substring(group.start, group.end)
+            if (text.isEmpty() || text.first().isWhitespace() || text.last().isWhitespace() ||
+                prepared.projection.ranges.any { it.path.startsWith(group.path + "/") &&
+                    it.role in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup) })
+                throw UnsupportedFloatLayout("Inline padding group requires a nonempty plain annotation")
+            val child = row(prepared, group, sourceStart, rtl, false, placement.state, format.wrap)
+            val nativeChild = child.geometry as? NativeFloatGeometry
+                ?: throw UnsupportedFloatLayout("Inline padding group lacks native text geometry")
+            if (!nativeRubySpacingProfile(nativeChild, child.line).zeroOpportunities)
+                throw UnsupportedFloatLayout("Inline padding group requires native spacing distribution")
+            val edges = checkNotNull(groupFormat.padding)
+            val paddedAdvance = child.advance.toDouble() + edges.left + edges.right
+            if (!paddedAdvance.isFinite() || paddedAdvance > TablePixelLimit)
+                throw UnsupportedFloatLayout("Inline padding exceeds native coordinates")
+            val used = nativeRubyIncludeShifted(natural, child.used, child.localShift)
+            val content = nativeRubyIncludeShifted(natural, child.content, child.localShift)
+            return NativeRubyRow(sourceStart + range.start, sourceStart + range.end, nativeChild,
+                paddedAdvance.toFloat(), child.baseline, used, content, format, placement.state, placement.local,
+                padding = NativeRubyRowPadding(owner, groupFormat, child.content, child.localShift, child.advance))
+        }
         if (range.start == range.end) return NativeRubyRow(sourceStart + range.start, sourceStart + range.end,
             NativeRubyEmptyGeometry(), 0f, 0f, declaring, natural, format, placement.state, placement.local)
         val absolute = SpannableString(prepared.source.subSequence(range.start, range.end))
@@ -1661,9 +1750,10 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             wraps.forEach(slice::removeSpan)
             slice.setSpan(NativeAuthoredTextWrap(TextWrap.NoWrap, inheritedOwner = true, sourceLineStarts = listOf(0)),
                 0, slice.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        } else if (format.wrap != null) {
+        } else if (format.wrap != null || inheritedWrap != null) {
             wraps.filter { it.inheritedOwner }.forEach(slice::removeSpan)
-            slice.setSpan(NativeAuthoredTextWrap(format.wrap, inheritedOwner = true), 0, slice.length,
+            slice.setSpan(NativeAuthoredTextWrap(checkNotNull(format.wrap ?: inheritedWrap), inheritedOwner = true,
+                sourceLineStarts = if ((format.wrap ?: inheritedWrap) == TextWrap.NoWrap) listOf(0) else null), 0, slice.length,
                 Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         // Annotation line-height is not a strut. This derived height represents

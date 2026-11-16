@@ -70,4 +70,67 @@ class RubyReadingLayoutTest {
         assertEquals(listOf("base-action", "reading-action"), rubyGraphicalSpans(source).map { it.target })
         assertNull(sectionHeadingCompanion(section.copy(title = "baseread")))
     }
+
+    @Test fun paddingOnlyOwnersKeepTheirSourceBoxWithoutAddingLogicalCharacters() {
+        fun group(child: Span) = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(
+            StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Em, .25f), listOf(child)))
+        for (child in listOf(Span("text", ""), Span("text", "  "))) {
+            val source = listOf(group(child))
+            val block = Block("paragraph", 0, source)
+            assertFalse(source.hasRuby())
+            assertTrue(source.hasNativeInlineGroups())
+            assertTrue(source.hasCompiledInlineContent())
+            assertTrue(paragraphHasContent(block))
+            assertSame(source, compactSpans(source))
+            assertSame(source, ordinaryInlineDisplaySpans(block))
+            assertSame(source, paragraphDisplaySpans(block))
+            assertEquals(child.text, rubyGraphicalText(source))
+            assertEquals(child.text.length, source.nativeLogicalLength())
+            assertFalse(source.single().isEmptyInlineMetricOwner())
+            assertFalse(source.single().isUnsupportedAuthoredWhitespaceOwner())
+            val probe = inlineMetricOwnerSpan(source.single())
+            assertNull(probe.inlinePaddingGroup)
+            assertNull(probe.ruby)
+            assertEquals(" ", probe.text)
+            val dense = block.copy(spans = source + List(90) { Span("line_break", "") })
+            val rows = readingRows(listOf(Section(2, "section", listOf(dense)))).filter { it.block != null }
+            assertSame(dense, rows.single().block)
+        }
+        assertFalse(paragraphHasContent(Block("paragraph", 0, listOf(Span("text", "  ")))))
+    }
+
+    @Test fun paddingProjectionKeepsNestedRubyImageAltAndEgyptianUtf16Offsets() {
+        val sign = "\ud80c\udc00"
+        val grouped = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(
+            StyleLength(StyleLengthUnit.Em, .25f), StyleLength(StyleLengthUnit.Px, 3f), listOf(
+                Span("text", "x"), ruby(listOf(Span("link", "B", "base")), listOf(Span("text", "r"))),
+                Span("text", sign, classes = "Egyp"))))
+        val image = Span("text", "", image = InlineImage("File:example.png", alt = "source alt"))
+        val source = listOf(Span("text", "q"), grouped, image)
+        val logical = "qxBr$sign\ufffc"
+        assertEquals(logical, rubyGraphicalText(source))
+        assertEquals(7, source.nativeLogicalLength())
+        val parts = anonymousInlineSemantic(source, logical)
+        assertEquals("qxBr${sign}source alt", parts.joinToString("") { it.text })
+        assertEquals(listOf(0 to 1, 1 to 2, 2 to 3, 3 to 4, 4 to 6, 6 to 7),
+            parts.map { it.start to it.end })
+        assertTrue(parts.last().replacement)
+        val run = egyptianTextRuns(source).single()
+        assertEquals(4, run.start)
+        assertEquals(6, run.end)
+        assertEquals(sign, run.text)
+    }
+
+    @Test fun paddingHeadingCompanionKeepsOriginalOwnerAndTerminalLabel() {
+        val child = Span("link", "reading", "original-target")
+        val group = Span("text", "", fontScale = 1.35f, inlinePaddingGroup = InlinePaddingGroup(
+            StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Em, .25f), listOf(child)))
+        val block = Block("heading", 2, listOf(group), level = 2)
+        val section = Section(2, "reading", listOf(block))
+        assertSame(block, sectionHeadingCompanion(section))
+        assertEquals("reading", rubyGraphicalText(block.spans))
+        assertSame(child, rubyGraphicalSpans(block.spans).single())
+        assertNull(sectionHeadingCompanion(section.copy(title = " reading")))
+    }
+
 }

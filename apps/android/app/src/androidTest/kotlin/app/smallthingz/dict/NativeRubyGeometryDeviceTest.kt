@@ -1776,4 +1776,287 @@ class NativeRubyGeometryDeviceTest {
         assertEquals("", prepared.source.toString())
     }
 
+    @Test fun inlinePaddingKeepsFractionalOwnerEdgesChildGeometryAndFragmentRefusal() {
+        val normal = LinkState("#0000ff", false)
+        val hover = LinkState("#ff0000", true)
+        val linkPolicy = LinkPaint(normal, hover, normal, hover, normal, hover, normal, hover, false)
+        val calls = mutableListOf<Span>()
+        var witnessedRoundedPaddingHit = false
+        data class PaddingCase(
+            val spans: List<Span>, val base: Span, val group: Span, val children: List<Span>,
+            val projection: RubyTextProjection, val prepared: NativeRubyPreparedSource, val source: Spanned,
+            val body: TextPaint, val ownerPaint: TextPaint, val groupRange: RubyTextRange,
+            val left: Float, val right: Float, val action: Span, val callback: () -> Unit,
+            val state: NativeMissingLinkPaint?, val wrap: TextWrap,
+        )
+        fun resolved(body: Float, scale: Float, color: Int) = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.MONOSPACE
+            textSize = body * scale
+            textLocale = Locale.forLanguageTag("vi")
+            this.color = color
+        }
+        fun make(body: Float, density: Float, groupAction: Boolean, word: String = "nhân",
+            baseText: String = "MMMMMMMM", wrap: TextWrap = TextWrap.Normal): PaddingCase {
+            fun style() = InlineTextStyle(fontNormalized = true, wrap = wrap)
+            fun owner(scale: Float) = RubyOwner(InlineFontSnapshot(fontScale = scale,
+                fontScaleBasis = FontScaleBasis.NormalBody, fontNormalized = true, language = "vi"),
+                direction = "ltr", inlineStyle = style())
+            val base = Span("text", baseText, fontScale = 1f, fontScaleBasis = FontScaleBasis.NormalBody,
+                language = "vi", foreground = "#000000", inlineStyle = style())
+            val pieces = if (groupAction) listOf(word.take(word.length / 2), word.drop(word.length / 2)) else listOf(word)
+            val children = pieces.map { text -> Span(if (groupAction) "text" else "link", text,
+                if (groupAction) "" else "padding-child", fontScale = 1.35f,
+                fontScaleBasis = FontScaleBasis.NormalBody, language = "vi", foreground = "#0000ff", inlineStyle = style()) }
+            val padding = InlinePaddingGroup(StyleLength(StyleLengthUnit.Em, .25f),
+                StyleLength(StyleLengthUnit.Px, .125f), children)
+            val group = Span(if (groupAction) "link" else "text", "", if (groupAction) "padding-owner" else "",
+                fontScale = 1.35f, fontScaleBasis = FontScaleBasis.NormalBody, language = "vi",
+                direction = "ltr", foreground = "#0000ff", background = if (groupAction) null else "#00ff00",
+                inlineStyle = style(), linkPaint = if (groupAction) linkPolicy else null, inlinePaddingGroup = padding)
+            val ruby = Span("text", "", fontScale = 1f, fontScaleBasis = FontScaleBasis.NormalBody,
+                language = "vi", direction = "ltr", foreground = "#000000", inlineStyle = style(),
+                ruby = Ruby(listOf(RubySegment(emptyList(), listOf(RubyBase(owner(1f), emptyList(), listOf(base))),
+                    listOf(RubyAnnotation(0, 1, 0, owner(.5f), emptyList(), listOf(group), emptyList(), emptyList(), false))))))
+            val spans = listOf(ruby)
+            val projection = rubyGraphicalProjection(spans)
+            val root = resolved(body, 1f, Color.BLACK)
+            val groupPaint = resolved(body, 1.35f, Color.BLUE)
+            val left = padding.left.value * groupPaint.textSize
+            val right = padding.right.value * density
+            val state = if (groupAction) NativeMissingLinkPaint(linkPolicy, visited = false) else null
+            val groups = projection.ranges.filter { it.role in setOf(RubyTextRole.Owner, RubyTextRole.Base,
+                RubyTextRole.Annotation, RubyTextRole.PaddingGroup) }.associate { range ->
+                val declared = when (range.role) {
+                    RubyTextRole.Owner, RubyTextRole.PaddingGroup -> checkNotNull(range.span).let {
+                        RubyOwner(snapshot(it), it.direction, it.inlineStyle, it.foreground, it.background)
+                    }
+                    RubyTextRole.Base -> checkNotNull(range.base).owner
+                    RubyTextRole.Annotation -> checkNotNull(range.annotation).owner
+                    else -> error("Not a declaring owner")
+                }
+                val paint = resolved(body, declared.font.fontScale ?: 1f,
+                    declared.foreground?.let(Color::parseColor) ?: Color.BLACK).apply {
+                    bgColor = declared.background?.let(Color::parseColor) ?: Color.TRANSPARENT
+                }
+                range.path to NativeRubyGroupFormat(paint, TextDirectionHeuristics.LTR, NativeLineHeightPolicy.Normal,
+                    wrap = wrap, sourceDirection = declared.direction,
+                    padding = if (range.role == RubyTextRole.PaddingGroup) NativeInlinePaddingEdges(left, right) else null,
+                    actionPaint = if (range.role == RubyTextRole.PaddingGroup) state else null)
+            }
+            val logical = SpannableString(projection.text)
+            logical.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(root), NativeLineHeightPolicy.Normal, strut = true),
+                0, logical.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            projection.ranges.filter { it.span != null && it.role !in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup) }
+                .forEach { range ->
+                    val span = checkNotNull(range.span)
+                    val value = resolved(body, span.fontScale ?: 1f, Color.parseColor(checkNotNull(span.foreground)))
+                    val dynamic = state.takeIf { children.any { child -> child === span } }
+                    logical.setSpan(object : MetricAffectingSpan(), NativeInlineSafePaintSpan {
+                        override fun updateMeasureState(paint: TextPaint) { paint.set(value) }
+                        override fun updateDrawState(paint: TextPaint) {
+                            paint.set(value)
+                            dynamic?.appearance()?.let { paint.color = it.color }
+                        }
+                    }, range.start, range.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    logical.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(value), NativeLineHeightPolicy.Normal),
+                        range.start, range.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    logical.setSpan(NativeAuthoredTextWrap(wrap), range.start, range.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            val prepared = NativeRubyPreparedSource(projection, SpannedString(logical), root, TextDirectionHeuristics.LTR, groups)
+            val source = SpannableString(logical).apply {
+                setSpan(prepared, 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            val action = if (groupAction) group else children.single()
+            val callback: () -> Unit = { calls += action }
+            return PaddingCase(spans, base, group, children, projection, prepared, SpannedString(source), root, groupPaint,
+                projection.ranges.single { it.role == RubyTextRole.PaddingGroup && it.span === group },
+                left, right, action, callback, state, wrap)
+        }
+        fun build(value: PaddingCase, width: Int): NativeFloatGeometry = NativeFloatGeometry.build(value.source,
+            value.body, width, emptyList(), textDirection = TextDirectionHeuristics.LTR, nodeFactory = { geometry ->
+                val range = if (value.action === value.group) value.groupRange else value.projection.ranges.single {
+                    it.span === value.action && it.role != RubyTextRole.PaddingGroup
+                }
+                val bounds = if (value.action === value.group)
+                    checkNotNull(geometry.inlinePaddingGroupRects(value.group, range.start, range.end))
+                    else nativeInlinePaddingChildActionRects(geometry, value.group,
+                        value.groupRange.start, value.groupRange.end, NativeInlinePaddingEdges(value.left, value.right),
+                        geometry.rectsForRange(range.start, range.end))
+                listOf(FloatInteractionNode(0, FloatInteractionKind.LINK, range.start, range.end, bounds,
+                    value.children.joinToString("") { it.text }, null, value.callback, missingLinkPaint = value.state))
+            })
+        fun reference(value: PaddingCase, spans: List<Span>, ownerPaint: TextPaint, width: Int): NativeFloatGeometry {
+            val text = SpannableString(spans.joinToString("") { it.text })
+            val root = TextPaint(ownerPaint).apply { bgColor = 0 }
+            text.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(root), NativeLineHeightPolicy.Normal, strut = true),
+                0, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            var at = 0
+            spans.forEach { span ->
+                val paint = resolved(value.body.textSize, span.fontScale ?: 1f, Color.parseColor(checkNotNull(span.foreground)))
+                text.setSpan(SourcePaint(paint), at, at + span.text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                text.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(paint), NativeLineHeightPolicy.Normal),
+                    at, at + span.text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                text.setSpan(NativeAuthoredTextWrap(value.wrap), at, at + span.text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                at += span.text.length
+            }
+            text.setSpan(NativeAuthoredTextWrap(value.wrap, inheritedOwner = true), 0, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            return NativeFloatGeometry.build(text, root, width, emptyList(), textDirection = TextDirectionHeuristics.LTR,
+                includeFontPadding = false)
+        }
+        fun verify(value: PaddingCase, geometry: NativeFloatGeometry): RectF {
+            val range = value.groupRange
+            val word = value.children.joinToString("") { it.text }
+            assertEquals(value.base.text + word, value.projection.text)
+            assertEquals(value.projection.text, geometry.text.toString())
+            assertSame(value.projection, value.prepared.projection)
+            assertSame(value.group, range.span)
+            assertEquals("", value.group.text)
+            assertEquals("", value.group.trail)
+            val stored = checkNotNull(value.group.inlinePaddingGroup)
+            value.children.zip(stored.spans).forEach { (expected, actual) -> assertSame(expected, actual) }
+            val groupBox = checkNotNull(geometry.inlinePaddingGroupRects(value.group, range.start, range.end)).single()
+            assertNull(geometry.inlinePaddingGroupRects(value.group.copy(), range.start, range.end))
+            assertNull(geometry.inlinePaddingGroupRects(value.group, range.start + 1, range.end))
+            val plain = reference(value, value.children, value.ownerPaint, 1200)
+            val body = reference(value, listOf(value.base), value.body, 1200)
+            val advance = plain.nativeSingleLineAdvance()
+            val baseAdvance = body.nativeSingleLineAdvance()
+            val padded = advance + value.left + value.right
+            val baseRange = value.projection.ranges.single { it.span === value.base }
+            val baseLeft = geometry.caretRect(baseRange.start).left - body.caretRect(0).left
+            assertTrue("The independent base must leave real surrounding Ruby free space", baseAdvance > padded)
+            assertEquals(padded, groupBox.width(), .01f)
+            assertEquals(baseLeft + (baseAdvance - padded) / 2f, groupBox.left, .01f)
+            assertTrue(groupBox.left > baseLeft)
+            assertTrue(groupBox.right < baseLeft + baseAdvance)
+            val first = plain.caretRect(0)
+            val actualFirst = geometry.caretRect(range.start)
+            val dx = actualFirst.left - first.left
+            val dy = actualFirst.top - first.top
+            assertEquals(groupBox.left + value.left, actualFirst.left, .01f)
+            for (index in 0..word.length)
+                sameRect(RectF(plain.caretRect(index)).apply { offset(dx, dy) }, geometry.caretRect(range.start + index))
+            plain.characterRects(0, word.length).zip(geometry.characterRects(range.start, word.length)).forEach { (expected, actual) ->
+                sameRect(RectF(checkNotNull(expected)).apply { offset(dx, dy) }, checkNotNull(actual))
+            }
+            value.children.forEach { child ->
+                val childRange = value.projection.ranges.single { it.span === child }
+                val expected = plain.rectsForRange(childRange.start - range.start, childRange.end - range.start)
+                    .map { RectF(it).apply { offset(dx, dy) } }
+                val actual = geometry.rectsForRange(childRange.start, childRange.end)
+                assertEquals(expected.size, actual.size)
+                expected.zip(actual).forEach { (a, b) -> sameRect(a, b) }
+            }
+            val actualCharacters = geometry.rectsForRange(range.start, range.end)
+            val baseline = plain.nativeRubyLineBaseline(0) + dy
+            val primary = NativePrimaryFontMetrics.from(value.ownerPaint)
+            val content = NativeUsedLineMetrics(primary.ascent, primary.descent)
+                .including(plain.nativeContentLineMetrics(0))
+            assertEquals(baseline + content.top, groupBox.top, .01f)
+            assertEquals(baseline + content.bottom, groupBox.bottom, .01f)
+            val node = geometry.nodes.single()
+            assertSame(value.callback, node.onClick)
+            assertSame(value.state, node.missingLinkPaint)
+            assertEquals(word, node.label.toString())
+            if (value.action === value.group) sameRect(groupBox, node.bounds.single())
+            else {
+                assertEquals(actualCharacters.size, node.bounds.size)
+                actualCharacters.zip(node.bounds).forEach { (original, action) ->
+                    assertEquals(original.top, action.top, 0f)
+                    assertEquals(original.bottom, action.bottom, 0f)
+                    assertTrue(action.left >= groupBox.left + value.left)
+                    assertTrue(action.right <= groupBox.right - value.right)
+                }
+            }
+            val leftPoint = groupBox.left + value.left / 2f
+            val rightPoint = groupBox.right - value.right / 2f
+            assertEquals(value.action === value.group, node.contains(leftPoint, groupBox.centerY()))
+            assertEquals(value.action === value.group, node.contains(rightPoint, groupBox.centerY()))
+            if (value.action !== value.group && actualCharacters.any { it.contains(rightPoint, groupBox.centerY()) })
+                witnessedRoundedPaddingHit = true
+            assertTrue(node.contains(actualCharacters.first().centerX(), actualCharacters.first().centerY()))
+            val before = calls.size
+            checkNotNull(node.onClick).invoke()
+            assertEquals(before + 1, calls.size)
+            assertSame(value.action, calls.last())
+            if (value.state != null) {
+                val expectedUnderline = NativeFloatBounds(groupBox.left, baseline + value.ownerPaint.underlinePosition,
+                    groupBox.right, baseline + value.ownerPaint.underlinePosition + value.ownerPaint.underlineThickness)
+                val reserved = checkNotNull(geometry.ordinaryPaintBounds.reduceOrNull { a, b -> a.enclosing(b) })
+                assertTrue(reserved.left <= expectedUnderline.left && reserved.right >= expectedUnderline.right &&
+                    reserved.top <= expectedUnderline.top && reserved.bottom >= expectedUnderline.bottom)
+            }
+            return groupBox
+        }
+        for (zoom in listOf(1f, 1.5f)) for (groupAction in listOf(false, true)) {
+            val density = 1.25f
+            val normalBody = 24f * density * zoom
+            val value = make(normalBody, density, groupAction)
+            assertEquals(.25f * normalBody * 1.35f, value.left, .0001f)
+            assertEquals(.125f * density, value.right, 0f)
+            assertTrue(value.left != value.left.toInt().toFloat())
+            assertTrue(value.right != value.right.toInt().toFloat())
+            val geometry = build(value, 1200)
+            val groupBox = verify(value, geometry)
+            val normalInk = raster(geometry)
+            assertTrue(normalInk.getValue(Color.BLUE).count > 0)
+            assertEquals(0, normalInk.getValue(Color.RED).count)
+            if (!groupAction) {
+                assertTrue(normalInk.getValue(Color.GREEN).count > 0)
+            } else {
+                val state = checkNotNull(value.state)
+                state.hovered = true
+                val hoverInk = raster(geometry)
+                assertTrue(hoverInk.getValue(Color.RED).count > 0)
+                assertEquals(0, hoverInk.getValue(Color.BLUE).count)
+                val red = checkNotNull(hoverInk.getValue(Color.RED).bounds)
+                assertTrue("The group underline reaches the padding before child glyphs", red.left <= ceil(groupBox.left.toDouble()).toFloat())
+                assertTrue(red.right >= kotlin.math.floor(groupBox.right.toDouble()).toFloat())
+                sameRect(groupBox, checkNotNull(geometry.inlinePaddingGroupRects(value.group,
+                    value.groupRange.start, value.groupRange.end)).single())
+                state.hovered = false
+                assertEquals(normalInk, raster(geometry))
+            }
+        }
+
+        assertTrue("An original native selection region must reach the thin right padding while its child action excludes it",
+            witnessedRoundedPaddingHit)
+
+        // Independent native paragraphs supply the real same-source interior stops.
+        // Ruby may select those stops, but this admitted padding owner cannot fragment.
+        val emergency = make(24f, 1.25f, true, "abcdefghijklmnopqrstuvwx", "abcdefghijklmnop", TextWrap.BreakWord)
+        val normalCase = make(24f, 1.25f, true, "abcdefghijklmnopqrstuvwx", "abcdefghijklmnop", TextWrap.Normal)
+        val probes = listOf(listOf(emergency.base) to emergency.body, emergency.children to emergency.ownerPaint)
+        val prefixes = probes.map { (spans, paint) ->
+            val narrow = reference(emergency, spans, paint, 0)
+            val wide = reference(emergency, spans, paint, 1200)
+            val ends = (0 until narrow.shapedLineCount).flatMap(narrow::nativeRubyLineRanges)
+                .map { it.second }.filter { it > 0 && it < narrow.text.length }.distinct().sorted()
+            assertTrue("A genuine native interior endpoint is required", ends.isNotEmpty())
+            wide.nativeRubyMeasuredAdvance(0, ends[minOf(3, ends.lastIndex)]) to wide.nativeSingleLineAdvance()
+        }
+        val width = ceil(maxOf(prefixes[0].first, prefixes[1].first + emergency.left + emergency.right).toDouble()).toInt()
+        assertTrue(width > 0 && width < prefixes.minOf { it.second })
+        fun widths(value: PaddingCase) = nativeTextWidthRange(value.source, value.body, textDirection = TextDirectionHeuristics.LTR)
+        val normalWidths = widths(normalCase)
+        assertEquals(normalWidths.minimum, widths(emergency).minimum)
+        assertEquals(normalWidths.maximum, widths(emergency).maximum)
+        val wide = build(emergency, 1200)
+        assertEquals(1, wide.shapedLineCount)
+        val error = assertThrows(UnsupportedFloatLayout::class.java) { build(emergency, width) }
+        assertEquals("Inline padding group requires native fragmentation", error.message)
+        val recovered = build(emergency, 1200)
+        assertEquals(emergency.projection.text, recovered.text.toString())
+        val range = emergency.groupRange
+        sameRect(checkNotNull(wide.inlinePaddingGroupRects(emergency.group, range.start, range.end)).single(),
+            checkNotNull(recovered.inlinePaddingGroupRects(emergency.group, range.start, range.end)).single())
+        val node = recovered.nodes.single()
+        assertSame(emergency.callback, node.onClick)
+        val before = calls.size
+        checkNotNull(node.onClick).invoke()
+        assertEquals(before + 1, calls.size)
+        assertSame(emergency.group, calls.last())
+        assertSame(emergency.group, emergency.prepared.projection.ranges.single { it.role == RubyTextRole.PaddingGroup }.span)
+    }
+
 }

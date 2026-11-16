@@ -1121,7 +1121,7 @@ private fun UnavailableAnonymousGrid(table: Table, onLink: (EntryLink) -> Unit, 
 
 /** These actual cell owners expose synchronous height intrinsics; richer surfaces fail closed. */
 internal fun pairedTableCellHasIntrinsicHeight(cell: Cell): Boolean = cell.blocks == null && cell.nestedTable == null &&
-    cell.spans.all { it.ruby == null && it.image == null && !it.hasClassToken("wikidict-media") &&
+    cell.spans.all { it.ruby == null && it.inlinePaddingGroup == null && it.image == null && !it.hasClassToken("wikidict-media") &&
         it.kind in setOf("text", "link", "external_link", "line_break") } && egyptianTextRuns(cell.spans).isEmpty()
 
 /** One unchanged centered paragraph has the same real text height as a spans-only cell. */
@@ -1129,7 +1129,7 @@ internal fun intrinsicTableSingleParagraph(cell: Cell): Block? {
     if (cell.spans.isNotEmpty() || cell.nestedTable != null) return null
     val block = cell.blocks?.singleOrNull() ?: return null
     if (block != Block("paragraph", 0, block.spans, textAlign = CellTextAlign.Center) ||
-        !block.spans.hasCompiledInlineContent() || block.spans.any { it.ruby != null || it.image != null ||
+        !block.spans.hasCompiledInlineContent() || block.spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.image != null ||
             it.hasClassToken("wikidict-media") || it.kind !in setOf("text", "link", "external_link", "line_break") } ||
         egyptianTextRuns(block.spans).isNotEmpty()) return null
     return block
@@ -1660,7 +1660,7 @@ internal fun inlineMetricOwnerAnnotation(span: Span, style: TextStyle): Annotate
 @Composable
 internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = inheritedContainerBodyStyle(), onLink: (EntryLink) -> Unit = {}, preserveWhitespace: Boolean = false) {
     val nativeRuby = LocalRubyNative.current
-    if (source.hasRuby() && !nativeRuby) {
+    if (source.hasNativeInlineGroups() && !nativeRuby) {
         StyledText(rubyFallbackSpans(source), modifier, weight, style, onLink,
             preserveWhitespace = true)
         return
@@ -1674,8 +1674,8 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val sourceFamily = LocalNativeContainerTextContext.current?.fontFamily
     val sourceFontStack = sourceFamily is ContainerFontFamily.Stack
     val authoredFamily = sourceFontStack || source.hasAuthoredFontFamily()
-    val preserveOwner = preserveWhitespace || authoredFamily || source.hasRuby()
-    val spans = if (source.hasRuby()) source else
+    val preserveOwner = preserveWhitespace || authoredFamily || source.hasNativeInlineGroups()
+    val spans = if (source.hasNativeInlineGroups()) source else
         remember(source, preserveOwner) { if (preserveOwner) source else compactSpans(source) }
     val availableMedia = LocalEntryMedia.current
     val owners = LocalEntryMediaOwners.current
@@ -1700,10 +1700,10 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val sourceLinkPaint = spans.any { it.linkPaint != null }
     val nativeLinkPaint = LocalOrdinaryLinkPaintNative.current
     val sourceInlineStyle = spans.any { it.inlineStyle != null }
-    val sourceRuby = spans.hasRuby()
+    val sourceRuby = spans.hasNativeInlineGroups()
     val sourceInlineFamily = spans.hasAuthoredFontFamily()
     val nativeInlineStyle = LocalAuthoredInlineNative.current
-    if (sourceLinkPaint && nativeLinkPaint && ordinaryLinkPaintUnavailable(spans) != null) {
+    if (sourceLinkPaint && nativeLinkPaint && ordinaryLinkPaintUnavailable(spans.filter { it.inlinePaddingGroup == null }) != null) {
         Column(modifier) {
             Text(NativeOrdinaryLinkPaintUnavailable)
             CompositionLocalProvider(LocalOrdinaryLinkPaintNative provides false,

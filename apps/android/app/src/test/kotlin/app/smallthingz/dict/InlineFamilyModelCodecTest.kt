@@ -231,7 +231,7 @@ class InlineFamilyModelCodecTest {
         assertEquals(inherited.copy(bodyAdjoining = BodyAdjoiningPolicy.Ordinary), read(header(old, 'P') + byteArrayOf(1)))
         val legacy = Wire().document(Sink.Body, null, features = null)
         for (version in "MNO") assertEquals(read(legacy), read(header(legacy, version)))
-        val future = runCatching { read(header(legacy, 'U')) }.exceptionOrNull()
+        val future = runCatching { read(header(legacy, 'V')) }.exceptionOrNull()
         assertEquals("Unsupported presentation format", future!!.message)
     }
 

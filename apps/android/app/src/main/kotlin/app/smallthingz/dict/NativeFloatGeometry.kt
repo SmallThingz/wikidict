@@ -238,6 +238,11 @@ internal class NativeFloatGeometry private constructor(
         return layout.getLineStart(line) to layout.getLineEnd(line)
     }
 
+    override fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? {
+        require(start in 0..text.length && end in start..text.length)
+        return ruby?.paddingRects(owner, start, end)
+    }
+
     override fun rectsForRange(start: Int, end: Int): List<RectF> {
         ruby?.let { return it.rects(start, end) }
         require(start in 0..text.length && end in start..text.length)

@@ -85,12 +85,17 @@ private data class NativeInlineSourceRange(val span: Span, val start: Int, val e
     val declaringPaint: TextPaint?, val emptyPaint: TextPaint?, val rubyParentPath: String? = null)
 private data class NativeResolvedInlineStyle(val source: NativeInlineSourceRange,
     val height: Float?, val shift: Float?, val thickness: Float?)
-private class NativePaintSpan(private val value: TextPaint, private val missingLink: NativeMissingLinkPaint? = null) : MetricAffectingSpan(), NativeMayUnderline, NativeInlineSafePaintSpan {
-    override val mayUnderline: Boolean get() = missingLink != null || value.isUnderlineText
+private class NativePaintSpan(private val value: TextPaint, private val missingLink: NativeMissingLinkPaint? = null,
+    private val groupAction: Boolean = false) : MetricAffectingSpan(), NativeMayUnderline, NativeInlineSafePaintSpan {
+    override val mayUnderline: Boolean get() = (!groupAction && missingLink != null) || value.isUnderlineText
     override fun updateMeasureState(paint: TextPaint) { paint.set(value) }
     override fun updateDrawState(paint: TextPaint) {
         paint.set(value)
-        missingLink?.appearance()?.let { paint.color = it.color; paint.isUnderlineText = it.underline }
+        missingLink?.appearance()?.let {
+            paint.color = it.color
+            // The declaring group paints its own underline across both edges once.
+            paint.isUnderlineText = if (groupAction) value.isUnderlineText else it.underline
+        }
     }
 }
 
@@ -261,6 +266,13 @@ internal fun prepareNativeFloatText(
         it.role == RubyTextRole.SegmentGap || it.role == RubyTextRole.BaseGap || it.role == RubyTextRole.AnnotationGap
     }
     val rubyOwnerRanges = ruby?.projection?.ranges.orEmpty().filter { it.role == RubyTextRole.Owner }
+    val paddingRanges = ruby?.projection?.ranges.orEmpty().filter { it.role == RubyTextRole.PaddingGroup }
+    val paddingActions = paddingRanges.filter { range -> checkNotNull(range.span).let {
+        it.hasInternalAction() || externalLinkUrl(it) != null
+    } }
+    val linkAnnotations = annotated.getLinkAnnotations(0, annotated.length).let { links ->
+        if (paddingRanges.isEmpty()) links else links.sortedWith(compareBy({ it.start }, { it.end }))
+    }
     val paragraphBreaks = annotated.text.indices.filter { offset ->
         annotated.text[offset] == '\n' && rubyGaps.none { offset in it.start until it.end }
     }
@@ -272,14 +284,21 @@ internal fun prepareNativeFloatText(
     val documentOwner = LocalMissingLinkOwner.current ?: captionOwner
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
     val paintUnavailable = ordinaryLinkPaintUnavailable(visibleSpans, edition)
+        ?: NativeOrdinaryLinkPaintUnavailable.takeIf { paddingRanges.any {
+            it.span?.linkPaint != null && (it.start == it.end || it !in paddingActions)
+        } }
     val paintedLinks = remember(visibleSpans, captionScope, ruby?.projection) {
-        if (captionScope == null && visibleSpans.none { it.linkPaint != null }) emptyList()
-        else (ruby?.leaves?.mapIndexedNotNull { index, leaf ->
-            val range = leaf.range
-            val span = checkNotNull(range.span)
-            if (range.start < range.end && span.image == null &&
-                (span.hasInternalAction() || externalLinkUrl(span) != null))
-                NativeCaptionLinkRange(index, span, range.start, range.end) else null
+        if (captionScope == null && visibleSpans.none { it.linkPaint != null } &&
+            paddingActions.none { it.span?.linkPaint != null }) emptyList()
+        else (ruby?.let { contexts ->
+            val ranges = if (paddingActions.isEmpty()) contexts.leaves.map { it.range }
+                else (contexts.leaves.map { it.range } + paddingActions).sortedWith(compareBy({ it.start }, { it.path }))
+            ranges.mapIndexedNotNull { index, range ->
+                val span = checkNotNull(range.span)
+                if (range.start < range.end && span.image == null &&
+                    (span.hasInternalAction() || externalLinkUrl(span) != null))
+                    NativeCaptionLinkRange(index, span, range.start, range.end) else null
+            }
         } ?: nativeCaptionLinkRanges(visibleSpans)).filter { it.span.linkPaint != null || captionScope != null }
     }
     val ordinaryPolicies = paintedLinks.associate { (it.start to it.end) to it.span.linkPaint }
@@ -508,8 +527,21 @@ internal fun prepareNativeFloatText(
                         null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection)
                     }
             }
+            val padding = range.span?.inlinePaddingGroup?.let { model ->
+                fun edge(value: StyleLength): Float {
+                    val pixels = value.value.toDouble() * if (value.unit == StyleLengthUnit.Px) density.density else paint.textSize
+                    if (!pixels.isFinite() || pixels < 0.0 || pixels > TablePixelLimit)
+                        throw UnsupportedFloatLayout("Inline padding exceeds native geometry")
+                    return pixels.toFloat()
+                }
+                val left = edge(model.left); val right = edge(model.right)
+                if (left.toDouble() + right > TablePixelLimit)
+                    throw UnsupportedFloatLayout("Inline padding exceeds native geometry")
+                NativeInlinePaddingEdges(left, right)
+            }
             rubyFormats[path] = NativeRubyGroupFormat(paint, groupDirection, height, shift,
-                authored?.wrap, underline, authored?.cursor, sourceDirection, localBaselineShift = localShift)
+                authored?.wrap, underline, authored?.cursor, sourceDirection, localBaselineShift = localShift,
+                padding = padding, actionPaint = if (range in paddingActions) linkPaintAt(range.start, range.end) else null)
         } catch (failure: UnsupportedFloatLayout) {
             inlineFailure = failure.message ?: "Ruby declaring geometry is unavailable"
         }
@@ -660,7 +692,8 @@ internal fun prepareNativeFloatText(
         listOf(path, paint.typeface, paint.textSize, paint.textLocales, paint.fontFeatureSettings,
             paint.letterSpacing, paint.textScaleX, paint.textSkewX, paint.color, paint.bgColor,
             paint.isUnderlineText, paint.isStrikeThruText, group.direction, group.lineHeight,
-            group.baselineShift, group.localBaselineShift, group.wrap, group.underline, group.cursor, group.sourceDirection)
+            group.baselineShift, group.localBaselineShift, group.wrap, group.underline, group.cursor, group.sourceDirection,
+            group.padding, group.actionPaint)
     }
     val shapeKey = listOf(annotated, runs, effective, ruby, rubyMetricRevision, density.density, density.fontScale, inlineRevision, familyFailure, sourceFamily, familyRanges, legacyOwnerFamily, ownerFont, cellMetricRevision, sourceLineStarts,
         paintedLinks.filter { it.span.linkPaint != null }.map { it.start to it.end },
@@ -699,7 +732,9 @@ internal fun prepareNativeFloatText(
                 if (ownerWrap != null && (native.isNotEmpty() || sourceLineStarts != null)) native.setSpan(
                     NativeAuthoredTextWrap(ownerWrap, inheritedOwner = true, sourceLineStarts = sourceLineStarts), 0, native.length,
                     if (native.isEmpty()) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                styles.forEach { native.setSpan(NativePaintSpan(it.paint, linkPaintAt(it.start, it.end)), it.start, it.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
+                styles.forEach { range -> native.setSpan(NativePaintSpan(range.paint, linkPaintAt(range.start, range.end),
+                    groupAction = paddingActions.any { it.start <= range.start && it.end >= range.end }),
+                    range.start, range.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
                 val inlineParentPolicies = mutableListOf<Triple<Int, Int, NativeLineHeightPolicy>>()
                 val paragraphStarts = listOf(0) + paragraphBreaks.filter {
                     it + 1 < annotated.length || inlineSources.any { owner ->
@@ -851,9 +886,31 @@ internal fun prepareNativeFloatText(
         }
     val nativeNodes: (FloatTextGeometry) -> List<FloatInteractionNode> = { geometry ->
         if (sourceLineStarts?.isEmpty() == true) emptyList() else buildList {
-                         annotated.getLinkAnnotations(0, annotated.length).forEachIndexed { index, range ->
+                         linkAnnotations.forEachIndexed { index, range ->
                             val state = linkPaintAt(range.start, range.end)
-                            val fragments = geometry.rectsForRange(range.start, range.end)
+                            val paddingOwner = paddingActions.singleOrNull { it.start == range.start && it.end == range.end }?.span
+                            val childRange = if (paddingOwner != null || paddingRanges.isEmpty()) null else
+                                ruby?.leaves?.singleOrNull { leaf ->
+                                    val span = checkNotNull(leaf.range.span)
+                                    leaf.range.start == range.start && leaf.range.end == range.end && when (val link = range.item) {
+                                        is LinkAnnotation.Clickable -> span.hasInternalAction() && span.target == link.tag
+                                        is LinkAnnotation.Url -> externalLinkUrl(span) == link.url
+                                        else -> false
+                                    }
+                                }?.range ?: throw UnsupportedFloatLayout("Inline padding child action lost its source owner")
+                            val ancestor = childRange?.let { child ->
+                                paddingRanges.lastOrNull { child.path.startsWith(it.path + "/") }
+                            }
+                            val rawFragments = if (paddingOwner == null) geometry.rectsForRange(range.start, range.end)
+                                else geometry.inlinePaddingGroupRects(paddingOwner, range.start, range.end)
+                                    ?: throw UnsupportedFloatLayout("Inline padding action geometry is unavailable")
+                            val fragments = if (ancestor == null) rawFragments else {
+                                val edges = rubyFormats[ancestor.path]?.padding
+                                    ?: throw UnsupportedFloatLayout("Inline padding action geometry is unavailable")
+                                // Query the original group's full interval; clip only this child's action fragments.
+                                nativeInlinePaddingChildActionRects(geometry, checkNotNull(ancestor.span),
+                                    ancestor.start, ancestor.end, edges, rawFragments)
+                            }
                             val ordinary = ordinaryPolicies[range.start to range.end]
                             val focus = if (ordinary != null) ordinaryLinkFocusPaint(ordinary,
                                 nativeLinkFocusFragments(geometry, range.start, range.end, fragments), density.density, bodyPixels)
@@ -862,7 +919,7 @@ internal fun prepareNativeFloatText(
                                     range.start, range.end, fragments), scope.density, scope.bodyPixels)
                             }
                             add(FloatInteractionNode(index, FloatInteractionKind.LINK, range.start, range.end,
-                                fragments, annotated.subSequence(range.start, range.end), null,
+                                fragments, annotated.subSequence(range.start, range.end), paddingOwner?.tooltip,
                                  { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) }
                                     if (missingLinkPaint != null) onMissingLinkActivated()
                                     else state?.actionIdentity?.target?.let {
@@ -870,7 +927,7 @@ internal fun prepareNativeFloatText(
                                     }
                                 }, missingLinkPaint = state, focusPaint = focus))
                         }
-                        val firstImage = annotated.getLinkAnnotations(0, annotated.length).size
+                        val firstImage = linkAnnotations.size
                         images.forEach { image ->
                             val model = image.span.image!!
                             val url = inlineImageLinkUrl(image.span, edition)

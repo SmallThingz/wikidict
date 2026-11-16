@@ -2,13 +2,13 @@ package app.smallthingz.dict
 
 /** Mirrors the existing styled-text emission using explicit model boundaries, never character guessing. */
 internal fun anonymousInlineSemantic(spans: List<Span>, nativeText: String): List<AnonymousInlineTextPart> {
-    if (spans.any { it.ruby != null }) {
+    if (spans.hasNativeInlineGroups()) {
         val projection = rubyGraphicalProjection(spans)
         check(nativeText == projection.text) { "Anonymous ruby source drift" }
         return buildList {
             projection.ranges.forEach { range ->
                 val span = range.span ?: return@forEach
-                if (range.role == RubyTextRole.Owner) return@forEach
+                if (range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup) return@forEach
                 val image = span.image
                 if (image != null) {
                     // An ordinary image sibling keeps its existing semantic alt policy.

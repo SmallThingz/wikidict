@@ -143,6 +143,8 @@ internal class NativeAnonymousFlowGeometry private constructor(
         figures.filter { it.paintsOutsideLineClip }.forEach { drawFigure(canvas, it.measured, it.bounds) }
     }
     internal fun nativeRectsForRange(start: Int, end: Int): List<RectF> = native.rectsForRange(start, end)
+    internal fun nativeInlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? =
+        native.inlinePaddingGroupRects(owner, start, end)
     override fun interactionNodeAt(x: Float, y: Float): FloatInteractionNode? {
         positionedGroups.lastOrNull { it.contains(x, y) }?.let { group ->
             return nodes.lastOrNull { it.id in group.nodeIds && it.contains(x, y) }
@@ -310,6 +312,29 @@ internal class NativeAnonymousFlowGeometry private constructor(
             at = moved
         }
         return offset
+    }
+
+    override fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? {
+        require(start in 0..text.length && end in start..text.length)
+        if (start == end) return null
+        val covered = selection.segments.filter { start < it.end && end > it.start }
+        val first = covered.firstOrNull() ?: return null
+        if (first is AnonymousSelectionSegment.Figure) {
+            if (covered.size != 1) return null
+            val placed = figureById.getValue(first.anchor.event.id)
+            return placed.measured.geometry.inlinePaddingGroupRects(owner, start - first.start, end - first.start)
+                ?.map { RectF(it).apply { offset(placed.bounds.left, placed.bounds.top) } }
+        }
+        if (covered.any { it !is AnonymousSelectionSegment.Inline }) return null
+        val inline = covered.filterIsInstance<AnonymousSelectionSegment.Inline>()
+        if (inline.any { it.authored.replacement } || inline.zipWithNext().any { (a, b) ->
+                a.end != b.start || a.nativeEnd != b.nativeStart
+            }) return null
+        val begin = inline.first()
+        val last = inline.last()
+        return native.inlinePaddingGroupRects(owner,
+            begin.authored.nativeOffset(begin.authored.logicalStart + start - begin.start),
+            last.authored.nativeOffset(last.authored.logicalStart + end - last.start))
     }
 
     override fun rectsForRange(start: Int, end: Int): List<RectF> {
