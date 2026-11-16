@@ -685,13 +685,14 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    const test_step = b.step("test", "Run bundle encoder, data reader, Lua, and tooling tests");
     var run_encoder_tests: [encoder_partitions.len]*std.Build.Step.Run = undefined;
     for (encoder_partitions, 0..) |partition, i| {
         const run = b.addRunArtifact(encoder_tests[i]);
         if (partition.runtime_filter) |filter| run.addArgs(&.{ "--test-filter", filter });
-        // Serialize compilation as well as execution. Each next compiler waits
-        // for the preceding partition's tests, not merely its compilation.
-        if (i != 0) encoder_tests[i].step.dependOn(&run_encoder_tests[i - 1].step);
+        // The default graph serializes compilation and execution. Memory
+        // reservations let prior independent tests remain sibling obligations.
+        if (i != 0) addTestOrder(test_step, &encoder_tests[i].step, &run_encoder_tests[i - 1].step, test_step_memory != 0);
         run_encoder_tests[i] = run;
     }
     const run_blob_encoder_tests = b.addRunArtifact(blob_encoder_tests);
@@ -710,30 +711,30 @@ pub fn build(b: *std.Build) void {
     const run_lua_scribunto_tests = b.addRunArtifact(lua_scribunto_tests);
     const run_lua_wikitext_tests = b.addRunArtifact(lua_wikitext_tests);
 
-    blob_encoder_tests.step.dependOn(&run_encoder_tests[encoder_partitions.len - 1].step);
-    blob_decoder_tests.step.dependOn(&run_blob_encoder_tests.step);
-    blob_query_tests.step.dependOn(&run_blob_decoder_tests.step);
-    wikimedia_dump_tests.step.dependOn(&run_blob_query_tests.step);
-    lua_tests.step.dependOn(&run_wikimedia_dump_tests.step);
-    lua_core_tests.step.dependOn(&run_lua_tests.step);
-    global_index_tests.step.dependOn(&run_lua_core_tests.step);
-    program_shapes_tests.step.dependOn(&run_global_index_tests.step);
-    lua_abi_tests.step.dependOn(&run_program_shapes_tests.step);
-    lua_stdlib_tests.step.dependOn(&run_lua_abi_tests.step);
-    lua_ustring_tests.step.dependOn(&run_lua_stdlib_tests.step);
-    lua_scribunto_tests.step.dependOn(&run_lua_ustring_tests.step);
-    lua_wikitext_tests.step.dependOn(&run_lua_scribunto_tests.step);
+    addTestOrder(test_step, &blob_encoder_tests.step, &run_encoder_tests[encoder_partitions.len - 1].step, test_step_memory != 0);
+    addTestOrder(test_step, &blob_decoder_tests.step, &run_blob_encoder_tests.step, test_step_memory != 0);
+    addTestOrder(test_step, &blob_query_tests.step, &run_blob_decoder_tests.step, test_step_memory != 0);
+    addTestOrder(test_step, &wikimedia_dump_tests.step, &run_blob_query_tests.step, test_step_memory != 0);
+    addTestOrder(test_step, &lua_tests.step, &run_wikimedia_dump_tests.step, test_step_memory != 0);
+    addTestOrder(test_step, &lua_core_tests.step, &run_lua_tests.step, test_step_memory != 0);
+    addTestOrder(test_step, &global_index_tests.step, &run_lua_core_tests.step, test_step_memory != 0);
+    addTestOrder(test_step, &program_shapes_tests.step, &run_global_index_tests.step, test_step_memory != 0);
+    addTestOrder(test_step, &lua_abi_tests.step, &run_program_shapes_tests.step, test_step_memory != 0);
+    addTestOrder(test_step, &lua_stdlib_tests.step, &run_lua_abi_tests.step, test_step_memory != 0);
+    addTestOrder(test_step, &lua_ustring_tests.step, &run_lua_stdlib_tests.step, test_step_memory != 0);
+    addTestOrder(test_step, &lua_scribunto_tests.step, &run_lua_ustring_tests.step, test_step_memory != 0);
+    addTestOrder(test_step, &lua_wikitext_tests.step, &run_lua_scribunto_tests.step, test_step_memory != 0);
     const bundle_protocol_tests = b.addTest(.{
         .root_module = bundle_protocol_mod_test,
         .test_runner = .{ .path = test_runner, .mode = .simple },
     });
     const run_bundle_protocol_tests = b.addRunArtifact(bundle_protocol_tests);
-    run_bundle_protocol_tests.step.dependOn(&run_lua_wikitext_tests.step);
+    addTestOrder(test_step, &run_bundle_protocol_tests.step, &run_lua_wikitext_tests.step, test_step_memory != 0);
 
     const namespace_registry_tests = b.addTest(.{ .root_module = namespace_registry_test_mod, .test_runner = .{ .path = test_runner, .mode = .simple } });
     const run_namespace_registry_tests = b.addRunArtifact(namespace_registry_tests);
     b.step("test-namespace-registry", "Validate edition namespace and title resolution").dependOn(&run_namespace_registry_tests.step);
-    lua_tests.step.dependOn(&run_namespace_registry_tests.step);
+    addTestOrder(test_step, &lua_tests.step, &run_namespace_registry_tests.step, test_step_memory != 0);
     const program_provider_test_mod = b.createModule(.{
         .root_source_file = b.path("src/lua/runtime/llvm_program.zig"),
         .target = target,
@@ -789,18 +790,17 @@ pub fn build(b: *std.Build) void {
     closure_tests.root_module.linkSystemLibrary("zstd", .{});
     const run_closure_tests = b.addRunArtifact(closure_tests);
     b.step("test-usage-closure", "Test sparse cross-namespace transclusion closure").dependOn(&run_closure_tests.step);
-    const test_step = b.step("test", "Run bundle encoder, data reader, Lua, and tooling tests");
     const missing_dependency_tests = b.addTest(.{ .root_module = missing_dependency_test_mod, .test_runner = .{ .path = test_runner, .mode = .simple } });
     const run_missing_dependency_tests = b.addRunArtifact(missing_dependency_tests);
     test_step.dependOn(&run_missing_dependency_tests.step);
     b.step("test-lua-core", "Run Lua runtime core tests serially").dependOn(&run_lua_core_tests_only.step);
     b.step("test-global-index", "Run Lua global-name index tests serially").dependOn(&run_global_index_tests_only.step);
     b.step("test-lua-abi", "Run Lua LLVM ABI tests serially").dependOn(&run_lua_abi_tests_only.step);
-    blob_wasm_smoke.step.dependOn(&run_bundle_protocol_tests.step);
-    run_bundle_pipeline_tests.step.dependOn(&blob_wasm_smoke.step);
-    run_blob_build_tests.step.dependOn(&run_bundle_pipeline_tests.step);
+    addTestOrder(test_step, &blob_wasm_smoke.step, &run_bundle_protocol_tests.step, test_step_memory != 0);
+    addTestOrder(test_step, &run_bundle_pipeline_tests.step, &blob_wasm_smoke.step, test_step_memory != 0);
+    addTestOrder(test_step, &run_blob_build_tests.step, &run_bundle_pipeline_tests.step, test_step_memory != 0);
     test_step.dependOn(&run_blob_build_tests.step);
-    run_blob_file_tools_tests.step.dependOn(&run_blob_build_tests.step);
+    addTestOrder(test_step, &run_blob_file_tools_tests.step, &run_blob_build_tests.step, test_step_memory != 0);
     test_step.dependOn(&run_blob_file_tools_tests.step);
     test_step.dependOn(&run_closure_tests.step);
     test_step.dependOn(&run_provider_tests.step);
@@ -847,10 +847,12 @@ pub fn build(b: *std.Build) void {
     storage_unit.use_llvm = true;
     storage_unit.use_lld = true;
     const storage_unit_run = b.addRunArtifact(storage_unit);
-    storage_unit_run.step.dependOn(&reader_test_run.step);
-    storage_run.step.dependOn(&storage_unit_run.step);
-    b.step("test-storage", "Exercise after-compression indexes and selective real XZ block decoding").dependOn(&storage_run.step);
-    if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch) test_step.dependOn(&storage_run.step);
+    const storage_test_step = b.step("test-storage", "Exercise after-compression indexes and selective real XZ block decoding");
+    addTestOrder(storage_test_step, &storage_unit_run.step, &reader_test_run.step, test_step_memory != 0);
+    addTestOrder(storage_test_step, &storage_run.step, &storage_unit_run.step, test_step_memory != 0);
+    storage_test_step.dependOn(&storage_run.step);
+    if (target.result.os.tag == b.graph.host.result.os.tag and target.result.cpu.arch == b.graph.host.result.cpu.arch)
+        test_step.dependOn(if (test_step_memory != 0) storage_test_step else &storage_run.step);
 
     // Only prepared artifacts use these filters. The public full test graph
     // above remains unfiltered, including when these options are supplied.
@@ -1609,4 +1611,70 @@ test "qualification memory claims preserve exact scheduler units and disabled be
     const claim: u64 = 6 * 1024 * 1024 * 1024;
     try std.testing.expectEqual(claim, std.Build.Configuration.MaxRss.fromBytes(claim).toBytes());
     try std.testing.expect(claim + claim > claim);
+}
+
+// Each dependent remains reachable through its real artifact consumer. Without
+// memory claims, preserve the old serial order; with claims, keep the prior
+// independent obligation on the aggregate without propagating its failure.
+fn addTestOrder(aggregate: *std.Build.Step, dependent: *std.Build.Step,
+    prerequisite: *std.Build.Step, memory_claims: bool) void
+{
+    if (memory_claims) aggregate.dependOn(prerequisite) else dependent.dependOn(prerequisite);
+}
+
+test "memory scheduled test roots preserve reachable obligations and real artifact dependencies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var b: std.Build = undefined;
+    b.allocator = arena.allocator();
+    var nodes: [7]std.Build.Step = undefined;
+    for (&nodes) |*step| {
+        step.owner = &b;
+        step.dependencies = .empty;
+    }
+    const root = &nodes[0];
+    const dependent = &nodes[1];
+    const prerequisite = &nodes[2];
+    const dependent_artifact = &nodes[3];
+    const prerequisite_artifact = &nodes[4];
+    const shared_input = &nodes[5];
+    const standalone_duplicate = &nodes[6];
+    root.dependOn(dependent);
+    dependent.dependOn(dependent_artifact);
+    prerequisite.dependOn(prerequisite_artifact);
+    dependent_artifact.dependOn(shared_input);
+    prerequisite_artifact.dependOn(shared_input);
+    const Reach = struct {
+        fn has(from: *std.Build.Step, wanted: *std.Build.Step) bool {
+            if (from == wanted) return true;
+            for (from.dependencies.items) |dependency| {
+                if (has(dependency, wanted)) return true;
+            }
+            return false;
+        }
+    };
+    addTestOrder(root, dependent, prerequisite, false);
+    for (nodes[0..6]) |*step| try std.testing.expect(Reach.has(root, step));
+    try std.testing.expect(!Reach.has(root, standalone_duplicate));
+    try std.testing.expect(Reach.has(dependent, prerequisite));
+    try std.testing.expectEqualSlices(*std.Build.Step, &.{dependent}, root.dependencies.items);
+    try std.testing.expectEqualSlices(*std.Build.Step, &.{ dependent_artifact, prerequisite }, dependent.dependencies.items);
+
+    // Reconfigure the same objects in memory mode, retaining both real inputs.
+    dependent.dependencies.shrinkRetainingCapacity(1);
+    addTestOrder(root, dependent, prerequisite, true);
+    for (nodes[0..6]) |*step| try std.testing.expect(Reach.has(root, step));
+    try std.testing.expect(!Reach.has(root, standalone_duplicate));
+    // A prior test failure no longer blocks the independent consumer. A real
+    // artifact or shared input failure still blocks its existing consumers.
+    try std.testing.expect(!Reach.has(dependent, prerequisite));
+    try std.testing.expect(Reach.has(dependent, dependent_artifact));
+    try std.testing.expect(Reach.has(dependent, shared_input));
+    try std.testing.expect(Reach.has(prerequisite, prerequisite_artifact));
+    try std.testing.expect(Reach.has(prerequisite, shared_input));
+    try std.testing.expectEqualSlices(*std.Build.Step, &.{ dependent, prerequisite }, root.dependencies.items);
+    try std.testing.expectEqualSlices(*std.Build.Step, &.{dependent_artifact}, dependent.dependencies.items);
+    try std.testing.expectEqualSlices(*std.Build.Step, &.{prerequisite_artifact}, prerequisite.dependencies.items);
+    try std.testing.expectEqualSlices(*std.Build.Step, &.{shared_input}, dependent_artifact.dependencies.items);
+    try std.testing.expectEqualSlices(*std.Build.Step, &.{shared_input}, prerequisite_artifact.dependencies.items);
 }
