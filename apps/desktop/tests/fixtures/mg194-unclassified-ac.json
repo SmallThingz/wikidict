@@ -1,0 +1,1548 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "-ac",
+  "kind": "language",
+  "language": "Unclassified",
+  "match_mode": "exact-utf8",
+  "record_count": 1,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0
+        ]
+      },
+      "title": "-ac",
+      "display_title": [],
+      "kind": "language",
+      "language": "Unclassified",
+      "language_code": "",
+      "sections": [
+        {
+          "level": 2,
+          "title": "Unclassified",
+          "anchor": "",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "",
+                            "target": "File:Arrowyellow.png",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "wikidict-media wikidict-media-file-4172726f7779656c6c6f772e706e67",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Variantes typographiques",
+                            "foreground": "#3366cc",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "link_paint": {
+                              "normal": {
+                                "foreground": "#3366cc",
+                                "underline": false
+                              },
+                              "hover": {
+                                "foreground": "#3056a9",
+                                "underline": true
+                              },
+                              "active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "hover_active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "visited": {
+                                "foreground": "#6a60b0",
+                                "underline": false
+                              },
+                              "visited_hover": {
+                                "foreground": "#534fa3",
+                                "underline": true
+                              },
+                              "visited_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "visited_hover_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "underline_on_focus": true,
+                              "focus_outline": {
+                                "width": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "color": {
+                                  "kind": "rgb",
+                                  "value": "#3366cc"
+                                },
+                                "radius": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "offset": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              }
+                            },
+                            "image": {
+                              "file": "Arrowyellow.png",
+                              "width_px": 30,
+                              "vertical_align": "middle"
+                            },
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Variantes typographiques",
+                            "foreground": "#202122",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "Jereo koa",
+                            "target": "",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Variantes typographiques",
+                            "foreground": "#202122",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Variantes typographiques",
+                            "foreground": "#202122",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ":",
+                            "target": "",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Variantes typographiques",
+                            "foreground": "#202122",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": true,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#202122",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "-ać",
+                            "target": "-ać",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#bf3c2c",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "link_paint": {
+                              "normal": {
+                                "foreground": "#bf3c2c",
+                                "underline": false
+                              },
+                              "hover": {
+                                "foreground": "#9f3526",
+                                "underline": true
+                              },
+                              "active": {
+                                "foreground": "#612419",
+                                "underline": true
+                              },
+                              "hover_active": {
+                                "foreground": "#612419",
+                                "underline": true
+                              },
+                              "visited": {
+                                "foreground": "#9f5555",
+                                "underline": false
+                              },
+                              "visited_hover": {
+                                "foreground": "#854848",
+                                "underline": true
+                              },
+                              "visited_active": {
+                                "foreground": "#512e2e",
+                                "underline": true
+                              },
+                              "visited_hover_active": {
+                                "foreground": "#512e2e",
+                                "underline": true
+                              },
+                              "underline_on_focus": true,
+                              "focus_outline": {
+                                "width": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "color": {
+                                  "kind": "rgb",
+                                  "value": "#3366cc"
+                                },
+                                "radius": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "offset": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              }
+                            },
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ",",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#202122",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#202122",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "-ač",
+                            "target": "-ač",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#3366cc",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "link_paint": {
+                              "normal": {
+                                "foreground": "#3366cc",
+                                "underline": false
+                              },
+                              "hover": {
+                                "foreground": "#3056a9",
+                                "underline": true
+                              },
+                              "active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "hover_active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "visited": {
+                                "foreground": "#6a60b0",
+                                "underline": false
+                              },
+                              "visited_hover": {
+                                "foreground": "#534fa3",
+                                "underline": true
+                              },
+                              "visited_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "visited_hover_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "underline_on_focus": true,
+                              "focus_outline": {
+                                "width": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "color": {
+                                  "kind": "rgb",
+                                  "value": "#3366cc"
+                                },
+                                "radius": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "offset": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              }
+                            },
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ", ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#202122",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "ac",
+                            "target": "ac",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#3366cc",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "link_paint": {
+                              "normal": {
+                                "foreground": "#3366cc",
+                                "underline": false
+                              },
+                              "hover": {
+                                "foreground": "#3056a9",
+                                "underline": true
+                              },
+                              "active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "hover_active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "visited": {
+                                "foreground": "#6a60b0",
+                                "underline": false
+                              },
+                              "visited_hover": {
+                                "foreground": "#534fa3",
+                                "underline": true
+                              },
+                              "visited_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "visited_hover_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "underline_on_focus": true,
+                              "focus_outline": {
+                                "width": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "color": {
+                                  "kind": "rgb",
+                                  "value": "#3366cc"
+                                },
+                                "radius": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "offset": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              }
+                            },
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ", ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#202122",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "ac-",
+                            "target": "ac-",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#3366cc",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "link_paint": {
+                              "normal": {
+                                "foreground": "#3366cc",
+                                "underline": false
+                              },
+                              "hover": {
+                                "foreground": "#3056a9",
+                                "underline": true
+                              },
+                              "active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "hover_active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "visited": {
+                                "foreground": "#6a60b0",
+                                "underline": false
+                              },
+                              "visited_hover": {
+                                "foreground": "#534fa3",
+                                "underline": true
+                              },
+                              "visited_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "visited_hover_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "underline_on_focus": true,
+                              "focus_outline": {
+                                "width": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "color": {
+                                  "kind": "rgb",
+                                  "value": "#3366cc"
+                                },
+                                "radius": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "offset": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              }
+                            },
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ", ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#202122",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "aç",
+                            "target": "aç",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#3366cc",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "link_paint": {
+                              "normal": {
+                                "foreground": "#3366cc",
+                                "underline": false
+                              },
+                              "hover": {
+                                "foreground": "#3056a9",
+                                "underline": true
+                              },
+                              "active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "hover_active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "visited": {
+                                "foreground": "#6a60b0",
+                                "underline": false
+                              },
+                              "visited_hover": {
+                                "foreground": "#534fa3",
+                                "underline": true
+                              },
+                              "visited_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "visited_hover_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "underline_on_focus": true,
+                              "focus_outline": {
+                                "width": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "color": {
+                                  "kind": "rgb",
+                                  "value": "#3366cc"
+                                },
+                                "radius": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "offset": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              }
+                            },
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ", ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#202122",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "ać",
+                            "target": "ać",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#3366cc",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "link_paint": {
+                              "normal": {
+                                "foreground": "#3366cc",
+                                "underline": false
+                              },
+                              "hover": {
+                                "foreground": "#3056a9",
+                                "underline": true
+                              },
+                              "active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "hover_active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "visited": {
+                                "foreground": "#6a60b0",
+                                "underline": false
+                              },
+                              "visited_hover": {
+                                "foreground": "#534fa3",
+                                "underline": true
+                              },
+                              "visited_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "visited_hover_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "underline_on_focus": true,
+                              "focus_outline": {
+                                "width": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "color": {
+                                  "kind": "rgb",
+                                  "value": "#3366cc"
+                                },
+                                "radius": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "offset": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              }
+                            },
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ", ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#202122",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "ač",
+                            "target": "ač",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#3366cc",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "link_paint": {
+                              "normal": {
+                                "foreground": "#3366cc",
+                                "underline": false
+                              },
+                              "hover": {
+                                "foreground": "#3056a9",
+                                "underline": true
+                              },
+                              "active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "hover_active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "visited": {
+                                "foreground": "#6a60b0",
+                                "underline": false
+                              },
+                              "visited_hover": {
+                                "foreground": "#534fa3",
+                                "underline": true
+                              },
+                              "visited_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "visited_hover_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "underline_on_focus": true,
+                              "focus_outline": {
+                                "width": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "color": {
+                                  "kind": "rgb",
+                                  "value": "#3366cc"
+                                },
+                                "radius": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "offset": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              }
+                            },
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ", ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#202122",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "ác",
+                            "target": "ác",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#3366cc",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "link_paint": {
+                              "normal": {
+                                "foreground": "#3366cc",
+                                "underline": false
+                              },
+                              "hover": {
+                                "foreground": "#3056a9",
+                                "underline": true
+                              },
+                              "active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "hover_active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "visited": {
+                                "foreground": "#6a60b0",
+                                "underline": false
+                              },
+                              "visited_hover": {
+                                "foreground": "#534fa3",
+                                "underline": true
+                              },
+                              "visited_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "visited_hover_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "underline_on_focus": true,
+                              "focus_outline": {
+                                "width": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "color": {
+                                  "kind": "rgb",
+                                  "value": "#3366cc"
+                                },
+                                "radius": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "offset": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              }
+                            },
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ", ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#202122",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "āc",
+                            "target": "āc",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#bf3c2c",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "link_paint": {
+                              "normal": {
+                                "foreground": "#bf3c2c",
+                                "underline": false
+                              },
+                              "hover": {
+                                "foreground": "#9f3526",
+                                "underline": true
+                              },
+                              "active": {
+                                "foreground": "#612419",
+                                "underline": true
+                              },
+                              "hover_active": {
+                                "foreground": "#612419",
+                                "underline": true
+                              },
+                              "visited": {
+                                "foreground": "#9f5555",
+                                "underline": false
+                              },
+                              "visited_hover": {
+                                "foreground": "#854848",
+                                "underline": true
+                              },
+                              "visited_active": {
+                                "foreground": "#512e2e",
+                                "underline": true
+                              },
+                              "visited_hover_active": {
+                                "foreground": "#512e2e",
+                                "underline": true
+                              },
+                              "underline_on_focus": true,
+                              "focus_outline": {
+                                "width": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "color": {
+                                  "kind": "rgb",
+                                  "value": "#3366cc"
+                                },
+                                "radius": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "offset": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              }
+                            },
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ", ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#202122",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "ắc",
+                            "target": "ắc",
+                            "trail": "",
+                            "language": "mg",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#3366cc",
+                            "font_scale": 1,
+                            "font_scale_basis": "normal_body",
+                            "font_features": "normal",
+                            "font_family": "sans_serif",
+                            "link_paint": {
+                              "normal": {
+                                "foreground": "#3366cc",
+                                "underline": false
+                              },
+                              "hover": {
+                                "foreground": "#3056a9",
+                                "underline": true
+                              },
+                              "active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "hover_active": {
+                                "foreground": "#233566",
+                                "underline": true
+                              },
+                              "visited": {
+                                "foreground": "#6a60b0",
+                                "underline": false
+                              },
+                              "visited_hover": {
+                                "foreground": "#534fa3",
+                                "underline": true
+                              },
+                              "visited_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "visited_hover_active": {
+                                "foreground": "#353262",
+                                "underline": true
+                              },
+                              "underline_on_focus": true,
+                              "focus_outline": {
+                                "width": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "color": {
+                                  "kind": "rgb",
+                                  "value": "#3366cc"
+                                },
+                                "radius": {
+                                  "unit": "px",
+                                  "value": 2
+                                },
+                                "offset": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              }
+                            },
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f5f4aa",
+                        "style": {
+                          "border": {
+                            "none": {}
+                          },
+                          "padding": {
+                            "top": {
+                              "unit": "px",
+                              "value": 1
+                            },
+                            "right": {
+                              "unit": "px",
+                              "value": 1
+                            },
+                            "bottom": {
+                              "unit": "px",
+                              "value": 1
+                            },
+                            "left": {
+                              "unit": "px",
+                              "value": 1
+                            }
+                          },
+                          "text_align": "left",
+                          "vertical_align": "middle",
+                          "line_height": {
+                            "strut": {
+                              "font_scale": 1,
+                              "font_scale_basis": "normal_body",
+                              "owner_font": {
+                                "font_scale": 1,
+                                "font_scale_basis": "normal_body",
+                                "small": false,
+                                "superscript": false,
+                                "subscript": false,
+                                "font_normalized": false,
+                                "bold": false,
+                                "italic": false,
+                                "code": false,
+                                "language": "mg",
+                                "classes": "",
+                                "role": "normal",
+                                "font_features": "normal",
+                                "font_family": "sans_serif"
+                              }
+                            },
+                            "height": {
+                              "multiplier": 1.625
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "geometry": {
+                  "border": null,
+                  "cell_spacing": 2,
+                  "cell_padding": 1,
+                  "width": null
+                },
+                "style": {
+                  "background": "#f5f4aa",
+                  "border": {
+                    "solid": {
+                      "width": {
+                        "unit": "px",
+                        "value": 1
+                      },
+                      "color": "#bca674"
+                    }
+                  },
+                  "collapse": "separate",
+                  "margins": {
+                    "top": {
+                      "unit": "px",
+                      "value": 0
+                    },
+                    "right": {
+                      "unit": "px",
+                      "value": 0
+                    },
+                    "bottom": {
+                      "unit": "em",
+                      "value": 0.5
+                    },
+                    "left": {
+                      "unit": "px",
+                      "value": 0
+                    }
+                  },
+                  "containing_direction": "ltr",
+                  "width": {
+                    "unit": "percent",
+                    "value": 100
+                  },
+                  "padding": {
+                    "top": {
+                      "unit": "em",
+                      "value": 0.10000000149011612
+                    },
+                    "right": {
+                      "unit": "em",
+                      "value": 0.10000000149011612
+                    },
+                    "bottom": {
+                      "unit": "em",
+                      "value": 0.10000000149011612
+                    },
+                    "left": {
+                      "unit": "em",
+                      "value": 0.10000000149011612
+                    }
+                  },
+                  "clear": "none",
+                  "corner_radii": {
+                    "top_left": {
+                      "unit": "px",
+                      "value": 8
+                    },
+                    "top_right": {
+                      "unit": "px",
+                      "value": 8
+                    },
+                    "bottom_right": {
+                      "unit": "px",
+                      "value": 8
+                    },
+                    "bottom_left": {
+                      "unit": "px",
+                      "value": 0
+                    }
+                  }
+                },
+                "block_viewport": {
+                  "max_viewport_width_px": 639,
+                  "box_style": {
+                    "background": "#f5f4aa",
+                    "border": {
+                      "solid": {
+                        "width": {
+                          "unit": "px",
+                          "value": 1
+                        },
+                        "color": "#bca674"
+                      }
+                    },
+                    "margins": {
+                      "top": {
+                        "unit": "px",
+                        "value": 0
+                      },
+                      "right": {
+                        "unit": "px",
+                        "value": 0
+                      },
+                      "bottom": {
+                        "unit": "em",
+                        "value": 0.5
+                      },
+                      "left": {
+                        "unit": "px",
+                        "value": 0
+                      }
+                    },
+                    "containing_direction": "ltr",
+                    "width": {
+                      "unit": "percent",
+                      "value": 100
+                    },
+                    "padding": {
+                      "top": {
+                        "unit": "em",
+                        "value": 0.10000000149011612
+                      },
+                      "right": {
+                        "unit": "em",
+                        "value": 0.10000000149011612
+                      },
+                      "bottom": {
+                        "unit": "em",
+                        "value": 0.10000000149011612
+                      },
+                      "left": {
+                        "unit": "em",
+                        "value": 0.10000000149011612
+                      }
+                    },
+                    "clear": "none",
+                    "corner_radii": {
+                      "top_left": {
+                        "unit": "px",
+                        "value": 8
+                      },
+                      "top_right": {
+                        "unit": "px",
+                        "value": 8
+                      },
+                      "bottom_right": {
+                        "unit": "px",
+                        "value": 8
+                      },
+                      "bottom_left": {
+                        "unit": "px",
+                        "value": 0
+                      }
+                    }
+                  },
+                  "box_sizing": "border_box",
+                  "max_width": {
+                    "unit": "percent",
+                    "value": 100
+                  },
+                  "grid_style": {
+                    "collapse": "separate"
+                  },
+                  "grid_direction": "ltr",
+                  "language": "mg",
+                  "focus_paint": {
+                    "mode": "ua_auto",
+                    "color": {
+                      "kind": "rgb",
+                      "value": "#3366cc"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "ac/voir",
+                  "target": "ac/voir",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [
+        {
+          "file": "Arrowyellow.png",
+          "kind": "image",
+          "caption": "Arrowyellow.png"
+        }
+      ],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

@@ -5441,6 +5441,164 @@ private slots:
         QCOMPARE(QJsonDocument::fromJson(bytes), response);
     }
 
+    void typedCellDeclaringFontKeepsIndependentNativeMetricsAndDescendants()
+    {
+        MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        const QJsonObject serif{{"stack", QJsonObject{{"names", QJsonArray{}}, {"fallback", "serif"}}}};
+        const auto snapshot = [](qreal scale, const QString &basis, bool strong) {
+            return QJsonObject{{"font_scale", scale}, {"font_scale_basis", basis}, {"small", false},
+                {"superscript", false}, {"subscript", false}, {"font_normalized", false},
+                {"bold", strong}, {"italic", strong}, {"code", false}, {"language", "mg"},
+                {"classes", ""}, {"role", "normal"}, {"font_features", "normal"}, {"font_family", "sans_serif"}};
+        };
+        for (bool strong : {false, true}) for (bool header : {false, true}) for (bool cssPixels : {false, true}) {
+            QImage image(650, 300, QImage::Format_ARGB32_Premultiplied);
+            QTextDocument document; document.setLayoutEnabled(false); document.documentLayout()->setPaintDevice(&image);
+            QFont inherited = window.reading_->document()->defaultFont(); inherited.setPointSizeF(30);
+            inherited.setBold(!strong); inherited.setItalic(!strong);
+            SemanticHtml::applyFontFamily(inherited, serif);
+            SemanticHtml::applyFontFeatures(inherited, SemanticHtml::FontFeaturePolicy::SevenOn);
+            document.setDefaultFont(inherited);
+            const qreal scale = cssPixels ? 13.5 : 1.25;
+            const QString basis = cssPixels ? QStringLiteral("css_px") : QStringLiteral("normal_body");
+            const auto owner = snapshot(scale, basis, strong);
+            const QJsonObject strut{{"font_scale", scale}, {"font_scale_basis", basis}, {"owner_font", owner}};
+            const QJsonObject policy{{"strut", strut}, {"height", QJsonObject{{"normal", QJsonObject{}}}}};
+            const QJsonObject child{{"kind", "link"}, {"text", "Independent child"}, {"target", "CellFont"},
+                {"target_fragment", "part"}, {"bold", !strong}, {"italic", !strong}, {"code", false},
+                {"font_scale", .5}, {"font_scale_basis", "normal_body"}, {"font_family", serif}, {"font_features", "seven_on"}};
+            const QJsonObject cell{{"header", header}, {"spans", QJsonArray{child}},
+                {"style", QJsonObject{{"line_height", policy}}}};
+            const QJsonObject table{{"caption", QJsonArray{}},
+                {"geometry", QJsonObject{{"border", 0}, {"cell_spacing", 0}, {"cell_padding", 0}}},
+                {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell}}}}}};
+            FlowConstruction::RenderContext context; context.pointSize = 30;
+            SemanticHtml::setHtml(&document, window.tableHtml(table, 0, 1, {}, {}, {}, {}, context));
+            document.setTextWidth(550); document.setLayoutEnabled(true); document.size();
+            auto *nativeTable = qobject_cast<QTextTable *>(document.rootFrame()->childFrames().value(0)); QVERIFY(nativeTable);
+            const auto native = nativeTable->cellAt(0, 0).format().property(SemanticHtml::cellLineHeightProperty).toMap();
+            QCOMPARE(native.size(), 6); QCOMPARE(native.value("kind").toString(), QStringLiteral("normal"));
+            const QFont font = native.value("font").value<QFont>();
+            const qreal expectedPoints = scale * (cssPixels ? SemanticHtml::cssPixelFontBase(window.readingPointSize_) : window.readingPointSize_);
+            QVERIFY(qAbs(font.pointSizeF() - expectedPoints) < .0001);
+            QCOMPARE(font.bold(), strong); QCOMPARE(font.italic(), strong); QCOMPARE(font.styleHint(), QFont::SansSerif);
+            QVERIFY(font.featureTags().isEmpty());
+            QFont expectedFamily = inherited; SemanticHtml::applyFontFamily(expectedFamily, QStringLiteral("sans_serif"));
+            QCOMPARE(font.families(), expectedFamily.families());
+            QVERIFY(qAbs(native.value("owner_px").toDouble() - font.pointSizeF() * QFontMetricsF(font).fontDpi() / 72) < .0001);
+            const auto selected = document.find("Independent child"); QVERIFY(!selected.isNull());
+            const auto childFormat = selected.charFormat();
+            QCOMPARE(childFormat.fontWeight(), int(strong ? QFont::Normal : QFont::Bold)); QCOMPARE(childFormat.fontItalic(), !strong);
+            QCOMPARE(childFormat.font().styleHint(), QFont::Serif);
+            QCOMPARE(childFormat.fontFeatures(), SemanticHtml::fontFeatureMap(SemanticHtml::FontFeaturePolicy::SevenOn));
+            QVERIFY(qAbs(childFormat.fontPointSize() - .5 * window.readingPointSize_) < .0001);
+            QCOMPARE(childFormat.anchorHref(), QStringLiteral("dict:CellFont#part"));
+            QCOMPARE(document.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const QString raw = document.toRawText();
+            image.fill(Qt::white); QPainter painter(&image); document.drawContents(&painter); painter.end();
+            bool ink = false; for (int y = 0; y < image.height() && !ink; ++y)
+                for (int x = 0; x < image.width(); ++x) if (image.pixelColor(x, y) != QColor(Qt::white)) { ink = true; break; }
+            QVERIFY(ink); document.setTextWidth(300); document.size();
+            QCOMPARE(document.toRawText(), raw);
+            QCOMPARE(nativeTable->cellAt(0, 0).format().property(SemanticHtml::cellLineHeightProperty).toMap(), native);
+        }
+        const auto validOwner = snapshot(1, QStringLiteral("normal_body"), false);
+        const QJsonObject validStrut{{"font_scale", 1}, {"font_scale_basis", "normal_body"}, {"owner_font", validOwner}};
+        const auto line = [](const QJsonObject &strut) { return QJsonObject{{"strut", strut}, {"height", QJsonObject{{"multiplier", 1.625}}}}; };
+        QVERIFY(!SemanticHtml::cellLineHeight(line(validStrut), 12).ownerFont.isEmpty());
+        for (int failure = 0; failure < 18; ++failure) {
+            auto owner = validOwner; auto strut = validStrut;
+            switch (failure) {
+            case 0: owner.insert("font_scale", 2); break;
+            case 1: owner.insert("font_scale_basis", "css_px"); break;
+            case 2: owner.insert("font_family", QJsonValue()); break;
+            case 3: owner.insert("font_features", QJsonValue()); break;
+            case 4: owner.insert("language", ""); break;
+            case 5: owner.insert("language", QString(1025, QChar('a'))); break;
+            case 6: owner.insert("small", true); break;
+            case 7: owner.insert("superscript", true); break;
+            case 8: owner.insert("subscript", true); break;
+            case 9: owner.insert("font_normalized", true); break;
+            case 10: owner.insert("code", true); break;
+            case 11: owner.insert("classes", "source-class"); break;
+            case 12: owner.insert("role", "label"); break;
+            case 13: owner.insert("unknown", true); break;
+            case 14: owner.insert("bold", "false"); break;
+            case 15: owner.insert("font_family", "monospace"); break;
+            case 16: owner.insert("font_features", "unknown"); break;
+            case 17: strut.insert("unknown", true); break;
+            }
+            strut.insert("owner_font", owner);
+            QVERIFY_EXCEPTION_THROWN(SemanticHtml::cellLineHeight(line(strut), 12), std::runtime_error);
+        }
+        auto legacy = validStrut; legacy.remove("owner_font");
+        QVERIFY(SemanticHtml::cellLineHeight(line(legacy), 12).ownerFont.isEmpty());
+        legacy.insert("owner_font", QJsonValue());
+        QVERIFY(SemanticHtml::cellLineHeight(line(legacy), 12).ownerFont.isEmpty());
+        legacy.insert("owner_font", false);
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::cellLineHeight(line(legacy), 12), std::runtime_error);
+    }
+
+    void retainedMg194CompleteTableKeepsDeclaringFontAndResponsivePaint()
+    {
+        QFile file(QFINDTESTDATA("fixtures/mg194-unclassified-ac.json")); QVERIFY(file.open(QIODevice::ReadOnly));
+        const auto bytes = file.readAll(); QCOMPARE(bytes.size(), 65778);
+        QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(),
+            QByteArray("d423e9cad04c1866d29ce59430080ecac1fd674f2657259949929524202cad0c"));
+        QJsonParseError error; const auto response = QJsonDocument::fromJson(bytes, &error);
+        QCOMPARE(error.error, QJsonParseError::NoError);
+        const auto entries = response.object().value("entries").toArray(); QCOMPARE(entries.size(), 1);
+        const auto entry = entries.first().toObject(); QCOMPARE(entry.value("title").toString(), QStringLiteral("-ac"));
+        QCOMPARE(entry.value("language").toString(), QStringLiteral("Unclassified"));
+        const auto blocks = entry.value("sections").toArray().first().toObject().value("blocks").toArray();
+        const auto sourceTable = blocks.first().toObject().value("table").toObject();
+        const auto sourceCell = sourceTable.value("rows").toArray().first().toObject().value("cells").toArray().first().toObject();
+        const auto owner = sourceCell.value("style").toObject().value("line_height").toObject().value("strut").toObject().value("owner_font").toObject();
+        QCOMPARE(owner.value("font_family").toString(), QStringLiteral("sans_serif"));
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        QVERIFY(composeReadingEntry(window, entry)); window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+        auto *document = window.reading_->document(); auto *native = qobject_cast<QTextDocumentLayout *>(document->documentLayout()); QVERIFY(native);
+        QPointer<QTextTable> grid; QPointer<QTextFrame> viewport;
+        const auto find = [&](auto &&self, QTextFrame *frame) -> void {
+            if (frame->frameFormat().hasProperty(SemanticHtml::tableViewportProperty)) { QVERIFY(!viewport); viewport = frame; }
+            if (auto *table = qobject_cast<QTextTable *>(frame)) { QVERIFY(!grid); grid = table; }
+            for (auto *child : frame->childFrames()) self(self, child);
+        };
+        find(find, document->rootFrame()); QVERIFY(grid); QVERIFY(viewport);
+        QCOMPARE(grid->rows(), 1); QCOMPARE(grid->columns(), 1);
+        const auto metric = grid->cellAt(0, 0).format().property(SemanticHtml::cellLineHeightProperty).toMap();
+        const QFont font = metric.value("font").value<QFont>();
+        QCOMPARE(font.styleHint(), QFont::SansSerif); QVERIFY(!font.bold()); QVERIFY(!font.italic()); QVERIFY(font.featureTags().isEmpty());
+        QVERIFY(qAbs(font.pointSizeF() - window.readingPointSize_) < .0001);
+        QCOMPARE(metric.value("kind").toString(), QStringLiteral("multiplier")); QCOMPARE(metric.value("value").toDouble(), 1.625);
+        QCOMPARE(grid->cellAt(0, 0).format().background().color(), QColor("#f5f4aa"));
+        const QString raw = document->toRawText(); QVERIFY(raw.contains(QStringLiteral("Jereo koa")));
+        for (int width : {900, 639, 900}) {
+            window.resize(width, 700); QTRY_COMPARE(window.contentsRect().width(), width);
+            QTRY_COMPARE(viewport->frameFormat().property(SemanticHtml::tableViewportProperty).toMap().value("active").toBool(), width <= 639);
+            QTRY_VERIFY(!window.readingFloatLayoutScheduled_); native->documentSize();
+            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(window.currentEntry_, entry); QCOMPARE(document->toRawText(), raw);
+            QCOMPARE(grid->cellAt(0, 0).format().property(SemanticHtml::cellLineHeightProperty).toMap(), metric);
+            int searchPosition = grid->firstPosition();
+            for (const auto &value : sourceCell.value("spans").toArray()) {
+                const auto span = value.toObject(); const QString text = span.value("text").toString();
+                if (span.value("kind") != QStringLiteral("link") || text.isEmpty()) continue;
+                auto selected = document->find(text, searchPosition); QVERIFY(!selected.isNull());
+                QVERIFY(selected.selectionEnd() <= grid->lastPosition());
+                searchPosition = selected.selectionEnd();
+                const auto format = selected.charFormat(); QVERIFY(format.isAnchor());
+                QCOMPARE(format.stringProperty(MissingFigurePaint::policyProperty), MissingFigurePaint::ordinaryPolicy);
+                QCOMPARE(QJsonObject::fromVariantMap(format.property(MissingFigurePaint::fixedPolicyProperty).toMap()), span.value("link_paint").toObject());
+            }
+            QImage image(window.size(), QImage::Format_ARGB32_Premultiplied); image.fill(Qt::transparent); window.render(&image);
+            QVERIFY(!image.isNull());
+            const auto folder = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+            if (!folder.isEmpty()) { QVERIFY(QDir().mkpath(folder)); QVERIFY(image.save(QDir(folder).filePath(QStringLiteral("mg194-declaring-cell-%1.png").arg(width)))); }
+        }
+        QCOMPARE(QJsonDocument::fromJson(bytes), response);
+    }
+
     void typedCellLineHeightKeepsOwnerFontTraitsAndTextOrigins()
     {
         MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);

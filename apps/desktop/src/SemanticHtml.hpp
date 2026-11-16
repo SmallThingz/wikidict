@@ -308,10 +308,12 @@ inline constexpr int tablePhysicalEdgesProperty = QTextFormat::UserProperty + 0x
 inline constexpr int tableCornerRadiiProperty = QTextFormat::UserProperty + 0x5810;
 inline constexpr int cellHiddenEdgesProperty = QTextFormat::UserProperty + 0x57df;
 inline const QString cellStyleCapability = QStringLiteral("wikidict.cell-style/1");
+inline QJsonObject inlineFontSnapshot(const QJsonValue &value);
 struct CellLineInput {
     bool present = false;
     bool strut = false;
     qreal strutPoints = 0;
+    QJsonObject ownerFont;
     QString kind;
     qreal value = 0; // A fixed text length is in the native default-DPI coordinate.
 };
@@ -326,11 +328,25 @@ inline CellLineInput cellLineHeight(const QJsonValue &value, qreal bodyPoints,
         const auto spec = input.toObject();
         const auto amount = spec.value(number);
         const auto basis = spec.value(QStringLiteral("font_scale_basis"));
-        if (!input.isObject() || spec.size() != 2 || !amount.isDouble()
+        const bool hasOwner = font && spec.contains(QStringLiteral("owner_font"));
+        if (!input.isObject() || spec.size() != 2 + int(hasOwner) || !amount.isDouble()
             || !std::isfinite(amount.toDouble()) || amount.toDouble() < 0
             || amount.toDouble() > std::numeric_limits<float>::max() || !basis.isString()
             || (basis.toString() != QStringLiteral("normal_body") && basis.toString() != QStringLiteral("css_px")))
             throw std::runtime_error("invalid cell text metric");
+        if (hasOwner && present(spec.value(QStringLiteral("owner_font")))) {
+            const auto owner = inlineFontSnapshot(spec.value(QStringLiteral("owner_font")));
+            // The strut owns the single size; the snapshot supplies its declaring
+            // font traits, independently of the cell's painted descendants.
+            if (owner.value("font_scale") != amount || owner.value("font_scale_basis") != basis
+                || !present(owner.value("font_family")) || !present(owner.value("font_features"))
+                || owner.value("language").toString().isEmpty() || owner.value("language").toString().toUtf8().size() > 1024
+                || !owner.value("classes").toString().isEmpty() || owner.value("role") != QStringLiteral("normal"))
+                throw std::runtime_error("invalid declaring cell font");
+            for (const auto &key : {"small", "superscript", "subscript", "font_normalized", "code"})
+                if (owner.value(QLatin1StringView(key)).toBool()) throw std::runtime_error("invalid declaring cell font flags");
+            result.ownerFont = owner;
+        }
         const qreal base = basis.toString() == QStringLiteral("css_px") ? cssPixelFontBase(bodyPoints) : bodyPoints;
         if (!std::isfinite(base) || base <= 0) throw std::runtime_error("invalid cell body metric");
         if (amount.toDouble() == 0) return qreal(0);
@@ -2234,6 +2250,12 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                     QFont font = imported.value(QStringLiteral("font")).value<QFont>();
                     if (expected.value(QStringLiteral("header")).toBool() && font.weight() != QFont::Bold)
                         throw std::runtime_error("inconsistent typed header cell font");
+                    if (!line.ownerFont.isEmpty()) {
+                        font.setBold(line.ownerFont.value("bold").toBool());
+                        font.setItalic(line.ownerFont.value("italic").toBool());
+                        applyFontFamily(font, line.ownerFont.value("font_family"));
+                        applyFontFeatures(font, fontFeaturePolicy(line.ownerFont.value("font_features")));
+                    }
                     if (line.strut) {
                         if (line.strutPoints > 0) font.setPointSizeF(line.strutPoints);
                         else { font.setFamilies(QStringList{zeroFontFamilyName}); font.setStyleStrategy(QFont::NoFontMerging); }
