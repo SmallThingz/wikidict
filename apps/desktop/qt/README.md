@@ -589,6 +589,22 @@ changes are in the maintained patch series; private qualification paths record
 evidence and are not fresh-checkout build dependencies. Earlier qualification
 sections retain their historical scope and were not rerun by this update.
 
+## Owned-table boundary caret extent
+
+Owned-table traversal excludes the same unpainted table-boundary storage lines
+as glyph traversal. These empty lines retain their native caret allocation and
+navigation, but do not enlarge the scrollable document. Authored empty paragraphs,
+backgrounds, rules and entry-body boundaries retain their existing treatment;
+real table and text overflow remains reachable. Ordinary stock scope is unchanged.
+
+Seven affected native controls and the existing Reader table/list ownership
+method qualify this correction. The Reader executable was reused without an App
+build or configure replay. The earlier full Reader UX result (376 passes, one
+failure and two skips) and the diagnostic failure remain recorded; the complete
+suite was not rerun for this update. No genuine page or full frontend acceptance
+is claimed. Reproduce the selected scope through the maintained build routes and
+the method lists in `qualification.table_boundary_extent`.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,

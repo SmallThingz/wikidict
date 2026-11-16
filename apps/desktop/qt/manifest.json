@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "9f3fa540fbdb9f9fc79c5f8a3785c20cca2c219d01e973dd50a9d11a0a8614e8",
-      "bytes": 986053,
+      "sha256": "18530e87dde5c9102d85ea8deaa74a807ab034ceac09ed7a7709233bd776c5af",
+      "bytes": 986103,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "e3878ae54343c0611a183d1923b57d8a1c36dba95c76be0bda06371ef716ec3b",
-          "bytes": 792370
+          "qualified_sha256": "b5a57f03afbed127aee491175d2cd8bf828d9c415a7737c195b3a918e41589a9",
+          "bytes": 792419
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -201,8 +201,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "ac852ea8a6f4ff0e222f7d876836453b48fcf526ea55d0363b5c407ab66c38f5",
-      "bytes": 1224820,
+      "sha256": "63c1048cf1cdcba723b449f9ed0ed0e590137711ccab208b07817562bb61bf89",
+      "bytes": 1225219,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -215,8 +215,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "8fc44245b095c366826a7b7bdfaa9d62c107d8304ac1865bc9833c482fdd020b",
-          "bytes": 1229581
+          "qualified_sha256": "bf6812b3066f0de02647b160452ec2dd6d831dab87f979d0f5634be1802ea007",
+          "bytes": 1229975
         }
       ]
     },
@@ -753,6 +753,79 @@
         }
       ],
       "scope": "Eleven current native methods cover inline action declaring metrics, Ruby action/base allocation, positive reading padding and affected prior controls. One current Reader method, plus four source-identical historical App202 Reader passes and two source/binary-identical App204 Media passes, cover private JSON consumer rendering, actions, accessibility, copy, malformed input and structural preview/pronunciation traversal. Current and historical results remain distinct. Synthetic numerical typography is not an actual Mai source tuple; no paired U/V producer/FFI or genuine corpus rendering claim."
+    },
+    "table_boundary_extent": {
+      "date": "2026-11-16",
+      "native_application": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application174.json",
+        "bytes": 286913,
+        "sha256": "d5d0879ba66ca59e40843e6dac878983edf54e2bea73beca6ac836a9b6558b9a"
+      },
+      "source_components": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application174.json",
+          "bytes": 286913,
+          "sha256": "d5d0879ba66ca59e40843e6dac878983edf54e2bea73beca6ac836a9b6558b9a"
+        }
+      ],
+      "native_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold155/independent-closure01.json",
+        "bytes": 217700,
+        "sha256": "429ea7ca52f3d3179d3fa3433bb022f9ed06a1671b97b33af5461a555cd1c3b0"
+      },
+      "native_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold155/release01.json",
+        "bytes": 549,
+        "sha256": "dabcabd7cbf8b4a7f32b7022c80904fb91c60f948471d0d9b83361ee994e3744"
+      },
+      "current_methods": [
+        "tableBoundaryCaretDoesNotExpandGlyphTraversal",
+        "ownedFloatTableGridDoesNotAcquirePageMargin",
+        "ownedTableOverflowKeepsClippedPaintHitAndMutation",
+        "containerScrollportKeepsOneGridViewportAndSource",
+        "containerScrollportUsesAuthoredLineAdvanceInsteadOfFontBounds",
+        "tableCornersClipOnlyExistingOverflowAndKeepSourceActions",
+        "entryBodyPostTableCaretPreservesLeadingAndPendingMargins"
+      ],
+      "current_methods_passed": true,
+      "app_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile208/dispatch02/independent-closure01.json",
+        "bytes": 32827,
+        "sha256": "0f97ae6ed52461fc6e5d9377a5c302b61d67ca580ce4549f61e2f689856064d2"
+      },
+      "app_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile208/dispatch02/release01.json",
+        "bytes": 494,
+        "sha256": "0cc36386c1d84c8602e39123b5fde17a9d10660b1641de70cf310631dfd4a20d"
+      },
+      "current_main_methods": [
+        "tableOwnedByListItemKeepsMarkerBesideFirstRow"
+      ],
+      "current_media_methods": [],
+      "app_build_replayed": false,
+      "configure_replayed": false,
+      "reader_test_rebuilt": false,
+      "prior_diagnostic": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile207/dispatch03/independent-closure01.json",
+        "bytes": 35973,
+        "sha256": "22dc501e00857611ae4f5408b315861f2d7055434441b695c151a053b73c6647"
+      },
+      "prior_full_reader_ux": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile206/dispatch03/independent-closure01.json",
+        "bytes": 39292,
+        "sha256": "a6d67ffdedb4bef7cecad8f373fa0c670946816de867a56669ff4d38413cac90"
+      },
+      "prior_full_reader_ux_counts": {
+        "passed": 376,
+        "failed": 1,
+        "skipped": 2,
+        "blacklisted": 0
+      },
+      "historical_passes_promoted": false,
+      "full_native_suite": false,
+      "full_app_ctest": false,
+      "genuine_rendered_acceptance": false,
+      "scope": "Exclude only unpainted table-boundary caret storage lines from owned-table scrollable traversal. Preserve ordinary stock scope, actual caret layout, authored paragraph/background/ruler bounds, real table/text extent, scrollport clipping and action reachability. Seven current native controls and the existing Reader table/list ownership method pass; the earlier full UX376 passes/one failure/two skips and diagnostic failure remain historical. No complete-suite rerun or genuine page acceptance is inferred."
     }
   },
   "packaged_distribution_source_equivalence": false,

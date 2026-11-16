@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,13938 @@
+@@ -3,24 +3,13943 @@
 
 
  #include <QTest>
@@ -5103,7 +5103,8 @@
 +        constexpr int plain = QTextFormat::UserProperty + 0x57e0;
 +        constexpr int paragraph = QTextFormat::UserProperty + 0x5760;
 +        for (int dpi : {96, 144}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft})
-+            for (int mode : {0, 1, 2, 3}) {
++            for (int mode : {0, 1, 2, 3}) for (const bool tableOwned : {false, true}) {
++                qInfo() << "table boundary scope" << dpi << direction << mode << tableOwned;
 +                QImage device(1800, 700, QImage::Format_ARGB32_Premultiplied);
 +                device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
 +                const qreal scale = device.logicalDpiY() / QFontMetricsF(QFont()).fontDpi();
@@ -5119,6 +5120,10 @@
 +                QTextTableFormat tableFormat; tableFormat.setMargin(0); tableFormat.setBorder(0);
 +                tableFormat.setCellSpacing(0); tableFormat.setCellPadding(0);
 +                tableFormat.setWidth(QTextLength(QTextLength::PercentageLength, 100)); tableFormat.setLayoutDirection(direction);
++                if (tableOwned) {
++                    tableFormat.setProperty(QTextFormat::UserProperty + 0x57d0, QStringLiteral("wikidict.table-box/1"));
++                    tableFormat.setProperty(QTextFormat::UserProperty + 0x57d2, 0);
++                }
 +                auto *table = cursor.insertTable(1, 1, tableFormat);
 +                QTextCharFormat action; action.setAnchor(true); action.setAnchorHref(QStringLiteral("dict:table-boundary"));
 +                table->firstCursorPosition().insertText(QStringLiteral("Cell"), action);
@@ -13961,7 +13966,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +14562,1560 @@
+@@ -648,5 +14567,1560 @@
      }
  }
 
