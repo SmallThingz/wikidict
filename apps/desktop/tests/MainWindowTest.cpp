@@ -51,6 +51,7 @@
 #include <QFutureWatcher>
 #include <QFontMetricsF>
 #include <QFontInfo>
+#include <QFontDatabase>
 #include <QGridLayout>
 #include <QGlyphRun>
 #include <QPainterPath>
@@ -13841,6 +13842,11 @@ private slots:
                 QJsonArray{QJsonObject{{"spans", QJsonArray{}}, {"nested_table", nestedTable}}}}}}}};
         QJsonObject tableAtLimit{{"kind", "table"}, {"spans", QJsonArray{}}, {"table", nestedTable}};
         observed.clear(); walker.block(tableAtLimit); QCOMPARE(observed, QStringList({"table-limit"}));
+        for (int index = 16; index != 32; ++index)
+            nestedTable = QJsonObject{{"caption", QJsonArray{}}, {"rows", QJsonArray{QJsonObject{{"cells",
+                QJsonArray{QJsonObject{{"spans", QJsonArray{}}, {"nested_table", nestedTable}}}}}}}};
+        tableAtLimit.insert("table", nestedTable);
+        observed.clear(); walker.block(tableAtLimit); QCOMPARE(observed, QStringList({"table-limit"}));
         nestedTable = QJsonObject{{"caption", QJsonArray{}}, {"rows", QJsonArray{QJsonObject{{"cells",
             QJsonArray{QJsonObject{{"spans", QJsonArray{}}, {"nested_table", nestedTable}}}}}}}};
         tableAtLimit.insert("table", nestedTable);
@@ -19229,6 +19235,14 @@ private slots:
         for (int level = 0; level < 16; ++level) deep = wrapTable(deep);
         QJsonObject deepReference = reference; deepReference.insert("blocks", QJsonArray{deep});
         QVERIFY(window.clueFor(entryWith(deepReference)).contains("Depth16 leaf"));
+        for (int level = 16; level < 32; ++level) {
+            deep = wrapTable(deep);
+            if (level == 19 || level == 31) {
+                deepReference.insert("blocks", QJsonArray{deep});
+                QVERIFY(window.clueFor(entryWith(deepReference)).contains("Depth16 leaf"));
+                QVERIFY(!window.entryHtml(entryWith(deepReference)).isEmpty());
+            }
+        }
         deepReference.insert("blocks", QJsonArray{wrapTable(deep)});
         QVERIFY_EXCEPTION_THROWN(window.clueFor(entryWith(deepReference)), DictApiError);
         QJsonObject fragment = reference; fragment.insert("kind", "fragment");
@@ -26665,12 +26679,278 @@ private slots:
         invalid = empty; invalid.insert(QStringLiteral("blocks"), QJsonArray{QStringLiteral("not a block")});
         QVERIFY_EXCEPTION_THROWN(window.tableHtml(table(invalid), 0), DictApiError);
         QVERIFY_EXCEPTION_THROWN(walker.table(table(invalid), {0, 1}), std::runtime_error);
-        QJsonObject nested = table(empty);
-        const auto wrap = [&](const QJsonObject &child) { return table(QJsonObject{{QStringLiteral("spans"), QJsonArray{}},
-            {QStringLiteral("blocks"), QJsonArray{QJsonObject{{QStringLiteral("kind"), QStringLiteral("table")}, {QStringLiteral("table"), child}}}}}); };
-        for (int i = 1; i < 16; ++i) nested = wrap(nested);
-        QVERIFY(!window.tableHtml(nested, 0).isEmpty());
-        QVERIFY_EXCEPTION_THROWN(window.tableHtml(wrap(nested), 0), DictApiError);
+        const auto wrap = [&](const QJsonObject &child, bool legacyMode) {
+            QJsonObject cell{{"spans", QJsonArray{}}};
+            if (legacyMode) cell.insert("nested_table", child);
+            else cell.insert("blocks", QJsonArray{
+                QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Before"}}}}},
+                QJsonObject{{"kind", "table"}, {"table", child}},
+                QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "After"}}}}}});
+            return table(cell);
+        };
+        for (const bool legacyMode : {false, true}) {
+            QJsonObject nested = table(empty);
+            for (int count = 1; count <= 32; ++count) {
+                if (count == 16 || count == 20 || count == 32) {
+                    QVERIFY(!window.tableHtml(nested, 0).isEmpty());
+                    walker.table(nested, {0, 1});
+                }
+                if (count < 32) nested = wrap(nested, legacyMode);
+            }
+            const auto overflow = wrap(nested, legacyMode);
+            QVERIFY_EXCEPTION_THROWN(window.tableHtml(overflow, 0), DictApiError);
+            QVERIFY_EXCEPTION_THROWN(walker.table(overflow, {0, 1}), std::runtime_error);
+        }
+        // A deep table does not spend or enlarge the separate content budget.
+        for (const int contentDepth : {16, 17}) {
+            QJsonObject content{{"kind", "paragraph"}, {"spans", QJsonArray{}}};
+            for (int count = 0; count < contentDepth; ++count)
+                content = QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}},
+                    {"container", QJsonObject{{"style", QJsonObject{}}, {"blocks", QJsonArray{content}}}}};
+            QJsonObject mixed = table(QJsonObject{{"spans", QJsonArray{}}, {"blocks", QJsonArray{content}}});
+            for (int count = 1; count < 32; ++count) mixed = wrap(mixed, false);
+            if (contentDepth == 16) {
+                walker.table(mixed, {0, 1});
+                QVERIFY(!window.tableHtml(mixed, 0).isEmpty());
+            } else {
+                QVERIFY_EXCEPTION_THROWN(walker.table(mixed, {0, 1}), std::runtime_error);
+                QVERIFY_EXCEPTION_THROWN(window.tableHtml(mixed, 0), std::runtime_error);
+            }
+        }
+    }
+
+    void bundledKanaFallbackKeepsArchaicAndOrdinaryGlyphs() {
+        const QFont applicationFont = QApplication::font();
+        MainWindow window{QString()};
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        QCOMPARE(QApplication::font(), applicationFont);
+        const QString family = QStringLiteral("Noto Serif Hentaigana");
+        for (const auto script : {QChar::Script_Hiragana, QChar::Script_Katakana})
+            QVERIFY(QFontDatabase::applicationFallbackFontFamilies(script).contains(family));
+        QFile asset(QStringLiteral(":/fonts/NotoSerifHentaigana-Regular.ttf"));
+        QVERIFY(asset.open(QIODevice::ReadOnly));
+        const QByteArray bytes = asset.readAll();
+        QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(),
+            QByteArray("2231394c949fa1cea871d943cf7ff7c0552308fca9067d70b88a533351d6bb5c"));
+        QRawFont bundled(bytes, 20, QFont::PreferDefaultHinting);
+        QVERIFY(bundled.isValid());
+        QCOMPARE(bundled.familyName(), family);
+        const QList<char32_t> characters{0x1b000, 0x1b001, 0x3048, 0x30a8};
+        for (const char32_t character : characters)
+            QCOMPARE(bundled.supportsCharacter(character), character > 0xffff);
+        // Exercise the actual search, title and Reader primary families. A script
+        // fallback must resolve missing glyphs without replacing those families.
+        for (const QFont &base : {window.search_->font(), window.title_->font(),
+                                window.reading_->document()->defaultFont()}) {
+            for (const bool styled : {false, true}) {
+                QFont font = base;
+                if (styled) { font.setBold(true); font.setItalic(true); }
+                for (const char32_t character : characters) {
+                    const QString text = QString::fromUcs4(&character, 1);
+                    QTextLayout layout(text, font);
+                    layout.beginLayout();
+                    QTextLine line = layout.createLine();
+                    QVERIFY(line.isValid());
+                    line.setLineWidth(500);
+                    layout.endLayout();
+                    const auto runs = layout.glyphRuns();
+                    QVERIFY(!runs.isEmpty());
+                    int glyphs = 0;
+                    for (const auto &run : runs) {
+                        QVERIFY(run.rawFont().isValid());
+                        QVERIFY(run.rawFont().supportsCharacter(character));
+                        for (const auto glyph : run.glyphIndexes()) {
+                            QVERIFY2(glyph != 0, qPrintable(QStringLiteral("Missing U+%1").arg(uint(character), 0, 16)));
+                            QVERIFY(!run.rawFont().pathForGlyph(glyph).isEmpty());
+                            ++glyphs;
+                        }
+                        if (character > 0xffff) {
+                            QCOMPARE(run.rawFont().familyName(), family);
+                            QCOMPARE(run.rawFont().fontTable("cmap"), bundled.fontTable("cmap"));
+                        } else {
+                            QVERIFY(run.rawFont().familyName() != family);
+                        }
+                    }
+                    QVERIFY(glyphs > 0);
+                    QVERIFY(line.naturalTextWidth() > 0);
+                }
+            }
+        }
+    }
+
+    void deepCompiledTablesKeepNativeHierarchyPaintActionsAndReflow() {
+        MainWindow window{QString()}; window.resize(900, 650); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        ExternalUrlReceiver receiver; QDesktopServices::setUrlHandler("https", &receiver, "capture");
+        const auto restore = qScopeGuard([] { QDesktopServices::unsetUrlHandler("https"); });
+        const QString target = QStringLiteral("https://example.test/deep-table");
+        const QString label = QStringLiteral("Deep action");
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value}}; };
+        const auto paragraph = [&](const QString &value) {
+            return QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{text(value)}}};
+        };
+        const auto makeTable = [](QJsonObject cell, int level) {
+            cell.insert("header", false); cell.insert("rowspan", 1); cell.insert("colspan", 1);
+            cell.insert("background", level % 2 ? "#ddeeff" : "#fff4dc");
+            return QJsonObject{{"caption", QJsonArray{}},
+                {"geometry", QJsonObject{{"border", 1}, {"cell_padding", 1}, {"cell_spacing", 0},
+                    {"width", QJsonObject{{"unit", "percent"}, {"value", 100}}}}},
+                {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell}}}}}};
+        };
+        for (const int count : {20, 32}) {
+            QJsonObject action{{"kind", "external_link"}, {"text", label}, {"target", target},
+                {"foreground", "#114477"}, {"italic", true}, {"bold", false},
+                {"font_scale", 1.25}, {"font_scale_basis", "normal_body"}};
+            const QJsonObject heading{{"kind", "heading"}, {"level", 4}, {"anchor", "Deep_target"},
+                {"spans", QJsonArray{text("Deep heading")}}};
+            QJsonObject nested = makeTable(QJsonObject{{"spans", QJsonArray{}}, {"blocks", QJsonArray{
+                heading, QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{action}}}, paragraph("Deep tail")}}}, count - 1);
+            for (int level = count - 2; level >= 0; --level) {
+                QJsonObject cell{{"spans", QJsonArray{}}};
+                if (level % 2) cell.insert("nested_table", nested);
+                else cell.insert("blocks", QJsonArray{QJsonObject{{"kind", "table"}, {"table", nested}}});
+                nested = makeTable(cell, level);
+            }
+            const QJsonObject tableBlock{{"kind", "table"}, {"table", nested}};
+            QVERIFY(composeReadingBlocks(window, QJsonArray{paragraph("Before deep tables"), tableBlock,
+                paragraph("After deep tables")}));
+            const QJsonObject source = window.currentEntry_;
+            const QString raw = window.reading_->document()->toRawText();
+            for (const QString &part : {QStringLiteral("Before deep tables"), QStringLiteral("Deep heading"),
+                    label, QStringLiteral("Deep tail"), QStringLiteral("After deep tables")})
+                QCOMPARE(raw.count(part), 1);
+            QVERIFY(raw.indexOf("Before deep tables") < raw.indexOf("Deep heading"));
+            QVERIFY(raw.indexOf("Deep heading") < raw.indexOf(label));
+            QVERIFY(raw.indexOf(label) < raw.indexOf("Deep tail"));
+            QVERIFY(raw.indexOf("Deep tail") < raw.indexOf("After deep tables"));
+            QVERIFY(!raw.contains(QChar::ObjectReplacementCharacter));
+            int pass = 0;
+            qreal wideWidth = 0, wideDocumentWidth = 0;
+            int wideViewportWidth = 0;
+            for (const int width : {900, 640, 480, 900}) {
+                window.resize(width, 650); window.readingPaneAction_->trigger();
+                QTRY_COMPARE(window.width(), width);
+                QTRY_COMPARE(window.compactNavigation_, width < 720);
+                QTRY_VERIFY(window.reading_->isVisible() && !window.readingFloatLayoutScheduled_);
+                QCOMPARE(window.searchPane_->isVisible(), width >= 720);
+                auto *browser = window.reading_; auto *document = browser->document();
+                QTRY_COMPARE(document->pageSize(), QSizeF(browser->viewport()->width(), -1));
+                document->documentLayout()->documentSize();
+                const int viewportWidth = browser->viewport()->width();
+                const qreal documentWidth = document->pageSize().width();
+                QVERIFY(viewportWidth > 0); QCOMPARE(documentWidth, qreal(viewportWidth));
+                qInfo() << "deep-table-reflow-context" << count << width << pass
+                        << viewportWidth << documentWidth << wideViewportWidth << wideDocumentWidth;
+                if (pass == 0) {
+                    wideViewportWidth = viewportWidth; wideDocumentWidth = documentWidth;
+                } else if (width == 480) {
+                    QVERIFY(viewportWidth < wideViewportWidth);
+                    QVERIFY(documentWidth < wideDocumentWidth);
+                } else if (pass == 3) {
+                    QCOMPARE(viewportWidth, wideViewportWidth);
+                    QCOMPARE(documentWidth, wideDocumentWidth);
+                }
+                QCOMPARE(window.currentEntry_, source); QCOMPARE(document->toRawText(), raw);
+                QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                // Walk every real frame; the bounded Figure diagnostic snapshot
+                // intentionally cannot serve as a complete deep-table census.
+                QList<QTextTable *> tables;
+                const auto collect = [&](auto &&self, QTextFrame *frame) -> void {
+                    for (auto *child : frame->childFrames()) {
+                        if (auto *table = qobject_cast<QTextTable *>(child)) tables.append(table);
+                        self(self, child);
+                    }
+                };
+                collect(collect, document->rootFrame()); QCOMPARE(tables.size(), count);
+                QRectF parentBounds;
+                for (int level = 0; level < count; ++level) {
+                    auto *table = tables.at(level);
+                    QCOMPARE(table->rows(), 1); QCOMPARE(table->columns(), 1);
+                    QCOMPARE(table->parentFrame(), level ? static_cast<QTextFrame *>(tables.at(level - 1)) : document->rootFrame());
+                    QCOMPARE(table->cellAt(0, 0).format().background().color(), QColor(level % 2 ? "#ddeeff" : "#fff4dc"));
+                    QCOMPARE(table->format().cellPadding(), qreal(1));
+                    const QRectF bounds = document->documentLayout()->frameBoundingRect(table);
+                    QVERIFY(std::isfinite(bounds.x()) && std::isfinite(bounds.y())
+                        && std::isfinite(bounds.width()) && std::isfinite(bounds.height()));
+                    QVERIFY(bounds.width() > 0 && bounds.height() > 0);
+                    if (level) QVERIFY(parentBounds.adjusted(-1, -1, 1, 1).contains(bounds));
+                    else {
+                        qInfo() << "deep-table-outer-width" << count << width << bounds.width() << wideWidth;
+                        if (pass == 0) wideWidth = bounds.width();
+                        else if (documentWidth < wideDocumentWidth) QVERIFY(bounds.width() < wideWidth);
+                        else if (documentWidth > wideDocumentWidth) QVERIFY(bounds.width() > wideWidth);
+                        else QVERIFY(qAbs(bounds.width() - wideWidth) < 1);
+                        // The authored 100% table follows its actual containing
+                        // viewport, which can grow when compact mode hides Search.
+                        if (pass) QVERIFY(qAbs((bounds.width() - wideWidth)
+                            - (documentWidth - wideDocumentWidth)) < 1);
+                    }
+                    parentBounds = bounds;
+                }
+                const QTextCursor leaf = document->find(label); QVERIFY(!leaf.isNull());
+                QCOMPARE(leaf.currentTable(), tables.last()); QCOMPARE(leaf.charFormat().anchorHref(), target);
+                QCOMPARE(leaf.charFormat().foreground().color(), QColor("#114477"));
+                QVERIFY(leaf.charFormat().fontItalic()); QCOMPARE(leaf.charFormat().fontWeight(), int(QFont::Normal));
+                QVERIFY(qAbs(leaf.charFormat().fontPointSize() - window.readingPointSize_ * 1.25) < .02);
+                const int first = leaf.selectionStart(), last = leaf.selectionEnd();
+                const QTextCharFormat leafFormat = leaf.charFormat();
+                qInfo() << "deep-table-navigation-context" << count << width << first << last;
+                // Ordinary heading navigation rebuilds the document. Keep integer
+                // offsets and value formats, then reacquire every live text handle.
+                QVERIFY(window.jumpToFragment("Deep_target"));
+                browser = window.reading_; document = browser->document();
+                document->documentLayout()->documentSize();
+                QCOMPARE(window.currentEntry_, source); QCOMPARE(document->toRawText(), raw);
+                const QTextCursor currentLeaf = document->find(label); QVERIFY(!currentLeaf.isNull());
+                QCOMPARE(currentLeaf.selectionStart(), first); QCOMPARE(currentLeaf.selectionEnd(), last);
+                QCOMPARE(currentLeaf.selectedText(), label); QCOMPARE(currentLeaf.charFormat(), leafFormat);
+                QVERIFY(textIsVisible(browser, "Deep heading"));
+                auto *accessible = QAccessible::queryAccessibleInterface(browser);
+                QVERIFY(accessible && accessible->textInterface()); auto *content = accessible->textInterface();
+                QString accessibleText = raw;
+                for (QChar &character : accessibleText)
+                    if (character == QChar::ParagraphSeparator || character.unicode() == 0xfdd0 || character.unicode() == 0xfdd1)
+                        character = QChar('\n');
+                QCOMPARE(content->characterCount(), accessibleText.size());
+                QCOMPARE(content->text(0, content->characterCount()), accessibleText);
+                QCOMPARE(accessibleText.count(label), 1); QCOMPARE(accessibleText.indexOf(label), first);
+                QCOMPARE(content->text(first, last), label);
+                QAccessibleInterface *deepLink = nullptr;
+                for (int i = 0; i < accessible->childCount(); ++i) {
+                    auto *child = accessible->child(i); if (!child || child->role() != QAccessible::Link) continue;
+                    auto *link = child->hyperlinkInterface(); QVERIFY(link);
+                    if (link->startIndex() == first) { QVERIFY(!deepLink); deepLink = child; }
+                }
+                QVERIFY(deepLink && deepLink->actionInterface());
+                QCOMPARE(deepLink->text(QAccessible::Name), label);
+                QCOMPARE(deepLink->text(QAccessible::Description), target);
+                QCOMPARE(deepLink->hyperlinkInterface()->endIndex(), last);
+                deepLink->actionInterface()->doAction(QAccessibleActionInterface::setFocusAction());
+                QTRY_COMPARE(browser->textCursor().selectionStart(), first);
+                QCOMPARE(browser->textCursor().selectionEnd(), last);
+                const QRect character = content->characterRect(first); QVERIFY(!character.isEmpty());
+                const QPoint point = browser->viewport()->mapFromGlobal(character.center());
+                QVERIFY(browser->viewport()->rect().contains(point));
+                QCOMPARE(browser->anchorAt(point), target);
+                const int hit = browser->cursorForPosition(point).position();
+                QVERIFY(hit >= first && hit < last);
+                const int calls = receiver.opened.size();
+                deepLink->actionInterface()->doAction(QAccessibleActionInterface::pressAction());
+                QTRY_COMPARE(receiver.opened.size(), calls + 1); QCOMPARE(receiver.opened.last(), QUrl(target));
+                QCOMPARE(document->toRawText(), raw);
+                if (count == 20 && pass < 3) {
+                    QVERIFY(QDir().mkpath(".tmp/ui-screenshots"));
+                    QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/deep-table20-%1.png").arg(width)));
+                }
+                ++pass;
+            }
+            if (count == 32) {
+                const auto excess = makeTable(QJsonObject{{"spans", QJsonArray{}}, {"nested_table", nested}}, 0);
+                QVERIFY(!composeReadingBlocks(window, QJsonArray{QJsonObject{{"kind", "table"}, {"table", excess}}}));
+                QVERIFY(composeReadingBlocks(window, QJsonArray{paragraph("Recovered ordinary body")}));
+                QVERIFY(window.reading_->toPlainText().contains("Recovered ordinary body"));
+            }
+        }
     }
 
     void nestedSemanticTablesKeepOuterGridAndEmptyPaintedHeaders() {

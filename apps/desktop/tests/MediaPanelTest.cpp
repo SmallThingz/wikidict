@@ -1394,6 +1394,13 @@ private slots:
         }
         setTable(deep);
         QCOMPARE(panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation")).size(), 1);
+        for (int depth = 16; depth < 32; ++depth) {
+            deep = table(QJsonArray{QJsonObject{{QStringLiteral("nested_table"), deep}}});
+            if (depth == 19 || depth == 31) {
+                setTable(deep);
+                QCOMPARE(panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation")).size(), 1);
+            }
+        }
         setTable(table(QJsonArray{QJsonObject{{QStringLiteral("nested_table"), deep}}}));
         QVERIFY(panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation")).isEmpty());
         ipaEntry.insert(QStringLiteral("language_code"), QStringLiteral("fr"));

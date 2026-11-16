@@ -2519,7 +2519,7 @@ QVector<HeadingDestination> headingDestinations(const QJsonObject &entry) {
                 result.append({label, anchor, fallback, sectionIndex, rootBlock, location, cellLocal});
         }
         const auto visitTable = [&](auto &&tables, const QJsonObject &table, const QString &tableLocation, int depth) -> void {
-            if (depth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+            if (depth > CompiledContent::maxTableDepth) throw DictApiError("nested table depth exceeds presentation limit");
             const QJsonArray rows = table.value(QStringLiteral("rows")).toArray();
             for (qsizetype r = 0; r < rows.size(); ++r) {
                 const QJsonArray cells = rows[r].toObject().value(QStringLiteral("cells")).toArray();
@@ -2693,6 +2693,21 @@ QString backgroundInk(const QString &background) {
         ? QStringLiteral("#000000") : QStringLiteral("#ffffff");
 }
 
+// Keep supplementary kana ahead of the platform's bounded fallback list.
+// The bundled face supplies only missing glyphs; primary reader/UI fonts stay intact.
+void registerKanaFallback() {
+    static const bool registered = [] {
+        const int id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/NotoSerifHentaigana-Regular.ttf"));
+        const auto families = QFontDatabase::applicationFontFamilies(id);
+        if (id < 0 || families != QStringList{QStringLiteral("Noto Serif Hentaigana")})
+            throw DictApiError("unable to register bundled kana fallback font");
+        QFontDatabase::addApplicationFallbackFontFamily(QChar::Script_Hiragana, families.first());
+        QFontDatabase::addApplicationFallbackFontFamily(QChar::Script_Katakana, families.first());
+        return true;
+    }();
+    Q_UNUSED(registered);
+}
+
 QString readerFamily() {
     static const QString family = [] {
         const int id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/reader.ttf"));
@@ -2745,6 +2760,7 @@ QString egyptianFamily() {
 
 MainWindow::MainWindow(const QString &root, const QString &initialWord)
     : QMainWindow() {
+    registerKanaFallback();
     setupUi();
     restoreGeometry(QSettings().value(QStringLiteral("reader/windowGeometry")).toByteArray());
     const QByteArray storedSplitter = QSettings().value(QStringLiteral("reader/splitter")).toByteArray();
@@ -5401,7 +5417,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
 
 }
 QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground, const QString &location, const QString &inheritedAlignment, const QString &listMarker, FlowConstruction::RenderContext context) const {
-    if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+    if (tableDepth > CompiledContent::maxTableDepth) throw DictApiError("nested table depth exceeds presentation limit");
     SemanticHtml::validateInlineTableDomain(table, tableDepth, context.contentDepth, context.inReference, context.inlineTableAudioOwners, context.inlineTableImageOwners);
     const auto viewport = SemanticHtml::tableBlockViewport(table);
     const auto floatViewport = SemanticHtml::tableFloatViewport(table);
@@ -6009,7 +6025,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
         }
     }
     const auto collectTableMedia = [&](auto &&visit, const QJsonObject &nested, int tableDepth) -> void {
-        if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+        if (tableDepth > CompiledContent::maxTableDepth) throw DictApiError("nested table depth exceeds presentation limit");
         collectEmbeddedMedia(nested.value(QStringLiteral("caption")).toArray());
         for (const QJsonValue &row : nested.value(QStringLiteral("rows")).toArray())
             for (const QJsonValue &value : row.toObject().value(QStringLiteral("cells")).toArray()) {
@@ -6253,9 +6269,9 @@ QString MainWindow::clueFor(const QJsonObject &entry) const {
             QStringList pieces;
             const auto append = [&](const QString &text) { if (!text.isEmpty()) pieces.append(text); };
             if (block.value(QStringLiteral("table")).isObject()) {
-                if (depth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+                if (depth > CompiledContent::maxTableDepth) throw DictApiError("nested table depth exceeds presentation limit");
                 const auto tableText = [&](auto &&tables, const QJsonObject &table, int tableDepth) -> void {
-                    if (tableDepth > 16) throw DictApiError("nested table depth exceeds presentation limit");
+                    if (tableDepth > CompiledContent::maxTableDepth) throw DictApiError("nested table depth exceeds presentation limit");
                     append(textFor(table.value(QStringLiteral("caption")).toArray()));
                     for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray())
                         for (const QJsonValue &cellValue : row.toObject().value(QStringLiteral("cells")).toArray()) {

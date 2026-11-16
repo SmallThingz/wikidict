@@ -10,6 +10,8 @@
 // Walk semantic containers in authored order. A non-null block array is
 // authoritative even when empty; captions and scopes never borrow Block.spans.
 namespace CompiledContent {
+// Shared semantic table budget; Container/Flow/Ruby depth remains independent.
+inline constexpr int maxTableDepth = 32;
 inline bool present(const QJsonValue &value) { return !value.isNull() && !value.isUndefined(); }
 inline void require(bool condition) {
     if (!condition) throw std::runtime_error("invalid compiled content ownership");
@@ -375,7 +377,7 @@ struct Depth {
     int content = 0;
     int tables = 0;
     Depth nestedContent() const { require(content < 16); return {content + 1, tables}; }
-    Depth nestedTable() const { require(tables < 16); return {content, tables + 1}; }
+    Depth nestedTable() const { require(tables < maxTableDepth); return {content, tables + 1}; }
 };
 
 enum class TableSpans { Stored, VisibleBody };

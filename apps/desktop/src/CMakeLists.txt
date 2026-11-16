@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 project(DictQt VERSION 0.1.0 LANGUAGES CXX)
 
-find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui GuiPrivate Widgets Concurrent Network Multimedia Svg)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui GuiPrivate Widgets Concurrent Network Multimedia Svg)
 qt_standard_project_setup()
 
 # Compile product code once under the shipped GUI's compilation contract.
@@ -19,6 +19,11 @@ add_library(wikidict-gui SHARED main.cpp)
 qt_add_resources(wikidict-gui reader_font PREFIX "/fonts"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/../web"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/../web/reader.ttf")
+
+qt_add_resources(wikidict-gui kana_font PREFIX "/fonts"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-Regular.ttf"
+          "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-OFL.txt")
 
 qt_add_resources(wikidict-gui egyptian_font PREFIX "/fonts"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
@@ -69,6 +74,8 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/InstallCore.cmake")
 wikidict_select_install_core("${WIKIDICT_EXECUTABLE}" "${DICT_FFI_LIBRARY}"
     "${WIKIDICT_CORE}/src/ffi/dict.h")
 install(TARGETS wikidict-gui LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-OFL.txt"
+    DESTINATION share/licenses/wikidict)
 install(FILES "${wikidict_install_ffi}" DESTINATION lib)
 install(PROGRAMS "${wikidict_install_executable}" DESTINATION bin RENAME wikidict)
 if(NOT wikidict_install_header STREQUAL "")
@@ -92,7 +99,7 @@ if(BUILD_TESTING)
             "-DTEST_ROOT=${CMAKE_BINARY_DIR}/.tmp/install-core-selection"
             -P "${CMAKE_SOURCE_DIR}/tests/install_core_selection_check.cmake")
     set_tests_properties(native-install-core-selection PROPERTIES TIMEOUT 120)
-    find_package(Qt6 6.6 REQUIRED COMPONENTS Test GuiPrivate)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS Test GuiPrivate)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_library(wikidict-test-settings SHARED ../tests/UnifiedSettingsBootstrap.cpp)
         target_compile_features(wikidict-test-settings PRIVATE cxx_std_20)
@@ -125,6 +132,11 @@ if(BUILD_TESTING)
         set_property(SOURCE ../tests/MainWindowTest.cpp APPEND PROPERTY
             COMPILE_OPTIONS "$<$<CONFIG:Release>:-O0>")
     endif()
+    qt_add_resources(dict-qt-tests test_kana_font PREFIX "/fonts"
+        BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
+        FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-Regular.ttf"
+              "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-OFL.txt")
+
     qt_add_resources(dict-qt-tests test_egyptian_font PREFIX "/fonts"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NewGardinerOmni2d4.ttf")
