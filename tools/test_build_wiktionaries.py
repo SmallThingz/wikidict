@@ -14506,7 +14506,9 @@ class CompositeProducerSourceTests(unittest.TestCase):
 
     def test_composite_combined_blob_cli_accepts_only_the_exact_normal_target_pair(self):
         cases = [(['prepare-blob-tools'], True), (['prepare-captured-writer'], True),
-                 (['prepare-blob-tools', 'cli'], True), (['cli'], False),
+                 (['prepare-blob-tools', 'cli'], True), (['cli', 'ffi'], True), (['cli'], False),
+                 (['ffi', 'cli'], False), (['cli', 'ffi', 'ffi'], False),
+                 (['cli', 'ffi', 'foreign'], False),
                  (['cli', 'prepare-blob-tools'], False),
                  (['prepare-blob-tools', 'cli', 'ffi'], False),
                  (['prepare-blob-tools', 'cli', 'cli'], False),

@@ -3746,7 +3746,7 @@ def validate_composite_source_inventory(plan, base, selected, auth_payload):
             or not Path(base_path).is_absolute() or Path(base_path).as_posix() != base_path):
         raise ValueError('Composite source base differs from actual build cwd')
     stop = next((i for i,x in enumerate(argv[2:],2) if x.startswith('-')),len(argv))
-    if argv[2:stop] not in (['prepare-blob-tools'],['prepare-captured-writer'],['prepare-blob-tools','cli']):
+    if argv[2:stop] not in (['prepare-blob-tools'],['prepare-captured-writer'],['prepare-blob-tools','cli'],['cli','ffi']):
         raise ValueError('Composite build selected another production target')
     if argv.count('--build-file') != 1 or argv.index('--build-file')+1 >= len(argv) or argv[argv.index('--build-file')+1] != payloads['build.zig']['path']:
         raise ValueError('Composite actual build file differs from its payload')
