@@ -311,6 +311,90 @@ class MessageUnionTest(unittest.TestCase):
             with self.subTest(index=index), self.assertRaises(ValueError): union.verify(root)
 
 
+    def test_builder_union_boundaries_replay_once_per_role_and_call(self):
+        for batch in (False, True):
+            with self.subTest(batch=batch):
+                root, records, _ = (MessageFamilyUnionTest.batch(self, name='boundary-batch')
+                                    if batch else self.capture('boundary-singleton'))
+                expected = {kind: union.capture_artifacts(root / (kind + '.tsv'), records[kind])
+                            for kind in union.KINDS}
+                with patch.object(union, 'verify', wraps=union.verify) as verify, \
+                        patch.object(union, 'replay_base', wraps=union.replay_base) as replay:
+                    count = 0
+                    for boundary in range(2):
+                        for kind in union.KINDS:
+                            selected = builder.validated_auxiliary_capture(kind, root / (kind + '.tsv'), WIKI, DATE)
+                            count += 1
+                            self.assertEqual(selected, (records[kind], expected[kind]))
+                            self.assertEqual(verify.call_count, count)
+                            self.assertEqual(replay.call_count, count)
+                            selected[0]['sources'].clear()
+                            selected[1].clear()
+                # The helper's direct public boundary remains a complete replay.
+                with patch.object(union, 'verify', wraps=union.verify) as verify:
+                    union.capture_artifacts(root / 'interface-messages.tsv', records['interface-messages'])
+                    self.assertEqual(verify.call_count, 1)
+
+    def test_builder_union_semantic_and_receipt_refusals_keep_one_replay(self):
+        for kind in union.KINDS:
+            for mode in ('response', 'messages', 'fallbacks', 'receipt'):
+                with self.subTest(kind=kind, mode=mode):
+                    root, records, _ = self.capture(kind + '-' + mode)
+                    if mode == 'response':
+                        path = root / 'language-messages.0001-01.raw.json'
+                        value = json.loads(path.read_text())
+                        value['query']['allmessages'][0]['content'] = 'changed'
+                        path.write_text(json.dumps(value))
+                    elif mode == 'messages':
+                        path = root / 'interface-messages.tsv'
+                        path.write_bytes(path.read_bytes().replace(b'sat\tfiledesc\tV\t', b'sat\tfiledesc\tV\tchanged '))
+                    elif mode == 'fallbacks':
+                        path = root / 'language-fallbacks.tsv'
+                        path.write_bytes(path.read_bytes().replace(b'sat\ten\n', b'sat\tfr\n'))
+                    else:
+                        (root / records['interface-messages']['singleton']['accepted_receipt']).unlink()
+                    self.rebind(root)
+                    path = root / (kind + '.tsv')
+                    with self.assertRaises((ValueError, OSError)) as original:
+                        union.validate_snapshot(path, WIKI, DATE)
+                    with patch.object(union, 'verify', wraps=union.verify) as verify:
+                        with self.assertRaises(type(original.exception)) as selected:
+                            builder.validated_auxiliary_capture(kind, path, WIKI, DATE)
+                        self.assertEqual(str(selected.exception), str(original.exception))
+                        self.assertEqual(verify.call_count, 1)
+
+    def test_builder_union_identity_and_late_manifest_changes_still_refuse(self):
+        for kind in union.KINDS:
+            root, _, _ = self.capture(kind + '-identity')
+            path = root / (kind + '.tsv')
+            for wiki, date in (('enwiktionary', DATE), (WIKI, '20261002')):
+                with self.subTest(kind=kind, wiki=wiki, date=date), \
+                        patch.object(union, 'verify', wraps=union.verify) as verify:
+                    with self.assertRaisesRegex(ValueError, 'edition/date'):
+                        builder.validated_auxiliary_capture(kind, path, wiki, date)
+                    self.assertEqual(verify.call_count, 0)
+            original_capture = union.capture_artifacts
+            def changed_before_capture(selected, manifest):
+                self.rebind(root, lambda record: record['producer'].update(generator_sha256='0' * 64))
+                return original_capture(selected, manifest)
+            with patch.object(union, 'capture_artifacts', side_effect=changed_before_capture), \
+                    patch.object(union, 'verify', wraps=union.verify) as verify:
+                with self.assertRaisesRegex(ValueError, 'manifest changed'):
+                    builder.validated_auxiliary_capture(kind, path, WIKI, DATE)
+                self.assertEqual(verify.call_count, 1)
+            # A mismatched manifest digest returned by the pinning boundary is
+            # refused even when the semantic replay itself succeeded.
+            def wrong_digest(selected, manifest):
+                result = original_capture(selected, manifest)
+                result[kind + '.manifest.json'] = '0' * 64
+                return result
+            with patch.object(union, 'capture_artifacts', side_effect=wrong_digest), \
+                    patch.object(union, 'verify', wraps=union.verify) as verify:
+                with self.assertRaisesRegex(ValueError, 'manifest changed'):
+                    builder.validated_auxiliary_capture(kind, path, WIKI, DATE)
+                self.assertEqual(verify.call_count, 1)
+
+
 class CompleteBaseUnionTest(unittest.TestCase):
     def setUp(self):
         import test_prepare_language_messages_v2 as complete_tests

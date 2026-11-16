@@ -1276,7 +1276,7 @@ def validated_auxiliary_capture(name, path, edition=None, date=None):
         previous=_FILE_METADATA_V2_REPLAYS.get(replay_key)
     if getattr(helper,'__name__',None) in (
             'prepare_wikibase_entities','prepare_language_messages',
-            'prepare_language_messages_v2','prepare_date_numbering',
+            'prepare_language_messages_v2','prepare_language_messages_union','prepare_date_numbering',
             'prepare_site_info','prepare_language_names_translate','prepare_parser_function_facts',
             'prepare_category_statistics_format'):
         # These helpers replay the complete capture inside capture_artifacts.
