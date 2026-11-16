@@ -82,5 +82,58 @@ class OwnedReaderTests(unittest.TestCase):
         self.groups.assert_not_called()
 
 
+class EntryFocusTests(unittest.TestCase):
+    @staticmethod
+    def reader(width, footer):
+        # A completed terminal screen only: no PTY, subprocess, or signals.
+        from types import SimpleNamespace
+        reader = m.ReaderPty.__new__(m.ReaderPty)
+        reader.width, reader.rows = width, 32
+        display = [" " * width for _ in range(reader.rows)]
+        display[5] = "  MATCHES  2  |  READING   s to save"
+        display[6] = "  cat        |  cat / English"
+        display[12] = "             |  1. A small animal."
+        display[-2] = ("  " + footer).ljust(width)
+        reader.screen = SimpleNamespace(display=display)
+        return reader
+
+    def test_complete_reading_footer_tracks_display_width(self):
+        compact = "Esc back ↑↓ e fold d details ? help"
+        wide = "Esc results  / search  ↑↓ scroll  PgUp/PgDn page  [ ] section  e fold  d all  s save  ? help"
+        # 96 is the selected TUI's 92-cell wide hint plus its four-cell margin.
+        for width, footer in ((40, compact), (80, compact), (95, compact),
+                              (96, wide), (120, wide)):
+            with self.subTest(width=width):
+                self.assertTrue(self.reader(width, footer).entry_focused())
+        self.assertFalse(self.reader(80, wide).entry_focused())
+        self.assertFalse(self.reader(120, compact).entry_focused())
+
+    def test_reading_preview_with_body_is_not_entry_focus(self):
+        # Search and Matches both have a real READING preview at wide widths.
+        # A body/title/READING heading is deliberately present in every screen.
+        footers = (
+            "type to search  ↑↓ results  Enter read  Tab switch  Ctrl-U clear  Ctrl-C quit",
+            "/ search  ↑↓ select  Enter read  PgUp/PgDn page  ? help  q quit",
+            "Enter read  Del remove  / search  ? help",
+            "Tab game  Esc search  Ctrl-C quit",
+        )
+        for footer in footers:
+            with self.subTest(footer=footer):
+                reader = self.reader(120, footer)
+                self.assertIn("READING", reader.text())
+                self.assertIn("A small animal.", reader.text())
+                self.assertFalse(reader.entry_focused())
+
+    def test_partial_misplaced_or_extended_hint_does_not_prove_focus(self):
+        compact = "Esc back ↑↓ e fold d details ? help"
+        for footer in ("Esc back", compact[:-1], compact + " unexpected"):
+            with self.subTest(footer=footer):
+                self.assertFalse(self.reader(80, footer).entry_focused())
+        self.assertFalse(self.reader(120, "Esc results  / search").entry_focused())
+        reader = self.reader(80, "type  ↑↓ select  Enter read  ^C quit")
+        reader.screen.display[10] = compact
+        self.assertFalse(reader.entry_focused())
+
+
 if __name__ == "__main__":
     unittest.main()

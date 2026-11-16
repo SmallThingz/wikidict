@@ -170,8 +170,14 @@ class ReaderPty:
         return (match[1], *map(int, match.groups()[1:])) if match else None
 
     def entry_focused(self) -> bool:
-        # The wide split view also shows READING while only previewing a match.
-        return self.screen.display[self.rows - 2].lstrip().startswith("Esc results  / search")
+        # The split view also shows READING while only previewing a match.
+        # Only entry focus emits readingHints. Match its complete footer and
+        # width choice, rather than accepting a heading or a partial hint.
+        wide = "Esc results  / search  ↑↓ scroll  PgUp/PgDn page  [ ] section  e fold  d all  s save  ? help"
+        compact = "Esc back ↑↓ e fold d details ? help"
+        # Every scalar in these two fixed hints occupies one terminal cell.
+        expected = wide if len(wide) <= max(0, self.width - 4) else compact
+        return self.screen.display[self.rows - 2].strip() == expected
 
     def query(self) -> str:
         return normalized(self.screen.display[3][12:].rstrip())
