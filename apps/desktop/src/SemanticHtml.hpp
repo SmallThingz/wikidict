@@ -2749,6 +2749,7 @@ inline void normalizeImages(QTextDocument *document) {
 }
 
 inline constexpr int rubyImportProperty = QTextFormat::UserProperty + 0x5813;
+inline constexpr int actionImportProperty = QTextFormat::UserProperty + 0x5814;
 inline constexpr int inlineStyleProperty = QTextFormat::UserProperty + 0x5804;
 inline constexpr int inlineEmptyOwnersProperty = QTextFormat::UserProperty + 0x5805;
 inline const QString inlineStyleCapability = QStringLiteral("wikidict.inline-text/1");
@@ -2952,9 +2953,11 @@ inline bool hasInlineText(const QTextDocument *document) {
 inline QString scaledText(const QString &html, double scale, const QString &tooltip,
                           Basis basis = Basis::Context, qreal normalBodyPoints = 0,
                           bool small = false, bool superscript = false, bool subscript = false, qreal contextPoints = 0,
-                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}, bool ordinaryLink = false, const QJsonObject &inlineSpan = {}, qreal inlineBodyPoints = 0, qreal inlineContextPoints = 0, const QString &inlineOwnerHtml = {}, const QJsonValue &fontFamily = {}, const QJsonObject &compiledRuby = {}) {
+                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}, bool ordinaryLink = false, const QJsonObject &inlineSpan = {}, qreal inlineBodyPoints = 0, qreal inlineContextPoints = 0, const QString &inlineOwnerHtml = {}, const QJsonValue &fontFamily = {}, const QJsonObject &compiledRuby = {}, const QJsonObject &compiledAction = {}) {
     if (!compiledRuby.isEmpty() && (!inlineSpan.isEmpty() || !linkPaint.isEmpty()))
         throw std::runtime_error("Ruby import metadata cannot enter an ordinary inline split");
+    if (!compiledAction.isEmpty() && (!inlineSpan.isEmpty() || !linkPaint.isEmpty() || !compiledRuby.isEmpty()))
+        throw std::runtime_error("inline action import metadata cannot enter an ordinary inline split");
     if (present(inlineSpan.value("inline_style").toObject().value("wrap"))) {
         inlineTextStyle(inlineSpan);
         const auto source = inlineSpan.value("text").toString(), trail = inlineSpan.value("trail").toString();
@@ -2980,6 +2983,12 @@ inline QString scaledText(const QString &html, double scale, const QString &tool
         }
     }
     QJsonObject metadata{{"scale", scale}, {"tooltip", tooltip}};
+    if (!compiledAction.isEmpty()) {
+        if (html != QStringLiteral("&#xe000;") || !metadataOnly || !inlineSpan.isEmpty()
+            || !linkPaint.isEmpty() || !compiledRuby.isEmpty())
+            throw std::runtime_error("invalid generated inline action anchor");
+        metadata.insert("compiled_action", compiledAction);
+    }
     if (!compiledRuby.isEmpty()) {
         if (html != QStringLiteral("&#xe000;") || !metadataOnly || !inlineSpan.isEmpty())
             throw std::runtime_error("invalid generated Ruby import anchor");
@@ -3048,6 +3057,7 @@ struct ScaleInfo {
     FontFeaturePolicy fontFeatures = FontFeaturePolicy::Legacy;
     QJsonObject inlineSpan;
     QJsonObject compiledRuby;
+    QJsonObject compiledAction;
     qreal inlineBodyPoints = 0;
     qreal inlineContextPoints = 0;
     QString inlineOwnerHtml;
@@ -3089,6 +3099,7 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
         const bool hasLinkPaint = present(value.value("link_paint"));
         const bool hasInline = present(value.value("inline_span"));
         const bool hasRuby = value.contains("compiled_ruby");
+        const bool hasAction = value.contains("compiled_action");
         const auto fontFamily = CompiledContent::containerFontFamily(value.value("font_family"));
         const bool hasFamily = present(fontFamily);
         const auto fontFeatures = fontFeaturePolicy(value.value("font_features"));
@@ -3100,12 +3111,18 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
             || (present(advisory) && !advisory.isString())
             || (hasSourceRun && (!sourceRun.isDouble() || !std::isfinite(run)
                 || run < 0 || run > std::numeric_limits<int>::max() || std::floor(run) != run))
-            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && !hasInline && !hasRuby && !hasFamily && fontFeatures == FontFeaturePolicy::Legacy)
+            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && !hasInline && !hasRuby && !hasAction && !hasFamily && fontFeatures == FontFeaturePolicy::Legacy)
                 || value.contains(QStringLiteral("context_points")) || value.contains(QStringLiteral("legacy_flags"))))
             || (!basisValue.isUndefined() && (!basisValue.isString()
                 || (basisValue.toString() != QStringLiteral("context") && !absolute))))
             throw std::runtime_error("invalid renderer font-scale metadata");
         ScaleInfo info{scale, value.value(QStringLiteral("tooltip")).toString()};
+        if (hasAction) {
+            if (!metadataOnly || !value.value("compiled_action").isObject()
+                || value.value("compiled_action").toObject().isEmpty() || hasInline || hasLinkPaint || hasRuby)
+                throw std::runtime_error("invalid generated inline action metadata");
+            info.compiledAction = value.value("compiled_action").toObject();
+        }
         if (hasRuby) {
             if (!metadataOnly || !value.value("compiled_ruby").isObject()
                 || value.value("compiled_ruby").toObject().isEmpty() || hasInline || hasLinkPaint)
@@ -3406,6 +3423,11 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                     for (QChar c : fragment.text()) if (c != QChar(0xe000))
                         throw std::runtime_error("generated Ruby anchor changed during HTML import");
                     format.setProperty(rubyImportProperty, QVariant::fromValue(marker->compiledRuby));
+                }
+                if (!marker->compiledAction.isEmpty()) {
+                    for (QChar c : fragment.text()) if (c != QChar(0xe000))
+                        throw std::runtime_error("generated inline action anchor changed during HTML import");
+                    format.setProperty(actionImportProperty, QVariant::fromValue(marker->compiledAction));
                 }
                 if (present(marker->advisory)) {
                     format.setProperty(spanAdvisoryProperty, marker->advisory.toString());

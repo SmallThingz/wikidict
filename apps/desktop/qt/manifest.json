@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "00acba8e8386199f07c103c46cb3762a92c6f1dbad142f7f2fe55e917a1a2499",
-      "bytes": 955329,
+      "sha256": "9f3fa540fbdb9f9fc79c5f8a3785c20cca2c219d01e973dd50a9d11a0a8614e8",
+      "bytes": 986053,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "6fcd6c6c32841796474a66d39817a61a9246909d33582b5a78da284b687fbb53",
-          "bytes": 780306
+          "qualified_sha256": "e3878ae54343c0611a183d1923b57d8a1c36dba95c76be0bda06371ef716ec3b",
+          "bytes": 792370
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -96,8 +96,8 @@
           "path": "src/gui/text/qtextlogicalflow_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "qualified_sha256": "4759bb32cd1a82167e241ce159a8d340a949098f2bdb63bde77e32db03442932",
-          "bytes": 50399
+          "qualified_sha256": "8aba396994a7fded26b7a60a31aa249829a4fdbf81451636ffa2f2d3cbddf3bd",
+          "bytes": 50982
         },
         {
           "path": "src/gui/text/qtextsourceprovenance_p.h",
@@ -159,8 +159,8 @@
           "path": "src/gui/text/qtextinlinestyle_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "qualified_sha256": "db303460a39d2568fc8d6e4bdda7f36a91c3a0d5bc5297354c19cbbd5fe39beb",
-          "bytes": 10763
+          "qualified_sha256": "3b2146af76cbffc73cc260047db3bcfde5adc2cbf5e83f10ccbb8c5451b09147",
+          "bytes": 17185
         },
         {
           "path": "src/gui/text/qtextlayout.h",
@@ -180,8 +180,8 @@
           "path": "src/gui/text/qtextrubylayout_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "qualified_sha256": "d00594ce6aadf5250cac7b4eae8f077527730c0f2bba756ea1f3a62be38ed120",
-          "bytes": 35884
+          "qualified_sha256": "cec7d002305d27596d486a45555eb0006eeacd12d166ffc3f20f8fc85d31b8b2",
+          "bytes": 47061
         },
         {
           "path": "src/gui/text/qtextrubyrangemap_p.h",
@@ -201,8 +201,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "ba8d9e71f0ea17109ee3cc015eecf12bc2814b4ebd852de7957de99a95132d18",
-      "bytes": 1201685,
+      "sha256": "ac852ea8a6f4ff0e222f7d876836453b48fcf526ea55d0363b5c407ab66c38f5",
+      "bytes": 1224820,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -215,8 +215,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "795b61663f9447350ee0d42d1a881f3d9627c9efa74c08cadee6d4c1172bd45a",
-          "bytes": 1206740
+          "qualified_sha256": "8fc44245b095c366826a7b7bdfaa9d62c107d8304ac1865bc9833c482fdd020b",
+          "bytes": 1229581
         }
       ]
     },
@@ -628,6 +628,131 @@
         }
       ],
       "scope": "Intrinsic metrics reuse within one owned-table layout epoch, native visible-overflow traversal and paint-order hit/caret behavior. Five current native methods and thirteen source-identical historical passing methods remain distinct; two current App tests exercise depth20/32 and depth33 refusal. No whole frontend or corpus acceptance."
+    },
+    "inline_action_v": {
+      "date": "2026-11-16",
+      "native_application": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application173.json",
+        "bytes": 285533,
+        "sha256": "9c241d5a21302ab927ee5b94e2ed72bc9ee924551222c0990adbc5926293875d"
+      },
+      "source_components": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application172.json",
+          "bytes": 288812,
+          "sha256": "d83a3c2cd9dc8f0d1538523c91c358e837cd3d0fff748dc94d5f6fde025596a5"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application173.json",
+          "bytes": 285533,
+          "sha256": "9c241d5a21302ab927ee5b94e2ed72bc9ee924551222c0990adbc5926293875d"
+        }
+      ],
+      "native_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold154/independent-closure01.json",
+        "bytes": 219727,
+        "sha256": "c3a18c380cb3a68c7f6b3daf27f1538c10480f7d2bc95695ff5e825bb09f47d3"
+      },
+      "native_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold154/release01.json",
+        "bytes": 549,
+        "sha256": "43abd9df2156ce820fc3e37486bc4db61508f818ffd30023817ef02f218fe528"
+      },
+      "current_methods": [
+        "inlineActionDeclaringMetricsKeepChildFontsAndZeroAdvance",
+        "inlineActionRubyPaintUsesBaseAllocationAndActualHitRanges",
+        "rubyInlinePaddingKeepsDeclaringFontRangesAndActions",
+        "projectedRubyUsesResolvedBaseMetricsOnly",
+        "projectedRubyRejectsMalformedMetrics",
+        "rubyMultipleOwnersPaintAndKeepChildOffsets",
+        "rubyMixedOrdinaryLinesReserveAnnotationSides",
+        "rubyGapGeometryAndDeviceLifetime",
+        "rubyAppliesCommonAndReadingShiftExactlyOnce",
+        "logicalCellGeometryWaitsForLayout",
+        "ownedTableOverflowHitsFollowCellAndSiblingPaintOrder"
+      ],
+      "current_methods_passed": true,
+      "app_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile205/independent-closure01.json",
+        "bytes": 36620,
+        "sha256": "9f87745326a701bf3abec29ee052097a38440d34ba53f06b6b17d9e0cb75caa7"
+      },
+      "app_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile205/release01.json",
+        "bytes": 483,
+        "sha256": "55ba736145711674fa6546bc5c0ed8a2381ee11a425d5fd3aca0fdb301ec441e"
+      },
+      "current_main_methods": [
+        "inlineActionGroupsKeepRichOccurrencesKeyboardAndCopy"
+      ],
+      "current_media_methods": [],
+      "app_build_targets": [
+        "dict-qt-tests"
+      ],
+      "configure_replayed": false,
+      "app_product_binaries_rebuilt": false,
+      "reader_test_rebuilt": true,
+      "prior_app202": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile202/independent-closure01.json",
+        "bytes": 39419,
+        "sha256": "b7e000de2c738d9f1a73ce7927faf839bfc1907f8d1b59ae92a6ca91e4378d15"
+      },
+      "retained_main_passed_methods": [
+        "inlineActionGroupsRejectMalformedOwnersAndChildren",
+        "inlineActionGroupsOwnRubyAndGenuineReadingPadding",
+        "clueUsesStructuralFallbackOrderWithoutMediaLabels",
+        "rubyInlinePaddingGroupsKeepSourceFontsActionsAndText"
+      ],
+      "retained_main_methods_source_exact": true,
+      "retained_main_methods_reexecuted": false,
+      "retained_media_methods": [
+        "pronunciationControlsTraverseActionPaddingAndRubyLeaves",
+        "pronunciationControlsTraverseOrderedAndLegacyTableContent"
+      ],
+      "retained_media_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile204/independent-closure01.json",
+        "bytes": 47379,
+        "sha256": "f173a844dab4100cd87e64bc7972084aa2200c8e183995b3f77abeb391b6ac4b"
+      },
+      "retained_media_source_and_binary_exact": true,
+      "retained_media_methods_reexecuted": false,
+      "app_product_build": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile202/independent-closure01.json",
+        "bytes": 39419,
+        "sha256": "b7e000de2c738d9f1a73ce7927faf839bfc1907f8d1b59ae92a6ca91e4378d15"
+      },
+      "full_native_suite": false,
+      "full_app_ctest": false,
+      "genuine_rendered_acceptance": false,
+      "paired_UV_wire_acceptance": false,
+      "preserved_failures": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold153/independent-closure01.json",
+          "bytes": 201635,
+          "sha256": "894759fa837812e38b1c0de65c9509d1530f7ab8d3c569d042b6496899a6455a"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile201/independent-closure01.json",
+          "bytes": 28448,
+          "sha256": "5220f6d3913e736740c136c718b8b9c69c390c2f5589b96e0a915ac09ed70f77"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile202/independent-closure01.json",
+          "bytes": 39419,
+          "sha256": "b7e000de2c738d9f1a73ce7927faf839bfc1907f8d1b59ae92a6ca91e4378d15"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile203/independent-closure01.json",
+          "bytes": 37413,
+          "sha256": "8bcca7e8f262251d63ac46f56e87e563e748ceb7c74ca3d7b9029774150b8ebe"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile204/independent-closure01.json",
+          "bytes": 47379,
+          "sha256": "f173a844dab4100cd87e64bc7972084aa2200c8e183995b3f77abeb391b6ac4b"
+        }
+      ],
+      "scope": "Eleven current native methods cover inline action declaring metrics, Ruby action/base allocation, positive reading padding and affected prior controls. One current Reader method, plus four source-identical historical App202 Reader passes and two source/binary-identical App204 Media passes, cover private JSON consumer rendering, actions, accessibility, copy, malformed input and structural preview/pronunciation traversal. Current and historical results remain distinct. Synthetic numerical typography is not an actual Mai source tuple; no paired U/V producer/FFI or genuine corpus rendering claim."
     }
   },
   "packaged_distribution_source_equivalence": false,

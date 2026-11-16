@@ -81,7 +81,9 @@
 #include <QTextBoundaryFinder>
 #include <QTextDocument>
 #include <QtGui/private/qtextrubyrangemap_p.h>
+#include <QtGui/private/qtextinlinestyle_p.h>
 #include "CompiledRuby.hpp"
+#include "CompiledInlineAction.hpp"
 #include <QMimeData>
 #include <QClipboard>
 #include <QPlainTextEdit>
@@ -100,6 +102,53 @@
 #include <cmath>
 #include <array>
 #include <functional>
+namespace MissingFigurePaint {
+QList<QTextEdit::ExtraSelection> selections(QTextDocument *document, const QPalette &palette, const State &state) {
+    QList<QTextEdit::ExtraSelection> result;
+    const bool dark = palette.color(QPalette::Base).lightness() < 128;
+    for (auto block = document->begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment(); if (!fragment.isValid()) continue;
+            auto format = fragment.charFormat(); if (!owns(format)) continue;
+            // Replaced image owners retain action/state identity and authored
+            // focus outlines; glyph foreground/underline never paint the bitmap.
+            if (format.isImageFormat()) continue;
+            const qint64 owner = format.property(ownerProperty).toLongLong();
+            const auto interaction = owner == state.pressed ? Interaction::Active
+                : owner == state.hovered ? Interaction::Hover : Interaction::Rest;
+            const bool zero = format.boolProperty(zeroFontProperty);
+            const bool ordinary = format.stringProperty(policyProperty) == ordinaryPolicy;
+            const bool fixed = ordinary || format.stringProperty(policyProperty) == fixedPolicy;
+            const auto paint = QJsonObject::fromVariantMap(format.property(fixedPolicyProperty).toMap());
+            const bool visited = state.visitedTargets.contains(fixed ? fixedTargetKey(state, format.anchorHref()) : targetKey(state, format.anchorHref()));
+            const QString stateName = ordinary && owner == state.hovered && owner == state.pressed
+                ? (visited ? QStringLiteral("visited_hover_active") : QStringLiteral("hover_active")) : visited
+                ? (interaction == Interaction::Active ? QStringLiteral("visited_active") : interaction == Interaction::Hover ? QStringLiteral("visited_hover") : QStringLiteral("visited"))
+                : (interaction == Interaction::Active ? QStringLiteral("active") : interaction == Interaction::Hover ? QStringLiteral("hover") : QStringLiteral("normal"));
+            const auto selected = paint.value(stateName).toObject();
+            const QColor ink = zero ? QColor(Qt::transparent) : fixed
+                ? QColor(selected.value("foreground").toString()) : foreground(dark, visited, interaction);
+            QTextCharFormat overlay;
+            overlay.setProperty(overlayProperty, true);
+            overlay.setForeground(ink);
+            const bool underline = !zero && ((!ordinary && format.boolProperty(underlineProperty)) || (fixed
+                ? selected.value("underline").toBool() || (owner == state.focused && paint.value("underline_on_focus").toBool())
+                : interaction != Interaction::Rest));
+            if (QCompiledInline::actionOwner(format).isValid()) {
+                // One ancestor decoration is painted at its declaring baseline;
+                // a child SUP/italic/Ruby run keeps its local decoration.
+                overlay.setProperty(QCompiledInline::ActionPaintProperty, QVariantMap{
+                    {"owner", QVariant::fromValue(owner)}, {"foreground", ink}, {"underline", underline}});
+            } else overlay.setUnderlineStyle(underline ? QTextCharFormat::SingleUnderline : QTextCharFormat::NoUnderline);
+            QTextCursor cursor(document); cursor.setPosition(fragment.position());
+            cursor.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
+            result.append({cursor, overlay});
+        }
+    }
+    return result;
+}
+}
+
 namespace {
 // Settle the reader chrome before QBoxLayout snapshots margins for its pass.
 // A viewport Resize filter runs inside that pass, after those values are cached.
@@ -594,6 +643,7 @@ public:
 
 class SectionDisclosure;
 class ReadingLink;
+static QVariant accessibleAnchorOwner(const QTextCharFormat &format);
 
 class ReadingBrowser final : public QTextBrowser {
     CompiledHelpCursor inlineHelpCursor_;
@@ -602,6 +652,142 @@ public:
     using RubyMap = QTextRubyRangeMap;
     std::shared_ptr<const RubyMap> rubyProjection;
     QPointer<QTextDocument> rubyProjectionDocument;
+    QVariantList inlineActionOwners;
+    QPointer<QTextDocument> inlineActionDocument;
+    int inlineActionRevision = -1;
+    qint64 focusedInlineAction = -1;
+    bool inlineActionsCurrent() const {
+        return inlineActionOwners.isEmpty() || (inlineActionDocument == document()
+            && inlineActionRevision == document()->revision());
+    }
+    void installInlineActions(QVariantList owners) {
+        QSet<qint64> identities;
+        for (const auto &raw : owners) {
+            const auto row = raw.toMap();
+            const int first = row.value("first").toInt(), last = row.value("last").toInt();
+            const auto format = row.value("format").value<QTextFormat>().toCharFormat();
+            const auto identity = QCompiledInline::actionOwner(format);
+            const qint64 number = format.property(QCompiledInline::ActionOwnerProperty).toLongLong();
+            if (row.size() != 3 || first < 0 || last < first || last >= document()->characterCount()
+                || !identity.isValid() || !QCompiledInline::actionMetric(format) || identities.contains(number))
+                throw DictApiError("invalid native inline action registry");
+            identities.insert(number);
+        }
+        inlineActionOwners = std::move(owners);
+        inlineActionDocument = document(); inlineActionRevision = document()->revision();
+        focusedInlineAction = -1;
+        accessibleLinkRevision = -1;
+        requestAccessibleLinks();
+    }
+    QVariantMap inlineAction(qint64 identity) const {
+        if (identity < 0 || !inlineActionsCurrent()) return {};
+        for (const auto &value : inlineActionOwners) {
+            const auto row = value.toMap();
+            const auto format = row.value("format").value<QTextFormat>().toCharFormat();
+            if (format.property(QCompiledInline::ActionOwnerProperty).toLongLong() == identity) return row;
+        }
+        return {};
+    }
+    bool inlineActionFocused(qint64 identity) const {
+        const auto row = inlineAction(identity);
+        const auto cursor = textCursor();
+        return hasFocus() && focusedInlineAction == identity && !row.isEmpty()
+            && cursor.selectionStart() == row.value("first").toInt()
+            && cursor.selectionEnd() == row.value("last").toInt();
+    }
+    QRectF emptyInlineActionBand(qint64 identity) const {
+        const auto row = inlineAction(identity);
+        if (row.isEmpty() || row.value("first") != row.value("last")) return {};
+        const QPointer<ReadingBrowser> self(const_cast<ReadingBrowser *>(this));
+        const QPointer<QTextDocument> doc(document());
+        const auto geometry = LogicalFlow::position(doc, row.value("first").toInt());
+        if (!self || !doc || document() != doc || !inlineActionsCurrent()
+            || geometry.status == LogicalFlow::Status::Refused
+            || geometry.values.value("lineBaseline").metaType().id() != QMetaType::Double
+            || !LogicalFlow::finiteRect(geometry.values.value("cursorRect"))) return {};
+        const qreal x = geometry.values.value("cursorRect").toRectF().left();
+        return QCompiledInline::actionBand(row.value("format").value<QTextFormat>().toCharFormat(), x, x,
+            geometry.values.value("lineBaseline").toDouble(), doc->documentLayout()->paintDevice());
+    }
+    bool focusInlineAction(qint64 identity) {
+        const auto row = inlineAction(identity);
+        if (row.isEmpty()) return false;
+        const QPointer<ReadingBrowser> self(this);
+        const QPointer<QTextDocument> doc(document());
+        rubySelection.reset(); focusedInlineAction = identity;
+        QTextCursor cursor(doc);
+        cursor.setPosition(row.value("first").toInt());
+        cursor.setPosition(row.value("last").toInt(), QTextCursor::KeepAnchor);
+        setTextCursor(cursor);
+        if (!self || !doc || document() != doc || !inlineActionFocused(identity)) return false;
+        requestMissingPaint(); requestLocalReveal(); notifyDisclosureFocus();
+        return true;
+    }
+    struct AnchorTarget { int first, last; qint64 identity; QString href; QVariant owner; };
+    QList<AnchorTarget> inlineNavigationTargets() const {
+        QList<AnchorTarget> result;
+        if (!inlineActionsCurrent()) return result;
+        for (const auto &value : inlineActionOwners) {
+            const auto row = value.toMap();
+            const auto format = row.value("format").value<QTextFormat>().toCharFormat();
+            result.append({row.value("first").toInt(), row.value("last").toInt(),
+                format.property(QCompiledInline::ActionOwnerProperty).toLongLong(), format.anchorHref(),
+                QCompiledInline::actionOwner(format)});
+        }
+        // Keep existing section and ordinary anchors in the same source order.
+        // Only explicit action groups coalesce across their rich/Ruby children.
+        for (auto block = document()->begin(); block.isValid(); block = block.next()) {
+            int previous = -1;
+            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment(); const auto format = fragment.charFormat();
+                if (!fragment.isValid() || !format.isAnchor() || format.anchorHref().isEmpty()
+                    || QCompiledInline::actionOwner(format).isValid()) { previous = -1; continue; }
+                const auto owner = accessibleAnchorOwner(format);
+                if (previous >= 0 && result[previous].last == fragment.position()
+                    && result[previous].href == format.anchorHref() && result[previous].owner == owner)
+                    result[previous].last += fragment.length();
+                else {
+                    previous = result.size();
+                    result.append({fragment.position(), fragment.position() + fragment.length(), -1,
+                        format.anchorHref(), owner});
+                }
+            }
+        }
+        std::stable_sort(result.begin(), result.end(), [](const auto &a, const auto &b) {
+            return a.first < b.first;
+        });
+        return result;
+    }
+    bool navigateInlineActions(bool next, bool entering = false) {
+        if (inlineActionOwners.isEmpty() || !inlineActionsCurrent()) return false;
+        const auto targets = inlineNavigationTargets();
+        const auto cursor = textCursor(); int current = -1;
+        if (!entering) for (int i = 0; i < targets.size(); ++i) {
+            const auto &target = targets[i];
+            if ((target.identity >= 0 && inlineActionFocused(target.identity))
+                || (target.identity < 0 && cursor.hasSelection()
+                    && cursor.selectionStart() == target.first && cursor.selectionEnd() == target.last)) {
+                current = i; break;
+            }
+        }
+        int chosen = -1;
+        if (entering) chosen = next ? 0 : targets.size() - 1;
+        else if (current >= 0) chosen = current + (next ? 1 : -1);
+        else for (int i = next ? 0 : targets.size() - 1; i >= 0 && i < targets.size(); i += next ? 1 : -1) {
+            if (next ? targets[i].first >= cursor.selectionEnd() : targets[i].last <= cursor.selectionStart()) {
+                chosen = i; break;
+            }
+        }
+        if (chosen < 0 || chosen >= targets.size()) { focusedInlineAction = -1; return false; }
+        const auto target = targets[chosen];
+        if (target.identity >= 0) return focusInlineAction(target.identity);
+        focusedInlineAction = -1; rubySelection.reset();
+        const QPointer<ReadingBrowser> self(this);
+        QTextCursor selected(document()); selected.setPosition(target.first);
+        selected.setPosition(target.last, QTextCursor::KeepAnchor); setTextCursor(selected);
+        if (self) { notifyDisclosureFocus(); requestMissingPaint(); requestLocalReveal(); }
+        return true;
+    }
     struct LogicalSelection { int anchor, position, documentAnchor, documentPosition; };
     std::optional<LogicalSelection> rubySelection;
     bool rubyProjectionCurrent() const {
@@ -610,6 +796,8 @@ public:
     void installRubyProjection(std::unique_ptr<RubyMap> projection) {
         if (projection && projection->sourceDocument() != document()) throw DictApiError("stale or foreign Ruby logical projection");
         rubySelection.reset();
+        inlineActionOwners.clear(); inlineActionDocument.clear(); inlineActionRevision = -1;
+        focusedInlineAction = -1;
         rubyProjection = std::move(projection);
         rubyProjectionDocument = rubyProjection ? document() : nullptr;
         accessibleLinkRevision = -1;
@@ -1016,25 +1204,29 @@ public:
             if (current()) self->revealLocalPosition(cursor.position());
         });
     }
-    QRectF clipLocalCharacter(int position, const QRectF &rect) const {
+    QPainterPath clipLocalPath(int position, const QPainterPath &path) const {
         const QPointer<ReadingBrowser> self(const_cast<ReadingBrowser *>(this));
         const QPointer<QTextDocument> doc(document());
         const QPointer<QAbstractTextDocumentLayout> layout(doc->documentLayout());
         if (layout->property("_wikidictContainerScrollportCapability").toString()
-            != QStringLiteral("wikidict.container-scrollport/1")) return rect;
+            != QStringLiteral("wikidict.container-scrollport/1")) return path;
         QVariantMap result;
         if (!QMetaObject::invokeMethod(layout, "wikidictScrollClip", Qt::DirectConnection,
                 Q_RETURN_ARG(QVariantMap, result), Q_ARG(int, position))) return {};
         if (!self || !doc || !layout || self->document() != doc || doc->documentLayout() != layout
             || result.value(QStringLiteral("error")).toBool()) return {};
-        if (!result.value(QStringLiteral("handled")).toBool()) return rect;
+        if (!result.value(QStringLiteral("handled")).toBool()) return path;
         const auto clipPath = result.value(QStringLiteral("clip_path"));
         if (clipPath.isValid()) {
             if (clipPath.metaType().id() != qMetaTypeId<QPainterPath>()) return {};
-            QPainterPath character; character.addRect(rect);
-            return character.intersected(clipPath.value<QPainterPath>()).boundingRect();
+            return path.intersected(clipPath.value<QPainterPath>());
         }
-        return rect.intersected(result.value(QStringLiteral("clip")).toRectF());
+        QPainterPath clip; clip.addRect(result.value(QStringLiteral("clip")).toRectF());
+        return path.intersected(clip);
+    }
+    QRectF clipLocalCharacter(int position, const QRectF &rect) const {
+        QPainterPath path; path.addRect(rect);
+        return clipLocalPath(position, path).boundingRect();
     }
 
     void clearDisclosures();
@@ -1069,6 +1261,10 @@ public:
         return !policy.value(QStringLiteral("focus")).toMap().isEmpty() ? position : -1;
     }
     qint64 focusedMissingOwner() const {
+        if (inlineActionFocused(focusedInlineAction)) {
+            const auto format = inlineAction(focusedInlineAction).value("format").value<QTextFormat>().toCharFormat();
+            if (MissingFigurePaint::owns(format)) return focusedInlineAction;
+        }
         const auto cursor = textCursor();
         if (!hasFocus() || !cursor.hasSelection()) return -1;
         const qint64 owner = MissingFigurePaint::ownerAt(document(), cursor.selectionStart());
@@ -1227,6 +1423,31 @@ protected:
         if (!guard || !original || document() != original) return;
         QTextBrowser::paintEvent(event);
         if (!guard || !original || document() != original) return;
+        if (inlineActionFocused(focusedInlineAction) && missingState.focusVisible) {
+            const auto row = inlineAction(focusedInlineAction);
+            if (row.value("first") == row.value("last")) {
+                const auto band = emptyInlineActionBand(focusedInlineAction);
+                if (!guard || !original || document() != original) return;
+                const auto format = row.value("format").value<QTextFormat>().toCharFormat();
+                const auto outline = format.property(MissingFigurePaint::outlineProperty).toMap();
+                const qreal scale = documentVerticalScale(original);
+                const qreal width = outline.value("width").toDouble() * scale;
+                const qreal outset = outline.value("offset").toDouble() * scale;
+                if (band.height() > 0 && width > 0) {
+                    const auto center = band.center();
+                    QRectF stroke = band.adjusted(-outset - width / 2, -outset - width / 2, outset + width / 2, outset + width / 2);
+                    stroke.setWidth(qMax(width, stroke.width())); stroke.setHeight(qMax(width, stroke.height())); stroke.moveCenter(center);
+                    QPainterPath extent; extent.addRect(stroke.adjusted(-width, -width, width, width));
+                    const auto clipped = clipLocalPath(row.value("first").toInt(), extent);
+                    if (!guard || !original || document() != original) return;
+                    QPainter painter(viewport()); painter.translate(-rootDocumentOffset());
+                    painter.setClipPath(clipped); painter.setPen(QPen(outline.value("color").value<QColor>(), width));
+                    painter.setBrush(Qt::NoBrush);
+                    const qreal radius = qMax(qreal(0), outline.value("radius").toDouble() * scale + outset + width / 2);
+                    painter.drawRoundedRect(stroke, radius, radius);
+                }
+            }
+        }
         if (hasFocus() && missingState.focusVisible) {
             const auto luminance = [](const QColor &color) {
                 const auto linear = [](double value) { return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4); };
@@ -1313,8 +1534,12 @@ protected:
         return QTextBrowser::viewportEvent(event);
     }
     bool focusNextPrevChild(bool next) override {
+        const bool groups = !inlineActionOwners.isEmpty() && inlineActionsCurrent();
+        if (groups && navigateInlineActions(next)) return true;
         const QPointer<ReadingBrowser> guard(this);
-        const bool moved = QTextBrowser::focusNextPrevChild(next);
+        // At an explicit occurrence boundary, leave through ordinary widget
+        // traversal. QTextBrowser's href search could merge or revisit equal URLs.
+        const bool moved = groups ? QWidget::focusNextPrevChild(next) : QTextBrowser::focusNextPrevChild(next);
         if (guard) { guard->notifyDisclosureFocus(); guard->requestMissingPaint(); guard->requestLocalReveal(); }
         return moved;
     }
@@ -1323,6 +1548,8 @@ protected:
             || event->reason() == Qt::BacktabFocusReason || event->reason() == Qt::ShortcutFocusReason;
         const QPointer<ReadingBrowser> guard(this);
         QTextBrowser::focusInEvent(event);
+        if (guard && (event->reason() == Qt::TabFocusReason || event->reason() == Qt::BacktabFocusReason))
+            guard->navigateInlineActions(event->reason() == Qt::TabFocusReason, true);
         if (guard) { guard->notifyDisclosureFocus(); guard->requestMissingPaint(); }
     }
     void focusOutEvent(QFocusEvent *event) override {
@@ -1338,6 +1565,16 @@ protected:
         if (rubyProjection && event->matches(QKeySequence::Copy) && !semanticSelectionRanges().isEmpty()) {
             QApplication::clipboard()->setMimeData(createMimeDataFromSelection());
             event->accept(); return;
+        }
+        if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
+            && event->modifiers() == Qt::NoModifier && inlineActionFocused(focusedInlineAction)) {
+            const auto row = inlineAction(focusedInlineAction);
+            const auto format = row.value("format").value<QTextFormat>().toCharFormat();
+            const QPointer<ReadingBrowser> self(this);
+            keyboardActivation = true; event->accept();
+            emit anchorClicked(QUrl(format.anchorHref()));
+            if (self) self->keyboardActivation = false;
+            return;
         }
         missingState.focusVisible = true;
         if (!event->isAutoRepeat() && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter))
@@ -1403,6 +1640,7 @@ protected:
         }
     }
     void mousePressEvent(QMouseEvent *event) override {
+        focusedInlineAction = -1;
         missingState.focusVisible = false;
         missingState.hovered = missingOwnerAt(event->position().toPoint());
         missingState.pressed = event->button() == Qt::LeftButton && event->modifiers() == Qt::NoModifier
@@ -1498,9 +1736,9 @@ public:
 
 class ReadingLink final : public QObject {
 public:
-    ReadingLink(ReadingBrowser *reader, int first, int last, QString target, QString label)
+    ReadingLink(ReadingBrowser *reader, int first, int last, QString target, QString label, qint64 owner = -1)
         : QObject(reader), browser(reader), document(reader->document()), revision(document->revision()),
-          start(first), end(last), href(std::move(target)), name(std::move(label)) {}
+          start(first), end(last), href(std::move(target)), name(std::move(label)), actionOwner(owner) {}
     QPointer<ReadingBrowser> browser;
     QPointer<QTextDocument> document;
     const int revision;
@@ -1508,20 +1746,27 @@ public:
     int end;
     const QString href;
     QString name;
+    const qint64 actionOwner;
     bool active = true;
     bool current() const {
         return active && browser && document && browser->document() == document
-            && document->revision() == revision && start >= 0 && end > start
-            && end < document->characterCount() && browser->rubyProjectionCurrent();
+            && document->revision() == revision && start >= 0 && (end > start || (end == start && actionOwner >= 0))
+            && end < document->characterCount() && browser->rubyProjectionCurrent()
+            && (actionOwner < 0 || (!browser->inlineAction(actionOwner).isEmpty()
+                && browser->inlineAction(actionOwner).value("first").toInt() == start
+                && browser->inlineAction(actionOwner).value("last").toInt() == end));
     }
     bool focused() const {
         if (!current() || !browser->hasFocus()) return false;
+        if (actionOwner >= 0) return browser->inlineActionFocused(actionOwner);
         const auto cursor = browser->textCursor();
         return cursor.hasSelection() && cursor.selectionStart() == start && cursor.selectionEnd() == end;
     }
 };
 
 static QVariant accessibleAnchorOwner(const QTextCharFormat &format) {
+    const auto action = QCompiledInline::actionOwner(format);
+    if (action.isValid()) return action;
     const auto ruby = QCompiledInline::rubyAnchorOwner(format);
     if (ruby.isValid()) return ruby;
     const QString policy = format.stringProperty(MissingFigurePaint::policyProperty);
@@ -1542,6 +1787,14 @@ void ReadingBrowser::syncAccessibleLinks() {
     lastFocusedLink.clear();
     accessibleLinkDocument = doc;
     accessibleLinkRevision = doc->revision();
+    if (inlineActionsCurrent()) for (const auto &value : inlineActionOwners) {
+        const auto row = value.toMap();
+        const int first = row.value("first").toInt(), last = row.value("last").toInt();
+        const auto format = row.value("format").value<QTextFormat>().toCharFormat();
+        accessibleLinks.append(new ReadingLink(this, first, last, format.anchorHref(),
+            semanticText(semanticOffset(first), semanticOffset(last, RubyMap::Bias::Before)),
+            format.property(QCompiledInline::ActionOwnerProperty).toLongLong()));
+    }
     for (auto block = doc->begin(); block.isValid(); block = block.next()) {
         ReadingLink *previous = nullptr;
         QVariant previousOwner;
@@ -1549,6 +1802,7 @@ void ReadingBrowser::syncAccessibleLinks() {
             const auto fragment = it.fragment();
             if (!fragment.isValid()) continue;
             const auto format = fragment.charFormat();
+            if (QCompiledInline::actionOwner(format).isValid()) { previous = nullptr; continue; }
             const QString href = format.anchorHref();
             if (!format.isAnchor() || href.isEmpty() || QUrl(href).scheme() == QStringLiteral("section")) {
                 previous = nullptr;
@@ -1568,6 +1822,9 @@ void ReadingBrowser::syncAccessibleLinks() {
         }
     }
     for (auto *link : accessibleLinks) if (link->name.isEmpty()) link->name = link->href;
+    std::stable_sort(accessibleLinks.begin(), accessibleLinks.end(), [](const auto *a, const auto *b) {
+        return a->start < b->start;
+    });
 }
 
 void ReadingBrowser::requestAccessibleLinks() {
@@ -1628,7 +1885,41 @@ public:
             bounds = bounds.united(text->characterRect(offset));
             if (!link || !link->current()) return {};
         }
-        const auto *browser = link->browser.data();
+        const QPointer<ReadingBrowser> browser(link->browser);
+        const QPointer<QTextDocument> document(browser->document());
+        if (link->start == link->end && link->actionOwner >= 0) {
+            auto caret = browser->emptyInlineActionBand(link->actionOwner);
+            if (!browser || !document || !link || !link->current()) return {};
+            // A metric-only owner is focusable at its real caret. Its accessible
+            // rectangle has zero width and never creates a pointer target.
+            if (caret.height() <= 0) return {};
+            QPainterPath witness; witness.addRect(caret.adjusted(-1.0 / 128, 0, 1.0 / 128, 0));
+            const auto visible = browser->clipLocalPath(link->start, witness).boundingRect();
+            if (!browser || !document || !link || !link->current() || visible.isEmpty()) return {};
+            caret.setTop(qMax(caret.top(), visible.top())); caret.setBottom(qMin(caret.bottom(), visible.bottom()));
+            caret.translate(QPointF(browser->viewport()->mapToGlobal(QPoint())) - browser->rootDocumentOffset());
+            const QRect viewport(browser->viewport()->mapToGlobal(QPoint()), browser->viewport()->size());
+            const int top = qMax(viewport.top(), qFloor(caret.top()));
+            const int bottom = qMin(viewport.bottom() + 1, qCeil(caret.bottom()));
+            if (caret.x() < viewport.left() || caret.x() > viewport.right() || bottom <= top) return {};
+            return QRect(qRound(caret.x()), top, 0, bottom - top);
+        }
+        const auto position = LogicalFlow::position(document, link->start);
+        if (!browser || !document || !link || !link->current() || browser->document() != document
+            || position.status == LogicalFlow::Status::Refused) return {};
+        if (position.values.contains(QStringLiteral("actionRect"))) {
+            // The action box may own semantic padding, while character/copy
+            // ranges continue to refer only to the real native text.
+            auto action = browser->clipLocalCharacter(link->start, position.values.value(QStringLiteral("actionRect")).toRectF());
+            if (!browser || !document || !link || !link->current() || browser->document() != document) return {};
+            const int horizontal = browser->isRightToLeft()
+                ? int(qint64(browser->horizontalScrollBar()->minimum()) + browser->horizontalScrollBar()->maximum() - browser->horizontalScrollBar()->value())
+                : browser->horizontalScrollBar()->value();
+            if (!action.isEmpty()) {
+                action.translate(browser->viewport()->mapToGlobal(QPoint()) - QPoint(horizontal, browser->verticalScrollBar()->value()));
+                bounds = bounds.united(action.toAlignedRect());
+            }
+        }
         return bounds.intersected(QRect(browser->viewport()->mapToGlobal(QPoint()), browser->viewport()->size()));
     }
     QAccessible::State state() const override {
@@ -1637,7 +1928,13 @@ public:
         const auto *link = item();
         result.linked = true; result.focusable = true; result.focused = link->focused();
         result.disabled = !link->browser->isEnabled(); result.invisible = !link->browser->isVisible();
-        result.offscreen = rect().isEmpty();
+        const auto box = rect();
+        result.offscreen = box.isEmpty();
+        if (link->start == link->end && link->actionOwner >= 0) {
+            const QRect viewport(link->browser->viewport()->mapToGlobal(QPoint()), link->browser->viewport()->size());
+            result.offscreen = box.height() <= 0 || box.x() < viewport.left() || box.x() > viewport.right()
+                || box.bottom() < viewport.top() || box.top() > viewport.bottom();
+        }
         return result;
     }
     void *interface_cast(QAccessible::InterfaceType type) override {
@@ -1657,6 +1954,14 @@ public:
         if (!browser->isVisible() || !browser->isEnabled()) return;
         browser->setFocus(Qt::ShortcutFocusReason);
         if (!browser || !link || !link->current()) return;
+        if (link->actionOwner >= 0) {
+            if (!browser->focusInlineAction(link->actionOwner) || !browser || !link || !link->current()) return;
+            if (action == pressAction()) {
+                QKeyEvent event(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                QApplication::sendEvent(browser, &event);
+            }
+            return;
+        }
         browser->rubySelection.reset();
         QTextCursor cursor(browser->document());
         cursor.setPosition(link->start); cursor.setPosition(link->end, QTextCursor::KeepAnchor);
@@ -2573,7 +2878,9 @@ QVector<HeadingDestination> headingDestinations(const QJsonObject &entry) {
 // Explicit code/Poem/NBSP/bidi/media metadata never takes this display path.
 bool ordinaryLayoutWhitespaceSpan(const QJsonObject &span, bool allowBreak) {
     if (SemanticHtml::present(span.value(QStringLiteral("image")))
-        || SemanticHtml::present(span.value(QStringLiteral("ruby")))) return false;
+        || SemanticHtml::present(span.value(QStringLiteral("ruby")))
+        || SemanticHtml::present(span.value(QStringLiteral("inline_padding_group")))
+        || CompiledInlineAction::present(span)) return false;
     if (SemanticHtml::present(span.value(QStringLiteral("tooltip")))) return false;
     if (SemanticHtml::present(span.value(QStringLiteral("inline_style"))) || SemanticHtml::present(span.value(QStringLiteral("font_family")))) return false;
     const QString kind = span.value(QStringLiteral("kind")).toString();
@@ -4545,6 +4852,7 @@ bool MainWindow::refreshReading() {
     };
     document->setLayoutEnabled(false);
     CompiledContent::require(unchangedInitial());
+    CompiledInlineAction::validateEntry(currentEntry_);
     const QString html = entryHtml(currentEntry_, true);
     const bool bodyOrdinary = currentEntry_.value(QStringLiteral("body_adjoining")) == QJsonValue(QStringLiteral("ordinary"));
     CompiledContent::require(unchangedInitial());
@@ -4659,7 +4967,10 @@ bool MainWindow::refreshReading() {
     CompiledContent::require(current());
     // Expand compiled Ruby only after all frame/source-run copies exist and
     // before any body boundary positions are bound. No import anchor is painted.
-    const auto rubyExpansion = CompiledRuby::expand(document);
+    auto actionExpansion = CompiledInlineAction::expand(document);
+    auto rubyExpansion = CompiledRuby::expand(document, [&](int first, int removed, int inserted) {
+        actionExpansion.replaced(first, removed, inserted);
+    });
     CompiledContent::require(current() && !document->isLayoutEnabled());
     // The real first metadata block ends the one shared semantic-body flow.
     // No wrapper frame may change the containing interval of existing floats.
@@ -4758,6 +5069,7 @@ bool MainWindow::refreshReading() {
     }
     QVariantList descriptors = SemanticHtml::inlineTableOwners(document);
     for (const auto &owner : owners) descriptors.append(FlowConstruction::descriptor(owner));
+    const auto actionRegistry = CompiledInlineAction::finalize(actionExpansion, rubyExpansion);
     auto rubyFinal = CompiledRuby::finalize(rubyExpansion, std::move(descriptors));
     descriptors = std::move(rubyFinal.descriptors);
     const bool checkedNativeLayout = bodyEnd >= 0 || !descriptors.isEmpty() || !containers.isEmpty() || SemanticHtml::hasTableBoxes(document) || SemanticHtml::hasInlineText(document);
@@ -4772,6 +5084,7 @@ bool MainWindow::refreshReading() {
     };
     CompiledContent::require(endEdit() && sameSource());
     static_cast<ReadingBrowser *>(browser.data())->installRubyProjection(std::move(rubyFinal.map));
+    static_cast<ReadingBrowser *>(browser.data())->installInlineActions(actionRegistry);
     CompiledContent::require(sameSource());
     if (!descriptors.isEmpty()) {
         const bool registered = LogicalFlow::registerOwners(document, descriptors);
@@ -5065,6 +5378,16 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
         QString out;
         for (const QJsonValue &value : parts) {
             const QJsonObject span = value.toObject();
+            if (CompiledInlineAction::present(span)) {
+                if (zeroFontContext || !linkPaint.isEmpty() || reading_->document()->isLayoutEnabled()
+                    || nextLinkPaintOwner_ == std::numeric_limits<quint32>::max()
+                    || reading_->document()->documentLayout()->property("_wikidictInlineActionCapability").toString() != QCompiledInline::ActionCapability)
+                    throw DictApiError("inline action ownership is not installed in this native context");
+                const qint64 identity = (qint64(1) << 32) + nextLinkPaintOwner_++;
+                out += CompiledInlineAction::marker(span, identity, readingPointSize_, contextPointSize, sourceRun, contextFamily, egyptianFamily());
+                continue;
+            }
+            if (CompiledRuby::hasPadding(span)) throw DictApiError("inline padding outside a complete Ruby reading is not yet supported");
             if (SemanticHtml::present(span.value("ruby"))) {
                 if (zeroFontContext || !linkPaint.isEmpty() || reading_->document()->isLayoutEnabled())
                     throw DictApiError("Ruby outside the owned Reading transaction or in zero-font/link-paint context is not yet installed");
@@ -6220,16 +6543,19 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
 QString MainWindow::clueFor(const QJsonObject &entry) const {
     auto textFor = [](const QJsonArray &spans) {
         QString text;
-        for (const QJsonValue &value : spans) {
-            const QJsonObject span = value.toObject();
-            if (span.value(QStringLiteral("kind")).toString() == QStringLiteral("template")) throw DictApiError("compiled dictionary contains an uncompiled template span");
-            // Preview prose must not become an audio control or its filename.
-            // Keep ordinary linked text, including meanings compiled as indents.
+        const auto skip = [](const QJsonObject &span) {
+            if (span.value(QStringLiteral("kind")).toString() == QStringLiteral("template"))
+                throw DictApiError("compiled dictionary contains an uncompiled template span");
             const QStringList classes = span.value(QStringLiteral("classes")).toString().simplified().split(QChar(' '), Qt::SkipEmptyParts);
-            if (classes.contains(QStringLiteral("wikidict-media")) || classes.contains(QStringLiteral("audiotable"))) continue;
+            return classes.contains(QStringLiteral("wikidict-media")) || classes.contains(QStringLiteral("audiotable"));
+        };
+        auto leaf = [&](const QJsonObject &span, const CompiledContent::Context &) {
             text += span.value(QStringLiteral("text")).toString();
             text += span.value(QStringLiteral("trail")).toString();
-        }
+        };
+        auto literal = [&](const QString &part) { text += part; };
+        auto filter = skip;
+        CompiledContent::visitSpanLeaves(spans, {}, leaf, literal, filter);
         return text.simplified();
     };
     for (const QJsonValue &sectionValue : entry.value(QStringLiteral("sections")).toArray()) {

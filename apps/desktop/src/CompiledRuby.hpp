@@ -1,10 +1,12 @@
 #pragma once
 #include "CompiledRubyFont.hpp"
+#include "CompiledContent.hpp"
 #include <QtGui/private/qtextrubylayout_p.h>
 #include <QtGui/private/qtextrubyrangemap_p.h>
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QUrl>
+#include <functional>
 
 namespace CompiledRuby {
 inline QString marker(const QJsonObject &span, qreal bodyPoints, qreal contextPoints,
@@ -42,6 +44,7 @@ struct ImportedSegment {
     QList<ImportedReading> readings;
     Qt::LayoutDirection direction = Qt::LeftToRight;
     qreal baselineOrigin = 0;
+    QTextCharFormat actionFormat;
 };
 struct ImportedOwner { TrackedRange range; QList<ImportedSegment> segments; };
 struct Expansion {
@@ -59,6 +62,91 @@ inline int integer(const QJsonValue &value) {
         throw std::runtime_error("invalid compiled Ruby index");
     return int(number);
 }
+inline bool hasPadding(const QJsonObject &span) {
+    return SemanticHtml::present(span.value("inline_padding_group"));
+}
+inline QJsonObject paddingGroup(const QJsonObject &span) {
+    SemanticHtml::inlineObject(span, {"kind", "role", "text", "target", "trail", "language", "classes",
+        "direction", "explanation", "font_scale", "font_scale_basis", "font_features", "link_paint",
+        "inline_style", "font_family", "image", "target_fragment", "tooltip", "ruby", "inline_padding_group",
+        "foreground", "background", "bold", "italic", "small", "subscript", "superscript", "code", "underline", "strike"});
+    const auto group = SemanticHtml::inlineObject(span.value("inline_padding_group"),
+        {"left", "right", "spans"}, {"left", "right", "spans"});
+    bool nonzero = false;
+    for (const auto &key : {"left", "right"}) {
+        const auto edge = SemanticHtml::inlineObject(group.value(key), {"unit", "value"}, {"unit", "value"});
+        if (edge.value("unit") != "px" && edge.value("unit") != "em")
+            throw std::runtime_error("invalid inline padding unit");
+        nonzero |= SemanticHtml::inlineNumber(edge.value("value")) != 0;
+    }
+    const auto children = array(group.value("spans"));
+    if (!nonzero || children.isEmpty() || children.size() > 65536
+        || !span.value("text").isString() || !span.value("text").toString().isEmpty()
+        || !span.value("trail").isString() || !span.value("trail").toString().isEmpty()
+        || SemanticHtml::present(span.value("ruby")) || SemanticHtml::present(span.value("image"))
+        || SemanticHtml::present(span.value("link_paint")))
+        throw std::runtime_error("invalid inline padding owner");
+    const auto kind = span.value("kind");
+    if ((kind != "text" && kind != "link" && kind != "external_link") || !span.value("target").isString()
+        || (kind == "text" ? !span.value("target").toString().isEmpty() : span.value("target").toString().isEmpty()))
+        throw std::runtime_error("invalid inline padding action");
+    if (!span.value("direction").isString() || !span.value("direction").toString().isEmpty())
+        throw std::runtime_error("inline padding bidi scope not yet supported");
+    for (const auto &key : {"underline", "strike"})
+        if (span.contains(key) && !span.value(key).isBool()) throw std::runtime_error("invalid inline padding paint");
+    if (SemanticHtml::present(span.value("target_fragment"))
+        && (kind != "link" || !span.value("target_fragment").isString()))
+        throw std::runtime_error("invalid inline padding fragment");
+    if (span.contains("explanation") && !span.value("explanation").isString())
+        throw std::runtime_error("invalid inline padding explanation");
+    return group;
+}
+// Check the whole compiled entry before rendering any carrier. Table depth is
+// independent; each Ruby/group increments the existing content-depth budget.
+inline void validatePaddingEntry(const QJsonObject &entry,
+        const std::function<bool(const QJsonObject &, int, int, qsizetype &)> &extra = {}) {
+    qsizetype remaining = 1 << 20;
+    const auto scan = [&](auto &&self, const QJsonArray &spans, int depth, int rubyDepth) -> void {
+        if (depth > 16 || rubyDepth > 16 || spans.size() > remaining)
+            throw std::runtime_error("inline group presentation budget exceeded");
+        remaining -= spans.size();
+        for (const auto &raw : spans) {
+            if (!raw.isObject()) throw std::runtime_error("invalid compiled inline child");
+            const auto span = raw.toObject();
+            if (extra && extra(span, depth, rubyDepth, remaining)) continue;
+            if (hasPadding(span)) self(self, array(paddingGroup(span).value("spans")), depth + 1, rubyDepth);
+            if (!SemanticHtml::present(span.value("ruby"))) continue;
+            if (hasPadding(span)) throw std::runtime_error("competing inline group payloads");
+            const auto ruby = SemanticHtml::inlineObject(span.value("ruby"), {"segments"}, {"segments"});
+            const auto segments = array(ruby.value("segments"));
+            if (depth >= 16 || rubyDepth >= 16 || segments.size() > remaining)
+                throw std::runtime_error("Ruby presentation budget exceeded");
+            remaining -= segments.size();
+            for (const auto &value : segments) {
+                const auto segment = value.toObject();
+                self(self, array(segment.value("gap_before")), depth + 1, rubyDepth + 1);
+                for (const auto &key : {"bases", "annotations"}) {
+                    const auto children = array(segment.value(key));
+                    if (children.size() > remaining) throw std::runtime_error("Ruby presentation budget exceeded");
+                    remaining -= children.size();
+                    for (const auto &item : children) {
+                        const auto child = item.toObject();
+                        self(self, array(child.value("spans")), depth + 1, rubyDepth + 1);
+                        self(self, array(child.value("gap_before")), depth + 1, rubyDepth + 1);
+                        if (QLatin1StringView(key) == QLatin1StringView("annotations"))
+                            for (const auto &fallback : {"fallback_before", "fallback_after"})
+                                self(self, array(child.value(fallback)), depth + 1, rubyDepth + 1);
+                    }
+                }
+            }
+        }
+    };
+    const auto visit = [&](const QJsonArray &spans, const CompiledContent::Context &context) {
+        scan(scan, spans, context.contentDepth, 0);
+    };
+    CompiledContent::Walker walker(visit, CompiledContent::TableSpans::Stored);
+    walker.entry(entry);
+}
 inline QString gapText(const QJsonValue &value) {
     QString result;
     for (const auto &raw : array(value)) {
@@ -66,7 +154,7 @@ inline QString gapText(const QJsonValue &value) {
         const auto span = raw.toObject();
         if (span.value("kind") != "text" || !span.value("text").isString()
             || !span.value("trail").toString().isEmpty() || !span.value("target").toString().isEmpty()
-            || SemanticHtml::present(span.value("ruby")) || SemanticHtml::present(span.value("image"))
+            || hasPadding(span) || SemanticHtml::present(span.value("ruby")) || SemanticHtml::present(span.value("image"))
             || SemanticHtml::present(span.value("link_paint")) || !span.value("direction").toString().isEmpty())
             throw std::runtime_error("unsupported Ruby gap content");
         const auto text = span.value("text").toString();
@@ -76,12 +164,17 @@ inline QString gapText(const QJsonValue &value) {
     }
     return result;
 }
-inline QString plain(const QJsonArray &spans) {
+inline QString plain(const QJsonArray &spans, int depth = 0) {
+    if (depth > 16) throw std::runtime_error("inline group content depth exceeded");
     QString result;
     for (const auto &value : spans) {
         if (!value.isObject()) throw std::runtime_error("invalid Ruby child");
         const auto span = value.toObject();
         if (SemanticHtml::present(span.value("ruby"))) throw std::runtime_error("nested Ruby importer not yet installed");
+        if (hasPadding(span)) {
+            result += plain(array(paddingGroup(span).value("spans")), depth + 1);
+            continue;
+        }
         if (!span.value("text").isString() || !span.value("trail").isString()) throw std::runtime_error("invalid Ruby text");
         result += span.value("text").toString() + span.value("trail").toString();
     }
@@ -95,7 +188,7 @@ inline Qt::LayoutDirection direction(const QString &value, const QString &text, 
     throw std::runtime_error("invalid Ruby direction");
 }
 inline void validateLeaf(const QJsonObject &span) {
-    if (SemanticHtml::present(span.value("ruby")) || SemanticHtml::present(span.value("image"))
+    if (hasPadding(span) || SemanticHtml::present(span.value("ruby")) || SemanticHtml::present(span.value("image"))
         || SemanticHtml::present(span.value("link_paint"))) throw std::runtime_error("Ruby child capability not yet installed");
     const QString kind = span.value("kind").toString();
     if (kind != "text" && kind != "link" && kind != "external_link") throw std::runtime_error("invalid Ruby child kind");
@@ -134,7 +227,8 @@ inline void requireOwnerPolicy(const QJsonObject &owner, bool outer = false) {
 }
 inline ImportedChild insertChild(QTextCursor &cursor, const QJsonObject &owner,
         const QJsonArray &spans, const Context &context, const ResolvedOwner &outer,
-        const Placement &outerPlacement, bool underline, bool strike, const QTextCharFormat &provenance) {
+        const Placement &outerPlacement, bool underline, bool strike, const QTextCharFormat &provenance,
+        bool reading = false) {
     requireOwnerPolicy(owner);
     const ResolvedOwner resolved = resolveOwner(owner, context);
     const auto placement = place(resolved, &outerPlacement);
@@ -144,9 +238,49 @@ inline ImportedChild insertChild(QTextCursor &cursor, const QJsonObject &owner,
     const qint64 actionOwner = ++*context.actionOwnerCounter;
     const QBrush inheritedInk = resolved.format.foreground().style() != Qt::NoBrush ? resolved.format.foreground()
         : outer.format.foreground().style() != Qt::NoBrush ? outer.format.foreground() : context.foreground;
+    QJsonArray children = spans;
+    std::optional<QTextRubyLayout::InlinePadding> padding;
+    QString inheritedAction;
+    if (spans.size() == 1 && hasPadding(spans.first().toObject())) {
+        if (!reading) throw std::runtime_error("inline padding is only supported in a complete Ruby reading");
+        const auto groupSpan = spans.first().toObject();
+        const auto group = paddingGroup(groupSpan);
+        children = array(group.value("spans"));
+        QJsonObject groupOwner{{"font", spanFont(groupSpan)}, {"direction", ""},
+            {"inline_style", groupSpan.value("inline_style")}, {"foreground", groupSpan.value("foreground")},
+            {"background", groupSpan.value("background")}};
+        requireOwnerPolicy(groupOwner);
+        if (SemanticHtml::present(groupSpan.value("inline_style").toObject().value("line_height")))
+            throw std::runtime_error("inline padding group line-height not yet supported");
+        const auto declaring = resolveOwner(groupOwner, context);
+        if (place(declaring, &placement).shift != groupShift)
+            throw std::runtime_error("shifted inline padding group not yet supported");
+        padding.emplace(); padding->ownerFont = declaring.font;
+        padding->ownerFormat = childFormat(declaring, 0);
+        if (padding->ownerFormat.foreground().style() == Qt::NoBrush) padding->ownerFormat.setForeground(inheritedInk);
+        padding->ownerFormat.setFontUnderline(groupSpan.value("underline").toBool());
+        padding->ownerFormat.setFontStrikeOut(groupSpan.value("strike").toBool());
+        for (const auto &key : {"left", "right"}) {
+            const auto spec = group.value(key).toObject();
+            auto &edge = QLatin1StringView(key) == QLatin1StringView("left") ? padding->left : padding->right;
+            edge.value = spec.value("value").toDouble(); edge.em = spec.value("unit") == "em";
+        }
+        inheritedAction = href(groupSpan);
+        if (!inheritedAction.isEmpty()) {
+            padding->ownerFormat.setAnchor(true); padding->ownerFormat.setAnchorHref(inheritedAction);
+            padding->ownerFormat.setProperty(QCompiledInline::RubyAnchorProperty, actionOwner);
+        }
+        if (SemanticHtml::present(groupSpan.value("tooltip"))) {
+            if (!groupSpan.value("tooltip").isString()) throw std::runtime_error("invalid inline padding tooltip");
+            padding->ownerFormat.setToolTip(groupSpan.value("tooltip").toString());
+        } else padding->ownerFormat.setToolTip(groupSpan.value("explanation").toString());
+        if (plain(children).trimmed().isEmpty()) throw std::runtime_error("empty inline padding group");
+    }
     const int first = cursor.position();
-    for (const auto &value : spans) {
+    for (const auto &value : children) {
         const auto span = value.toObject(); validateLeaf(span);
+        if (padding && plain(QJsonArray{span}).isEmpty())
+            throw std::runtime_error("empty inline padding child metrics not yet supported");
         QJsonObject childOwner{{"font", spanFont(span)}, {"direction", ""},
             {"inline_style", span.value("inline_style")}, {"foreground", span.value("foreground")},
             {"background", span.value("background")}};
@@ -154,14 +288,24 @@ inline ImportedChild insertChild(QTextCursor &cursor, const QJsonObject &owner,
         QTextCharFormat format = childFormat(child, place(child, &placement).shift - groupShift);
         if (provenance.hasProperty(SemanticHtml::sourceRunProperty))
             format.setProperty(SemanticHtml::sourceRunProperty, provenance.property(SemanticHtml::sourceRunProperty));
-        if (format.foreground().style() == Qt::NoBrush) format.setForeground(inheritedInk);
+        if (format.foreground().style() == Qt::NoBrush)
+            format.setForeground(padding ? padding->ownerFormat.foreground() : inheritedInk);
         format.setFontUnderline(span.value("underline").toBool()); format.setFontStrikeOut(span.value("strike").toBool());
-        const auto action = href(span);
+        const auto childAction = href(span);
+        if (!inheritedAction.isEmpty() && !childAction.isEmpty())
+            throw std::runtime_error("competing inline padding child action");
+        const auto action = inheritedAction.isEmpty() ? childAction : inheritedAction;
         if (!action.isEmpty()) {
+            qint64 id = actionOwner;
+            if (padding && inheritedAction.isEmpty()) {
+                if (*context.actionOwnerCounter >= (1 << 20)) throw std::runtime_error("Ruby action-owner budget exceeded");
+                id = ++*context.actionOwnerCounter;
+            }
             format.setAnchor(true); format.setAnchorHref(action);
-            format.setProperty(QCompiledInline::RubyAnchorProperty, actionOwner);
+            format.setProperty(QCompiledInline::RubyAnchorProperty, id);
         }
         if (SemanticHtml::present(span.value("tooltip"))) format.setToolTip(span.value("tooltip").toString());
+        else if (padding && !padding->ownerFormat.toolTip().isEmpty()) format.setToolTip(padding->ownerFormat.toolTip());
         else format.setToolTip(span.value("explanation").toString());
         cursor.insertText(span.value("text").toString(), format);
         auto policy = QCompiledInline::policy(format); policy.remove("wrap"); format.setProperty(QCompiledInline::Property, policy);
@@ -177,6 +321,7 @@ inline ImportedChild insertChild(QTextCursor &cursor, const QJsonObject &owner,
     result.native.foreground = inheritedInk;
     result.native.background = resolved.format.background();
     result.native.underline = underline; result.native.strike = strike;
+    result.native.inlinePadding = padding;
     return result;
 }
 inline QString collapseGap(const QString &raw, const QString &before, const QString &after) {
@@ -254,7 +399,8 @@ inline ImportedGap insertGap(QTextCursor &cursor, const QJsonValue &value,
     result.child.range = TrackedRange(cursor.document(), first, cursor.position());
     return result;
 }
-inline Expansion expand(QTextDocument *document) {
+inline Expansion expand(QTextDocument *document,
+        const std::function<void(int, int, int)> &replaced = {}) {
     if (!document || document->isLayoutEnabled()) throw std::runtime_error("Ruby expansion requires the owned disabled layout transaction");
     Expansion result; result.document = document;
     struct Marker { QTextCursor cursor; QJsonObject data; QTextCharFormat provenance; };
@@ -368,7 +514,7 @@ inline Expansion expand(QTextDocument *document) {
                     child = insertChild(marker.cursor, reading.value("owner").toObject(), {}, context, outer,
                         outerPlacement, false, false, marker.provenance);
                 } else child = insertChild(marker.cursor, reading.value("owner").toObject(), body, context, outer,
-                    outerPlacement, false, false, marker.provenance);
+                    outerPlacement, false, false, marker.provenance, true);
                 output.readings.append({child, start, count, level, hidden, gap});
                 previousReading = hidden ? QString() : readingText;
             }
@@ -380,6 +526,7 @@ inline Expansion expand(QTextDocument *document) {
         }
         if (marker.cursor.position() == ownerFirst) throw std::runtime_error("empty complete Ruby owner not yet installed");
         imported.range = TrackedRange(document, ownerFirst, marker.cursor.position()); result.owners.append(imported);
+        if (replaced) replaced(ownerFirst, 1, marker.cursor.position() - ownerFirst);
     }
     return result;
 }
@@ -428,6 +575,7 @@ inline Finalized finalize(const Expansion &expansion, QVariantList descriptors) 
             QTextRubyRangeMap::Segment logical;
             logical.gap = gapRange(segment.gap);
             QTextRubyLayout::Description native; native.direction = segment.direction; native.baselineOrigin = segment.baselineOrigin;
+            native.actionFormat = segment.actionFormat;
             for (int index = 0; index < segment.bases.size(); ++index) {
                 const auto &base = segment.bases[index];
                 const auto &gap = segment.baseGaps[index];

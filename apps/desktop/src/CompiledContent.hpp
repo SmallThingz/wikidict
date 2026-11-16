@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <cmath>
 #include <limits>
+#include <functional>
 
 // Walk semantic containers in authored order. A non-null block array is
 // authoritative even when empty; captions and scopes never borrow Block.spans.
@@ -387,11 +388,108 @@ struct Context {
     // Value-owned because some metadata visitors retain Context after walking.
     // Only the direct Figure-media visit carries this ownership evidence.
     QJsonObject figureMediaOwner;
+    int contentDepth = 0;
 };
 inline QString languageForSpan(const QJsonObject &span, const Context &context) {
     // Empty Span.language is the legacy default; only Scope.language can reset.
     const QString explicitLanguage = span.value(QStringLiteral("language")).toString();
     return explicitLanguage.isEmpty() ? context.language : explicitLanguage;
+}
+
+// Opt-in plain fallback/metadata traversal. Container Walker visitors keep their
+// existing array ownership; only these side consumers request structural leaves.
+// Synthetic Ruby delimiters go to literal, never to the metadata leaf callback.
+template <typename Leaf, typename Literal, typename Skip>
+inline void visitSpanLeaves(const QJsonArray &spans, Context context,
+                            Leaf &leaf, Literal &literal, Skip &skip) {
+    qsizetype remaining = 1 << 20;
+    const auto charge = [](qsizetype count, qsizetype &budget) {
+        require(count >= 0 && count <= budget); budget -= count;
+    };
+    using LeafFn = std::function<void(const QJsonObject &, const Context &)>;
+    using TextFn = std::function<void(const QString &)>;
+    const auto walk = [&](auto &&self, const QJsonArray &values, Context inherited,
+                          int depth, int rubyDepth, qsizetype &budget,
+                          const LeafFn &visitLeaf, const TextFn &text, bool probing) -> void {
+        require(depth <= 16 && rubyDepth <= 16);
+        charge(values.size(), budget);
+        for (const auto &raw : values) {
+            const auto span = object(raw);
+            if (skip(span)) continue;
+            Context local = inherited;
+            local.contentDepth = depth;
+            if (present(span.value("language"))) require(span.value("language").isString());
+            local.language = languageForSpan(span, inherited);
+            const bool action = present(span.value("inline_action_group"));
+            const bool padding = present(span.value("inline_padding_group"));
+            const bool ruby = present(span.value("ruby"));
+            require(int(action) + int(padding) + int(ruby) <= 1);
+            if (action || padding || ruby) {
+                require(depth < 16 && !present(span.value("image"))
+                    && span.value("text").isString() && span.value("text").toString().isEmpty()
+                    && span.value("trail").isString() && span.value("trail").toString().isEmpty());
+            }
+            if (action || padding) {
+                const auto group = containerObject(span.value(action ? "inline_action_group" : "inline_padding_group"),
+                    action ? QStringList{"spans"} : QStringList{"left", "right", "spans"},
+                    action ? QStringList{"spans"} : QStringList{"left", "right", "spans"});
+                require(group.value("spans").isArray() && !group.value("spans").toArray().isEmpty());
+                if (padding) {
+                    containerLength(group.value("left")); containerLength(group.value("right"));
+                    require(group.value("left").toObject().value("value").toDouble() != 0
+                        || group.value("right").toObject().value("value").toDouble() != 0);
+                }
+                self(self, group.value("spans").toArray(), local, depth + 1, rubyDepth, budget, visitLeaf, text, probing);
+            } else if (ruby) {
+                require(rubyDepth < 16);
+                const auto payload = containerObject(span.value("ruby"), {"segments"}, {"segments"});
+                require(payload.value("segments").isArray());
+                const auto segments = payload.value("segments").toArray(); charge(segments.size(), budget);
+                for (const auto &rawSegment : segments) {
+                    const auto segment = object(rawSegment);
+                    const auto children = [&](const QJsonObject &owner, const char *key) {
+                        require(owner.value(key).isArray()); return owner.value(key).toArray();
+                    };
+                    self(self, children(segment, "gap_before"), local, depth + 1, rubyDepth + 1, budget, visitLeaf, text, probing);
+                    for (const auto &key : {"bases", "annotations"}) {
+                        const auto owners = children(segment, key); charge(owners.size(), budget);
+                        for (const auto &rawOwner : owners) {
+                            charge(1, budget);
+                            const auto owner = object(rawOwner);
+                            self(self, children(owner, "gap_before"), local, depth + 1, rubyDepth + 1, budget, visitLeaf, text, probing);
+                            const auto body = children(owner, "spans");
+                            if (QLatin1StringView(key) == QLatin1StringView("bases")) {
+                                self(self, body, local, depth + 1, rubyDepth + 1, budget, visitLeaf, text, probing);
+                            } else {
+                                require(owner.value("explicit_fallback").isBool());
+                                if (owner.value("explicit_fallback").toBool()) {
+                                    self(self, children(owner, "fallback_before"), local, depth + 1, rubyDepth + 1, budget, visitLeaf, text, probing);
+                                    self(self, body, local, depth + 1, rubyDepth + 1, budget, visitLeaf, text, probing);
+                                    self(self, children(owner, "fallback_after"), local, depth + 1, rubyDepth + 1, budget, visitLeaf, text, probing);
+                                } else {
+                                    require(children(owner, "fallback_before").isEmpty()
+                                        && children(owner, "fallback_after").isEmpty());
+                                    // Probe against a copy of the same remaining budget, not a
+                                    // fresh per-sibling allowance. No metadata/actions escape.
+                                    auto probeBudget = budget; bool nonempty = false;
+                                    auto probeLeaf = [&](const QJsonObject &part, const Context &) {
+                                        nonempty |= !part.value("text").toString().isEmpty() || !part.value("trail").toString().isEmpty();
+                                    };
+                                    auto probeLiteral = [&](const QString &part) { nonempty |= !part.isEmpty(); };
+                                    if (!probing) self(self, body, local, depth + 1, rubyDepth + 1, probeBudget, probeLeaf, probeLiteral, true);
+                                    if (!probing && nonempty) text(QString(QChar(0xff08)));
+                                    self(self, body, local, depth + 1, rubyDepth + 1, budget, visitLeaf, text, probing);
+                                    if (!probing && nonempty) text(QString(QChar(0xff09)));
+                                }
+                            }
+                        }
+                    }
+                }
+            } else visitLeaf(span, local);
+        }
+    };
+    const LeafFn visitLeaf = leaf; const TextFn text = literal;
+    walk(walk, spans, context, context.contentDepth, 0, remaining, visitLeaf, text, false);
 }
 
 template <typename Visitor> class Walker {
@@ -421,10 +519,10 @@ public:
             // Old codec records permit both fields. Metadata walkers retain
             // both; visible-body projection keeps the established table priority.
             if (present(tableValue)) {
-                if (tableSpans_ == TableSpans::Stored) visit_(spans, context);
+                if (tableSpans_ == TableSpans::Stored) visitSpans(spans, depth, context);
                 table(object(tableValue), depth.nestedTable(), context);
             }
-            else visit_(spans, context);
+            else visitSpans(spans, depth, context);
         }
     }
     void parts(const QJsonArray &values, Depth depth, Context context = {}) {
@@ -437,7 +535,7 @@ public:
             const QJsonValue group = part.value(QStringLiteral("scope"));
             if (kind == QStringLiteral("inline")) {
                 require(!present(image) && !present(group));
-                visit_(spans, context);
+                visitSpans(spans, depth, context);
             } else if (kind == QStringLiteral("figure")) {
                 require(spans.isEmpty() && !present(group));
                 figure(object(image), depth, context);
@@ -455,7 +553,7 @@ public:
         require(value.value(QStringLiteral("caption")).isArray());
         Context content = context; content.figureMediaOwner = {};
         Context media = content; media.figureMediaOwner = value;
-        visit_(QJsonArray{figureSpan(value)}, media);
+        visitSpans(QJsonArray{figureSpan(value)}, depth, media);
         caption(value, depth, content);
     }
     void table(const QJsonObject &value, Depth depth, Context context = {}) {
@@ -474,36 +572,41 @@ public:
                 } else if (present(nested)) {
                     require(spans.isEmpty());
                     table(object(nested), depth.nestedTable(), context);
-                } else visit_(spans, context);
+                } else visitSpans(spans, depth, context);
             }
         }
     }
     void reference(const QJsonObject &value, Context context = {}) {
+        const Depth depth;
         const QJsonArray spans = array(value.value(QStringLiteral("spans")));
         const QJsonValue owned = value.value(QStringLiteral("blocks"));
         if (present(owned)) {
             require(owned.isArray() && spans.isEmpty());
             blocks(owned.toArray(), {}, context);
-        } else visit_(spans, context);
+        } else visitSpans(spans, depth, context);
     }
     void entry(const QJsonObject &value) {
         QString language = value.value(QStringLiteral("language_code")).toString();
         if (language.isEmpty()) language = value.value(QStringLiteral("language")).toString();
         const Context context{language};
-        visit_(array(value.value(QStringLiteral("display_title"))), context);
-        visit_(array(value.value(QStringLiteral("preamble_spans"))), context);
+        visitSpans(array(value.value(QStringLiteral("display_title"))), {}, context);
+        visitSpans(array(value.value(QStringLiteral("preamble_spans"))), {}, context);
         for (const QJsonValue &section : array(value.value(QStringLiteral("sections"))))
             blocks(array(object(section).value(QStringLiteral("blocks"))), {}, context);
         for (const QJsonValue &ref : array(value.value(QStringLiteral("references")))) reference(object(ref), context);
     }
 private:
+    void visitSpans(const QJsonArray &spans, Depth depth, Context context) {
+        context.contentDepth = depth.content;
+        visit_(spans, context);
+    }
     void caption(const QJsonObject &value, Depth depth, Context context = {}) {
         const QJsonArray spans = array(value.value(QStringLiteral("caption")));
         const QJsonValue owned = value.value(QStringLiteral("caption_blocks"));
         if (present(owned)) {
             require(owned.isArray() && spans.isEmpty());
             blocks(owned.toArray(), depth.nestedContent(), context);
-        } else visit_(spans, context);
+        } else visitSpans(spans, depth, context);
     }
     Visitor &visit_;
     TableSpans tableSpans_;

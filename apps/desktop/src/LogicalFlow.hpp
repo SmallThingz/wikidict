@@ -46,6 +46,9 @@ inline Position position(QTextDocument *document, int originalOffset) {
         || values.value(QStringLiteral("error")).metaType().id() != QMetaType::Int) return {};
     const int error = values.value(QStringLiteral("error")).toInt();
     if (error != 0) return {Status::Refused, error, values};
+    if (values.contains(QStringLiteral("lineBaseline"))
+        && (values.value(QStringLiteral("lineBaseline")).metaType().id() != QMetaType::Double
+            || !std::isfinite(values.value(QStringLiteral("lineBaseline")).toDouble()))) return {};
     if (!values.value(QStringLiteral("handled")).toBool()) return {Status::Stock, 0, values};
     for (const QString &key : {QStringLiteral("first"), QStringLiteral("last"), QStringLiteral("position")})
         if (values.value(key).metaType().id() != QMetaType::Int) return {};
@@ -56,6 +59,7 @@ inline Position position(QTextDocument *document, int originalOffset) {
         || values.value(QStringLiteral("last")).toInt() >= document->characterCount()
         || !finiteRect(values.value(QStringLiteral("cursorRect")))) return {};
     if (values.contains(QStringLiteral("characterRect")) && !finiteRect(values.value(QStringLiteral("characterRect")))) return {};
+    if (values.contains(QStringLiteral("actionRect")) && !finiteRect(values.value(QStringLiteral("actionRect")))) return {};
     return {Status::Handled, 0, values};
 }
 

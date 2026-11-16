@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,13935 @@
+@@ -3,24 +3,13938 @@
 
 
  #include <QTest>
@@ -1140,6 +1140,9 @@
 +    void rubyJointBreaksRequireEveryVisibleInterior();
 +    void rubyVerticalEntryKeepsPreferredChildCaret();
 +    void rubyAppliesCommonAndReadingShiftExactlyOnce();
++    void rubyInlinePaddingKeepsDeclaringFontRangesAndActions();
++    void inlineActionDeclaringMetricsKeepChildFontsAndZeroAdvance();
++    void inlineActionRubyPaintUsesBaseAllocationAndActualHitRanges();
 +    void logicalCharacterRectKeepsCompleteGraphemeWithinItsLine()
 +    {
 +        // The first two UTF-16 units are one grapheme: Syriac base/mark,
@@ -13958,7 +13961,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +14559,1269 @@
+@@ -648,5 +14562,1560 @@
      }
  }
 
@@ -15224,6 +15227,297 @@
 +    QVERIFY(measured->metrics().occupiedTop.toReal() <= measured->characterRect(11).top() + 1.0 / 64);
 +    QVERIFY(measured->metrics().occupiedBottom.toReal() >= measured->characterRect(8).bottom() - 1.0 / 64);
 +    QCOMPARE(document.toRawText(), QStringLiteral("Basereadlowouter"));
++}
++
++void tst_QTextDocumentLayout::rubyInlinePaddingKeepsDeclaringFontRangesAndActions()
++{
++    // Retained SR 日 topology; scales below are controlled inputs, not a
++    // substitute for a future paired producer's complete computed U output.
++    const QStringList bases{QString::fromUtf8("人"), QString::fromUtf8("質"), QString::fromUtf8("切")};
++    const QStringList readings{QString::fromUtf8("nhân"), QString::fromUtf8("chất"), QString::fromUtf8("thiết")};
++    for (int sample = 0; sample < 3; ++sample) for (qreal zoom : {qreal(1), qreal(2)}) for (bool wideBase : {false, true}) {
++        QImage device(1000, 500, QImage::Format_ARGB32_Premultiplied);
++        device.fill(Qt::white);
++        QTextDocument document; document.documentLayout()->setPaintDevice(&device);
++        QFont baseFont(QStringLiteral("DejaVu Sans")); baseFont.setPointSizeF((wideBase ? 60 : 12) * zoom);
++        QFont rtFont = baseFont; rtFont.setPointSizeF(12 * .675 * zoom);
++        QFont groupFont = baseFont; groupFont.setPointSizeF(12 * (sample < 2 ? .91125 : .675) * zoom);
++        // Different child and declaring fonts prove edges use the owner once.
++        QFont childFont = groupFont; childFont.setPointSizeF(groupFont.pointSizeF() * .8);
++        document.setDefaultFont(baseFont);
++        QTextCharFormat base; base.setFont(baseFont);
++        QTextCharFormat child; child.setFont(childFont); child.setForeground(Qt::blue);
++        const QString action = sample == 2 ? QStringLiteral("dict:fanqie") : QStringLiteral("dict:reading");
++        child.setAnchor(true); child.setAnchorHref(action);
++        child.setProperty(QCompiledInline::RubyAnchorProperty, qint64(91));
++        QTextCursor insert(&document); insert.insertText(bases[sample], base);
++        // Two native style runs still have exactly one pair of group edges.
++        insert.insertText(readings[sample].left(1), child);
++        auto rest = child; rest.setForeground(Qt::red); insert.insertText(readings[sample].mid(1), rest);
++        const auto source = document.toRawText();
++        QTextRubyLayout::Child b, r;
++        b.source = {0, 1}; b.ownerFont = baseFont;
++        b.usedAbove = QFontMetricsF(baseFont, &device).ascent(); b.usedBelow = QFontMetricsF(baseFont, &device).descent();
++        r.source = {1, int(source.size())}; r.ownerFont = rtFont;
++        b.option.setTextDirection(Qt::LeftToRight); r.option.setTextDirection(Qt::LeftToRight);
++        r.option.setWrapMode(QTextOption::WordWrap);
++        QTextRubyLayout::Description description;
++        description.bases = {b}; description.gaps = {0}; description.readings = {{r, 0, 1, 0}};
++        auto ordinary = QTextRubyLayout::create(&document, description); QVERIFY(ordinary);
++        const auto ordinaryFirst = ordinary->cursorRect(1), ordinaryLast = ordinary->cursorRect(source.size());
++        const qreal textWidth = ordinaryLast.x() - ordinaryFirst.x();
++        QTextRubyLayout::InlinePadding group;
++        group.left = {.25, true}; group.right = {.25, true}; group.ownerFont = groupFont;
++        group.ownerFormat.setFont(groupFont); group.ownerFormat.setBackground(QColor(240, 240, 220));
++        if (sample == 2) {
++            group.ownerFormat.setAnchor(true); group.ownerFormat.setAnchorHref(action);
++            group.ownerFormat.setProperty(QCompiledInline::RubyAnchorProperty, qint64(91));
++        }
++        description.readings[0].child.inlinePadding = group;
++        auto padded = QTextRubyLayout::create(&document, description); QVERIFY(padded);
++        const qreal edge = .25 * groupFont.pointSizeF() * QFontMetricsF(groupFont, &device).fontDpi() / 72;
++        const qreal baseWidth = ordinary->metrics().advance.toReal();
++        QVERIFY(qAbs(padded->metrics().advance.toReal() - qMax(baseWidth, textWidth + edge * 2)) <= 2.0 / 64);
++        const auto first = padded->cursorRect(1), last = padded->cursorRect(source.size());
++        QVERIFY(qAbs(last.x() - first.x() - textWidth) < 1.0 / 64);
++        const qreal y = padded->characterRect(1).center().y();
++        const QPointF left(first.x() - edge / 2, y), right(last.x() + edge / 2, y);
++        if (wideBase) {
++            QVERIFY(baseWidth > textWidth + 2 * edge + 4);
++            QCOMPARE(padded->hitTest(QPointF(first.x() - edge - 2, y), Qt::ExactHit), -1);
++            QCOMPARE(padded->hitTest(QPointF(last.x() + edge + 2, y), Qt::ExactHit), -1);
++        }
++        if (sample == 2) {
++            QCOMPARE(padded->hitTest(left, Qt::ExactHit), 1);
++            QVERIFY(padded->hitTest(right, Qt::ExactHit) >= 1);
++            const auto links = padded->linkBoxes(); QCOMPARE(links.size(), 1);
++            QCOMPARE(padded->actionRect(1), links.first().rect);
++            QVERIFY(links.first().rect.contains(left)); QVERIFY(links.first().rect.contains(right));
++            QVERIFY(qAbs(links.first().rect.width() - (textWidth + 2 * edge)) < 1.0 / 64);
++        } else {
++            QVERIFY(padded->actionRect(1).isEmpty());
++            QCOMPARE(padded->hitTest(left, Qt::ExactHit), -1);
++            QCOMPARE(padded->hitTest(right, Qt::ExactHit), -1);
++            for (const auto &link : padded->linkBoxes()) {
++                QVERIFY(!link.rect.contains(left)); QVERIFY(!link.rect.contains(right));
++            }
++        }
++        for (const auto point : {left, right}) {
++            const int caret = padded->hitTest(point, Qt::FuzzyHit); QVERIFY(caret >= 1 && caret <= source.size());
++        }
++        QVERIFY(!padded->selectionRects(1, source.size()).isEmpty());
++        QTextCursor copied(&document); copied.setPosition(1); copied.setPosition(source.size(), QTextCursor::KeepAnchor);
++        QCOMPARE(copied.selectedText(), readings[sample]); QCOMPARE(document.toRawText(), source);
++        const auto fragments = QTextRubyLayout::fragments(&document, description, padded->metrics().advance.toReal() / 2);
++        QVERIFY(fragments); QCOMPARE(fragments->size(), 1); // A proved unbreakable reading, not a wrap override.
++        QPainter painter(&device); padded->draw(&painter, QPointF(60, 350), {}); painter.end();
++        QCOMPARE(device.pixelColor(qFloor(60 + left.x()), qFloor(350 + y)), QColor(240, 240, 220));
++        QVERIFY(padded->current());
++        auto invalid = description; invalid.readings[0].child.inlinePadding->left.value = -1;
++        QVERIFY(!QTextRubyLayout::create(&document, invalid));
++        invalid = description; invalid.readings[0].child.inlinePadding->left.value = 0;
++        invalid.readings[0].child.inlinePadding->right.value = 0; QVERIFY(!QTextRubyLayout::create(&document, invalid));
++        invalid = description; invalid.readings[0].child.option.setTextDirection(Qt::RightToLeft);
++        QVERIFY(!QTextRubyLayout::create(&document, invalid));
++        invalid = description; invalid.bases[0].inlinePadding = group; QVERIFY(!QTextRubyLayout::create(&document, invalid));
++        if (sample == 2) {
++            invalid = description; invalid.readings[0].child.inlinePadding->ownerFormat.setAnchorHref(QStringLiteral("dict:other"));
++            QVERIFY(!QTextRubyLayout::create(&document, invalid));
++        }
++        // Physical px and em remain distinct under a different declaring size.
++        auto asymmetric = description;
++        asymmetric.readings[0].child.inlinePadding->left = {3, false};
++        asymmetric.readings[0].child.inlinePadding->right = {.5, true};
++        auto asym = QTextRubyLayout::create(&document, asymmetric); QVERIFY(asym);
++        const qreal px = 3 * QFontMetricsF(groupFont, &device).fontDpi() / QFontMetricsF(QFont()).fontDpi();
++        QVERIFY(qAbs(asym->metrics().advance.toReal() - qMax(baseWidth, textWidth + px + 2 * edge)) <= 2.0 / 64);
++        auto legacy = description; legacy.readings[0].child.inlinePadding.reset();
++        auto unchanged = QTextRubyLayout::create(&document, legacy); QVERIFY(unchanged);
++        QCOMPARE(unchanged->metrics().advance, ordinary->metrics().advance);
++        document.setDefaultFont(QFont(QStringLiteral("DejaVu Serif"), 19));
++        QVERIFY(!padded->current());
++    }
++    // Space-separated content has a real ordinary opportunity; this first
++    // group subset must refuse it instead of cloning edges across fragments.
++    for (const auto &text : {QStringLiteral("word word"), QString::fromUtf8("aאב"), QStringLiteral("a\u202eb"),
++            QStringLiteral("a\U0001e900"), QStringLiteral("a\u200eb"), QStringLiteral("a") + QChar(0xd83d)}) {
++    QTextDocument document; document.setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 12));
++    QTextCursor cursor(&document); cursor.insertText(QStringLiteral("A") + text);
++    QTextRubyLayout::Child base, reading;
++    base.source = {0, 1}; reading.source = {1, 1 + int(text.size())};
++    base.ownerFont = reading.ownerFont = document.defaultFont();
++    base.usedAbove = 12; base.usedBelow = 3;
++    reading.option.setTextDirection(Qt::LeftToRight);
++    QTextRubyLayout::InlinePadding group; group.left = {.25, true}; group.right = {.25, true}; group.ownerFont = document.defaultFont();
++    reading.inlinePadding = group;
++    QTextRubyLayout::Description description; description.bases = {base}; description.gaps = {0}; description.readings = {{reading, 0, 1, 0}};
++    QVERIFY(!QTextRubyLayout::create(&document, description));
++    }
++}
++void tst_QTextDocumentLayout::inlineActionDeclaringMetricsKeepChildFontsAndZeroAdvance()
++{
++    QImage device(700, 400, QImage::Format_ARGB32_Premultiplied); device.fill(Qt::white);
++    QTextDocument document; document.documentLayout()->setPaintDevice(&device);
++    document.setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 12)); document.setTextWidth(240);
++    QTextCharFormat declaring; declaring.setFont(QFont(QStringLiteral("DejaVu Serif"), 28));
++    QTextCharFormat action; action.setAnchor(true); action.setAnchorHref(QStringLiteral("dict:owner"));
++    action.setProperty(QCompiledInline::ActionOwnerProperty, qint64(1) << 32);
++    action.setProperty(QCompiledInline::ActionMetricProperty, QVariant::fromValue(QTextFormat(declaring)));
++    QTextCharFormat ordinary; ordinary.setFont(document.defaultFont()); ordinary.merge(action);
++    QTextCharFormat script = ordinary; script.setFontPointSize(9); script.setFontItalic(true);
++    script.setProperty(QCompiledInline::Property, QVariantMap{{"policy", QCompiledInline::Capability},
++        {"normalized", true}, {"shift", 5.0}});
++    QTextCursor cursor(&document); cursor.insertText(QStringLiteral("ordinary "), ordinary);
++    cursor.insertText(QStringLiteral("SUP"), script);
++    const QString raw = document.toRawText(); const auto size = document.documentLayout()->documentSize();
++    auto *layout = document.begin().layout(); QVERIFY(layout && layout->lineCount() == 1);
++    const auto line = layout->lineAt(0); const QFontMetricsF ownerMetrics(declaring.font(), &device);
++    QVERIFY(line.height() + 1.0 / 64 >= ownerMetrics.ascent() + ownerMetrics.descent());
++    QCOMPARE(document.find(QStringLiteral("SUP")).charFormat().font().pointSizeF(), 9.0);
++    QVERIFY(document.find(QStringLiteral("SUP")).charFormat().fontItalic());
++    const qreal advance = line.horizontalAdvance();
++    const auto origin = document.documentLayout()->blockBoundingRect(document.begin()).topLeft();
++    const qreal x = origin.x() + (line.cursorToX(0) + line.cursorToX(1)) / 2;
++    const qreal base = origin.y() + line.y() + line.ascent();
++    const QFontMetricsF childMetrics(document.defaultFont(), &device);
++    QCOMPARE(document.documentLayout()->anchorAt(QPointF(x, base - childMetrics.ascent() / 2)), QStringLiteral("dict:owner"));
++    QVERIFY(base - ownerMetrics.ascent() + 1 < base - childMetrics.ascent());
++    QCOMPARE(document.documentLayout()->anchorAt(QPointF(x, base - ownerMetrics.ascent() + 1)), QString());
++    // The group strut contributes height but never substitutes owner-font glyphs.
++    QTextDocument reference; reference.documentLayout()->setPaintDevice(&device);
++    reference.setDefaultFont(document.defaultFont()); reference.setTextWidth(240);
++    QTextCursor copy(&reference); auto plain = ordinary; plain.clearProperty(QCompiledInline::ActionOwnerProperty); plain.clearProperty(QCompiledInline::ActionMetricProperty);
++    auto raised = script; raised.clearProperty(QCompiledInline::ActionOwnerProperty); raised.clearProperty(QCompiledInline::ActionMetricProperty);
++    copy.insertText(QStringLiteral("ordinary "), plain); copy.insertText(QStringLiteral("SUP"), raised);
++    reference.documentLayout()->documentSize();
++    QVERIFY(qAbs(reference.begin().layout()->lineAt(0).horizontalAdvance() - advance) <= 1.0 / 64);
++    QVERIFY(reference.begin().layout()->lineAt(0).height() < line.height());
++    auto emptyAction = action; auto emptyMetric = declaring; emptyMetric.setFontPointSize(40);
++    emptyAction.setProperty(QCompiledInline::ActionOwnerProperty, (qint64(1) << 32) + 1);
++    emptyAction.setProperty(QCompiledInline::ActionMetricProperty, QVariant::fromValue(QTextFormat(emptyMetric)));
++    auto block = document.begin().blockFormat();
++    block.setProperty(QCompiledInline::EmptyActionOwners, QVariantMap{{"text", raw}, {"owners", QVariantList{
++        QVariantMap{{"offset", int(raw.size())}, {"format", QVariant::fromValue(QTextFormat(emptyAction))}}}}});
++    cursor.setPosition(0); cursor.setBlockFormat(block); document.documentLayout()->documentSize();
++    QCOMPARE(document.toRawText(), raw);
++    QCOMPARE(document.begin().layout()->lineAt(0).horizontalAdvance(), advance);
++    QVERIFY(document.documentLayout()->documentSize().height() > size.height());
++    const qreal baseline = document.begin().layout()->lineAt(0).y() + document.begin().layout()->lineAt(0).ascent();
++    const auto caretBand = QCompiledInline::actionBand(emptyAction, advance, advance, baseline, &device);
++    QCOMPARE(caretBand.width(), 0.0); QVERIFY(caretBand.height() > 0);
++    QVariantMap geometry;
++    QVERIFY(QMetaObject::invokeMethod(document.documentLayout(), "wikidictLogicalPosition", Qt::DirectConnection,
++        Q_RETURN_ARG(QVariantMap, geometry), Q_ARG(int, int(raw.size()))));
++    QCOMPARE(geometry.value("error").toInt(), 0);
++    QCOMPARE(geometry.value("lineBaseline").metaType().id(), QMetaType::Double);
++    QVERIFY(std::isfinite(geometry.value("lineBaseline").toDouble()));
++    document.setLayoutEnabled(false);
++    QVERIFY(QMetaObject::invokeMethod(document.documentLayout(), "wikidictLogicalPosition", Qt::DirectConnection,
++        Q_RETURN_ARG(QVariantMap, geometry), Q_ARG(int, int(raw.size()))));
++    QCOMPARE(geometry.value("error").toInt(), 5);
++    document.setLayoutEnabled(true);
++    auto invalid = emptyAction; invalid.setProperty(QCompiledInline::ActionOwnerProperty, QStringLiteral("owner"));
++    QVERIFY(!QCompiledInline::actionMetric(invalid));
++    invalid = emptyAction; auto recursive = emptyMetric; recursive.setProperty(QCompiledInline::ActionMetricProperty, QVariant::fromValue(QTextFormat(emptyMetric)));
++    invalid.setProperty(QCompiledInline::ActionMetricProperty, QVariant::fromValue(QTextFormat(recursive)));
++    QVERIFY(!QCompiledInline::actionMetric(invalid));
++    // Clearing the only empty owner restores the original line, including undo.
++    cursor.beginEditBlock(); auto noEmpty = block; noEmpty.clearProperty(QCompiledInline::EmptyActionOwners); cursor.setBlockFormat(noEmpty); cursor.endEditBlock();
++    document.documentLayout()->documentSize(); QVERIFY(qAbs(document.documentLayout()->documentSize().height() - size.height()) <= 1.0 / 64);
++    document.undo(); document.documentLayout()->documentSize(); QVERIFY(document.documentLayout()->documentSize().height() > size.height());
++}
++
++void tst_QTextDocumentLayout::inlineActionRubyPaintUsesBaseAllocationAndActualHitRanges()
++{
++    QImage image(500, 300, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
++    QTextDocument document; document.documentLayout()->setPaintDevice(&image);
++    QFont baseFont(QStringLiteral("DejaVu Sans"), 14), readingFont(QStringLiteral("DejaVu Sans"), 10);
++    document.setDefaultFont(baseFont);
++    QTextCharFormat owner; owner.setFont(baseFont); owner.setForeground(Qt::red); owner.setFontUnderline(true);
++    owner.setBackground(QColor(255, 255, 210));
++    QTextCharFormat action; action.setAnchor(true); action.setAnchorHref(QStringLiteral("dict:whole-ruby"));
++    action.setProperty(QCompiledInline::ActionOwnerProperty, (qint64(1) << 32) + 7);
++    action.setProperty(QCompiledInline::ActionMetricProperty, QVariant::fromValue(QTextFormat(owner)));
++    QTextCharFormat base; base.setFont(baseFont); base.setForeground(Qt::black); base.merge(action);
++    QTextCharFormat reading; reading.setFont(readingFont); reading.setForeground(Qt::blue); reading.merge(action);
++    QTextCursor cursor(&document); cursor.insertText(QStringLiteral("A"), base); cursor.insertText(QStringLiteral("widereading"), reading);
++    const QString raw = document.toRawText();
++    QTextRubyLayout::Child b, r; b.source = {0, 1}; r.source = {1, int(raw.size())};
++    b.ownerFont = baseFont; r.ownerFont = readingFont; b.actionDecoration = action;
++    const QFontMetricsF bm(baseFont, &image);
++    b.usedAbove = bm.ascent(); b.usedBelow = bm.descent();
++    r.foreground = QBrush(Qt::blue); r.underline = true;
++    b.option.setTextDirection(Qt::LeftToRight); r.option.setTextDirection(Qt::LeftToRight);
++    QTextRubyLayout::Description description; description.actionFormat = action;
++    description.bases = {b}; description.gaps = {0}; description.readings = {{r, 0, 1, 0}};
++    auto ruby = QTextRubyLayout::create(&document, description); QVERIFY(ruby);
++    const auto baseGlyph = ruby->characterRect(0), readingGlyph = ruby->characterRect(1);
++    QVERIFY(baseGlyph.left() > 2); // Real alignment slack caused by the wider reading.
++    QCOMPARE(ruby->hitTest(QPointF(1, baseGlyph.center().y()), Qt::ExactHit), -1);
++    QCOMPARE(ruby->hitTest(baseGlyph.center(), Qt::ExactHit), 0);
++    QVERIFY(ruby->hitTest(readingGlyph.center(), Qt::ExactHit) >= 1);
++    for (const auto &link : ruby->linkBoxes()) {
++        QCOMPARE(QCompiledInline::actionOwner(link.format), QCompiledInline::actionOwner(action));
++        QVERIFY(!link.rect.contains(QPointF(1, baseGlyph.center().y())));
++    }
++    auto withPadding = description;
++    QTextRubyLayout::InlinePadding padding;
++    padding.left = {.25, true}; padding.right = {.25, true}; padding.ownerFont = readingFont;
++    padding.ownerFormat.setFont(readingFont); padding.ownerFormat.merge(action);
++    withPadding.readings[0].child.inlinePadding = padding;
++    auto padded = QTextRubyLayout::create(&document, withPadding); QVERIFY(padded);
++    const auto paddedGlyph = padded->characterRect(1), ownedPadding = padded->actionRect(1);
++    QVERIFY(ownedPadding.left() < paddedGlyph.left());
++    const QPointF edge((ownedPadding.left() + paddedGlyph.left()) / 2, paddedGlyph.center().y());
++    QCOMPARE(padded->hitTest(edge, Qt::ExactHit), 1);
++    auto foreign = withPadding;
++    foreign.readings[0].child.inlinePadding->ownerFormat.setProperty(QCompiledInline::ActionOwnerProperty, (qint64(1) << 32) + 8);
++    QVERIFY(!QTextRubyLayout::create(&document, foreign));
++    const QPointF origin(40, 180);
++    { QPainter painter(&image); ruby->draw(&painter, origin, {}); }
++    const auto countColor = [](const QImage &pixels, QRect area, QColor color) {
++        int result = 0; area &= pixels.rect();
++        for (int y = area.top(); y <= area.bottom(); ++y) for (int x = area.left(); x <= area.right(); ++x)
++            if (pixels.pixelColor(x, y) == color) ++result;
++        return result;
++    };
++    const QRect baseBand = QCompiledInline::actionBand(action, 0, ruby->metrics().advance.toReal(), 0, &image).translated(origin).toAlignedRect();
++    QVERIFY(countColor(image, baseBand.adjusted(0, 0, 0, 5), Qt::red) > 10);
++    QVERIFY(countColor(image, readingGlyph.translated(origin).toAlignedRect().adjusted(-2, -2, 100, 5), Qt::blue) > 0);
++    const QRect annotationOnly(0, 0, image.width(), qFloor(baseBand.top()) - 1);
++    QCOMPARE(countColor(image, annotationOnly, Qt::red), 0);
++    // Dynamic ancestor decoration is removed once; annotation-local underline
++    // and all source characters/actions remain exactly as before.
++    QTextCharFormat overlay; overlay.setProperty(QCompiledInline::ActionPaintProperty, QVariantMap{
++        {"owner", action.property(QCompiledInline::ActionOwnerProperty)}, {"foreground", QColor(Qt::green)}, {"underline", false}});
++    QImage changed(image.size(), image.format()); changed.fill(Qt::white);
++    { QPainter painter(&changed); ruby->draw(&painter, origin, {{{0, int(raw.size())}, overlay}}); }
++    QCOMPARE(countColor(changed, changed.rect(), Qt::red), 0);
++    QVERIFY(countColor(changed, annotationOnly, Qt::blue) > 0);
++    QCOMPARE(document.toRawText(), raw);
++    const QPainterPath clip = [&] { QPainterPath p; p.addRoundedRect(QRectF(42, 150, 55, 50), 10, 10); return p; }();
++    QImage clipped(image.size(), image.format()); clipped.fill(Qt::white);
++    { QPainter painter(&clipped); painter.setClipPath(clip); ruby->draw(&painter, origin, {}); }
++    for (int y = 0; y < clipped.height(); ++y) for (int x = 0; x < clipped.width(); ++x)
++        if (!clip.contains(QPointF(x + .5, y + .5))) QCOMPARE(clipped.pixelColor(x, y), QColor(Qt::white));
++    auto invalid = description; invalid.readings[0].child.actionDecoration = action;
++    QVERIFY(!QTextRubyLayout::create(&document, invalid));
++    invalid = description; invalid.bases[0].actionDecoration.clearProperty(QCompiledInline::ActionMetricProperty);
++    QVERIFY(!QTextRubyLayout::create(&document, invalid));
++    auto inheritedMetric = owner; inheritedMetric.clearProperty(QTextFormat::ForegroundBrush);
++    auto inheritedAction = action;
++    inheritedAction.setProperty(QCompiledInline::ActionMetricProperty, QVariant::fromValue(QTextFormat(inheritedMetric)));
++    QTextCursor all(&document); all.select(QTextCursor::Document); all.mergeCharFormat(inheritedAction);
++    auto inheritedDescription = description; inheritedDescription.actionFormat = inheritedAction;
++    inheritedDescription.bases[0].actionDecoration = inheritedAction;
++    inheritedDescription.bases[0].foreground = QBrush(Qt::green);
++    auto inheritedRuby = QTextRubyLayout::create(&document, inheritedDescription); QVERIFY(inheritedRuby);
++    QImage inheritedPixels(image.size(), image.format()); inheritedPixels.fill(Qt::white);
++    { QPainter painter(&inheritedPixels); painter.setPen(Qt::magenta); inheritedRuby->draw(&painter, origin, {}); }
++    QVERIFY(countColor(inheritedPixels, baseBand.adjusted(0, 0, 0, 5), Qt::magenta) > 10);
++    QCOMPARE(countColor(inheritedPixels, annotationOnly, Qt::magenta), 0);
++    QVERIFY(inheritedRuby->current());
++    document.setPlainText(QStringLiteral("new")); QVERIFY(!inheritedRuby->current()); QVERIFY(!ruby->current());
 +}
 +
  QTEST_MAIN(tst_QTextDocumentLayout)

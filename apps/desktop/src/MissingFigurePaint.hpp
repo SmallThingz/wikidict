@@ -130,45 +130,8 @@ inline qint64 ownerAt(QTextDocument *document, int position) {
 }
 // Interactive color/decoration is a standard text selection overlay. It never
 // edits document formats, revisions, source positions or logical owner maps.
-inline QList<QTextEdit::ExtraSelection> selections(QTextDocument *document, const QPalette &palette, const State &state) {
-    QList<QTextEdit::ExtraSelection> result;
-    const bool dark = palette.color(QPalette::Base).lightness() < 128;
-    for (auto block = document->begin(); block.isValid(); block = block.next()) {
-        for (auto it = block.begin(); !it.atEnd(); ++it) {
-            const auto fragment = it.fragment(); if (!fragment.isValid()) continue;
-            auto format = fragment.charFormat(); if (!owns(format)) continue;
-            // Replaced image owners retain action/state identity and authored
-            // focus outlines; glyph foreground/underline never paint the bitmap.
-            if (format.isImageFormat()) continue;
-            const qint64 owner = format.property(ownerProperty).toLongLong();
-            const auto interaction = owner == state.pressed ? Interaction::Active
-                : owner == state.hovered ? Interaction::Hover : Interaction::Rest;
-            const bool zero = format.boolProperty(zeroFontProperty);
-            const bool ordinary = format.stringProperty(policyProperty) == ordinaryPolicy;
-            const bool fixed = ordinary || format.stringProperty(policyProperty) == fixedPolicy;
-            const auto paint = QJsonObject::fromVariantMap(format.property(fixedPolicyProperty).toMap());
-            const bool visited = state.visitedTargets.contains(fixed ? fixedTargetKey(state, format.anchorHref()) : targetKey(state, format.anchorHref()));
-            const QString stateName = ordinary && owner == state.hovered && owner == state.pressed
-                ? (visited ? QStringLiteral("visited_hover_active") : QStringLiteral("hover_active")) : visited
-                ? (interaction == Interaction::Active ? QStringLiteral("visited_active") : interaction == Interaction::Hover ? QStringLiteral("visited_hover") : QStringLiteral("visited"))
-                : (interaction == Interaction::Active ? QStringLiteral("active") : interaction == Interaction::Hover ? QStringLiteral("hover") : QStringLiteral("normal"));
-            const auto selected = paint.value(stateName).toObject();
-            const QColor ink = zero ? QColor(Qt::transparent) : fixed
-                ? QColor(selected.value("foreground").toString()) : foreground(dark, visited, interaction);
-            QTextCharFormat overlay;
-            overlay.setProperty(overlayProperty, true);
-            overlay.setForeground(ink);
-            const bool underline = !zero && ((!ordinary && format.boolProperty(underlineProperty)) || (fixed
-                ? selected.value("underline").toBool() || (owner == state.focused && paint.value("underline_on_focus").toBool())
-                : interaction != Interaction::Rest));
-            overlay.setUnderlineStyle(underline ? QTextCharFormat::SingleUnderline : QTextCharFormat::NoUnderline);
-            QTextCursor cursor(document); cursor.setPosition(fragment.position());
-            cursor.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
-            result.append({cursor, overlay});
-        }
-    }
-    return result;
-}
+QList<QTextEdit::ExtraSelection> selections(QTextDocument *document, const QPalette &palette, const State &state);
+
 inline QRectF focusBox(QTextDocument *document, qint64 owner) {
     if (!document || owner < 0) return {};
     QRectF found;

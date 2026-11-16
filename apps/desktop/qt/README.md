@@ -557,6 +557,38 @@ not use elapsed time as the correctness oracle. The maintained patches contain
 all source changes; the private qualification paths are evidence references,
 not fresh-checkout build dependencies.
 
+## Inline actions and Ruby reading padding
+
+Private JSON consumers preserve distinct inline action occurrences,
+independently resolved declaring and child fonts, wrapped and natural bidi
+ranges, zero-length owner identity without hit advance, and native keyboard,
+accessibility and copy paths. Ruby ancestor decoration covers the allocated
+base band; annotation-local decoration stays separate, and action hits exclude
+alignment slack.
+
+Positive Ruby reading padding is supported only for a complete LTR unbreakable
+reading. Other placements and wrapped padding refuse. Authored direction or
+isolation, image descendants, competing descendant actions, and malformed or
+unsupported structural fields refuse.
+
+The current native qualification ran eleven selected methods. The App continuation
+ran one Reader method. Four unchanged Reader method bodies retain their actual
+App202 passes, including structural clue traversal. Two unchanged Media methods
+retain their actual App204 passes for pronunciation traversal; their source and
+binary remain exact and they were not rerun. GUI, Reader and Media targets were
+built in App202. Only the Reader test executable was rebuilt in App205, with
+product and native bytes unchanged and the existing CMake configuration reused. The original const-device and App private-header compile failures, and the
+clipboard and selected-background fixture failures, remain recorded. These are
+focused controls, not complete native or App suites. Numerical SUP controls are
+synthetic: no actual Mai font tuple, paired U/V producer/FFI or genuine rendered
+acceptance is claimed.
+
+Reproduce the selected controls with the existing native and App build routes
+and the method lists in `qualification.inline_action_v`. All native source
+changes are in the maintained patch series; private qualification paths record
+evidence and are not fresh-checkout build dependencies. Earlier qualification
+sections retain their historical scope and were not rerun by this update.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,

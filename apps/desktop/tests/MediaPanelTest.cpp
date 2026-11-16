@@ -1316,6 +1316,52 @@ private slots:
         QCOMPARE(QDir(cacheRoot()).entryList(QDir::Files).size(), 2);
     }
 
+
+    void pronunciationControlsTraverseActionPaddingAndRubyLeaves()
+    {
+        Network network; MediaPanel panel(nullptr, &network);
+        const auto leaf = [](QString text, QString language = {}, QString role = QStringLiteral("pronunciation")) {
+            return QJsonObject{{"kind", "text"}, {"text", text}, {"trail", ""}, {"target", ""},
+                {"language", language}, {"role", role}};
+        };
+        const auto action = [&](QJsonArray children, QString language) {
+            auto value = leaf({}, language, "normal"); value.insert("kind", "link"); value.insert("target", "word");
+            value.insert("inline_action_group", QJsonObject{{"spans", children}}); return value;
+        };
+        const QJsonObject edge{{"unit", "px"}, {"value", 1}};
+        const QJsonObject paddingPayload{{"left", edge}, {"right", edge}, {"spans", QJsonArray{leaf("/vi/", "en")}}};
+        auto padding = leaf({}, {}, "normal"); padding.insert("inline_padding_group", paddingPayload);
+        const QJsonObject base{{"gap_before", QJsonArray{}}, {"spans", QJsonArray{leaf("/wi/", "en")}}};
+        const QJsonObject annotation{{"gap_before", QJsonArray{}}, {"spans", QJsonArray{leaf("/ti/", "en")}},
+            {"explicit_fallback", false}, {"fallback_before", QJsonArray{}}, {"fallback_after", QJsonArray{}}};
+        const QJsonObject segment{{"gap_before", QJsonArray{}}, {"bases", QJsonArray{base}}, {"annotations", QJsonArray{annotation}}};
+        const QJsonObject rubyPayload{{"segments", QJsonArray{segment}}};
+        auto ruby = leaf({}, {}, "normal"); ruby.insert("ruby", rubyPayload);
+        const auto sectionsFor = [](const QJsonArray &spans) {
+            const QJsonObject block{{"kind", "paragraph"}, {"spans", spans}};
+            const QJsonObject section{{"blocks", QJsonArray{block}}};
+            return QJsonArray{section};
+        };
+        QJsonObject value = entry(); value.insert("media", QJsonArray{}); value.insert("language_code", "fr");
+        const QJsonArray children{leaf("/mi/"), padding, ruby, leaf("/zi/", "fr"), leaf("/si/", "en", "normal")};
+        value.insert("sections", sectionsFor(QJsonArray{action(children, "en")}));
+        const auto before = QJsonDocument(value).toJson(QJsonDocument::Compact);
+        panel.setEntry(value);
+        QStringList names;
+        for (auto *button : panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation"))) names.append(button->accessibleName());
+        QStringList expected;
+        for (const auto &ipa : {"/mi/", "/vi/", "/wi/", "/ti/"})
+            expected.append(QStringLiteral("Listen to the transcription %1 offline").arg(QString::fromLatin1(ipa)));
+        QCOMPARE(names, expected); QCOMPARE(QJsonDocument(value).toJson(QJsonDocument::Compact), before);
+        QVERIFY(network.urls.isEmpty());
+        auto deep = leaf("/mi/");
+        for (int i = 0; i < 17; ++i) deep = action(QJsonArray{deep}, "en");
+        value.insert("sections", sectionsFor(QJsonArray{leaf("/vi/", "en"), deep}));
+        panel.setEntry(value);
+        QVERIFY(panel.findChildren<QPushButton *>(QStringLiteral("mediaPronunciation")).isEmpty());
+        QVERIFY(network.urls.isEmpty());
+    }
+
     void pronunciationControlsTraverseOrderedAndLegacyTableContent() {
         Network network;
         MediaPanel panel(nullptr, &network);

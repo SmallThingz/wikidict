@@ -1090,7 +1090,12 @@ struct MediaPanel::Impl {
         };
         QList<QPair<QJsonArray, CompiledContent::Context>> pending;
         const auto retainSpans = [&](const QJsonArray &spans, const CompiledContent::Context &context) {
-            pending.append({spans, context});
+            auto leaf = [&](const QJsonObject &span, const CompiledContent::Context &local) {
+                pending.append({QJsonArray{span}, local});
+            };
+            auto literal = [](const QString &) {}; // Synthetic Ruby punctuation has no metadata.
+            auto skip = [](const QJsonObject &) { return false; };
+            CompiledContent::visitSpanLeaves(spans, context, leaf, literal, skip);
         };
         try {
             CompiledContent::Walker walker(retainSpans, CompiledContent::TableSpans::VisibleBody);
