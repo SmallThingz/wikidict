@@ -3,6 +3,55 @@
 ## Current baseline and qualification — 2026-11-16
 
 The current [build target](../app/build.gradle) is **Android 12+ (minimum API 31),
+target API 37**. Required guards for later APIs remain. The qualified APKs were
+built from source20, commit `b6b41b1e`. The subsequent commit `41370ede` removes
+four redundant API 31 annotations and their two imports from two files; all
+method and control bodies are unchanged. It was not separately compiled,
+linted or packaged, so the APK lineage remains source20.
+
+The current JVM qualification covers **937 cases**: 935 correctness tests and
+two benchmark-named tests, with no performance claim. Host80 executed all 937:
+936 passed and one failed on a stale native table-depth expectation. Host81
+passed that corrected method and carried the exact 936 unchanged passing cases.
+This is **936 carried passes plus one fresh pass**, not a fresh 937-test pass.
+Host79 separately passed the 12 selected JVM controls. Main and
+instrumentation compilation from Host78 is retained on unchanged inputs; that
+run's later unit-compilation failure remains recorded. Device controls have
+compilation evidence only for this candidate.
+
+Package82 passed normal lint and debug Main/test APK qualification with all
+compilation tasks up to date: zero lint errors, 36 warnings and five hints.
+It reused the earned JVM results and native libraries without rerunning them.
+Both APKs retain the expected API 31/37 identity and signing certificate. Main
+retains its assets and four Egyptian JNI libraries; the test APK has no native
+libraries. The [deterministic packaging setting](../gradle.properties)
+produced no stranded virtual-entry space. Main/test APK SHA-256 prefixes are
+`ae7f5a36` / `27e2bd1a`; their sizes are 81,691,779 and 11,556,303 bytes.
+
+**Package82 is uninstalled; physical-device qualification remains pending.**
+The installed62 pair and user data remain unchanged. A host process
+network-namespace read failed with `EACCES` during preflight, before any device
+command; preflight remains blocked on that unreadable namespace field. Earlier
+device results do not establish acceptance of these APKs.
+
+The genuine 1,852-byte Writer176 blob has host decoder coverage for its complete
+body, Ruby font bases and actions. Ordinary Main import/read, rendered Ruby
+actions, missing-target recovery, link/Back navigation, narrow layout,
+soft-keyboard/cursor behavior and accessibility still need current device
+evidence. The one-record fixture has no destination for its `旅路` links and
+cannot prove successful destination navigation. Existing compiled controls
+cover focused popup Retry activation and error recovery; they were not run on
+this APK pair. No spoken TalkBack acceptance is claimed.
+
+Release and prerelease publication remain on hold until the user explicitly
+approves them. These debug APKs are not a production release.
+
+## Historical Host72–Package74 qualification — 2026-11-16
+
+This retained baseline predates source20. “Current” in this section refers only
+to that earlier qualification; Package82 above supersedes its APK and lint roles.
+
+The current [build target](../app/build.gradle) is **Android 12+ (minimum API 31),
 target API 37**. Older-platform compatibility paths have been removed; guards
 for APIs introduced after API 31 remain where needed.
 
